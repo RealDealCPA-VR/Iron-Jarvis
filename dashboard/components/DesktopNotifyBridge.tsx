@@ -5,10 +5,17 @@
 // DesktopChannel.send (daemon) publishes a `comm.desktop` event; this bridge
 // watches the existing event stream and raises a NATIVE OS toast through the
 // Electron preload. It is mounted once in the root layout, so it is alive on
-// every page — including while the window is minimized to the tray, which is
-// exactly when a notification matters. In a plain browser (no preload bridge)
-// it is a silent no-op: the destination's tile copy says "desktop app" and
-// this component keeps that promise honest rather than half-shimming it.
+// every page — including while the window is MINIMISED. In a plain browser
+// (no preload bridge) it is a silent no-op: the destination's tile copy says
+// "desktop app" and this component keeps that promise honest rather than
+// half-shimming it.
+//
+// WHAT IT CANNOT DO, and used to claim it could (v1.249.0, R-03): closing the
+// window to the TRAY destroys the renderer (`hideToTray` in desktop/main.js),
+// so this bridge — and every other page-side toast — is gone until a window
+// exists again. The desktop app itself watches for jobs waiting on the user
+// while no window is open (`installAskWatcher`); a `comm.desktop` message that
+// arrives with no window still waits in the bell rather than raising a toast.
 
 import { useEffect, useRef } from "react";
 

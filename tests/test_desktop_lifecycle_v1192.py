@@ -83,6 +83,7 @@ def _run_node(script: str, tmp_path: Path) -> dict:
 _UPDATE_HARNESS = """
 const { EventEmitter } = require("events");
 
+const MODE = process.argv[2];
 const calls = [];
 let pendingUpdateInfo = { version: "1.192.0" };
 let updateInstallInFlight = false;
@@ -93,6 +94,18 @@ const app = { quit: () => calls.push(["app.quit"]) };
 const dialog = {
   showMessageBoxSync: (o) => { calls.push(["dialog", String(o && o.title)]); return 0; },
 };
+// v1.249.0 (R-02): the install path now checks the cached installer BEFORE it
+// stops anything, and closes the daemon the tidy way Quit does.
+let daemonProc = { pid: 11, exitCode: null, signalCode: null };
+let dashboardProc = { pid: 12, exitCode: null, signalCode: null };
+function cachedInstallerState() { return MODE === "missing" ? "missing" : MODE === "corrupt" ? "corrupt" : "ok"; }
+function requestDaemonShutdown(ms) {
+  calls.push(["requestDaemonShutdown", ms]);
+  if (MODE === "stopthrow") return Promise.reject(new Error("post failed"));
+  return Promise.resolve(MODE !== "nostop");
+}
+function killChild(child, label, reason) { calls.push(["killChild", label, reason]); }
+function respawnStoppedServices() { calls.push(["respawnStoppedServices"]); }
 function markUpdatePending(v) { calls.push(["markUpdatePending", v]); }
 function clearUpdatePending() { calls.push(["clearUpdatePending"]); }
 // The real shutdown() latches shuttingDown, which is what permanently disables
@@ -124,23 +137,32 @@ class OkUpdater extends EventEmitter {
   }
 }
 
-let _autoUpdater = process.argv[2] === "fail" ? new FailingUpdater() : new OkUpdater();
-applyPendingUpdate();
-if (process.argv[2] === "reentry") applyPendingUpdate();
-console.log(JSON.stringify({
-  calls,
-  shuttingDown,
-  isQuitting,
-  updateInstallInFlight,
-  pendingUpdateInfo,
-  errorListeners: _autoUpdater.listenerCount("error"),
-}));
+let _autoUpdater = MODE === "fail" ? new FailingUpdater() : new OkUpdater();
+(async () => {
+  await applyPendingUpdate();
+  if (MODE === "reentry") await applyPendingUpdate();
+  // Let electron-updater's queued app.quit() land, so the ORDER of the
+  // teardown against it is observable rather than merely unreached.
+  await new Promise((r) => setImmediate(r));
+  console.log(JSON.stringify({
+    calls,
+    shuttingDown,
+    isQuitting,
+    updateInstallInFlight,
+    pendingUpdateInfo,
+    errorListeners: _autoUpdater.listenerCount("error"),
+  }));
+})().catch((e) => { process.stderr.write(String(e && e.stack)); process.exit(1); });
 """
 
 
 def _update_harness() -> str:
-    lifted = _lift("function applyPendingUpdate()", "function abortUpdateInstall")
+    # v1.249.0 (R-02): applyPendingUpdate awaits the tidy daemon stop, so the
+    # marker must carry `async` — slicing from "function applyPendingUpdate()"
+    # would drop it and leave `await` inside a sync function.
+    lifted = _lift("async function applyPendingUpdate()", "function abortUpdateInstall")
     assert "quitAndInstall" in lifted and "abortUpdateInstall" in lifted
+    assert lifted.startswith("async function"), "the handoff is no longer async"
     return _UPDATE_HARNESS.replace("__LIFTED__", lifted)
 
 
@@ -356,7 +378,7 @@ def test_the_marker_is_what_the_recovery_dialog_reads():
     src = _src()
     assert "const pendingUpdate = readAndBumpUpdatePending();" in src
     m = re.search(
-        r"function handleStartupFailure\(title, message, pendingUpdate\) \{(.{0,900}?)\n  \} else",
+        r"function handleStartupFailure\(title, message, pendingUpdate, context\) \{(.{0,900}?)\n  \} else",
         src,
         re.S,
     )

@@ -34,6 +34,10 @@ class EventType:
     # the 1-based place in the queue at park time. Tagged session_id.
     SESSION_QUEUED = "session.queued"
     SESSION_COMPLETED = "session.completed"
+    # v1.249.0 (R-02): the boot reconcile found work a restart cut off —
+    # {count, session_ids, cause}. ONE event per boot, not one per session;
+    # the bell and the Overview offer Continue from GET /sessions/interrupted.
+    SESSIONS_INTERRUPTED = "sessions.interrupted"
     AGENT_STARTED = "agent.started"
     AGENT_STATE_CHANGED = "agent.state_changed"
     AGENT_COMPLETED = "agent.completed"

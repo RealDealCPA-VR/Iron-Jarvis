@@ -1552,6 +1552,11 @@ class Orchestrator:
                     continue
                 s.status = SessionStatus.FAILED
                 s.finished_at = utcnow()
+                # v1.249.0 (R-02): TAG the cause, independent of the summary
+                # (a run that already had a summary kept it, so the words
+                # alone could not say it was cut off) — the bell and the
+                # Overview offer Continue while this is set.
+                s.interrupted_at = utcnow()
                 if not s.summary:
                     s.summary = "interrupted by a daemon restart"
                 db.add(s)
@@ -1584,6 +1589,16 @@ class Orchestrator:
         # loop serves requests.
         for sid in interrupted:
             self._release_worklist_claims(sid)
+        # ONE event per boot, never one per session (v1.249.0, R-02): the bell
+        # and the Overview poll `/sessions/interrupted`, and this is what makes
+        # them show the offer without waiting out a poll interval. Fifty
+        # interrupted jobs must not be fifty events on the live feed.
+        if interrupted:
+            self._publish_bg(
+                EventType.SESSIONS_INTERRUPTED,
+                {"count": len(interrupted), "session_ids": interrupted},
+                "",
+            )
         return marked
 
     def rehydrate_reviews(self) -> int:
