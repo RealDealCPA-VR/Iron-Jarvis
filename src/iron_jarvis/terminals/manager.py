@@ -418,8 +418,20 @@ class TerminalManager:
         if self._pty_ok is False:
             return self._pipe_session(cwd, name, argv, cols, rows, env)
 
+        from .backend import ConPtyUnavailable, mark_conpty_broken
+
         session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows)
-        session.start(env=env)
+        try:
+            session.start(env=env)
+        except ConPtyUnavailable:
+            # v1.248.0: the raw ConPTY could not make a PSEUDOCONSOLE here (a
+            # bad command or folder is a different error and still reaches
+            # the caller). Stop offering it for the rest of this process and
+            # spawn on the next backend in `default_backend`'s order.
+            log.warning("raw ConPTY unavailable; using the next backend", exc_info=True)
+            mark_conpty_broken()
+            session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows)
+            session.start(env=env)
 
         if self._pty_ok is True:  # already verified healthy — trust it, no wait
             return session

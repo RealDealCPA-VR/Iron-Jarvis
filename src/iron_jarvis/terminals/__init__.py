@@ -12,6 +12,7 @@ Public surface:
 from __future__ import annotations
 
 from .backend import (
+    ConPtyBackend,
     FakeBackend,
     PipeBackend,
     PosixPtyBackend,
@@ -27,6 +28,7 @@ __all__ = [
     "TerminalManager",
     "TerminalSession",
     "PtyBackend",
+    "ConPtyBackend",
     "WinPtyBackend",
     "PosixPtyBackend",
     "PipeBackend",

@@ -2,12 +2,16 @@
 
 A :class:`PtyBackend` owns a single child process attached to a pseudo-terminal
 (or a plain pipe fallback). It exposes a *non-blocking* read so a single async
-loop in the daemon can fan many sessions out over WebSockets without threads
-per session.
+loop in the daemon can fan many sessions out over WebSockets. A backend that
+sets ``pushes_output`` (v1.248.0) instead delivers every chunk from its own
+reader thread to the handler the session installs, and is never polled.
 
 Implementations:
 
-* :class:`WinPtyBackend`  — Windows ConPTY via ``pywinpty`` (import ``winpty``).
+* :class:`ConPtyBackend`  — Windows ConPTY straight from kernel32 (ctypes),
+  bytes in and out, pushing (v1.248.0; the Windows default).
+* :class:`WinPtyBackend`  — Windows ConPTY via ``pywinpty`` (import ``winpty``),
+  the fallback (``IRONJARVIS_PTY_BACKEND=pywinpty`` forces it).
 * :class:`PosixPtyBackend` — stdlib ``pty`` fork + ``select`` non-blocking reads.
 * :class:`PipeBackend`     — ``subprocess`` pipes (no real TTY) universal fallback.
 * :class:`FakeBackend`     — deterministic, offline, no real process (tests).
@@ -654,21 +658,550 @@ class PipeBackend:
         return self._proc.poll()
 
 
+# --------------------------------------------------------------------------- #
+# Windows ConPTY, raw — kernel32 through ctypes (v1.248.0)                    #
+# --------------------------------------------------------------------------- #
+# WHY NOT pywinpty ANY MORE (it stays as the fallback). Measured on 2026-09-11:
+# (1) it hands output over as TEXT and re-encodes it, so a multi-byte
+# character split between two reads became U+FFFD (121 per 8.46 MB of mixed
+# box-drawing/CJK output in the audit, 3 per 10 MB in the v1.248 bench) — raw
+# ConPTY output is UTF-8 bytes and this backend never decodes a byte; (2) it
+# can only be POLLED (a loopback socket), which cost every attached pane 100
+# wakeups a second — 8 idle panes measured a whole CPU core. Here a blocking
+# reader thread per pane hands each chunk to the session the moment it exists
+# (``pushes_output``), and an idle pane costs nothing.
+#
+# WHICH CONSOLE HOST. The three pseudoconsole calls exist twice on this
+# machine: in kernel32 (the INBOX conhost, Windows 10 1809+) and in the
+# ``conpty.dll`` pywinpty ships beside Windows Terminal's ``OpenConsole.exe``
+# (both already in the .spec for the pywinpty backend). Measured 2026-09-11,
+# keystroke echo in pwsh (PSReadLine), in-process: inbox conhost 14.8 ms
+# median, bundled OpenConsole 0.5 ms (pywinpty 2.0 ms) — the inbox host paints
+# on a frame timer. So the bundled host is used when BOTH files are present
+# and the inbox one otherwise; ``IRONJARVIS_CONPTY_HOST=inbox`` forces
+# kernel32. Either way it is ctypes only: no native dependency, nothing new
+# for the .spec.
+
+#: ``IRONJARVIS_PTY_BACKEND``: ``pywinpty`` forces the pywinpty backend,
+#: ``pipe`` the pipe shell; anything else (or unset) picks the best available.
+PTY_BACKEND_ENV = "IRONJARVIS_PTY_BACKEND"
+
+#: ``IRONJARVIS_CONPTY_HOST=inbox`` makes the raw backend use kernel32's
+#: ConPTY (the inbox conhost) even when the bundled OpenConsole is present.
+CONPTY_HOST_ENV = "IRONJARVIS_CONPTY_HOST"
+
+#: Set when a ConPTY could not be CREATED in this process (not a bad command
+#: or folder — the pseudoconsole itself). Every later pane then skips straight
+#: to pywinpty instead of failing the same way; see ``mark_conpty_broken``.
+_CONPTY_BROKEN = False
+
+_PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
+_EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+_CREATE_UNICODE_ENVIRONMENT = 0x00000400
+_STARTF_USESTDHANDLES = 0x00000100
+_INFINITE = 0xFFFFFFFF
+_CONPTY_PIPE_BYTES = 64 * 1024
+_CONPTY_READ_BYTES = 64 * 1024
+
+_CONPTY_API = None
+
+
+class ConPtyUnavailable(OSError):
+    """The pseudoconsole itself could not be made — as opposed to a command
+    or folder that could not be started, which is the caller's problem and
+    must not disable ConPTY for every later pane."""
+
+
+def _conpty_api():
+    """kernel32's ConPTY surface, typed, on a PRIVATE ``WinDLL`` — argtypes set
+    here never leak into another ctypes user in the process (``_win_job_for``
+    has its own). Built once and lazily, so this module imports on every OS."""
+    global _CONPTY_API
+    if _CONPTY_API is not None:
+        return _CONPTY_API
+    import ctypes
+    from ctypes import wintypes
+    from types import SimpleNamespace
+
+    class COORD(ctypes.Structure):
+        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+    class STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.c_void_p),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class STARTUPINFOEXW(ctypes.Structure):
+        _fields_ = [("StartupInfo", STARTUPINFOW), ("lpAttributeList", ctypes.c_void_p)]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    H, D, B = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL
+    vp = ctypes.c_void_p
+    k.CreatePipe.argtypes = [ctypes.POINTER(H), ctypes.POINTER(H), vp, D]
+    k.CreatePipe.restype = B
+    k.CreatePseudoConsole.argtypes = [COORD, H, H, D, ctypes.POINTER(vp)]
+    k.CreatePseudoConsole.restype = ctypes.c_long  # HRESULT
+    k.ResizePseudoConsole.argtypes = [vp, COORD]
+    k.ResizePseudoConsole.restype = ctypes.c_long
+    k.ClosePseudoConsole.argtypes = [vp]
+    k.ClosePseudoConsole.restype = None
+    k.InitializeProcThreadAttributeList.argtypes = [vp, D, D, ctypes.POINTER(ctypes.c_size_t)]
+    k.InitializeProcThreadAttributeList.restype = B
+    k.UpdateProcThreadAttribute.argtypes = [vp, D, ctypes.c_size_t, vp, ctypes.c_size_t, vp, vp]
+    k.UpdateProcThreadAttribute.restype = B
+    k.DeleteProcThreadAttributeList.argtypes = [vp]
+    k.DeleteProcThreadAttributeList.restype = None
+    k.CreateProcessW.argtypes = [
+        wintypes.LPCWSTR, vp, vp, vp, B, D, vp, wintypes.LPCWSTR, vp, vp,
+    ]
+    k.CreateProcessW.restype = B
+    k.ReadFile.argtypes = [H, vp, D, ctypes.POINTER(D), vp]
+    k.ReadFile.restype = B
+    k.WriteFile.argtypes = [H, vp, D, ctypes.POINTER(D), vp]
+    k.WriteFile.restype = B
+    k.CloseHandle.argtypes = [H]
+    k.CloseHandle.restype = B
+    k.WaitForSingleObject.argtypes = [H, D]
+    k.WaitForSingleObject.restype = D
+    k.GetExitCodeProcess.argtypes = [H, ctypes.POINTER(D)]
+    k.GetExitCodeProcess.restype = B
+    k.TerminateProcess.argtypes = [H, wintypes.UINT]
+    k.TerminateProcess.restype = B
+    calls, host, host_dir = k, "inbox", None
+    host_pref = os.environ.get(CONPTY_HOST_ENV, "").strip().lower()
+    if host_pref != "inbox":
+        host_dir = _bundled_conpty_dir()
+        if host_dir is not None:
+            try:
+                calls = _BundledConpty(k, ctypes.WinDLL(os.path.join(host_dir, "conpty.dll")))
+                host = "bundled"
+            except Exception:  # a DLL that will not load: the inbox host still works
+                _log().warning("bundled conpty.dll unusable; using the inbox conhost", exc_info=True)
+                calls, host_dir = k, None
+    _CONPTY_API = SimpleNamespace(
+        ctypes=ctypes,
+        wintypes=wintypes,
+        k32=calls,
+        host=host,  # "bundled" (OpenConsole.exe) or "inbox" (kernel32's conhost)
+        host_dir=host_dir,
+        COORD=COORD,
+        STARTUPINFOEXW=STARTUPINFOEXW,
+        PROCESS_INFORMATION=PROCESS_INFORMATION,
+    )
+    return _CONPTY_API
+
+
+def _bundled_conpty_dir() -> str | None:
+    """The folder holding pywinpty's ``conpty.dll`` AND ``OpenConsole.exe``
+    (``_internal/winpty`` in the frozen build — the .spec bundles both), or
+    None. Half a bundle is no bundle: the DLL without its host exe fails every
+    spawn. Found by import SPEC, so nothing is loaded just to look."""
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("winpty")
+        origin = getattr(spec, "origin", None) if spec is not None else None
+        if not origin:
+            return None
+        folder = os.path.dirname(origin)
+        if all(
+            os.path.isfile(os.path.join(folder, name))
+            for name in ("conpty.dll", "OpenConsole.exe")
+        ):
+            return folder
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return None
+
+
+class _BundledConpty:
+    """kernel32, except that the three pseudoconsole calls are answered by the
+    bundled ``conpty.dll`` (which hosts each console in OpenConsole.exe). Same
+    signatures; pipes, processes and ReadFile stay kernel32's."""
+
+    def __init__(self, k32, dll) -> None:
+        self._k32 = k32
+        for mine, theirs in (
+            ("CreatePseudoConsole", "ConptyCreatePseudoConsole"),
+            ("ResizePseudoConsole", "ConptyResizePseudoConsole"),
+            ("ClosePseudoConsole", "ConptyClosePseudoConsole"),
+        ):
+            fn = getattr(dll, theirs)
+            ref = getattr(k32, mine)
+            fn.argtypes, fn.restype = ref.argtypes, ref.restype
+            setattr(self, mine, fn)
+
+    def __getattr__(self, name):
+        return getattr(self._k32, name)
+
+
+def conpty_available() -> bool:
+    """Does this OS offer ConPTY (Windows 10 1809+)? Probes; never spawns."""
+    if sys.platform != "win32":
+        return False
+    try:
+        _conpty_api()
+        return True
+    except Exception:  # AttributeError: kernel32 has no CreatePseudoConsole
+        return False
+
+
+def mark_conpty_broken() -> None:
+    """Stop offering ConPTY for the rest of this process (see ``_CONPTY_BROKEN``)."""
+    global _CONPTY_BROKEN
+    _CONPTY_BROKEN = True
+
+
+def _env_block(api, env: dict):
+    """``env`` as a CreateProcessW UNICODE environment block (sorted, NUL-separated,
+    double-NUL-terminated). Built from bytes so embedded NULs survive."""
+    items = sorted(((str(k), str(v)) for k, v in env.items()), key=lambda kv: kv[0].upper())
+    text = "".join(f"{k}={v}\0" for k, v in items if k and "=" not in k[1:]) + "\0"
+    raw = text.encode("utf-16-le")
+    return api.ctypes.create_string_buffer(raw, len(raw) + 2)
+
+
+class ConPtyBackend:
+    """Windows ConPTY straight from kernel32 (v1.248.0): BYTES in and out, and
+    a reader thread that PUSHES each chunk to the session.
+
+    ``pushes_output`` tells :class:`~iron_jarvis.terminals.session.TerminalSession`
+    to hand over its ingest callback (``set_output_handler``) before ``start``;
+    nothing polls ``read_nonblocking`` (it serves only a handler-less caller).
+
+    Lifecycle. A WAITER thread blocks on the shell's process handle; when the
+    shell exits (on its own, or through :meth:`kill`) it records the exit code
+    and closes the pseudoconsole. That closes the console for every process
+    still attached to it — a CLI the shell started, a build — which is the
+    tree kill ConPTY gives for free (the pipe backend needs a Job for it), and
+    it ends the READER: ConPTY holds the output pipe open until it is closed,
+    so the reader drains the last output and then sees EOF
+    (``output_finished``). A GUI app launched from the pane (``code .``) has
+    its own window and no console, and is deliberately left running.
+    """
+
+    pushes_output = True
+
+    def __init__(self) -> None:
+        self._hpc = None  # HPCON (ctypes.c_void_p), made in start()
+        self._in_write: int | None = None
+        self._out_read: int | None = None
+        self._hproc: int | None = None
+        self.pid: int | None = None
+        self._exit_code: int | None = None
+        self._started = False
+        self._exited = threading.Event()
+        self._eof = threading.Event()
+        # `_lock`: the process handle, the pty's one close, resize.
+        # `_in_lock`: the input handle — a write that blocks (a hung console)
+        # must never block kill(), which is how the user gets out of it.
+        self._lock = threading.Lock()
+        self._in_lock = threading.Lock()
+        self._pty_closed = False
+        self._on_output = None
+        self._on_eof = None
+        self._queue: "queue.Queue[bytes]" = queue.Queue()
+
+    def set_output_handler(self, on_output, on_eof=None) -> None:
+        """``on_output(bytes)`` is called from the reader thread for every
+        chunk; ``on_eof()`` once, when the output has ended. Set before start."""
+        self._on_output = on_output
+        self._on_eof = on_eof
+
+    @property
+    def output_finished(self) -> bool:
+        """The reader has seen EOF: every byte the PTY produced was delivered."""
+        return self._eof.is_set()
+
+    def start(
+        self,
+        argv: list[str],
+        cwd: str,
+        env: dict | None,
+        cols: int,
+        rows: int,
+    ) -> None:
+        if sys.platform != "win32":
+            raise ConPtyUnavailable("ConPTY is Windows-only")
+        try:
+            api = _conpty_api()
+        except Exception as exc:  # no CreatePseudoConsole on this Windows
+            raise ConPtyUnavailable(f"ConPTY is unavailable: {exc}") from exc
+        ctypes, wintypes, k = api.ctypes, api.wintypes, api.k32
+        in_read, in_write = wintypes.HANDLE(), wintypes.HANDLE()
+        out_read, out_write = wintypes.HANDLE(), wintypes.HANDLE()
+        if not k.CreatePipe(ctypes.byref(in_read), ctypes.byref(in_write), None, _CONPTY_PIPE_BYTES):
+            raise ConPtyUnavailable(f"CreatePipe failed ({ctypes.get_last_error()})")
+        if not k.CreatePipe(ctypes.byref(out_read), ctypes.byref(out_write), None, _CONPTY_PIPE_BYTES):
+            err = ctypes.get_last_error()
+            k.CloseHandle(in_read)
+            k.CloseHandle(in_write)
+            raise ConPtyUnavailable(f"CreatePipe failed ({err})")
+        self._hpc = ctypes.c_void_p()
+        hr = k.CreatePseudoConsole(
+            api.COORD(_clamp_dim(cols), _clamp_dim(rows)), in_read, out_write, 0,
+            ctypes.byref(self._hpc),
+        )
+        # The pseudoconsole holds its own duplicates of these two ends.
+        k.CloseHandle(in_read)
+        k.CloseHandle(out_write)
+        if hr != 0:
+            k.CloseHandle(in_write)
+            k.CloseHandle(out_read)
+            raise ConPtyUnavailable(
+                f"CreatePseudoConsole failed (HRESULT 0x{hr & 0xFFFFFFFF:08X})"
+            )
+        self._in_write = in_write.value
+        self._out_read = out_read.value
+        try:
+            self._spawn(api, argv, cwd, env)
+        except BaseException:
+            k.ClosePseudoConsole(self._hpc)
+            self._pty_closed = True
+            k.CloseHandle(self._in_write)
+            k.CloseHandle(self._out_read)
+            self._in_write = self._out_read = None
+            raise
+        self._started = True
+        threading.Thread(target=self._read_loop, name="conpty-read", daemon=True).start()
+        threading.Thread(target=self._wait_loop, name="conpty-wait", daemon=True).start()
+
+    def _spawn(self, api, argv, cwd, env) -> None:
+        ctypes, k = api.ctypes, api.k32
+        size = ctypes.c_size_t(0)
+        k.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+        attrs = ctypes.create_string_buffer(size.value)
+        if not k.InitializeProcThreadAttributeList(attrs, 1, 0, ctypes.byref(size)):
+            raise ConPtyUnavailable(
+                f"InitializeProcThreadAttributeList failed ({ctypes.get_last_error()})"
+            )
+        try:
+            # The VALUE is the HPCON itself, not a pointer to it.
+            if not k.UpdateProcThreadAttribute(
+                attrs, 0, _PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, self._hpc,
+                ctypes.sizeof(ctypes.c_void_p), None, None,
+            ):
+                raise ConPtyUnavailable(
+                    f"UpdateProcThreadAttribute failed ({ctypes.get_last_error()})"
+                )
+            si = api.STARTUPINFOEXW()
+            si.StartupInfo.cb = ctypes.sizeof(api.STARTUPINFOEXW)
+            # NULL std handles + STARTF_USESTDHANDLES: the child gets the
+            # pseudoconsole's handles — never the daemon's own stdout/stderr,
+            # which the desktop app redirects to a log and a child would
+            # otherwise inherit, printing into the log instead of the pane.
+            si.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
+            si.lpAttributeList = ctypes.cast(attrs, ctypes.c_void_p)
+            pi = api.PROCESS_INFORMATION()
+            cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(argv)))
+            block = _env_block(api, env) if env is not None else None
+            flags = _EXTENDED_STARTUPINFO_PRESENT | _CREATE_UNICODE_ENVIRONMENT
+            if not k.CreateProcessW(
+                None, cmdline, None, None, False, flags, block, cwd or None,
+                ctypes.byref(si), ctypes.byref(pi),
+            ):
+                # The command or the folder — NOT a ConPTY failure.
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            k.DeleteProcThreadAttributeList(attrs)
+        k.CloseHandle(pi.hThread)
+        self._hproc = pi.hProcess
+        self.pid = int(pi.dwProcessId)
+
+    def _read_loop(self) -> None:
+        api = _conpty_api()
+        ctypes, k = api.ctypes, api.k32
+        buf = ctypes.create_string_buffer(_CONPTY_READ_BYTES)
+        n = api.wintypes.DWORD(0)
+        handle = self._out_read
+        try:
+            while True:
+                # Blocks without the GIL (ctypes releases it) until ConPTY
+                # writes — no poll, no sleep.
+                if not k.ReadFile(handle, buf, _CONPTY_READ_BYTES, ctypes.byref(n), None):
+                    break  # ERROR_BROKEN_PIPE: the pseudoconsole was closed
+                if not n.value:
+                    continue
+                data = ctypes.string_at(buf, n.value)
+                handler = self._on_output
+                if handler is None:
+                    self._queue.put(data)
+                    continue
+                try:
+                    handler(data)
+                except Exception:  # noqa: BLE001 — a consumer bug must not end the stream
+                    _log().debug("conpty output handler raised", exc_info=True)
+        finally:
+            self._out_read = None
+            k.CloseHandle(handle)
+            self._eof.set()
+            eof = self._on_eof
+            if eof is not None:
+                try:
+                    eof()
+                except Exception:  # noqa: BLE001
+                    _log().debug("conpty eof handler raised", exc_info=True)
+
+    def _wait_loop(self) -> None:
+        api = _conpty_api()
+        k = api.k32
+        k.WaitForSingleObject(self._hproc, _INFINITE)
+        code = api.wintypes.DWORD(0)
+        if k.GetExitCodeProcess(self._hproc, api.ctypes.byref(code)):
+            self._exit_code = int(code.value)
+        self._exited.set()
+        self._close_pty()
+        with self._lock:
+            handle, self._hproc = self._hproc, None
+        if handle:
+            k.CloseHandle(handle)
+
+    def _close_pty(self) -> None:
+        """Close the pseudoconsole exactly once: every console process still
+        attached goes down, and the reader drains to EOF."""
+        with self._lock:
+            if self._pty_closed or self._hpc is None:
+                return
+            self._pty_closed = True
+        api = _conpty_api()
+        # Older Windows blocks here until the output pipe is drained — the
+        # reader thread is doing exactly that, so it returns.
+        api.k32.ClosePseudoConsole(self._hpc)
+        with self._in_lock:  # a write blocked on the dead console has returned now
+            handle, self._in_write = self._in_write, None
+        if handle:
+            api.k32.CloseHandle(handle)
+
+    def write(self, data: str | bytes) -> None:
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        if not data:
+            return
+        api = _conpty_api() if sys.platform == "win32" else None
+        if api is None:
+            return
+        ctypes, k = api.ctypes, api.k32
+        written = api.wintypes.DWORD(0)
+        with self._in_lock:
+            handle = self._in_write
+            if not handle:
+                return  # closed or never started: a dead PTY swallows input
+            view = memoryview(data)
+            while view:
+                chunk = bytes(view[:_CONPTY_PIPE_BYTES])
+                if not k.WriteFile(handle, chunk, len(chunk), ctypes.byref(written), None):
+                    return  # the console is going away — same as pywinpty's EOFError path
+                view = view[written.value:]
+
+    def read_nonblocking(self, max_bytes: int = 65536) -> bytes:
+        """Only for a caller that installed no handler — the session never polls."""
+        buf = bytearray()
+        while len(buf) < max_bytes:
+            try:
+                buf += self._queue.get_nowait()
+            except queue.Empty:
+                break
+        return bytes(buf)
+
+    def resize(self, cols: int, rows: int) -> None:
+        with self._lock:
+            if self._pty_closed or self._hpc is None:
+                return
+            api = _conpty_api()
+            api.k32.ResizePseudoConsole(self._hpc, api.COORD(_clamp_dim(cols), _clamp_dim(rows)))
+
+    def is_alive(self) -> bool:
+        return self._started and not self._exited.is_set()
+
+    def kill(self) -> None:
+        """Terminate the shell; the waiter then closes the pseudoconsole, which
+        takes every console process attached to it. Idempotent — the manager
+        kills a closed pane and ``kill_all`` kills it again at shutdown."""
+        if not self._started:
+            return
+        with self._lock:
+            handle = self._hproc
+            alive = handle is not None and not self._exited.is_set()
+            if alive:
+                _conpty_api().k32.TerminateProcess(handle, 1)
+        if not alive:
+            self._close_pty()
+
+    @property
+    def exit_code(self) -> int | None:
+        return self._exit_code
+
+
+def _clamp_dim(n) -> int:
+    """A COORD field is a SHORT; a nonsense size must not wrap negative."""
+    try:
+        return max(1, min(int(n), 32767))
+    except (TypeError, ValueError):
+        return 80
+
+
+def _log():
+    import logging
+
+    return logging.getLogger(__name__)
+
+
+def _winpty_importable() -> bool:
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("winpty") is not None
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def default_backend() -> PtyBackend:
     """Pick the best backend for this OS *without* spawning anything.
 
-    Windows → :class:`WinPtyBackend` (if ``winpty`` importable) else
-    :class:`PipeBackend`; POSIX → :class:`PosixPtyBackend`; otherwise
-    :class:`PipeBackend`.
+    Windows → :class:`ConPtyBackend` (v1.248.0: kernel32's ConPTY, bytes,
+    event-driven) when the OS has it and it has not failed to START in this
+    process; else :class:`WinPtyBackend` (pywinpty) if importable; else
+    :class:`PipeBackend`. ``IRONJARVIS_PTY_BACKEND=pywinpty`` forces pywinpty
+    — the escape hatch if the raw backend misbehaves on some machine — and
+    ``=pipe`` forces the pipe shell. POSIX → :class:`PosixPtyBackend`;
+    otherwise :class:`PipeBackend`.
     """
     if sys.platform == "win32":
-        try:
-            import importlib.util
-
-            if importlib.util.find_spec("winpty") is not None:
-                return WinPtyBackend()
-        except Exception:  # pragma: no cover - defensive
-            pass
+        forced = os.environ.get(PTY_BACKEND_ENV, "").strip().lower()
+        if forced == "pipe":
+            return PipeBackend()
+        winpty_ok = _winpty_importable()
+        if forced in ("pywinpty", "winpty") and winpty_ok:
+            return WinPtyBackend()
+        if not _CONPTY_BROKEN and conpty_available():
+            return ConPtyBackend()
+        if winpty_ok:
+            return WinPtyBackend()
         return PipeBackend()
     if os.name == "posix":
         return PosixPtyBackend()

@@ -304,28 +304,84 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # a client that drops mid-replay just reconnects
             pass
 
+        # EVENT-DRIVEN (v1.248.0). This pump used to run `read(); take();
+        # sleep(0.01)` for as long as the pane was open — 100 wakeups a second
+        # per attach — and the 2026-09-11 bench put 8 idle attached panes at a
+        # whole CPU core. A pushing backend (raw ConPTY) delivers each chunk
+        # from its own reader thread and the subscription wakes this pump
+        # through the loop, so an idle pane costs nothing. A polling backend
+        # (the pywinpty fallback, the pipe shell, the tests' FakeBackend) keeps
+        # the read-and-sleep cadence it always had.
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+
+        def _wake_from_any_thread() -> None:
+            try:
+                loop.call_soon_threadsafe(wake.set)
+            except RuntimeError:  # the loop is closing (shutdown): nothing to wake
+                pass
+
+        sub.set_waker(_wake_from_any_thread)
+        wake.set()  # anything pushed between subscribe() and here goes out first
+        pushes = session.pushes_output
+        #: A pushing pump's safety net only — a chunk, an overflow and the end
+        #: of the output all wake it immediately.
+        IDLE_WAKE_S = 5.0
+        # FLOW CONTROL (v1.248.0). The pane sends {"type":"flow","paused":true}
+        # when its renderer's backlog passes its high mark and false once it
+        # drains below its low mark (the dashboard only sends it to a daemon
+        # at >= 1.248.0). While paused this attach is SENT nothing — the PTY
+        # is still READ, because a PTY nobody reads blocks the program in it,
+        # and the output queues in `sub` under the same 8 MB bound (→ 1013 →
+        # a fresh replay). Per attach: a paused phone never holds up the desktop.
+        flow = {"paused": False}
+
+        async def sleep_until_woken(timeout: float) -> None:
+            try:
+                await asyncio.wait_for(wake.wait(), timeout)
+            except asyncio.TimeoutError:
+                pass
+
+        async def overflow_close() -> None:
+            # So far behind that catching up would be a lie about the present:
+            # drop the link, and the pane reconnects to a fresh replay (any
+            # close but 4000 retries).
+            try:
+                await ws.close(code=ATTACH_OVERFLOW)
+            except Exception:
+                pass
+
         async def pump_output() -> None:  # PTY -> client
-            # 10ms idle poll: measured end-to-end, the shell's own echo is
-            # ~50ms (ConPTY/PowerShell), so our added worst-case latency should
-            # stay well under it. 100 wakeups/s per idle terminal is noise.
             while True:
-                session.read()  # whoever reads, every attach gets the chunk
+                wake.clear()  # BEFORE the take: a push after it re-arms the event
+                if flow["paused"]:
+                    if not pushes:
+                        session.read()  # still READ: only the send is held
+                    if sub.overflowed:
+                        await overflow_close()
+                        break
+                    if pushes:
+                        await sleep_until_woken(IDLE_WAKE_S)
+                    else:
+                        await asyncio.sleep(0.01)
+                    continue
+                if not pushes:
+                    session.read()  # whoever reads, every attach gets the chunk
                 data = sub.take()
                 if sub.overflowed:
-                    # So far behind that catching up would be a lie about the
-                    # present: drop the link, and the pane reconnects to a
-                    # fresh replay (any close but 4000 retries).
-                    try:
-                        await ws.close(code=ATTACH_OVERFLOW)
-                    except Exception:
-                        pass
+                    await overflow_close()
                     break
                 if data:
                     await ws.send_bytes(data)
-                elif not session.alive:
+                    continue
+                if not session.alive and session.output_finished:
                     await close_exited()  # tell the client WHY, then stop
                     break
+                if pushes:
+                    await sleep_until_woken(IDLE_WAKE_S)
                 else:
+                    # 10 ms: the shell's own echo is ~50 ms (ConPTY/PowerShell),
+                    # so a polling backend's added latency stays well under it.
                     await asyncio.sleep(0.01)
 
         out = asyncio.create_task(pump_output())
@@ -368,6 +424,15 @@ def register(app: FastAPI, d) -> None:
                                 continue
                             repaint_pending = False
                             session.resize(cols, rows)
+                        elif isinstance(obj, dict) and obj.get("type") == "flow":
+                            # v1.248.0 flow control (see pump_output). Only a
+                            # real bool counts; anything else is ignored —
+                            # never typed into the shell, never a close.
+                            paused = obj.get("paused")
+                            if isinstance(paused, bool):
+                                flow["paused"] = paused
+                                if not paused:
+                                    wake.set()  # flush what queued, in order
                         else:
                             session.write(text)
                     elif msg.get("bytes") is not None:
