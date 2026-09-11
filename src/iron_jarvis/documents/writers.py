@@ -540,6 +540,115 @@ def _docx_render(doc: Any, blocks: list[Block]) -> None:
 # --- xlsx ----------------------------------------------------------------------
 
 
+# --- spreadsheet content a model sent as TEXT (v1.244.0) ------------------------
+
+
+def _is_records(v: Any) -> bool:
+    return isinstance(v, (list, tuple)) and bool(v) and all(isinstance(r, dict) for r in v)
+
+
+def _is_table(v: Any) -> bool:
+    return (
+        isinstance(v, (list, tuple))
+        and bool(v)
+        and (all(isinstance(r, (list, tuple)) for r in v) or _is_records(v))
+    )
+
+
+def _is_sheet(v: Any) -> bool:
+    return _is_table(v) or (isinstance(v, dict) and "rows" in v)
+
+
+def _records_to_rows(records: Any) -> list[list[Any]]:
+    """``[{column: value}, ...]`` → ``[header, *rows]``, columns in first-seen order."""
+    header: list[Any] = []
+    for rec in records:
+        for key in rec:
+            if key not in header:
+                header.append(key)
+    return [[str(h) for h in header]] + [[rec.get(h, "") for h in header] for rec in records]
+
+
+def _sheet_rows(v: Any) -> Any:
+    if _is_records(v):
+        return _records_to_rows(v)
+    if isinstance(v, dict) and _is_records(v.get("rows")):
+        return {**v, "rows": _records_to_rows(v["rows"])}
+    return v
+
+
+def _markdown_table_rows(text: str) -> "list[list[Any]] | None":
+    """Rows for markdown holding at least one pipe table, else None.
+
+    Tables become rows (cell formatting stripped); every other block keeps its
+    text as a one-cell row in its place, so a title or a closing note the model
+    wrote is not dropped on the way into the sheet.
+    """
+    from .markdown import _plain, parse_markdown
+
+    blocks = parse_markdown(text)
+    if not any(b.kind == "table" and b.rows for b in blocks):
+        return None
+    rows: list[list[Any]] = []
+    prev = ""
+    for b in blocks:
+        if b.kind == "table" and b.rows:
+            if rows:
+                rows.append([])
+            rows.extend([_plain(str(c)).strip() for c in r] for r in b.rows)
+            prev = "table"
+        elif b.kind != "hr" and (b.text or "").strip():
+            if prev == "table":
+                rows.append([])
+            rows.append([b.text.strip()])
+            prev = "text"
+    return rows
+
+
+def _spreadsheet_content(content: Any) -> tuple[Any, bool]:
+    """The table a model MEANT, for .xlsx/.csv — ``(content, recovered)``.
+
+    Replayed on the live model (v1.244.0): asked for "an Excel workbook grouped
+    by category", the chat called write_document with the rows as a JSON
+    STRING — ``'[["Date", "Vendor", ...], ...]'`` — and this writer, which
+    treats a string as lines, put the whole table into cell A1. The reply said
+    "Done!" over a one-cell workbook and the QA lint called it clean. The
+    tool's schema invites the slip (content may be "a string, a list of rows,
+    or {'sheets': ...}"), and local models stringify structured arguments.
+
+    So a string is first read as the structure it spells — JSON rows or sheets
+    (through ``core.jsonish``, the one lenient ladder), then a markdown pipe
+    table (the shape the model's own reply used). A list of RECORDS
+    (``{column: value}`` per row) becomes a header row plus rows, whether it
+    arrived as text or as real JSON, and ``{name: rows}`` without the
+    ``sheets`` wrapper is read as sheets. Anything else comes back untouched
+    with ``recovered`` False, so plain text still lands one line per row.
+    """
+    value = content
+    recovered = False
+    if isinstance(value, str):
+        from ..core.jsonish import loads_lenient
+
+        parsed = loads_lenient(value, want=(list, dict))
+        if _is_table(parsed) or (
+            isinstance(parsed, dict)
+            and (isinstance(parsed.get("sheets"), dict) or (parsed and all(_is_sheet(v) for v in parsed.values())))
+        ):
+            value, recovered = parsed, True
+        else:
+            md = _markdown_table_rows(value)
+            return (md, True) if md else (content, False)
+    if _is_records(value):
+        return _records_to_rows(value), True
+    if isinstance(value, dict) and not isinstance(value.get("sheets"), dict):
+        if value and all(_is_sheet(v) for v in value.values()):
+            return {"sheets": {k: _sheet_rows(v) for k, v in value.items()}}, True
+    if isinstance(value, dict) and isinstance(value.get("sheets"), dict):
+        sheets = {k: _sheet_rows(v) for k, v in value["sheets"].items()}
+        return {**value, "sheets": sheets}, recovered
+    return value, recovered
+
+
 def _write_xlsx(
     p: Path,
     content: Any,
@@ -553,6 +662,13 @@ def _write_xlsx(
     # sheet value may be {"rows": [...], "charts": [...]} (a shape the legacy
     # writer never accepted, so no existing content changes meaning).
     opts, theme = _beauty_opts(options, warnings)
+
+    # Text that spells a table is written AS the table (v1.244.0 — see
+    # _spreadsheet_content). Recovered rows take the sheets path so they get
+    # what a real sheet gets: numbers and dates as values, a bold header.
+    content, recovered = _spreadsheet_content(content)
+    if recovered and _is_table(content):
+        content = {"sheets": {"Sheet1": content}}
 
     wb = Workbook()
     if isinstance(content, dict) and isinstance(content.get("sheets"), dict):
@@ -1272,6 +1388,21 @@ def _pdf_table_fallback(
 
 
 def _write_csv(p: Path, content: Any) -> None:
+    # Same recovery as .xlsx (v1.244.0 — _spreadsheet_content): a table sent
+    # as JSON or markdown text is written as rows. A CSV holds one sheet, so a
+    # multi-sheet value is written sheet after sheet under its name — nothing
+    # the model wrote is dropped.
+    content, _ = _spreadsheet_content(content)
+    if isinstance(content, dict) and isinstance(content.get("sheets"), dict):
+        stacked: list[Any] = []
+        for name, rows in content["sheets"].items():
+            if isinstance(rows, dict):
+                rows = rows.get("rows") or []
+            if stacked:
+                stacked.append([])
+            stacked.append([str(name)])
+            stacked.extend(rows if isinstance(rows, (list, tuple)) else [[rows]])
+        content = stacked
     with _atomic(p) as tmp:
         with open(tmp, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)

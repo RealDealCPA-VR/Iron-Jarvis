@@ -23,6 +23,7 @@ from ..schemas import (
     RedactScanBody,
     SaveCopyBody,
     UploadBody,
+    WorkfolderBody,
 )
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
@@ -122,6 +123,89 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
         target.write_bytes(data)
         return {"path": str(target), "name": name, "bytes": len(data)}
+
+    @app.post("/documents/workfolder")
+    def documents_workfolder(body: WorkfolderBody) -> dict[str, Any]:
+        """A no-project conversation's own visible folder (v1.244.0).
+
+        ``documents/workfolder.py`` records the report this answers. Three
+        intents, one route:
+
+        * ``into`` — a folder this route made earlier for the same
+          conversation: later attachments are copied in beside the first. It
+          must sit under ``config.chat_files_dir``; anything else is a 400,
+          because a route that copied uploads into any folder the caller named
+          would be a file-copy primitive nobody asked for.
+        * ``prefer`` — the folder the chat is already pointed at. Kept as it
+          is when the app can work in it (``root_problem``, the ONE definition
+          every "work in the user's own folder" door uses), with nothing
+          copied: the user chose that folder, and filling it with duplicates
+          is not ours to decide.
+        * otherwise a NEW dated folder under ``chat_files_dir`` with the
+          uploads copied in — and, when ``prefer`` was refused, a ``note``
+          naming the refused folder, why, and where the work goes instead, so
+          a sticky pick such as ``C:\\Users`` is never replaced silently.
+
+        Sync on purpose: every step stats, probes or copies, so FastAPI runs
+        it on the threadpool, off the event loop (v1.153.1).
+        """
+        from ...core.fs_policy import root_problem
+        from ...documents.workfolder import copy_uploads_into, make_chat_workfolder
+
+        cfg = d.platform.config
+        uploads = cfg.home / "uploads"
+        root = cfg.chat_files_dir
+
+        into = (body.into or "").strip()
+        if into:
+            target = Path(into)
+            try:
+                target.resolve().relative_to(root.resolve())
+                ours = target.is_dir()
+            except (ValueError, OSError):
+                ours = False
+            if not ours:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"not a conversation folder under {root}: {into}",
+                )
+            copied, skipped = copy_uploads_into(target, body.files, uploads)
+            return {
+                "path": str(target),
+                "created": False,
+                "files": copied,
+                "skipped": skipped,
+                "note": "",
+            }
+
+        prefer = (body.prefer or "").strip()
+        refused = ""
+        if prefer:
+            try:
+                refused = root_problem(prefer) or ""
+            except Exception as exc:  # noqa: BLE001 — an unreadable pick is not usable
+                refused = f"{type(exc).__name__}: {exc}"
+            if not refused:
+                return {"path": prefer, "created": False, "files": [], "skipped": [], "note": ""}
+
+        title = body.title or (Path(body.files[0]).name if body.files else "")
+        try:
+            made = make_chat_workfolder(root, title, body.files, uploads)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"could not make a working folder under {root}: {exc}",
+            )
+        problem = root_problem(made["path"])
+        if problem:
+            raise HTTPException(status_code=409, detail=problem)
+        made["note"] = (
+            f"This chat was pointed at {prefer}, but {refused}. "
+            f"Its files go in {made['path']} instead."
+            if prefer
+            else ""
+        )
+        return made
 
     # ------------------------------------------------------------------ #
     # Preview + native open (v1.89.0) — the chat's embedded document panel.

@@ -347,6 +347,11 @@ class Config(BaseModel):
     active_project_id: str | None = None
     comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
+    # Where a chat with NO project keeps the files it was handed and the files
+    # it makes (v1.244.0): one dated folder per conversation, so the work lands
+    # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
+    # `chat_files_dir`; see documents/workfolder.py for why it exists.
+    chat_files_root: str = ""
     obsidian_vault: str | None = None  # long-term memory vault path
     notion_database_id: str | None = None  # long-term memory Notion DB
     computer_use: dict[str, Any] = Field(default_factory=default_computer_use)
@@ -591,6 +596,17 @@ class Config(BaseModel):
     @property
     def workspaces_dir(self) -> Path:
         return self.home / "workspaces"
+
+    @property
+    def chat_files_dir(self) -> Path:
+        """Where no-project conversations get their folders (v1.244.0):
+        ``chat_files_root`` when set, else ``<Documents>\\Iron Jarvis``."""
+        raw = (self.chat_files_root or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        from .userdirs import documents_dir
+
+        return documents_dir() / "Iron Jarvis"
 
     @property
     def browser_dir(self) -> Path:

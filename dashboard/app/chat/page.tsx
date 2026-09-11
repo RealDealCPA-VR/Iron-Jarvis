@@ -741,6 +741,16 @@ interface UploadedFile {
   bytes: number;
 }
 
+/** POST /documents/workfolder response (v1.244.0): the conversation's own
+ *  folder, and where each attached upload was copied inside it. */
+interface WorkfolderResult {
+  path: string;
+  created: boolean;
+  files: { name: string; path: string; bytes: number; source: string }[];
+  skipped?: { source: string; reason: string }[];
+  note?: string;
+}
+
 // Attachment limits: keep uploads snappy and the /chat context sane.
 const MAX_ATTACHMENTS = 4;
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -1186,6 +1196,13 @@ export default function ChatPage() {
   }, []);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+  // The folder THIS conversation was given for its files (v1.244.0 — see
+  // placeInWorkfolder): shown as a chip, and later attachments join it. The
+  // ref is what the next attach reads; the state is what the chip renders.
+  const convFolderRef = useRef<string | null>(null);
+  const [workfolder, setWorkfolder] = useState<string | null>(null);
+  // Why the chat's previous folder was not used, when it was replaced.
+  const [workfolderNote, setWorkfolderNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [input, setInput] = useState("");
@@ -2477,6 +2494,11 @@ export default function ChatPage() {
     setSaveFailure(null); // its Retry belonged to the conversation being left
     setSessionId(null);
     setAttachments([]);
+    // The conversation folder chip belongs to the conversation that made it;
+    // a reopened thread still works in its saved folder (setup.workspace_dir).
+    convFolderRef.current = null;
+    setWorkfolder(null);
+    setWorkfolderNote("");
     setSelectedTools([]); // armed tools are per-conversation
     setSelectedConnectors([]); // so are connector toggles
     // New chat returns to the user's DEFAULT posture (the localStorage one),
@@ -2747,24 +2769,83 @@ export default function ChatPage() {
     if (accepted.length === 0) return;
     setUploading(true);
     try {
+      const uploaded: UploadedFile[] = [];
       for (const f of accepted) {
         const content_b64 = await readAsBase64(f);
         const res = await post<UploadResult>("/documents/upload", {
           filename: f.name,
           content_b64,
         });
-        setAttachments((prev) =>
-          prev.length >= MAX_ATTACHMENTS
-            ? prev
-            : [...prev, { name: res.name, path: res.path, bytes: f.size }],
-        );
+        uploaded.push({ name: res.name, path: res.path, bytes: f.size });
       }
+      const placed = await placeInWorkfolder(uploaded);
+      setAttachments((prev) => [...prev, ...placed].slice(0, MAX_ATTACHMENTS));
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setUploading(false);
     }
+  }
+
+  /**
+   * THE CONVERSATION GETS A FOLDER (v1.244.0).
+   *
+   * Reported: "attach a document and ask for work — a lagging delay, a request
+   * for information, then a completed screen with absolutely no output; it
+   * works inside a project." Replayed on the live model: with no project the
+   * chat had no folder and no file tools, so it could not make the workbook it
+   * was asked for, handed the job to an agent in a hidden AppData scratch
+   * folder, and that agent built the file, stopped twice for approval, ran out
+   * of steps and said "Task failed" beside a file nobody could find.
+   *
+   * Selecting a project avoids all of it by binding a REAL folder and arming
+   * the file essentials, so this does the same for a plain chat the moment it
+   * is handed a file: the daemon makes a dated folder under Documents\Iron
+   * Jarvis (or keeps the folder the chat already points at, when the app can
+   * work in it), copies the uploads in, and the chat binds it and arms
+   * PROJECT_FILE_TOOLS over an empty set. Everything the project path already
+   * does — the folder grounding, the tools, a hand-off carrying the folder —
+   * then applies unchanged. The folder is PER CONVERSATION: it rides the
+   * thread's setup and is never written to the sticky WORKSPACE_KEY default.
+   *
+   * Never loses the file: if the folder cannot be made, the upload attaches
+   * exactly as it always did and the user is told why.
+   */
+  async function placeInWorkfolder(files: UploadedFile[]): Promise<UploadedFile[]> {
+    if (projectIdRef.current || files.length === 0) return files;
+    const own = convFolderRef.current;
+    let res: WorkfolderResult;
+    try {
+      res = await post<WorkfolderResult>("/documents/workfolder", {
+        files: files.map((f) => f.path),
+        ...(own ? { into: own } : { title: files[0].name, prefer: workspaceDir ?? "" }),
+      });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) throw e; // offline — the caller says so
+      setError(
+        `Attached, but this chat has no folder to save its work in: ${
+          e instanceof ApiError ? e.message : String(e)
+        }`,
+      );
+      return files;
+    }
+    if (res.created) {
+      convFolderRef.current = res.path;
+      setWorkfolder(res.path);
+    }
+    setWorkfolderNote(res.note ?? "");
+    if (res.path && res.path !== workspaceDir) setWorkspaceDir(res.path);
+    if (selectedToolsRef.current.length === 0) {
+      setSelectedTools(PROJECT_FILE_TOOLS);
+      autoArmedRef.current = true;
+    }
+    markSetupChanged(); // the folder + the tools ride this conversation's setup
+    const copies = new Map(res.files.map((c) => [c.source, c]));
+    return files.map((f) => {
+      const c = copies.get(f.path);
+      return c ? { name: c.name, path: c.path, bytes: f.bytes } : f;
+    });
   }
 
   // Stable handle for the once-registered window drag listeners below.
@@ -4847,6 +4928,10 @@ export default function ChatPage() {
     setFailedTurn(null);
     setSaveFailure(null); // its Retry belonged to the conversation being left
     setAttachments([]);
+    // A fresh conversation has no folder of its own until it is handed a file.
+    convFolderRef.current = null;
+    setWorkfolder(null);
+    setWorkfolderNote("");
     // A selected project keeps its file essentials armed on a fresh
     // conversation (its folder stays live); otherwise nothing is armed.
     const proj = projectIdRef.current
@@ -6280,10 +6365,49 @@ export default function ChatPage() {
                   indistinguishable from one that failed. Armed tools/connectors
                   stay chat-only because those are chat-loop mechanics. */}
               {(attachments.length > 0 ||
+                workfolder !== null ||
                 activeSkill !== "" ||
                 selectedTools.length > 0 ||
                 selectedConnectors.length > 0) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
+                  {/* THIS CONVERSATION'S FOLDER (v1.244.0, placeInWorkfolder) —
+                      where the files it was handed were copied and where what
+                      it makes is saved. On screen because an output nobody can
+                      find is exactly the defect this exists to fix. */}
+                  {workfolder !== null && (
+                    <span
+                      data-testid="workfolder-chip"
+                      title={`This chat saves its work in ${workfolder}`}
+                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
+                    >
+                      <FolderOpen size={11} className="shrink-0 text-accent-soft" />
+                      <span className="max-w-[18rem] truncate">
+                        {workfolder.split(/[\\/]/).filter(Boolean).pop() ?? workfolder}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void post("/documents/open", { path: workfolder }).catch((e) =>
+                            setError(e instanceof ApiError ? e.message : String(e)),
+                          );
+                        }}
+                        aria-label="Open this chat's folder"
+                        title="Open this folder"
+                        className="text-accent-soft/80 transition-colors hover:text-accent"
+                      >
+                        Open
+                      </button>
+                    </span>
+                  )}
+                  {workfolderNote && (
+                    <span
+                      data-testid="workfolder-note"
+                      className="max-w-full truncate text-[11px] text-amber-300"
+                      title={workfolderNote}
+                    >
+                      {workfolderNote}
+                    </span>
+                  )}
                   {activeSkill !== "" && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
                       <Sparkles size={11} className="shrink-0 text-accent-soft" />

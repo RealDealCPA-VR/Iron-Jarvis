@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.243.0 (2026-09-10).*
+holds itself to. Current as of v1.244.0 (2026-09-11).*
 
 ---
 
@@ -47,6 +47,17 @@ Chat is where most work happens, and it is wired into everything:
 - **Attachments**: drag-drop or the "+" menu (up to 4 files, 20 MB each).
   Images go to vision; documents are inlined or retrieved via RAG with page
   references, sized to the answering model's context window.
+- **Attach and ask, no project needed** (v1.244.0): the first file you attach
+  to a chat that has no project gives that conversation its own folder —
+  `Documents\Iron Jarvis\<date> <file name>` — with your file copied in, and
+  arms the same file tools a project does (find, read, create a document,
+  write a file). The chat then does the job itself and saves what it makes
+  next to your file; the folder shows as a chip above the message box with an
+  **Open** button. Later attachments in the same chat join the same folder.
+  If the chat was already pointed at a folder the app can save in, that
+  folder is used instead; if it was pointed at one it cannot (such as
+  `C:\Users`), the chip says so. Change the parent folder with the
+  `chat_files_root` setting.
 - **Files rail**: every file a conversation *makes or was given* appears on
   the right — preview (spreadsheets as sheets, PDFs and images inline, docx as
   a Word-faithful page), download, open in the native app, save a copy, and a

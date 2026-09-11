@@ -361,6 +361,19 @@ class UploadBody(BaseModel):
     content_b64: str
 
 
+class WorkfolderBody(BaseModel):
+    """``POST /documents/workfolder`` (v1.244.0) — a no-project conversation's
+    own visible folder. ``files`` are paths ``/documents/upload`` returned;
+    ``title`` names a NEW folder; ``prefer`` is the folder the chat is already
+    pointed at (kept when the app can work in it); ``into`` is a folder this
+    route made earlier for the same conversation (later attachments join it)."""
+
+    files: list[str] = []
+    title: str = ""
+    prefer: str = ""
+    into: str = ""
+
+
 class SettingsBody(BaseModel):
     values: dict[str, Any]
 
@@ -467,6 +480,9 @@ _SETTINGS_KEYS = [
     "routing_local_ladder",
     # Short-horizon decomposition for local models (v1.132.0) — same story.
     "decompose_local_tasks",
+    # Where a chat with no project keeps each conversation's folder (v1.244.0;
+    # "" = <Documents>\Iron Jarvis — see config.chat_files_dir).
+    "chat_files_root",
     # OpenCode store override for the Usage merge (dir or .db path).
     "opencode_data_dir",
     # Pi coding agent session-store override for the Usage merge (dir path).

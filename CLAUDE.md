@@ -529,6 +529,40 @@ does not need a bump, stop and bump it.
   a PTY nobody reads fills its pipe and the Claude in it BLOCKS until someone
   looks. `tests/test_terminal_attach_v1243.py`,
   `dashboard/__tests__/terminal-host-v1243.test.ts`.
+- **A chat handed a file gets a FOLDER, project or not** (v1.244.0). The
+  user's report: attach a document in chat, ask for work — "a lagging delay, a
+  request for information and then a completed screen with absolutely no
+  output"; fine inside a project. Replayed on the live model: a no-project
+  chat armed NO file tools (the page arms `PROJECT_FILE_TOOLS` only when a
+  project is selected) and its tool workspace was the hidden `home/uploads`,
+  so it could not create the workbook, escalated, and the agent ran in
+  `workspaces/<sid>` under AppData — built the right file, stopped twice on
+  shell approvals, hit max steps, "Task failed" beside a file nobody could
+  find. The sticky `ij_chat_workspace` default made it worse: the live
+  install's was `C:\Users`, which `root_problem` refuses, so both the turn and
+  the hand-off fell back to hidden folders. Now the page's `placeInWorkfolder`
+  runs on every attach with no project: `POST /documents/workfolder` makes
+  `<chat_files_dir>/<YYYY-MM-DD> <title>` (`config.chat_files_root`, default
+  the Documents Known Folder + `Iron Jarvis`, `core/userdirs.py`), copies the
+  uploads in (ONLY files under `home/uploads` — it must not become a general
+  copy primitive; `into` must sit under `chat_files_dir`), keeps a `prefer`
+  folder that passes `root_problem` (no copies), and NAMES a refused one in
+  `note`. The page binds it as `workspace_dir` (per conversation — never
+  written to `WORKSPACE_KEY`), arms `PROJECT_FILE_TOOLS` over an empty set,
+  and shows it as a chip with Open. A folder failure attaches the upload
+  exactly as before and says why. `tests/test_chat_workfolder_v1244.py`,
+  `dashboard/__tests__/chat-workfolder-v1244.test.tsx`. TWO MORE DEFECTS the
+  same replay found once the folder worked, both "Done!" over nothing usable:
+  (1) the model called `write_document` with the rows as a JSON STRING and the
+  .xlsx writer (text = lines) put the whole table in cell A1, QA-lint clean —
+  `writers._spreadsheet_content` now reads .xlsx/.csv text as the table it
+  spells (JSON rows/sheets via `core.jsonish`, records, `{name: rows}`, a
+  markdown pipe table with the text around it kept) and recovered rows take
+  the sheets path so numbers/dates/header are real; plain text keeps one line
+  per row (`tests/test_sheet_from_text_v1244.py`). (2) the working-folder
+  grounding block said "opened from a Build terminal pane" and listed "this
+  project", so the model called a plain chat's folder "your project folder" —
+  the block is surface-neutral now and names a project only when one is.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing

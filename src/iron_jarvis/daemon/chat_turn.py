@@ -1563,12 +1563,20 @@ def _workspace_grounding_block(
     if not ws:
         return ""
     if resolved is not None and resolved[1]:
+        # SURFACE-NEUTRAL (v1.244.0). This line used to say "opened from a
+        # Build terminal pane" — true when only Build panes bound a folder,
+        # false once a plain chat got its own folder for an attached file, and
+        # the model then told the user their workbook was "in your project
+        # folder" in a chat with no project. A project, when there is one, is
+        # named by its own block; this one only names the folder.
         return (
             "\n\n# Working folder (bound by the user)\n"
-            f"This chat was opened from a Build terminal pane bound to the "
-            f"folder: {resolved[0]}\n"
-            'When the user says "this codebase", "this project", "these '
-            'files", or "here", they mean that folder and its contents.'
+            f"This chat is working in the folder: {resolved[0]}\n"
+            "Files you create are saved there, and files the user attached may "
+            'have been copied into it. When the user says "this codebase", '
+            '"these files", "this folder", or "here", they mean that folder and '
+            "its contents. Call it the working folder — not a project, unless a "
+            "project is named elsewhere in this prompt."
         )
     return (
         "\n\n# Working folder (bound by the user)\n"
