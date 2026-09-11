@@ -581,6 +581,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
                 log.exception("boot rehydration step %s failed", name)
 
+        # v1.250.0 (S-01): warm the OpenCode allowlist FIRST, before any other
+        # boot step. `available("opencode-cli")` resolves it through
+        # `_opencode_allowed`, which SHELLS OUT to `opencode models` — measured
+        # 1,647 ms cold on this machine — and the first caller is the first
+        # `GET /health`, which is the desktop's own startup gate. Started here
+        # it overlaps the rest of boot instead of being paid serially after it
+        # (measured on the frozen build: startup-complete -> first healthy
+        # /health was 1.96 s before this warm existed). Fire-and-forget on a
+        # thread; a failure caches "none allowed" exactly as the lazy path
+        # would, and `refresh_opencode()` still re-resolves when the user saves
+        # the setting.
+        _rehydrate_step("warm_opencode", platform.providers.warm_opencode)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # AFTER session reconciliation by contract: a goal stranded mid-iteration
         # reads its session's honest FAILED/interrupted verdict (v1.208.0).

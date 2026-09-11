@@ -11,6 +11,7 @@ what makes "connect a model and it just works" true. Browser-session providers
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -93,6 +94,10 @@ class ProviderManager:
         #: defaulting to "none") so a bare ProviderManager() never shells out.
         self._opencode_resolver: Callable[[], list[str]] = opencode_allowed or (lambda: [])
         self._opencode_cache: list[str] | None = None
+        #: Serialises that resolution so a caller arriving while the boot
+        #: warm-up is still shelling out WAITS for it instead of duplicating the
+        #: work (v1.250.0, S-01 — see :meth:`_opencode_allowed`).
+        self._opencode_lock = threading.Lock()
         #: Availability oracle for providers registered at RUNTIME (the local
         #: fleet). Returns None for names it doesn't own, so every built-in
         #: provider keeps its existing logic. Injected rather than name-branched
@@ -250,13 +255,30 @@ class ProviderManager:
         Cached because ``available()`` is on the routing hot path and the
         underlying detection shells out to ``opencode models`` and may probe a
         proxy. Call ``refresh_opencode()`` after the user changes the allowlist.
+
+        SINGLE-FLIGHT (v1.250.0, S-01): the resolution runs at most once at a
+        time, and a caller arriving mid-flight WAITS for it instead of starting
+        its own. Without this, :meth:`warm_opencode` bought NOTHING — the cache
+        is written only when the shell-out RETURNS, so the desktop's first
+        ``GET /health`` (which lands about half a second after the warm starts)
+        resolved a second time in parallel. Measured on the frozen build: that
+        first request cost 1,415 ms while racing the warm and 46 ms once the
+        warm had finished, and an interleaved A/B put the racing version 0.08 s
+        BEHIND no warm-up at all — two concurrent ``opencode models``
+        subprocesses. The fast path stays OUTSIDE the lock, so a warm cache
+        still costs one attribute read on the routing hot path.
         """
-        if self._opencode_cache is None:
-            try:
-                self._opencode_cache = list(self._opencode_resolver())
-            except Exception:  # noqa: BLE001 — detection never breaks routing
-                self._opencode_cache = []
-        return self._opencode_cache
+        cached = self._opencode_cache
+        if cached is not None:
+            return cached
+        with self._opencode_lock:
+            # Re-check: whoever held the lock has probably just filled it.
+            if self._opencode_cache is None:
+                try:
+                    self._opencode_cache = list(self._opencode_resolver())
+                except Exception:  # noqa: BLE001 — detection never breaks routing
+                    self._opencode_cache = []
+            return self._opencode_cache
 
     def refresh_opencode(self) -> None:
         """Drop the cached local-model list (settings changed / re-scan)."""
@@ -308,6 +330,41 @@ class ProviderManager:
         for binary in CLI_BINARIES.values():
             if self._cli_binary_present(binary):
                 DEFAULT_PROBE.warm((binary,))
+
+    def warm_opencode(self) -> None:
+        """Boot warm-up: resolve the OpenCode allowlist on a THREAD (v1.250.0,
+        S-01).
+
+        THE COST THIS MOVES OFF THE BOOT PATH: ``available("opencode-cli")``
+        asks :meth:`_opencode_allowed`, which shells out to ``opencode models``
+        and may probe a LiteLLM ``/model/info`` — and the first caller is the
+        FIRST ``GET /health``, i.e. the desktop's own startup gate. Measured on
+        the frozen build: that request cost 1,415 ms cold, and 46 ms once this
+        warm-up had finished.
+
+        THIS IS ONLY WORTH ANYTHING WITH THE SINGLE-FLIGHT IN
+        :meth:`_opencode_allowed`, so do not "simplify" that lock away: the
+        cache is written when the shell-out RETURNS, and without the lock the
+        gate raced this thread, re-resolved in parallel, and an interleaved A/B
+        measured the whole change 0.08 s SLOWER than no warm-up at all.
+
+        Fire-and-forget and never raises: ``_opencode_allowed`` already caches
+        ``[]`` on failure (the same value the lazy path would have cached), so
+        a missing binary or a dead proxy degrades to exactly today's behaviour.
+        ``refresh_opencode()`` still clears the cache when the user saves the
+        setting, so this can only ever make the first answer EARLIER, never
+        staler.
+        """
+
+        def _warm() -> None:
+            try:
+                self._opencode_allowed()
+            except Exception:  # noqa: BLE001 — a warm-up must never break boot
+                pass
+
+        threading.Thread(
+            target=_warm, name="opencode-warm", daemon=True
+        ).start()
 
     @staticmethod
     def _cli_binary_present(binary: str) -> bool:
