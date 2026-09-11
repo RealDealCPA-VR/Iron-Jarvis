@@ -156,6 +156,18 @@ _collect("pikepdf")
 # keeps that survivable; the spec entry is what keeps it from happening.
 _collect("pdf_inspector")
 
+# winrt (C-05) — the Windows OCR bindings documents/local_ocr.py uses to read
+# scans ON THIS PC before any vision model is asked. A namespace package whose
+# per-namespace modules are NATIVE .pyd extensions (`winrt._winrt_windows_*`),
+# imported lazily inside functions — PyInstaller's analysis cannot see them, so
+# collect_all + an explicit submodule sweep are both required. Its absence is
+# survivable BY DESIGN (local_ocr.available() is False and every scan goes to
+# the vision model exactly as before C-05), which is exactly why a silently
+# missing copy would never be noticed without the doctor's "local_ocr" check.
+if sys.platform == "win32":
+    _collect("winrt")
+    hiddenimports += collect_submodules("winrt")
+
 # --- markitdown: structure-preserving PDF/office -> Markdown -----------------
 # Lazily imported inside iron_jarvis.documents.pdf_markdown (only when a PDF is
 # ingested into memory), so the daemon still BOOTS without any of these. But

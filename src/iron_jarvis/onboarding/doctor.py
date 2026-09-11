@@ -501,6 +501,37 @@ def check_browser_addon() -> dict:
         level=RECOMMENDED,
     )
 
+def check_local_ocr() -> dict:
+    """Scanned pages can be read ON THIS PC (C-05).
+
+    RECOMMENDED, not required: without it a scan is readable only by a
+    vision-capable model, which is the pre-C-05 behaviour — and with no vision
+    model connected, not readable at all. It IMPORTS the bindings and actually
+    reads a rendered test line (``local_ocr.self_test``), because "the module
+    imports" is exactly the claim a packaged build can satisfy while the native
+    part is missing — the pikepdf lesson, checked instead of assumed.
+    """
+    from ..documents.local_ocr import self_test
+
+    result = self_test()
+    ok = bool(result.get("ok"))
+    langs = ", ".join(result.get("languages") or []) or "none"
+    return _result(
+        "local_ocr",
+        ok,
+        f"Scans are read on this PC (Windows OCR, languages: {langs})."
+        if ok
+        else f"Windows OCR is not usable here ({result.get('detail') or 'unknown'}) — "
+        "scanned forms need a vision-capable model instead.",
+        fix=""
+        if ok
+        else "Add the OCR language in Settings → Time & language → Language & region "
+        "→ (your language) → Language options → Optical character recognition. "
+        "If this is the packaged app, the winrt bindings are missing from the build.",
+        level=RECOMMENDED,
+    )
+
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -510,6 +541,7 @@ CHECKS = [
     check_pnpm,
     check_browser,
     check_pdf_classifier,
+    check_local_ocr,
     check_guide_docs,
     check_browser_addon,
 ]

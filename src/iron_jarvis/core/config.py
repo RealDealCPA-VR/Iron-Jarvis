@@ -327,6 +327,9 @@ class Config(BaseModel):
     #: the spend per document: one vision call per page.
     ocr_enabled: bool = True
     ocr_max_pages: int = 10
+    #: C-05: read scans ON THIS PC first (Windows' built-in OCR, offline) and
+    #: use a vision model only for pages it doubts. Off = the vision-only path.
+    ocr_local: bool = True
     permissions: dict[str, str] = Field(default_factory=default_permissions)
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
     sandbox_runtime: str = "native"  # "native" | "docker" (§16)

@@ -10,6 +10,28 @@ from iron_jarvis.platform import build_platform
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _local_ocr_off_by_default():
+    """Keep the offline suite on the VISION-path OCR it was written against (C-05).
+
+    ``documents/local_ocr`` reads scans with Windows' built-in OCR BEFORE any
+    vision model. On a dev box with an OCR language installed, every existing
+    OCR test (fake vision routers, call counts, exact notes) would otherwise be
+    answered by the real engine instead — and CI's Windows Server image may or
+    may not have a language pack, so the same test would pass on one runner and
+    fail on another. Tests for local OCR switch it back on explicitly
+    (``monkeypatch.setattr(local_ocr, "_FORCED_OFF", False)``).
+    """
+    from iron_jarvis.documents import local_ocr
+
+    original = local_ocr._FORCED_OFF
+    local_ocr._FORCED_OFF = True
+    try:
+        yield
+    finally:
+        local_ocr._FORCED_OFF = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_cli_provider_home():
     """Point locally-installed-CLI-provider detection at an empty home for the
     whole test session.

@@ -315,18 +315,28 @@ def file_digest(path: "str | Path") -> str:
     return h.hexdigest()
 
 
-def _record_name(digest: str, max_pages: int) -> str:
-    return f"{digest}.p{int(max_pages)}.json"
+def _method_of(note: str) -> str:
+    """Which engine produced a transcript, from its note (C-05): ``"local"``
+    when any page was read on this PC, else ``""`` (vision only)."""
+    from .local_ocr import LOCAL_NOTE
+
+    return "local" if LOCAL_NOTE in (note or "") else ""
 
 
-def load_cached(home: "str | Path", digest: str, max_pages: int) -> "dict[str, Any] | None":
-    """A prior transcription of these exact bytes at this exact page cap.
+def _record_name(digest: str, max_pages: int, method: str = "") -> str:
+    """The cache file for these bytes, this page cap and this METHOD.
 
-    A missing/corrupt/foreign-version record simply means "not cached" — the
-    cache may never be the reason a document fails to read.
+    A vision-only transcript keeps the pre-C-05 name, so every record already
+    on a user's disk stays valid. A transcript with locally-read pages gets its
+    own file: the two engines read the same bytes to different text, and
+    serving a local transcript under the vision key would freeze the cheaper
+    answer in place on the day a vision model is finally connected.
     """
-    root = cache_dir(home)
-    record_path = root / _record_name(digest, max_pages)
+    suffix = ".local" if method == "local" else ""
+    return f"{digest}.p{int(max_pages)}{suffix}.json"
+
+
+def _read_record(record_path: Path) -> "dict[str, Any] | None":
     try:
         record = json.loads(record_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -338,10 +348,26 @@ def load_cached(home: "str | Path", digest: str, max_pages: int) -> "dict[str, A
         or not record["text"].strip()
     ):
         return None
-    # Only a HIT arms the synchronous lookup: this root demonstrably holds
-    # transcriptions, so the hashing the sync path pays can actually pay off.
-    remember_cache_root(root)
     return record
+
+
+def load_cached(home: "str | Path", digest: str, max_pages: int) -> "dict[str, Any] | None":
+    """A prior transcription of these exact bytes at this exact page cap.
+
+    A missing/corrupt/foreign-version record simply means "not cached" — the
+    cache may never be the reason a document fails to read. A VISION record
+    wins over a local one for the same bytes: it is the more expensive read and
+    the one the user paid for.
+    """
+    root = cache_dir(home)
+    for method in ("", "local"):
+        record = _read_record(root / _record_name(digest, max_pages, method))
+        if record is not None:
+            # Only a HIT arms the synchronous lookup: this root demonstrably
+            # holds transcriptions, so the hashing the sync path pays can pay off.
+            remember_cache_root(root)
+            return record
+    return None
 
 
 def store_cached(
@@ -350,13 +376,22 @@ def store_cached(
     """Persist ONE successful transcription (sibling temp + ``os.replace``, the
     writers' atomic convention). Callers only reach here with real text — a
     failure is never cached, or a provider outage would freeze into a permanent
-    "this scan is empty"."""
-    if not (text or "").strip():
+    "this scan is empty".
+
+    A DOUBTFUL local read (C-05) is not cached either, for the same reason one
+    layer along: it is the best this PC could do with no vision model to check
+    it, and freezing it in would rob the next run of the better answer a
+    connected vision model would give.
+    """
+    from .local_ocr import LOW_CONFIDENCE
+
+    if not (text or "").strip() or LOW_CONFIDENCE in (note or ""):
         return
     root = cache_dir(home)
     root.mkdir(parents=True, exist_ok=True)
     remember_cache_root(root)
-    record_path = root / _record_name(digest, max_pages)
+    method = _method_of(note)
+    record_path = root / _record_name(digest, max_pages, method)
     tmp = record_path.with_name(f".{record_path.name}.tmp-{os.getpid()}")
     record = {
         "version": _CACHE_VERSION,
@@ -364,6 +399,8 @@ def store_cached(
         "max_pages": int(max_pages),
         "text": text,
         "note": note,
+        # "" = vision only; "local" = at least one page read on this PC.
+        "method": method,
         "at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -392,27 +429,23 @@ def lookup_cached_text(path: "str | Path") -> "tuple[str, str] | None":
         digest = file_digest(path)
     except OSError:
         return None
-    best: "tuple[int, dict[str, Any]] | None" = None
+    # Ranked by (page cap, then vision over local): the widest cap is the most
+    # complete transcript of the same bytes, and at the same cap a vision
+    # transcript is the more expensive read — the one the user paid for (C-05).
+    best: "tuple[tuple[int, int], dict[str, Any]] | None" = None
     for root in roots:
         try:
             candidates = list(root.glob(f"{digest}.p*.json"))
         except OSError:  # pragma: no cover — an unreadable cache dir is a miss
             continue
         for candidate in candidates:
-            try:
-                record = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if (
-                not isinstance(record, dict)
-                or record.get("version") != _CACHE_VERSION
-                or not isinstance(record.get("text"), str)
-                or not record["text"].strip()
-            ):
+            record = _read_record(candidate)
+            if record is None:
                 continue
             pages = int(record.get("max_pages") or 0)
-            if best is None or pages > best[0]:
-                best = (pages, record)
+            rank = (pages, 0 if str(record.get("method") or "") == "local" else 1)
+            if best is None or rank > best[0]:
+                best = (rank, record)
     if best is None:
         return None
     return best[1]["text"], str(best[1].get("note") or "")
@@ -631,20 +664,51 @@ async def ocr_pdf(
             "scanned/image-only PDF with no readable embedded page images — "
             "there is no text layer, and nothing OCR could work on"
         )
-    pages, fatal = await _transcribe(
-        blobs,
-        router,
-        route_kwargs=_vision_route_kwargs(router, config),
-        label_pages=True,
-        page_numbers=numbers,
-    )
-    if fatal:
-        return "", fatal
-    if not pages:
+    # READ EVERY PAGE ON THIS PC FIRST (C-05). A page Windows' recognizer is
+    # confident about never reaches a vision model: no call, no spend, and the
+    # client's scan never leaves the machine. One thread hop for all pages.
+    from .local_ocr import CHECK_FIGURES, LOCAL_NOTE, LOW_CONFIDENCE, read_pages
+
+    local = await asyncio.to_thread(read_pages, blobs, numbers, config)
+    confident = {n: r for n, r in local.items() if r.confident}
+    todo = [(b, n) for b, n in zip(blobs, numbers) if n not in confident]
+    by_page: dict[int, str] = {n: r.text for n, r in confident.items()}
+    local_used = set(confident)
+    fatal = ""
+    if todo:
+        vision_pages, fatal = await _transcribe(
+            [b for b, _n in todo],
+            router,
+            route_kwargs=_vision_route_kwargs(router, config),
+            label_pages=True,
+            page_numbers=[n for _b, n in todo],
+        )
+        by_page.update(transcript_pages("\n\n".join(vision_pages)))
+    # A page the model could not answer for — it failed, it is the offline mock,
+    # or it came back empty — keeps whatever this PC read, doubtful or not. The
+    # asymmetry rule: never read LESS because the check was unavailable.
+    for _blob, number in todo:
+        if number in by_page:
+            continue
+        fallback = local.get(number)
+        if fallback is not None:
+            by_page[number] = fallback.text
+            local_used.add(number)
+    if not by_page:
+        if fatal:
+            return "", fatal
         return "", (
             "scanned PDF — the current model returned no transcription; it may "
             "not support vision (connect a vision-capable model and retry)"
         )
+    ordered = [n for n in numbers if n in by_page]
+    pages = [f"[page {n}]\n{by_page[n]}" for n in ordered]
+    local_count = sum(1 for n in ordered if n in local_used)
+    local_doubtful = any(
+        n in local_used and not local[n].confident for n in ordered
+    )
+    local_figures = any(n in local_used and local[n].number_heavy for n in ordered)
+    unchecked = [n for _b, n in todo if n not in by_page]
     # The second number is the count of pages that were CANDIDATES, not the
     # document's length: `attachment_rag.ocr_pages_spent` charges the turn
     # `min(cap, that number)`, and billing a 20-page return for 20 vision calls
@@ -664,6 +728,22 @@ async def ocr_pdf(
             f"; the scanned page(s) of a {total}-page document: {shown}"
             + (" …" if len(numbers) > 12 else "")
         )
+    # C-05: how many pages this PC read, and whether to double-check them.
+    # ``attachment_rag.ocr_pages_spent`` parses "; N read on this PC by machine
+    # OCR" to charge the turn's VISION budget only for vision calls — keep the
+    # wording and the constant in step.
+    local_clause = ""
+    if local_count:
+        local_clause = f"; {local_count} {LOCAL_NOTE}"
+        if local_doubtful:
+            local_clause += f" — {LOW_CONFIDENCE}"
+        if local_figures or local_doubtful:
+            local_clause += f" — {CHECK_FIGURES}"
+    unchecked_clause = (
+        f"; {len(unchecked)} page(s) a vision model could not check"
+        if unchecked and fatal
+        else ""
+    )
     note = (
         f"scanned PDF — {OCR_MARK} ({len(pages)} of {candidates} page(s) transcribed"
         + where
@@ -673,6 +753,8 @@ async def ocr_pdf(
             if capped
             else ""
         )
+        + local_clause
+        + unchecked_clause
         + ")"
     )
     return "\n\n".join(pages), note
@@ -693,12 +775,24 @@ async def ocr_image(
             "image file — the image could not be decoded, so there was nothing "
             "OCR could work on"
         )
+    # THIS PC FIRST (C-05): a photographed form is read by Windows' recognizer,
+    # and a confident read never reaches a vision model — which is what makes a
+    # scan readable with no vision model connected, and keeps it on the machine.
+    from .local_ocr import note_for, read_pages
+
+    local = (await asyncio.to_thread(read_pages, [blob], [1], config)).get(1)
+    if local is not None and local.confident:
+        return local.text, f"image file — {OCR_MARK} ({note_for(local)})"
     pages, fatal = await _transcribe(
         [blob],
         router,
         route_kwargs=_vision_route_kwargs(router, config),
         label_pages=False,
     )
+    # No model could check this PC's doubtful read — keep it rather than hand
+    # back nothing (the asymmetry rule), labelled so nobody trusts it blindly.
+    if (fatal or not pages) and local is not None:
+        return local.text, f"image file — {OCR_MARK} ({note_for(local)})"
     if fatal:
         return "", fatal
     if not pages:
