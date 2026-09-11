@@ -34,6 +34,37 @@ _ANSI_RE = re.compile(
 )
 
 
+def _utf8_window(buf: bytes) -> str:
+    """Decode a window of raw terminal output that was cut at BYTE offsets
+    (v1.248.0) without inventing a U+FFFD at either edge.
+
+    Leading UTF-8 continuation bytes — the end of a character that began
+    before the window — are skipped, and an incomplete sequence at the very
+    end — a character whose last bytes have not been read yet, which the raw
+    ConPTY backend records the moment they arrive — is held back. Invalid
+    bytes INSIDE the window still decode to U+FFFD: only the edges, which are
+    artefacts of where the window was cut, are trimmed."""
+    start = 0
+    while start < len(buf) and start < 3 and 0x80 <= buf[start] <= 0xBF:
+        start += 1
+    end = len(buf)
+    i, k = end - 1, 0
+    while i >= start and k < 3 and 0x80 <= buf[i] <= 0xBF:
+        i -= 1
+        k += 1
+    if i >= start:
+        lead = buf[i]
+        need = (
+            2 if 0xC0 <= lead <= 0xDF
+            else 3 if 0xE0 <= lead <= 0xEF
+            else 4 if 0xF0 <= lead <= 0xF7
+            else 1
+        )
+        if end - i < need:
+            end = i
+    return buf[start:end].decode("utf-8", "replace")
+
+
 #: The five capabilities a Build pane can be granted (plan §4.2, decision D20).
 #: A FIXED set: a key outside it is dropped rather than stored, so a caller
 #: cannot invent a capability name and have it round-trip through
@@ -459,8 +490,9 @@ class TerminalSession:
         """Recent output as CLEAN text (ANSI stripped) for the AI assist.
 
         Only the last ~32KB is decoded — the AI needs a short window, and the
-        full scrollback can be up to :data:`TAIL_MAX_BYTES`."""
-        text = bytes(self._tail[-32 * 1024:]).decode("utf-8", "replace")
+        full scrollback can be up to :data:`TAIL_MAX_BYTES`. The window is cut
+        at a byte offset, so it is decoded by :func:`_utf8_window` (v1.248.0)."""
+        text = _utf8_window(bytes(self._tail[-32 * 1024:]))
         return _ANSI_RE.sub("", text)
 
     def scrollback_bytes(self) -> bytes:

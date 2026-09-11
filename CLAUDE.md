@@ -635,6 +635,47 @@ does not need a bump, stop and bump it.
   `_MAX_TOOL_ROUNDS` and escalates as before. A test that drives an attended
   timeout must set the bound explicitly. `tests/test_approvals_office_v1247.py`,
   `dashboard/__tests__/approvals-office-v1247.test.tsx`.
+- **The Build terminal path is BYTES, PUSHED and paced; only the pane on
+  screen draws** (v1.248.0, B2). DAEMON: pywinpty handed output over as TEXT
+  (a character split across two reads became U+FFFD) and could only be
+  polled, so every attached pane's pump ran read/take/sleep(10 ms) forever —
+  8 idle panes measured a whole CPU core (99.7% → 0.08% after). `ConPtyBackend`
+  (ctypes) delivers raw bytes from a reader thread through
+  `TerminalSession._ingest` → `_record_locked`, the ONE output path shared
+  with `read()`; the handler is installed BEFORE `start`; a pushing session
+  starts no drain; the route's pump sleeps until the subscription's waker
+  fires (5 s safety net). `OutputSubscription._push` and `take` share the
+  session's read lock — that is what makes a reader thread safe; never give
+  a subscription its own lock. The pseudoconsole calls come from pywinpty's
+  bundled `conpty.dll` + `OpenConsole.exe` when both exist (echo 0.5 ms vs
+  14.8 ms on the inbox conhost), else kernel32; `IRONJARVIS_PTY_BACKEND=
+  pywinpty|pipe` and `IRONJARVIS_CONPTY_HOST=inbox` force the others, and a
+  pseudoconsole that cannot be made marks ConPTY broken for the process and
+  the manager retries on the next backend. FLOW CONTROL: the pane counts bytes
+  written to xterm and not yet parsed and sends `{"type":"flow","paused":
+  <bool>}` at 512/128 KiB; the daemon consumes ONLY that exact shape and holds
+  the SEND, never the READ (the 8 MB bound → 1013 still applies). An OLDER
+  daemon TYPES every non-resize text frame into the shell, so the pane sends
+  flow frames only when `/health` reports ≥ `FLOW_MIN_DAEMON` (1.248.0) — any
+  new client→daemon text frame needs the same gate. DASHBOARD: `paneHost`
+  loads `@xterm/addon-webgl` only while a terminal is on screen and releases
+  it on park/release (browsers cap live WebGL contexts at ~16); a lost
+  context falls back to the DOM renderer on the same buffer; `ij.build.webgl`
+  = "off" disables it. A rail pane behind the focused one is `parked`: its
+  terminal moves to the lot but its view and socket stay (badges live, no
+  replay); it parks only after fitting and starting at its true size and
+  never fits or resizes while parked. `tests/test_terminal_datapath_v1248.py`,
+  `dashboard/__tests__/terminal-render-v1248.test.ts`. SAME RELEASE, found by
+  its own Handbook bullet: the Guide's `_chunk` cut an oversize paragraph (a
+  bullet list has no blank lines) at FIXED 1600-char offsets, so any edit above
+  a bullet moved every later cut — "Restart to update" fell off the chunk that
+  answers "how do updates install". `_line_pieces` now cuts at line
+  boundaries, before the last list item that began in the piece;
+  `tests/test_guide_chunk_v1248.py`. And the browser check found one U+FFFD
+  in 4.3 MB: `output_tail` decoded a window cut at a BYTE offset, so its
+  first (and, with bytes recorded as they arrive, last) character could be
+  half a code point. `_utf8_window` trims only those edges — invalid bytes
+  inside still show; `tests/test_terminal_tail_utf8_v1248.py`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing

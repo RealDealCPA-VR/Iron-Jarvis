@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.247.0 (2026-09-11).*
+holds itself to. Current as of v1.248.0 (2026-09-11).*
 
 ---
 
@@ -410,6 +410,17 @@ seam); Train (teach it your writing voice, suggest-only).
   and over, **Ctrl+C with text selected copies it** (with nothing selected it
   still interrupts), and a stray input can no longer mark a live shell
   "closed".
+- **Faster, lighter, exact terminals** (v1.248.0): an idle pane now costs
+  almost no CPU (eight idle panes used to keep a whole processor core busy),
+  keystrokes echo in about a millisecond, and box-drawing, emoji and accented
+  characters no longer turn into "�". The pane you're looking at draws on
+  the graphics card; panes behind it in the rail stop drawing but keep
+  running, and switching back to one is instant. A command that prints a huge
+  amount can no longer freeze the page — the pane asks the app to hold the
+  stream until it has caught up, while the program keeps running. If a
+  machine has trouble: set `ij.build.webgl` to `off` in the browser storage
+  to turn graphics-card drawing off, or start the app with
+  `IRONJARVIS_PTY_BACKEND=pywinpty` to use the previous terminal engine.
 - **Usage counts models that did work** (v1.232.0): the By-model list and
   "Across N models" leave out the offline mock provider and rows that moved
   zero tokens (a probe, a refused call, a misconfigured id); the API still

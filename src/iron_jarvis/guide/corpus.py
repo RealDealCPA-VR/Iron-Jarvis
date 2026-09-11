@@ -207,14 +207,66 @@ def _chunk(body: str, max_chars: int) -> list[str]:
         if size and size + len(p) + 2 > max_chars:
             parts.append("\n\n".join(cur))
             cur, size = [], 0
-        while len(p) > max_chars:  # one enormous paragraph (a table, a list)
-            parts.append(p[:max_chars])
-            p = p[max_chars:]
+        if len(p) > max_chars:  # one enormous paragraph (a list, a table)
+            pieces = _line_pieces(p, max_chars)
+            parts.extend(pieces[:-1])
+            p = pieces[-1]
         cur.append(p)
         size += len(p) + 2
     if cur:
         parts.append("\n\n".join(cur))
     return parts
+
+
+#: A line that starts a list item — the preferred place to cut a long list.
+_ITEM_START = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
+
+
+def _line_pieces(p: str, max_chars: int) -> list[str]:
+    """Cut ONE oversize paragraph into pieces of at most ``max_chars`` at LINE
+    boundaries, ending a piece before the last list item that began in it so
+    an item moves whole into the next piece (v1.248.0).
+
+    THE SILENT FAILURE THIS PREVENTS: a Handbook bullet list has no blank
+    lines, so it is one paragraph, and it used to be cut at fixed 1600-char
+    offsets from its start. Any edit ABOVE a bullet moved every later cut —
+    the v1.248.0 Build bullet moved one into the middle of the updates
+    bullet, and the Guide's answer to "how do updates install" stopped just
+    before "Restart to update". Only a line longer than the budget is still
+    cut mid-line, as before; an item bigger than half the budget may be split
+    at a line end rather than leave a tiny piece behind."""
+    pieces: list[str] = []
+    cur: list[str] = []
+
+    def size(lines: list[str]) -> int:
+        return sum(len(x) for x in lines) + max(0, len(lines) - 1)
+
+    for line in p.split("\n"):
+        while len(line) > max_chars:  # a single line longer than the budget
+            if cur:
+                pieces.append("\n".join(cur))
+                cur = []
+            pieces.append(line[:max_chars])
+            line = line[max_chars:]
+        if cur and size(cur) + 1 + len(line) > max_chars:
+            cut = next(
+                (i for i in range(len(cur) - 1, 0, -1) if _ITEM_START.match(cur[i])),
+                0,
+            )
+            if (
+                cut
+                and size(cur[:cut]) >= max_chars // 2
+                and size(cur[cut:]) + 1 + len(line) <= max_chars
+            ):
+                pieces.append("\n".join(cur[:cut]))
+                cur = cur[cut:]
+            else:
+                pieces.append("\n".join(cur))
+                cur = []
+        cur.append(line)
+    if cur:
+        pieces.append("\n".join(cur))
+    return pieces
 
 
 # --------------------------------------------------------------- live catalog
