@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.246.1 (2026-09-11).*
+holds itself to. Current as of v1.247.0 (2026-09-11).*
 
 ---
 
@@ -69,6 +69,17 @@ Chat is where most work happens, and it is wired into everything:
   (`tool_call_timeout_s`), and a model that finishes its work without writing
   an answer is asked once for it — you get the answer, not a raw tool dump or
   an empty bubble.
+- **Approvals wait for you, and a batch is one click** (v1.247.0): when a
+  job you started (from chat, the Agents page, a project, or by hand) needs
+  your permission, it waits until you answer — it no longer gives up after
+  5 minutes and records the step as not done. Scheduled and other automatic
+  jobs still stop after 5 minutes, because nobody may be there to answer.
+  When one step wants to do the same kind of thing several times — renaming
+  8 files, say — you get one card ("× 8") with a few examples: **Allow these
+  8** runs exactly those, **Deny all 8** refuses them. Chat also has room to
+  finish document and spreadsheet work itself (12 steps instead of 6) and,
+  if it still runs out, tells you what it did and what is left instead of
+  handing the job to a background agent.
 - **Files rail**: every file a conversation *makes or was given* appears on
   the right — preview (spreadsheets as sheets, PDFs and images inline, docx as
   a Word-faithful page), download, open in the native app, save a copy, and a

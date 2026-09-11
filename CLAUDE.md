@@ -611,6 +611,30 @@ does not need a bump, stop and bump it.
   these is lock-step across `chat_turn.py` and `routes/chat.py`.
   `tests/test_chat_never_hangs_v1246.py`,
   `dashboard/__tests__/chat-never-hangs-v1246.test.tsx`.
+- **An attended ask WAITS; a batch is ONE ask; office work stays in chat**
+  (v1.247.0, C3). 26 of 31 asks on the 2026-08-23 rename job expired at 300 s
+  and each was recorded as work not done. Runs whose origin starts with
+  `ATTENDED_ORIGINS` (chat/job/project/user) wait with no clock
+  (`ATTENDED_APPROVAL_TIMEOUT_S = None`) until answered, declined or
+  cancelled; the unattended doors (goal/schedule/workflow/reflex/comm/
+  autonomy) keep `SESSION_APPROVAL_TIMEOUT_S`, because the trust ladder is
+  built on their timeout receipts. `/chat/stream` waits with
+  `CHAT_ASK_TIMEOUT_S = None` and checks Stop and a dropped connection every
+  `_ASK_POLL_S`. `timeout_s: 0` on the event/frame means "no expiry" and the
+  card says "nothing runs until you answer". `runtime._pause_needed` is the ONE
+  gate: a step's same-permission asks share ONE pause (`count` + ≤3 redacted
+  examples; the shared task is cancelled in the gather's `finally` so a
+  cancelled run never leaves it parked); 'once' covers exactly that batch,
+  'deny' refuses all of it, and every call still gets its own ledger row.
+  Listings (pending, `waiting_on`, the bell) carry NUMBERS, never arguments.
+  The stream lane groups a round's asks with `_would_card`, which REPEATS the
+  per-call `_needs_card` predicate — change one and you must change the other.
+  `_round_budget` gives a turn with a document-writing tool
+  `_DOC_TOOL_ROUNDS` (12) in BOTH lanes, and its last round ends in chat with
+  `OUT_OF_ROUNDS_INSTRUCTION` instead of escalating; every other turn keeps
+  `_MAX_TOOL_ROUNDS` and escalates as before. A test that drives an attended
+  timeout must set the bound explicitly. `tests/test_approvals_office_v1247.py`,
+  `dashboard/__tests__/approvals-office-v1247.test.tsx`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing
