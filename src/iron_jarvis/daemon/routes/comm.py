@@ -738,6 +738,76 @@ def register(app: FastAPI, d) -> None:
     def comm_notify(body: NotifyBody) -> dict[str, Any]:
         return d.platform.notifier.notify(body.message, body.channels)
 
+    @app.post("/comm/email/compose")
+    async def compose_email(body: dict[str, Any]) -> dict[str, Any]:
+        """Save a chat draft to the mailbox's Drafts folder, or send it (C-06).
+
+        Called ONLY by the DraftCard's confirm dialog on a person's click —
+        this is deliberately not a tool, so no model can reach it. ``mode``
+        defaults to ``draft`` (IMAP APPEND, nothing sent); ``send`` goes out
+        over SMTP. Attachments must pass the file policy (see
+        ``comm/compose.py``). Every attempt is ledgered as
+        ``comm.email_composed`` — recipients, subject, attachment names and
+        the outcome, never the body.
+
+        409 when no email account is connected (the words say how to add
+        one), 400 for something the user can fix, 502 when the mail server
+        refused or did not answer within ``COMPOSE_DEADLINE_S``.
+        """
+        import asyncio
+
+        from ...comm import compose as _compose
+
+        found = _compose.find_email_channel(d.platform.notifier)
+        if found is None:
+            raise HTTPException(status_code=409, detail=_compose.NO_EMAIL_CHANNEL)
+        name, channel = found
+        cfg = getattr(channel, "config", None) or {}
+        from_addr = str(cfg.get("from_addr") or cfg.get("username") or "").strip()
+        if not from_addr:
+            raise HTTPException(
+                status_code=409,
+                detail="This email account has no From address yet — set one "
+                "in Channels, then try again.",
+            )
+        try:
+            # Attachment checks stat the disk: off the loop.
+            plan = await asyncio.to_thread(_compose.prepare, body)
+        except _compose.ComposeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _compose.run_compose, channel, plan, from_addr=from_addr
+                ),
+                timeout=_compose.COMPOSE_DEADLINE_S,
+            )
+        except asyncio.TimeoutError:
+            result = {
+                "ok": False,
+                "timed_out": True,
+                "detail": f"the mail server did not answer within "
+                f"{int(_compose.COMPOSE_DEADLINE_S)} s — check your Drafts or "
+                "Sent folder before trying again",
+            }
+        await d.platform.event_bus.publish(
+            _compose.EMAIL_COMPOSED, _compose.ledger_payload(name, plan, result)
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=502,
+                detail=str(result.get("detail") or "the mail server refused"),
+            )
+        return {
+            "ok": True,
+            "mode": plan.mode,
+            "channel": name,
+            "detail": result.get("detail"),
+            "folder": result.get("folder"),
+            "refused": result.get("refused") or [],
+            "attachments": [p.name for p in plan.attachments],
+        }
+
     @app.get("/webhooks")
     def list_webhooks() -> dict[str, Any]:
         from ...webhooks.models import WebhookRecord

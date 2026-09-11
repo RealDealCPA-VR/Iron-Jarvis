@@ -46,7 +46,10 @@ const apiState = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({
   get: (path: string, opts?: { signal?: AbortSignal }) => {
     apiState.calls.push(path);
-    if (opts?.signal) apiState.signals.push(opts.signal);
+    // Only the conversation lane's signals: the palette also runs the
+    // files & memory lane (C-08) through this same client, and this test
+    // is about /search/history's abort.
+    if (opts?.signal && path.startsWith("/search/history")) apiState.signals.push(opts.signal);
     if (path.startsWith("/search/history")) {
       if (apiState.history.failStatus !== null) {
         const err = Object.assign(new Error("nope"), {

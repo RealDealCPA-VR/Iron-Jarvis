@@ -80,3 +80,18 @@ def register(app: FastAPI, d) -> None:
             "mode": index.mode,
             "count": len(hits),
         }
+
+    @app.get("/search/all")
+    async def search_all(q: str = "", project_id: str = "") -> dict[str, Any]:
+        """Files, memory and conversations in one answer (C-08).
+
+        Three lanes run side by side off the event loop, each with its own
+        deadline; a lane cut short is named in ``partial``. Same contract as
+        ``/search/history``: every ``q`` answers 200, a too-short query answers
+        empty lanes, and nothing here raises. See ``search/unified.py``.
+        """
+        from ...search.unified import search_all as _search_all
+
+        return await _search_all(
+            d.platform, getattr(d, "search_index", None), q, project_id
+        )
