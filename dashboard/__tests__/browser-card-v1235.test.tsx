@@ -460,6 +460,10 @@ describe("the Browser page mounts the card at the top (v1.235.0)", () => {
     // sections: mounting a card at the top must not duplicate or drop them.
     expect(screen.getAllByText("Read this before you turn it on.")).toHaveLength(1);
     expect(screen.getAllByTestId("your-browser-card")).toHaveLength(1);
-    expect(screen.getByText(/Agent browser off/)).toBeTruthy();
+    // WAIT FOR THE THING ASSERTED (the CLAUDE.md waitFor rule): this label is
+    // rendered from the page's OWN computer-use status fetch, which resolves
+    // independently of the card's /browser/status — a sync getBy right after
+    // the card appeared went red on a contended CI runner (v1.244.0's gate).
+    expect(await screen.findByText(/Agent browser off/)).toBeTruthy();
   });
 });
