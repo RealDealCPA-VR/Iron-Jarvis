@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
@@ -49,6 +50,42 @@ def _max_upload_bytes() -> int:
 
 
 _MAX_UPLOAD_BYTES = _max_upload_bytes()
+
+# BOOT BREAKDOWN (v1.250.0, S-01). The review measured 7-10 s between reading
+# settings and being ready on the USER's install; on a scratch root the same
+# phase is 0.73 s, and it cannot be otherwise — an empty state home has no MCP
+# servers, no skills, no saved terminals and a 0-byte database. Rather than
+# optimise a machine that does not show the symptom, the boot reports its own
+# breakdown where it happens.
+#
+# NAMES AND NUMBERS ONLY. This goes into the log file and into GET /diagnostics,
+# both of which users paste into bug reports, so a phase name is a code
+# identifier — never a path, a file name, a server name, a credential or any
+# content.
+_BOOT_SLOWEST = 6  # how many phases the summary names; a 40-step list hides the cause
+_BOOT_SLOW_MS = 50.0  # under this a phase is noise, not an explanation
+
+
+def _boot_line(total_ms: float, steps: "dict[str, float]") -> str:
+    """The ONE summary line: the total, then the slowest phases.
+
+    ``startup 8.42 s: platform 4.10, skills 1.90, rehydrate_terminals 0.80``
+
+    Seconds with two decimals, because a human comparing a slow boot with a
+    fast one wants the shape; ``/diagnostics`` carries the exact milliseconds.
+    """
+    slow = sorted(
+        ((n, ms) for n, ms in steps.items() if ms >= _BOOT_SLOW_MS),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    named = slow[:_BOOT_SLOWEST]
+    if not named:
+        return f"startup {total_ms / 1000:.2f} s: nothing over {_BOOT_SLOW_MS:.0f} ms"
+    body = ", ".join(f"{n} {ms / 1000:.2f}" for n, ms in named)
+    if len(slow) > len(named):
+        body += f" (+{len(slow) - len(named)} more)"
+    return f"startup {total_ms / 1000:.2f} s: {body}"
 
 
 def _ws_token_ok(ws: WebSocket) -> bool:
@@ -419,12 +456,36 @@ async def _fts_backfill_loop(
 
 
 def create_app(project_root: str | None = None) -> FastAPI:
+    # BOOT BREAKDOWN (v1.250.0, S-01 — see _boot_line). `_boot` spans THIS
+    # function as well as the lifespan, because the gap the review blamed
+    # ("State home" -> "Started server process") is create_app, not the
+    # lifespan: uvicorn prints "Started server process" BEFORE it runs the
+    # lifespan at all, so timing only the rehydrate steps would measure
+    # everything except the suspect. Handed to `d` BY REFERENCE, so
+    # /diagnostics reports the boot that actually ran.
+    _boot: dict[str, Any] = {"total_ms": None, "at": None, "steps_ms": {}}
+    _boot_t0 = time.perf_counter()
+
+    def _boot_step(name: str, started: float) -> None:
+        """Record one phase's elapsed ms. Never raises, never reorders
+        anything: every caller records AFTER the work, from a `finally`."""
+        try:
+            _boot["steps_ms"][name] = int((time.perf_counter() - started) * 1000)
+        except Exception:  # noqa: BLE001 — bookkeeping never breaks a boot
+            pass
+
     # Headless mode: no human can answer an "ask", so wire a resolver that
     # auto-approves only low-risk orchestration (delegate) and keeps dangerous
     # tools (shell) fail-closed. This is what lets supervised sessions delegate.
-    platform = build_platform(
-        project_root or os.getcwd(), ask_resolver=headless_ask_resolver()
-    )
+    _t = time.perf_counter()
+    try:
+        platform = build_platform(
+            project_root or os.getcwd(), ask_resolver=headless_ask_resolver()
+        )
+    finally:
+        # A build that RAISES still reports how long it spent: the phase that
+        # dies is exactly the one worth having a number for.
+        _boot_step("platform", _t)
     # Opt-in git-native sessions (run→review→approve over HTTP) via env/--git-native.
     if _env_truthy("IRONJARVIS_GIT_NATIVE"):
         platform.config.git_native = True
@@ -555,12 +616,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        _t = time.perf_counter()
         try:  # start the cron scheduler when the daemon boots
             platform.scheduler.start()
             _tick("scheduler", True)
         except Exception as exc:  # noqa: BLE001 — never block boot (v1.226.0: but SAY so)
             log.exception("scheduler failed to start — schedules will not fire")
             _tick("scheduler", False, exc)
+        finally:
+            _boot_step("scheduler", _t)
         # Restart survival. Each step is INDEPENDENT: a failure in one (e.g. a
         # review rehydrate tripping on a bad worktree) must NOT skip the others —
         # previously a single try-block meant a session/review failure silently
@@ -568,6 +632,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # signal. Record each in loop_health so a silent skip is visible in
         # /diagnostics.
         def _rehydrate_step(name, fn):
+            # v1.250.0 (S-01): timed in a `finally` so a step that FAILS still
+            # gets a number — the breakdown must not go quiet exactly when
+            # something is wrong. Order and failure behaviour are unchanged.
+            _t = time.perf_counter()
             try:
                 fn()
                 _tick(name, True)
@@ -580,7 +648,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 _tick(name, False, exc)
                 loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
                 log.exception("boot rehydration step %s failed", name)
+            finally:
+                _boot_step(name, _t)
 
+        # v1.250.0 (S-01): warm the OpenCode allowlist FIRST, before any other
+        # boot step. `available("opencode-cli")` resolves it through
+        # `_opencode_allowed`, which SHELLS OUT to `opencode models` — measured
+        # 1,647 ms cold on this machine — and the first caller is the first
+        # `GET /health`, which is the desktop's own startup gate. Started here
+        # it overlaps the rest of boot instead of being paid serially after it
+        # (measured on the frozen build: startup-complete -> first healthy
+        # /health was 1.96 s before this warm existed). Fire-and-forget on a
+        # thread; a failure caches "none allowed" exactly as the lazy path
+        # would, and `refresh_opencode()` still re-resolves when the user saves
+        # the setting.
+        _rehydrate_step("warm_opencode", platform.providers.warm_opencode)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # AFTER session reconciliation by contract: a goal stranded mid-iteration
         # reads its session's honest FAILED/interrupted verdict (v1.208.0).
@@ -1205,6 +1287,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         _tick("slack_socket", False, exc)
 
                 slack_socket_task = asyncio.create_task(_slack_socket_loop())
+        # ONE line, once, when boot is genuinely done (v1.250.0, S-01):
+        # everything above has run and the app is about to serve. Wrapped
+        # because the boot's own summary must never become the thing that
+        # breaks the boot (the v1.229.0 OBS5 lesson, one layer up).
+        try:
+            from ..core.ids import utcnow
+
+            _boot["total_ms"] = int((time.perf_counter() - _boot_t0) * 1000)
+            _boot["at"] = utcnow().isoformat()
+            log.info("%s", _boot_line(float(_boot["total_ms"]), _boot["steps_ms"]))
+        except Exception:  # noqa: BLE001 — never let the summary abort a boot
+            log.debug("boot summary failed", exc_info=True)
         try:
             yield
         finally:
@@ -2390,6 +2484,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # /health so the desktop shell can tell its own daemon from a stale one.
         instance=uuid.uuid4().hex,
         loop_health=loop_health,
+        # Boot breakdown (v1.250.0, S-01): the SAME dict create_app and the
+        # lifespan fill, BY REFERENCE — /diagnostics must report the boot that
+        # actually ran, and a copy taken here would be empty forever (this wire
+        # was missed once and the route answered zeros while the log line was
+        # already correct).
+        startup=_boot,
         inbound_poller=inbound_poller,
         comm_thread_store=comm_thread_store,
         _live_rearm=_live_rearm,

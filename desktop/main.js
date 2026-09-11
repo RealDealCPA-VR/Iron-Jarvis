@@ -145,6 +145,13 @@ function isTrustedDashboardSender(event) {
 // Packaged cold boots are slow the first time (AV scans the PyInstaller-frozen
 // daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
 const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
+// How often the boot gates re-probe the daemon and the dashboard (v1.250.0,
+// S-01). Was 500 ms, which on a boot that becomes ready at t+6.1s costs up to
+// half a second of pure waiting — the splash stays up while both children are
+// already answering. 150 ms is still far cheaper than what it waits for (each
+// probe is one local HTTP GET with its own 2.5 s timeout) and shortens the
+// average blind spot to ~75 ms.
+const GATE_POLL_MS = 150;
 
 const HOTKEY = "CommandOrControl+Shift+J"; // show/focus the main window (preferred)
 const SPOTLIGHT_HOTKEY = "CommandOrControl+Shift+Space"; // quick-task overlay
@@ -3139,10 +3146,29 @@ async function startup() {
     );
   }
 
-  // 3) Health-gate the DAEMON first (guards a foreign process squatting on the
-  //    baked port), then the dashboard, then swap the splash for the real window.
+  // 3) Health-gate the DAEMON (guards a foreign process squatting on the baked
+  //    port) and the dashboard AT THE SAME TIME, then swap the splash for the
+  //    real window.
+  //
+  // WHY BOTH AT ONCE (v1.250.0, S-01): these gates used to run one after the
+  // other, and the dashboard is ready in ~0.1 s while the daemon takes seconds
+  // — so the app sat on the splash for the daemon, and only THEN started
+  // probing (and rendering) a dashboard that had been up the whole time. The
+  // window's first paint was pushed ~2 s past the moment it could have
+  // happened. The gates are independent probes of independent children; the
+  // ONLY ordering that ever mattered is that both must pass before a window is
+  // shown, which `Promise.allSettled` below preserves exactly.
+  //
+  // The daemon's verdict is still reported FIRST when both fail: its failure is
+  // the one that explains the other (no daemon → the dashboard renders an
+  // offline shell), and `classifyStartupFailure` keys off the daemon's child
+  // exit + log tail (v1.249.0, R-06).
+  const [daemonGate, dashboardGate] = await Promise.allSettled([
+    waitForDaemon(STARTUP_TIMEOUT_MS, GATE_POLL_MS),
+    waitForDashboard(STARTUP_TIMEOUT_MS, GATE_POLL_MS),
+  ]);
   try {
-    await waitForDaemon(STARTUP_TIMEOUT_MS, 500);
+    if (daemonGate.status === "rejected") throw daemonGate.reason;
   } catch (err) {
     // A failed health gate on a DAMAGED install (e.g. files were still being
     // extracted when the pre-spawn check ran) routes to repair, not the
@@ -3167,7 +3193,9 @@ async function startup() {
     return;
   }
   try {
-    await waitForDashboard(STARTUP_TIMEOUT_MS, 500);
+    // Already probed ABOVE, concurrently with the daemon (v1.250.0, S-01) —
+    // re-awaiting here would reinstate the serial wait this change removes.
+    if (dashboardGate.status === "rejected") throw dashboardGate.reason;
   } catch (err) {
     const integrityResult = verifyInstallIntegrity();
     if (!integrityResult.ok) {
