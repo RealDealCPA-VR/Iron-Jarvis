@@ -40,6 +40,7 @@ dependencies = [
     # a 3-page file. Pinned to a minor range on purpose: it went 1.0 -> 1.14 in
     # weeks, and it decides which pages of a client document get read.
     "pdf-inspector>=1.14.2,<2",
+    "xlrd>=2.0.1",
 ]
 
 [project.optional-dependencies]

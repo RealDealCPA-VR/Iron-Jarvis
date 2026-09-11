@@ -121,6 +121,11 @@ _DOCUMENT_TOOLS = [
     # Page-level PDF work (v1.138.0): merge/split/rotate/reorder into NEW
     # workspace files — sources are never modified, every write is undoable.
     "pdf_arrange", "pdf_split",
+    # Office capability tools (C-03/C-07/C-09): edit a Word file without
+    # retyping it, compare two documents exactly, read and fill PDF forms.
+    # A tool absent from these lists reaches no session (this file's header
+    # lesson), and every one of these is work an agent run is asked for.
+    "docx_edit", "compare_documents", "pdf_form_fields", "pdf_form_fill",
 ]
 # Self-correction: record preferences learned mid-task; recall past lessons.
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]

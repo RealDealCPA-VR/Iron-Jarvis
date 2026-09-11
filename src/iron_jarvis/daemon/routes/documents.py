@@ -538,6 +538,66 @@ def register(app: FastAPI, d) -> None:
                 note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
         return {"path": path, "text": text[:20000], "note": note}
 
+    #: Suffixes "Compare with…" can put side by side (C-07) — what the
+    #: comparison engine and the preview's text diff both understand.
+    _COMPARABLE = {
+        ".docx", ".doc", ".pdf", ".xlsx", ".xlsm", ".xls", ".csv",
+        ".txt", ".md", ".rtf", ".pptx",
+    }
+
+    @app.get("/documents/siblings")
+    async def documents_siblings(path: str) -> dict[str, Any]:
+        """Other documents sitting in the same folder as ``path``.
+
+        This is what the preview's "Compare with…" offers. A conversation's
+        files live together (v1.244.0 gives a plain chat its own dated folder),
+        so the folder IS the conversation's file list — which keeps the feature
+        reachable without any page having to hand it one. Read-gated by the same
+        policy as every read, capped, and off the event loop (the v1.153.1 rule:
+        a folder scan on the loop is the "Daemon offline" shape)."""
+        import asyncio as _asyncio
+        import os as _os
+
+        ok, reason = fs_read_ok(path)
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
+
+        def _scan() -> tuple[list[dict[str, Any]], bool]:
+            here = Path(path)
+            parent = here.parent
+            if not parent.is_dir():
+                return [], False
+            found: list[dict[str, Any]] = []
+            seen = 0
+            truncated = False
+            try:
+                with _os.scandir(parent) as it:
+                    for entry in it:
+                        seen += 1
+                        if seen > 2000:
+                            truncated = True
+                            break
+                        if not entry.is_file():
+                            continue
+                        p = Path(entry.path)
+                        if p.suffix.lower() not in _COMPARABLE:
+                            continue
+                        if p.resolve() == here.resolve():
+                            continue
+                        allowed, _why = fs_read_ok(entry.path)
+                        if not allowed:
+                            continue
+                        found.append({"path": str(p), "name": p.name})
+            except OSError:
+                return [], False
+            found.sort(key=lambda f: f["name"].casefold())
+            if len(found) > 50:
+                found, truncated = found[:50], True
+            return found, truncated
+
+        files, truncated = await _asyncio.to_thread(_scan)
+        return {"files": files, "truncated": truncated}
+
     # ------------------------------------------------------- save a copy to… ---
     # REPORTED: "the agent should give me options with buttons as to where to
     # store the file."

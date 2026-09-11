@@ -118,9 +118,12 @@ _DOC_SUFFIXES: frozenset[str] = frozenset(
 
 #: Legacy binary Office / ODF formats we cannot parse — mapped to an honest
 #: error naming the format and the modern target to convert to.
+#:
+#: ``.doc`` AND ``.xls`` LEFT THIS TABLE IN C-10: both are read now (xlrd, and
+#: Word's own conversion), and their branches in :func:`extract_text` return
+#: before this dict is consulted — so the two rows had become unreachable text
+#: still telling a reader that the app cannot open a file it opens.
 _LEGACY_HINTS: dict[str, str] = {
-    ".doc": "legacy Word 97-2003 (.doc) — convert it to .docx first",
-    ".xls": "legacy Excel 97-2003 (.xls) — convert it to .xlsx first",
     ".ppt": "legacy PowerPoint 97-2003 (.ppt) — convert it to .pptx first",
     ".odt": "OpenDocument Text (.odt) — convert it to .docx first",
     ".ods": "OpenDocument Spreadsheet (.ods) — convert it to .xlsx first",
@@ -129,7 +132,18 @@ _LEGACY_HINTS: dict[str, str] = {
 
 #: Every suffix ``extract_text`` knows how to read (unknown text files also work,
 #: but are not advertised here).
-SUPPORTED_READ: set[str] = set(_DOC_SUFFIXES | _TEXT_SUFFIXES | _IMAGE_SUFFIXES)
+#:
+#: THE LEGACY PAIR IS IN IT (C-10), and leaving them out was not cosmetic:
+#: ``convert_document`` GATES on this set, so "turn this .doc into a .docx" was
+#: refused with "supported source formats: ..." before the branch that does
+#: exactly that could run — the mechanism shipped and the feature did not
+#: (measured against a live daemon). ``.xls`` reads through xlrd and ``.doc``
+#: through Word; a ``.doc`` on a PC with no Word still fails, but with the
+#: reader's honest "Microsoft Word is not installed" reason instead of a list
+#: implying the format is unknown.
+SUPPORTED_READ: set[str] = set(
+    _DOC_SUFFIXES | _TEXT_SUFFIXES | _IMAGE_SUFFIXES | {".xls", ".doc"}
+)
 
 
 def _cached_ocr_text(p: Path, *, keep: str = "") -> str:
@@ -241,6 +255,18 @@ def extract_text(
         # real information, and existing callers branch on it.
         described = _describe_image(p)
         return _cached_ocr_text(p, keep=described) if ocr_cache_ok else described
+    if suffix == ".xls":
+        # C-10: legacy workbooks are read directly (xlrd, pure Python) instead
+        # of stopping the job with "convert it first".
+        from .legacy import xls_text
+
+        return xls_text(p, sheet=sheet)
+    if suffix == ".doc":
+        # C-10: Word itself re-saves it as .docx (cached by content) — faithful,
+        # and honestly refused with the reason when Word is not installed.
+        from .legacy import doc_text
+
+        return doc_text(p)
     if suffix in _LEGACY_HINTS:
         # Named legacy format: fail with a useful next step, not "binary file".
         raise ValueError(f"cannot read {_LEGACY_HINTS[suffix]}")

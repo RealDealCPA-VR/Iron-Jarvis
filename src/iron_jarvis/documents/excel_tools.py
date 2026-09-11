@@ -122,13 +122,23 @@ class ExcelReadTool(Tool):
         ok, reason = fs_read_ok(str(path))
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
-        if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        if path.suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
             return ToolResult(ok=False, error=f"not an Excel workbook: {path.name}")
         try:
-            data = await asyncio.to_thread(
-                _read_workbook, path, args.get("sheet"), args.get("range"),
-                bool(args.get("include_formulas")),
-            )
+            if path.suffix.lower() == ".xls":
+                # C-10: a legacy workbook reads through xlrd. Values only —
+                # the format stores no formula text — and the payload says so
+                # (`legacy_xls`) rather than returning silently different data.
+                from .legacy import read_xls_workbook
+
+                data = await asyncio.to_thread(
+                    read_xls_workbook, path, args.get("sheet"), args.get("range"),
+                )
+            else:
+                data = await asyncio.to_thread(
+                    _read_workbook, path, args.get("sheet"), args.get("range"),
+                    bool(args.get("include_formulas")),
+                )
         except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
             return ToolResult(ok=False, error=_open_error(exc, path))
         import json
@@ -251,11 +261,16 @@ class ExcelEditTool(Tool):
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, error=_open_error(exc, target))
         rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
+        # ABSOLUTE, like write_document and redact_pii (the v1.153.2 rule): a
+        # workspace-relative name IS a bare filename when the workbook sits in
+        # the workspace root, and the model relays it to the user verbatim.
+        _abs = str(target.resolve())
         return ToolResult(
             ok=True,
             output=f"applied {result['applied']} edit(s) to {rel} "
-                   f"(sheets: {', '.join(result['sheets'])})",
-            data={"path": rel, **result},
+                   f"(sheets: {', '.join(result['sheets'])})"
+                   f"\nSaved to: {_abs}",
+            data={"path": rel, "abs_path": _abs, **result},
         )
 
 
@@ -981,7 +996,10 @@ class ExcelApplySpecTool(Tool):
             out += f" + {data['charts_added']} chart(s)"
         if data["beauty_warnings"]:
             out += "\n" + "\n".join(f"warning: {w}" for w in data["beauty_warnings"])
-        return ToolResult(ok=True, output=out, data={"path": rel, **data})
+        # ABSOLUTE too (the v1.153.2 rule) — same reason as excel_edit above.
+        _abs = str(target.resolve())
+        out += f"\nSaved to: {_abs}"
+        return ToolResult(ok=True, output=out, data={"path": rel, "abs_path": _abs, **data})
 
 
 class ExcelAccountsDiffTool(Tool):

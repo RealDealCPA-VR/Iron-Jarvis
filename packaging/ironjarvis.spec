@@ -135,7 +135,7 @@ for pkg in ("paramiko", "bcrypt", "nacl"):
 # --- Document libraries (lazily imported in iron_jarvis.documents) ----------
 # Included so doc read/write tools work out of the box. They add modest size;
 # drop any you don't need from this tuple to shrink the bundle.
-for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL"):
+for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL", "xlrd"):
     _collect(pkg)
 
 # pikepdf (v1.154.0) — TRUE in-place PDF redaction. A NATIVE wheel (it wraps

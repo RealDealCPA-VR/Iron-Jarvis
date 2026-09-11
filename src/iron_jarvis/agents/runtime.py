@@ -205,6 +205,12 @@ _WRITE_TIER: frozenset[str] = frozenset(
         # (`capture_undo` spills the prior bytes + sha256), and defaults to
         # permission "allow" — the same three facts that put `excel_edit` here.
         "excel_apply_spec",
+        # LANDED AS A PAIR with `tools/autoselect.AUTO_SAFE_TOOLS`, exactly as
+        # `excel_apply_spec` above: both write workspace-confined, REVERSIBLE
+        # files and are auto-armable, so a read-only REVIEWER/SUPERVISOR must
+        # not gain them off its task text.
+        "docx_edit",
+        "pdf_form_fill",
         "redact_pii",
         "pdf_arrange",
         "pdf_split",
