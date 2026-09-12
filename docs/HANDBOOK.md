@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.254.1 (2026-09-12).*
+holds itself to. Current as of v1.254.2 (2026-09-12).*
 
 ---
 

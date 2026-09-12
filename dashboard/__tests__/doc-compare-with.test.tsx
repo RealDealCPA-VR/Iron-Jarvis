@@ -278,12 +278,21 @@ describe("DocPreview compare-with", () => {
     fireEvent.change(screen.getByTestId("compare-pick"), {
       target: { value: OTHER },
     });
-    await waitFor(() =>
-      expect(screen.queryByTestId("redaction-badge")).not.toBeInTheDocument(),
-    );
+    // WAIT FOR THE THING THIS ASSERTS (v1.254.2). This waited for the
+    // redaction badge to GO — which happens the moment the mode switches —
+    // and then read the new caption SYNCHRONOUSLY. The caption only appears
+    // once the picked file has been read and diffed, one fetch later, so on a
+    // contended runner the badge was already gone while the caption was not
+    // there yet: the Release gate failed here with "Unable to find an element
+    // with the text: /Red lines are engagement 2024.docx/" while the Tests
+    // workflow passed the SAME commit. The caption is what is being asserted,
+    // so it is what the wait is for; the badge's absence is then checked after
+    // it, by which point it is settled. (CLAUDE.md's waitFor rule — the third
+    // instance in this release cycle.)
     expect(
-      screen.getByText(/Red lines are engagement 2024\.docx/),
+      await screen.findByText(/Red lines are engagement 2024\.docx/),
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("redaction-badge")).not.toBeInTheDocument();
     // The receipt button no longer claims to be showing anything.
     expect(
       screen.getByRole("button", { name: /Compare to original/ }),

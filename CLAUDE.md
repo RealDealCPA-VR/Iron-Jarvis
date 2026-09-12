@@ -926,6 +926,26 @@ does not need a bump, stop and bump it.
       idle machine. Hold the async step (an `Image` whose load fires when the
       test says so) instead of hoping a loaded runner shows it; v1.251.1's
       mutation reproduced v1.236.1's exact error text locally.
+  THE RELEASE GATE IS A SMALLER MACHINE THAN THE TESTS GATE, and that asymmetry
+  is why the same commit passes one and fails the other (v1.254.0-.2, three red
+  gates in one cycle, each on a DIFFERENT timing-sensitive dashboard test).
+  `tests.yml` splits work across four jobs, so its vitest gets a runner to
+  itself. `release.yml` runs ONE `suite` job: the add-on `pnpm install`, the
+  add-on build, the dashboard suite, the node syntax checks, THEN the whole
+  Python suite at `-n auto`. Same command, far less machine. So:
+    - A dashboard test that passes in Tests and fails in Release is a LOAD
+      signal, not a flake and not a product defect. Read it as "this test has
+      a wait that is wrong" first, and fix the wait.
+    - vitest's per-test budget is an absolute wall-clock threshold measuring
+      the runner (the rule this repo already holds about p95 assertions).
+      `dashboard/vitest.config.ts` sets `testTimeout: 15_000` for that reason.
+      Raising it hides nothing — a wrong expectation still fails with its own
+      message — which is exactly what a `waitFor` bound equal to the budget
+      cannot promise.
+    - Reproduce the ordering locally instead of guessing: delay the one async
+      hop the assertion depends on (a mocked read, an `Image` whose load you
+      release by hand) and watch the OLD shape fail on an idle machine. Both
+      v1.251.1 and v1.254.2 reproduced CI's exact error text that way.
 - **A folder is WRITABLE when a file lands in it, and `tempfile` is not the
   way to find out** (v1.228.0, audit Wave 2). `fs_policy.usable_workspace_root`
   accepted `C:\Users` (absolute, a dir, allowlist-clean, not protected) and
