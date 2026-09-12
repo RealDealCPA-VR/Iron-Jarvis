@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -778,6 +779,7 @@ async def run_batch(
     output: str = "both",
     max_files: int = 25,
     config: Any = None,
+    on_file: Any = None,
 ) -> dict[str, Any]:
     """The whole pipeline: sweep → per-doc extract (resumable, persisted) →
     synthesize from the extractions. Per-document failures are COLLECTED —
@@ -789,7 +791,21 @@ async def run_batch(
     against the router's own manager, and the resolved pairs ride every
     one-shot. ``None`` (or an empty mapping) keeps the pipeline byte-for-byte
     unchanged: the fallbacks are (None, None), the router's default route,
-    which is exactly the call this module always made."""
+    which is exactly the call this module always made.
+
+    ``on_file`` (v1.251.0, C-04) is called as each document SETTLES —
+    ``on_file(index, total, name, status)``, 1-based index, status
+    ``extracted`` | ``cached`` | ``failed`` — and may be sync or async. This
+    pipeline is ONE tool call that runs for minutes and spends about one model
+    call per document, so without it the only thing anyone can see is the final
+    report, which is indistinguishable from a hang.
+
+    THE CALLBACK CANNOT BREAK THE BATCH. Every invocation is wrapped (see
+    ``_report``): a reporting failure must never cost extractions that have
+    already been paid for — the ``RecentErrorsHandler`` lesson, where the call
+    meant to record a failure became the failure. ``None`` (the default) keeps
+    the loop exactly as it was, which is what every existing caller relies
+    on."""
     folder = Path(folder)
     out_dir = Path(out_dir)
     extract_llm = synth_llm = None
@@ -817,7 +833,20 @@ async def run_batch(
     cached = 0
     failed: list[dict[str, str]] = []
     extractions: list[dict[str, Any]] = []
-    for path in files:
+    total = len(files)
+
+    async def _report(index: int, name: str, status: str) -> None:
+        """Announce one settled document. NEVER RAISES — see the docstring."""
+        if on_file is None:
+            return
+        try:
+            outcome = on_file(index, total, name, status)
+            if inspect.isawaitable(outcome):
+                await outcome
+        except Exception:  # noqa: BLE001 — progress must not cost paid work
+            pass
+
+    for i, path in enumerate(files, start=1):
         try:
             sha = await asyncio.to_thread(_sha256_file, path)
             record_path = ext_dir / f"{slug_for(path)}.json"
@@ -825,6 +854,7 @@ async def run_batch(
             if record is not None:
                 cached += 1
                 extractions.append(record)
+                await _report(i, path.name, "cached")
                 continue
             extraction = await extract_one(
                 path, router, instructions, llm=extract_llm, config=config
@@ -842,10 +872,12 @@ async def run_batch(
             _persist_record(record_path, record)
             processed += 1
             extractions.append(record)
+            await _report(i, path.name, "extracted")
         except Exception as exc:  # noqa: BLE001 — per-doc failures never abort the batch
             failed.append(
                 {"file": str(path), "error": f"{type(exc).__name__}: {exc}"}
             )
+            await _report(i, path.name, "failed")
     deliverable_paths: list[Path] = []
     synthesis_errors: list[dict[str, str]] = []
     qa: dict[str, Any] = {}

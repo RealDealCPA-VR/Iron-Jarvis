@@ -91,6 +91,19 @@ class EventType:
     # an empty string that looks like an id is worse than an absent field.
     DELEGATION_STARTED = "delegation.started"
     DELEGATION_COMPLETED = "delegation.completed"
+    #: ONE DOCUMENT of a `batch_documents` run finished (v1.251.0, C-04).
+    #: {folder, index, total, name, status} where status is
+    #: ``extracted`` | ``cached`` | ``failed``; ``index`` is 1-based, like
+    #: ``workflow.step_started``'s. Tagged with the caller's session_id.
+    #:
+    #: THE FIRST PER-ITEM EVENT INSIDE A SINGLE TOOL CALL, and it exists
+    #: because the registry structurally cannot provide this: it publishes
+    #: ``tool.executed`` ONCE, when the call returns, while a folder of 30
+    #: documents is ~30 model calls and several minutes during which the only
+    #: honest thing to show the user is which file is being read right now.
+    #: A batch that silently spends real money for minutes is the "did it
+    #: hang?" report this app keeps paying for.
+    BATCH_FILE_DONE = "batch.file_done"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"

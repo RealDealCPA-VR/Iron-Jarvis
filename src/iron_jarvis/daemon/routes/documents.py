@@ -15,6 +15,7 @@ from typing import Any
 
 from .. import app as _app
 from ..schemas import (
+    BatchFolderBody,
     DocEnhanceBody,
     DocumentOpenBody,
     DocWriteBody,
@@ -206,6 +207,129 @@ def register(app: FastAPI, d) -> None:
             else ""
         )
         return made
+
+    # ------------------------------------------------------------------ #
+    # A FOLDER OF DOCUMENTS BECOMES ONE SUMMARY SHEET (v1.251.0, C-04).
+    #
+    # `batch_documents` has existed since v1.133.0 and is deliberately NOT
+    # auto-armable: `tools/autoselect` keeps it out on COST grounds (about one
+    # model call per document, default 25, cap 100) and says so — it "remains
+    # one click away in the '+' menu, which is the interactive consent its cost
+    # profile deserves". These two routes are that click, made visible: the
+    # PREVIEW counts what the batch would really process so the card can state
+    # the number and the spend BEFORE anything is charged, and the RUN is the
+    # user pressing the button.
+    #
+    # THE PREVIEW MUST AGREE WITH THE RUN. Both answers come from the SAME
+    # `sweep` + `ocr_settings` pair the pipeline itself uses — a second counter
+    # would drift and the card would quote a number the batch does not honour.
+    # ------------------------------------------------------------------ #
+    def _batch_folder(raw: str) -> Path:
+        p = Path((raw or "").strip())
+        if not raw or not p.is_absolute():
+            raise HTTPException(status_code=400, detail="an absolute folder is required")
+        ok, reason = fs_read_ok(str(p))
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason or "folder not allowed")
+        if not p.is_dir():
+            raise HTTPException(status_code=404, detail=f"not a folder: {p}")
+        return p
+
+    @app.post("/documents/batch/preview")
+    def documents_batch_preview(body: BatchFolderBody) -> dict[str, Any]:
+        """What a batch over this folder WOULD do — and cost. Nothing runs.
+
+        Answers ``{folder, files, skipped, count, estimate_calls, cap,
+        truncated}``. ``skipped`` carries ``sweep``'s own reason per entry
+        (subfolder, unsupported type, read denied, over the cap), because a
+        count that silently omits files reads as complete — the truncation lie
+        this repo bans.
+
+        ``estimate_calls`` is documents + 1 synthesis pass: the honest shape of
+        the spend, not a price. Sync (it stats a folder) so FastAPI keeps it off
+        the event loop (v1.153.1).
+        """
+        from ...documents.batch import sweep
+        from ...documents.ocr import ocr_settings
+
+        folder = _batch_folder(body.folder)
+        cap = max(1, min(int(body.max_files or 25), 100))
+        ocr_on, _pages = ocr_settings(d.platform.config)
+        try:
+            files, skipped = sweep(folder, cap, include_images=ocr_on)
+        except OSError as exc:
+            raise HTTPException(status_code=409, detail=f"could not read {folder}: {exc}")
+        return {
+            "folder": str(folder),
+            "files": [{"name": p.name, "path": str(p)} for p in files],
+            "skipped": skipped,
+            "count": len(files),
+            # One call per document plus the synthesis pass that writes the
+            # sheet. Named as an ESTIMATE: a cached re-run costs less, and a
+            # document that fails still spent its call.
+            "estimate_calls": len(files) + (1 if files else 0),
+            "cap": cap,
+            "truncated": any(
+                "over the max_files limit" in (s.get("reason") or "") for s in skipped
+            ),
+        }
+
+    @app.post("/documents/batch")
+    async def documents_batch_run(body: BatchFolderBody) -> dict[str, Any]:
+        """RUN the batch — the user pressed the button, so this spends money.
+
+        Invoked through ``registry.invoke`` with the real permission engine, so
+        this route is not a permission bypass (the v1.121.0 rule a workflow tool
+        step follows too). ``batch_documents`` is allow-tier, so no
+        ``session_allow`` grant is passed or needed: a route that self-granted
+        would be widening consent, not honouring it.
+
+        Deliverables land in ``workspace_dir`` — the conversation's own folder
+        (v1.244.0) — so the sheet appears beside the documents it summarises.
+        ``created_paths`` comes back absolute, which is what puts it on the
+        chat's Files rail.
+        """
+        from ...tools.base import ToolContext
+
+        folder = _batch_folder(body.folder)
+        tool = d.platform.registry.get("batch_documents")
+        if tool is None:
+            raise HTTPException(status_code=501, detail="batch_documents is not registered")
+        ws = (body.workspace_dir or "").strip()
+        workspace = Path(ws) if ws else folder
+        if ws:
+            ok, reason = fs_read_ok(ws)
+            if not ok:
+                raise HTTPException(status_code=403, detail=reason or "workspace not allowed")
+        ctx = ToolContext(
+            workspace=workspace,
+            # The progress events carry this, so the page can tell THIS
+            # conversation's batch from any other running at the same time.
+            session_id=(body.session_id or "chat").strip() or "chat",
+            agent_run_id="chat",
+            config=d.platform.config,
+            event_bus=d.platform.event_bus,
+            engine=d.platform.engine,
+        )
+        result = await d.platform.registry.invoke(
+            "batch_documents",
+            {
+                "folder": str(folder),
+                "instructions": body.instructions or "",
+                "output": body.output or "both",
+                "max_files": max(1, min(int(body.max_files or 25), 100)),
+            },
+            ctx,
+            d.platform.permissions,
+            None,
+        )
+        if not result.ok:
+            raise HTTPException(status_code=409, detail=result.error or "batch failed")
+        return {
+            "output": result.output,
+            "report": result.data or {},
+            "created_paths": result.created_paths or [],
+        }
 
     # ------------------------------------------------------------------ #
     # Preview + native open (v1.89.0) — the chat's embedded document panel.

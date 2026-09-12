@@ -384,6 +384,32 @@ class WorkfolderBody(BaseModel):
     into: str = ""
 
 
+class BatchFolderBody(BaseModel):
+    """``POST /documents/batch/preview`` and ``/documents/batch`` (v1.251.0,
+    C-04) — "a folder of documents becomes one summary sheet".
+
+    ``folder`` is the folder the conversation is pointed at (absolute).
+    ``instructions`` is what the sheet should cover. ``output`` is the
+    deliverable format the batch tool accepts (``xlsx`` | ``docx`` | ``both``).
+    ``max_files`` bounds the run; the preview reports the same bound so the
+    card can state the cap BEFORE the user spends anything.
+
+    ``workspace_dir`` is where the deliverables land — the conversation's own
+    folder (v1.244.0), so the sheet appears beside the documents it summarises
+    instead of in a hidden scratch dir. Empty falls back to the folder itself.
+
+    ``session_id`` tags the progress events so the page can tell THIS
+    conversation's batch from any other.
+    """
+
+    folder: str = ""
+    instructions: str = ""
+    output: str = "both"
+    max_files: int = 25
+    workspace_dir: str = ""
+    session_id: str = "chat"
+
+
 class SettingsBody(BaseModel):
     values: dict[str, Any]
 

@@ -123,6 +123,10 @@ import {
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
+import {
+  BatchSuggestCard,
+  type BatchPreview,
+} from "@/components/chat/BatchSuggestCard";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
@@ -779,6 +783,11 @@ const MAX_THREAD_DOCS = 30;
  *  "that return" resolve — so the NEWEST few, which is what a follow-up
  *  almost always means. The daemon bounds this again on its side. */
 const MAX_CARRIED_FILES = 8;
+/** How many documents a folder needs before the app OFFERS to summarise the
+ *  whole thing (v1.251.0, C-04). One or two files are quicker to attach and
+ *  ask about — the batch pipeline earns its cost (about a model call per
+ *  document) only once reading them by hand is the slow part. */
+const BATCH_SUGGEST_MIN = 6;
 // Resizable side rail (preview/workspace column): width bounds + persistence.
 const RAIL_W_KEY = "ij_chat_rail_w";
 const RAIL_MIN_W = 280;
@@ -1215,6 +1224,31 @@ export default function ChatPage() {
   const [workfolder, setWorkfolder] = useState<string | null>(null);
   // Why the chat's previous folder was not used, when it was replaced.
   const [workfolderNote, setWorkfolderNote] = useState("");
+  // A FOLDER OF DOCUMENTS COULD BE ONE SUMMARY SHEET (v1.251.0, C-04).
+  // `batch_documents` has existed since v1.133.0 and is deliberately NOT
+  // auto-armed (cost: about one model call per document), so it has always sat
+  // behind a "+" menu click nobody knew to make. When this chat is pointed at a
+  // folder, ask the daemon what a batch would REALLY process and offer it with
+  // that number and the spend attached. Dismissable, per folder.
+  const [batchPreview, setBatchPreview] = useState<BatchPreview | null>(null);
+  const [batchDismissed, setBatchDismissed] = useState("");
+  useEffect(() => {
+    const folder = (workspaceDir || "").trim();
+    setBatchPreview(null); // the offer belongs to the folder that earned it
+    if (!folder) return;
+    let live = true;
+    void (async () => {
+      try {
+        const pv = await post<BatchPreview>("/documents/batch/preview", { folder });
+        if (live && pv && pv.count >= BATCH_SUGGEST_MIN) setBatchPreview(pv);
+      } catch {
+        /* an unreadable or missing folder simply gets no offer */
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [workspaceDir]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [input, setInput] = useState("");
@@ -6366,6 +6400,31 @@ export default function ChatPage() {
                     </button>
                   )}
                 </div>
+              )}
+
+              {/* A FOLDER BECOMES ONE SUMMARY SHEET (v1.251.0, C-04). Sits with
+                  the other pre-send notes above the composer, because it is
+                  about the folder this conversation is already pointed at. The
+                  card states the document count and the spend BEFORE the click:
+                  one press runs the batch, so the number has to be honest. */}
+              {batchPreview && batchDismissed !== batchPreview.folder && (
+                <BatchSuggestCard
+                  preview={batchPreview}
+                  events={events}
+                  // Whatever the user has typed is what the sheet should cover.
+                  instructions={input}
+                  // The sheet lands in this conversation's own folder when it
+                  // has one (v1.244.0), else beside the documents themselves.
+                  workspaceDir={workfolder ?? workspaceDir}
+                  onDone={(made) => {
+                    // The Files rail is how a made file is ever found again.
+                    if (made.length) {
+                      rememberThreadDocs(made);
+                      setWorkspaceOpenPersisted(true);
+                    }
+                  }}
+                  onDismiss={() => setBatchDismissed(batchPreview.folder)}
+                />
               )}
 
               {/* PREFLIGHT (v1.165.0): the active model is known-unreachable
