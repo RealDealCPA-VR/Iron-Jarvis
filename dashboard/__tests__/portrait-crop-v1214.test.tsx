@@ -236,13 +236,69 @@ function pick(agent: string, file: File) {
   fireEvent.change(input, { target: { files: [file] } });
 }
 
+/**
+ * `Image` whose load fires only when the returned function is called
+ * (v1.251.1) — the contended runner, made exact.
+ *
+ * The default stub above resolves in a microtask, so on any unloaded machine
+ * the decode has landed and React has re-rendered before a test's next line
+ * runs. Holding the load lets a test stand in the window a busy CI runner
+ * actually produces, with no timing in it.
+ */
+function stubImageManual(w: number, h: number): () => void {
+  const waiting: Array<() => void> = [];
+  class ManualImage {
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    naturalWidth = w;
+    naturalHeight = h;
+    width = w;
+    height = h;
+    #src = "";
+    get src() {
+      return this.#src;
+    }
+    set src(v: string) {
+      this.#src = v;
+      waiting.push(() => this.onload?.());
+    }
+  }
+  vi.stubGlobal("Image", ManualImage);
+  return () => waiting.splice(0).forEach((fire) => fire());
+}
+
+/**
+ * Confirm the crop, waiting for the THING the click needs (v1.251.1).
+ *
+ * "Use this" is `disabled={!natural}` until the pick has decoded, and
+ * `fireEvent.click` on a disabled button dispatches NOTHING — so a click that
+ * lands early is swallowed in silence and whatever the test waits for next can
+ * never arrive. Waiting for the cropper's modal does not cover it: the modal
+ * is on screen the moment the component mounts, before any decode, so it is a
+ * proxy signal that lands earlier (CLAUDE.md's waitFor rule).
+ *
+ * ONE SWALLOWED CLICK, TWO SYMPTOMS. The v1.251.0 gate went red here alone out
+ * of 158 files with "Test timed out in 5000ms", and the v1.236.1 gate before
+ * it with "Unable to find an element with the text: boom". Both were this
+ * click landing on a still-disabled button, which is why v1.236.2's larger
+ * bound could not help. Waiting on `disabled` is the real precondition — the
+ * same correction v1.227.1 made for Remove a few tests above.
+ */
+async function confirmCrop() {
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Use this" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Use this" }));
+}
+
 describe("AgentPortrait — the same row for every kind of agent", () => {
   it("stores under the NAME it is given, built-in or not", async () => {
     // The whole point: `builder` is a built-in and the route is identical.
     render(<AgentPortrait name="builder" onChanged={vi.fn()} />);
     pick("builder", pngFile());
-    await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Use this" }));
+    await confirmCrop();
     await waitFor(() =>
       expect(hooks.posts).toEqual([
         { path: "/agents/builder/avatar", body: { image_b64: "QUJD" } },
@@ -253,8 +309,7 @@ describe("AgentPortrait — the same row for every kind of agent", () => {
   it("exports at the daemon's own stored size, so nothing is resized twice", async () => {
     render(<AgentPortrait name="builder" onChanged={vi.fn()} />);
     pick("builder", pngFile());
-    await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Use this" }));
+    await confirmCrop();
     await waitFor(() => expect(exported()).toHaveLength(1));
     // drawImage(img, sx, sy, sw, sh, 0, 0, OUTPUT, OUTPUT)
     const [, , , sw, sh, dx, dy, dw, dh] = exported()[0] as number[];
@@ -329,27 +384,41 @@ describe("AgentPortrait — the same row for every kind of agent", () => {
     const onChanged = vi.fn();
     render(<AgentPortrait name="builder" onChanged={onChanged} />);
     pick("builder", pngFile());
-    await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Use this" }));
-    // HEADROOM, NOT A PERFORMANCE CLAIM (v1.236.2). This is still waiting for the
-    // exact thing it asserts — the error the failed store produced — which is the
-    // rule that matters. The only change is how long it is willing to wait.
-    //
-    // The v1.236.1 gate failed here alone, out of 140 files and 1975 tests, with
-    // "Unable to find an element with the text: boom". It passes locally every
-    // time, in isolation and beside its neighbours, because the whole chain is
-    // synchronous plus microtasks: click -> crop -> onCropped -> a rejected post
-    // -> setError. A contended Windows runner rendering 140 suites is the only
-    // place that window opens, which is exactly what this repo has recorded twice
-    // before about frontend waits. Raising the bound cannot mask a real defect:
-    // if the error never renders, this still fails, just later.
-    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy(), {
-      timeout: 5000,
-    });
+    await confirmCrop();
+    // THE WAIT MOVED, THE BOUND WENT BACK (v1.251.1). The error is one rejected
+    // promise away from a click that actually dispatched, so the default bound
+    // is ample. The 5000ms v1.236.2 granted here was vitest's ENTIRE per-test
+    // budget, so this line could never report its own failure — the test just
+    // timed out, which is the bare "Test timed out in 5000ms" v1.251.0 printed.
+    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
     // Whether one EXISTS is daemon truth, so the row must not refetch on a
     // failure and must not draw one either (the v1.171.0 rule).
     expect(onChanged).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+  });
+
+  it("stores the crop even when the decode lands after the dialog does", async () => {
+    // THE CI ORDERING, WITHOUT THE CI (v1.251.1). The cropper's modal is up
+    // while the picture is still decoding — the state every red run in this
+    // file happened in — and the release below is the decode arriving one turn
+    // of the loop later. React re-renders outside act() from there, so the
+    // button is still disabled on the line right after the release; a click
+    // issued there would be dispatched nowhere and the POST below would never
+    // come. The point is that the same work still lands, just later.
+    const decode = stubImageManual(1600, 900);
+    render(<AgentPortrait name="builder" onChanged={vi.fn()} />);
+    pick("builder", pngFile());
+    expect(screen.getByTestId("portrait-cropper")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Use this" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    decode();
+    await confirmCrop();
+    await waitFor(() =>
+      expect(hooks.posts).toEqual([
+        { path: "/agents/builder/avatar", body: { image_b64: "QUJD" } },
+      ]),
+    );
   });
 });
 
@@ -413,7 +482,7 @@ describe("PortraitCropper — the user sees the square before it is stored", () 
     fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, pointerId: 1 });
     fireEvent.pointerMove(canvas, { clientX: 40, clientY: 100, pointerId: 1 });
     fireEvent.pointerUp(canvas, { pointerId: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "Use this" }));
+    await confirmCrop();
     await waitFor(() => expect(exported()).toHaveLength(1));
     const [, sx] = exported()[0] as number[];
     // Dragged LEFT ⇒ a square further RIGHT in the source than the centred

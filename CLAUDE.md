@@ -908,6 +908,24 @@ does not need a bump, stop and bump it.
   handler (the success note, the re-enabled button), not on the first
   observable side effect. A handler that does `await x` and then sets state has
   a window between the two, and CI will find it eventually.
+  A THIRD instance, v1.251.0, names the trap underneath: a click on a
+  DISABLED button dispatches NOTHING, so `fireEvent.click` on one is swallowed
+  in silence and every later wait in that test waits for work never started.
+  `portrait-crop-v1214` waited for the cropper's MODAL before clicking "Use
+  this" — but the modal mounts before the picked image decodes, and the button
+  is `disabled={!natural}` until it does. Two gates died there: v1.236.1
+  ("Unable to find an element with the text: boom") and v1.251.0 ("Test timed
+  out in 5000ms") — one swallowed click, two symptoms. Three corollaries:
+    - A dialog being on screen is not its CONTENT being ready. Wait for the
+      control to be ENABLED — that is the precondition the click needs.
+    - Never give a `waitFor` a bound equal to vitest's per-test budget
+      (5000ms default). It can then never report its own failure: the test
+      times out first and prints nothing about what it waited for. v1.236.2
+      did exactly that here and turned a legible error into a bare timeout.
+    - A race fix is verified only if the MUTATION reproduces the failure on an
+      idle machine. Hold the async step (an `Image` whose load fires when the
+      test says so) instead of hoping a loaded runner shows it; v1.251.1's
+      mutation reproduced v1.236.1's exact error text locally.
 - **A folder is WRITABLE when a file lands in it, and `tempfile` is not the
   way to find out** (v1.228.0, audit Wave 2). `fs_policy.usable_workspace_root`
   accepted `C:\Users` (absolute, a dir, allowlist-clean, not protected) and
