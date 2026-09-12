@@ -215,7 +215,22 @@ describe("one /health poll per window", () => {
     for (let i = 0; i < 12; i++) await advance(5_000);
     // Used to be 39 (three 5 s pollers). One poll: 1 + 12 ticks.
     expect(count("/health")).toBe(13);
-  });
+    // HEADROOM FOR A CONTENDED RUNNER, NOT A PERFORMANCE CLAIM (v1.254.1).
+    // This is the only test in the file that RENDERS a page — the whole
+    // Overview, with every card and poller it owns — and it then drives 13
+    // fake-timer advances, each flushing every pending promise and
+    // re-rendering all of it. There is no waiting on a signal here: `advance`
+    // is `act(() => vi.advanceTimersByTimeAsync(ms))` under fake timers, so
+    // every step is deterministic work and the only variable is how much CPU
+    // the runner will spare. The v1.254.0 Release gate timed out here at the
+    // 5 s default while the Tests workflow's dashboard job passed the same
+    // commit — the signature of load, not of a defect.
+    //
+    // Raising a TEST timeout is not the v1.236.2 mistake (a `waitFor` granted
+    // the whole per-test budget, which left it unable to report its own
+    // failure). A test timeout hides nothing: if a count is wrong, the
+    // expectations above still fail with their own numbers.
+  }, 20_000);
 
   it("useProviderHealth inside the provider reads the shared poll and adds NO request of its own", async () => {
     stubFetch();

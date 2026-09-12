@@ -127,7 +127,16 @@ async def test_the_route_reports_a_reply_while_it_streams(tmp_path):
         task = asyncio.create_task(
             client.post("/chat/stream", json={"messages": [{"role": "user", "content": "hi"}]})
         )
-        await asyncio.sleep(0.2)
+        # Wait for the PROBE to have run — `seen` is what it records — rather
+        # than for a guessed interval (v1.254.1, the same fix as the walk-away
+        # test below). With a fixed sleep, a slow worker left `seen` empty and
+        # the assertion below died on a KeyError instead of saying what was
+        # wrong.
+        for _ in range(400):  # <= 8 s
+            if "during" in seen:
+                break
+            await asyncio.sleep(0.02)
+        assert "during" in seen, "the stream never started, so nothing was probed"
         release.set()
         res = await task
         assert res.status_code == 200
@@ -153,8 +162,18 @@ async def test_the_count_is_released_when_the_client_walks_away(tmp_path):
         task = asyncio.create_task(
             client.post("/chat/stream", json={"messages": [{"role": "user", "content": "hi"}]})
         )
-        await asyncio.sleep(0.2)
-        assert CHAT_INFLIGHT.count() == 1
+        # WAIT FOR THE THING THIS ASSERTS (v1.254.1). A fixed 0.2 s sleep is a
+        # guess about how quickly the runner gets round to the POST task, and
+        # on a loaded CI worker under `-n auto` the guess was wrong: the turn
+        # had not yet reached the counter, so this read `0 == 1` and took the
+        # v1.254.0 gate red — a test about CANCELLATION failing over
+        # scheduling speed. The release side below already polls; this is the
+        # same discipline on the arrival side.
+        for _ in range(400):  # <= 8 s, far beyond any scheduling delay
+            if CHAT_INFLIGHT.count() == 1:
+                break
+            await asyncio.sleep(0.02)
+        assert CHAT_INFLIGHT.count() == 1, "the reply was never counted as in progress"
         task.cancel()
         try:
             await task
