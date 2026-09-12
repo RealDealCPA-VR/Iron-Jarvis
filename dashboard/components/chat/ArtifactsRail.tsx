@@ -39,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
+import { setThreadFiles } from "@/lib/threadFiles";
 
 /** One file the conversation produced. `path` is ABSOLUTE — that is the whole
  *  point (v1.153.2 made every writing tool report absolute paths; this rail is
@@ -364,6 +365,16 @@ export function ArtifactsRail({
     }
     return out;
   }, [items]);
+
+  // THIS RAIL IS THE CONVERSATION'S FILE LIST (C-06). The email draft card is
+  // rendered by the markdown renderer deep inside a message and cannot reach
+  // the chat page's state, so the one component that already holds the list
+  // publishes it: the card offers exactly these files as attachments. Cleared
+  // on unmount, so a conversation with no files offers none.
+  useEffect(() => {
+    setThreadFiles(rows.map((r) => r.path));
+    return () => setThreadFiles([]);
+  }, [rows]);
 
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [openingPath, setOpeningPath] = useState<string | null>(null);

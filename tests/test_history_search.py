@@ -649,13 +649,19 @@ def test_route_limit_is_typed_but_out_of_range_is_clamped(client):
 
 
 def test_nothing_else_in_the_app_claims_a_search_path(client):
-    """The ordering pin's other half: today NOTHING else lives under /search,
-    and no path-converter route (``{x:path}``) exists there that could swallow
-    a sibling. If a future module adds one, this fails before the palette
-    silently loses its lane."""
+    """The ordering pin's other half: ONLY ``routes/search.py`` lives under
+    /search, and no path-converter route (``{x:path}``) exists there that could
+    swallow a sibling. If a future module adds one, this fails before the
+    palette silently loses a lane.
+
+    ``/search/all`` joined in C-08 (the "In your files & memory" lane) from the
+    same module, which is why this list is the module's routes rather than one
+    name — a path added ANYWHERE ELSE still fails here."""
     paths = [getattr(r, "path", "") or "" for r in client.app.router.routes]
     under_search = sorted(p for p in paths if p.startswith("/search"))
-    assert under_search == ["/search/history"]
+    assert under_search == ["/search/all", "/search/history"]
+    # No converter route: `{x:path}` under /search would match its siblings.
+    assert not [p for p in under_search if ":path}" in p]
 
 
 def test_route_is_registered_first_and_nothing_shadows_it(client):

@@ -26,6 +26,9 @@ import {
   Phone,
   Users,
   Boxes,
+  FileText,
+  Brain,
+  StickyNote,
   type LucideIcon,
 } from "lucide-react";
 import { NAV_ENTRIES } from "@/lib/nav";
@@ -33,6 +36,8 @@ import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
 import { recordOpen } from "@/lib/appTiles";
+import { useDaemon } from "@/lib/daemon";
+import { DocPreview } from "@/components/chat/DocPreview";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -65,6 +70,8 @@ interface PaletteRow extends PaletteItem {
   when?: string;
   /** History lane only: a truer badge than the generic kind ("Phone", "Session"). */
   badge?: string;
+  /** Files lane only (C-08): open this file's preview instead of navigating. */
+  previewPath?: string;
 }
 
 /** Row badge text — small, so a result never leaves you guessing what it IS. */
@@ -528,6 +535,94 @@ function historyRows(hits: HistoryHit[] | undefined): PaletteRow[] {
   return rows;
 }
 
+// -- "In your files & memory" (C-08) -----------------------------------------
+// The lane above finds what was SAID. This one finds what the app MADE and what
+// it REMEMBERS: files in your chat folder and project folders, long-term notes,
+// remembered facts, project knowledge and lessons. Before this, "where's the
+// Smith 2024 summary sheet?" meant looking in three places, and files were not
+// searchable at all. GET /search/all runs those stores side by side, each on
+// its own deadline, and says which lane it had to cut short.
+//
+// Same shape as the conversation lane on purpose: debounce, abort, generation
+// guard, and latch OFF on 404/405 so an older daemon costs one request, not one
+// per keystroke. Rows carry the `history` kind (they are not fed to
+// scorePalette either) with their OWN badge -- "File", "Note", "Memory",
+// "Project", "Lesson" -- so lib/palette.ts's shared kind union is untouched.
+
+const FOUND_HEADER = "In your files & memory";
+const FOUND_LIMIT = 6;
+const FOUND_MIN_CHARS = 3;
+const FOUND_DEBOUNCE_MS = 220;
+
+interface FoundFile {
+  title?: string;
+  path?: string;
+  folder?: string;
+  at?: string | null;
+  project_id?: string | null;
+}
+interface FoundMemory {
+  kind?: string;
+  title?: string;
+  snippet?: string;
+  href?: string;
+  source?: string;
+}
+interface FoundResponse {
+  files?: FoundFile[];
+  memory?: FoundMemory[];
+  partial?: string[];
+}
+
+/** What each memory store IS, in the user's words. */
+const FOUND_KINDS: Record<string, { badge: string; icon: LucideIcon }> = {
+  note: { badge: "Note", icon: StickyNote },
+  memory: { badge: "Memory", icon: Brain },
+  project: { badge: "Project", icon: FolderKanban },
+  lesson: { badge: "Lesson", icon: GraduationCap },
+};
+
+/** Files first (you asked for a thing you can open), then memory. */
+function foundRows(data: FoundResponse | undefined): PaletteRow[] {
+  const rows: PaletteRow[] = [];
+  const seen = new Set<string>();
+  for (const f of Array.isArray(data?.files) ? data!.files! : []) {
+    const path = String(f?.path || "").trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    rows.push({
+      id: `found:file:${path}`,
+      kind: "history",
+      label: String(f?.title || "").trim() || path,
+      icon: FileText,
+      badge: "File",
+      blurb: String(f?.folder || ""),
+      when: historyWhen(f?.at),
+      previewPath: path,
+    });
+    if (rows.length >= FOUND_LIMIT) return rows;
+  }
+  for (const m of Array.isArray(data?.memory) ? data!.memory! : []) {
+    const href = String(m?.href || "").trim();
+    const meta = FOUND_KINDS[String(m?.kind || "")];
+    if (!href || !meta) continue;
+    const id = `found:${m?.kind}:${String(m?.title || "")}:${href}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    rows.push({
+      id,
+      kind: "history",
+      label: String(m?.title || "").trim() || meta.badge,
+      href,
+      icon: meta.icon,
+      badge: meta.badge,
+      blurb: String(m?.snippet || ""),
+    });
+    if (rows.length >= FOUND_LIMIT) break;
+  }
+  return rows;
+}
+
 /** lib/api's `get` forwards any extra init fields straight into fetch (see
  *  `api`'s `...rest`), so an AbortSignal rides along fine — its published opts
  *  type just doesn't advertise the field. Narrowed here rather than widened in
@@ -556,6 +651,14 @@ export function CommandPalette() {
    *  the older one landing last would paint the previous query's results under
    *  the current query's rows. */
   const historyGenRef = useRef(0);
+  // The files & memory lane (C-08) -- its own state, generation and latch.
+  const [foundItems, setFoundItems] = useState<PaletteRow[]>([]);
+  const foundGenRef = useRef(0);
+  const foundOffRef = useRef(false);
+  /** The file a row asked to preview, or null. Survives the palette closing. */
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  /** Results favour the project you are working in (never filter to it). */
+  const activeProject = useDaemon().health?.active_project?.id ?? "";
   /** A 404 means an older daemon with no index at all. Asking again on every
    *  keystroke for the rest of the session would be pure noise, so the lane
    *  switches itself off — silently, which is the entire degrade story. */
@@ -768,6 +871,42 @@ export function CommandPalette() {
     };
   }, [open, query]);
 
+  /** The files & memory lane. Same three guards as the lane above; a daemon
+   *  without /search/all (404/405) turns it off for the session. */
+  useEffect(() => {
+    const gen = ++foundGenRef.current;
+    const needle = open ? query.trim() : "";
+    if (!needle || needle.length < FOUND_MIN_CHARS || foundOffRef.current) {
+      setFoundItems((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    let ctrl: AbortController | null = null;
+    const timer = setTimeout(() => {
+      ctrl = new AbortController();
+      const scope = activeProject
+        ? `&project_id=${encodeURIComponent(activeProject)}`
+        : "";
+      getAbortable<FoundResponse>(
+        `/search/all?q=${encodeURIComponent(needle)}${scope}`,
+        { signal: ctrl.signal },
+      )
+        .then((d) => {
+          if (gen !== foundGenRef.current) return;
+          setFoundItems(foundRows(d));
+        })
+        .catch((err: unknown) => {
+          const status = (err as { status?: number } | null)?.status;
+          if (status === 404 || status === 405) foundOffRef.current = true;
+          if (gen !== foundGenRef.current) return;
+          setFoundItems((prev) => (prev.length ? [] : prev));
+        });
+    }, FOUND_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ctrl?.abort();
+    };
+  }, [open, query, activeProject]);
+
   const allItems = useMemo(
     () => [...PAGE_ITEMS, ...DEEP_LINK_ITEMS, ...ACTION_ITEMS, ...skillItems, ...threadItems, ...projectItems],
     [skillItems, threadItems, projectItems],
@@ -813,14 +952,19 @@ export function CommandPalette() {
     // A conversation already offered above by title is not offered twice.
     const above = new Set(matched.map((r) => r.href).filter(Boolean));
     const lane = historyItems.filter((r) => !above.has(r.href));
+    // Files & memory sit below the conversations: a thing you can open beats a
+    // phrase in a months-old message only when you named it outright, which the
+    // title matches above already cover.
+    const found = foundItems.filter((r) => !r.href || !above.has(r.href));
     const h: Record<number, string> = {};
     if (lane.length) h[matched.length] = HISTORY_HEADER;
+    if (found.length) h[matched.length + lane.length] = FOUND_HEADER;
     // THE ROW THAT MAKES SEARCH NEVER A DEAD END. Appended for every non-empty
     // query, matches or not: "no results" is where a search tells you to go
     // away, and the one thing this app can always do with a sentence is answer
     // it. Always last so it never steals the top slot from a real destination.
-    return { rows: [...matched, ...lane, askRow(q)], headers: h };
-  }, [q, allItems, byId, threadItems, historyItems]);
+    return { rows: [...matched, ...lane, ...found, askRow(q)], headers: h };
+  }, [q, allItems, byId, threadItems, historyItems, foundItems]);
 
   // Clamp rather than trust: live results can arrive after the user has already
   // arrowed down, and an out-of-range index would silently Enter into nothing.
@@ -845,6 +989,12 @@ export function CommandPalette() {
       row.run();
       return;
     }
+    // A file has no page to go to: it opens in the same preview the chat's
+    // Files rail uses (C-08).
+    if (row.previewPath) {
+      setPreviewPath(row.previewPath);
+      return;
+    }
     // Search is how a lot of navigation actually happens here, so it counts
     // toward "most used" too — counting only the rail would rank the grid by
     // half the story (v1.151.0).
@@ -855,8 +1005,17 @@ export function CommandPalette() {
   }
 
   return (
-    <AnimatePresence>
-      {open && (
+    <>
+      {previewPath && (
+        <div
+          data-testid="palette-preview"
+          className="fixed inset-y-0 right-0 z-50 flex w-[min(560px,100%)] flex-col border-l border-white/10 bg-ink-950/95 shadow-card-hover backdrop-blur-xl"
+        >
+          <DocPreview path={previewPath} onClose={() => setPreviewPath(null)} />
+        </div>
+      )}
+      <AnimatePresence>
+        {open && (
         <m.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -1006,8 +1165,9 @@ export function CommandPalette() {
             </div>
           </m.div>
         </m.div>
-      )}
-    </AnimatePresence>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 

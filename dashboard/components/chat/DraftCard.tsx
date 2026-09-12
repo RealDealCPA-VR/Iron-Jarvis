@@ -42,12 +42,20 @@
  * has been misled about the one thing this component exists to do.
  */
 
-import { Check, Copy, Mail } from "lucide-react";
+import { Check, Copy, Inbox, Mail, Send } from "lucide-react";
+import {
+  EmailComposeDialog,
+  draftHeaders,
+  type ComposeMode,
+  type ComposeResult,
+} from "@/components/chat/EmailComposeDialog";
+import { useThreadFiles } from "@/lib/threadFiles";
 import {
   Children,
   isValidElement,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -390,6 +398,27 @@ export function DraftCard({
   const timer = useRef<number | null>(null);
   const [state, setState] = useState<"idle" | "rich" | "plain" | "failed">("idle");
   const [subjectCopied, setSubjectCopied] = useState(false);
+  // MAIL IT, DON'T RETYPE IT (C-06). Both buttons open ONE confirm dialog;
+  // nothing reaches the mail server until the person presses its button.
+  const [compose, setCompose] = useState<ComposeMode | null>(null);
+  const [mailed, setMailed] = useState<string | null>(null);
+  const files = useThreadFiles();
+  const headers = useMemo(() => draftHeaders(text), [text]);
+
+  /** The message as mailed: the SAME cleaned HTML the Copy button writes
+   *  (so Outlook gets the spacing that survives Word), minus any To:/Cc:
+   *  lines the model wrote at the top — those become real headers. */
+  const mailBody = useCallback(() => {
+    const node = bodyRef.current;
+    let html = node ? cleanHtml(node) : `<p>${escapeHtml(headers.body)}</p>`;
+    if (headers.to.length || headers.cc.length) {
+      html = html.replace(
+        /^\s*<(p|div)[^>]*>\s*(to|cc)\s*:[^<]*<\/\1>\s*/gi,
+        "",
+      );
+    }
+    return { html, text: headers.body };
+  }, [headers]);
 
   useEffect(
     () => () => {
@@ -484,11 +513,34 @@ export function DraftCard({
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-3 py-1.5">
-        <span className="truncate text-[11px] text-zinc-500">
-          {state === "plain"
-            ? "formatting could not be copied here — paste as plain text"
-            : "paste into your email — formatting is kept"}
+        <span
+          data-testid="draft-note"
+          className={`truncate text-[11px] ${mailed ? "text-emerald-400" : "text-zinc-500"}`}
+        >
+          {mailed
+            ? mailed
+            : state === "plain"
+              ? "formatting could not be copied here — paste as plain text"
+              : "paste into your email — formatting is kept"}
         </span>
+        <button
+          type="button"
+          data-testid="draft-save-draft"
+          onClick={() => setCompose("draft")}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
+        >
+          <Inbox size={11} />
+          Save to Drafts
+        </button>
+        <button
+          type="button"
+          data-testid="draft-send"
+          onClick={() => setCompose("send")}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
+        >
+          <Send size={11} />
+          Send…
+        </button>
         <button
           type="button"
           onClick={() => void copyAll()}
@@ -502,6 +554,29 @@ export function DraftCard({
           {label}
         </button>
       </div>
+
+      {compose && (
+        <EmailComposeDialog
+          mode={compose}
+          subject={subject}
+          to={headers.to}
+          cc={headers.cc}
+          files={files}
+          bodyText={text}
+          getBody={mailBody}
+          onClose={() => setCompose(null)}
+          onDone={(result: ComposeResult) => {
+            setCompose(null);
+            setMailed(
+              result.mode === "draft"
+                ? `Saved to your ${result.folder ?? "Drafts"} folder`
+                : result.refused?.length
+                  ? `Sent — but refused for ${result.refused.join(", ")}`
+                  : "Sent",
+            );
+          }}
+        />
+      )}
     </div>
   );
 }

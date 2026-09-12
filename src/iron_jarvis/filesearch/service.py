@@ -395,6 +395,53 @@ class FileSearchService:
                     break
         return results
 
+    def search_words(
+        self,
+        words: list[str],
+        roots: list[Path],
+        limit: int = 8,
+        max_walk: int = 5_000,
+        deadline_s: float = 2.0,
+    ) -> tuple[list[dict], bool]:
+        """Files whose path under ``roots`` contains EVERY word (C-08).
+
+        For "Smith 2024 summary": each word must appear in the path relative
+        to its root, with ``/ \\ _ - .`` read as spaces, so ``Smith_2024
+        summary.xlsx`` matches. Bounded twice — ``max_walk`` files and
+        ``deadline_s`` seconds — and says so: returns ``(hits, partial)`` where
+        ``partial`` means the cap or the deadline cut the walk short, so a
+        caller never presents a cut-off list as complete. Office lock files
+        (``~$…``) and the app's writability probes are skipped. BLOCKING:
+        call it off the event loop.
+        """
+        import time
+
+        want = [w.lower() for w in words if w and w.strip()]
+        if not want:
+            return [], False
+        stop_at = time.monotonic() + max(0.0, float(deadline_s))
+        hits: list[dict] = []
+        walked = 0
+        for root in self._effective_roots(roots):
+            prefix = str(root)
+            for path in self._iter_files([root], max(0, max_walk - walked)):
+                walked += 1
+                if walked % 200 == 0 and time.monotonic() > stop_at:
+                    return hits, True
+                name = path.name
+                if name.startswith("~$") or name.startswith(".ij-probe"):
+                    continue
+                full = str(path)
+                rel = (full[len(prefix):] if full.startswith(prefix) else name).lower()
+                flat = re.sub(r"[\\/_\-.]+", " ", rel)
+                if all(w in rel or w in flat for w in want):
+                    hits.append({"path": full, "root": prefix})
+                    if len(hits) >= limit:
+                        return hits, False
+            if walked >= max_walk:
+                return hits, True
+        return hits, False
+
     # -- content search -----------------------------------------------------
 
     def search_content(

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.252.0 (2026-09-11).*
+holds itself to. Current as of v1.253.0 (2026-09-11).*
 
 ---
 
@@ -117,6 +117,17 @@ Chat is where most work happens, and it is wired into everything:
 - **Draft cards**: when the model drafts an email, it arrives as a card whose
   **Copy** writes rich text that survives pasting into Outlook (bold, lists,
   links — spacing included, because Outlook renders through Word).
+- **Mail it without retyping it** (v1.253.0): the same draft card now has
+  **Save to Drafts** and **Send**. Either one opens a confirm box first, where
+  you check the To/Cc lines the model wrote, edit the subject, and tick any of
+  this conversation's files to attach — so the letter and the spreadsheet the
+  chat just made go out together. **Save to Drafts** puts it in your own
+  mailbox's Drafts folder and sends nothing, which is the default on purpose:
+  you open it in Outlook, read it once more, and press send yourself. Nothing
+  reaches the mail server until you press the button in that box — the model
+  cannot do this on its own. If the server accepts some recipients and refuses
+  others, the card says which were refused instead of just "Sent". Needs your
+  email account in Channels (IMAP to save drafts, SMTP to send).
 - **"/" skills** anywhere in a message invoke a skill; **@mentions** pull
   agents into a panel bound to the thread; **escalation** hands a chat request
   to a real background agent session when it outgrows a chat turn.
@@ -280,6 +291,14 @@ with the request typed in.
   titled **Search working memory** and says so — it searches only the
   working store (session · project · user). The count field beside each
   query is labelled **Results** (it was "k").
+- **One search for everything you have** (v1.253.0): the command palette
+  (Ctrl+K) now answers from three places at once — your **files**, your
+  **memory**, and **past conversations** — so you can look for "Dewerff
+  engagement letter" without first deciding which of the three it lives in.
+  Each result says which place it came from, and a file result opens in the
+  preview pane without leaving the palette. If one of the three takes too
+  long to answer, the palette says that part is incomplete rather than
+  quietly showing you a short list.
 
 ### Automation
 - **Schedules**: cron/interval/date tasks that fire real agent sessions
