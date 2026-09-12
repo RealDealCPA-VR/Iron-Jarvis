@@ -56,9 +56,25 @@ function renderCard(text = BODY) {
   );
 }
 
-async function openDialog(which: "draft" | "send" = "draft") {
+/**
+ * Open the confirm dialog and WAIT FOR THE FORM, not just the box (v1.255.1).
+ *
+ * The dialog's container mounts immediately; its form appears only once the
+ * channels lookup has resolved (that is how the no-account branch below can
+ * exist at all). Awaiting `email-compose-dialog` and then reading a field
+ * synchronously therefore caught the pre-form state on a loaded runner: the
+ * v1.255.0 Tests gate failed with "Unable to find a label with the text of:
+ * To" while Release passed the same commit. Seven of the eight callers here
+ * touch the form, so the wait belongs in one place; `form: false` is for the
+ * one case that asserts the form is NOT offered.
+ */
+async function openDialog(
+  which: "draft" | "send" = "draft",
+  { form = true }: { form?: boolean } = {},
+) {
   fireEvent.click(screen.getByTestId(which === "draft" ? "draft-save-draft" : "draft-send"));
   await screen.findByTestId("email-compose-dialog");
+  if (form) await screen.findByTestId("compose-submit");
 }
 
 beforeEach(() => {
@@ -129,7 +145,12 @@ describe("the draft card's mail buttons", () => {
   it("pre-fills the recipient from the draft's own To: line and ticks the file it names", async () => {
     renderCard();
     await openDialog();
-    expect((screen.getByLabelText?.("To") ?? screen.getByDisplayValue("client@example.com")) as unknown).toBeTruthy();
+    // A STRAIGHT ASSERTION, because the old one could not do what it looked
+    // like (v1.255.1): `getByLabelText?.("To")` guards whether the FUNCTION
+    // exists, and `getByLabelText` THROWS when it matches nothing — so the
+    // `?? getByDisplayValue(...)` fallback was dead code, and a missing label
+    // was always an exception, never the alternative it appeared to offer.
+    expect(screen.getByLabelText("To")).toBeTruthy();
     expect(screen.getByDisplayValue("client@example.com")).toBeTruthy();
     expect(screen.getByDisplayValue("Q1 expenses")).toBeTruthy();
     const box = screen.getByRole("checkbox") as HTMLInputElement;
@@ -168,7 +189,8 @@ describe("the draft card's mail buttons", () => {
   it("with no email account it explains how to connect one and posts nothing", async () => {
     api.channels = [{ name: "this-pc", type: "desktop" }];
     renderCard();
-    await openDialog();
+    // The one case with NO form to wait for — that is the whole assertion.
+    await openDialog("draft", { form: false });
 
     await screen.findByTestId("compose-no-account");
     expect(screen.getByText(/Add your email in Channels/)).toBeTruthy();
