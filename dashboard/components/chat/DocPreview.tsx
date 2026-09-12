@@ -321,9 +321,16 @@ interface CompareState {
 export function DocPreview({
   path,
   onClose,
+  compareCandidates,
 }: {
   path: string;
   onClose: () => void;
+  /** Other files this preview may be compared with (C-07). Optional on
+   *  purpose: the panel also asks the daemon for the rest of THIS file's
+   *  folder, and a conversation's files live together (v1.244.0 gives a plain
+   *  chat its own dated folder) — so "Compare with…" is there whether or not a
+   *  page hands it a list. */
+  compareCandidates?: string[];
 }) {
   const [copied, setCopied] = useState(false);
   const [data, setData] = useState<PreviewData | null>(null);
@@ -346,12 +353,22 @@ export function DocPreview({
   // extraction on a big PDF is real work, so it never runs unasked.
   const [compare, setCompare] = useState<CompareState | null>(null);
   const [showCompare, setShowCompare] = useState(false);
+  // "Compare with…" (C-07): the other document the user picked (null = the
+  // redaction receipt, which is the same machinery with a fixed other side),
+  // the folder's other documents, and whether the picker is open.
+  const [compareWith, setCompareWith] = useState<string | null>(null);
+  const [siblings, setSiblings] = useState<string[]>([]);
+  const [pickCompare, setPickCompare] = useState(false);
 
   // The original this file is a redacted copy of, by the engine's naming
   // convention (null for every non-redacted file — the row simply isn't there).
   const redactionSource = useMemo(() => redactionSourcePath(path), [path]);
   const redactionSourceName =
     redactionSource?.split(/[\\/]/).pop() ?? redactionSource ?? "";
+  // The picked file's own name, for the "Compare with…" wording (C-07).
+  const compareWithName = compareWith
+    ? (compareWith.split(/[\\/]/).pop() ?? compareWith)
+    : "";
 
   // In-flight guard for the comparison fetch. /documents/read can take
   // SECONDS (the scanned-PDF OCR fallback goes through the vision router), so
@@ -361,9 +378,11 @@ export function DocPreview({
   // (or the PREVIOUS file's) diff and counts without refetching.
   const compareGen = useRef(0);
 
-  /** Fetch BOTH extracted texts and diff them (original → redacted copy). */
-  const loadCompare = useCallback(async () => {
-    if (!redactionSource) return;
+  /** Fetch BOTH extracted texts and diff them: the redaction original, or any
+   *  other document the user picked with "Compare with…" (C-07). */
+  const runCompare = useCallback(async (other: string) => {
+    if (!other) return;
+    const otherName = other.split(/[\\/]/).pop() ?? other;
     const gen = ++compareGen.current; // a newer call invalidates this one too
     setCompare({
       loading: true,
@@ -381,7 +400,7 @@ export function DocPreview({
     // original when the redacted copy's read is the broken one sends the user
     // hunting for the wrong file.
     const [orig, red] = await Promise.allSettled([
-      read(redactionSource),
+      read(other),
       read(path),
     ]);
     if (gen !== compareGen.current) return; // invalidated mid-flight — drop it
@@ -389,7 +408,7 @@ export function DocPreview({
       const failedOriginal = orig.status === "rejected";
       const reason: unknown = failedOriginal ? orig.reason : (red as PromiseRejectedResult).reason;
       const failedName = failedOriginal
-        ? redactionSourceName
+        ? otherName
         : (path.split(/[\\/]/).pop() ?? path);
       const status = reason instanceof ApiError ? reason.status : null;
       // The hint fits the failure: 403 is the daemon's file policy saying no
@@ -424,19 +443,61 @@ export function DocPreview({
       markers: markerDelta(redactionMarkers(redText), redactionMarkers(origText)),
       clipped: origText.length >= READ_CAP || redText.length >= READ_CAP,
     });
-  }, [path, redactionSource, redactionSourceName]);
+  }, [path]);
 
   function toggleCompare() {
     setShowChanges(false); // one diff view at a time
+    setCompareWith(null); // the redaction receipt, not a picked file
     setShowCompare((v) => {
       const next = !v;
       // Refetch on first open AND when reopening onto a cached error — the
       // failure may have been transient (daemon hiccup, file restored), and
       // re-showing a stale error with no way to retry dead-ends the user.
-      if (next && (compare === null || compare.error)) void loadCompare();
+      if (next && redactionSource && (compare === null || compare.error))
+        void runCompare(redactionSource);
       return next;
     });
   }
+
+  /** "Compare with…" (C-07): the user picked another document. */
+  function compareWithFile(other: string) {
+    setShowChanges(false); // one diff view at a time
+    setPickCompare(false);
+    setCompareWith(other);
+    setShowCompare(true);
+    void runCompare(other);
+  }
+
+  // The other documents this one can be compared with: whatever the page
+  // handed us, plus the rest of this file's folder (a conversation's files sit
+  // together). Never this file itself.
+  const candidates = useMemo(() => {
+    const here = path.toLowerCase();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const p of [...(compareCandidates ?? []), ...siblings]) {
+      const key = p.toLowerCase();
+      if (!p || key === here || seen.has(key)) continue;
+      seen.add(key);
+      out.push(p);
+    }
+    return out;
+  }, [compareCandidates, siblings, path]);
+
+  // The folder's other documents, asked for once per file. A failure here is
+  // simply "no candidates" — the panel's own job is unaffected.
+  useEffect(() => {
+    let alive = true;
+    setSiblings([]);
+    get<{ files: { path: string }[] }>(
+      `/documents/siblings?path=${encodeURIComponent(path)}`,
+    )
+      .then((r) => alive && setSiblings((r.files ?? []).map((f) => f.path)))
+      .catch(() => alive && setSiblings([]));
+    return () => {
+      alive = false;
+    };
+  }, [path]);
 
   useEffect(() => {
     let alive = true;
@@ -724,23 +785,75 @@ export function DocPreview({
           copy (`<stem>.redacted<suffix>`, the engine's one convention), so
           offer the original side-by-side — what was removed, category by
           category, counted from the redacted file's own text. */}
-      {redactionSource && !loading && data && (
-        <div className="flex shrink-0 items-center gap-2 px-1">
-          <button
-            type="button"
-            onClick={toggleCompare}
-            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
-              showCompare
-                ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
-                : "border-white/[0.08] text-zinc-300 hover:bg-white/[0.06]"
-            }`}
-          >
-            <ShieldCheck size={11} />{" "}
-            {showCompare ? "Hide comparison" : "Compare to original"}
-          </button>
-          <span className="text-[10.5px] text-zinc-500">
-            a redacted copy of {redactionSourceName}
-          </span>
+      {!loading && data && (redactionSource || candidates.length > 0) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 px-1">
+          {redactionSource && (
+            <>
+              <button
+                type="button"
+                onClick={toggleCompare}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                  showCompare && !compareWith
+                    ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                    : "border-white/[0.08] text-zinc-300 hover:bg-white/[0.06]"
+                }`}
+              >
+                <ShieldCheck size={11} />{" "}
+                {/* Only the receipt's OWN view earns "Hide" — with a picked
+                    file on screen this button still opens the receipt. */}
+                {showCompare && !compareWith
+                  ? "Hide comparison"
+                  : "Compare to original"}
+              </button>
+              <span className="text-[10.5px] text-zinc-500">
+                a redacted copy of {redactionSourceName}
+              </span>
+            </>
+          )}
+          {/* "Compare with…" (C-07): the same Changes diff view, against
+              another document in this conversation's folder. */}
+          {candidates.length > 0 &&
+            (pickCompare ? (
+              <select
+                autoFocus
+                data-testid="compare-pick"
+                aria-label="Compare with another document"
+                value={compareWith ?? ""}
+                onChange={(e) => {
+                  if (e.target.value) compareWithFile(e.target.value);
+                  else setPickCompare(false);
+                }}
+                onBlur={() => setPickCompare(false)}
+                className="rounded-md border border-white/[0.08] bg-ink-850 px-2 py-0.5 text-[11px] text-zinc-200"
+              >
+                <option value="">Pick a document…</option>
+                {candidates.map((c) => (
+                  <option key={c} value={c}>
+                    {c.split(/[\\/]/).pop() ?? c}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                type="button"
+                data-testid="compare-with"
+                onClick={() => {
+                  if (showCompare && compareWith) {
+                    setShowCompare(false);
+                    setCompareWith(null);
+                  } else setPickCompare(true);
+                }}
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                  showCompare && compareWith
+                    ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                    : "border-white/[0.08] text-zinc-300 hover:bg-white/[0.06]"
+                }`}
+              >
+                {showCompare && compareWith
+                  ? `Hide comparison with ${compareWithName}`
+                  : "Compare with…"}
+              </button>
+            ))}
         </div>
       )}
       {error && <ErrorNote>{error}</ErrorNote>}
@@ -779,8 +892,12 @@ export function DocPreview({
               </div>
             ) : (
               <>
-                {(Object.keys(compare.markers?.categories ?? {}).length > 0 ||
-                  (compare.markers?.blocks ?? 0) > 0) && (
+                {/* Redaction badges belong to the RECEIPT only. A file-vs-file
+                    compare counts the same markers, but there they say nothing
+                    about a redaction pass — no pass ran. */}
+                {!compareWith &&
+                  (Object.keys(compare.markers?.categories ?? {}).length > 0 ||
+                    (compare.markers?.blocks ?? 0) > 0) && (
                   <div className="flex flex-wrap items-center gap-1.5 pb-2">
                     {Object.entries(compare.markers?.categories ?? {}).map(
                       ([label, n]) => (
@@ -804,11 +921,20 @@ export function DocPreview({
                   </div>
                 )}
                 <p className="pb-2 text-[10.5px] text-zinc-500">
-                  {compare.markers && markerSummary(compare.markers)
-                    ? markerSummary(compare.markers)
-                    : "No new redaction markers in this file's extracted text — the diff below shows what differs from the original."}{" "}
-                  Red lines are the original&apos;s text; green lines are the
-                  redacted copy.
+                  {compareWith ? (
+                    <>
+                      Comparing {name} with {compareWithName}. Red lines are{" "}
+                      {compareWithName}; green lines are this file.
+                    </>
+                  ) : (
+                    <>
+                      {compare.markers && markerSummary(compare.markers)
+                        ? markerSummary(compare.markers)
+                        : "No new redaction markers in this file's extracted text — the diff below shows what differs from the original."}{" "}
+                      Red lines are the original&apos;s text; green lines are
+                      the redacted copy.
+                    </>
+                  )}
                   {compare.clipped &&
                     // Window honesty: /documents/read clips at 20k chars, so
                     // a payload AT the cap means later PII is out of view.

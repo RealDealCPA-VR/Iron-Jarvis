@@ -197,6 +197,14 @@ def default_permissions() -> dict[str, str]:
         "excel_sheet_spec": "allow",
         "excel_edit": "allow",
         "excel_apply_spec": "allow",
+        # Office capability tools (C-03/C-07/C-09): docx_edit and pdf_form_fill
+        # write workspace-confined, TX-01 undoable files (a copy by default) —
+        # the same three facts that put excel_edit here. compare_documents and
+        # pdf_form_fields only read, through the same fs policy as read_document.
+        "docx_edit": "allow",
+        "compare_documents": "allow",
+        "pdf_form_fields": "allow",
+        "pdf_form_fill": "allow",
         # Disposable code — same trust tier as shell (arming in chat = consent).
         "run_code": "ask",
         # Code Lab reuse (v1.97.0): finding and READING a saved script is text

@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.253.0"
+version = "1.254.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -47,6 +47,7 @@ dependencies = [
     "winrt-windows-foundation>=3 ; sys_platform == 'win32'",
     "winrt-windows-foundation-collections>=3 ; sys_platform == 'win32'",
     "winrt-windows-globalization>=3 ; sys_platform == 'win32'",
+    "xlrd>=2.0.1",
 ]
 
 [project.optional-dependencies]

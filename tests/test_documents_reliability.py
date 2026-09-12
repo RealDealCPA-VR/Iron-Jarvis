@@ -226,13 +226,55 @@ def test_rtf_reader_strips_control_words(tmp_path):
 
 @pytest.mark.parametrize(
     "suffix,needle",
-    [(".doc", "docx"), (".xls", "xlsx"), (".ppt", "pptx"), (".odt", "docx")],
+    # .doc and .xls left this list in C-10 — they are READ now, see below.
+    [(".ppt", "pptx"), (".odt", "docx")],
 )
 def test_legacy_formats_clear_error(tmp_path, suffix, needle):
     p = tmp_path / f"old{suffix}"
     p.write_bytes(b"\xd0\xcf\x11\xe0legacy binary")
     with pytest.raises(ValueError, match=needle):
         extract_text(p)
+
+
+def test_legacy_xls_and_doc_are_read_not_refused(tmp_path, monkeypatch):
+    """C-10: a .xls opens directly (xlrd) and a .doc opens through Word, so
+    neither is turned away with "convert it first" any more. Bytes that are NOT
+    really that format still fail — with the real reason, which is the whole
+    point of dropping the blanket refusal."""
+    from iron_jarvis.documents import legacy
+
+    xls = tmp_path / "old.xls"
+    xls.write_bytes(b"\xd0\xcf\x11\xe0not really a workbook")
+    with pytest.raises(ValueError) as err:
+        extract_text(xls)
+    assert "convert it to .xlsx first" not in str(err.value)
+    assert "old.xls" in str(err.value)
+
+    # THE .doc HALF IS PINNED WITH WORD DECLARED ABSENT, and the reason is a
+    # measurement: this PC has Word, and Word's own file recovery opens these
+    # bytes as plain text and RETURNS it rather than failing, while CI has no
+    # Word at all. Asserting a raise here therefore pinned the behaviour of
+    # whichever machine ran it. The absent branch is the one that is the same
+    # everywhere; the live conversion is covered, Word-gated, by
+    # tests/test_legacy_office.py.
+    #
+    # THE CACHE MUST BE REDIRECTED TOO, and finding out why cost a round: the
+    # conversion cache is keyed by the source's BYTES and lives in the machine's
+    # temp dir, so the first run of this test (Word present, Word's recovery
+    # succeeded) left an entry these exact bytes still hit — `doc_as_docx`
+    # returned it and `word_available` was never consulted. A test that patches
+    # the availability of a tool must also isolate anything that can answer
+    # WITHOUT that tool.
+    monkeypatch.setattr(legacy, "_cache_dir", lambda: tmp_path / "legacy-cache")
+    monkeypatch.setattr(legacy, "word_available", lambda: False)
+    doc = tmp_path / "old.doc"
+    doc.write_bytes(b"\xd0\xcf\x11\xe0not really a document")
+    with pytest.raises(ValueError) as err2:
+        extract_text(doc)
+    msg = str(err2.value)
+    assert "convert it to .docx first" not in msg
+    # It names what is MISSING (Word), never "convert it first" with no why.
+    assert "Microsoft Word" in msg
 
 
 # --- size guard ---------------------------------------------------------------

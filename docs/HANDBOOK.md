@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.253.0 (2026-09-11).*
+holds itself to. Current as of v1.254.0 (2026-09-11).*
 
 ---
 
@@ -271,6 +271,32 @@ create, redact and the batch history; **convert, split, merge and batch
 processing are done from Chat** — ask for it in chat, or use the "+" menu —
 and the page's empty state offers those four as example chips that open Chat
 with the request typed in.
+
+**New in v1.254.0 — four things you used to do by hand:**
+
+- **Change a Word document without retyping it.** Ask for "replace the fee
+  with $4,200 in this letter" and the file keeps its letterhead, fonts,
+  styles, headers and footers — only the words you asked about change. Until
+  now the only way to "edit" a .docx was to rebuild it from scratch, which
+  came back looking like a different firm's letter. It changes a copy by
+  default, and the chat's **Undo** works on it. If the text you named isn't in
+  the document, nothing is changed and you are told what wasn't found — it
+  never half-edits a letter.
+- **Fill in a PDF form, and know it took.** Hand over a fillable PDF and the
+  app lists its fields, fills the ones you name, then **re-opens the finished
+  file and checks every value is really there**. If any value did not stick,
+  the copy is deleted and you are told — the same "prove it, don't claim it"
+  rule the redaction flow uses. So "filled" always means filled.
+- **See exactly what changed between two documents.** Point at two versions of
+  a letter or a workbook and get a plain list: what was added, removed and
+  reworded, sheet by sheet and figure by figure for spreadsheets. No more
+  reading two copies side by side hunting for the one number that moved.
+- **Old .xls and .doc files open.** Files from the 1997-2003 era now read
+  properly: .xls directly, and .doc through Microsoft Word if you have it
+  installed (only Word converts its own old format faithfully). If Word isn't
+  here, the app says so and tells you to save the file as .docx rather than
+  failing halfway through a job. The Diagnostics page shows which of the two
+  is available on this PC.
 
 ### Memory
 - **Long-term memory**: markdown bases (Obsidian vault supported), Notion,

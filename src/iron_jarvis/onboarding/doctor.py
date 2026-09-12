@@ -501,6 +501,7 @@ def check_browser_addon() -> dict:
         level=RECOMMENDED,
     )
 
+
 def check_local_ocr() -> dict:
     """Scanned pages can be read ON THIS PC (C-05).
 
@@ -532,6 +533,43 @@ def check_local_ocr() -> dict:
     )
 
 
+def check_legacy_office() -> dict:
+    """Old .xls and .doc files (C-10).
+
+    RECOMMENDED, not required, and the two halves differ on purpose: .xls is
+    read by a pure-Python library that ships with the app, so it either works
+    everywhere or the install is broken; .doc needs Microsoft Word on this PC,
+    because only Word converts its own 1997 format faithfully. Saying which of
+    the two is available is the difference between "it just opens" and a job
+    stopping on a file the user cannot tell apart from any other."""
+    from ..documents.legacy import word_available, xls_available
+
+    xls_ok = xls_available()
+    word_ok = word_available()
+    if xls_ok and word_ok:
+        detail = "Old .xls files open directly, and .doc files open through Microsoft Word."
+    elif xls_ok:
+        detail = (
+            "Old .xls files open directly. .doc files need Microsoft Word, which "
+            "is not installed here — save those as .docx to use them."
+        )
+    else:
+        detail = "Old .xls files cannot be read: the xlrd reader is missing from this install."
+    return _result(
+        "old Office files",
+        xls_ok and word_ok,
+        detail,
+        fix=""
+        if xls_ok and word_ok
+        else (
+            "Reinstall dependencies (`uv sync`); if this is the packaged app, xlrd is missing from the build."
+            if not xls_ok
+            else "Install Microsoft Word, or save .doc files as .docx before using them."
+        ),
+        level=RECOMMENDED,
+    )
+
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -542,6 +580,7 @@ CHECKS = [
     check_browser,
     check_pdf_classifier,
     check_local_ocr,
+    check_legacy_office,
     check_guide_docs,
     check_browser_addon,
 ]

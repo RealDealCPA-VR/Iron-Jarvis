@@ -65,12 +65,22 @@ MAX_SYNTHESIS_CHARS = 16_000
 #: 800x600 ...]"), which hands a fact-extraction model nothing but an invitation
 #: to fabricate. (``_IMAGE_SUFFIXES`` is the reader's own definition of "image";
 #: importing it keeps the two modules from drifting apart.)
-SWEEP_SUFFIXES: frozenset[str] = frozenset(SUPPORTED_READ - _IMAGE_SUFFIXES)
+#: ``.doc`` IS READABLE NOW (C-10) AND STILL STAYS OUT OF THE SWEEP. Every
+#: unique .doc starts Microsoft Word over COM, so a folder holding fifty of them
+#: would start Word fifty times — a per-file cost nothing else in this sweep
+#: carries, paid on the machine the user is working on. Handing a .doc to the
+#: pipeline directly still reads it; only the unattended folder sweep declines to
+#: fan out that way. ``.xls`` is pure Python and sweeps like any workbook.
+_SWEEP_EXCLUDED: frozenset[str] = frozenset({".doc"})
+
+SWEEP_SUFFIXES: frozenset[str] = frozenset(
+    SUPPORTED_READ - _IMAGE_SUFFIXES - _SWEEP_EXCLUDED
+)
 
 #: With OCR available an image IS a document — a photographed W-2 is exactly
 #: the file this pipeline exists for. It joins the sweep only when OCR is on,
 #: because without transcription it would go back to being that size note.
-SWEEP_SUFFIXES_WITH_OCR: frozenset[str] = frozenset(SUPPORTED_READ)
+SWEEP_SUFFIXES_WITH_OCR: frozenset[str] = frozenset(SUPPORTED_READ - _SWEEP_EXCLUDED)
 
 _EXTRACT_SYSTEM = (
     "You extract structured facts from ONE document for a batch pipeline. "

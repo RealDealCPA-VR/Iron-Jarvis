@@ -152,8 +152,55 @@ def test_the_writing_tool_set_covers_every_tool_that_writes_a_file():
     from iron_jarvis.daemon.chat_turn import _FILE_WRITING_TOOLS
 
     for name in ("write_document", "write_file", "excel_edit", "excel_apply_spec",
-                 "redact_pii", "convert_document", "batch_documents"):
+                 "redact_pii", "convert_document", "batch_documents",
+                 # v1.254.0 (C-03/C-07): both write a real file — a
+                 # workspace-confined, undoable copy — and arrived from a branch
+                 # that wired them everywhere EXCEPT this vocabulary.
+                 "docx_edit", "pdf_form_fill"):
         assert name in _FILE_WRITING_TOOLS, f"{name} writes files but is not listed"
+
+
+def test_the_office_writers_reach_the_strict_ask_gate_and_the_office_round_budget():
+    """THE SEAM THE BRANCH COULD NOT SEE (v1.254.0).
+
+    C-03/C-07 wired `docx_edit` and `pdf_form_fill` into the registry, the
+    autoselect tier, the agent definitions and `runtime._WRITE_TIER` — every
+    place inside their own reach. Neither is in `chat_turn.py`, and two things
+    that matter live only there:
+
+    * `STRICT_ASK_TOOLS` DERIVES from `_FILE_WRITING_TOOLS`. A file writer
+      missing from that set skips the strict ask-before-file-edits posture
+      entirely — the setting a person turns on precisely so nothing touches
+      their files without a card. That is a permission hole, not a nicety.
+    * `_DOC_WRITING_TOOLS` is what earns an office turn 12 tool rounds instead
+      of 6 (`_is_office_turn`). Without it, "change the fee in this letter"
+      died on the last-round escalation that hands the job to an agent and
+      discards what the turn had already done.
+
+    The anti-vacuity control is `read_document`: if this test ever passes
+    because everything is in the strict set, that assertion fails first."""
+    from iron_jarvis.daemon.chat_turn import (
+        _DOC_WRITING_TOOLS,
+        _FILE_WRITING_TOOLS,
+        STRICT_ASK_TOOLS,
+    )
+
+    for name in ("docx_edit", "pdf_form_fill"):
+        assert name in _DOC_WRITING_TOOLS, (
+            f"{name} changes a document, so an office turn carrying it must get "
+            f"the 12-round budget — it is missing from _DOC_WRITING_TOOLS"
+        )
+        assert name in STRICT_ASK_TOOLS, (
+            f"{name} writes a file but escapes the strict ask gate — it must "
+            f"reach STRICT_ASK_TOOLS, which derives from _FILE_WRITING_TOOLS"
+        )
+    # Derived, never re-listed: the invariant that keeps the two vocabularies
+    # from drifting (the same assertion test_approval_modes_v1188 makes).
+    assert _FILE_WRITING_TOOLS <= STRICT_ASK_TOOLS
+    # ANTI-VACUITY: a read-only tool must stay out, or "is it in the set?"
+    # proves nothing about writers.
+    assert "read_document" not in STRICT_ASK_TOOLS
+    assert "read_document" not in _DOC_WRITING_TOOLS
 
 
 # --------------------------------------------------------------------------- #

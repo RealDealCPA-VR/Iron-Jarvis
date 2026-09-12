@@ -644,6 +644,28 @@ _GENERIC = LiveVerbs(
     ("convert_document", "write_document"),
 )
 
+#: Word documents (C-03). ``write_document`` RETYPES a .docx from markdown, so
+#: it was the only change verb this table could offer for "change the fee in
+#: this letter" — and the answer was a document with the letterhead gone.
+#: ``docx_edit`` leads because it is the one that keeps the file the user's.
+#: NOT `_WORD` — that name is TAKEN, by the tokenizer regex at the top of this
+#: module (`_tokens` calls `_WORD.findall`). Binding a LiveVerbs to it shadowed
+#: the pattern and every .xlsx attachment came back "(could not read: 'LiveVerbs'
+#: object has no attribute 'findall')" — the retrieval branch, silently, for a
+#: file type this change never meant to touch.
+_DOCX = LiveVerbs(
+    "read_document",
+    (
+        "docx_edit (changes the words and keeps the letterhead, styles, headers)",
+        "convert_document",
+        "write_document",
+    ),
+    _DERIVED_TARGET,
+    False,
+    ("read_document",),
+    ("docx_edit", "convert_document", "write_document"),
+)
+
 LIVE_VERBS: dict[str, LiveVerbs] = {
     ".xlsx": _WORKBOOK,
     ".xlsm": _WORKBOOK,
@@ -656,14 +678,19 @@ LIVE_VERBS: dict[str, LiveVerbs] = {
         ("convert_document", "write_document"),
     ),
     ".pdf": LiveVerbs(
+        # `pdf_form_fields` is deliberately NOT a READ verb here. This table's
+        # read half is a promise every plain "summarize this" turn keeps (a
+        # read verb that is auto-armable MUST arm — pinned by
+        # tests/test_autoselect_gaps_v1196), and naming a form's fields is not
+        # something every PDF has to offer. It arms from the request instead.
         "read_document with page_range, extract_pdf",
-        ("pdf_arrange", "pdf_split"),
+        ("pdf_arrange", "pdf_split", "pdf_form_fill (fills a form into a copy)"),
         _DERIVED_TARGET,
         False,
         ("read_document", "extract_pdf"),
-        ("pdf_arrange", "pdf_split"),
+        ("pdf_arrange", "pdf_split", "pdf_form_fill"),
     ),
-    ".docx": _GENERIC,
+    ".docx": _DOCX,
     ".pptx": LiveVerbs(
         "read_document with page_range",
         ("convert_document", "write_document"),

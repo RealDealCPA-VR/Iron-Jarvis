@@ -2036,6 +2036,16 @@ _DOC_WRITING_TOOLS = {
     "excel_edit",
     "excel_apply_spec",
     "redact_pii",
+    # C-03/C-07 (v1.254.0): these two CHANGE a document the user already has —
+    # `docx_edit` rewrites words inside a .docx keeping its letterhead, and
+    # `pdf_form_fill` writes values into a form. Their branch wired them
+    # everywhere it touched (registry, autoselect, agent definitions,
+    # runtime._WRITE_TIER) but never here, and this file is where an office
+    # turn earns its 12 rounds: without them `_is_office_turn` was false, so a
+    # "change the fee in this letter" turn got six and died on the last-round
+    # escalation that hands the job away and discards what it had already done.
+    "docx_edit",
+    "pdf_form_fill",
 }
 
 #: A chat turn that can WRITE a document gets this many tool rounds instead
@@ -2119,6 +2129,16 @@ _FILE_WRITING_TOOLS = frozenset(
         "redact_pii",
         "convert_document",
         "batch_documents",
+        # C-03/C-07 (v1.254.0), and this one is a PERMISSION fix, not a note
+        # fix. `STRICT_ASK_TOOLS` is DERIVED from this set just below, so a
+        # writer missing here is a writer that skips the strict
+        # ask-before-file-edits gate entirely — the posture a user turns on to
+        # be asked before anything touches their files. `docx_edit` and
+        # `pdf_form_fill` both write a real file (a workspace-confined,
+        # undoable copy by default), so they belong in the one vocabulary that
+        # the gate, the honesty note and the created-files report all read.
+        "docx_edit",
+        "pdf_form_fill",
     }
 )
 

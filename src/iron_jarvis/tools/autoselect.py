@@ -160,6 +160,17 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # that goes red if the two ever drift apart again.
         "excel_apply_spec",
         "excel_accounts_diff",
+        # Office capability tools (C-03/C-07/C-09). `compare_documents` and
+        # `pdf_form_fields` only READ (fs-policy confined), the same tier as
+        # `excel_read`. `docx_edit` and `pdf_form_fill` write a workspace-
+        # confined, TX-01 undoable COPY by default — the three facts that put
+        # `excel_edit` and `excel_apply_spec` here — and both LAND AS A PAIR
+        # with `agents/runtime._WRITE_TIER`, so a read-only REVIEWER/SUPERVISOR
+        # definition cannot gain a writer off its task text.
+        "docx_edit",
+        "compare_documents",
+        "pdf_form_fields",
+        "pdf_form_fill",
         # Code Lab reuse (v1.97.0): READ-ONLY prior-art lookup — find a script
         # already written for this problem and read its source. Deliberately
         # NOT code_run, which executes saved code and belongs with shell behind
@@ -238,6 +249,38 @@ _DOC_EXT_RX = re.compile(
 )
 _IMG_EXT_RX = re.compile(r"\.(png|jpe?g|gif|webp|bmp|tiff?)$", re.IGNORECASE)
 
+#: THE ATTACHMENT SIDE of the three office intents (C-03/C-07/C-09). The
+#: sentence often names no file type at all — "replace Smith with Jones",
+#: "fill this in", "what changed?" — and the ATTACHMENT is what says which tool
+#: can do it. Each keeps its own gate below: the two writers need an
+#: imperative-position verb (the `_CHANGE_TOOLS` contract), the readers do not.
+#: NO "correct" HERE, and the omission is load-bearing: it is an ADJECTIVE at
+#: least as often as a verb, and `_ENQUIRY`'s `is/are/was` branch only covers
+#: PRONOUN subjects ("is it"), not "is THE fee" — so "is the fee in this letter
+#: correct?" had no marker in front of the match, passed the position gate, and
+#: armed a file writer off a plain question (measured). The sentence rule below
+#: keeps the verb, where a document noun and the imperative gate both apply, so
+#: "correct the fee in this letter" still arms; only the type-free attachment
+#: path gives it up. This path names no file type, so it can afford to be the
+#: conservative one.
+_EDIT_VERB_RX = re.compile(
+    r"\b(?:change|replace|update|edit|amend|revise|fix|swap|"
+    r"substitute|reword|retitle|insert)\b",
+    re.IGNORECASE,
+)
+_FILL_VERB_RX = re.compile(r"\b(?:fill|complete|populate)\b", re.IGNORECASE)
+#: THE ADJECTIVE FORMS ARE THE NATURAL ONES and the first cut of this pattern
+#: missed them: "what's DIFFERENT between last year's and this year's?" scored
+#: nothing at all, which is the most ordinary way this request arrives.
+#: `differ\w*` (not `diff\w*`) because `diff\w*` also matches "difficult".
+_COMPARE_RX = re.compile(
+    r"\b(?:compar\w*|differ\w*|diffs?|"
+    r"what(?:'s|\s+has|\s+have)?\s+changed)\b",
+    re.IGNORECASE,
+)
+_WORD_EXT_RX = re.compile(r"\.docx?$", re.IGNORECASE)
+_PDF_EXT_RX = re.compile(r"\.pdf$", re.IGNORECASE)
+
 _URL_RX = re.compile(r"https?://\S+", re.IGNORECASE)
 # Windows (C:\...) or POSIX-looking absolute paths typed into the message.
 _PATH_RX = re.compile(r"(?:[A-Za-z]:\\[^\s\"']+|(?<!\S)/(?:[\w.-]+/)+[\w.-]+)")
@@ -308,6 +351,10 @@ _CHANGE_TOOLS: frozenset[str] = frozenset({
     "write_document", "write_file", "convert_document", "excel_edit",
     "excel_apply_spec", "pdf_arrange", "pdf_split", "image_convert",
     "image_resize",
+    # C-03/C-09: both write a file for the user (a copy by default), so both
+    # need the same imperative-position gate every other mutator here has —
+    # "why did you change the fee in the letter?" must arm nothing.
+    "docx_edit", "pdf_form_fill",
     # v1.196.0 round 5. `redact_pii` writes a NEW `.redacted` file and is a
     # `_WRITE_TIER` member on the agent side, but until this round NOTHING in
     # this module gated it: the redaction rule fires on the bare NOUN "pii", so
@@ -1362,6 +1409,73 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         {"pdf_arrange": 8},
     ),
+    # --- Word documents: change the words, keep the paper (C-03) ----------
+    # `docx_edit` is the only verb that keeps a letter's letterhead, styles and
+    # numbering, so a change request about a Word document must reach it —
+    # `write_document` (which scores on the same sentences) RETYPES the file,
+    # which is the loss C-03 exists to fix. Imperative-gated like every other
+    # mutator in this module: "why was the fee changed in the letter?" arms
+    # nothing, and `read_document` rides along because an edit starts by
+    # finding the text.
+    (
+        re.compile(
+            _imperative()
+            + r"(?:change|replace|update|edit|amend|revise|correct|fix|swap|"
+            r"substitute|reword|retitle)\b[^.!?]{0,80}?"
+            r"\b(?:letter|memo|memorandum|agreement|contract|engagement|docx|"
+            r"word\s+doc\w*|letterhead|header|footer|paragraph|heading|clause)\b",
+            re.IGNORECASE,
+        ),
+        {"docx_edit": 9, "read_document": 4},
+    ),
+    # --- compare two documents (C-07) -------------------------------------
+    # NO imperative gate: `compare_documents` only reads, and "what changed
+    # between last year's return and this year's?" is a question that IS the
+    # request. It still needs a document word in the sentence, or "compare
+    # these two quotes" (a web question) would arm it.
+    (
+        re.compile(
+            # `compar\w*`/`differ\w*` rather than a hand-listed set of endings:
+            # "what's DIFFERENT between last year's and this year's" and "how do
+            # these two DIFFER" are the everyday phrasings, and the first cut
+            # (compare|difference|differences) scored neither. `diffs?` keeps the
+            # noun without letting `diff\w*` match "difficult".
+            r"\b(?:compar\w*|differ\w*|diffs?|"
+            r"what(?:'s|\s+has|\s+have)?\s+changed)\b"
+            r"[^.!?]{0,80}?\b(?:documents?|files?|versions?|drafts?|returns?|"
+            r"letters?|sheets?|spreadsheets?|workbooks?|statements?|reports?|"
+            r"pdfs?|docx|xlsx|last\s+year|this\s+year|prior\s+year)\b"
+            r"|\b(?:documents?|files?|versions?|drafts?|returns?|letters?|"
+            r"sheets?|spreadsheets?|workbooks?|statements?|reports?)\b"
+            r"[^.!?]{0,40}?\b(?:compar\w*|differ\w*|diffs?)\b",
+            re.IGNORECASE,
+        ),
+        {"compare_documents": 9, "read_document": 4},
+    ),
+    # --- fill in a PDF form (C-09) ----------------------------------------
+    # The filler writes a file, so it takes the imperative gate; the reader
+    # that NAMES a form's fields is a plain read and gets its own rule below.
+    (
+        re.compile(
+            _imperative()
+            + r"(?:fill|complete|populate|prepare)\b[^.!?]{0,60}?"
+            r"\b(?:forms?|w-?9|w-?4|w-?8\w*|8879|1099|9465|2848|941|1040|"
+            r"application|questionnaire|intake)\b",
+            re.IGNORECASE,
+        ),
+        {"pdf_form_fill": 9, "pdf_form_fields": 7},
+    ),
+    (
+        # "what does this form ask for?", "which boxes are blank?" — naming the
+        # fields is the answer, and arming the filler would be a mutator on a
+        # question.
+        re.compile(
+            r"\b(?:fields?|boxes|blanks)\b[^.!?]{0,40}?\b(?:forms?|pdf)\b"
+            r"|\b(?:forms?|pdf)\b[^.!?]{0,40}?\b(?:fields?|blanks)\b",
+            re.IGNORECASE,
+        ),
+        {"pdf_form_fields": 7},
+    ),
     # --- spreadsheets -----------------------------------------------------
     (
         re.compile(rf"\b({_XL_NOUNS})\b", re.IGNORECASE),
@@ -2382,11 +2496,45 @@ def select_auto_tools(
     # are not three times the signal).
     if _CODE_FILE_RX.search(msg):
         bump({"read_file": 6, "file_search": 4})
-    for name in attachments or []:
+    atts = attachments or []
+    for name in atts:
         if _DOC_EXT_RX.search(name):
             bump({"read_document": 9})
         elif _IMG_EXT_RX.search(name):
             bump({"view_image": 9})
+    # THE ATTACHMENT SIDE of the three office intents (C-03/C-07/C-09), and the
+    # reason it cannot live in `_RULES`: the sentence a user types over an
+    # attachment often names no file type at all — "replace Smith with Jones",
+    # "fill this in", "what changed?" — so the RULE cannot tell which tool can
+    # do it and the ATTACHMENT is the only thing that can. Weighted BELOW the
+    # `read_document: 9` above, because reading is what every attachment turn
+    # wants and this only adds the door that matches the file in hand.
+    #
+    # THE TWO WRITERS KEEP THE GATE (`_CHANGE_TOOLS`' contract): the verb must
+    # stand before the first `_ENQUIRY` marker, which is test 1 of
+    # :func:`_position_allows` ("a marker at or before *start* refuses") and is
+    # what keeps "why did you change the fee?" from arming `docx_edit`. No
+    # positional branch participates here, so tests 2 and 3 have nothing to say.
+    # `compare_documents` is READ-ONLY and needs no gate — but it does need TWO
+    # documents, or "what changed?" over a single file would arm a tool with
+    # nothing to compare it to.
+    if atts:
+        if cut < 0:
+            found = _ENQUIRY.search(msg)
+            cut = found.start() if found else len(msg) + 1
+
+        def _asked(rx: re.Pattern[str]) -> bool:
+            m = rx.search(msg)
+            return m is not None and m.start() < cut
+
+        if any(_WORD_EXT_RX.search(n) for n in atts) and _asked(_EDIT_VERB_RX):
+            bump({"docx_edit": 6})
+        if any(_PDF_EXT_RX.search(n) for n in atts) and _asked(_FILL_VERB_RX):
+            bump({"pdf_form_fill": 6, "pdf_form_fields": 4})
+        if _COMPARE_RX.search(msg) and (
+            sum(1 for n in atts if _DOC_EXT_RX.search(n)) >= 2
+        ):
+            bump({"compare_documents": 6})
 
     # NO POST-PASS SUPPRESSION HERE ANY MORE (v1.196.0 round 5). Round 4 revoked
     # every `_CHANGE_TOOLS` member at this point whenever `_NOT_A_REQUEST`

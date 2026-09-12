@@ -219,6 +219,7 @@ _MUTATING_TOOLS: frozenset[str] = frozenset({
     "write_file", "edit_file", "write_document", "convert_document",
     "redact_pii", "pdf_arrange", "pdf_split",
     "excel_edit", "excel_apply_spec", "batch_documents",
+    "docx_edit", "pdf_form_fill",
     "image_convert", "image_resize",
     "pixio_generate",
     # anything that hands the work to something else that can write

@@ -880,6 +880,10 @@ def test_every_gated_mutator_is_actually_gated(platform):
         "image_convert": "convert the photo to png",
         "image_resize": "resize the photo to 800px",
         "redact_pii": "redact the pii in this return",
+        # C-03/C-09: both write a file for the user, so both joined
+        # `_CHANGE_TOOLS` and both owe this file a probe sentence.
+        "docx_edit": "change the fee in the engagement letter",
+        "pdf_form_fill": "fill in the w-9 form",
     }
     assert set(reaching) == set(_CHANGE_TOOLS), (
         f"_CHANGE_TOOLS changed; add a reaching sentence for "

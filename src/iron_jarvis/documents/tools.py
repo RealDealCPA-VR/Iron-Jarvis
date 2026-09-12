@@ -569,11 +569,22 @@ class ExtractPdfTool(Tool):
 
 #: Formats where a conversion must preserve real rows/cells, not flattened text.
 _TABULAR = {".csv", ".xlsx"}
+#: Legacy workbooks can SOURCE a tabular conversion (C-10) — .xls -> .xlsx/.csv
+#: keeps real rows instead of a text dump — but nothing writes .xls, so the
+#: suffix stays out of ``_TABULAR`` (which is also the TARGET vocabulary).
+_TABULAR_SOURCES = _TABULAR | {".xls"}
 
 
 def _load_for_conversion(source: Path, src_suffix: str, tgt_suffix: str) -> Any:
     """Read ``source`` as the richest content shape the target can accept."""
-    if src_suffix in _TABULAR and tgt_suffix in _TABULAR:
+    if src_suffix == ".xls" and tgt_suffix in _TABULAR:
+        from .legacy import read_xls_sheets
+
+        sheets = read_xls_sheets(source)
+        if tgt_suffix == ".xlsx" and len(sheets) > 1:
+            return {"sheets": sheets}
+        return [row for rows in sheets.values() for row in rows]
+    if src_suffix in _TABULAR_SOURCES and tgt_suffix in _TABULAR:
         if src_suffix == ".csv":  # real csv parsing, not text lines
             # Encoding-DETECTED, exactly like readers._read_csv: Excel/Windows
             # CSVs are frequently UTF-8-BOM or cp1252, and the old hard-coded
@@ -682,6 +693,26 @@ class ConvertDocumentTool(Tool):
         note = ""
         try:
             existed = target.exists()  # created_paths means CREATED, not overwritten
+            if src_suffix == ".doc" and tgt_suffix == ".docx":
+                # C-10: Word re-saves its own 1997 format FAITHFULLY — going
+                # through extracted text here would turn a letter into flat
+                # paragraphs, which is exactly the loss this pair fixes.
+                from .legacy import convert_doc_to_docx
+
+                await asyncio.to_thread(convert_doc_to_docx, source, target)
+                size = target.stat().st_size
+                _abs = str(target.resolve())
+                return ToolResult(
+                    ok=True,
+                    output=f"converted {source.name} -> {_abs} ({size} bytes)",
+                    data={
+                        "source": str(source),
+                        "path": str(target.resolve().relative_to(Path(ctx.workspace).resolve())).replace("\\", "/"),
+                        "abs_path": _abs,
+                        "bytes": size,
+                    },
+                    created_paths=None if existed else [_abs],
+                )
             content = await asyncio.to_thread(  # CPU-bound parse off the loop
                 _load_for_conversion, source, src_suffix, tgt_suffix
             )
@@ -1312,6 +1343,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     picked). Without it the tools behave exactly as before (no platform
     dependency)."""
     from .excel_tools import excel_tools
+    from .office_tools import office_tools
     from .pdf_tools import pdf_page_tools
 
     return [
@@ -1325,4 +1357,8 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         BatchDocumentsTool(router_resolver),
         *excel_tools(),
         *pdf_page_tools(),
+        # C-03/C-07/C-09 — docx_edit, compare_documents, pdf_form_fields,
+        # pdf_form_fill. A tool that is not in THIS list is registered nowhere,
+        # however complete its module is (the v1.218.0 lesson).
+        *office_tools(),
     ]
