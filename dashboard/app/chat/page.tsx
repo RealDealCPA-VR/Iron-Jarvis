@@ -107,8 +107,7 @@ import {
   WorkflowDraftCard,
   WorkflowRunChip,
 } from "@/components/chat/WorkflowDraftCard";
-import { GoalBirth } from "@/components/chat/GoalContractCard";
-import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
+import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
 import {
   TurnReceipt,
@@ -126,10 +125,7 @@ import {
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
-import {
-  BatchSuggestCard,
-  type BatchPreview,
-} from "@/components/chat/BatchSuggestCard";
+import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
@@ -180,6 +176,7 @@ import {
 } from "@/lib/composerStore";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
+import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { appendDictation } from "@/components/VoiceInput";
 import { Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
@@ -201,18 +198,74 @@ const CHAT_HINT =
 import { DocPreview } from "@/components/chat/DocPreview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
-import { KnowledgePanel } from "@/components/project/KnowledgePanel";
-import {
-  ProjectSurface,
-  type ProjectSurfaceView,
-} from "@/components/project/ProjectSurfaces";
-import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
+import type { ProjectSurfaceView } from "@/components/project/ProjectSurfaces";
 import {
   SourcesRow,
   WEB_TOOLS,
   extractWebSources,
   type ChatSource,
 } from "@/components/chat/SourcesRow";
+
+/* v1.258.0 (S-03): six panels the chat route used to download before first
+ * paint. Every one renders only behind a state gate that is false on open —
+ * a project board, a folder-batch card, the knowledge rail, the share dialog,
+ * a run-result card and the goal offer — so deferring them changes nothing a
+ * user sees. ProjectSurfaces is the big one: it statically imports KanbanBoard,
+ * the only path pulling dnd-kit (43.6 KiB) onto this route.
+ *
+ * NOT deferred, deliberately: CompactionCard and WorkflowDraftCard. Each shares
+ * a module with a chip the page renders anyway (CompactionChip, WorkflowRunChip),
+ * and bundling is per-module — the code would ship regardless and the change
+ * would look like progress while moving nothing.
+ *
+ * `{ ssr: false }` with no `loading`, matching components/Overlays.tsx: there is
+ * nothing to show until the gate opens.
+ */
+const KnowledgePanel = dynamic(
+  () =>
+    import("@/components/project/KnowledgePanel").then((m) => ({
+      default: m.KnowledgePanel,
+    })),
+  { ssr: false },
+);
+const ShareChatDialog = dynamic(
+  () =>
+    import("@/components/chat/ShareChatDialog").then((m) => ({
+      default: m.ShareChatDialog,
+    })),
+  { ssr: false },
+);
+// The heaviest single win on this route: ProjectSurfaces statically imports
+// KanbanBoard, which is the only thing pulling dnd-kit (chunk 6284, 43.6 KiB
+// measured) onto /chat. Nothing else on the page reaches either.
+const ProjectSurface = dynamic(
+  () =>
+    import("@/components/project/ProjectSurfaces").then((m) => ({
+      default: m.ProjectSurface,
+    })),
+  { ssr: false },
+);
+const BatchSuggestCard = dynamic(
+  () =>
+    import("@/components/chat/BatchSuggestCard").then((m) => ({
+      default: m.BatchSuggestCard,
+    })),
+  { ssr: false },
+);
+const RunResultCard = dynamic(
+  () =>
+    import("@/components/chat/RunResultCard").then((m) => ({
+      default: m.RunResultCard,
+    })),
+  { ssr: false },
+);
+const GoalBirth = dynamic(
+  () =>
+    import("@/components/chat/GoalContractCard").then((m) => ({
+      default: m.GoalBirth,
+    })),
+  { ssr: false },
+);
 
 /** One pending ask of an escalated run (v1.227.0) — folded from
  *  approval.requested/approval.resolved events, one ApprovalCard each. */

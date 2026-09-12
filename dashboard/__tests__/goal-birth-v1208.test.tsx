@@ -310,9 +310,13 @@ describe("source pins — the call site the component tests cannot see", () => {
   );
 
   it("chat page imports GoalBirth and mounts it on the newest settled reply", () => {
-    expect(pageSrc).toContain(
-      'import { GoalBirth } from "@/components/chat/GoalContractCard";',
-    );
+    // v1.258.0 (S-03): this panel is DEFERRED now. It renders only on the newest
+    // settled reply, so its code no longer belongs in the chunk a chat downloads
+    // before first paint — the import moved from static to `next/dynamic`. What
+    // this pin is FOR (the page really mounts it, and only on the last settled
+    // message) is unchanged and still asserted below.
+    expect(pageSrc).toContain("const GoalBirth = dynamic(");
+    expect(pageSrc).toContain('import("@/components/chat/GoalContractCard")');
     // Gated exactly like the workflow chip: last message, turn settled.
     // v1.250.0 (S-05): each message is its own memoized row now, so the gate
     // reads `isLast` inside the row — and the page is what decides `isLast`.

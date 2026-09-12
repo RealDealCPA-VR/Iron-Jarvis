@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Iron Jarvis",
-  "version": "1.257.0",
+  "version": "1.258.0",
   "description": "Lets Iron Jarvis, running on this computer, work in the tabs you are already signed in to.",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3J3/BT/MotVK+feO3jhM1LV6dFJR/N+JaUHJchIXNz25ufytipOVurkW4nkk4TYk6dhHkWxSeZWo5dl00cozpDE7Rbt37bRgQxG+7fa2TLtErFHCiFC6SPvdp8jmupgpUyJUjRoXyjWkWjhyJvrDDOWnA6sYlLFatM16id4MGKCklIdtwAsZ5ZnomXLe3b4nOjf8YxlM3uMc751SBJoLt7SCGRlLUyr9c447/z4RVTPrlqSXbZHP+FoR7EoILKRwEzFVDUoUGeW/BKm6Oohuncaudtf1RH0luREXlaUfm9ramBQ4RhPG/QlMcKAIDHFqS7CTX02xA4vROvXk6nOp1QIDAQAB",

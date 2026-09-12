@@ -1100,6 +1100,31 @@ does not need a bump, stop and bump it.
   task in `_running` armed synchronously one line above, so nothing was ever being
   waited for.
 
+- **A component is not its own chunk: before deferring one, check what else its
+  module exports as a VALUE.** Bundling is per-module. v1.258.0 (S-03) started with
+  eight `next/dynamic` candidates on the chat route and two were dead on arrival:
+  `CompactionCard` ships beside `CompactionChip` and `WorkflowDraftCard` beside
+  `WorkflowRunChip`, both of which the page RENDERS (`:6642`, `:1673`/`:1760`) — so
+  those modules load either way and "deferring" the card would have moved zero
+  bytes while looking like progress. Type-only siblings are harmless
+  (`CompactionInfo`, `BatchPreview`, `RunResult`, `ProjectSurfaceView`): types
+  erase at compile time, so keep them as `import type` and defer the component.
+  Corollary for measuring: do NOT attribute bytes by grepping built chunks for
+  identifiers — minification erases them, and probing produced a string of false
+  negatives here (even literal UI text went unfound). Compare route weights from
+  `.next/app-build-manifest.json` BEFORE and AFTER the change on the same machine;
+  that A/B put the real figure at -122.5 KiB for /chat, nearly triple the 43.6 KiB
+  the one chunk I could positively identify would have suggested.
+- **Inserting a declaration above a named one ORPHANS its doc comment — check for
+  one first.** Twice in v1.257.0/v1.258.0 a patch script inserted a block
+  immediately before a named declaration that already had a `/** ... */` above it,
+  leaving that comment describing the wrong thing: `<AgentLiveText>` landed between
+  `StreamingText`'s comment and `StreamingText`, and a `MODULE_OF` table landed
+  between the anti-vacuity comment and the `MUST_STAY_STATIC` list it explains.
+  Neither breaks behaviour, which is exactly why it survives review; in an
+  8,200-line file a comment over the wrong function is worse than no comment.
+  Before inserting at a name, look at the line above it.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
