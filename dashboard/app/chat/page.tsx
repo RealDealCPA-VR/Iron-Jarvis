@@ -179,7 +179,8 @@ import {
   type ComposerStore,
 } from "@/lib/composerStore";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
-import { useRunStream } from "@/lib/useRunStream";
+import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { appendDictation } from "@/components/VoiceInput";
 import { Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { ModuleTitle } from "@/components/PageHeader";
@@ -1074,7 +1075,14 @@ function AttachmentFooter({ names }: { names: string[] }) {
 /** A compact list of live tool calls (the streaming hooks' `ToolCard`s, already
  *  redacted server-side): spinner while running, check/✗ when done, each with
  *  the tool name and a short output preview. */
-function ToolCardList({ cards }: { cards: readonly ToolCard[] }) {
+// v1.257.0 (S-02): memoized. This renders inside the per-frame subtree, so
+// before this it remapped every tool card on EVERY flushed frame — while the
+// cards themselves only change on a tool_call frame.
+const ToolCardList = memo(function ToolCardList({
+  cards,
+}: {
+  cards: readonly ToolCard[];
+}) {
   if (!cards.length) return null;
   return (
     <div className="mt-1.5 flex flex-col gap-1">
@@ -1108,7 +1116,7 @@ function ToolCardList({ cards }: { cards: readonly ToolCard[] }) {
       })}
     </div>
   );
-}
+});
 
 /** Drop the agent-lane wait mark (v1.226.0) — every path that ENDS a turn
  *  (finalize, Stop, a hard finalize failure) saves through this, so the mark
@@ -1130,6 +1138,25 @@ function pendingSessionOf(msgs: ChatMessage[]): string | null {
   return last && typeof last.awaitingSession === "string" && last.awaitingSession
     ? last.awaitingSession
     : null;
+}
+
+/** The agent run's live text, subscribed HERE instead of on the page.
+ *
+ *  v1.257.0 (S-02): the agent lane's counterpart to <LiveReply>. Every token
+ *  used to re-render this 8,177-line page and fire its scroll effect, because
+ *  `runStream.text` was page state and a dependency of that effect. The text
+ *  now lives in the run's store, this component is its only subscriber, and the
+ *  growth reports itself for the scroll exactly as the chat lane does.
+ *
+ *  Renders precisely what the inline expression rendered before: StreamingText
+ *  when there is text, nothing when there is not.
+ */
+function AgentLiveText({ stream, onGrow }: { stream: UseRunStream; onGrow: () => void }) {
+  const text = useLiveText(stream);
+  useEffect(() => {
+    if (text) onGrow();
+  }, [text, onGrow]);
+  return text ? <StreamingText content={text} /> : null;
 }
 
 /** Streamed assistant markdown with a blinking caret pinned after the last line
@@ -2288,7 +2315,10 @@ export default function ChatPage() {
   // subscribes to the stream's text store — so a streamed token no longer
   // re-renders this 7,750-line page.
   const stream = useChatStream({ textInState: false });
-  const runStream = useRunStream();
+  // v1.257.0 (S-02): same treatment the chat lane got in v1.250.0 — the agent
+  // text is rendered by <AgentLiveText>, which subscribes to the store, so a
+  // token no longer re-renders this page.
+  const runStream = useRunStream({ textInState: false });
   // Whether the current streaming turn has fed TTS yet (drives the once-per-turn
   // resetStream in feedTTS).
   const ttsStreamStartedRef = useRef(false);
@@ -4063,7 +4093,12 @@ export default function ChatPage() {
   useEffect(() => {
     if (!pinnedRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: busy ? "auto" : "smooth", block: "end" });
-  }, [messages, awaitingId, chatBusy, progress.length, runStream.text, busy]);
+    // v1.257.0 (S-02): `runStream.text` is deliberately NOT a dependency any
+    // more. It used to be, and because scrollIntoView walks every scrollable
+    // ancestor, each agent token cost a whole page render plus a synchronous
+    // layout. <AgentLiveText> reports its growth through scrollLiveIntoView
+    // instead; listing the text here again would restore both costs.
+  }, [messages, awaitingId, chatBusy, progress.length, busy]);
 
   // v1.250.0 (S-03): the streamed reply no longer re-renders this page, so its
   // growth cannot be an effect dependency — <LiveReply> calls this after each
@@ -4305,16 +4340,27 @@ export default function ChatPage() {
   useEffect(() => {
     if (!awaitingId) return;
     void pollPendingAsks(awaitingId); // a reload's first look, at once (A10)
-    const timer = setInterval(() => {
-      void finalize(awaitingId);
-      void pollPendingAsks(awaitingId);
-    }, 1500);
     return () => {
-      clearInterval(timer);
       setPolledAsks([]);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaitingId]);
+  // v1.257.0 (S-02): the 1.5 s REPEAT runs through useVisibleInterval. Two
+  // fetches every 1.5 s kept firing while the window was minimised — this page
+  // was the last polling surface still on a bare setInterval after v1.250.0
+  // (S-09) moved nine others. Same cadence, torn down while hidden, and one
+  // catch-up run on the hidden -> visible edge. The callback reads the REF, not
+  // the closed-over id, so a recreated closure never restarts the timer.
+  useVisibleInterval(
+    () => {
+      const id = awaitingIdRef.current;
+      if (!id) return;
+      void finalize(id);
+      void pollPendingAsks(id);
+    },
+    1500,
+    !!awaitingId,
+  );
 
   // AGENT MODE streaming: subscribe to this session's live run frames so the
   // working bubble narrates tokens + tool calls. Purely a live view — the reply
@@ -5686,7 +5732,10 @@ export default function ChatPage() {
     if (!awaitingId) return;
     tts.cancel();
     post(`/sessions/${awaitingId}/cancel`).catch(() => {});
-    const partial = runStream.text.trim();
+    // The STORE is the truth. With `textInState: false` the `text` field stays
+    // empty, so reading it here would save "Stopped." over whatever the agent
+    // had already written — losing the user's partial answer to a speed change.
+    const partial = (runStream.textStore?.get() ?? runStream.text).trim();
     const full: ChatMessage[] = [
       ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
       {
@@ -6728,7 +6777,7 @@ export default function ChatPage() {
                               {runStream.phase.detail}
                             </span>
                           )}
-                          {runStream.text && <StreamingText content={runStream.text} />}
+                          <AgentLiveText stream={runStream} onGrow={scrollLiveIntoView} />
                           {runStream.tools.length > 0 && (
                             <ToolCardList cards={runStream.tools} />
                           )}

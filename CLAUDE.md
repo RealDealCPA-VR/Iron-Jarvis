@@ -1047,6 +1047,59 @@ does not need a bump, stop and bump it.
 - **Windows dev shell**: PowerShell 5.1 — no `&&` chaining; Git Bash available.
   This machine lacks ffmpeg on PATH.
 
+- **Before deferring a boot step into the daemon lifespan, ask who builds a
+  platform WITHOUT one.** v1.257.0 (S-01) was designed as a background connect in
+  `lifespan`, until `grep build_platform` showed `daemon/cli.py` calling it from
+  ~40 entrypoints that have no lifespan at all — every one of them would have
+  silently lost its MCP tools, a capability regression hidden inside a speed fix.
+  The fix was to make the existing call site CONCURRENT instead (a
+  `ThreadPoolExecutor` whose `pool.map` preserves config order), which also kept
+  `tests/test_mcp_execution.py`'s restart-survival assertion a real guarantee
+  rather than converting it into a race. Parallel beats deferred when a
+  synchronous contract depends on the work being finished.
+- **A pin that survives the obvious revert is UNCHECKED — mutate what the pin
+  itself claims.** Reverting to the old implementation only falsifies pins the
+  old implementation violates. In v1.257.0 the serial revert reddened 2 of 5
+  S-01 pins: serial code is in-order, records per-pack and builds no pool BY
+  CONSTRUCTION, so for the other three that revert proved nothing until each got
+  its own mutation (`pool.map` -> `as_completed`, drop the failure record, remove
+  the single-pack shortcut). Worse, the first four S-02 pins passed every
+  mutation because they measured REACT, not the code: all tokens were emitted
+  inside one `act()` so React batched the notifications into one render, and
+  `useSyncExternalStore` re-reads `get()` on ANY re-render (and `stop()` sets
+  state), so an on-screen assertion held even with the synchronous flush
+  deleted. Rewritten to count publishes to the store's own subscriber, one
+  `act()` per token, all five then went red. Corollary: a mutation harness must
+  restore in a `finally` and decode/encode child output as UTF-8 — a cp1252
+  crash mid-round left a deliberately broken file in the tree.
+
+- **Edit N tests, run all N — verify the FILE, not the one test you were
+  thinking about.** v1.257.0 converted three fixed-sleep waits in
+  `tests/test_fix_sessions.py`, and the reproduction harness that proved the fix
+  targets ONE of them, so the other two were never executed after the edit. One
+  referenced `SessionStatus.RUNNING`, which does not exist — `RUNNING` is a member
+  of `AgentState`, a DIFFERENT enum in the same module — and it reached the
+  full-suite gate as an `AttributeError`. Two lessons: a targeted re-run proves
+  the case you had in mind, never the edit; and when two enums in one module share
+  plausible member names, read the enum rather than recalling it (`SessionStatus`
+  is ACTIVE / QUEUED / COMPLETED / FAILED / CANCELLED — there is no RUNNING
+  session).
+
+- **To falsify a WAIT, mutate it by DELETING it — shrinking it to `sleep(0)`
+  proves nothing.** v1.257.0 converted three fixed sleeps in
+  `tests/test_fix_sessions.py` and checked them by shrinking each to `sleep(0)`.
+  One stayed green, so I concluded the wait was decoration and dropped it —
+  wrongly: DELETING that wait fails with `ACTIVE is not CANCELLED`, because with
+  no yield at all `run_session` never enters its try block, `task.cancel()`
+  unwinds a task that never armed the CancelledError handler, and
+  `_finalize_cancelled` never runs. A single yield satisfies some waits, so
+  `sleep(0)` is a weaker mutation than absence. Check a wait both ways: delete it
+  (does anything still need it?) and shrink it (is the DURATION load-sensitive, or
+  only the ordering?). The genuinely decorative wait in that same file was the one
+  where DELETION also left the test green — `delete_session` refuses on a live
+  task in `_running` armed synchronously one line above, so nothing was ever being
+  waited for.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

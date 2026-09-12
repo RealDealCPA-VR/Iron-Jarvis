@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.256.0 (2026-09-12).*
+holds itself to. Current as of v1.257.0 (2026-09-12).*
 
 ---
 
@@ -318,26 +318,26 @@ with the request typed in.
   is available on this PC.
 
 ### Settings → Maintenance
-- **What the app is keeping on your disk** (v1.256.0): Maintenance now lists
+- **What the app is keeping on your disk** (v1.257.0): Maintenance now lists
   everything Iron Jarvis stores here — generated pictures and video, backups,
   undo history, the scan-text cache, code workspaces and the database — largest
   first, with a total. Before this it was invisible: on the machine this shipped
   from, 783 MB of the 814 MB was old generated video that nothing ever cleared
   and no screen ever mentioned.
-- **Clearing old media takes two presses, on purpose** (v1.256.0): "Clear"
+- **Clearing old media takes two presses, on purpose** (v1.257.0): "Clear"
   shows you how many files and how much space, then **moves** them out of the
   way rather than deleting them — they sit in the app's own trash, still
   recoverable, and the screen keeps counting them because the space isn't freed
   yet. **Delete permanently** is the separate press that actually frees it. Your
   backups, undo history, project files and code workspaces are never offered and
   never touched, however old they are.
-- **A tool pack that can't start tells you why, in words** (v1.256.0): if an
+- **A tool pack that can't start tells you why, in words** (v1.257.0): if an
   add-on pack fails, Tools now says what actually happened — "npx exists on this
   PC but not on the PATH Iron Jarvis was started with" — and what to do about
   it, instead of only showing the error the computer produced. The raw text is
   still there underneath for a bug report. On this machine one pack had been
   failing silently at every start for weeks.
-- **A model you can't reach says so** (v1.256.0): if the model you picked for
+- **A model you can't reach says so** (v1.257.0): if the model you picked for
   routing or as your default can't be reached, the start-up check names it and
   says whether no address is configured or the server isn't answering. Iron
   Jarvis never quietly uses a different model instead, which is exactly why it
@@ -854,6 +854,33 @@ maintainers' full list is `docs/TODO.md` in the source repository, which is not 
 an installed copy.)
 
 ---
+
+## What got faster (v1.257.0)
+
+**Opening the app when you have several tool packs.** Iron Jarvis says hello to
+each of your tool packs when it starts. It used to do that one pack at a time,
+so the wait was every pack's greeting added together — two packs meant twice the
+wait, three meant three times. Now it greets them all at once, so the wait is
+about as long as the slowest single pack no matter how many you have. Measured
+on this PC with two packs: 2.2 seconds down to 1.1. Nothing about your packs
+changed — a pack that cannot start still tells you why, in the same words, in
+the same place.
+
+**The app while an agent is typing.** When an agent writes a long answer, the
+words arrive a few at a time. The app used to redraw the whole chat page for
+every single word, which is what made typing, scrolling and clicking feel like
+they were catching on something during a long answer. Now only the bubble
+holding the answer redraws. The answer appears exactly as before, at the same
+speed, in the same place — the rest of the app just stops stuttering while it
+happens.
+
+**Stopping an agent still keeps its words.** If you press Stop partway through
+an answer, the part already written stays in the conversation, marked as cut
+off. That was true before and it is still true.
+
+**Less background chatter.** While an agent is working, the app checks on it
+every second and a half. It used to keep checking with the window minimised;
+now it stops while you are not looking and catches up the moment you come back.
 
 ## The trust model (why you can rely on it)
 

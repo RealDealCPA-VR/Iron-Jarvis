@@ -422,6 +422,41 @@ def load_statuses() -> dict[str, dict[str, Any]]:
     return {k: dict(v) for k, v in _LOAD_STATUS.items()}
 
 
+def _load_one_server(
+    cfg: dict[str, Any],
+    secret_resolver: SecretResolver | None,
+    timeout: float,
+    record: bool,
+) -> list[Tool]:
+    """Connect ONE pack, list its tools, and wrap them.
+
+    NEVER RAISES. A pack that cannot be reached, errors, or does not answer
+    within ``timeout`` returns ``[]`` with its reason recorded, so one bad pack
+    never stops the others. This is the body the serial loop in ``mcp_tools``
+    used to inline; it was lifted out in v1.257.0 (S-01) so several packs can
+    connect at once, and its behaviour is otherwise unchanged.
+    """
+    name = cfg.get("name") or "mcp"
+    try:
+        client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
+    except Exception as exc:  # skip the bad/hung server; keep booting
+        log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
+        if record:
+            # `cfg` names the launcher, which is what makes the reason
+            # actionable (v1.256.0, R-02) — without it the classifier can
+            # only echo the exception.
+            _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
+        return []
+    tools: list[Tool] = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not spec.get("name"):
+            continue
+        tools.append(MCPRemoteTool.from_spec(client, name, spec))
+    if record:
+        _record_load(name, error=None, tools_loaded=len(tools), cfg=cfg)
+    return tools
+
+
 def mcp_tools(
     server_configs: list[dict[str, Any]] | None,
     secret_resolver: SecretResolver | None = None,
@@ -447,29 +482,34 @@ def mcp_tools(
     if not server_configs:
         return []
 
+    # Resolved ONCE and shared by every worker, so the bound stays PER PACK and
+    # is never summed — a slow pack cannot eat another pack's budget.
     timeout = _mcp_connect_timeout()
-    tools: list[Tool] = []
-    for cfg in server_configs:
-        name = cfg.get("name") or "mcp"
-        try:
-            client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
-        except Exception as exc:  # skip the bad/hung server; keep booting
-            log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
-            if record:
-                # `cfg` names the launcher, which is what makes the reason
-                # actionable (v1.256.0, R-02) — without it the classifier can
-                # only echo the exception.
-                _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
-            continue
-        count = 0
-        for spec in specs:
-            if not isinstance(spec, dict) or not spec.get("name"):
-                continue
-            tools.append(MCPRemoteTool.from_spec(client, name, spec))
-            count += 1
-        if record:
-            _record_load(name, error=None, tools_loaded=count, cfg=cfg)
-    return tools
+
+    # v1.257.0 (S-01): these handshakes used to run one after another, so boot
+    # waited for their SUM (measured 2.28 s for two local packs) even though a
+    # handshake is almost entirely waiting on a child process or a socket. They
+    # overlap now. ORDER IS PRESERVED: `pool.map` yields results in INPUT order,
+    # not completion order, so the registry receives the same tools in the same
+    # sequence it always did — a pack finishing first does not jump the queue.
+    if len(server_configs) == 1:
+        # The common case. No pool, no extra thread, the identical path as before.
+        return _load_one_server(server_configs[0], secret_resolver, timeout, record)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Capped so a long pack list cannot spawn an unbounded number of threads;
+    # each worker's own `_connect_with_timeout` adds one more bounded thread.
+    with ThreadPoolExecutor(
+        max_workers=min(len(server_configs), 8), thread_name_prefix="mcp-connect"
+    ) as pool:
+        batches = list(
+            pool.map(
+                lambda cfg: _load_one_server(cfg, secret_resolver, timeout, record),
+                server_configs,
+            )
+        )
+    return [tool for batch in batches for tool in batch]
 
 
 __all__ = [
