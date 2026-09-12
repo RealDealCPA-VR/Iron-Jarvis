@@ -2590,7 +2590,10 @@ async def _prepare_attachments(
     # Parts, not one growing string, so an unseen-image note can be spliced back
     # NEXT TO its own attachment instead of after every file block.
     parts: list[str] = []
-    image_slots: list[tuple[int, str]] = []
+    # (slot, display name, PATH). The path rides along for C-05: an image the
+    # answering model cannot see can still be read on THIS PC, and that needs
+    # the file, not just its name.
+    image_slots: list[tuple[int, str, Path]] = []
 
     # THE TURN'S TOOL WORKSPACE, resolved AT MOST ONCE and only when a document
     # attachment actually needs it (v1.196.0). It decides whether the live-file
@@ -2676,7 +2679,7 @@ async def _prepare_attachments(
                     ),
                     "media_type": _ATTACH_IMAGE_TYPES[suffix],
                 })
-                image_slots.append((len(parts), p.name))
+                image_slots.append((len(parts), p.name, p))
                 parts.append("")  # filled below iff the images go unseen
             else:
                 # Too large to send to vision — be HONEST rather than answering
@@ -2759,10 +2762,33 @@ async def _prepare_attachments(
             _vision_unavailable_reason, d, provider_choice, model_choice
         )
         if blind:
-            for slot, name in image_slots:
-                parts[slot] = (
-                    f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
+            # NO VISION MODEL IS NOT THE SAME AS NOBODY CAN READ IT (C-05).
+            # Windows' own OCR runs here, offline, and a scanned form dropped
+            # into chat is exactly what it is for — so the image is offered to
+            # it BEFORE the turn tells the user it went unlooked-at. Only when
+            # the local read comes back empty does the honest "NOT analyzed"
+            # line stand, unchanged. `note_for` supplies the words on purpose:
+            # `LOCAL_NOTE` is the contract `attachment_rag.ocr_pages_spent`
+            # and `ocr._method_of` parse, so inventing a sentence here would
+            # quietly break the vision-budget accounting C-05 just built.
+            from ..documents import local_ocr as _local_ocr
+
+            _local_ready = _local_ocr.local_enabled(cfg) and _local_ocr.available()
+            for slot, name, path in image_slots:
+                read = (
+                    await asyncio.to_thread(_local_ocr.local_ocr_image, path)
+                    if _local_ready
+                    else None
                 )
+                if read is not None and read.text.strip():
+                    parts[slot] = (
+                        f"\n\n## Attached image: {name}\n"
+                        f"[{_local_ocr.note_for(read)}]\n{read.text}"
+                    )
+                else:
+                    parts[slot] = (
+                        f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
+                    )
     return images, "".join(parts)
 
 

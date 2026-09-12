@@ -219,6 +219,11 @@ _OCR_COUNT = re.compile(r"\((\d+) of (\d+) page\(s\) transcribed")
 #: ``ocr_document`` appends this when it served the transcription from the
 #: contract-5 cache — i.e. when it made ZERO vision calls.
 _OCR_CACHED = "cached — already transcribed earlier"
+#: C-05: ``ocr_pdf`` says how many pages were read ON THIS PC (Windows OCR).
+#: Those cost no vision call, so they are subtracted below. Coupled to
+#: ``local_ocr.LOCAL_NOTE`` on purpose and pinned by a test, exactly like
+#: ``_OCR_COUNT`` above.
+_OCR_LOCAL = re.compile(r"; (\d+) read on this PC by machine OCR")
 #: ``ocr_pdf``'s "the model returned no transcription" note: one vision call per
 #: page was made and every response came back empty. THE case the turn budget
 #: exists for, and the one where counting transcribed pages charges nothing.
@@ -242,7 +247,14 @@ def ocr_pages_spent(note: str, text: str, cap: int) -> int:
     if hit:
         # Attempted = every page up to the cap that carried an image; the total
         # bounds it, and a transcript longer than that bound wins outright.
-        return max(int(hit.group(1)), min(int(cap), int(hit.group(2))))
+        spent = max(int(hit.group(1)), min(int(cap), int(hit.group(2))))
+        # C-05: pages read ON THIS PC cost no vision call, so charging them
+        # against the turn's vision budget would ration the free path — and a
+        # wholly locally-read document would spend the whole budget for nothing.
+        local = _OCR_LOCAL.search(note)
+        if local:
+            spent = max(0, spent - int(local.group(1)))
+        return spent
     if _OCR_EMPTY_RESPONSES in note:
         return max(1, int(cap))
     # Mock guard, a first-call provider fault, "nothing OCR could work on": one

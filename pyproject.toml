@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.251.1"
+version = "1.252.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -40,6 +40,13 @@ dependencies = [
     # a 3-page file. Pinned to a minor range on purpose: it went 1.0 -> 1.14 in
     # weeks, and it decides which pages of a client document get read.
     "pdf-inspector>=1.14.2,<2",
+    "winrt-runtime>=3 ; sys_platform == 'win32'",
+    "winrt-windows-media-ocr>=3 ; sys_platform == 'win32'",
+    "winrt-windows-graphics-imaging>=3 ; sys_platform == 'win32'",
+    "winrt-windows-storage-streams>=3 ; sys_platform == 'win32'",
+    "winrt-windows-foundation>=3 ; sys_platform == 'win32'",
+    "winrt-windows-foundation-collections>=3 ; sys_platform == 'win32'",
+    "winrt-windows-globalization>=3 ; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

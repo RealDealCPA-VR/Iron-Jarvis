@@ -18,9 +18,14 @@ These tests pin the fix and the four ways it stays honest:
    the user never sees.
 3. NOTHING IS EVER INVENTED. OCR off, no router, budget spent, provider down,
    or the offline mock ⇒ empty text plus a note that says exactly which.
-4. AN UNSEEN IMAGE SAYS SO. Images ride to vision, but the router's vision
-   preference is soft: with no vision-capable provider anywhere the adapter
-   drops them silently. That now reads like the >8 MB case — "NOT analyzed".
+4. AN UNSEEN IMAGE SAYS SO — OR IS READ HERE INSTEAD. Images ride to vision,
+   but the router's vision preference is soft: with no vision-capable provider
+   anywhere the adapter drops them silently. That reads like the >8 MB case —
+   "NOT analyzed" — EXCEPT where this PC can read it itself (C-05): Windows'
+   own OCR is offered the image first, and the disclaimer stands only when that
+   comes back with nothing. The offline suite keeps the local engine switched
+   off (conftest's ``_local_ocr_off_by_default``), so the "NOT analyzed" pin
+   below still exercises the no-engine world it was written for.
 
 Offline throughout: the router is faked, the scans are generated.
 """
@@ -755,6 +760,59 @@ async def test_unseen_image_gets_the_not_analyzed_note(client, tmp_path, monkeyp
     assert images, "the image still rides along — the router may yet reroute"
     assert "## Attached image: receipt.png" in block
     assert "NOT analyzed" in block and "codex-cli" in block
+
+
+async def test_an_unseen_image_is_read_on_this_pc_before_being_disclaimed(
+    client, tmp_path, monkeypatch
+):
+    """C-05 REACHABILITY. "No vision model" is not "nobody can read it".
+
+    The engine, the note wording and the budget arithmetic were all built and
+    tested in ``test_local_ocr_scans.py`` — but for an IMAGE attachment the
+    turn never asked them anything: ``_prepare_attachments`` replaced the slot
+    with "(NOT analyzed — …)" the moment vision was unavailable, so a scanned
+    form dropped into chat on a machine with Windows OCR right there came back
+    unread. A green suite for a path the product cannot reach.
+
+    Everything real is in the path: the genuine ``client``/platform, a blind
+    fleet so ``_vision_unavailable_reason`` answers on its own, and the actual
+    preparer. Only the recognizer is faked, so the test runs the same on a
+    runner with no OCR language pack."""
+    from iron_jarvis.documents import local_ocr
+
+    platform = client.app.state.platform
+    _fleet(platform, monkeypatch, {"codex-cli": _Blind()})
+    monkeypatch.setattr(local_ocr, "_FORCED_OFF", False)
+    monkeypatch.setattr(local_ocr, "available", lambda: True)
+    monkeypatch.setattr(
+        local_ocr,
+        "local_ocr_bytes",
+        lambda data, *, deadline_s=local_ocr.PAGE_DEADLINE_S: local_ocr.OcrResult(
+            text=TRANSCRIPT, confident=True, number_heavy=True, seconds=0.04
+        ),
+    )
+    png = tmp_path / "w2-scan.png"
+    from PIL import Image
+
+    Image.new("RGB", (40, 30), (250, 250, 250)).save(png)
+
+    images, block = await _prepare_attachments(
+        SimpleNamespace(platform=platform), _body([str(png)]),
+        inline_budget=6000, rag_budget=2400, rag_k=6,
+    )
+
+    assert "## Attached image: w2-scan.png" in block
+    assert "84,120.55" in block, "the text this PC read must reach the model"
+    assert local_ocr.LOCAL_NOTE in block, (
+        "the note must be local_ocr's own words — attachment_rag.ocr_pages_spent "
+        "and ocr._method_of parse them"
+    )
+    assert "NOT analyzed" not in block, (
+        "the disclaimer is for an image nobody could read, not one this PC just did"
+    )
+    # The image still rides along: a reroute to a vision model is still allowed
+    # to happen, and it would simply read the same file better.
+    assert images
 
 
 def test_a_vision_provider_with_an_open_circuit_does_not_silence_the_note(

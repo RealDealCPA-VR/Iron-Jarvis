@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.251.1 (2026-09-11).*
+holds itself to. Current as of v1.252.0 (2026-09-11).*
 
 ---
 
@@ -47,6 +47,16 @@ Chat is where most work happens, and it is wired into everything:
 - **Attachments**: drag-drop or the "+" menu (up to 4 files, 20 MB each).
   Images go to vision; documents are inlined or retrieved via RAG with page
   references, sized to the answering model's context window.
+- **Scans are read on this PC first** (v1.252.0): drop in a photographed or
+  scanned page — a W-2, a signed letter, a receipt — and this computer reads
+  the words itself, offline. No cloud call, and it works with no vision model
+  connected at all, which is the case where a scan used to come back as
+  nothing. A cloud vision model is asked only for the pages this PC could not
+  make out, so a scan of client papers does not leave the machine just to be
+  read. The answer tells you which pages were read here, and flags anything
+  mostly made of figures as worth your eye — machine reading can misplace a
+  digit, and on a tax form one digit is the whole point. You can switch it off
+  in Settings if you would rather every page went to a vision model.
 - **Attach and ask, no project needed** (v1.244.0): the first file you attach
   to a chat that has no project gives that conversation its own folder —
   `Documents\Iron Jarvis\<date> <file name>` — with your file copied in, and
@@ -237,7 +247,8 @@ set. Cancel genuinely stops the agent, in every lane.
   visit — the daemon answers `{"review": null}`.
 
 ### Documents
-Read/extract (PDF incl. scanned-with-OCR fallback, docx, xlsx, pptx, csv,
+Read/extract (PDF incl. scans — read on this PC first, a vision model only for
+the pages it cannot make out — docx, xlsx, pptx, csv,
 images described), create with real structure (markdown → real headings,
 tables, code in docx/pdf/pptx/html; multi-sheet xlsx with formulas), convert
 between formats, split/merge/arrange PDFs (originals never modified),
