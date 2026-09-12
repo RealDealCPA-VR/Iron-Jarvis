@@ -182,6 +182,16 @@ class ChatBody(BaseModel):
     persona: str = ""
     #: Workspace/absolute paths of uploaded files to ground this turn on.
     attachments: list[str] = []
+    #: THE CONVERSATION'S FILES (v1.251.0, C-01) — everything this chat has
+    #: been given or has made, as the Files rail already lists it, MINUS this
+    #: turn's own ``attachments``. The user's report: attach a return, ask for
+    #: a summary, then say "now turn that into a memo" — the second turn had
+    #: no file at all, because history is sent as ``{role, content}`` text and
+    #: only the CURRENT message's attachments ride. The daemon names these
+    #: files (and their absolute paths) so "it" / "that return" resolve, and
+    #: counts them when arming tools so "edit it" gets the editing verbs.
+    #: Their TEXT is not re-extracted — naming them is what was missing.
+    thread_files: list[str] = []
     #: A skill to invoke this turn (the "/" picker) — instructions injected.
     skill: str = ""
     #: Tools the user ARMED via the "+" menu (registry names, max 6). When set,
@@ -372,6 +382,32 @@ class WorkfolderBody(BaseModel):
     title: str = ""
     prefer: str = ""
     into: str = ""
+
+
+class BatchFolderBody(BaseModel):
+    """``POST /documents/batch/preview`` and ``/documents/batch`` (v1.251.0,
+    C-04) — "a folder of documents becomes one summary sheet".
+
+    ``folder`` is the folder the conversation is pointed at (absolute).
+    ``instructions`` is what the sheet should cover. ``output`` is the
+    deliverable format the batch tool accepts (``xlsx`` | ``docx`` | ``both``).
+    ``max_files`` bounds the run; the preview reports the same bound so the
+    card can state the cap BEFORE the user spends anything.
+
+    ``workspace_dir`` is where the deliverables land — the conversation's own
+    folder (v1.244.0), so the sheet appears beside the documents it summarises
+    instead of in a hidden scratch dir. Empty falls back to the folder itself.
+
+    ``session_id`` tags the progress events so the page can tell THIS
+    conversation's batch from any other.
+    """
+
+    folder: str = ""
+    instructions: str = ""
+    output: str = "both"
+    max_files: int = 25
+    workspace_dir: str = ""
+    session_id: str = "chat"
 
 
 class SettingsBody(BaseModel):

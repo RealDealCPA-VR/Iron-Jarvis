@@ -210,7 +210,13 @@ async def test_registry_batch_documents_two_deliverables_one_envelope_row(
     (folder / "a.txt").write_text("doc", encoding="utf-8")
 
     async def fake_run_batch(
-        src, out_dir, router, *, instructions, output, max_files, config
+        src, out_dir, router, *, instructions, output, max_files, config,
+        # v1.255.0 (C-04): the tool now hands `run_batch` a per-document
+        # progress callback, so a fake that refuses the keyword fails the whole
+        # call with a TypeError. These two tests are about created_paths, not
+        # progress — the events themselves are pinned in
+        # tests/test_batch_card_v1251.py — so accepting it is the whole fix.
+        on_file=None,
     ):
         out_dir.mkdir(parents=True, exist_ok=True)
         outs = []
@@ -344,7 +350,13 @@ async def test_batch_documents_reports_absolute_deliverables(ws, monkeypatch):
     written: dict[str, Path] = {}
 
     async def fake_run_batch(
-        src, out_dir, router, *, instructions, output, max_files, config
+        src, out_dir, router, *, instructions, output, max_files, config,
+        # v1.255.0 (C-04): the tool now hands `run_batch` a per-document
+        # progress callback, so a fake that refuses the keyword fails the whole
+        # call with a TypeError. These two tests are about created_paths, not
+        # progress — the events themselves are pinned in
+        # tests/test_batch_card_v1251.py — so accepting it is the whole fix.
+        on_file=None,
     ):
         out_dir.mkdir(parents=True, exist_ok=True)
         deliverable = out_dir / "summary.docx"

@@ -20,6 +20,7 @@ import io
 from pathlib import Path
 from typing import Any
 
+from ..core.events import EventType
 from ..core.fs_policy import fs_read_ok
 from ..tools.base import (
     Reversibility,
@@ -1258,6 +1259,34 @@ class BatchDocumentsTool(Tool):
         # 0/omitted falls to the default — the same `or`-default convention as
         # list_folder's `limit` (a 0-document batch is never what was meant).
         max_files = max(1, min(int(args.get("max_files") or 25), 100))
+        # PER-FILE PROGRESS (v1.251.0, C-04). A folder of 30 documents is ~30
+        # model calls and several minutes, and the registry can only speak once
+        # — when this call RETURNS — so without this the user watches nothing
+        # happen while real money is spent. Publishing from inside `execute` is
+        # unusual here (every other event comes from `registry.invoke`); it is
+        # warranted because no per-item channel exists above this layer.
+        #
+        # GUARDED, and `run_batch` guards it again: a reporting failure must
+        # never cost extractions that have already been paid for.
+        async def _on_file(index: int, total: int, name: str, status: str) -> None:
+            bus = getattr(ctx, "event_bus", None)
+            if bus is None:
+                return
+            try:
+                await bus.publish(
+                    EventType.BATCH_FILE_DONE,
+                    {
+                        "folder": str(folder),
+                        "index": index,
+                        "total": total,
+                        "name": name,
+                        "status": status,
+                    },
+                    session_id=ctx.session_id,
+                )
+            except Exception:  # noqa: BLE001 — progress is never worth the batch
+                pass
+
         try:
             # Outputs + the extraction cache live INSIDE the session workspace
             # (writes are always workspace-confined, same as write_document),
@@ -1270,6 +1299,7 @@ class BatchDocumentsTool(Tool):
                 instructions=str(args.get("instructions") or ""),
                 output=output,
                 max_files=max_files,
+                on_file=_on_file,
                 # Step-aware routing (v1.135.0): the live config carries
                 # model_roles so extraction/synthesis can resolve their roles.
                 config=ctx.config,

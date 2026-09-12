@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.254.2 (2026-09-12).*
+holds itself to. Current as of v1.255.0 (2026-09-12).*
 
 ---
 
@@ -111,6 +111,25 @@ Chat is where most work happens, and it is wired into everything:
   a Word-faithful page), download, open in the native app, save a copy, and a
   **Changes** toggle that diffs a file you re-preview. Truncated previews say
   exactly how much is missing.
+- **A follow-up remembers your files** (v1.255.0): attach a return, ask for a
+  summary, then say "now turn that into a memo" — and it knows which file you
+  mean. Before this, the second message arrived carrying no file at all, so the
+  chat either asked you which one or answered about nothing in particular.
+  Every file this conversation has been given or has made — the ones on the
+  Files rail — is named for each new turn, with its full location, so "it",
+  "that return", or the file's own name all point somewhere real, and the tools
+  that can change a document are ready when you ask for a change. Their
+  contents are not read again: they are already earlier in the conversation, so
+  you are not charged twice for the same pages. The newest eight are carried,
+  and a file you are attaching right now is not counted a second time.
+- **A folder of documents becomes one summary sheet** (v1.255.0): point a chat
+  at a folder — 30 organizers, a year of statements — and a card appears above
+  the message box saying how many documents it found and what the run will
+  cost, **before** you press anything. One press reads them all and writes a
+  single sheet summarising each one, counting up as it goes ("12 of 30"), so a
+  long run is never a silent wait you have to guess about. The sheet lands in
+  this conversation's own folder and shows up on the Files rail with
+  everything else.
 - **TurnReceipt**: under each reply — which provider/model actually answered
   and *why* (your pick, the default, a failover), plus the files that turn
   really wrote per the ledger. A mock or failover answer is flagged in amber.
