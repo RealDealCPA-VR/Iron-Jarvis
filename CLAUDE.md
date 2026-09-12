@@ -55,10 +55,16 @@ So: if you are about to `git push`, you have already edited the three files
 below. If you find yourself writing a commit message that explains why this one
 does not need a bump, stop and bump it.
 
-1. Bump the version in **three files, with ANCHORED edits** (never blanket
+1. Bump the version in **six locations, with ANCHORED edits — run
+   `uv run python scripts/bump_version.py OLD NEW`** (never blanket
    search/replace — it once rewrote a dependency pin): `pyproject.toml`
    (`version = `), `src/iron_jarvis/__init__.py` (`__version__`),
-   `desktop/package.json` (`"version"`).
+   `desktop/package.json` (`"version"`). Plus `extensions/chrome/manifest.json` and
+   `extensions/chrome/package.json` (`"version"`), `docs/HANDBOOK.md` on its
+   `Current as of vX` line ONLY, and `uv lock` regenerated. The script refuses
+   unless each anchor matches exactly once. THIS IS NOT OPTIONAL: v1.257.0 and
+   v1.258.0 used ad-hoc blanket replaces that relabelled five lines of shipped
+   Handbook history (fixed in v1.258.1).
 2. Commit + push to master. CI (`.github/workflows/release.yml`) detects the
    bump, RUNS THE OFFLINE SUITE AS A GATE (the `suite` job; the installer job
    `needs:` it), PRE-CREATES the tag+release (electron-builder 422s otherwise),
