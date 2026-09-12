@@ -946,6 +946,24 @@ does not need a bump, stop and bump it.
       hop the assertion depends on (a mocked read, an `Image` whose load you
       release by hand) and watch the OLD shape fail on an idle machine. Both
       v1.251.1 and v1.254.2 reproduced CI's exact error text that way.
+- **A PACKAGE THAT RE-EXPORTS A FUNCTION SHADOWS THE MODULE OF THE SAME NAME**
+  (cost time twice, v1.254.0 and v1.256.0). `onboarding/__init__.py` does
+  `from .doctor import doctor`, so `from iron_jarvis.onboarding import doctor`
+  binds the FUNCTION and `doctor.CHECKS` / `doctor.__file__` raise
+  `AttributeError: 'function' object has no attribute ...`. Reach the module
+  with `importlib.import_module("iron_jarvis.onboarding.doctor")`. The failure
+  reads like the code is broken when the import is.
+- **A DESTRUCTIVE BULK ACTION MOVES, IT DOES NOT DELETE** (v1.256.0, R-01). The
+  undo journal has two file kinds — `file_restore` (needs the prior bytes) and
+  `file_delete` (created new → unlink on undo) — and NEITHER can reverse
+  "remove bytes that already existed": the first would demand a pre-image of the
+  very bytes being freed (700 MB of video, in the case this shipped for) and the
+  second inverts to UNLINKING, which destroys rather than restores. So a bulk
+  clear moves into `<home>/trash/<stamp>/` keeping relative paths, names what it
+  moved, and the report keeps counting those bytes until a SEPARATE press
+  deletes them. Do not "simplify" this into an unlink: the move IS the
+  recoverability, and the two presses are what let the first one be confident.
+  Never promise Undo can reverse something the journal cannot.
 - **A folder is WRITABLE when a file lands in it, and `tempfile` is not the
   way to find out** (v1.228.0, audit Wave 2). `fs_policy.usable_workspace_root`
   accepted `C:\Users` (absolute, a dir, allowlist-clean, not protected) and

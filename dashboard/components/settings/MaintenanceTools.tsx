@@ -170,6 +170,255 @@ const TONE_CLASS: Record<"ok" | "warn" | "muted", string> = {
 };
 
 /** Settings -> Maintenance: a second copy of every backup, on another drive. */
+/** GET /maintenance/storage (v1.256.0, R-01). */
+export interface StorageCategory {
+  label: string;
+  dir: string;
+  path: string;
+  files: number;
+  bytes: number;
+  newest: string | null;
+  /** True for the folders "Clear old media" will move (generated media only). */
+  clearable: boolean;
+}
+
+export interface StorageReport {
+  home: string;
+  total_bytes: number;
+  categories: StorageCategory[];
+  older_than_days: number;
+  candidates: { files: number; bytes: number; largest: { rel: string; bytes: number }[] };
+}
+
+/**
+ * What Iron Jarvis is keeping on disk, and a way to clear the part that is safe
+ * to clear (v1.256.0, R-01).
+ *
+ * WHY THIS EXISTS. Measured on the live install: 814 MB of state, of which
+ * `artifacts/` was 783 MB — 186 files, 57 of them videos totalling 676 MB, none
+ * newer than August. Nothing pruned it and no screen reported it, so the only
+ * way to find out was a file manager.
+ *
+ * TWO PRESSES, ON PURPOSE. "Clear" MOVES old media into the app's own trash and
+ * names what it moved, so the press is recoverable; "Delete permanently" is the
+ * separate one that frees the disk. The daemon cannot undo a bulk media delete
+ * through the journal (its two file kinds would need a pre-image of the very
+ * bytes being freed, or would invert to unlinking), so recoverability is the
+ * move itself rather than a promise the journal cannot keep.
+ */
+function StorageReportCard({ disabled, refreshKey }: { disabled: boolean; refreshKey?: number }) {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [busy, setBusy] = useState<"" | "clear" | "purge">("");
+  const [confirming, setConfirming] = useState<"clear" | "purge" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setReport(await get<StorageReport>("/maintenance/storage"));
+    } catch (e) {
+      setErr(errorText(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load, refreshKey]);
+
+  const run = useCallback(
+    async (action: "clear_media" | "purge_trash") => {
+      setBusy(action === "clear_media" ? "clear" : "purge");
+      setErr(null);
+      setNote(null);
+      setConfirming(null);
+      try {
+        if (action === "clear_media") {
+          const r = await post<{ moved: number; bytes: number; trash: string; failed: number }>(
+            "/diagnostics/repair",
+            { action, older_than_days: report?.older_than_days ?? 30 },
+          );
+          setNote(
+            r.moved === 0
+              ? "Nothing was old enough to clear."
+              : `Moved ${r.moved} file${r.moved === 1 ? "" : "s"} (${fmtBytes(r.bytes)}) out of the way. ` +
+                `They are still recoverable until you delete them permanently.` +
+                (r.failed ? ` ${r.failed} could not be moved.` : ""),
+          );
+        } else {
+          const r = await post<{ deleted: number; bytes: number }>("/diagnostics/repair", { action });
+          setNote(
+            r.deleted === 0
+              ? "There was nothing waiting to be deleted."
+              : `Deleted ${r.deleted} file${r.deleted === 1 ? "" : "s"} for good, freeing ${fmtBytes(r.bytes)}.`,
+          );
+        }
+        await load();
+      } catch (e) {
+        setErr(errorText(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [load, report?.older_than_days],
+  );
+
+  const rows = (report?.categories ?? []).filter((c) => c.files > 0 || c.bytes > 0);
+  const trash = (report?.categories ?? []).find((c) => c.dir === "trash");
+  const candidates = report?.candidates;
+  const days = report?.older_than_days ?? 30;
+
+  return (
+    <div className="border-t hairline pt-4" data-testid="storage-report">
+      <SectionLabel>What Iron Jarvis is keeping</SectionLabel>
+      <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+        Everything the app stores on this PC, largest first. Only generated pictures, video and
+        audio can be cleared here — your backups, undo history and project files are never touched.
+      </p>
+
+      {!report && !err && <p className="mt-2 text-[11px] text-zinc-500">Measuring…</p>}
+
+      {rows.length > 0 && (
+        <ul className="mt-2.5 space-y-1">
+          {[...rows]
+            .sort((a, b) => b.bytes - a.bytes)
+            .map((c) => (
+              <li
+                key={c.dir}
+                data-testid={`storage-row-${c.dir}`}
+                className="flex items-baseline justify-between gap-3 text-[12px]"
+              >
+                <span className="min-w-0 truncate text-zinc-300">{c.label}</span>
+                <span className="shrink-0 tabular-nums text-zinc-500">
+                  {fmtBytes(c.bytes)}
+                  {c.files > 0 && ` · ${c.files} file${c.files === 1 ? "" : "s"}`}
+                  {c.newest && ` · newest ${fmtWhen(c.newest)}`}
+                </span>
+              </li>
+            ))}
+        </ul>
+      )}
+
+      {report && (
+        <p className="mt-2 text-[11px] text-zinc-400" data-testid="storage-total">
+          {fmtBytes(report.total_bytes)} in total, under {report.home}
+        </p>
+      )}
+
+      {candidates && candidates.files > 0 && confirming !== "clear" && (
+        <button
+          type="button"
+          onClick={() => setConfirming("clear")}
+          disabled={disabled || busy !== ""}
+          className="btn-ghost mt-2.5 w-full justify-center py-1.5 text-xs"
+          data-testid="storage-clear"
+        >
+          <HardDrive size={14} /> Clear {candidates.files} old file
+          {candidates.files === 1 ? "" : "s"} ({fmtBytes(candidates.bytes)})
+        </button>
+      )}
+
+      {candidates && candidates.files === 0 && report && (
+        <p className="mt-2 text-[11px] text-zinc-500" data-testid="storage-nothing-to-clear">
+          Nothing is older than {days} days, so there is nothing to clear.
+        </p>
+      )}
+
+      {confirming === "clear" && candidates && (
+        <div
+          className="mt-2.5 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-2.5"
+          data-testid="storage-clear-confirm"
+        >
+          <p className="text-[12px] leading-relaxed text-amber-100">
+            Move {candidates.files} file{candidates.files === 1 ? "" : "s"} ({fmtBytes(candidates.bytes)})
+            older than {days} days out of the way? They go to the app&rsquo;s own trash first, so you
+            can still get them back until you delete them permanently.
+          </p>
+          {candidates.largest.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {candidates.largest.slice(0, 5).map((f) => (
+                <li key={f.rel} className="truncate font-mono text-[10.5px] text-amber-100/70">
+                  {f.rel} · {fmtBytes(f.bytes)}
+                </li>
+              ))}
+              {candidates.files > 5 && (
+                <li className="text-[10.5px] text-amber-100/60">
+                  …and {candidates.files - 5} more
+                </li>
+              )}
+            </ul>
+          )}
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => void run("clear_media")}
+              disabled={busy !== ""}
+              className="btn-ghost flex-1 justify-center py-1.5 text-xs"
+              data-testid="storage-clear-go"
+            >
+              {busy === "clear" ? <LoaderInline label="Clearing…" /> : "Yes, clear them"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(null)}
+              disabled={busy !== ""}
+              className="btn-ghost flex-1 justify-center py-1.5 text-xs"
+            >
+              Keep them
+            </button>
+          </div>
+        </div>
+      )}
+
+      {trash && trash.files > 0 && (
+        <div className="mt-2.5" data-testid="storage-trash">
+          <p className="text-[11px] text-zinc-400">
+            {trash.files} cleared file{trash.files === 1 ? "" : "s"} ({fmtBytes(trash.bytes)}) are
+            waiting to be deleted. The space is only freed once they are.
+          </p>
+          {confirming !== "purge" ? (
+            <button
+              type="button"
+              onClick={() => setConfirming("purge")}
+              disabled={disabled || busy !== ""}
+              className="btn-ghost mt-1.5 w-full justify-center py-1.5 text-xs"
+              data-testid="storage-purge"
+            >
+              <ArchiveRestore size={14} /> Delete permanently ({fmtBytes(trash.bytes)})
+            </button>
+          ) : (
+            <div className="mt-1.5 flex gap-2" data-testid="storage-purge-confirm">
+              <button
+                type="button"
+                onClick={() => void run("purge_trash")}
+                disabled={busy !== ""}
+                className="btn-ghost flex-1 justify-center py-1.5 text-xs"
+                data-testid="storage-purge-go"
+              >
+                {busy === "purge" ? <LoaderInline label="Deleting…" /> : "Delete for good"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(null)}
+                disabled={busy !== ""}
+                className="btn-ghost flex-1 justify-center py-1.5 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {note && (
+        <p className="mt-1.5 text-[11px] text-zinc-400" data-testid="storage-note">
+          {note}
+        </p>
+      )}
+      {err && <ErrorNote>{err}</ErrorNote>}
+    </div>
+  );
+}
+
 function BackupMirror({ disabled, refreshKey }: { disabled: boolean; refreshKey?: number }) {
   const [dir, setDir] = useState("");
   const [media, setMedia] = useState(true);
@@ -405,6 +654,8 @@ export function MaintenanceTools({
 
   return (
     <>
+      <StorageReportCard disabled={disabled} refreshKey={refreshKey} />
+
       <BackupMirror disabled={disabled} refreshKey={refreshKey} />
 
       <div className="border-t hairline pt-4" data-testid="copy-diagnostics">

@@ -840,7 +840,98 @@ def runtime_checks(platform) -> list[dict]:
     except Exception:  # noqa: BLE001 — a network hiccup must not fail the doctor
         pass
 
+    # Every model the config POINTS AT can actually be reached (v1.256.0, R-03).
+    try:
+        checks.append(check_model_targets(platform))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _result("model_targets", False, f"model reachability check failed: {exc}", level=RECOMMENDED)
+        )
+
     return checks
+
+
+def check_model_targets(platform) -> dict:
+    """The models the config points at are ones this install can reach (R-03).
+
+    THE SILENT SETTING THIS CATCHES. Measured on the live install before this
+    shipped: ``routing_model`` was ``ollama:qwen3.6:27b`` while
+    ``ollama_base_url`` was empty and nothing answered on Ollama's port — and
+    ``ProviderManager.available`` is explicit that a local provider is
+    "available only once a base_url is configured". So the cheap router the user
+    had chosen could never run, no screen said so, and the doctor never looked.
+    A setting the app accepts and then cannot honour is worse than one it
+    refuses, because the user believes it took.
+
+    Reads only what the app already believes: ``providers.health()`` for what is
+    reachable and ``routing.parse_pm`` for the ``provider:model`` strings, so this
+    cannot form a second opinion about either. RECOMMENDED — an unreachable
+    router degrades routing, it does not break the install. The app never
+    substitutes silently (it refuses and names itself), which is exactly why the
+    warning has to arrive here instead.
+    """
+    from ..providers.routing import parse_pm
+
+    cfg = platform.config
+    try:
+        health = {
+            str(row.get("provider")): bool(row.get("available"))
+            for row in (platform.providers.health() or [])
+        }
+    except Exception as exc:  # noqa: BLE001 — never raise out of a check
+        return _result("model_targets", False, f"provider health unavailable: {exc}", level=RECOMMENDED)
+
+    #: (label, configured value) for every "point at a model" setting. A blank
+    #: one is not configured and so is not a problem.
+    targets: list[tuple[str, str]] = [
+        ("the cheap router", str(getattr(cfg, "routing_model", "") or "").strip()),
+    ]
+    default_provider = str(getattr(cfg, "default_provider", "") or "").strip()
+    if default_provider and default_provider not in ("auto", "mock"):
+        targets.append(("the default model", default_provider))
+
+    problems: list[str] = []
+    fixes: list[str] = []
+    for label, value in targets:
+        if not value:
+            continue
+        parsed = parse_pm(value)
+        if parsed is None:
+            problems.append(f"{label} ({value!r}) is not a provider:model setting")
+            continue
+        provider, model = parsed
+        if provider not in health:
+            problems.append(f"{label} points at {provider!r}, which this install does not know")
+            fixes.append(f"Pick a connected provider for {label} on the Connections page.")
+            continue
+        if health[provider]:
+            continue
+        # Reachable-vs-configured: name WHICH, because the fix differs.
+        why = "no address is configured for it"
+        url_attr = {"ollama": "ollama_base_url", "custom": "custom_base_url"}.get(provider)
+        if url_attr is not None:
+            configured = str(getattr(cfg, url_attr, "") or "").strip()
+            why = "no address is configured for it" if not configured else "it is not answering"
+        named = f"{provider}:{model}" if model else provider
+        problems.append(f"{label} is {named}, which cannot be reached — {why}")
+        fixes.append(
+            f"Set an address for {provider} under Settings, or choose a connected provider for {label}."
+            if why.startswith("no address")
+            else f"Start {provider} (or fix its address), then re-check."
+        )
+
+    ok = not problems
+    return _result(
+        "model_targets",
+        ok,
+        "every configured model can be reached."
+        if ok
+        else "; ".join(problems)
+        + ". Iron Jarvis refuses rather than quietly using a different model,"
+        " so this setting is doing nothing until it is fixed",
+        fix="" if ok else " ".join(dict.fromkeys(fixes)),
+        level=RECOMMENDED,
+    )
 
 
 def _find_npx() -> str | None:

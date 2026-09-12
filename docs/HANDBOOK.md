@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.255.1 (2026-09-12).*
+holds itself to. Current as of v1.256.0 (2026-09-12).*
 
 ---
 
@@ -316,6 +316,32 @@ with the request typed in.
   here, the app says so and tells you to save the file as .docx rather than
   failing halfway through a job. The Diagnostics page shows which of the two
   is available on this PC.
+
+### Settings → Maintenance
+- **What the app is keeping on your disk** (v1.256.0): Maintenance now lists
+  everything Iron Jarvis stores here — generated pictures and video, backups,
+  undo history, the scan-text cache, code workspaces and the database — largest
+  first, with a total. Before this it was invisible: on the machine this shipped
+  from, 783 MB of the 814 MB was old generated video that nothing ever cleared
+  and no screen ever mentioned.
+- **Clearing old media takes two presses, on purpose** (v1.256.0): "Clear"
+  shows you how many files and how much space, then **moves** them out of the
+  way rather than deleting them — they sit in the app's own trash, still
+  recoverable, and the screen keeps counting them because the space isn't freed
+  yet. **Delete permanently** is the separate press that actually frees it. Your
+  backups, undo history, project files and code workspaces are never offered and
+  never touched, however old they are.
+- **A tool pack that can't start tells you why, in words** (v1.256.0): if an
+  add-on pack fails, Tools now says what actually happened — "npx exists on this
+  PC but not on the PATH Iron Jarvis was started with" — and what to do about
+  it, instead of only showing the error the computer produced. The raw text is
+  still there underneath for a bug report. On this machine one pack had been
+  failing silently at every start for weeks.
+- **A model you can't reach says so** (v1.256.0): if the model you picked for
+  routing or as your default can't be reached, the start-up check names it and
+  says whether no address is configured or the server isn't answering. Iron
+  Jarvis never quietly uses a different model instead, which is exactly why it
+  has to tell you the setting is doing nothing.
 
 ### Memory
 - **Long-term memory**: markdown bases (Obsidian vault supported), Notion,

@@ -295,11 +295,116 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
 _LOAD_STATUS: dict[str, dict[str, Any]] = {}
 
 
-def _record_load(name: str, *, error: str | None, tools_loaded: int) -> None:
+def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict[str, str]:
+    """Turn a raw load exception into a sentence the user can act on (v1.256.0, R-02).
+
+    THE GAP THIS CLOSES. The reason a pack held no tools has been recorded since
+    v1.229.0 and shown on the Tools row ("Didn't start: FileNotFoundError:
+    [WinError 2] The system cannot find the file specified") — and that text names
+    nothing the user can do. On this install ``brave_search`` has failed at EVERY
+    boot for weeks: its launcher is ``npx``, which is not on the PATH a
+    GUI-launched daemon inherits. The exception is accurate and useless.
+
+    So the classification lives here, once, next to the load record — not in the
+    Tools page and not in the doctor, both of which read this. ``reason`` is what
+    went wrong in plain words; ``fix`` is the next action, and is "" when there
+    isn't an honest one to name (never a guess).
+
+    The launcher probe is :func:`terminals.ai_clis._find` — PATH first, then the
+    per-user bin dirs a GUI-launched process never sees — the SAME resolver the
+    Build page and :func:`onboarding.doctor._find_npx` use, so three surfaces
+    cannot form three opinions about whether ``npx`` exists.
+    """
+    raw = (error or "").strip()
+    if not raw:
+        return {"reason": "", "fix": ""}
+    command = str((cfg or {}).get("command") or "").strip()
+    launcher = command.split()[0] if command else ""
+    low = raw.lower()
+
+    # The launcher itself is missing. This is the common one and the one whose
+    # exception text is furthest from the cause.
+    if "filenotfounderror" in low or "winerror 2" in low or "no such file" in low:
+        if launcher:
+            # THE PACK FAILED TO LAUNCH, so the launcher is the story whatever a
+            # probe says. An earlier cut only named it when `_find` ALSO came back
+            # empty — and on the machine this shipped from `_find("npx")` succeeds
+            # while the GUI-launched daemon still cannot start the pack, because a
+            # desktop process inherits a different PATH than a shell. That made the
+            # classifier fall through to a generic sentence in exactly the case it
+            # exists for. The probe now only chooses the WORDING.
+            present = None
+            try:
+                from ..terminals.ai_clis import _find
+
+                present = _find(launcher) is not None
+            except Exception:  # noqa: BLE001 — a classifier never raises
+                present = None
+            node_launchers = {"npx", "npx.cmd", "node", "npm"}
+            if present:
+                reason = (
+                    f"{launcher} exists on this PC but not on the PATH Iron Jarvis "
+                    f"was started with, so the pack could not launch"
+                )
+                fix = (
+                    "Restart Iron Jarvis from a terminal that can run "
+                    f"{launcher}, or reinstall Node.js LTS so it registers for every program."
+                    if launcher.lower() in node_launchers
+                    else f"Restart Iron Jarvis from a terminal that can run {launcher}."
+                )
+            else:
+                reason = f"{launcher} isn't installed, or isn't on the PATH this app can see"
+                fix = (
+                    "Install Node.js LTS from nodejs.org, then press Retry."
+                    if launcher.lower() in node_launchers
+                    else f"Install {launcher} (or correct the command), then press Retry."
+                )
+            return {"reason": reason, "fix": fix}
+        return {
+            "reason": f"a file the pack needs to start wasn't found ({raw})",
+            "fix": "Check the pack's command and arguments on Tools → Connected packs, then press Retry.",
+        }
+    if "timeouterror" in low or "did not respond within" in low:
+        return {
+            "reason": "the pack didn't answer in time",
+            "fix": "Press Retry; if it keeps timing out, start its server by hand once to see what it prints.",
+        }
+    if "permission" in low or "winerror 5" in low:
+        return {
+            "reason": "the pack's launcher was refused by the operating system",
+            "fix": "Check the file's permissions, or reinstall the pack's program.",
+        }
+    if "401" in raw or "403" in raw or "unauthorized" in low or "forbidden" in low:
+        return {
+            "reason": "the pack refused our credentials",
+            "fix": "Re-enter its key or token on Tools → Connected packs, then press Retry.",
+        }
+    if "connect" in low or "refused" in low or "unreachable" in low:
+        return {
+            "reason": "the pack's server couldn't be reached",
+            "fix": "Check its address, and that the server is running, then press Retry.",
+        }
+    # Unknown: say so rather than invent a cause, and keep the raw text visible.
+    return {"reason": raw, "fix": ""}
+
+
+def _record_load(
+    name: str,
+    *,
+    error: str | None,
+    tools_loaded: int,
+    cfg: dict[str, Any] | None = None,
+) -> None:
     from datetime import datetime, timezone
 
+    # v1.256.0 (R-02): the record carries the plain-words reason and the fix
+    # beside the raw exception, so every surface that reads this record shows
+    # the same sentence instead of each one classifying for itself.
+    verdict = classify_load_failure(cfg, error)
     _LOAD_STATUS[name] = {
         "last_error": error,
+        "reason": verdict["reason"],
+        "fix": verdict["fix"],
         "tools_loaded": tools_loaded,
         "at": datetime.now(timezone.utc).isoformat(),
     }
@@ -351,7 +456,10 @@ def mcp_tools(
         except Exception as exc:  # skip the bad/hung server; keep booting
             log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
             if record:
-                _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0)
+                # `cfg` names the launcher, which is what makes the reason
+                # actionable (v1.256.0, R-02) — without it the classifier can
+                # only echo the exception.
+                _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
             continue
         count = 0
         for spec in specs:
@@ -360,7 +468,7 @@ def mcp_tools(
             tools.append(MCPRemoteTool.from_spec(client, name, spec))
             count += 1
         if record:
-            _record_load(name, error=None, tools_loaded=count)
+            _record_load(name, error=None, tools_loaded=count, cfg=cfg)
     return tools
 
 

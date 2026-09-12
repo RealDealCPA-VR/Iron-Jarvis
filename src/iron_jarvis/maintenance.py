@@ -17,6 +17,10 @@ from pathlib import Path
 from .core.ids import utcnow
 
 BACKUP_DIRNAME = "backups"
+#: Where a cleared media library waits (v1.256.0, R-01). Clearing MOVES files
+#: here so the press is recoverable; `purge_trash` is the deliberate second
+#: press that actually frees the disk.
+TRASH_DIRNAME = "trash"
 _DB_NAME = "ironjarvis.db"
 _BACKUP_GLOB = "ironjarvis-backup-*.tar.gz"
 
@@ -562,3 +566,213 @@ def restore_backup_live(home: Path, archive: Path) -> int:
         return moved
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# What the app is keeping on disk, and clearing it (v1.256.0, R-01)
+# --------------------------------------------------------------------------- #
+#: The state folders the report accounts for, as (label, dirname) pairs. The
+#: labels are what the user reads on Settings -> Maintenance, so each says what
+#: the folder IS rather than what it happens to be called on disk.
+_REPORT_DIRS = (
+    ("Generated media", "artifacts"),
+    ("Creative thumbnails", "creative-thumbs"),
+    ("Backups", BACKUP_DIRNAME),
+    ("Undo history", "undo"),
+    ("Scan text cache", "ocr"),
+    ("Code workspaces", "codelab"),
+    ("Cleared, awaiting deletion", TRASH_DIRNAME),
+)
+
+
+def _walk_dir(root: Path) -> "tuple[int, int, float]":
+    """``(files, bytes, newest mtime)`` under ``root``; zeros when it is absent.
+
+    The same ``os.walk`` + ``stat`` accounting :func:`mirror_media` uses, so the
+    report and the mirror can never disagree about the same folder. A file that
+    vanishes mid-walk is skipped rather than raising: this runs while the app is
+    still writing.
+    """
+    files = 0
+    total = 0
+    newest = 0.0
+    if not root.is_dir():
+        return (0, 0, 0.0)
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fn in filenames:
+            try:
+                st = (Path(dirpath) / fn).stat()
+            except OSError:
+                continue
+            files += 1
+            total += st.st_size
+            if st.st_mtime > newest:
+                newest = st.st_mtime
+    return (files, total, newest)
+
+
+def storage_report(home: Path) -> dict:
+    """What Iron Jarvis is keeping under ``home``, by category (R-01).
+
+    THE SILENT GROWTH THIS SURFACES. Measured on the live install before this
+    shipped: 814 MB of state, of which ``artifacts/`` was 783 MB — 186 files, 57
+    of them videos totalling 676 MB, the largest 71.6 MB, none newer than
+    August. Nothing pruned it and no screen reported it, so the only way to find
+    it was to go looking with a file manager.
+
+    Read-only and never raises. ``clearable`` marks the categories
+    :func:`clear_media` will move — generated media and thumbnails only, never
+    backups, never undo history, never a code workspace.
+    """
+    home = Path(home)
+    rows: list[dict] = []
+    for label, dirname in _REPORT_DIRS:
+        files, total, newest = _walk_dir(home / dirname)
+        rows.append(
+            {
+                "label": label,
+                "dir": dirname,
+                "path": str(home / dirname),
+                "files": files,
+                "bytes": total,
+                "newest": (
+                    datetime.fromtimestamp(newest, timezone.utc).isoformat()
+                    if newest
+                    else None
+                ),
+                "clearable": dirname in _MEDIA_DIRS,
+            }
+        )
+    db_bytes = 0
+    for side in (_DB_NAME, _DB_NAME + "-wal", _DB_NAME + "-shm"):
+        try:
+            db_bytes += (home / side).stat().st_size
+        except OSError:
+            pass
+    rows.append(
+        {
+            "label": "Database",
+            "dir": _DB_NAME,
+            "path": str(home / _DB_NAME),
+            "files": 1 if db_bytes else 0,
+            "bytes": db_bytes,
+            "newest": None,
+            "clearable": False,
+        }
+    )
+    return {
+        "home": str(home),
+        "total_bytes": sum(r["bytes"] for r in rows),
+        "categories": rows,
+    }
+
+
+def media_candidates(home: Path, older_than_days: int) -> dict:
+    """What :func:`clear_media` WOULD move, without moving anything (R-01).
+
+    The confirm card is built from this, so the count and the size the user
+    agrees to are the numbers the move then reports — a dry run that shares the
+    real thing's rules rather than estimating them separately.
+    """
+    home = Path(home)
+    cutoff = time.time() - max(0, int(older_than_days)) * 86400.0
+    files: list[dict] = []
+    total = 0
+    for dirname in _MEDIA_DIRS:
+        root = home / dirname
+        if not root.is_dir():
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for fn in filenames:
+                src = Path(dirpath) / fn
+                try:
+                    st = src.stat()
+                except OSError:
+                    continue
+                if st.st_mtime > cutoff:
+                    continue
+                total += st.st_size
+                files.append(
+                    {
+                        "rel": src.relative_to(home).as_posix(),
+                        "bytes": st.st_size,
+                    }
+                )
+    files.sort(key=lambda f: -f["bytes"])
+    return {"files": len(files), "bytes": total, "largest": files[:10]}
+
+
+def clear_media(home: Path, older_than_days: int) -> dict:
+    """MOVE generated media older than ``older_than_days`` into the trash (R-01).
+
+    IT MOVES, IT DOES NOT DELETE, and that is the whole design. The undo journal
+    has exactly two file kinds — ``file_restore`` (needs the prior bytes) and
+    ``file_delete`` (created new -> unlink on undo). Neither can reverse "remove
+    700 MB of video that already existed": the first would demand a pre-image of
+    the very bytes being freed, and the second inverts to UNLINKING, which would
+    destroy rather than restore. So the files move to ``<home>/trash/<stamp>/``
+    keeping their relative paths and the manifest names them. Getting them back
+    is a move; freeing the disk for real is a second, deliberate press
+    (:func:`purge_trash`).
+
+    Only the two media directories every archive already skips are touched —
+    never backups, never undo history, never a code workspace, never a project
+    folder.
+    """
+    home = Path(home)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    dest_root = home / TRASH_DIRNAME / stamp
+    cutoff = time.time() - max(0, int(older_than_days)) * 86400.0
+    moved = 0
+    moved_bytes = 0
+    failed = 0
+    errors: list[str] = []
+    names: list[str] = []
+    for dirname in _MEDIA_DIRS:
+        root = home / dirname
+        if not root.is_dir():
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for fn in filenames:
+                src = Path(dirpath) / fn
+                try:
+                    st = src.stat()
+                    if st.st_mtime > cutoff:
+                        continue
+                    rel = src.relative_to(home)
+                    dst = dest_root / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(src, dst)
+                except OSError as exc:
+                    failed += 1
+                    if len(errors) < 5:
+                        errors.append(str(fn) + ": " + str(exc))
+                    continue
+                moved += 1
+                moved_bytes += st.st_size
+                if len(names) < 200:
+                    names.append(rel.as_posix())
+    return {
+        "moved": moved,
+        "bytes": moved_bytes,
+        "failed": failed,
+        "errors": errors,
+        "trash": str(dest_root) if moved else "",
+        "names": names,
+    }
+
+
+def purge_trash(home: Path) -> dict:
+    """Delete everything under ``<home>/trash`` for good (R-01).
+
+    The second press. Until this runs, a cleared library is recoverable by
+    moving it back, which is what lets :func:`clear_media` be one confident
+    click rather than a warning nobody reads.
+    """
+    home = Path(home)
+    root = home / TRASH_DIRNAME
+    if not root.is_dir():
+        return {"deleted": 0, "bytes": 0}
+    files, total, _newest = _walk_dir(root)
+    shutil.rmtree(root, ignore_errors=True)
+    return {"deleted": files, "bytes": total}

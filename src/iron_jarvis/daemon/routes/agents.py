@@ -1407,6 +1407,11 @@ def register(app: FastAPI, d) -> None:
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
                     "last_error": status.get("last_error") if status else None,
+                    # v1.256.0 (R-02): the same raw text, plus what it MEANS and
+                    # what to do. Classified once on the load record so this row
+                    # and the Overview hero cannot form two opinions about it.
+                    "reason": status.get("reason") if status else None,
+                    "fix": status.get("fix") if status else None,
                     "last_attempt_at": status.get("at") if status else None,
                 }
             )

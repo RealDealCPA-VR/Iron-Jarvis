@@ -202,6 +202,13 @@ interface McpServer {
    *  text, e.g. "FileNotFoundError: npx not found"); null = it loaded, or no
    *  attempt has been made in this daemon process. */
   last_error?: string | null;
+  /** v1.256.0 (R-02): the same failure in plain words — "npx isn't installed,
+   *  or isn't on the PATH this app can see" — classified once on the daemon's
+   *  load record so this row and the Overview hero cannot disagree. */
+  reason?: string | null;
+  /** v1.256.0 (R-02): the next action, or "" when there isn't an honest one to
+   *  name. Never a guess. */
+  fix?: string | null;
   last_attempt_at?: string | null;
 }
 
@@ -1941,8 +1948,13 @@ export default function ToolsPage() {
                             data-testid={`mcp-last-error-${s.name}`}
                             className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-amber-200"
                           >
+                            {/* v1.256.0 (R-02): the PLAIN-WORDS cause leads when the
+                                daemon classified one. "FileNotFoundError: [WinError 2]
+                                The system cannot find the file specified" is accurate
+                                and names nothing anyone can act on; the raw text stays
+                                below it, because a bug report still needs it. */}
                             <span className="min-w-0 break-all">
-                              Didn’t start: {s.last_error}
+                              Didn’t start: {s.reason || s.last_error}
                             </span>
                             <button
                               type="button"
@@ -1952,6 +1964,19 @@ export default function ToolsPage() {
                             >
                               <RefreshCw size={11} /> Retry
                             </button>
+                            {s.fix && (
+                              <span
+                                data-testid={`mcp-fix-${s.name}`}
+                                className="w-full text-[11px] text-amber-100/80"
+                              >
+                                {s.fix}
+                              </span>
+                            )}
+                            {s.reason && s.reason !== s.last_error && (
+                              <code className="w-full whitespace-pre-wrap break-all font-mono text-[10.5px] text-zinc-500">
+                                {s.last_error}
+                              </code>
+                            )}
                           </div>
                         )}
                       </div>

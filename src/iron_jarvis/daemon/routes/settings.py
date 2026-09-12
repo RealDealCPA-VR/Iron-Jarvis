@@ -239,6 +239,10 @@ def register(app: FastAPI, d) -> None:
                     "name": str(s.get("name") or ""),
                     "tools_loaded": len(d.platform.registry.mcp_names(str(s.get("name") or ""))),
                     "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
+                    # v1.256.0 (R-02): the plain-words cause and the next action,
+                    # so the hero's "1 thing needs attention" can say WHAT to do.
+                    "reason": (_mcp_load_status(str(s.get("name") or "")) or {}).get("reason"),
+                    "fix": (_mcp_load_status(str(s.get("name") or "")) or {}).get("fix"),
                 }
                 for s in (getattr(cfg, "mcp_servers", None) or [])
                 if isinstance(s, dict) and s.get("name")
@@ -263,6 +267,26 @@ def register(app: FastAPI, d) -> None:
         from ...core.logging import RECENT_ERRORS_CAPACITY, recent_errors
 
         return {"errors": recent_errors(limit), "capacity": RECENT_ERRORS_CAPACITY}
+
+    @app.get("/maintenance/storage")
+    def maintenance_storage(older_than_days: int = 30) -> dict[str, Any]:
+        """What Iron Jarvis is keeping on disk, by category (v1.256.0, R-01).
+
+        THE SILENT GROWTH THIS ANSWERS: measured on the live install, 783 MB of
+        814 MB was generated media nothing pruned and no screen reported. This is
+        that screen. ``candidates`` is the dry run for the clear — the same rules
+        the move uses, so the count the user agrees to is the count that moves.
+
+        Read-only. BLOCKING (it walks the media folders), hence a sync def so
+        FastAPI runs it in the threadpool rather than on the event loop.
+        """
+        from ...maintenance import media_candidates, storage_report
+
+        home = d.platform.config.home
+        report = storage_report(home)
+        report["candidates"] = media_candidates(home, older_than_days)
+        report["older_than_days"] = max(0, int(older_than_days))
+        return report
 
     @app.get("/maintenance/backups")
     def maintenance_backups() -> dict[str, Any]:
@@ -404,6 +428,28 @@ def register(app: FastAPI, d) -> None:
             if entry is not None:
                 d.loop_health["backup_mirror"] = entry
             return {"action": action, "ok": True, "result": str(p), "mirror": status}
+        if action == "clear_media":
+            # v1.256.0 (R-01): MOVES old generated media into <home>/trash/<stamp>/
+            # and names what it moved. It does not delete: the undo journal's two
+            # file kinds cannot reverse "remove bytes that already existed" (one
+            # needs a pre-image of the very bytes being freed, the other inverts
+            # to unlinking), so recoverability is the move itself and freeing the
+            # disk is the separate `purge_trash` press.
+            from ...maintenance import clear_media
+
+            res = clear_media(d.platform.config.home, body.older_than_days)
+            log.warning(
+                "cleared %d media file(s) (%d bytes) to %s",
+                res["moved"], res["bytes"], res["trash"] or "(nothing moved)",
+            )
+            return {"action": action, "ok": True, **res}
+        if action == "purge_trash":
+            # The deliberate second press: after this the cleared files are gone.
+            from ...maintenance import purge_trash
+
+            res = purge_trash(d.platform.config.home)
+            log.warning("purged %d cleared file(s) (%d bytes)", res["deleted"], res["bytes"])
+            return {"action": action, "ok": True, **res}
         if action == "recheck":
             from ...onboarding import doctor as _doctor
 
@@ -412,7 +458,8 @@ def register(app: FastAPI, d) -> None:
             status_code=400,
             detail=(
                 f"unknown repair action '{action}' "
-                "(db_integrity | db_vacuum | prune_events | backup_now | recheck)"
+                "(db_integrity | db_vacuum | prune_events | backup_now | clear_media | "
+                "purge_trash | recheck)"
             ),
         )
 

@@ -456,7 +456,9 @@ class TranscribeBody(BaseModel):
 
 
 class RepairBody(BaseModel):
-    action: str  # db_integrity | db_vacuum | prune_events | backup_now | recheck
+    #: db_integrity | db_vacuum | prune_events | backup_now | clear_media |
+    #: purge_trash | recheck  (clear_media/purge_trash: v1.256.0, R-01)
+    action: str
     older_than_days: int = 30
 
 

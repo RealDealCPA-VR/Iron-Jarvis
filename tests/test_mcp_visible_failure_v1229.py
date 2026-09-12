@@ -164,7 +164,18 @@ def test_green_test_over_a_pack_that_failed_at_boot_keeps_every_truth_surface_lo
     row = next(s for s in client.get("/mcp/servers").json()["servers"] if s["name"] == "srv")
     assert row["tools_loaded"] == 0 and row["last_error"] == boot_error
     diag = client.get("/diagnostics").json()["mcp_servers"]
-    assert diag == [{"name": "srv", "tools_loaded": 0, "last_error": boot_error}]
+    # The row still says the pack did not start — that is what this test is for.
+    # It was an exhaustive dict comparison until v1.256.0 (R-02) added `reason`
+    # and `fix` to the record, which failed it on SHAPE while its meaning held.
+    # Widened to the fields it cares about, and extended to pin the new two:
+    # the classified sentence has to reach this surface too, or the Overview hero
+    # and the Tools row go back to interpreting a raw exception each.
+    assert len(diag) == 1
+    assert diag[0]["name"] == "srv"
+    assert diag[0]["tools_loaded"] == 0
+    assert diag[0]["last_error"] == boot_error
+    assert "reason" in diag[0] and "fix" in diag[0], "R-02: both surfaces read the same record"
+    assert diag[0]["reason"], "an unclassifiable failure still keeps its own words"
     check = next(c for c in client.get("/doctor").json()["checks"] if c["name"] == "mcp")
     assert check["ok"] is False and "srv didn't start:" in check["detail"]
 

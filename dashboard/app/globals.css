@@ -542,6 +542,8 @@ table {
 :root[data-theme="mark8"] .ring-amber-400\/40 { --tw-ring-color: rgb(180 83 9 / 0.65); }
 :root[data-theme="mark1"] .text-amber-100,
 :root[data-theme="mark8"] .text-amber-100 { color: rgb(120 53 15 / 1); }
+:root[data-theme="mark1"] .text-amber-100\/60,
+:root[data-theme="mark8"] .text-amber-100\/60 { color: rgb(120 53 15 / 0.8); }
 :root[data-theme="mark1"] .text-amber-100\/70,
 :root[data-theme="mark8"] .text-amber-100\/70 { color: rgb(120 53 15 / 0.8); }
 :root[data-theme="mark1"] .text-amber-100\/80,
