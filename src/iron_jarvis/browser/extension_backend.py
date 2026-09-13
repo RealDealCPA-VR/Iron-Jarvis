@@ -339,6 +339,10 @@ class ExtensionConnection:
         self.ws = ws
         self.extension_id = str(extension_id or "")
         self.extension_version = str(extension_version or "")
+        #: v1.259.0: the browser that loaded the add-on, from ``browser.hello``.
+        #: Empty until a greeting says — absence is "unknown", never a guess.
+        self.browser_name = ""
+        self.browser_version = ""
         self.host_permission = bool(host_permission)
         self.paired = bool(paired)
         self.pairing_request_id = str(pairing_request_id or "")
@@ -631,6 +635,8 @@ class ExtensionBackend:
             "connected": self.connected,
             "extension_id": conn.extension_id if conn else "",
             "extension_version": conn.extension_version if conn else "",
+            "browser_name": conn.browser_name if conn else "",
+            "browser_version": conn.browser_version if conn else "",
             "host_permission": bool(conn.host_permission) if conn else False,
             "connected_at": conn.connected_at.isoformat() if conn else None,
             "in_flight": len(conn.pending) if conn else 0,
@@ -660,6 +666,8 @@ class ExtensionBackend:
         payload: dict[str, Any] = {
             "extension_id": conn.extension_id,
             "extension_version": conn.extension_version,
+            "browser_name": conn.browser_name,
+            "browser_version": conn.browser_version,
             "host_permission": conn.host_permission,
         }
         access = self.access_word()
@@ -1330,14 +1338,35 @@ class ExtensionBackend:
         ``host_permission`` in an event is a lie, and a second identical event is
         noise.
         """
-        before = (conn.extension_id, conn.extension_version, conn.host_permission)
+        before = (
+            conn.extension_id,
+            conn.extension_version,
+            conn.host_permission,
+            conn.browser_name,
+            conn.browser_version,
+        )
         conn.extension_id = str(frame.get("extension_id") or conn.extension_id)
         conn.extension_version = str(
             frame.get("extension_version") or conn.extension_version
         )
         conn.host_permission = bool(frame.get("host_permission"))
+        # v1.259.0: which browser. Read defensively — the value is add-on-authored
+        # text — and only ever SET, never cleared: a later hello without the key
+        # (an older add-on reloaded) keeps what was known rather than blanking it.
+        browser = frame.get("browser")
+        if isinstance(browser, dict):
+            name = str(browser.get("name") or "").strip()[:64]
+            if name:
+                conn.browser_name = name
+                conn.browser_version = str(browser.get("version") or "").strip()[:32]
         conn.hello_seen = True
-        after = (conn.extension_id, conn.extension_version, conn.host_permission)
+        after = (
+            conn.extension_id,
+            conn.extension_version,
+            conn.host_permission,
+            conn.browser_name,
+            conn.browser_version,
+        )
         if after != before and self._conn is conn:
             await self._publish(
                 EVENT_CONNECTED,

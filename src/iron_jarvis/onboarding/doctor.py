@@ -173,13 +173,27 @@ def check_pnpm() -> dict:
     )
 
 
+def _browser_label(path: str) -> str:
+    """Name the browser a path points at — "Microsoft Edge" for msedge, "Google
+    Chrome" for chrome — so the doctor line says which one this PC has instead of
+    the generic "Chromium-based browser" (v1.259.0: on an Edge-only machine the
+    generic word left the user unsure the add-on applied to them)."""
+    lowered = (path or "").lower()
+    base = os.path.basename(lowered)
+    if "msedge" in base or "microsoft edge" in lowered:
+        return "Microsoft Edge"
+    if "chrome" in base or "google chrome" in lowered:
+        return "Google Chrome"
+    return "Chromium-based browser"
+
+
 def check_browser() -> dict:
     path = _find_browser()
     ok = path is not None
     return _result(
         "browser",
         ok,
-        f"Chromium-based browser found ({path})."
+        f"{_browser_label(path)} found ({path})."
         if ok
         else "No Chrome/Edge found — needed for the voice UI and browser automation.",
         fix=""

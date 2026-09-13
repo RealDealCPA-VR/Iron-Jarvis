@@ -374,7 +374,9 @@ describe("the add-on is never called an extension to the user (v1.235.0)", () =>
       // type the first and select the second. Everything the copy CALLS the
       // add-on must read "add-on".
       const text = (document.body.textContent ?? "")
-        .replace(/chrome:\/\/extensions/g, "")
+        // v1.259.0: `edge://extensions` is Edge's name for its own page, stripped for
+        // exactly the reason the Chrome one is.
+        .replace(/(chrome|edge):\/\/extensions/g, "")
         .replace(/extensions\/chrome/g, "");
       expect(text, `state ${state} leaked the MCP word`).not.toMatch(/extension/i);
       cleanup();

@@ -699,6 +699,10 @@ export interface BrowserStatus {
   /** The id the daemon EXPECTS — public, and always present, unlike
    *  `extension_id`, which is whatever is connected right now. */
   expected_extension_id: string;
+  /** v1.259.0: which browser paired ("Microsoft Edge" / "153"). Empty or absent
+   *  means the add-on did not say — unknown, never assumed to be Chrome. */
+  browser_name?: string;
+  browser_version?: string;
   paired: boolean;
   /** The ABSOLUTE folder on this machine that Chrome's Load unpacked must be
    *  pointed at (v1.239.0) — the daemon's own `onboarding.doctor.browser_addon_dir()`,

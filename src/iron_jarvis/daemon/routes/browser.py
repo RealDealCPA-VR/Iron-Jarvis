@@ -414,6 +414,8 @@ def _disconnected_status() -> dict[str, Any]:
         # something is connected makes every reader write a second branch, and
         # the one that forgets renders a comparison against `undefined`.
         "extension_version": "",
+        "browser_name": "",
+        "browser_version": "",
         # The id the daemon EXPECTS, as opposed to ``extension_id`` above, which is
         # whatever is connected right now (empty when nothing is). Public material,
         # and the card needs it precisely when nothing is connected: a pairing
@@ -1066,6 +1068,10 @@ def register(app: FastAPI, d) -> None:
                     # lets the card say "reload it" instead of the user
                     # wondering why the sidebar they just read about is missing.
                     "extension_version": str(view.get("extension_version") or ""),
+                    # v1.259.0: WHICH browser paired, so the card can say "Microsoft
+                    # Edge 153" instead of leaving an Edge user to read Chrome steps.
+                    "browser_name": str(view.get("browser_name") or ""),
+                    "browser_version": str(view.get("browser_version") or ""),
                     "active_tab": view.get("active_tab") or None,
                     "last_error": view.get("last_error") or None,
                 }

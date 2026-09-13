@@ -498,9 +498,10 @@ function SidebarNote({ appVersion }: { appVersion: string }) {
         data-testid="browser-sidebar-pin"
         className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-100/80"
       >
-        <span className="font-semibold text-amber-200">No icon on the toolbar?</span> Chrome does
-        not put a newly loaded add-on there. Click the puzzle-piece button at the top right of your
-        browser, find Iron Jarvis in that list, and press the pin beside it.
+        <span className="font-semibold text-amber-200">No icon on the toolbar?</span> Neither
+        Chrome nor Edge puts a newly loaded add-on there. Click the puzzle-piece button at the top
+        right of your browser, find Iron Jarvis in that list, and press the pin beside it (in Edge,
+        the eye icon: Show in toolbar).
       </p>
       <p
         data-testid="browser-sidebar-stale"
@@ -508,7 +509,8 @@ function SidebarNote({ appVersion }: { appVersion: string }) {
       >
         If the icon opens a small popup instead of a sidebar, your browser is still running an
         older copy of the add-on — open{" "}
-        <code className="font-mono text-zinc-400">chrome://extensions</code> and press Reload on
+        <code className="font-mono text-zinc-400">chrome://extensions</code> (in Edge,{" "}
+        <code className="font-mono text-zinc-400">edge://extensions</code>) and press Reload on
         Iron Jarvis.
         {appVersion ? (
           <>
@@ -660,6 +662,19 @@ export function YourBrowserCard() {
               session. Load the Iron Jarvis browser add-on, pair it here, and Jarvis can read the
               page you are looking at.
             </p>
+            {/* v1.259.0: WHICH browser paired. Chrome and Edge load the same add-on
+                with the same id, so until the add-on said so the card could not tell
+                an Edge user from a Chrome one — and every step below was written
+                for Chrome. Rendered only when the add-on reported it. */}
+            {data?.connected && data.browser_name ? (
+              <p data-testid="browser-identity" className="text-[11.5px] text-zinc-500">
+                Paired browser:{" "}
+                <span className="text-zinc-300">
+                  {data.browser_name}
+                  {data.browser_version ? ` ${data.browser_version}` : ""}
+                </span>
+              </p>
+            ) : null}
 
             {/* THE GUIDED WINDOW (v1.240.0). One button, on the three states
                 that still have work to do — nothing is loaded, the add-on is

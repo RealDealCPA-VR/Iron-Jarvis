@@ -617,7 +617,7 @@ export function BrowserSetupModal({
 
   const steps: StepMeta[] = [
     { n: 1, label: "Open the folder", done: step1 },
-    { n: 2, label: "Load it in Chrome", done: step2 },
+    { n: 2, label: "Load it in Chrome or Edge", done: step2 },
     { n: 3, label: "Pair", done: step3 },
     { n: 4, label: "Allow site access", done: step4 },
     { n: 5, label: "Open the sidebar", done: step5 },
@@ -819,13 +819,17 @@ export function BrowserSetupModal({
             )}
 
             {current === 2 && (
-              <StepCard n={2} icon={<Puzzle size={13} />} title="Load it in Chrome">
+              <StepCard n={2} icon={<Puzzle size={13} />} title="Load it in Chrome or Edge">
                 <p className="text-[12.5px] leading-relaxed text-zinc-400">
                   Open{" "}
                   <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11.5px] text-zinc-200">
                     chrome://extensions
                   </code>
-                  , turn on <span className="font-medium text-zinc-200">Developer mode</span>, press{" "}
+                  {" "}(in Microsoft Edge:{" "}
+                  <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11.5px] text-zinc-200">
+                    edge://extensions
+                  </code>
+                  ), turn on <span className="font-medium text-zinc-200">Developer mode</span>, press{" "}
                   <span className="font-medium text-zinc-200">Load unpacked</span>, and paste the
                   folder you just copied.
                 </p>
@@ -833,7 +837,7 @@ export function BrowserSetupModal({
                   data-testid="browser-setup-why-manual"
                   className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
                 >
-                  Iron Jarvis cannot do these two clicks for you. Chrome only installs add-ons
+                  Iron Jarvis cannot do these two clicks for you. Chrome and Edge only install add-ons
                   either from a Web Store listing or from a person pressing Load unpacked
                   themselves — that is the whole point of the setting. The Iron Jarvis browser
                   add-on has no Web Store listing yet, so it is the second route.
@@ -976,22 +980,23 @@ export function BrowserSetupModal({
                   <span className="font-semibold text-amber-200">
                     You probably have no icon yet &mdash; pin it.
                   </span>{" "}
-                  Chrome does not put a newly loaded add-on on the toolbar. Click the
+                  Neither Chrome nor Edge puts a newly loaded add-on on the toolbar. Click the
                   puzzle-piece button at the top right of your browser, find Iron Jarvis in that
-                  list, and press the pin beside it. Until you do, the icon lives inside that
-                  menu and there is nothing on the toolbar to click.
+                  list, and press the pin beside it (in Edge, the eye icon: Show in toolbar).
+                  Until you do, the icon lives inside that menu and there is nothing on the
+                  toolbar to click.
                 </div>
                 <p
                   data-testid="browser-setup-stale-build"
                   className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
                 >
                   If clicking it opens a small popup instead of a sidebar, your browser is still
-                  running an older copy of the add-on &mdash; Chrome keeps the copy it loaded
-                  until you reload it. Open{" "}
+                  running an older copy of the add-on &mdash; your browser keeps the copy it
+                  loaded until you reload it. Open{" "}
                   <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11px] text-zinc-300">
                     chrome://extensions
                   </code>{" "}
-                  and press Reload on Iron Jarvis.
+                  (in Edge, edge://extensions) and press Reload on Iron Jarvis.
                   {appVersion ? (
                     <>
                       {" "}

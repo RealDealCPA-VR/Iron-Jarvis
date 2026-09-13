@@ -56,9 +56,20 @@ import {
 } from "../protocol";
 import { browserError } from "./errors";
 import type { Dispatcher } from "./dispatch";
+import { currentBrowser } from "./browser-identity";
 
-/** The daemon's loopback address. Never configurable: the bridge is local-only. */
-export const DAEMON_WS_URL = "ws://127.0.0.1:8787/browser/ws";
+/** The daemon's loopback address. Not configurable at RUN time: the bridge is
+ *  local-only. A developer BUILD may substitute another loopback port through
+ *  esbuild's `define` (`IJ_ADDON_DAEMON_WS`), and the build script refuses
+ *  anything that is not `ws://127.0.0.1:<port>/browser/ws` — so a verification
+ *  build can dial an isolated daemon without ever being able to dial the
+ *  network. The production bundle sets nothing and gets the address below. */
+// Injected by esbuild's `define` in esbuild.config.mjs — the add-on's only build
+// path — which supplies "ws://127.0.0.1:8787/browser/ws" unless a loopback dev
+// override is set. Read directly (no in-source fallback) so a bundle carries
+// exactly ONE daemon address: its own.
+declare const __IJ_DAEMON_WS__: string;
+export const DAEMON_WS_URL: string = __IJ_DAEMON_WS__;
 
 /** `chrome.storage.local` keys. Namespaced so a future key cannot collide. */
 export const STORAGE_TOKEN_KEY = "ij.browser.pairing_token";
@@ -533,11 +544,15 @@ export class BridgeSocket {
   }
 
   private sendHello(): void {
+    // v1.259.0: say which browser this is, when it can be said. The daemon's
+    // card renders it ("Microsoft Edge 153"); an absent key reads as unknown.
+    const browser = currentBrowser();
     this.send({
       type: FRAME_HELLO,
       extension_id: this.opts.extensionId,
       extension_version: this.opts.extensionVersion,
       host_permission: this.hostPermission,
+      ...(browser ? { browser } : {}),
     });
   }
 

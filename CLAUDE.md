@@ -1131,6 +1131,46 @@ does not need a bump, stop and bump it.
   8,200-line file a comment over the wrong function is worse than no comment.
   Before inserting at a name, look at the line above it.
 
+- **Define the done condition before you edit, and report four things when you
+  deliver.** Borrowed from omg.dev's agent conventions (2026-09-12 review) because
+  this repo's rules are mostly post-mortems and it lacked the preflight half.
+  Before touching a file, write down in one line what "done" means for THIS change
+  (the measured number, the test that must go red-then-green, the surface a user
+  will see). When delivering, report exactly: (1) BEHAVIOUR — what changed for the
+  user, in plain words; (2) VERIFICATION — which suites/mutations/measurements ran,
+  with numbers read from files, never exit codes; (3) DELIVERY STATE — one of
+  `in the tree` / `committed` / `pushed` / `CI green` / `installer published`, and
+  never a higher one than the evidence supports (a green local build is not a
+  deployment; a release object with zero assets is not a ship); (4) RISK — what
+  could still be wrong and what would show it. A report missing any of the four
+  is incomplete, and the delivery-state ladder is the one this project has
+  already paid for: v1.251.0, v1.254.0, v1.255.0 and v1.258.1 each had a moment
+  where "pushed" was reported in a way that read as "shipped".
+
+- **The browser add-on is proven in the browser the user actually has, against
+  an ISOLATED daemon — never by loading a bundle that dials 8787.** v1.259.0:
+  this PC has no Chrome; it has Edge 153, and "Chrome or Edge" had been a claim
+  in the docs, not a proof. The production bundle dials `ws://127.0.0.1:8787` —
+  the user's live daemon — and a newer browser connection REPLACES the real
+  pairing, so a test load in a second browser would have knocked the user's own
+  browser off. `extensions/chrome/esbuild.config.mjs` is the add-on's ONE build
+  path and takes dev-only overrides (`IJ_ADDON_OUT`, `IJ_ADDON_DAEMON_WS`,
+  `IJ_ADDON_JARVIS_URL`) that it REFUSES unless loopback; the bundle reads the
+  injected constant directly so each build carries exactly one daemon address.
+  `scripts/verify_browser_addon.sh` does the whole proof — dev bundle, scratch
+  daemon on 8797, headless browser with a throwaway profile on a fictional data:
+  URL, pairing through the isolated API, a read-only round trip — and prints the
+  paired browser's NAME, which the add-on now sends on `browser.hello` and the
+  card renders ("Paired browser: Microsoft Edge 153"; absent = unknown, never
+  assumed to be Chrome). Both `chrome://extensions` and `edge://extensions` are
+  quoted as addresses in the setup copy; the vocabulary scrubs in
+  `browser-card-v1235` and `browser-setup-modal-v1240` strip both for the same
+  reason (neither names the add-on). AND: `extensions/chrome/src/protocol.ts` is
+  GENERATED from `browser/protocol.py` (`uv run python -m
+  iron_jarvis.browser.gen_protocol`) — a hand edit there is caught by
+  `test_browser_protocol_v1235`, which cost this release a round; add the field
+  to the TypedDict and regenerate.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

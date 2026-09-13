@@ -219,6 +219,7 @@ export interface HelloFrame {
   extension_id: string;
   extension_version: string;
   host_permission: boolean;
+  browser?: Record<string, string>;
 }
 
 /** Extension -> daemon: something happened in the browser, unprompted. */

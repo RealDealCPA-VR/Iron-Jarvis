@@ -502,6 +502,10 @@ class HelloFrame(TypedDict):
     extension_id: str
     extension_version: str
     host_permission: bool
+    #: v1.259.0: which browser loaded the add-on — ``{"name": "Microsoft Edge",
+    #: "version": "153"}``. Optional: an older add-on sends no such key, and the
+    #: daemon reads its absence as "unknown", never as Chrome.
+    browser: NotRequired[dict[str, str]]
 
 
 class EventFrame(TypedDict):

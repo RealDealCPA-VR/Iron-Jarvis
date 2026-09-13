@@ -92,7 +92,10 @@ import {
 } from "./tabs";
 
 /** The dashboard page the side panel's Open Jarvis button goes to. */
-const JARVIS_URL = "http://127.0.0.1:8788/computeruse";
+// Loopback at run time; a developer BUILD may point this at another loopback port
+// (IJ_ADDON_JARVIS_URL, refused by the build script unless loopback).
+declare const __IJ_JARVIS_URL__: string;
+const JARVIS_URL: string = __IJ_JARVIS_URL__;
 
 /** Messages the side panel and the setup page send this worker.
  *

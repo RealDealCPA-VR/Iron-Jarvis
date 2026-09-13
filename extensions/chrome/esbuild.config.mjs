@@ -13,11 +13,53 @@
 
 import { build } from "esbuild";
 import { copyFile, mkdir, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const OUT = join(ROOT, "dist");
+// DEV-ONLY OVERRIDES (v1.259.0). Production builds set none of these and get
+// exactly the addresses below.
+//   IJ_ADDON_OUT        write the bundle somewhere other than ./dist, so a
+//                       verification build never overwrites the committed
+//                       layout's dist/.
+//   IJ_ADDON_DAEMON_WS  the daemon socket the bundle dials. LOOPBACK ONLY: anything
+//                       but ws://127.0.0.1:<port>/browser/ws is refused here, so
+//                       the bridge stays local by construction even in a developer
+//                       build. It exists so the add-on can be proven against an
+//                       ISOLATED daemon on another port — a build that dials 8787,
+//                       loaded into a second browser, would REPLACE the user's real
+//                       pairing (a newer connection replaces the older).
+//   IJ_ADDON_JARVIS_URL the dashboard the setup page links to; same rule.
+const OUT = process.env.IJ_ADDON_OUT ? resolve(process.env.IJ_ADDON_OUT) : join(ROOT, "dist");
+const DEFAULT_DAEMON_WS = "ws://127.0.0.1:8787/browser/ws";
+const DEFAULT_JARVIS_URL = "http://127.0.0.1:8788/computeruse";
+
+/** Return `value` only if it matches the loopback shape; refuse loudly otherwise. */
+function loopbackOnly(name, value, fallback, pattern) {
+  if (!value) return fallback;
+  if (!pattern.test(value)) {
+    console.error(`${name} must be a loopback address matching ${pattern}; refusing "${value}"`);
+    process.exit(1);
+  }
+  return value;
+}
+const DAEMON_WS = loopbackOnly(
+  "IJ_ADDON_DAEMON_WS",
+  process.env.IJ_ADDON_DAEMON_WS,
+  DEFAULT_DAEMON_WS,
+  /^ws:\/\/127\.0\.0\.1:\d{2,5}\/browser\/ws$/,
+);
+const JARVIS_URL = loopbackOnly(
+  "IJ_ADDON_JARVIS_URL",
+  process.env.IJ_ADDON_JARVIS_URL,
+  DEFAULT_JARVIS_URL,
+  /^http:\/\/127\.0\.0\.1:\d{2,5}\/computeruse$/,
+);
+/** Compile-time constants the bundles read (see socket.ts and background/index.ts). */
+const DEFINES = {
+  __IJ_DAEMON_WS__: JSON.stringify(DAEMON_WS),
+  __IJ_JARVIS_URL__: JSON.stringify(JARVIS_URL),
+};
 
 /** Output name -> entry point, one per surface.
  *
@@ -64,6 +106,7 @@ async function main() {
     // parse time, which surfaces as a service worker that never registers.
     target: ["chrome120"],
     platform: "browser",
+    define: DEFINES,
     sourcemap: "linked",
     logLevel: "info",
     legalComments: "none",
@@ -77,7 +120,8 @@ async function main() {
     await copyFile(join(ROOT, from), join(OUT, to));
   }
   console.log(
-    "built dist/background.js, dist/content.js, dist/sidepanel.js, dist/setup.js + 2 html",
+    `built ${OUT}: background.js, content.js, sidepanel.js, setup.js + 2 html` +
+      (DAEMON_WS === DEFAULT_DAEMON_WS ? "" : ` (DEV daemon ${DAEMON_WS})`),
   );
 }
 

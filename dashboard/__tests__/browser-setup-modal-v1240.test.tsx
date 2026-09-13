@@ -325,7 +325,7 @@ describe("the Your browser card names the sidebar durably (v1.242.0)", () => {
     api.status = CARD_STATES.connected;
     render(<YourBrowserCard />);
     const note = await screen.findByTestId("browser-sidebar-note");
-    const words = (note.textContent ?? "").replace(/chrome:\/\/extensions/g, "");
+    const words = (note.textContent ?? "").replace(/(chrome|edge):\/\/extensions/g, "");
     expect(words).not.toMatch(/\bextensions?\b/i);
   });
 });
@@ -938,10 +938,13 @@ describe("the dialog is attached to the page, not to the card", () => {
 
 describe("nothing a user reads calls the add-on an extension", () => {
   const CHROME_PAGE = "chrome://extensions";
+  // v1.259.0: Edge's name for ITS own page, quoted as an address for the same
+  // reason and stripped for the same reason — neither names the add-on.
+  const EDGE_PAGE = "edge://extensions";
   const CHECKOUT_FOLDER = "extensions/chrome";
 
   const scrub = (t: string) =>
-    t.split(CHROME_PAGE).join(" ").split(CHECKOUT_FOLDER).join(" ");
+    t.split(CHROME_PAGE).join(" ").split(EDGE_PAGE).join(" ").split(CHECKOUT_FOLDER).join(" ");
 
   it("across every step of the dialog, steps 2 and 3 included", async () => {
     // STEP 2 HAS TO BE DRIVEN TO, not merely listed. It is the step that quotes

@@ -10,7 +10,7 @@ Never "extension": inside Iron Jarvis that word already means an MCP server.
 **If you just want to load it, read the next section and stop there.** Everything
 after *Site access* is for people working on the add-on's source.
 
-## Load it into Chrome
+## Load it into Chrome or Edge
 
 You are most likely reading this file from inside your Iron Jarvis installation,
 because the installer ships this whole folder with the app. That is the folder to
@@ -24,7 +24,7 @@ Windows install it is:
 If you chose a different location when you installed Iron Jarvis, it is
 `resources\browser-addon` underneath the folder you chose.
 
-1. In Chrome or Edge, open `chrome://extensions`.
+1. In Chrome, open `chrome://extensions`; in Edge, open `edge://extensions`.
 2. Turn on **Developer mode**, top right.
 3. Press **Load unpacked** and select this folder — the one holding
    `manifest.json`, not `dist/`.

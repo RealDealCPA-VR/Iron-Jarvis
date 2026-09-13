@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.258.2 (2026-09-12).*
+holds itself to. Current as of v1.259.0 (2026-09-13).*
 
 ---
 
@@ -591,7 +591,7 @@ seam); Train (teach it your writing voice, suggest-only).
 
 ---
 
-### Browser — your own Chrome
+### Browser — your own Chrome or Edge
 
 The **Browser** page is where Jarvis meets a browser. There are two of them, and
 the difference matters.
@@ -612,28 +612,36 @@ cookies or sessions with your browser.
 **Setting it up (v1.240.0, five steps since v1.242.0).** The Browser card has a
 **Set up my browser** button that opens a guided window and walks the steps in
 order, moving itself along as each one lands: find the add-on folder on this
-machine (it names the real path and copies it), load that folder into Chrome,
+machine (it names the real path and copies it), load that folder into Chrome or Edge,
 press **Pair**, allow site access, and open the sidebar. While the window is open
 Jarvis opens the site-access page for you instead of making you find it.
 
-**The last step is the one that makes the rest reachable.** Chrome does not put a
-newly loaded add-on on the toolbar — it hides it behind the **puzzle-piece** button
-at the top right. Open that menu, find **Iron Jarvis**, and press the **pin**, and
+**Edge works the same way.** It is the same add-on with the same identity, loaded
+from `edge://extensions` instead of `chrome://extensions` — Developer mode, Load
+unpacked, the same folder. Because the identity is identical, Jarvis could not
+tell which browser had paired until the add-on started saying so: since
+v1.259.0 the Browser card names it ("Microsoft Edge 153"), and the doctor's
+browser line names the one installed on this PC.
+
+**The last step is the one that makes the rest reachable.** Neither Chrome nor Edge
+puts a newly loaded add-on on the toolbar — both hide it behind the **puzzle-piece**
+button at the top right. Open that menu, find **Iron Jarvis**, and press the **pin**
+(in Edge it is the eye icon, **Show in toolbar**), and
 the icon stays on the toolbar where one click opens the sidebar. The Browser card
 says this too, in every state, for anyone who set their browser up months ago and
 never opens the guided window again.
 
 **If clicking the icon opens a small popup rather than a sidebar**, your browser is
-still running an older copy of the add-on: Chrome keeps the copy it loaded until
-you reload it, so updating Iron Jarvis does not update what Chrome runs. Open
-`chrome://extensions` and press **Reload** on Iron Jarvis. The add-on carries the
+still running an older copy of the add-on: your browser keeps the copy it loaded
+until you reload it, so updating Iron Jarvis does not update what it runs. Open
+`chrome://extensions` (in Edge, `edge://extensions`) and press **Reload** on Iron Jarvis. The add-on carries the
 same version number as the app it shipped with, the sidebar prints that number in
 its own header, and the Browser card prints the app's — an older number in the
 sidebar is the copy to reload.
 
 Two of those steps are yours and cannot be automated, and the guide says so rather
-than leaving you wondering. Chrome will not let an app install an add-on into your
-browser, so **Developer mode** and **Load unpacked** are your clicks until there is
+than leaving you wondering. Chrome and Edge will not let an app install an add-on
+into your browser, so **Developer mode** and **Load unpacked** are your clicks until there is
 a Web Store listing. And **Pair** is your click on purpose: the identity a browser
 presents to Jarvis over a local connection is a header any program on your computer
 could write, so a person has to confirm the browser knocking is really theirs. That
@@ -725,14 +733,14 @@ implying an isolation it did not get.
 
 **Where the add-on comes from.** The installer ships it **inside the app**, so
 there is nothing to download and no repository to clone: the Browser card names
-the add-on folder, and Chrome's **Load unpacked** takes it from there. Chrome's
+the add-on folder, and your browser's **Load unpacked** takes it from there. The
 picker wants a *directory*, so you need where the folder is as well as what it is
 called — on a default Windows install that is
 `%LOCALAPPDATA%\Programs\Iron Jarvis\resources\browser-addon`, and if you chose your own
 install location it is `resources\browser-addon` underneath it. `docs/BROWSER.md`
 walks the whole thing. (Running from a source checkout instead? The card says so
 and gives the one build command first — the built files are deliberately not
-committed, and Chrome refuses the folder without them.)
+committed, and the browser refuses the folder without them.)
 
 **What reading a page gives it, and what it does not.** Jarvis asks the page for a
 structured summary, not its HTML: the visible text, the headings, the links, and the
@@ -752,10 +760,10 @@ and only to the browser socket — it is not the app's access token, and it cann
 used for anything else. **Disconnect** ends the session and keeps the pairing;
 **Forget browser** revokes it, so the next connection starts over.
 
-**Site access.** Chrome will not let Jarvis ask for access to your sites on your
-behalf; the request has to come from a button inside the add-on. So the card sends
+**Site access.** Chrome and Edge will not let Jarvis ask for access to your sites
+on your behalf; the request has to come from a button inside the add-on. So the card sends
 you to a single-purpose page with one button on it. Grant once and normal use stops
-prompting. You can narrow it later in Chrome's own extension controls, and Jarvis
+prompting. You can narrow it later in your browser's own extension controls, and Jarvis
 will tell you when a page is out of reach rather than failing quietly.
 
 **What it will never do.** All three are live as of this version, and each says so,
@@ -820,10 +828,10 @@ landed.
 
 **What this first version cannot do**, stated here rather than discovered later. One
 browser at a time, and a newer connection replaces the older. Chrome and Edge only,
-version 120 or newer. Loaded unpacked, so Chrome may prompt about it at each start until a Web Store listing
+version 120 or newer. Loaded unpacked, so your browser may prompt about it at each start until a Web Store listing
 exists. Site access is granted all-or-nothing from the add-on's own page and narrowed
-afterwards in Chrome's controls, never per-site from Jarvis. Downloads land where
-Chrome puts them — Jarvis learns the path and copies the file into a project, and
+afterwards in your browser's controls, never per-site from Jarvis. Downloads land where
+your browser puts them — Jarvis learns the path and copies the file into a project, and
 writing files stays inside the workspace, so that copy goes through the app's
 save-a-copy route rather than renaming a file that lives outside it. No clicking by
 coordinates: a control drawn on a canvas with no readable name cannot be clicked. No
