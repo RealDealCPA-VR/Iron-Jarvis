@@ -293,7 +293,11 @@ describe("a folder of documents is offered as one summary sheet", () => {
       target: { value: "per client please" },
     });
 
-    const progress = await screen.findByTestId("batch-progress");
+    // v1.258.2: BatchSuggestCard is loaded on demand since v1.258.0 (S-03), so the
+    // card arrives one import-resolution after its gate opens; findBy's default
+    // 1 s ceiling missed it on a loaded machine. 8 s is under the 15 s per-test
+    // budget, so a missing card still reports THIS message rather than a timeout.
+    const progress = await screen.findByTestId("batch-progress", {}, { timeout: 8000 });
     expect(progress).toHaveTextContent("Reading 2 of 7: doc2.pdf");
 
     resolveRun({ output: "done", report: { processed: 7 }, created_paths: [SHEET] });

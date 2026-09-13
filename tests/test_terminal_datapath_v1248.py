@@ -659,7 +659,14 @@ def test_real_conpty_kill_takes_the_whole_console_tree(tmp_path):
         except psutil.NoSuchProcess:
             pass
     assert not psutil.pid_exists(gpid) or psutil.Process(gpid).status() == psutil.STATUS_ZOMBIE
-    assert sink.eof.wait(20)
+    # EOF is the pseudoconsole host tearing down AFTER the tree is dead, and on a
+    # loaded Windows Server 2025 runner that lagged past 20 s (v1.258.1 went red
+    # on BOTH CI runs right here, with every assertion above green — the tree was
+    # already dead; only the stream's EOF was late). The assertion is the event
+    # itself, so a longer ceiling hides nothing: no EOF still fails with this
+    # message. 90 s matches the EOF wait this file already uses at the child-exit
+    # test above.
+    assert sink.eof.wait(90), "the stream never reached EOF after the tree was killed"
 
 
 @real_conpty

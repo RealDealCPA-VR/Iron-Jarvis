@@ -471,7 +471,10 @@ def test_native_timeout_kills_child_and_grandchild_and_returns_on_time(tmp_path)
     assert res.returncode == -1
     # The tool returns at ~timeout, not when the command feels like exiting
     # (measured before the fix: 4-6 s for a 1 s timeout).
-    assert elapsed < limit + 1.5, elapsed
+    # v1.258.2: was `limit + 1.5`, which a loaded -n auto worker missed at 2.53 s
+    # (idle: ~1.1 s). The regression this pins is 4-6 s for a 1 s limit, so
+    # `limit + 2.5` stays strictly below that floor and stops measuring the runner.
+    assert elapsed < limit + 2.5, elapsed
     assert child_pid.exists() and grand_pid.exists(), "the tree had started before the deadline"
     pids = [int(child_pid.read_text()), int(grand_pid.read_text())]
     deadline = time.monotonic() + 3.0
