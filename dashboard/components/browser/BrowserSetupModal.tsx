@@ -119,6 +119,13 @@ import { ErrorNote, LoaderInline, SectionLabel } from "@/components/ui";
 import { post, put, ApiError } from "@/lib/api";
 import type { BrowserStatus } from "@/lib/types";
 import { copyPlain } from "@/components/settings/MaintenanceTools";
+import {
+  BROWSERS,
+  pickBrowser,
+  readBrowserChoice,
+  writeBrowserChoice,
+  type BrowserKey,
+} from "./browserWords";
 
 /** What `POST /browser/setup/arm` answers. */
 interface ArmResult {
@@ -531,6 +538,11 @@ export function BrowserSetupModal({
   // detected — and it is acknowledged by the press that also closes the dialog,
   // so there is no state here claiming a thing we did not see.
   const [sidebarSeen, setSidebarSeen] = useState(false);
+  // v1.261.0: WHICH BROWSER THE STEPS ARE WRITTEN FOR. Null follows the status
+  // (the paired browser, else the only installed one, else Chrome); a press on
+  // the header's toggle overrides it and is remembered on this device.
+  const [browserChoice, setBrowserChoice] = useState<BrowserKey | null>(() => readBrowserChoice());
+  const browser = BROWSERS[browserChoice ?? pickBrowser(status)];
 
   const changedRef = useRef(onChanged);
   changedRef.current = onChanged;
@@ -617,7 +629,7 @@ export function BrowserSetupModal({
 
   const steps: StepMeta[] = [
     { n: 1, label: "Open the folder", done: step1 },
-    { n: 2, label: "Load it in Chrome or Edge", done: step2 },
+    { n: 2, label: `Load it in ${browser.short}`, done: step2 },
     { n: 3, label: "Pair", done: step3 },
     { n: 4, label: "Allow site access", done: step4 },
     { n: 5, label: "Open the sidebar", done: step5 },
@@ -690,9 +702,40 @@ export function BrowserSetupModal({
             Set up your browser
           </h2>
           <p className="mt-0.5 text-[11.5px] text-zinc-500">
-            Five presses, and Iron Jarvis does the rest. Three of them are Chrome&apos;s to keep,
-            one is yours to give, and the last one opens the sidebar.
+            Five presses, and Iron Jarvis does the rest. Three of them are {browser.possessive} to
+            keep, one is yours to give, and the last one opens the sidebar.
           </p>
+          {/* v1.261.0: the steps below are written for ONE browser. The pick
+              follows what this PC has and what paired; this is the override. */}
+          <div
+            data-testid="browser-setup-browser"
+            data-browser={browser.key}
+            className="mt-2 flex flex-wrap items-center gap-1.5"
+          >
+            <span className="text-[11px] text-zinc-500">Steps written for</span>
+            {(Object.keys(BROWSERS) as BrowserKey[]).map((k) => {
+              const on = browser.key === k;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  data-testid={`browser-setup-browser-${k}`}
+                  aria-pressed={on}
+                  onClick={() => {
+                    setBrowserChoice(k);
+                    writeBrowserChoice(k);
+                  }}
+                  className={`rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    on
+                      ? "border-accent/40 bg-accent/10 text-zinc-100"
+                      : "border-white/10 text-zinc-400 hover:border-accent/30 hover:text-zinc-200"
+                  }`}
+                >
+                  {BROWSERS[k].short}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
@@ -791,7 +834,8 @@ export function BrowserSetupModal({
                   <>
                     <p className="text-[12.5px] leading-relaxed text-zinc-400">
                       This is the Iron Jarvis browser add-on on this machine, already built and
-                      shipped with the app. Copy it — Chrome asks for it by path in the next step.
+                      shipped with the app. Copy it — {browser.short} asks for it by path in the
+                      next step.
                     </p>
                     <SetupFolder
                       folder={addonDir}
@@ -808,8 +852,8 @@ export function BrowserSetupModal({
                     <span className="font-semibold text-amber-200">
                       Iron Jarvis could not find the add-on folder on this machine
                     </span>{" "}
-                    — so there is no path to copy, and printing a folder name Chrome&apos;s picker
-                    cannot resolve would only waste your time. Reinstalling the current release
+                    — so there is no path to copy, and printing a folder name{" "}
+                    {browser.possessive} picker cannot resolve would only waste your time. Reinstalling the current release
                     puts it back. From a source checkout, use{" "}
                     <code className="font-mono text-zinc-300">extensions/chrome</code>, built once
                     first.
@@ -819,17 +863,16 @@ export function BrowserSetupModal({
             )}
 
             {current === 2 && (
-              <StepCard n={2} icon={<Puzzle size={13} />} title="Load it in Chrome or Edge">
+              <StepCard n={2} icon={<Puzzle size={13} />} title={`Load it in ${browser.short}`}>
                 <p className="text-[12.5px] leading-relaxed text-zinc-400">
-                  Open{" "}
-                  <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11.5px] text-zinc-200">
-                    chrome://extensions
+                  In {browser.short}, open{" "}
+                  <code
+                    data-testid="browser-setup-extensions-page"
+                    className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11.5px] text-zinc-200"
+                  >
+                    {browser.extensionsPage}
                   </code>
-                  {" "}(in Microsoft Edge:{" "}
-                  <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11.5px] text-zinc-200">
-                    edge://extensions
-                  </code>
-                  ), turn on <span className="font-medium text-zinc-200">Developer mode</span>, press{" "}
+                  , turn on <span className="font-medium text-zinc-200">Developer mode</span>, press{" "}
                   <span className="font-medium text-zinc-200">Load unpacked</span>, and paste the
                   folder you just copied.
                 </p>
@@ -837,8 +880,8 @@ export function BrowserSetupModal({
                   data-testid="browser-setup-why-manual"
                   className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
                 >
-                  Iron Jarvis cannot do these two clicks for you. Chrome and Edge only install add-ons
-                  either from a Web Store listing or from a person pressing Load unpacked
+                  Iron Jarvis cannot do these two clicks for you. {browser.short} only installs
+                  add-ons either from a Web Store listing or from a person pressing Load unpacked
                   themselves — that is the whole point of the setting. The Iron Jarvis browser
                   add-on has no Web Store listing yet, so it is the second route.
                 </p>
@@ -920,9 +963,9 @@ export function BrowserSetupModal({
                       data-testid="browser-setup-why-gesture"
                       className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
                     >
-                      This click has to come from inside the add-on — Chrome requires the permission
-                      prompt to be opened by you, in the browser, and refuses it to anything asking
-                      from outside.
+                      This click has to come from inside the add-on — {browser.short} requires the
+                      permission prompt to be opened by you, in the browser, and refuses it to
+                      anything asking from outside.
                     </p>
                     <div className="flex flex-wrap items-center gap-2.5">
                       <button
@@ -980,23 +1023,22 @@ export function BrowserSetupModal({
                   <span className="font-semibold text-amber-200">
                     You probably have no icon yet &mdash; pin it.
                   </span>{" "}
-                  Neither Chrome nor Edge puts a newly loaded add-on on the toolbar. Click the
-                  puzzle-piece button at the top right of your browser, find Iron Jarvis in that
-                  list, and press the pin beside it (in Edge, the eye icon: Show in toolbar).
-                  Until you do, the icon lives inside that menu and there is nothing on the
-                  toolbar to click.
+                  {browser.short} does not put a newly loaded add-on on the toolbar. Click the
+                  puzzle-piece button at the top right of {browser.short}, find Iron Jarvis in that
+                  list, and {browser.pinAction}. Until you do, the icon lives inside that menu and
+                  there is nothing on the toolbar to click.
                 </div>
                 <p
                   data-testid="browser-setup-stale-build"
                   className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
                 >
-                  If clicking it opens a small popup instead of a sidebar, your browser is still
-                  running an older copy of the add-on &mdash; your browser keeps the copy it
-                  loaded until you reload it. Open{" "}
+                  If clicking it opens a small popup instead of a sidebar, {browser.short} is still
+                  running an older copy of the add-on &mdash; it keeps the copy it loaded until you
+                  reload it. Open{" "}
                   <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11px] text-zinc-300">
-                    chrome://extensions
+                    {browser.extensionsPage}
                   </code>{" "}
-                  (in Edge, edge://extensions) and press Reload on Iron Jarvis.
+                  and press Reload on Iron Jarvis.
                   {appVersion ? (
                     <>
                       {" "}

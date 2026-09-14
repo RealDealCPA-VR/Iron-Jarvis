@@ -101,6 +101,7 @@ import { copyPlain } from "@/components/settings/MaintenanceTools";
 // time-boxed window on open and gives it back on close — and this card is
 // already six states long.
 import { BrowserSetupModal } from "@/components/browser/BrowserSetupModal";
+import { BROWSERS, pickBrowser, type BrowserWords } from "@/components/browser/browserWords";
 
 /* -------------------------------------------------------------------------- */
 /*  Contracts                                                                 */
@@ -348,7 +349,7 @@ function FolderLine({
  *  honest block: no path, and no folder name dressed up as one. The remedy is the
  *  doctor's own — reinstall, or use the checkout below — and not a page that does
  *  not print the path, which is the sentence this block was rewritten to remove. */
-function AddonFolder({ addonDir }: { addonDir: string }) {
+function AddonFolder({ addonDir, browser }: { addonDir: string; browser: BrowserWords }) {
   const resolved = addonDir.trim();
   return (
     <div
@@ -361,7 +362,7 @@ function AddonFolder({ addonDir }: { addonDir: string }) {
           <FolderLine
             testid="browser-addon-packaged"
             folder={resolved}
-            where="This is the folder on this machine, already built, from your Iron Jarvis install. Copy it and paste it into Chrome's Load unpacked box."
+            where={`This is the folder on this machine, already built, from your Iron Jarvis install. Copy it and paste it into ${browser.possessive} Load unpacked box.`}
           />
         ) : (
           <p
@@ -406,7 +407,7 @@ function AddonFolder({ addonDir }: { addonDir: string }) {
  *  steps, and the build step is scoped explicitly to "from a source checkout". A
  *  packaged user told to run pnpm is at a dead end, and that is the failure this
  *  ordering exists to prevent. */
-function InstallSteps() {
+function InstallSteps({ browser }: { browser: BrowserWords }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-xl border border-white/[0.08] bg-white/[0.02]">
@@ -426,8 +427,8 @@ function InstallSteps() {
           className="list-decimal space-y-1.5 border-t hairline px-8 py-3 text-[12px] leading-relaxed text-zinc-400"
         >
           <li>
-            In Chrome or Edge, open{" "}
-            <code className="font-mono text-zinc-300">chrome://extensions</code>.
+            In {browser.short}, open{" "}
+            <code className="font-mono text-zinc-300">{browser.extensionsPage}</code>.
           </li>
           <li>Turn on Developer mode.</li>
           <li>
@@ -439,8 +440,8 @@ function InstallSteps() {
           <li className="list-none pl-0 pt-1 text-zinc-500">
             Working from a source checkout instead? Build the add-on once first — run{" "}
             <code className="font-mono text-zinc-300">pnpm install &amp;&amp; pnpm run check</code>{" "}
-            inside <code className="font-mono text-zinc-300">{ADDON_FOLDER}</code>, or Chrome
-            refuses the folder. The copy that comes with the app is already built.
+            inside <code className="font-mono text-zinc-300">{ADDON_FOLDER}</code>, or{" "}
+            {browser.short} refuses the folder. The copy that comes with the app is already built.
           </li>
         </ol>
       )}
@@ -479,7 +480,7 @@ function InstallSteps() {
  *  LIGHT MARKS: `border-amber-500/25`, `bg-amber-500/10`, `text-amber-100/80`
  *  and `text-amber-200` all already carry mark1 + mark8 rules in the generated
  *  light-amber-overrides block in app/globals.css. Nothing new is introduced. */
-function SidebarNote({ appVersion }: { appVersion: string }) {
+function SidebarNote({ appVersion, browser }: { appVersion: string; browser: BrowserWords }) {
   return (
     <div
       data-testid="browser-sidebar-note"
@@ -498,20 +499,18 @@ function SidebarNote({ appVersion }: { appVersion: string }) {
         data-testid="browser-sidebar-pin"
         className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-100/80"
       >
-        <span className="font-semibold text-amber-200">No icon on the toolbar?</span> Neither
-        Chrome nor Edge puts a newly loaded add-on there. Click the puzzle-piece button at the top
-        right of your browser, find Iron Jarvis in that list, and press the pin beside it (in Edge,
-        the eye icon: Show in toolbar).
+        <span className="font-semibold text-amber-200">No icon on the toolbar?</span>{" "}
+        {browser.short} does not put a newly loaded add-on there. Click the puzzle-piece button at
+        the top right of {browser.short}, find Iron Jarvis in that list, and {browser.pinAction}.
       </p>
       <p
         data-testid="browser-sidebar-stale"
         className="mt-2 text-[11px] leading-relaxed text-zinc-500"
       >
-        If the icon opens a small popup instead of a sidebar, your browser is still running an
+        If the icon opens a small popup instead of a sidebar, {browser.short} is still running an
         older copy of the add-on — open{" "}
-        <code className="font-mono text-zinc-400">chrome://extensions</code> (in Edge,{" "}
-        <code className="font-mono text-zinc-400">edge://extensions</code>) and press Reload on
-        Iron Jarvis.
+        <code className="font-mono text-zinc-400">{browser.extensionsPage}</code> and press Reload
+        on Iron Jarvis.
         {appVersion ? (
           <>
             {" "}
@@ -537,6 +536,9 @@ export function YourBrowserCard() {
   // actively watching. `usePolledApi` tears the interval down while the window
   // is hidden (v1.230.0), so a minimised dashboard costs nothing here.
   const { data, error, reload } = usePolledApi<BrowserStatus>("/browser/status", 5000);
+  // v1.261.0: the browser the card's own notes are written for — the paired
+  // one, else the only one installed on this PC, else Chrome (browserWords.ts).
+  const browser = BROWSERS[pickBrowser(data)];
   // The version THIS app is, for the stale-add-on line below. Fetched once, not
   // polled: it cannot change without the process restarting, and a second 5 s
   // interval on this card would be traffic bought for a string.
@@ -819,8 +821,8 @@ export function YourBrowserCard() {
                 this and does not need the folder again. */}
             {(state === "not_connected" || state === "paired_down") && (
               <>
-                <AddonFolder addonDir={data?.addon_dir ?? ""} />
-                <InstallSteps />
+                <AddonFolder addonDir={data?.addon_dir ?? ""} browser={browser} />
+                <InstallSteps browser={browser} />
               </>
             )}
 
@@ -942,7 +944,7 @@ export function YourBrowserCard() {
                 because a user who set this up once and never opens the guided
                 window again would otherwise never learn the sidebar exists —
                 and because the pin instruction is what makes it reachable. */}
-            <SidebarNote appVersion={appVersion} />
+            <SidebarNote appVersion={appVersion} browser={browser} />
 
             {/* The access selector. Always present, because it is the switch the
                 whole feature hangs on and hiding it behind a state would make

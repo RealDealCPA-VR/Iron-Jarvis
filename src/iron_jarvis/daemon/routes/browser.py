@@ -102,7 +102,7 @@ from ...browser.service import ACCESS_OFF
 # ``browser_addon_dir`` on it. Tests drive this through the real
 # ``IRONJARVIS_BROWSER_ADDON_DIR`` env override the resolver reads per call, which
 # is the seam the desktop supervisor itself uses.
-from ...onboarding.doctor import browser_addon_dir
+from ...onboarding.doctor import browser_addon_dir, installed_browsers
 
 logger = logging.getLogger("iron_jarvis.browser")
 
@@ -397,6 +397,15 @@ def _setup_view(runtime: Any) -> dict[str, Any]:
 #: thing -- and the human pressing Pair is the whole security boundary.
 
 
+def _installed_browsers() -> list[str]:
+    """The doctor's answer as a plain list, or ``[]`` — the status never fails."""
+    try:
+        return [str(name) for name in installed_browsers()]
+    except Exception:
+        logger.debug("installed-browser lookup degraded", exc_info=True)
+        return []
+
+
 def _disconnected_status() -> dict[str, Any]:
     """The status shape for "there is no browser here", in one place.
 
@@ -425,6 +434,12 @@ def _disconnected_status() -> dict[str, Any]:
         # The folder a user points Chrome's Load unpacked at, absolute, or "" when
         # this install cannot find one. See :func:`_addon_dir`.
         "addon_dir": _addon_dir(),
+        # v1.261.0: which browsers this PC HAS ("Google Chrome", "Microsoft
+        # Edge"), so the guided setup writes its steps for the one the user will
+        # actually open — an Edge-only machine used to read Chrome's steps with
+        # Edge in parentheses. A fact about the disk, like ``addon_dir``, hence
+        # in this shape; cached in the doctor, never a launch; never a failure.
+        "installed_browsers": _installed_browsers(),
         "active_tab": None,
         "pending_pairing": None,
         "paired": False,

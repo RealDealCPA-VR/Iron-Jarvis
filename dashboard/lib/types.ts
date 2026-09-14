@@ -703,6 +703,11 @@ export interface BrowserStatus {
    *  means the add-on did not say — unknown, never assumed to be Chrome. */
   browser_name?: string;
   browser_version?: string;
+  /** v1.261.0: the browsers the daemon found INSTALLED on this machine
+   *  ("Google Chrome", "Microsoft Edge"), Chrome first — so the guided setup
+   *  writes its steps for the browser the user actually has. Absent on an
+   *  older daemon; empty when none was found. */
+  installed_browsers?: string[];
   paired: boolean;
   /** The ABSOLUTE folder on this machine that Chrome's Load unpacked must be
    *  pointed at (v1.239.0) — the daemon's own `onboarding.doctor.browser_addon_dir()`,

@@ -344,6 +344,9 @@ def test_the_release_job_publishes_the_manifest_after_the_release_is_public_and_
     assert "scripts/publish_update_manifest.py" in body and '--repo "$GITHUB_REPOSITORY" --version "$ver"' in body
     assert "push origin HEAD:updates" in body
     assert "checkout --orphan updates" in body, "the branch is an orphan: one file, no history"
+    # v1.261.0: two releases in flight must never leave the branch naming the
+    # older one — the step compares versions and leaves a newer manifest alone.
+    assert "sort -V" in body and "newer than $ver" in body, "no guard against writing an older manifest"
     for path in (_RELEASE, _TESTS_WF):
         on = re.search(r"^on:\n(?:  .*\n)+", _src(path), re.M).group(0)
         assert re.search(r"branches: \[master\]", on), f"{path.name} must run on master only, or the updates push loops"

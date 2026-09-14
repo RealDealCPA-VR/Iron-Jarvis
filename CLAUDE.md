@@ -1170,6 +1170,17 @@ does not need a bump, stop and bump it.
   iron_jarvis.browser.gen_protocol`) — a hand edit there is caught by
   `test_browser_protocol_v1235`, which cost this release a round; add the field
   to the TypedDict and regenerate.
+  **"CHROME (IN EDGE: …)" IS STILL A CHROME PAGE** (v1.261.0). The user, on an
+  Edge-only work PC: "I only get the instructions for Chrome, not Edge." Every
+  step is now written for ONE browser: `GET /browser/status` carries
+  `installed_browsers` (doctor `installed_browsers()`, cached per process —
+  the card polls every 5 s), `dashboard/components/browser/browserWords.ts`
+  holds the words per browser (its own add-ons page, its own pin gesture) and
+  `pickBrowser` makes the one decision — the paired browser, else the only
+  installed one, else Chrome — with a remembered override in the window's
+  header. Do not put a second browser back in parentheses; add it to
+  `BROWSERS` and let the pick choose. `browser-setup-edge-v1261.test.tsx`
+  asserts an Edge-only window contains no "Chrome" outside the toggle.
 
 - **Updates come from the `updates` branch manifest first; GitHub's releases
   feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**

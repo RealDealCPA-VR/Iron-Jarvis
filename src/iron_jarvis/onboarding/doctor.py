@@ -10,6 +10,7 @@ still reports healthy.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import sys
@@ -171,6 +172,63 @@ def check_pnpm() -> dict:
         "Dashboard-only.",
         level=RECOMMENDED,
     )
+
+
+#: Every place a Chrome or Edge could be on this machine, Chrome first. The same
+#: names and folders :func:`_find_browser` walks, listed so a caller can ask for
+#: ALL of them rather than the first.
+_BROWSER_PATH_NAMES = (
+    "chrome",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "msedge",
+)
+
+
+def _browser_candidates() -> list[str]:
+    found: list[str] = []
+    for name in _BROWSER_PATH_NAMES:
+        path = shutil.which(name)
+        if path:
+            found.append(path)
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+        base = os.environ.get(env)
+        if not base:
+            continue
+        found += [
+            os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+        ]
+    found += [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ]
+    return found
+
+
+@functools.lru_cache(maxsize=1)
+def installed_browsers() -> tuple[str, ...]:
+    """The browsers INSTALLED on this PC, by name, Chrome first (v1.261.0).
+
+    ``("Microsoft Edge",)`` on an Edge-only machine, ``("Google Chrome",
+    "Microsoft Edge")`` with both, ``()`` with neither. Pure ``shutil.which`` +
+    ``os.path.exists`` — nothing is launched — and CACHED for the process: the
+    Browser card polls ``/browser/status`` every 5 s and must not walk PATH each
+    time. The guided setup uses this to write its steps for the browser the user
+    actually has instead of Chrome-with-Edge-in-parentheses (the 2026-09-14
+    report: "I only get the instructions for Chrome, not Edge").
+    """
+    labels: list[str] = []
+    for path in _browser_candidates():
+        if not path or not os.path.exists(path):
+            continue
+        label = _browser_label(path)
+        if label == "Chromium-based browser" or label in labels:
+            continue
+        labels.append(label)
+    return tuple(sorted(labels, key=lambda name: (name != "Google Chrome", name)))
 
 
 def _browser_label(path: str) -> str:

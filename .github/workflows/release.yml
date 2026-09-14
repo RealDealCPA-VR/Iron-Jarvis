@@ -322,6 +322,18 @@ jobs:
             git -C "$work/wt" rm -rfq --cached . || true
             find "$work/wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
+          # NEVER WRITE AN OLDER VERSION THAN THE BRANCH NAMES (v1.261.0). Two
+          # releases can be in flight at once, and a slower older run finishing
+          # last would point every install at the older installer until the
+          # next release; the app falls back to the feed only when the manifest
+          # FAILS, not when it is stale.
+          if [ -f "$work/wt/latest.yml" ]; then
+            have="$(grep -oE '^version: *[0-9.]+' "$work/wt/latest.yml" | awk '{print $2}')"
+            if [ -n "$have" ] && [ "$(printf '%s\n%s\n' "$have" "$ver" | sort -V | tail -1)" != "$ver" ]; then
+              echo "updates branch already names $have, newer than $ver — leaving it"
+              exit 0
+            fi
+          fi
           cp "$work/out/latest.yml" "$work/wt/latest.yml"
           cat > "$work/wt/README.md" <<'EOF'
           # updates

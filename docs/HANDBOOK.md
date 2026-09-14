@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.260.0 (2026-09-14).*
+holds itself to. Current as of v1.261.0 (2026-09-14).*
 
 ---
 
@@ -628,6 +628,15 @@ unpacked, the same folder. Because the identity is identical, Jarvis could not
 tell which browser had paired until the add-on started saying so: since
 v1.259.0 the Browser card names it ("Microsoft Edge 153"), and the doctor's
 browser line names the one installed on this PC.
+
+**The steps are written for your browser (v1.261.0).** Iron Jarvis looks at
+which browsers are installed on this PC and which one paired, and writes every
+step of the guided window — and the card's own notes — for that one: on an
+Edge-only machine you read Edge's page (`edge://extensions`) and Edge's way of
+pinning the icon (the eye icon, **Show in toolbar**), with no Chrome in it. The
+paired browser wins; with both installed and nothing paired yet it starts with
+Chrome. A small **Steps written for** switch at the top of the window changes
+it, and that choice is remembered on this PC.
 
 **The last step is the one that makes the rest reachable.** Neither Chrome nor Edge
 puts a newly loaded add-on on the toolbar — both hide it behind the **puzzle-piece**

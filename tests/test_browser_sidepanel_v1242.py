@@ -79,6 +79,9 @@ RELEASE_WORKFLOW = REPO / ".github" / "workflows" / "release.yml"
 #: exists at all. A sidebar nothing mentions is a sidebar nobody opens.
 SETUP_MODAL = REPO / "dashboard" / "components" / "browser" / "BrowserSetupModal.tsx"
 BROWSER_CARD = REPO / "dashboard" / "components" / "browser" / "YourBrowserCard.tsx"
+#: v1.261.0: the words that differ per browser — the add-ons page, the pin gesture
+#: — live in ONE place and both surfaces above read them from it.
+BROWSER_WORDS = REPO / "dashboard" / "components" / "browser" / "browserWords.ts"
 
 #: The one place this file spells the panel's bundle names. Every pin below derives
 #: from these rather than repeating them, so a rename is one edit here and a set of
@@ -509,10 +512,19 @@ def test_the_app_tells_the_user_the_sidebar_exists_and_how_to_reach_it():
             f"{what} does not say the icon is hidden behind Chrome's puzzle-piece menu, "
             "which is the difference between the sidebar existing and being reachable"
         )
-        assert "chrome://extensions" in text and "Reload" in text, (
+        # v1.261.0: the remedy names the browser's OWN add-ons page, read from
+        # browserWords.ts for the browser the steps are written for — so the
+        # surface must reference that word, and the words file must carry every
+        # browser's address. A literal here would pin the page to Chrome again.
+        assert "extensionsPage" in text and "Reload" in text, (
             f"{what} gives no remedy for a browser still running an older copy of the "
             "add-on — the copy whose toolbar click opens the retired popup"
         )
+    words = _code(BROWSER_WORDS)
+    assert "chrome://extensions" in words and "edge://extensions" in words, (
+        "browserWords.ts must name each browser's own add-ons page — the reload remedy "
+        "both surfaces print is read from there"
+    )
 
 
 def test_one_name_for_the_page_the_user_is_sent_to():
