@@ -204,6 +204,7 @@ class GrokCliAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         # Resolve the session off the loop (a small file read, but keep the
         # contract identical to token-refreshing adapters).
@@ -270,6 +271,7 @@ class GrokCliAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token stream over the Responses SSE endpoint (FX-01).
 

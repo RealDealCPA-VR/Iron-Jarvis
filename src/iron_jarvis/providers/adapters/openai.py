@@ -63,6 +63,15 @@ _CHATGPT_KNOWN_GOOD: list[str] = []
 #: (adapters are rebuilt per request).
 _MAX_TOKENS_FIELD = "max_tokens"
 _COMPLETION_TOKENS_FIELD = "max_completion_tokens"
+#: v1.263.0: the chat-completions spelling of the reasoning level (OpenAI's
+#: o-series / gpt-5, and the OpenAI-compatible servers that adopted it).
+_REASONING_FIELD = "reasoning_effort"
+
+
+def _rejects_reasoning(detail: str) -> bool:
+    """True when a 400 body is the server refusing the reasoning parameter."""
+    low = (detail or "").lower()
+    return _REASONING_FIELD in low or ("reasoning" in low and "unsupported" in low)
 _COMPLETION_TOKENS_MODELS: set[tuple[str, str]] = set()
 
 
@@ -434,6 +443,7 @@ class OpenAIAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        reasoning: str = "",
     ) -> LLMResponse:
         account_id = _chatgpt_account_id(token)
         if not account_id:
@@ -478,6 +488,8 @@ class OpenAIAdapter(LLMAdapter):
                 "store": False,  # required: the backend keeps no server-side state
                 "stream": True,  # the endpoint is SSE-only
                 "include": ["reasoning.encrypted_content"],
+                # v1.263.0: the Responses spelling of the reasoning level.
+                **({"reasoning": {"effort": reasoning}} if reasoning else {}),
             }
             resp = await self._client().post(
                 _CHATGPT_ENDPOINT, headers=headers, json=body
@@ -533,6 +545,7 @@ class OpenAIAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         # Resolve the credential off the loop — for an OAuth provider this may
         # trigger a blocking token refresh that must not stall the event loop.
@@ -549,7 +562,8 @@ class OpenAIAdapter(LLMAdapter):
             # ChatGPT-account (subscription) backend: guided-decoding knobs are
             # out of scope for the Responses ladder this wave — accepted, DROPPED.
             return await self._complete_chatgpt(
-                token=key, system=system, messages=messages, tools=tools
+                token=key, system=system, messages=messages, tools=tools,
+                reasoning=reasoning,
             )
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if key:
@@ -579,6 +593,11 @@ class OpenAIAdapter(LLMAdapter):
             body["tool_choice"] = tool_choice
         if extra_body:
             body.update(extra_body)
+        # THE REASONING LEVEL (v1.263.0): the chat-completions spelling. Only
+        # when the user picked one; a server that refuses the parameter gets
+        # ONE retry without it (below) — the answer beats the knob.
+        if reasoning:
+            body[_REASONING_FIELD] = reasoning
         resp = await self._client().post(
             self._endpoint,
             headers=headers,
@@ -604,6 +623,20 @@ class OpenAIAdapter(LLMAdapter):
                 json=body,
             )
             status = getattr(resp, "status_code", 200)
+        if (
+            status == 400
+            and _REASONING_FIELD in body
+            and _rejects_reasoning(_error_detail(resp))
+        ):
+            # A model that matched a reasoning family by NAME but takes no
+            # effort parameter (or an older gateway): drop it and retry once.
+            body = {k: v for k, v in body.items() if k != _REASONING_FIELD}
+            resp = await self._client().post(
+                self._endpoint,
+                headers=headers,
+                json=body,
+            )
+            status = getattr(resp, "status_code", 200)
         if status >= 400:
             # Typed error (status + Retry-After) so the router fails over on a
             # transient 429/5xx and raises honestly on a permanent 4xx — never a
@@ -622,6 +655,7 @@ class OpenAIAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token streaming for every backend this adapter serves.
 
@@ -648,7 +682,8 @@ class OpenAIAdapter(LLMAdapter):
             # ChatGPT-account (subscription) backend: guided-decoding knobs are
             # out of scope for the Responses ladder this wave — accepted, DROPPED.
             async for frame in self._stream_chatgpt(
-                token=key, system=system, messages=messages, tools=tools
+                token=key, system=system, messages=messages, tools=tools,
+                reasoning=reasoning,
             ):
                 yield frame
             return
@@ -679,6 +714,9 @@ class OpenAIAdapter(LLMAdapter):
             body["tool_choice"] = tool_choice
         if extra_body:
             body.update(extra_body)
+        # THE REASONING LEVEL (v1.263.0) — same contract as complete().
+        if reasoning:
+            body[_REASONING_FIELD] = reasoning
         # Some local OpenAI-compat servers reject `stream_options` outright
         # (older Ollama builds, some llama.cpp gateways 400 on it). Attempt
         # WITH it first (usage accounting), and on a 400 from a NON-hosted
@@ -688,6 +726,12 @@ class OpenAIAdapter(LLMAdapter):
             slim = dict(body)
             slim.pop("stream_options", None)
             attempts.append(slim)
+        # And every attempt again WITHOUT the reasoning parameter, last: a
+        # server that refuses it 400s, the ladder walks on, the answer arrives.
+        if _REASONING_FIELD in body:
+            attempts += [
+                {k: v for k, v in a.items() if k != _REASONING_FIELD} for a in list(attempts)
+            ]
         # `attempts` GROWS: a "use max_completion_tokens" 400 splices a swapped
         # retry in ahead of any remaining attempt (which is swapped too — the
         # server has told us which name it speaks).
@@ -822,6 +866,7 @@ class OpenAIAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-stream the Codex (ChatGPT-subscription) backend.
 
@@ -875,6 +920,8 @@ class OpenAIAdapter(LLMAdapter):
                     "store": False,  # the backend keeps no server-side state
                     "stream": True,  # the endpoint is SSE-only
                     "include": ["reasoning.encrypted_content"],
+                    # v1.263.0: the Responses spelling of the reasoning level.
+                    **({"reasoning": {"effort": reasoning}} if reasoning else {}),
                 }
                 async with self._client().stream(
                     "POST", _CHATGPT_ENDPOINT, headers=headers, json=body

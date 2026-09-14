@@ -332,11 +332,15 @@ class PromptedToolsAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         if not tools:
             # No tools in play → the wrapper is invisible (system untouched,
             # transcript untouched). Keeps the no-tools path byte-identical.
-            return await self.inner.complete(system=system, messages=messages, tools=tools)
+            return await self.inner.complete(
+                system=system, messages=messages, tools=tools,
+                **({"reasoning": reasoning} if reasoning else {}),
+            )
 
         section = render_tools_section(tools)
         scaffold_system = f"{system}\n\n{section}" if system else section
@@ -349,7 +353,8 @@ class PromptedToolsAdapter(LLMAdapter):
             # Inner gets tools=[] — it is a text-only completer; the tools live
             # in the system section above.
             resp = await self.inner.complete(
-                system=scaffold_system, messages=convo, tools=[]
+                system=scaffold_system, messages=convo, tools=[],
+                **({"reasoning": reasoning} if reasoning else {}),
             )
             for k in usage:
                 try:

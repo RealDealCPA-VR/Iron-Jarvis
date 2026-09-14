@@ -117,6 +117,11 @@ export interface TurnRoute {
   from?: string;
   /** v1.228.0: on a failover, the router's derived reason for that failure. */
   why?: string;
+  /** v1.263.0: the reasoning level the router actually applied on the wire
+   *  ("low" | "medium" | "high"); "" or absent when none was asked for or the
+   *  serving model offers none — the receipt never names a level that did
+   *  not reach the model. */
+  reasoning?: string;
 }
 
 export interface TurnReceiptProps {
@@ -334,6 +339,15 @@ export function TurnReceipt({
     parts.push(
       <span key="adapted" className="text-zinc-500">
         {adaptedText}
+      </span>,
+    );
+  }
+  if (rt?.reasoning) {
+    // v1.263.0: the level that reached the model, in the quiet class — a
+    // choice the user made, honoured; never a warning.
+    parts.push(
+      <span key="reasoning" data-testid="turn-reasoning" className="text-zinc-500">
+        reasoning {rt.reasoning}
       </span>,
     );
   }

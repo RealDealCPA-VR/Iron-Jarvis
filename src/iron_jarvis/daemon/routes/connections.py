@@ -10,6 +10,8 @@ import asyncio
 import html as _html
 import json
 
+from ...providers.reasoning import reasoning_levels
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from typing import Any
@@ -168,6 +170,9 @@ def selectable_models(d) -> list[dict[str, Any]]:
             m["inherited_from"] = d.platform.providers.inherited_from(prov)
         except Exception:  # noqa: BLE001 — never breaks the picker
             m["inherited_from"] = None
+        # v1.263.0: the reasoning levels this model offers (empty = none), so
+        # the chat composer shows the control only where it does something.
+        m["reasoning"] = list(reasoning_levels(prov, str(m.get("model") or "")))
     return models
 
 

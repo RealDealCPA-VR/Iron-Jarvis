@@ -58,6 +58,7 @@ from .adapters.base import (
     TRANSIENT_STATUS,
 )
 from .adapters.prompted_tools import PromptedToolsAdapter
+from .reasoning import normalize_level, supports
 from .guided import GuidedToolsAdapter, profile_supports_guided
 from .local import is_local_provider
 from .manager import ProviderManager
@@ -399,6 +400,20 @@ def _short_detail(text: str, wanted: str, status: "int | None") -> str:
     return t[:240] + ("…" if len(t) > 240 else "")
 
 
+def _applied_reasoning(adapter: Any, reasoning: str) -> str:
+    """The level to put on the wire for THIS adapter (v1.263.0): the caller's
+    pick when the serving (provider, model) offers it, else "". A wrapped
+    adapter (prompted-tools / guided) answers for the model it wraps."""
+    level = normalize_level(reasoning)
+    if not level:
+        return ""
+    inner = getattr(adapter, "inner", None)
+    target = inner if inner is not None else adapter
+    provider = str(getattr(target, "provider", "") or "")
+    model = str(getattr(target, "model", "") or "")
+    return level if supports(provider, model, level) else ""
+
+
 def _disclosed_reason(reason: str, serving_provider: str) -> str:
     """The route reason a caller may DISCLOSE to the user (v1.165.0).
 
@@ -451,6 +466,7 @@ class RouteResult:
         reason: str = "default",
         from_provider: str = "",
         why: str = "",
+        reasoning: str = "",
     ) -> None:
         self.response = response
         self.provider = provider
@@ -459,6 +475,11 @@ class RouteResult:
         self.reason = reason
         self.from_provider = from_provider
         self.why = why
+        #: v1.263.0: the reasoning level that was actually APPLIED on the wire
+        #: ("low"/"medium"/"high"), "" when none was asked for or the serving
+        #: model offers none (a failover to a model without the knob reports
+        #: "" — the receipt must never name a level that never reached it).
+        self.reasoning = reasoning
 
 
 class ModelRouter:
@@ -1170,13 +1191,18 @@ class ModelRouter:
 
     # -- execution helpers -------------------------------------------------
     async def _timed_complete(
-        self, adapter: LLMAdapter, *, system, messages, tools
+        self, adapter: LLMAdapter, *, system, messages, tools, reasoning: str = ""
     ) -> LLMResponse:
         """Run a completion and, on SUCCESS, feed the observed latency into the
         per-(provider,model) EWMA so Auto can prefer the faster of two equally-
-        cheap candidates. A failure records nothing (it raises before the note)."""
+        cheap candidates. A failure records nothing (it raises before the note).
+        ``reasoning`` (v1.263.0) rides only when set — the call stays
+        byte-identical for every adapter and test double otherwise."""
         t0 = self._clock()
-        resp = await adapter.complete(system=system, messages=messages, tools=tools)
+        resp = await adapter.complete(
+            system=system, messages=messages, tools=tools,
+            **({"reasoning": reasoning} if reasoning else {}),
+        )
         try:
             _routing.LATENCY.record(adapter.provider, adapter.model, self._clock() - t0)
         except Exception:  # noqa: BLE001 — telemetry must never break a request
@@ -1184,7 +1210,8 @@ class ModelRouter:
         return resp
 
     async def _attempt_with_retry(
-        self, adapter: LLMAdapter, *, system, messages, tools, deadline: float
+        self, adapter: LLMAdapter, *, system, messages, tools, deadline: float,
+        reasoning: str = "",
     ) -> LLMResponse:
         """First attempt + up to 2 SAME-ADAPTER retries on a transient blip.
 
@@ -1196,7 +1223,8 @@ class ModelRouter:
         while True:
             try:
                 return await self._timed_complete(
-                    adapter, system=system, messages=messages, tools=tools
+                    adapter, system=system, messages=messages, tools=tools,
+                    reasoning=reasoning,
                 )
             except Exception as exc:  # noqa: BLE001 — classified below
                 if not is_transient_error(exc) or attempt >= 2:
@@ -1241,6 +1269,7 @@ class ModelRouter:
         tools: list[dict[str, Any]],
         session_id: str | None = None,
         task_class: str | None = None,
+        reasoning: str = "",
     ) -> RouteResult:
         # AUTO ROUTING: only when the resolved provider is the "auto" pseudo-
         # provider (the user selected Auto). Any other path is byte-for-byte the
@@ -1346,12 +1375,19 @@ class ModelRouter:
         if adapter.provider != "mock":
             await self._emit_routed(provider, adapter, reason, routed_payload, session_id)
 
+        # THE REASONING LEVEL (v1.263.0): applied only when the adapter that
+        # will actually answer offers one; "" otherwise, and the result says
+        # which. A failover candidate below gets none — a level the user chose
+        # for one model is not a level for whatever answered instead.
+        applied = _applied_reasoning(adapter, reasoning)
+
         deadline = self._clock() + self._deadline_s
         tried_ids: set[int] = set()
         tried_providers: set[str] = set()
         try:
             response = await self._attempt_with_retry(
-                adapter, system=system, messages=messages, tools=tools, deadline=deadline
+                adapter, system=system, messages=messages, tools=tools, deadline=deadline,
+                reasoning=applied,
             )
             self.health.record_success(adapter.provider)
             # ROUTE DISCLOSURE (v1.165.0): thread the SAME requested/reason the
@@ -1364,6 +1400,7 @@ class ModelRouter:
                 response, adapter.provider, adapter.model,
                 requested=provider or "",
                 reason=_disclosed_reason(reason, adapter.provider),
+                reasoning=applied,
             )
         except Exception as exc:
             transient = is_transient_error(exc)
@@ -1534,6 +1571,7 @@ class ModelRouter:
         tools,
         deadline: float,
         retry: bool,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a SINGLE candidate adapter, yielding its raw frames.
 
@@ -1546,9 +1584,11 @@ class ModelRouter:
         propagates, so the caller never retries or fails over a live stream. With
         ``retry=False`` (the failover candidates, the twin of
         :meth:`_timed_complete`) it is a single straight pass-through."""
+        # v1.263.0: the level rides only when set (byte-identical otherwise).
+        _kw: dict[str, Any] = {"reasoning": reasoning} if reasoning else {}
         if not retry:
             async for frame in adapter.stream(
-                system=system, messages=messages, tools=tools
+                system=system, messages=messages, tools=tools, **_kw
             ):
                 yield frame
             return
@@ -1558,7 +1598,7 @@ class ModelRouter:
             yielded = False
             try:
                 async for frame in adapter.stream(
-                    system=system, messages=messages, tools=tools
+                    system=system, messages=messages, tools=tools, **_kw
                 ):
                     yielded = True
                     yield frame
@@ -1595,6 +1635,7 @@ class ModelRouter:
         reason: str = "default",
         from_provider: str = "",
         why: str = "",
+        reasoning: str = "",
     ) -> dict[str, Any]:
         """Tag the terminal ``final`` frame with the provider+model that ACTUALLY
         served it (which may differ from the primary after a failover) so a
@@ -1617,6 +1658,8 @@ class ModelRouter:
                 # from_provider/why. Wire key is "from" to match the chat lanes.
                 "from": from_provider,
                 "why": why,
+                # v1.263.0: the level actually applied — RouteResult.reasoning's twin.
+                "reasoning": reasoning,
             }
         return frame
 
@@ -1630,6 +1673,7 @@ class ModelRouter:
         tools: list[dict[str, Any]],
         session_id: str | None = None,
         task_class: str | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-streaming twin of :meth:`complete` (FX-01).
 
@@ -1741,16 +1785,21 @@ class ModelRouter:
         committed = False  # True once any frame reached the caller → no swap
 
         # (Primary) — same-adapter retry on a transient blip before first frame.
+        # THE REASONING LEVEL (v1.263.0) — lock-step with complete(): applied
+        # only when THIS adapter offers it, reported on the final frame.
+        applied = _applied_reasoning(adapter, reasoning)
         t0 = self._clock()
         try:
             async for frame in self._stream_one(
                 adapter, system=system, messages=messages, tools=tools,
-                deadline=deadline, retry=True,
+                deadline=deadline, retry=True, reasoning=applied,
             ):
                 committed = True
                 # Route disclosure rides the final frame (v1.165.0) — the
                 # stream twin of complete()'s RouteResult fields.
-                yield self._enrich_final(frame, adapter, provider or "", reason)
+                yield self._enrich_final(
+                    frame, adapter, provider or "", reason, reasoning=applied
+                )
             self._record_stream_latency(adapter, t0)
             self.health.record_success(adapter.provider)
             return

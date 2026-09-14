@@ -1234,6 +1234,24 @@ does not need a bump, stop and bump it.
   rule for the panel, and do not widen a plain Allow to more than one call.
   `tests/test_browser_agent_v1262.py` (harness: `tests/_fakes/panel_harness.py`).
 
+- **The reasoning level is ONE vocabulary, ONE table, and applied only where
+  the serving model offers it** (v1.263.0). `providers/reasoning.py` says which
+  (provider, model) pairs take `low`/`medium`/`high`; `GET /models` rows carry
+  `reasoning: [...]` so the composer draws the control only there;
+  `ChatBody.reasoning` rides both lanes as `**_reasoning_kw(body)` — PASSED ONLY
+  WHEN SET, because 18 router doubles predating the knob take no `**kw`; the
+  router's `_applied_reasoning(adapter, level)` decides per SERVING adapter
+  (failover candidates get none) and reports it on `RouteResult.reasoning` /
+  the final frame → the `route` object → the receipt's quiet "reasoning high".
+  Every adapter accepts `reasoning: str = ""` beside the guided knobs and
+  forwards it only when set; the translations: OpenAI `reasoning_effort` (+ one
+  retry without it on a 400 that names it), Responses `reasoning.effort`,
+  Anthropic `thinking` budgets with `max_tokens` raised to fit AND `raw_blocks`
+  replayed verbatim (a thinking tool loop refuses a rebuilt assistant turn),
+  Gemini `thinkingConfig.thinkingBudget`, `claude --effort`, `codex -c
+  model_reasoning_effort=`. Never add a vendor spelling without a row in the
+  table; never send a level the table did not offer.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

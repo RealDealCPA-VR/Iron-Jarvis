@@ -692,6 +692,9 @@ interface ThreadSetup {
   workspace_dir?: string;
   provider?: string;
   model?: string;
+  /** v1.263.0: the reasoning level ("low" | "medium" | "high"); "" or absent
+   *  = the model's own default. */
+  reasoning?: string;
   /** Permission posture for the mid-turn ask (v1.188.0). Absent = the
    *  default ("approve_for_me") — the daemon stores nothing for the default
    *  so a stray string never reloads as a posture nobody picked. */
@@ -975,6 +978,9 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
 
 // The model <select> encodes the choice as `${provider}::${model}` (empty => let the
 // server pick its default). Split it back out only when it carries both halves.
+/** v1.263.0: the levels the composer may offer — the daemon's vocabulary. */
+const REASONING_LEVELS = ["low", "medium", "high"];
+
 function splitChoice(choice: string): { provider?: string; model?: string } {
   const i = choice.indexOf("::");
   if (i === -1) return {};
@@ -1992,7 +1998,21 @@ export default function ChatPage() {
     retrying?: boolean;
   } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
+  /** v1.263.0: the reasoning levels the PICKED model offers, from the daemon's
+   *  catalog row — [] for the default model (its id is not known here), for a
+   *  model with no knob, and for an older daemon that sends none. */
+  function reasoningLevelsFor(c: string): string[] {
+    const { provider, model } = splitChoice(c);
+    if (!provider || !model) return [];
+    const row = models.find((m) => m.provider === provider && m.model === model);
+    return (row?.reasoning ?? []).filter((l) => REASONING_LEVELS.includes(l));
+  }
   const [choice, setChoice] = useState(""); // "" => server default model
+  // v1.263.0: the reasoning level for this conversation — "" = the model's own
+  // default. Sent on every turn; the daemon applies it only where the serving
+  // model offers one, and the receipt says what was applied. Persists with the
+  // thread setup like the model pick.
+  const [reasoning, setReasoning] = useState("");
   // Live per-provider availability (v1.165.0) — drives the preflight note
   // above the composer. 5s default keeps it in step with the topbar switcher.
   const health = useProviderHealth();
@@ -3167,6 +3187,7 @@ export default function ChatPage() {
       provider: provider ?? "",
       model: model ?? "",
       approval_mode: approvalMode,
+      reasoning,
     };
   }
 
@@ -3532,6 +3553,7 @@ export default function ChatPage() {
         setChoice(
           setup.provider && setup.model ? `${setup.provider}::${setup.model}` : "",
         );
+        setReasoning(REASONING_LEVELS.includes(setup.reasoning ?? "") ? (setup.reasoning as string) : "");
         sendSetupRef.current = true;
       }
       // Document chips: recorded ones win; otherwise the server's transcript-
@@ -4630,6 +4652,10 @@ export default function ChatPage() {
       ...(approvalMode !== "approve_for_me"
         ? { approval_mode: approvalMode }
         : {}),
+      // v1.263.0: the reasoning level — only when the picked model offers it,
+      // so a level chosen for one model never rides a request to another and
+      // a pre-v1.263.0 daemon sees a body it already understands.
+      ...(reasoning && reasoningLevelsFor(choice).includes(reasoning) ? { reasoning } : {}),
     };
   }
 
@@ -7896,6 +7922,32 @@ export default function ChatPage() {
                     a permanent meter is the kind of chrome that gets ignored
                     exactly when it starts mattering. */}
                 <ContextMeter usage={contextUsage} />
+                {/* v1.263.0: the reasoning level, ONLY for a model that offers
+                    one (the daemon's catalog says which). A control that does
+                    nothing for the picked model is not drawn at all. */}
+                {reasoningLevelsFor(choice).length > 0 && (
+                  <select
+                    aria-label="Reasoning level"
+                    data-testid="reasoning-level"
+                    value={reasoningLevelsFor(choice).includes(reasoning) ? reasoning : ""}
+                    onChange={(e) => {
+                      setReasoning(e.target.value);
+                      markSetupChanged();
+                    }}
+                    disabled={awaiting && sessionId !== null}
+                    title="How hard the model thinks before answering — higher is slower and costs more"
+                    className="rounded-md border border-white/10 bg-transparent px-1.5 py-0.5 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
+                  >
+                    <option value="" className="bg-ink-900 text-zinc-200">
+                      reasoning: default
+                    </option>
+                    {reasoningLevelsFor(choice).map((lvl) => (
+                      <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">
+                        reasoning: {lvl}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <div ref={modelPopRef} className="relative">
                   <button
                     type="button"

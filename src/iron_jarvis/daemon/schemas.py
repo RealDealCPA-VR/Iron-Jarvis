@@ -259,6 +259,11 @@ class ChatBody(BaseModel):
     #: the ordinary install bearer like every other ``/chat/*`` route, and an
     #: unknown or finished id is a 404, never a silent success.
     turn_id: str | None = None
+    #: v1.263.0: the reasoning level the user picked for this turn — "low" /
+    #: "medium" / "high", or "" for the model's own default. Applied only when
+    #: the serving model offers one (``providers.reasoning``); the route
+    #: object reports what was applied.
+    reasoning: str = ""
 
 
 class ChatCompactBody(BaseModel):

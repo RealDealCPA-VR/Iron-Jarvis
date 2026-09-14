@@ -152,6 +152,7 @@ class OpencodeCliAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         from ..opencode import binary
 

@@ -33,6 +33,7 @@ from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.turns import CHAT_INFLIGHT, TURNS
+from ...providers.reasoning import normalize_level
 from ..doors import collect_doors, door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -70,6 +71,7 @@ from ..chat_turn import (
     _filter_browser_tools,
     _is_browser_agent_turn,
     _out_of_rounds_instruction,
+    _reasoning_kw,
     _stays_in_chat,
     _persist_chat_usage,
     _wants_final_answer,
@@ -2342,6 +2344,8 @@ async def chat_stream(
         # (both "" otherwise) — read off the same final frame.
         route_from = ""
         route_why = ""
+        # v1.263.0: the reasoning level the router actually APPLIED ("" = none).
+        route_reasoning = ""
         # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
         # goes through this helper, so the cancellation guards can run
         # unconditionally without ever writing a second row for the same
@@ -2397,6 +2401,11 @@ async def chat_stream(
                     messages=msgs,
                     tools=tool_specs,
                     task_class="chat",
+                    # v1.263.0: the user's reasoning level; the router applies
+                    # it only where the serving model offers one. Passed ONLY
+                    # when set, so every router double that predates the knob
+                    # sees the call it always saw. Lock-step: chat_turn.
+                    **_reasoning_kw(body),
                 ):
                     if await _stop():
                         # STOP MID-ANSWER (v1.241.0). The round-TOP check
@@ -2446,6 +2455,7 @@ async def chat_stream(
                         route_reason = str(frame.get("reason") or route_reason)
                         route_from = str(frame.get("from") or route_from)
                         route_why = str(frame.get("why") or route_why)
+                        route_reasoning = str(frame.get("reasoning") or route_reasoning)
                 if final_resp is None:
                     # The stream ended without an aggregate — honest error, not
                     # a fabricated reply. Completed rounds still get counted.
@@ -2508,7 +2518,11 @@ async def chat_stream(
                     break
                 msgs.append(LLMMessage(role="assistant",
                                        content=final_resp.text,
-                                       tool_calls=calls))
+                                       tool_calls=calls,
+                                       # v1.263.0: provider-native blocks, replayed
+                                       # verbatim by the adapter that wrote them
+                                       # (Anthropic thinking + tools). [] otherwise.
+                                       raw_blocks=list(getattr(final_resp, "raw_blocks", None) or [])))
                 # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
                 # runtime's grouping. Read this round's calls AHEAD with the
                 # same predicate the per-call card uses below, grouped by
@@ -2988,6 +3002,8 @@ async def chat_stream(
                 # a failover — same keys the non-stream lane emits.
                 "from": route_from,
                 "why": route_why,
+                # v1.263.0 (additive): the reasoning level actually applied.
+                "reasoning": route_reasoning,
             },
             "tools_used": tools_used,
             # DOORS (v1.199.0): server-derived links into the surfaces

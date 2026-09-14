@@ -37,6 +37,7 @@ class MockLLMAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         if self._script:
             return self._script.pop(0)
@@ -52,6 +53,7 @@ class MockLLMAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Actually stream the offline reply word-by-word so the streaming path
         demos + smoke-tests end-to-end with zero network. A tool-use turn (empty

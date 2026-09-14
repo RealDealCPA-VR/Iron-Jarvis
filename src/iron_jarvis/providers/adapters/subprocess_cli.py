@@ -125,6 +125,7 @@ class SubprocessCliAdapter(LLMAdapter):
         runner: Callable[..., tuple[int, str, str]] | None = None,
         which: Callable[[str], str | None] = _which_cli,
         output_last_message_flag: str | None = None,
+        reasoning_argv: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -133,6 +134,10 @@ class SubprocessCliAdapter(LLMAdapter):
         self._parse = parse
         self._runner = runner or _run
         self._which = which
+        #: v1.263.0: how THIS CLI spells a reasoning level on its command line
+        #: (codex: `-c model_reasoning_effort=<level>`), or None when it has no
+        #: such flag — the level is then accepted and ignored, never guessed.
+        self._reasoning_argv = reasoning_argv
         #: When set (e.g. codex's --output-last-message), the CLI writes its
         #: FINAL message to a temp file we read back — the DETERMINISTIC reply
         #: channel. Parsing stdout with heuristics is only the fallback: a CLI
@@ -153,6 +158,7 @@ class SubprocessCliAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         exe = self._which(self._binary)
         if not exe:
@@ -161,6 +167,9 @@ class SubprocessCliAdapter(LLMAdapter):
             )
         prompt = _flatten(system, messages)
         argv = [exe] + self._argv_builder(prompt, self.model)
+        if reasoning and self._reasoning_argv is not None:
+            # Flags precede the positional prompt marker (the builder's last arg).
+            argv = argv[:-1] + list(self._reasoning_argv(reasoning)) + argv[-1:]
         out_path: str | None = None
         if self._out_flag:
             fd, out_path = tempfile.mkstemp(prefix="ij-cli-reply-", suffix=".txt")
@@ -226,8 +235,15 @@ def _codex_parse(stdout: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _codex_reasoning_argv(level: str) -> list[str]:
+    """Codex's spelling of the reasoning level (v1.263.0): a config override
+    on the command line — the same key `~/.codex/config.toml` takes."""
+    return ["-c", f"model_reasoning_effort={level}"]
+
+
 def make_codex_cli(**kw: Any) -> SubprocessCliAdapter:
     kw.setdefault("output_last_message_flag", "--output-last-message")
+    kw.setdefault("reasoning_argv", _codex_reasoning_argv)
     return SubprocessCliAdapter(
         "codex-cli", "codex", _codex_argv, _codex_parse, **kw
     )
@@ -331,7 +347,9 @@ class ClaudeCliAdapter(LLMAdapter):
         self._runner = runner or _run
         self._which = which
 
-    def _argv(self, exe: str, tools: list[dict[str, Any]]) -> list[str]:
+    def _argv(
+        self, exe: str, tools: list[dict[str, Any]], reasoning: str = ""
+    ) -> list[str]:
         # NO positional prompt: `claude -p` reads it from STDIN. As a command-
         # line arg, a big office prompt (extracted PDFs, project knowledge)
         # blew Windows' 32,767-char CreateProcess limit — live-hit 2026-07-20:
@@ -346,6 +364,10 @@ class ClaudeCliAdapter(LLMAdapter):
         marg = _claude_model_arg(self.model)
         if marg:
             argv += ["--model", marg]
+        if reasoning:
+            # v1.263.0: the CLI's own effort flag ("Effort level for the current
+            # session") — the same low/medium/high vocabulary the composer offers.
+            argv += ["--effort", reasoning]
         if tools:
             argv += ["--json-schema", json.dumps(_STEP_SCHEMA)]
         return argv
@@ -361,6 +383,7 @@ class ClaudeCliAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         exe = self._which("claude")
         if not exe:
@@ -376,7 +399,7 @@ class ClaudeCliAdapter(LLMAdapter):
                 "connect an Anthropic API key for vision."
             )
         prompt = _flatten_for_claude(system, messages, tools)
-        argv = self._argv(exe, tools)
+        argv = self._argv(exe, tools, reasoning)
         try:
             code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
         except subprocess.TimeoutExpired as exc:

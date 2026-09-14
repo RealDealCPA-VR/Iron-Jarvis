@@ -21,6 +21,7 @@ from .base import (
     ToolCall,
     provider_error_from_response,
 )
+from ..reasoning import budget_tokens
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -40,6 +41,16 @@ _REFUSAL_FINISH_REASONS: frozenset[str] = frozenset(
         "OTHER",
     }
 )
+
+
+def _thinking_config(body: dict[str, Any], reasoning: str) -> None:
+    """Gemini's spelling of the reasoning level (v1.263.0): a thinking budget
+    under ``generationConfig``. ``""`` adds nothing — byte-identical body."""
+    budget = budget_tokens(reasoning)
+    if not budget:
+        return
+    cfg = body.setdefault("generationConfig", {})
+    cfg["thinkingConfig"] = {"thinkingBudget": budget}
 
 
 class GoogleAdapter(LLMAdapter):
@@ -242,6 +253,7 @@ class GoogleAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         # Resolve the credential off the event loop: an OAuth credential() may do
         # a blocking (up to 30s) httpx refresh, which must not stall the loop.
@@ -251,6 +263,7 @@ class GoogleAdapter(LLMAdapter):
             body["system_instruction"] = {"parts": [{"text": system}]}
         if tools:
             body["tools"] = self._to_tools(tools)
+        _thinking_config(body, reasoning)
         if self._oauth:
             # An OAuth access token authorizes via the standard Bearer header;
             # sent as x-goog-api-key it is rejected (401) and we silently mock.
@@ -295,6 +308,7 @@ class GoogleAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token stream via ``:streamGenerateContent?alt=sse`` (FX-01).
 
@@ -317,7 +331,7 @@ class GoogleAdapter(LLMAdapter):
         started = False
         try:
             async for frame in self._stream_sse(
-                system=system, messages=messages, tools=tools
+                system=system, messages=messages, tools=tools, reasoning=reasoning
             ):
                 started = True
                 yield frame
@@ -326,7 +340,8 @@ class GoogleAdapter(LLMAdapter):
             if started or getattr(exc, "blocked", False):
                 raise
         async for frame in super().stream(
-            system=system, messages=messages, tools=tools
+            system=system, messages=messages, tools=tools,
+            **({"reasoning": reasoning} if reasoning else {}),
         ):
             yield frame
 
@@ -336,6 +351,7 @@ class GoogleAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         key = await asyncio.to_thread(self._resolve_key)
         body: dict[str, Any] = {"contents": self._to_contents(messages)}
@@ -343,6 +359,7 @@ class GoogleAdapter(LLMAdapter):
             body["system_instruction"] = {"parts": [{"text": system}]}
         if tools:
             body["tools"] = self._to_tools(tools)
+        _thinking_config(body, reasoning)
         if self._oauth:
             headers = {
                 "Authorization": f"Bearer {key}",

@@ -475,11 +475,15 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         if not tools:
             # No tools in play → the wrapper is invisible (system untouched,
             # transcript untouched) — same rule as the fenced wrapper.
-            return await self.inner.complete(system=system, messages=messages, tools=tools)
+            return await self.inner.complete(
+                system=system, messages=messages, tools=tools,
+                **({"reasoning": reasoning} if reasoning else {}),
+            )
         if not _accepts_response_format(self.inner):
             # No constrained decoding possible on this adapter → the rung is
             # not real here. Honest ladder-down to the fenced contract, not a
@@ -491,6 +495,7 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
                 response_format=response_format,
                 tool_choice=tool_choice,
                 extra_body=extra_body,
+                reasoning=reasoning,
             )
 
         fragment = render_guided_system_fragment(tools)
@@ -511,6 +516,7 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
                 messages=convo,
                 tools=[],
                 response_format=guided_format,
+                **({"reasoning": reasoning} if reasoning else {}),
             )
             for k in usage:
                 try:
@@ -556,6 +562,7 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
             response_format=response_format,
             tool_choice=tool_choice,
             extra_body=extra_body,
+            reasoning=reasoning,
         )
         for k in ("input_tokens", "output_tokens"):
             try:

@@ -520,6 +520,10 @@ export interface ModelOption {
   /** Parameter count in billions, parsed from the model id — orders a local
    *  fleet smallest-first. Absent when the id doesn't state one. */
   size_b?: number | null;
+  /** v1.263.0: the reasoning levels this model offers ("low" | "medium" |
+   *  "high"), from the daemon's one table. Empty or absent = no such knob, so
+   *  the composer shows no control for it. */
+  reasoning?: string[];
   /** v1.230.0: a keyless API provider served through the logged-in CLI names
    *  it here ("claude-cli" / "codex-cli") — flat-rate, so pickers label it
    *  "included", never "metered". Null/absent otherwise. */

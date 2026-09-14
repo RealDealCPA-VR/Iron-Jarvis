@@ -20,6 +20,7 @@ from .base import (
     ToolCall,
     parse_retry_after,
 )
+from ..reasoning import budget_tokens, normalize_level
 
 
 def _anthropic_provider_error(exc: Exception) -> ProviderError:
@@ -56,6 +57,19 @@ def _anthropic_provider_error(exc: Exception) -> ProviderError:
         retry_after=retry_after,
         transient=transient,
     )
+
+
+def _raw_blocks(content: Any) -> list[dict[str, Any]]:
+    """The response's content blocks as plain dicts, for verbatim replay
+    (v1.263.0). ``exclude_none`` because the SDK models carry every optional
+    field as ``None`` and the API refuses some of them echoed back."""
+    out: list[dict[str, Any]] = []
+    for block in content or []:
+        if hasattr(block, "model_dump"):
+            out.append(block.model_dump(exclude_none=True))
+        elif isinstance(block, dict):
+            out.append({k: v for k, v in block.items() if v is not None})
+    return out
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -124,6 +138,14 @@ class AnthropicAdapter(LLMAdapter):
                         ],
                     }
                 )
+            elif m.role == "assistant" and getattr(m, "raw_blocks", None):
+                # v1.263.0: an assistant turn produced with extended thinking
+                # is replayed VERBATIM — thinking blocks (with signatures) ahead
+                # of the tool_use they preceded — or the API refuses the
+                # follow-up call of a tool loop. Written by this adapter only.
+                out.append(
+                    {"role": "assistant", "content": [dict(b) for b in m.raw_blocks]}
+                )
             elif m.role == "assistant" and m.tool_calls:
                 blocks: list[dict[str, Any]] = []
                 if m.content:
@@ -172,6 +194,7 @@ class AnthropicAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         # Build the client off the loop — credential resolution may trigger a
         # blocking OAuth token refresh that must not stall the event loop.
@@ -214,13 +237,15 @@ class AnthropicAdapter(LLMAdapter):
                 ]
             elif isinstance(content, list) and content:
                 content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        thinking_kw, max_tokens = self._thinking(reasoning)
         try:
             resp = await client.messages.create(
                 model=self.model,
-                max_tokens=self.max_tokens,
+                max_tokens=max_tokens,
                 system=system_param,
                 messages=anthropic_messages,
                 tools=tool_defs,
+                **thinking_kw,
             )
         except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
             raise _anthropic_provider_error(exc) from exc
@@ -244,6 +269,21 @@ class AnthropicAdapter(LLMAdapter):
             tool_calls=tool_calls,
             finish_reason=finish,
             usage=usage_dict,
+            raw_blocks=_raw_blocks(resp.content) if thinking_kw else [],
+        )
+
+    def _thinking(self, reasoning: str) -> tuple[dict[str, Any], int]:
+        """The extended-thinking kwargs for a level, and the max_tokens that
+        makes room for them (v1.263.0). ``""`` → nothing, the old max_tokens:
+        byte-identical to every call before the level existed."""
+        level = normalize_level(reasoning)
+        if not level:
+            return {}, self.max_tokens
+        budget = budget_tokens(level)
+        # The budget must fit INSIDE max_tokens with room for the answer.
+        return (
+            {"thinking": {"type": "enabled", "budget_tokens": budget}},
+            max(self.max_tokens, budget + 4096),
         )
 
     async def stream(
@@ -256,6 +296,7 @@ class AnthropicAdapter(LLMAdapter):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token streaming (FX-01). Builds the SAME request as :meth:`complete`
         — verbatim tool/system/message construction + prompt-cache breakpoints — but
@@ -306,17 +347,20 @@ class AnthropicAdapter(LLMAdapter):
                 ]
             elif isinstance(content, list) and content:
                 content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        thinking_kw, max_tokens = self._thinking(reasoning)
         try:
             # The SDK's streaming helper accumulates state for us: `text_stream`
-            # yields incremental text deltas, `get_final_message()` returns the SAME
-            # Message object messages.create() would have — so the aggregate below is
-            # identical to complete().
+            # yields incremental text deltas (thinking deltas are NOT text, so
+            # they never reach the user's bubble), `get_final_message()` returns
+            # the SAME Message object messages.create() would have — so the
+            # aggregate below is identical to complete().
             async with client.messages.stream(
                 model=self.model,
-                max_tokens=self.max_tokens,
+                max_tokens=max_tokens,
                 system=system_param,
                 messages=anthropic_messages,
                 tools=tool_defs,
+                **thinking_kw,
             ) as s:
                 async for delta in s.text_stream:
                     yield {"type": "text", "text": delta}
@@ -345,5 +389,6 @@ class AnthropicAdapter(LLMAdapter):
                 tool_calls=tool_calls,
                 finish_reason=finish,
                 usage=usage_dict,
+                raw_blocks=_raw_blocks(final.content) if thinking_kw else [],
             ),
         }

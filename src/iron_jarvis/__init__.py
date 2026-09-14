@@ -8,4 +8,4 @@ integrations, comm channels, an encrypted secrets vault, opt-in computer use, an
 a Next.js control center.
 """
 
-__version__ = "1.262.0"
+__version__ = "1.263.0"

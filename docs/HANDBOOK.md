@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.262.0 (2026-09-14).*
+holds itself to. Current as of v1.263.0 (2026-09-14).*
 
 ---
 
@@ -822,6 +822,18 @@ No field's value is ever collected — the stripping happens inside the page, so
 password never reaches Iron Jarvis at all — and what Jarvis types is redacted before
 the record is written. Everything a browser tool does is on the Activity ledger, with
 no credential ever written down.
+
+**Reasoning level, per conversation (v1.263.0).** Next to the model picker in
+Chat, a small **reasoning** control appears for a model that offers one —
+Claude 4 and 5 models, OpenAI's o-series and GPT-5, Gemini 2.5, the Claude and
+Codex CLIs, and local reasoning models such as gpt-oss, DeepSeek-R1 and Qwen3.
+Pick **low**, **medium** or **high** (or leave it on the model's default);
+higher is slower and, on a metered API, costs more. The choice is saved with
+the thread, sent on every turn, and the receipt under the reply says
+"reasoning high" when it actually reached the model. For a model with no such
+knob there is no control at all — nothing is sent, and nothing is quietly
+dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
+so you get the answer rather than an error.
 
 **The sidebar works the page for you (v1.262.0).** With access set to
 **Interactive**, ask the sidebar for a job — "fill this form with my details",

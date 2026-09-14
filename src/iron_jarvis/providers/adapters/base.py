@@ -110,6 +110,14 @@ class LLMMessage:
     #: optional image parts on a user turn (multimodal). Each is
     #: ``{"data_b64": <base64>, "media_type": "image/png"|"image/jpeg"|...}``.
     images: list[dict[str, str]] = field(default_factory=list)
+    #: v1.263.0: the provider-NATIVE content blocks of an assistant turn, when
+    #: the adapter needs them replayed verbatim on the next call. Anthropic's
+    #: extended thinking is the case: a tool loop must hand the ``thinking``
+    #: blocks (with their signatures) back with the ``tool_use`` they preceded,
+    #: or the API refuses the follow-up. Empty means "rebuild from text +
+    #: tool_calls", exactly as before; only the adapter that wrote them reads
+    #: them. Copied from ``LLMResponse.raw_blocks`` by the chat lanes.
+    raw_blocks: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -128,6 +136,9 @@ class LLMResponse:
     usage: dict[str, int] = field(
         default_factory=lambda: {"input_tokens": 0, "output_tokens": 0}
     )
+    #: v1.263.0: see ``LLMMessage.raw_blocks`` — set only by an adapter whose
+    #: next call needs these blocks back verbatim (Anthropic with thinking on).
+    raw_blocks: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def wants_tools(self) -> bool:
@@ -148,6 +159,7 @@ class LLMAdapter(ABC):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> LLMResponse:
         """One completion.
 
@@ -168,6 +180,15 @@ class LLMAdapter(ABC):
         them on the wire; every other adapter ACCEPTS and IGNORES them, so a
         caller (the guided rung) can pass them uniformly without knowing the
         adapter class.
+
+        ``reasoning`` (v1.263.0, additive, ``""`` = provider default): the
+        user's chosen reasoning level, ``low`` / ``medium`` / ``high``. Each
+        adapter that has a wire form translates it (OpenAI ``reasoning_effort``
+        / Responses ``reasoning.effort``, Anthropic ``thinking`` budgets, Gemini
+        ``thinkingBudget``, the Claude CLI ``--effort``, the Codex CLI ``-c
+        model_reasoning_effort=``); every other adapter accepts and ignores it.
+        The router passes it only when ``providers.reasoning`` says the serving
+        model supports it, and reports what it applied on the route.
         """
         ...
 
@@ -180,6 +201,7 @@ class LLMAdapter(ABC):
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
+        reasoning: str = "",
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-stream a completion (FX-01). Yields frames:
 
@@ -206,6 +228,9 @@ class LLMAdapter(ABC):
             kw["tool_choice"] = tool_choice
         if extra_body is not None:
             kw["extra_body"] = extra_body
+        # v1.263.0: the reasoning level rides the same way — only when set.
+        if reasoning:
+            kw["reasoning"] = reasoning
         resp = await self.complete(system=system, messages=messages, tools=tools, **kw)
         if resp.text:
             yield {"type": "text", "text": resp.text}

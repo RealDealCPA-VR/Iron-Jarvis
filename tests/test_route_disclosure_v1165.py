@@ -183,6 +183,8 @@ def test_default_route_discloses_default_with_empty_requested(tmp_path):
         "reason": "default",
         "from": "",
         "why": "",
+        # v1.263.0 (additive): the reasoning level applied — "" when none.
+        "reasoning": "",
     }
 
 
@@ -231,6 +233,8 @@ def test_an_explicitly_chosen_mock_still_says_mock(tmp_path):
         "reason": "mock",
         "from": "",
         "why": "",
+        # v1.263.0 (additive): the reasoning level applied — "" when none.
+        "reasoning": "",
     }
 
 
@@ -255,6 +259,8 @@ def test_stream_done_frame_route_is_identical_to_post_chat(tmp_path):
         "reason": "default",
         "from": "",
         "why": "",
+        # v1.263.0 (additive): the reasoning level applied — "" when none.
+        "reasoning": "",
     }
 
 
@@ -448,6 +454,8 @@ def test_parity_explicit_pick_both_lanes_identical(tmp_path):
         "reason": "explicit",
         "from": "",
         "why": "",
+        # v1.263.0 (additive): the reasoning level applied — "" when none.
+        "reasoning": "",
     }
 
 
@@ -515,6 +523,8 @@ def test_parity_failover_both_lanes_identical(tmp_path):
         # provider (requested is "" here by contract).
         "from": "anthropic",
         "why": "http 429",
+        # v1.263.0 (additive): the reasoning level applied — "" when none.
+        "reasoning": "",
     }
     # Top-level provider/model tell the same story (old-client surface).
     assert flat.json()["provider"] == "grok-cli"

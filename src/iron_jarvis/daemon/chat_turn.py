@@ -46,6 +46,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from ..providers.reasoning import normalize_level
 from ..core.db import session_scope
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
@@ -2156,6 +2157,15 @@ BROWSER_LOOK_ONLY_LINE = (
 )
 
 
+def _reasoning_kw(body) -> dict[str, str]:
+    """The router kwarg for the turn's reasoning level (v1.263.0): ``{}`` when
+    none was picked (or the word is not one of ours), so the router call — and
+    every double of it — stays byte-identical to before the knob existed.
+    MIRROR NOTE (lock-step): both chat lanes spread this into their router call."""
+    level = normalize_level(getattr(body, "reasoning", ""))
+    return {"reasoning": level} if level else {}
+
+
 def _is_office_turn(armed_names) -> bool:
     """Is a document-writing tool armed this turn? (v1.247.0) — the ONE
     answer both chat lanes use (the stream lane passes armed + ask_armed)."""
@@ -3704,6 +3714,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 messages=msgs,
                 tools=tool_specs,
                 task_class="chat",
+                # v1.263.0: the user's reasoning level; the router applies it
+                # only where the serving model offers one. Passed ONLY when set
+                # (router doubles that predate the knob). Lock-step: stream lane.
+                **_reasoning_kw(body),
             )
             _u = route.response.usage or {}
             usage_in += int(_u.get("input_tokens", 0) or 0)
@@ -3760,7 +3774,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 break
             msgs.append(LLMMessage(role="assistant",
                                    content=route.response.text,
-                                   tool_calls=calls))
+                                   tool_calls=calls,
+                                   # v1.263.0 — lock-step with the stream lane.
+                                   raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
             for tc in calls:
                 ran = False
                 try:
@@ -4008,6 +4024,8 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             "provider": route.provider,
             "model": route.model,
             "reason": getattr(route, "reason", ""),
+            # v1.263.0 (additive): the reasoning level actually applied.
+            "reasoning": getattr(route, "reasoning", ""),
             # v1.228.0 (additive): on a failover, WHICH provider failed and
             # WHY (router.failure_reason's word) — the default route's
             # `requested` is "" by contract, so these are the only way the
