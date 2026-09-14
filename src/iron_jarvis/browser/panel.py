@@ -63,11 +63,24 @@ ordinary chat path, whose ``_filter_browser_tools`` gate reads the live
 setting: ``read_only`` leaves the inspection tools, ``interactive`` leaves the
 full set with the deny floor intact, so a page-acting call still pauses for the
 approval card. THE CEILING IS AN ADDITIONAL BOUND, NEVER A REPLACEMENT — every
-existing gate still runs, and this module adds no tool name of its own (it
-picks nothing explicitly, precisely because a panel that armed
-``browser_click`` would have consented on the user's behalf to the very click
-the card exists to ask about). ``off`` never gets this far:
+existing gate still runs. ``off`` never gets this far:
 ``ExtensionBackend._handle_panel`` refuses the frame and says so.
+
+ARMED BY SURFACE, NOT BY SENTENCE (v1.262.0). Until this version the module
+picked nothing explicitly and let the ordinary autoselect pass arm whatever the
+user's SENTENCE matched — so "book the first available slot", "fill this form
+with my details", "go through these listings" matched no rule, no acting tool
+was armed, six rounds ran out, and the sidebar was, in the user's words, "a
+chat bot next to the window". A sidebar docked in the browser is a browser
+surface by definition, so it now hands the chat lane the whole ``browser_*``
+family as ``arm_family``: the lane ARMS the read tier (the very grant the
+autoselect pass already gave any browser-shaped sentence — READ, three gates
+ahead of any disclosure) and ASK-ARMS the acting tier — VISIBLE, NEVER
+GRANTED: every page action still pauses for the card, exactly the consent the
+card exists to ask for. The access gate then strips the acting tier at
+``read_only``, and the ceiling applies unchanged. Nothing in this module
+consents to anything on the user's behalf: the grant a card gives is the
+grant the user pressed.
 
 TWO MORE BOUNDS THIS MODULE OWNS, both closing demonstrated holes:
 
@@ -188,6 +201,77 @@ def browser_tool_ceiling(platform: Any) -> frozenset[str]:
     )
 
 
+#: How much of a typed text or a URL the panel repeats back (v1.262.0). The
+#: args are the lane's redacted args already; this is about a card that fits.
+_DESCRIBE_CHARS = 60
+
+
+def _short(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= _DESCRIBE_CHARS else text[: _DESCRIBE_CHARS - 1] + "…"
+
+
+def _cap(sentence: str) -> str:
+    return sentence[:1].upper() + sentence[1:] if sentence else sentence
+
+
+def describe_browser_call(name: str, args: object) -> str:
+    """A browser tool call as the user would say it (v1.262.0): "click 'Search'",
+    "type 'flights to denver' into the search box", "open https://…".
+
+    Lower-case, no trailing period, so it composes: "Iron Jarvis wants to
+    {this}. Allow it?", "{This}…", "Could not {this}." A name this function has
+    never heard of is described as "run <name>" — never dropped, never guessed.
+    The args are whatever the lane sent, already redacted by the tool's own
+    ``redact_args``; only a bounded excerpt of a text or a URL is repeated.
+    """
+    a = args if isinstance(args, dict) else {}
+    target = _short(
+        a.get("text_hint")
+        or a.get("label")
+        or a.get("name")
+        or a.get("selector")
+        or (f"element {a['element_id']}" if a.get("element_id") not in (None, "") else "")
+    )
+    quoted = f"'{target}'" if target else ""
+    if name == "browser_click":
+        return f"click {quoted}" if quoted else "click on the page"
+    if name == "browser_type":
+        typed = _short(a.get("text"))
+        into = f" into {quoted}" if quoted else ""
+        enter = " and press Enter" if a.get("press_enter") else ""
+        return f"type '{typed}'{into}{enter}" if typed else f"type{into}{enter}"
+    if name == "browser_press_key":
+        key = _short(a.get("key"))
+        return f"press {key}" if key else "press a key"
+    if name == "browser_navigate":
+        url = _short(a.get("url"))
+        return f"open {url}" if url else "open a page"
+    if name == "browser_create_tab":
+        url = _short(a.get("url"))
+        return f"open a new tab at {url}" if url else "open a new tab"
+    if name == "browser_close_tab":
+        return "close a tab"
+    if name == "browser_activate_tab":
+        return "switch to another tab"
+    if name == "browser_scroll":
+        direction = _short(a.get("direction"))
+        return f"scroll {direction}" if direction else "scroll the page"
+    if name == "browser_read_page":
+        return "read the page"
+    if name == "browser_get_elements":
+        return "look at the page's controls"
+    if name == "browser_screenshot":
+        return "take a screenshot of the page"
+    if name == "browser_list_tabs":
+        return "list your tabs"
+    if name == "browser_get_active_tab":
+        return "check which tab is active"
+    if name == "browser_get_status":
+        return "check the browser connection"
+    return f"run {name or 'a step'}"
+
+
 def parse_sse(chunk: str) -> list[tuple[str, dict[str, Any]]]:
     """Split one SSE chunk into ``(event, data)`` pairs.
 
@@ -293,7 +377,9 @@ class PanelTurns:
             await self._steer(conn, params)
             return
         if act in (P.PANEL_ACTION_APPROVE, P.PANEL_ACTION_DENY):
-            await self._decide(conn, act, str(params.get("id") or ""))
+            await self._decide(
+                conn, act, str(params.get("id") or ""), str(params.get("scope") or "")
+            )
             return
         if act == P.PANEL_ACTION_CLOSE:
             # The panel is gone: a turn narrating to nobody keeps billing.
@@ -392,8 +478,17 @@ class PanelTurns:
             return
         self._steers.append({"id": note_id, "text": note})
 
-    async def _decide(self, conn: Any, action: str, approval_id: str) -> None:
+    async def _decide(
+        self, conn: Any, action: str, approval_id: str, scope: str = ""
+    ) -> None:
         """Answer a mid-turn approval through THE approval registry.
+
+        ``scope`` (v1.262.0): ``"task"`` on an approve answers ``conversation``
+        — the chat lane's grant for the REMAINING ROUNDS OF THIS TURN, which is
+        exactly one task in the sidebar: every Send is a fresh turn with a fresh
+        grant set and a fresh ``_offered``. Anything else answers ``once``. A
+        ten-step task used to be ten cards; the user's words for the result
+        were "a chat bot next to the window".
 
         The same one ``POST /chat/approvals/{id}`` answers and the same one the
         waiting turn is parked on — reached through ``routes.chat._approvals``
@@ -404,9 +499,9 @@ class PanelTurns:
         ``GET /chat/approvals/pending``), which is why the panel is told down
         this socket and answers back down it.
 
-        ``approve`` resolves ``once``, never ``conversation``: the panel shows
-        one card for one call, and widening a grant the user was not asked to
-        widen is a consent nobody gave.
+        A plain ``approve`` resolves ``once``: the panel shows one card for one
+        call, and widening a grant the user was not asked to widen is a consent
+        nobody gave. The wider grant exists only behind its own button.
 
         AN ID THIS PANEL NEVER OFFERED IS REFUSED, and that check is new.
         ``resolve`` has no ownership check of its own — proven by answering an
@@ -434,7 +529,12 @@ class PanelTurns:
                 },
             )
             return
-        decision = "once" if action == P.PANEL_ACTION_APPROVE else "deny"
+        if action != P.PANEL_ACTION_APPROVE:
+            decision = "deny"
+        elif scope == "task":
+            decision = "conversation"
+        else:
+            decision = "once"
         try:
             ok = _approvals(SimpleNamespace(platform=self.platform)).resolve(
                 approval_id, decision
@@ -501,6 +601,15 @@ class PanelTurns:
                 body,
                 steer_source=self.take_steer,
                 tool_ceiling=ceiling,
+                # v1.262.0: THE WHOLE FAMILY, BY SURFACE. The same set as the
+                # ceiling — the chat lane arms its read tier (the grant the
+                # autoselect pass already gave any browser-shaped sentence) and
+                # ask-arms its acting tier (visible, never granted: every page
+                # action still pauses for the card), then applies the access
+                # gate and this ceiling exactly as before. Without it a panel
+                # turn was armed by the SENTENCE, and "book the first slot"
+                # matched no rule — the sidebar could only talk.
+                arm_family=ceiling,
             )
             async for chunk in gen:
                 for event, data in parse_sse(chunk):
@@ -579,15 +688,14 @@ class PanelTurns:
             return
         if event == "tool_call":
             name = str(data.get("name") or "a step")
+            # v1.262.0: in WORDS — "Clicking 'Search'…", not "Running
+            # browser_click…". The args here are the lane's REDACTED args.
+            what = describe_browser_call(name, data.get("args"))
             if data.get("status") == "finished":
-                word = "finished" if data.get("ok") else "could not finish"
-                await self.emit(
-                    conn, P.PANEL_EVENT_TOOL, {"name": name, "text": f"{name} {word}."}
-                )
+                text = f"{_cap(what)} — done." if data.get("ok") else f"Could not {what}."
             else:
-                await self.emit(
-                    conn, P.PANEL_EVENT_TOOL, {"name": name, "text": f"Running {name}…"}
-                )
+                text = f"{_cap(what)}…"
+            await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": name, "text": text})
             return
         if event == "approval":
             tool = str(data.get("tool") or "a step")
@@ -596,13 +704,14 @@ class PanelTurns:
             # recorded. `_decide` refuses anything absent from this set.
             if approval_id:
                 self._offered.add(approval_id)
+            what = describe_browser_call(tool, data.get("args"))
             await self.emit(
                 conn,
                 P.PANEL_EVENT_APPROVAL,
                 {
                     "id": approval_id,
                     "tool": tool,
-                    "text": f"Iron Jarvis wants to run {tool}. Allow it?",
+                    "text": f"Iron Jarvis wants to {what}. Allow it?",
                 },
             )
             return

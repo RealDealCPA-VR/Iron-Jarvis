@@ -795,7 +795,10 @@ def _browser_section(d, pane_id: str = "") -> str:
         runtime = _browser_runtime(d)
         if runtime is None or not runtime.connected:
             return ""
-        if runtime.access() == "off":
+        # Read ONCE per render (pinned: the setting is read live, exactly once,
+        # every render) and used for both the gate and the look-only line.
+        access = runtime.access()
+        if access == "off":
             return ""
         if not _pane_browser_allowed(d, pane_id):
             # The pane cannot call a browser tool (gate 2 stripped them all), so
@@ -830,6 +833,13 @@ def _browser_section(d, pane_id: str = "") -> str:
     else:
         lines.append(BROWSER_NO_TAB_LINE)
     lines.append(BROWSER_CAPABILITY_LINE)
+    # v1.262.0: at Read only the model is told it can LOOK and not act, and
+    # where the switch is — read off the live setting, like everything above.
+    # The acting brief is NOT here: it rides with the Tools block, on the turns
+    # that actually arm a page-acting tool (``BROWSER_AGENT_BLOCK``), because a
+    # brief that says "you can click" on a turn with no click tool is a lie.
+    if access == "read_only":
+        lines.append(BROWSER_LOOK_ONLY_LINE)
     return "\n\n" + "\n".join(lines)
 
 
@@ -2072,6 +2082,79 @@ _DOC_WRITING_TOOLS = {
 #: had already done. A turn with no document-writing tool keeps six.
 _DOC_TOOL_ROUNDS = 12
 
+#: The browser tools that CHANGE a page or the browser (v1.262.0) — the set
+#: whose presence makes a turn a browser-agent turn. Named here rather than
+#: read off the registry because the round budget is decided before any tool
+#: runs and must not depend on a registry read; the tools lane's own
+#: ``min_access = "interactive"`` declarations are the same eight names, and
+#: ``tests/test_browser_agent_v1262.py`` pins the two lists against each other.
+_BROWSER_ACTING_TOOLS: frozenset[str] = frozenset(
+    {
+        "browser_navigate",
+        "browser_create_tab",
+        "browser_activate_tab",
+        "browser_close_tab",
+        "browser_scroll",
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+    }
+)
+
+#: A chat turn that can ACT in the user's browser gets this many tool rounds
+#: (v1.262.0). Working a page is read → act → read → act — a form is five or
+#: six of those, a search-and-pick task more — and six rounds ended every such
+#: turn on the last-round escalation, which the sidebar cannot follow ("ask
+#: again in the Iron Jarvis window"). The user's words for the result: "acts
+#: as a chat bot next to the window". Twenty-four is room for a real task;
+#: the deny floor still asks before each page action, so the budget is not
+#: autonomy, it is not being cut off mid-task.
+_BROWSER_TOOL_ROUNDS = 24
+
+#: What the model is told when a browser-agent turn used every round
+#: (v1.262.0): the browser is where it left it, and the user needs to know
+#: exactly where that is.
+OUT_OF_STEPS_BROWSER_INSTRUCTION = (
+    "You have used every step this turn allows, so no more browser actions can "
+    "run. Write your final answer now from the results above: say exactly what "
+    "you did in the browser, what the page shows now, and what is still left to "
+    "do. Never describe a step you did not actually take."
+)
+
+#: THE AGENT'S BRIEF (v1.262.0), appended to the system prompt on any turn that
+#: has a page-acting browser tool armed — both chat lanes, at the Tools seam.
+#: Until this existed the only sentence about acting was "Browser tools are
+#: available if this pane has Browser capability", and a model told that much
+#: advises the user which buttons to press instead of pressing them. Each line
+#: answers a failure that was watched: not acting; acting on a page nobody had
+#: read (STALE_SNAPSHOT refusals); reading once and then clicking ids from a
+#: page that had changed; treating the approval card as a reason to stop;
+#: narrating steps that were never taken.
+BROWSER_AGENT_BLOCK = (
+    "# Working in the user's browser\n"
+    "You can act in this browser yourself: browser_navigate, browser_create_tab, "
+    "browser_activate_tab, browser_scroll, browser_click, browser_type, "
+    "browser_press_key and browser_close_tab are yours to call. Work the task "
+    "step by step instead of telling the user which buttons to press. Read the "
+    "page with browser_read_page before acting on it and again after each action "
+    "that changes it — element ids come from the latest read and go stale when "
+    "the page changes. An action that changes a page asks the user first; that "
+    "is expected — carry on once it is allowed. Stop and ask only when a decision "
+    "is genuinely theirs: paying, sending, signing, deleting, or a choice between "
+    "options they have not stated. When you finish, say what you did and what "
+    "the page shows now; never claim a step you did not take."
+)
+
+#: What the ambient Browser block says at Read only (v1.262.0): the model can
+#: look but not act, and the user should hear where the switch is rather than
+#: watch it try. Rendered by ``_browser_section`` from the LIVE setting.
+BROWSER_LOOK_ONLY_LINE = (
+    "Browser access is Read only: you can look at tabs and pages but not click, "
+    "type or navigate. If the user asks you to act on a page, say that plainly "
+    "and tell them the switch is on the Browser page in Iron Jarvis, under "
+    "Interactive."
+)
+
 
 def _is_office_turn(armed_names) -> bool:
     """Is a document-writing tool armed this turn? (v1.247.0) — the ONE
@@ -2079,10 +2162,35 @@ def _is_office_turn(armed_names) -> bool:
     return bool(_DOC_WRITING_TOOLS & set(armed_names or ()))
 
 
+def _is_browser_agent_turn(armed_names) -> bool:
+    """Is a page-ACTING browser tool armed (or ask-armed) this turn? (v1.262.0)"""
+    return bool(_BROWSER_ACTING_TOOLS & set(armed_names or ()))
+
+
+def _stays_in_chat(armed_names) -> bool:
+    """A turn that must end in chat when it runs out of rounds, never by
+    escalating to an agent that discards its work (v1.247.0 office turns,
+    v1.262.0 browser-agent turns — the sidebar cannot follow an escalation)."""
+    return _is_office_turn(armed_names) or _is_browser_agent_turn(armed_names)
+
+
+def _out_of_rounds_instruction(armed_names) -> str:
+    """The final-answer instruction for a turn cut at its last round: the
+    browser wording when it acted in a browser, the office wording otherwise.
+    MIRROR NOTE (lock-step): both chat lanes pass this to
+    ``_final_answer_after_tools`` — never one of the constants directly."""
+    if _is_browser_agent_turn(armed_names):
+        return OUT_OF_STEPS_BROWSER_INSTRUCTION
+    return OUT_OF_ROUNDS_INSTRUCTION
+
+
 def _round_budget(armed_names) -> int:
-    """How many tool rounds this turn gets (v1.247.0): _DOC_TOOL_ROUNDS for an
-    office turn, _MAX_TOOL_ROUNDS otherwise. MIRROR NOTE (lock-step): both
+    """How many tool rounds this turn gets: _BROWSER_TOOL_ROUNDS for a
+    browser-agent turn (v1.262.0), _DOC_TOOL_ROUNDS for an office turn
+    (v1.247.0), _MAX_TOOL_ROUNDS otherwise. MIRROR NOTE (lock-step): both
     chat lanes size their loop with this — never a bare range() again."""
+    if _is_browser_agent_turn(armed_names):
+        return _BROWSER_TOOL_ROUNDS
     return _DOC_TOOL_ROUNDS if _is_office_turn(armed_names) else _MAX_TOOL_ROUNDS
 
 #: File-creation intent in the user's message ("create an excel of…"), used
@@ -3459,6 +3567,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
             project_id=(pid if resolved_proj is not None else None),
         )
+        # THE AGENT'S BRIEF (v1.262.0) — lock-step with the stream lane: only
+        # on a turn that can actually act in the browser.
+        if _is_browser_agent_turn(armed):
+            system += "\n\n" + BROWSER_AGENT_BLOCK
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -3579,7 +3691,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office turn
     # that uses every round ends HERE with an answer instead of escalating.
     _rounds = _round_budget(armed)
-    _office = _is_office_turn(armed)
+    # v1.262.0: office AND browser-agent turns end in chat at the last round
+    # (lock-step with the stream lane's `_stays_in_chat`).
+    _office = _stays_in_chat(armed)
     _cut_office = False
     try:
         for _round in range(_rounds):
@@ -3797,8 +3911,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             messages=msgs,
             provider=provider_choice,
             model=model_choice,
-            # v1.247.0: an office turn cut at its last round is told so.
-            **({"instruction": OUT_OF_ROUNDS_INSTRUCTION} if _cut_office else {}),
+            # v1.247.0 / v1.262.0: a turn cut at its last round is told so, in
+            # the browser wording when it acted in a browser.
+            **({"instruction": _out_of_rounds_instruction(armed)} if _cut_office else {}),
         )
         model_text = _f_text or model_text
         usage_in += _f_in

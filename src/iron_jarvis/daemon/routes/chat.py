@@ -64,6 +64,13 @@ from ..chat_turn import (
     OUT_OF_ROUNDS_INSTRUCTION,
     _is_office_turn,
     _round_budget,
+    # v1.262.0 — the browser-agent seams, lock-step with chat_turn.
+    BROWSER_AGENT_BLOCK,
+    _BROWSER_STATUS_TOOL,
+    _filter_browser_tools,
+    _is_browser_agent_turn,
+    _out_of_rounds_instruction,
+    _stays_in_chat,
     _persist_chat_usage,
     _wants_final_answer,
     chat_tool_deadline,
@@ -1443,6 +1450,7 @@ def register(app: FastAPI, d) -> None:
 async def stream_chat_turn(
     platform, personas: dict, body, *, should_stop=None, steer_source=None,
     tool_ceiling: "frozenset[str] | None" = None,
+    arm_family: "frozenset[str] | None" = None,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -1510,6 +1518,17 @@ async def stream_chat_turn(
     to an agent session with its OWN full tool set, which walks straight around
     any ceiling this turn holds.
 
+    ``arm_family`` (v1.262.0) — names to arm BY SURFACE rather than by
+    sentence, for a caller that IS a browser surface (the side panel). Each
+    name that the registry knows is sorted into its tier by the tool's own
+    ``min_access``: the read tier joins ``armed`` (the same grant the
+    autoselect pass gives any browser-shaped sentence), the acting tier joins
+    ``ask_armed`` — VISIBLE, NEVER GRANTED, so every page action still pauses
+    for the card. The access gate (``_filter_browser_tools``) and the ceiling
+    then apply exactly as before; a family name outside the ceiling is
+    dropped. ``None`` is the default and arms nothing extra — byte-identical
+    to every pre-existing caller.
+
     ``body.turn_id`` — optional and defaulted. Present, the turn registers in
     :data:`iron_jarvis.core.turns.TURNS` for the duration and
     ``POST /chat/turns/{turn_id}/stop`` can stop it from anywhere; absent,
@@ -1537,11 +1556,13 @@ async def stream_chat_turn(
         return await chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=None, tool_ceiling=tool_ceiling,
+            arm_family=arm_family,
         )
     try:
         inner = await chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
+            arm_family=arm_family,
         )
     except BaseException:
         # Prep can raise (400/404) before there is any generator to release
@@ -1566,6 +1587,7 @@ async def stream_chat_turn(
 async def chat_stream(
     platform, personas: dict, body, *, should_stop=None, steer_source=None,
     handle=None, tool_ceiling: "frozenset[str] | None" = None,
+    arm_family: "frozenset[str] | None" = None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -2017,6 +2039,35 @@ async def chat_stream(
                 "changes": [f"tool_cap:{_selection.ceiling}"],
             }
         armed += [t for t in conn_tools if t not in armed]
+        # ARMED BY SURFACE (v1.262.0): a caller that IS a browser surface hands
+        # the whole `browser_*` family in `arm_family`. Sorted by each tool's
+        # OWN `min_access`, never by a list written here: the read tier joins
+        # `armed` (below, `overrides` makes that a grant — the same grant the
+        # autoselect pass already gives any browser-shaped sentence: READ
+        # tools, three gates ahead of any disclosure), the acting tier is held
+        # for `ask_armed` — VISIBLE, NEVER GRANTED. Both then pass through the
+        # access gate, which strips the acting tier at read_only and all but
+        # the status tool at off; the ceiling below applies last, as always.
+        _family_ask: list[str] = []
+        if arm_family:
+            _reg = d.platform.registry
+            _read_tier, _act_tier = [], []
+            for _fname in sorted(arm_family):
+                _ftool = _reg.get(_fname)
+                if _ftool is None:
+                    continue
+                _fmin = getattr(_ftool, "min_access", "") or ""
+                if _fmin == "interactive":
+                    _act_tier.append(_fname)
+                elif _fmin == "read_only" or _fname == _BROWSER_STATUS_TOOL:
+                    _read_tier.append(_fname)
+            armed += [t for t in _read_tier if t not in armed]
+            auto_armed += [t for t in _read_tier if t not in auto_armed]
+            armed = _filter_browser_tools(d, body, armed)
+            auto_armed = [t for t in auto_armed if t in armed]
+            _family_ask = [
+                t for t in _filter_browser_tools(d, body, _act_tier) if t not in armed
+            ]
         # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
         # this message signals a need for — VISIBLE, never GRANTED. They
         # join tool_specs so the model can call them, and deliberately
@@ -2049,6 +2100,10 @@ async def chat_stream(
                 and d.platform.registry.get("shell") is not None
             ):
                 ask_armed.append("shell")
+        # The family's acting tier (v1.262.0) — after the sentence pass, so a
+        # sentence-armed name keeps its place, and before the ceiling, which
+        # bounds it like everything else.
+        ask_armed += [t for t in _family_ask if t not in ask_armed]
         # THE CEILING (v1.242.0), applied LAST and to EVERY list that can
         # reach the model. Last for the same reason `_filter_browser_tools` is
         # last: four fill passes and the ask tier each append names, and a
@@ -2121,6 +2176,11 @@ async def chat_stream(
             # NOTE (lock-step): non-stream copy in daemon/chat_turn.py.
             project_id=(pid if resolved_proj is not None else None),
         )
+        # THE AGENT'S BRIEF (v1.262.0): only on a turn that can actually act in
+        # the browser — a brief that says "you can click" beside no click tool
+        # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
+        if _is_browser_agent_turn({*armed, *ask_armed}):
+            system += "\n\n" + BROWSER_AGENT_BLOCK
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -2305,7 +2365,11 @@ async def chat_stream(
         # turn that uses every round ends HERE with an answer instead of
         # escalating. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
         _rounds = _round_budget({*armed, *ask_armed})
-        _office = _is_office_turn({*armed, *ask_armed})
+        # v1.262.0: office turns AND browser-agent turns end in chat when the
+        # rounds run out — the sidebar cannot follow an escalation, and the
+        # hand-off discarded the work either way. `_stays_in_chat` is the one
+        # answer; the final-answer wording is chosen by the same helper.
+        _office = _stays_in_chat({*armed, *ask_armed})
         _cut_office = False
         try:
             for _round in range(_rounds):
@@ -2830,9 +2894,10 @@ async def chat_stream(
                     messages=msgs,
                     provider=provider_choice,
                     model=model_choice,
-                    # v1.247.0 — lock-step with chat_turn.
+                    # v1.247.0 / v1.262.0 — lock-step with chat_turn: the
+                    # browser wording for a browser-agent turn, else office.
                     **(
-                        {"instruction": OUT_OF_ROUNDS_INSTRUCTION}
+                        {"instruction": _out_of_rounds_instruction({*armed, *ask_armed})}
                         if _cut_office else {}
                     ),
                 )

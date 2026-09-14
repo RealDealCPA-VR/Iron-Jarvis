@@ -272,6 +272,11 @@
       <p class="access">
         Access: <span id="access">—</span> · Add-on <span id="version">—</span>
       </p>
+      <!-- v1.262.0: what the access mode MEANS for this panel, in a sentence —
+           Read only used to strip every acting tool silently, and the user read
+           the result as "a chat bot next to the window". Filled by paintStatus;
+           hidden while the mode is off or unknown. -->
+      <p id="mode-hint" hidden></p>
       <div class="actions">
         <button class="primary" id="open" type="button">Open Jarvis</button>
         <!-- Empty and hidden until the worker says which action is real. A static
@@ -294,7 +299,11 @@
     <div id="approval" hidden>
       <p id="approval-text"></p>
       <div class="row">
-        <button class="primary" id="approve" type="button">Approve</button>
+        <button class="primary" id="approve" type="button">Allow once</button>
+        <!-- v1.262.0: one press for the rest of THIS task. It answers the card
+             with the chat lane's "conversation" grant, which covers the remaining
+             rounds of this turn only — the next message asks again. -->
+        <button id="approve-task" type="button">Allow for this task</button>
         <button id="deny" type="button">Deny</button>
       </div>
     </div>

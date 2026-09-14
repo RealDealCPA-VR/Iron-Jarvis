@@ -65,7 +65,15 @@ does not need a bump, stop and bump it.
    unless each anchor matches exactly once. THIS IS NOT OPTIONAL: v1.257.0 and
    v1.258.0 used ad-hoc blanket replaces that relabelled five lines of shipped
    Handbook history (fixed in v1.258.1).
-2. Commit + push to master. CI (`.github/workflows/release.yml`) detects the
+2. Commit + push to master. **IF THE COMMIT TOUCHES `.github/workflows/*`, PUSH
+   THE TAG YOURSELF** (`git tag vX.Y.Z <sha> && git push origin vX.Y.Z`) — CI's
+   `GITHUB_TOKEN` is refused when it pushes a tag whose commit changes a
+   workflow file ("refusing to allow a GitHub App to create or update
+   workflow … without `workflows` permission"; no `permissions:` key grants
+   it). v1.260.0's master-push Release died there after a green suite, and the
+   tag push from the user's own credentials is what shipped v1.261.0 (a tag
+   push triggers Release on its own — cancel the master-push run first or two
+   runs publish the same version). CI (`.github/workflows/release.yml`) detects the
    bump, RUNS THE OFFLINE SUITE AS A GATE (the `suite` job; the installer job
    `needs:` it), PRE-CREATES the tag+release (electron-builder 422s otherwise),
    builds the frozen daemon + installer, publishes `Iron-Jarvis-Setup-X.Y.Z.exe`
@@ -1203,6 +1211,28 @@ does not need a bump, stop and bump it.
   Both workflows trigger on master + tags only, so the `updates` push never
   loops. `tests/test_update_channel_v1260.py` lifts the functions and runs them
   under node; keep owner/repo in `main.js` in step with `desktop/package.json`.
+
+- **The sidebar is armed BY SURFACE, and a browser-agent turn stays in chat**
+  (v1.262.0). The user's report: the add-on "doesn't navigate and control the
+  browser and simply acts as a chat bot next to the window." The daemon had
+  every acting tool; the sidebar could not reach them: a panel turn was armed by
+  the SENTENCE (autoselect rules like "click the 'Buy' button"), six rounds
+  ended in an escalation the sidebar cannot follow, and the prompt never said it
+  could act. Now `browser/panel.py` passes `arm_family=<the browser_* ceiling>`
+  to `stream_chat_turn`, and the stream lane ARMS the read tier and ASK-ARMS the
+  acting tier by each tool's `min_access` — visible, never granted: every page
+  action still pauses for the card — then runs the access gate and the ceiling
+  exactly as before. `_BROWSER_TOOL_ROUNDS` (24) applies when a page-acting tool
+  is armed; `_stays_in_chat` (office OR browser-agent) ends the turn in chat at
+  the last round with `_out_of_rounds_instruction`; `BROWSER_AGENT_BLOCK` rides
+  the Tools seam of BOTH lanes only when acting tools are armed (a brief that
+  says "you can click" beside no click tool is a lie), and `_browser_section`
+  adds `BROWSER_LOOK_ONLY_LINE` at read_only. The panel's `approve` takes
+  `scope: "task"` → the chat lane's `conversation` grant (the rest of THIS turn;
+  every Send is a fresh turn), and its tool/approval frames are worded by
+  `describe_browser_call`. Do not put a browser tool back behind a sentence
+  rule for the panel, and do not widen a plain Allow to more than one call.
+  `tests/test_browser_agent_v1262.py` (harness: `tests/_fakes/panel_harness.py`).
 
 ## Map (where things live)
 

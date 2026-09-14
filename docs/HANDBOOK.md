@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.261.0 (2026-09-14).*
+holds itself to. Current as of v1.262.0 (2026-09-14).*
 
 ---
 
@@ -822,6 +822,19 @@ No field's value is ever collected — the stripping happens inside the page, so
 password never reaches Iron Jarvis at all — and what Jarvis types is redacted before
 the record is written. Everything a browser tool does is on the Activity ledger, with
 no credential ever written down.
+
+**The sidebar works the page for you (v1.262.0).** With access set to
+**Interactive**, ask the sidebar for a job — "fill this form with my details",
+"find the cheapest option on this page and open it", "book the first available
+slot" — and Jarvis does it: it reads the page, clicks, types, presses keys,
+scrolls and moves between tabs itself, step by step, and tells you what it did.
+Every action that changes a page asks you first; press **Allow for this task**
+on the first card and the rest of that job runs without asking again (the next
+message starts fresh). Before this version the sidebar only got the tools your
+sentence happened to name and ran out of steps after six — it read as a chat
+box beside the page. At **Read only** it can look but not act, and it says so
+in its header with the switch named; **Off** runs nothing. Jarvis still stops
+to ask when a decision is yours — paying, sending, signing, deleting.
 
 **The sidebar is a window onto Jarvis, not a second Jarvis.** The chat docked in
 your browser holds no model, no agent loop and no settings of its own: the question

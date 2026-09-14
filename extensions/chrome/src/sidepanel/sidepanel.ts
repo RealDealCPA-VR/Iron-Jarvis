@@ -106,6 +106,31 @@ export function describe(status: BridgeStatus): Rendered {
   }
 }
 
+/**
+ * What the access mode MEANS for this panel (v1.262.0), or "" when there is
+ * nothing to say (off has the empty state; unknown is named in the header).
+ *
+ * Read only strips every acting tool from a panel turn — correctly, and silently.
+ * The user's words for what that looks like: "acts as a chat bot next to the
+ * window". So the mode is explained where they are looking, with the switch named.
+ */
+export function modeHint(access: string): string {
+  switch (access) {
+    case "read_only":
+      return (
+        "Read only: Jarvis can look at this page but not act on it. To let it click, " +
+        "type and navigate for you, open Jarvis → Browser and choose Interactive."
+      );
+    case "interactive":
+      return (
+        "Interactive: Jarvis can work this page for you — navigate, click, type. " +
+        "Each action that changes a page asks you first; Allow for this task covers the rest."
+      );
+    default:
+      return "";
+  }
+}
+
 /** The word for a reported access mode, or the mode itself if it is a newer one. */
 export function accessWord(access: string): string {
   if (!access) {
@@ -119,6 +144,7 @@ const el = {
   word: document.getElementById("state-word"),
   note: document.getElementById("note"),
   access: document.getElementById("access"),
+  modeHint: document.getElementById("mode-hint"),
   version: document.getElementById("version"),
   open: document.getElementById("open") as HTMLButtonElement | null,
   toggle: document.getElementById("toggle") as HTMLButtonElement | null,
@@ -126,6 +152,7 @@ const el = {
   approval: document.getElementById("approval"),
   approvalText: document.getElementById("approval-text"),
   approve: document.getElementById("approve") as HTMLButtonElement | null,
+  approveTask: document.getElementById("approve-task") as HTMLButtonElement | null,
   deny: document.getElementById("deny") as HTMLButtonElement | null,
   ask: document.getElementById("ask") as HTMLTextAreaElement | null,
   send: document.getElementById("send") as HTMLButtonElement | null,
@@ -212,6 +239,11 @@ function paintStatus(status: BridgeStatus): void {
     // otherwise. An older daemon sends `browser.ready` with no `access` at all, and
     // a bare placeholder sitting where a mode belongs reads AS the mode.
     el.access.textContent = accessWord(status.access);
+  }
+  if (el.modeHint) {
+    const hint = modeHint(status.access);
+    el.modeHint.textContent = hint;
+    el.modeHint.hidden = hint === "";
   }
   // The empty state is driven by the SAME string the header prints from, so the
   // panel cannot offer a composer while its own header says access is off.
@@ -447,6 +479,15 @@ el.approve?.addEventListener("click", () => {
   const id = pendingApprovalId;
   clearApproval();
   void post(PANEL_ACTION_APPROVE, { id });
+});
+
+// v1.262.0: one press for the rest of this task. `scope: "task"` is answered by
+// the daemon as the chat lane's "conversation" grant — the remaining rounds of
+// THIS turn only; the next message starts with a clean slate and asks again.
+el.approveTask?.addEventListener("click", () => {
+  const id = pendingApprovalId;
+  clearApproval();
+  void post(PANEL_ACTION_APPROVE, { id, scope: "task" });
 });
 
 el.deny?.addEventListener("click", () => {
