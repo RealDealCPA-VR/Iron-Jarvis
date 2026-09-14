@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.259.0 (2026-09-13).*
+holds itself to. Current as of v1.260.0 (2026-09-14).*
 
 ---
 
@@ -33,7 +33,13 @@ the key that is live, or say "hotkey unavailable" when both are taken.
 `Ctrl+Shift+Space` opens Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
 config.toml, secrets vault, skills, backups). Updates download automatically
 (checked at boot and every 30 min) and install only when you click
-**Restart to update**. While the window is hidden or minimised the dashboard
+**Restart to update**. Since v1.260.0 the check reads a small manifest file the
+release process publishes (a plain, fast download) and only falls back to
+GitHub's release feed if that file is missing — the feed is the page that made
+update checks fail with a "504" on 2026-09-14. If GitHub still does not answer,
+the Updates page says so in one line and the app tries again five minutes
+later; nothing is wrong with your install, and the direct installer link on the
+release page always works. While the window is hidden or minimised the dashboard
 stops polling the daemon (the daemon check itself slows to every 30 s) and
 refreshes everything the moment you bring it back.
 

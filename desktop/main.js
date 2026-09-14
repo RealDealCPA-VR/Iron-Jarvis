@@ -2219,12 +2219,16 @@ function installSpotlightIpc() {
     }
     _emitUpdateState({ status: "checking", error: null });
     try {
-      await au.checkForUpdates();
+      await checkForUpdatesWithFallback(au);
     } catch (err) {
-      _emitUpdateState({
-        status: "error",
-        error: friendlyUpdateError((err && err.message) || "check failed"),
-      });
+      // The updater's "error" event has normally already said this (v1.260.0:
+      // onUpdaterError); this is the net for a rejection that emitted nothing.
+      if (_updateState.status !== "error") {
+        _emitUpdateState({
+          status: "error",
+          error: friendlyUpdateError((err && err.message) || "check failed"),
+        });
+      }
     }
     return _updateState;
   });
@@ -2499,7 +2503,30 @@ function createTray() {
 // seeing an update. init once (listeners), then re-check every 30 minutes so a
 // freshly-pushed release is detected + downloaded promptly (not up to 12h later).
 const UPDATE_RECHECK_MS = 30 * 60 * 1000;
+// v1.260.0: after a TRANSIENT failure — GitHub answered 5xx, timed out, or the
+// network blinked — the next check comes after this, once, instead of waiting
+// out the whole half hour. One pending retry at a time; a check clears it.
+const UPDATE_RETRY_MS = 5 * 60 * 1000;
+// v1.260.0: WHERE UPDATES COME FROM. electron-updater's GitHub provider starts
+// every check by reading github.com/<repo>/releases.atom — a page GitHub takes
+// 2–10 s to render and cuts off at ~10 s, so on 2026-09-14 about every other
+// check on both of the user's PCs ended in a 504 (the raw HttpError dump reached
+// the Updates page, session cookie and all). The release job now also publishes
+// latest.yml — with ABSOLUTE installer URLs — to the repo's `updates` branch,
+// which raw.githubusercontent.com serves in ~0.2 s with no feed involved. That
+// manifest is the FIRST source; the GitHub feed stays as the FALLBACK, so a
+// missing or stale branch degrades to exactly the pre-v1.260.0 behaviour.
+// Keep owner/repo in step with desktop/package.json's publish config — a test
+// reads both.
+const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/RealDealCPA-VR/Iron-Jarvis/updates";
+const UPDATE_GITHUB_FEED = { provider: "github", owner: "RealDealCPA-VR", repo: "Iron-Jarvis" };
 let _autoUpdater = null;
+let _updateSource = "manifest"; // "manifest" | "feed" — which source the NEXT check reads
+let _updateRetryTimer = null;
+// True only while the manifest attempt of checkForUpdatesWithFallback is in
+// flight: electron-updater EMITS "error" before it rejects, and the feed attempt
+// that follows is the one whose outcome the user should see.
+let _updateFallbackArmed = false;
 
 // Live update state, mirrored to the dashboard's Updates page (so the packaged
 // app finally has a real "check for updates" UI instead of the git-only page).
@@ -2867,16 +2894,121 @@ function abortUpdateInstall(err) {
 // several minutes. Translate that (and any opaque updater failure) into a plain
 // sentence so NEITHER the auto-check NOR the manual "Check for updates" ever
 // surfaces a raw HttpError stack trace.
+// v1.260.0: WHAT KIND of failure an updater message describes.
+//   "publishing" — latest.yml not there yet: CI is still uploading the release.
+//   "transient"  — GitHub answered 5xx / rate-limited / timed out, the network
+//                  blinked, or the feed came back as something other than a
+//                  feed (GitHub's "Unicorn" HTML page arrives with a 200 too).
+//                  Nothing is wrong with the install; a later check will do.
+//   "other"      — everything else: shown as its first line, bounded.
+// Pure and adjacent to friendlyUpdateError so the two are lifted together.
+function updateErrorKind(msg) {
+  const m = (msg || "").toString();
+  if (/latest\.yml/i.test(m) && /404|not.*found|cannot find/i.test(m)) return "publishing";
+  if (/^\s*(5\d\d|429)\b/.test(m) || /HTTP_ERROR_(5\d\d|429)\b/.test(m)) return "transient";
+  if (/\b(5\d\d)\s+(Gateway|Bad Gateway|Service Unavailable|Internal Server)/i.test(m)) return "transient";
+  if (/Gateway Time-?out|couldn't respond to your request in time|Unicorn!/i.test(m)) return "transient";
+  if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|net::ERR_|ERR_UPDATER_INVALID_RELEASE_FEED|Cannot parse releases feed/i.test(m)) {
+    return "transient";
+  }
+  return "other";
+}
+
+// The status GitHub answered with, when the message carries one ("504").
+function _updateErrorStatus(m) {
+  const lead = /^\s*(\d{3})\b/.exec(m) || /HTTP_ERROR_(\d{3})\b/.exec(m) || /\b(5\d\d)\s+(?:Gateway|Bad Gateway|Service Unavailable|Internal Server)/i.exec(m);
+  return lead ? lead[1] : "";
+}
+
 function friendlyUpdateError(msg) {
   const m = (msg || "update failed").toString();
-  if (/latest\.yml/i.test(m) && /404|not.*found|cannot find/i.test(m)) {
+  const kind = updateErrorKind(m);
+  if (kind === "publishing") {
     return (
       "A new version is being prepared — its files are still uploading (this " +
       "takes a few minutes after a release goes out). You're on the latest " +
       "available version until then; check again shortly."
     );
   }
-  return m;
+  if (kind === "transient") {
+    // ONE sentence, and nothing of the response: the raw dump of a 504 carried
+    // GitHub's whole error page and its Set-Cookie header into the Updates page.
+    const status = _updateErrorStatus(m);
+    const minutes = Math.round(UPDATE_RETRY_MS / 60000);
+    return (
+      `GitHub did not answer the update check${status ? ` (HTTP ${status})` : ""}. ` +
+      `Nothing is wrong with your install — Iron Jarvis will try again in ${minutes} minutes.`
+    );
+  }
+  // Unknown: the first line only, cut before any response body or header dump.
+  const firstLine = m.split(/\r?\n/)[0].replace(/\s*(Data:|Headers:).*$/i, "").trim() || "update failed";
+  return firstLine.length > 200 ? `${firstLine.slice(0, 197)}…` : firstLine;
+}
+
+// v1.260.0: one earlier re-check after a transient failure — never a storm.
+// Returns whether a retry was armed. `checkForUpdates` clears a pending one, so
+// a manual check never stacks a second timer behind it.
+function scheduleUpdateRetry(msg) {
+  if (updateErrorKind(msg) !== "transient") return false;
+  if (_updateRetryTimer) return false;
+  _updateRetryTimer = setTimeout(() => {
+    _updateRetryTimer = null;
+    checkForUpdates();
+  }, UPDATE_RETRY_MS);
+  if (_updateRetryTimer && typeof _updateRetryTimer.unref === "function") _updateRetryTimer.unref();
+  return true;
+}
+
+function clearUpdateRetry() {
+  if (_updateRetryTimer) {
+    clearTimeout(_updateRetryTimer);
+    _updateRetryTimer = null;
+  }
+}
+
+// The updater's "error" event, in one place: electron-updater emits it for a
+// failed check AND for a failed download. Suppressed only while the manifest
+// attempt is armed for a fallback — the feed attempt reports instead.
+function onUpdaterError(msg) {
+  desktopLog("error", "[update] error:", (msg || "").toString().split(/\r?\n/)[0]);
+  if (_updateFallbackArmed) return false;
+  _emitUpdateState({ status: "error", error: friendlyUpdateError(msg) });
+  scheduleUpdateRetry(msg);
+  return true;
+}
+
+function _setUpdateSource(au, which) {
+  _updateSource = which === "feed" ? "feed" : "manifest";
+  au.setFeedURL(
+    _updateSource === "feed" ? UPDATE_GITHUB_FEED : { provider: "generic", url: UPDATE_MANIFEST_URL }
+  );
+}
+
+// v1.260.0: the manifest first, the GitHub feed if the manifest fails, and the
+// manifest restored for the next check either way. Both call sites (the timer
+// and the Updates page's button) come through here.
+async function checkForUpdatesWithFallback(au) {
+  clearUpdateRetry();
+  _setUpdateSource(au, "manifest");
+  _updateFallbackArmed = true;
+  try {
+    return await au.checkForUpdates();
+  } catch (err) {
+    _updateFallbackArmed = false;
+    desktopLog(
+      "warn",
+      "[update] manifest source failed; trying the GitHub releases feed:",
+      ((err && err.message) || String(err)).split(/\r?\n/)[0]
+    );
+    _setUpdateSource(au, "feed");
+    try {
+      return await au.checkForUpdates();
+    } finally {
+      _setUpdateSource(au, "manifest");
+    }
+  } finally {
+    _updateFallbackArmed = false;
+  }
 }
 
 function initUpdater() {
@@ -2900,11 +3032,10 @@ function initUpdater() {
   autoUpdater.on("download-progress", (p) =>
     _emitUpdateState({ status: "downloading", percent: Math.round((p && p.percent) || 0) })
   );
-  autoUpdater.on("error", (err) => {
-    const msg = (err && err.message) || "update failed";
-    desktopLog("error", "[update] error:", msg);
-    _emitUpdateState({ status: "error", error: friendlyUpdateError(msg) });
-  });
+  autoUpdater.on("error", (err) => onUpdaterError((err && err.message) || "update failed"));
+  // v1.260.0: the feed-independent manifest is the first source (see
+  // UPDATE_MANIFEST_URL); checkForUpdatesWithFallback re-applies it per check.
+  _setUpdateSource(autoUpdater, "manifest");
   autoUpdater.on("update-available", (info) => {
     console.log("[update] available:", info && info.version);
     _emitUpdateState({ status: "available", version: (info && info.version) || null });
@@ -2947,9 +3078,9 @@ function checkForUpdates() {
   // checkForUpdates (not ...AndNotify): autoDownload fetches it, and our own
   // update-downloaded handler shows the clickable notification — we don't want
   // electron-updater's separate default notification competing with ours.
-  autoUpdater
-    .checkForUpdates()
-    .catch((err) => desktopLog("error", "[update] check failed:", err && err.message));
+  checkForUpdatesWithFallback(autoUpdater).catch((err) =>
+    desktopLog("error", "[update] check failed:", ((err && err.message) || String(err)).split(/\r?\n/)[0])
+  );
 }
 
 // --- Application menu ----------------------------------------------------

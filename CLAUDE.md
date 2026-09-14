@@ -1171,6 +1171,28 @@ does not need a bump, stop and bump it.
   `test_browser_protocol_v1235`, which cost this release a round; add the field
   to the TypedDict and regenerate.
 
+- **Updates come from the `updates` branch manifest first; GitHub's releases
+  feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**
+  (v1.260.0). electron-updater's GitHub provider opens every check by reading
+  `github.com/<repo>/releases.atom`, which GitHub renders in 2–10 s and cuts at
+  ~10 s — on 2026-09-14 about every other check on both of the user's PCs 504'd,
+  and `friendlyUpdateError` (which knew only the 404 publishing window) printed
+  the whole error page plus the `_gh_sess` cookie on the Updates page. Pruning
+  331 old releases did NOT change the feed's timing (the count was a wrong
+  hypothesis; tags were kept). So: `release.yml` publishes electron-builder's
+  `latest.yml` with ABSOLUTE installer URLs (`scripts/publish_update_manifest.py`
+  — a line rewrite that refuses a wrong version or a missing sha512) alone on the
+  orphan `updates` branch, AFTER `--draft=false`; `desktop/main.js` reads it via
+  the generic provider (`UPDATE_MANIFEST_URL`) and `checkForUpdatesWithFallback`
+  swaps to `UPDATE_GITHUB_FEED` only when that fails, restoring the manifest for
+  the next check. electron-updater EMITS "error" before it rejects, so
+  `onUpdaterError` is suppressed while the manifest attempt is armed — the feed
+  attempt reports. `updateErrorKind` sorts failures into publishing / transient /
+  other; a transient one is one sentence and arms ONE `UPDATE_RETRY_MS` re-check.
+  Both workflows trigger on master + tags only, so the `updates` push never
+  loops. `tests/test_update_channel_v1260.py` lifts the functions and runs them
+  under node; keep owner/repo in `main.js` in step with `desktop/package.json`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

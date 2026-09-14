@@ -289,3 +289,53 @@ jobs:
         run: |
           ver="${{ steps.gate.outputs.version }}"
           gh release edit "v$ver" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      # v1.260.0: THE FEED-INDEPENDENT UPDATE SOURCE. The installed app reads
+      # raw.githubusercontent.com/<repo>/updates/latest.yml FIRST and only falls
+      # back to GitHub's releases feed (which 504'd about every other check on
+      # 2026-09-14) if that is missing. The manifest is electron-builder's own
+      # latest.yml with the installer URLs made absolute (scripts/
+      # publish_update_manifest.py refuses a wrong version or a missing sha512),
+      # committed alone on the orphan `updates` branch. Neither workflow triggers
+      # on that branch (both run on master + tags only), so this push costs nothing.
+      # Runs AFTER the release is public: a manifest that points at a draft's
+      # assets would 404 for every install.
+      - name: Publish the update manifest to the updates branch
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ steps.gate.outputs.version }}"
+          work="$(mktemp -d)"
+          gh release download "v$ver" --repo "$GITHUB_REPOSITORY" --pattern latest.yml --dir "$work/in"
+          uv run python scripts/publish_update_manifest.py "$work/in/latest.yml" "$work/out/latest.yml" \
+            --repo "$GITHUB_REPOSITORY" --version "$ver"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin updates 2>/dev/null; then
+            git worktree add "$work/wt" FETCH_HEAD
+          else
+            git worktree add --detach "$work/wt"
+            git -C "$work/wt" checkout --orphan updates
+            git -C "$work/wt" rm -rfq --cached . || true
+            find "$work/wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          cp "$work/out/latest.yml" "$work/wt/latest.yml"
+          cat > "$work/wt/README.md" <<'EOF'
+          # updates
+
+          Machine-read by the installed Iron Jarvis desktop app: `latest.yml` names the
+          newest release and its installer (absolute URLs on the GitHub release). Written
+          by the Release workflow on every published version. Do not edit by hand.
+          EOF
+          git -C "$work/wt" add latest.yml README.md
+          if git -C "$work/wt" diff --cached --quiet; then
+            echo "update manifest unchanged"
+          else
+            git -C "$work/wt" commit -q -m "update manifest: $ver"
+            git -C "$work/wt" push origin HEAD:updates
+          fi
+          curl -fsS "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/updates/latest.yml" | grep -q "^version: $ver" \
+            && echo "manifest live for $ver" || echo "manifest not yet visible on raw (CDN cache); it will be within minutes"
