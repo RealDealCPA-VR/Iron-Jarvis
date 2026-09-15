@@ -365,7 +365,7 @@ class PanelTurns:
         act = str(action or "")
         params = params if isinstance(params, dict) else {}
         if act == P.PANEL_ACTION_OPEN:
-            await self.emit(conn, P.PANEL_EVENT_STATE, {"running": self.running})
+            await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
             return
         if act == P.PANEL_ACTION_SEND:
             await self._send(conn, str(params.get("text") or "").strip())
@@ -425,8 +425,28 @@ class PanelTurns:
         # would only widen what this panel may resolve.
         self._offered.clear()
         self._delta_seen = False
-        await self.emit(conn, P.PANEL_EVENT_STATE, {"running": True})
+        await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
         self._task = asyncio.ensure_future(self._run(conn, text, self._turn_id))
+
+    def _state(self, *, running: bool | None = None) -> dict[str, Any]:
+        """The ``state`` frame: whether a turn runs, and whether THIS tab is allowed.
+
+        ``tab_allowed`` (v1.266.0) is about the tab the user is looking at — the
+        daemon's cached active tab — and it is a FACT the header paints, not a
+        promise: the grant is recorded before any frame says so, and the panel
+        asks again on every tab switch.
+        """
+        return {
+            "running": self.running if running is None else bool(running),
+            "tab_allowed": self._tab_allowed(),
+        }
+
+    def _tab_allowed(self) -> bool:
+        runtime = getattr(self.platform, "browser", None)
+        try:
+            return bool(runtime is not None and runtime.active_tab_allowed())
+        except Exception:  # noqa: BLE001 — a header line must never break the socket
+            return False
 
     def _over_budget(self) -> str:
         """"" if this Send fits the rolling budget, else the sentence to say.
@@ -461,7 +481,7 @@ class PanelTurns:
             # Nothing addressable is running. Say so plainly rather than
             # leaving the panel's Stop button looking like it worked on
             # something: the state frame is what flips it back to idle.
-            await self.emit(conn, P.PANEL_EVENT_STATE, {"running": self.running})
+            await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
 
     async def _steer(self, conn: Any, params: dict[str, Any]) -> None:
         note = str(params.get("text") or "").strip()
@@ -533,6 +553,12 @@ class PanelTurns:
             decision = "deny"
         elif scope == "task":
             decision = "conversation"
+        elif scope == "tab":
+            # v1.266.0: ONE APPROVAL PER TAB. The chat lane records the grant
+            # for the tab this call acts on and runs the call as "once"; every
+            # later page action in that tab — this message or the next — runs
+            # without a card until the tab closes (browser/grants.py).
+            decision = "tab"
         else:
             decision = "once"
         try:
@@ -714,6 +740,13 @@ class PanelTurns:
                     "text": f"Iron Jarvis wants to {what}. Allow it?",
                 },
             )
+            return
+        if event == "approval_resolved":
+            # v1.266.0: an "Allow for this tab" answer changes what the header
+            # says about this tab. The lane records the grant BEFORE it emits
+            # this frame, so the state painted here is a fact.
+            if str(data.get("decision") or "") == "tab":
+                await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
             return
         if event == "done":
             # NEVER AN EMPTY ANSWER. The panel paints its reply from `delta`

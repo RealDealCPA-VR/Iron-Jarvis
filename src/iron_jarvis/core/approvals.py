@@ -69,8 +69,12 @@ if TYPE_CHECKING:  # pragma: no cover
 
 #: What a resolution may say. "once" grants THIS call; "conversation" grants
 #: the rest of the turn too (and the client re-arms the tool for later turns —
-#: the existing "+"-menu machinery, not a second grant store); "deny" refuses.
-DECISIONS = ("once", "conversation", "deny")
+#: the existing "+"-menu machinery, not a second grant store); "deny" refuses;
+#: "tab" (v1.266.0) grants this call AND the browser tab it acts on, for as long
+#: as that tab stays open — the chat lane records it on
+#: ``BrowserRuntime.tab_grants`` (browser/grants.py) and then treats the call as
+#: "once". A lane that knows no tabs (the agent runtime) reads it as "once".
+DECISIONS = ("once", "conversation", "deny", "tab")
 
 #: How long a turn will hold for an answer before denying honestly. Long
 #: enough to read what the tool wants and decide; short enough that a stream

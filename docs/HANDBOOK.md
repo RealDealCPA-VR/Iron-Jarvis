@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.265.0 (2026-09-14).*
+holds itself to. Current as of v1.266.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,19 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**One approval per tab (v1.266.0).** The sidebar used to ask before every
+page action, and **Allow for this task** only covered the rest of that one
+message — ten messages into a job in one tab was ten cards. The approval card
+now offers **Allow for this tab**: that action runs, and every later page
+action in the same tab runs without asking — across messages — for as long as
+the tab stays open. Closing the tab ends it; so does restarting the browser,
+and Forget on the Browser page. The header says "This tab: allowed until it
+closes" while it holds. **Allow once** and **Allow for this task** are still
+there. What a tab approval never covers: the questions that are yours —
+paying, entering a password or a card, deleting, and anything on a page that
+looked like it was trying to steer Jarvis — those still stop and ask. The same
+button appears on the chat page's approval card for browser actions.
 
 **Pairing never dead-ends, and the sidebar matches your browser (v1.265.0).**
 If the Browser page ever told you "This install is already paired with a

@@ -124,7 +124,8 @@ export function modeHint(access: string): string {
     case "interactive":
       return (
         "Interactive: Jarvis can work this page for you — navigate, click, type. " +
-        "Each action that changes a page asks you first; Allow for this task covers the rest."
+        "Each action that changes a page asks you first; Allow for this tab covers this tab " +
+        "until you close it, Allow for this task covers the rest of this message."
       );
     default:
       return "";
@@ -153,6 +154,8 @@ const el = {
   approvalText: document.getElementById("approval-text"),
   approve: document.getElementById("approve") as HTMLButtonElement | null,
   approveTask: document.getElementById("approve-task") as HTMLButtonElement | null,
+  approveTab: document.getElementById("approve-tab") as HTMLButtonElement | null,
+  tabAllowed: document.getElementById("tab-allowed"),
   deny: document.getElementById("deny") as HTMLButtonElement | null,
   ask: document.getElementById("ask") as HTMLTextAreaElement | null,
   send: document.getElementById("send") as HTMLButtonElement | null,
@@ -335,6 +338,11 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       if (payload["running"] !== true) {
         streaming = null;
       }
+      // v1.266.0: whether the tab the user is looking at holds an approval grant.
+      // Absent (an older daemon) reads as not allowed — the line stays hidden.
+      if (el.tabAllowed) {
+        el.tabAllowed.hidden = payload["tab_allowed"] !== true;
+      }
       return;
     }
     case PANEL_EVENT_DELTA: {
@@ -509,6 +517,16 @@ el.approveTask?.addEventListener("click", () => {
   void post(PANEL_ACTION_APPROVE, { id, scope: "task" });
 });
 
+// v1.266.0: ONE APPROVAL PER TAB. `scope: "tab"` is answered by the daemon with
+// the "tab" decision: this call runs, and the tab it acts on is granted until it
+// closes — across messages, not just this one. The daemon's next `state` frame
+// says so in the header.
+el.approveTab?.addEventListener("click", () => {
+  const id = pendingApprovalId;
+  clearApproval();
+  void post(PANEL_ACTION_APPROVE, { id, scope: "tab" });
+});
+
 el.deny?.addEventListener("click", () => {
   const id = pendingApprovalId;
   clearApproval();
@@ -525,3 +543,10 @@ window.addEventListener("pagehide", () => {
 paintVersion();
 void refresh();
 void post(PANEL_ACTION_OPEN);
+
+// v1.266.0: the header's "allowed in this tab" line is about the tab the user is
+// looking at, so a tab switch asks the daemon for a fresh state frame. Guarded:
+// the panel also runs where `chrome.tabs` is absent (the runtime test's stub).
+chrome.tabs?.onActivated?.addListener?.(() => {
+  void post(PANEL_ACTION_OPEN);
+});

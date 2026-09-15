@@ -1611,7 +1611,9 @@ class AgentRuntime:
             # each wakes, pops itself, publishes its own `approval.resolved`.
             self._release_siblings(approvals, session.id, perm)
             return "", set()
-        if decision == "once":
+        if decision in ("once", "tab"):
+            # "tab" is the chat lane's per-tab grant (v1.266.0); a run has no
+            # tab to remember it for, so here it is this one call.
             return "", {*names, perm}
         if decision == "deny":
             return "the user declined this call when asked", set()

@@ -211,6 +211,7 @@ def test_a_plain_allow_covers_one_call_only(tmp_path, monkeypatch):
     [
         (P.PANEL_ACTION_APPROVE, "", "once"),
         (P.PANEL_ACTION_APPROVE, "task", "conversation"),
+        (P.PANEL_ACTION_APPROVE, "tab", "tab"),  # v1.266.0
         (P.PANEL_ACTION_APPROVE, "anything-else", "once"),
         (P.PANEL_ACTION_DENY, "task", "deny"),
     ],

@@ -201,6 +201,7 @@
       }
       .row {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
       }
 
@@ -312,6 +313,10 @@
            the result as "a chat bot next to the window". Filled by paintStatus;
            hidden while the mode is off or unknown. -->
       <p id="mode-hint" hidden></p>
+      <!-- v1.266.0: whether the tab the user is looking at holds an approval
+           grant. Painted from the daemon's `state` frame (`tab_allowed`), never
+           assumed: hidden until the daemon says so, and re-asked on a tab switch. -->
+      <p class="access" id="tab-allowed" hidden>This tab: allowed until it closes</p>
       <div class="actions">
         <button class="primary" id="open" type="button">Open Jarvis</button>
         <!-- Empty and hidden until the worker says which action is real. A static
@@ -334,7 +339,12 @@
     <div id="approval" hidden>
       <p id="approval-text"></p>
       <div class="row">
-        <button class="primary" id="approve" type="button">Allow once</button>
+        <!-- v1.266.0: ONE APPROVAL PER TAB. Answers with the "tab" decision: this
+             call runs, and every later page action in this same tab runs without
+             a card until the tab closes (or the browser restarts, or Forget). The
+             risk cards — a payment, a password, a "delete" — still ask. -->
+        <button class="primary" id="approve-tab" type="button">Allow for this tab</button>
+        <button id="approve" type="button">Allow once</button>
         <!-- v1.262.0: one press for the rest of THIS task. It answers the card
              with the chat lane's "conversation" grant, which covers the remaining
              rounds of this turn only — the next message asks again. -->

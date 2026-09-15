@@ -133,6 +133,7 @@ EVENT_NAVIGATION_COMPLETED: str = getattr(
 EVENT_DOWNLOAD_COMPLETED: str = getattr(
     EventType, "BROWSER_DOWNLOAD_COMPLETED", "browser.download_completed"
 )
+EVENT_TAB_REMOVED: str = getattr(EventType, "BROWSER_TAB_REMOVED", "browser.tab_removed")
 
 #: The four ``browser.disconnected`` reasons of plan §10.2, and the whole vocabulary.
 #: A word outside this tuple becomes ``closed``: the reason is what the ledger and any
@@ -220,6 +221,7 @@ _EVENT_BUS_NAMES: dict[str, str] = {
     P.EVENT_TAB_ACTIVATED: EVENT_TAB_ACTIVATED,
     P.EVENT_NAVIGATION_COMPLETED: EVENT_NAVIGATION_COMPLETED,
     P.EVENT_DOWNLOAD_COMPLETED: EVENT_DOWNLOAD_COMPLETED,
+    P.EVENT_TAB_REMOVED: EVENT_TAB_REMOVED,
 }
 
 #: The only keys the ADD-ON may contribute to a download payload, read off the
@@ -343,6 +345,9 @@ class ExtensionConnection:
         #: Empty until a greeting says — absence is "unknown", never a guess.
         self.browser_name = ""
         self.browser_version = ""
+        #: v1.266.0: the add-on's per-browser-session id, from ``browser.hello``.
+        #: Empty until a greeting says. Tab ids mean nothing across sessions.
+        self.browser_session = ""
         self.host_permission = bool(host_permission)
         self.paired = bool(paired)
         self.pairing_request_id = str(pairing_request_id or "")
@@ -491,6 +496,13 @@ class ExtensionBackend:
         #: than dropped — a Send that does nothing, silently, is the failure
         #: the whole sidebar was written against.
         self.panel_handler: Any = None
+        #: ``(tab_id) -> None`` and ``(session_id: str) -> None``, installed by
+        #: ``BrowserRuntime`` (v1.266.0) for the per-tab approval grants: a closed
+        #: tab ends its grant, a new browser session ends all of them. Callables
+        #: for the reason the three above are — the transport knows a tab closed
+        #: and nothing about what an approval is.
+        self.on_tab_removed: Any = None
+        self.on_browser_session: Any = None
         self._conn: ExtensionConnection | None = None
         self._lock = asyncio.Lock()
         self._seq = itertools.count(1)
@@ -1359,6 +1371,18 @@ class ExtensionBackend:
             if name:
                 conn.browser_name = name
                 conn.browser_version = str(browser.get("version") or "").strip()[:32]
+        # v1.266.0: the browser SESSION, for the per-tab approval grants. Bounded,
+        # only ever set, and handed to the runtime's hook, which clears every grant
+        # when it differs from the one they were made under.
+        session = str(frame.get("browser_session") or "").strip()[:64]
+        if session:
+            conn.browser_session = session
+            hook = self.on_browser_session
+            if hook is not None:
+                try:
+                    hook(session)
+                except Exception:  # noqa: BLE001 — grant bookkeeping must not kill the socket
+                    logger.debug("browser_session hook failed", exc_info=True)
         conn.hello_seen = True
         after = (
             conn.extension_id,
@@ -1458,6 +1482,24 @@ class ExtensionBackend:
             # cached snapshot rather than none: one unnecessary re-read is cheap, and
             # a kept snapshot of a page that has been replaced is a wrong answer.
             self._invalidate_snapshots(payload.get("tab_id"))
+        elif name == P.EVENT_TAB_REMOVED:
+            # THE TAB IS GONE (v1.266.0). Its approval grant ends (the runtime's
+            # hook), its snapshot is dropped (the element ids in it resolve to
+            # nothing), and if it was the tab the user was looking at, nothing is
+            # — the add-on's next ``tab_activated`` names the new one; guessing
+            # here would name a page the user cannot see.
+            gone = payload.get("tab_id")
+            self._invalidate_snapshots(gone)
+            if self.active_tab and gone is not None and (
+                self.active_tab.get("tab_id") == gone or self.active_tab.get("id") == gone
+            ):
+                self.active_tab = None
+            hook = self.on_tab_removed
+            if hook is not None:
+                try:
+                    hook(gone)
+                except Exception:  # noqa: BLE001 — grant bookkeeping must not kill the socket
+                    logger.debug("tab_removed hook failed", exc_info=True)
         elif name == P.EVENT_DOWNLOAD_COMPLETED:
             # THE ADD-ON'S CLAIM BECOMES THE DAEMON'S FACT ONLY AFTER A CHECK.
             # ``filename`` arrives as Chromium's absolute local path; ``local_path``

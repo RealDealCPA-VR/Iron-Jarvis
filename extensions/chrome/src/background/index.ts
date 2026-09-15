@@ -54,6 +54,7 @@ import {
   EVENT_ID_PREFIX,
   EVENT_NAVIGATION_COMPLETED,
   EVENT_TAB_ACTIVATED,
+  EVENT_TAB_REMOVED,
   METHOD_ACTIVATE_TAB,
   METHOD_ACTIVE_TAB,
   METHOD_CLICK,
@@ -344,6 +345,15 @@ chrome.tabs.onActivated.addListener((info) => {
       url,
     });
   })();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  // THE TAB CLOSED (v1.266.0). The daemon ends that tab's approval grant — "one
+  // approval per tab, for as long as the tab is open" is only true if the close
+  // is reported — and drops its cached snapshot. No lookup: the tab is gone, and
+  // the id is the whole fact.
+  eventSeq += 1;
+  socket.emitEvent(`${EVENT_ID_PREFIX}${eventSeq}`, EVENT_TAB_REMOVED, { tab_id: tabId });
 });
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {

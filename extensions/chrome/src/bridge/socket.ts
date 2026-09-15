@@ -73,6 +73,8 @@ export const DAEMON_WS_URL: string = __IJ_DAEMON_WS__;
 
 /** `chrome.storage.local` keys. Namespaced so a future key cannot collide. */
 export const STORAGE_TOKEN_KEY = "ij.browser.pairing_token";
+/** v1.266.0: the browser-session id, in `chrome.storage.session` (lives as long as the browser). */
+export const STORAGE_SESSION_KEY = "ij.browser.session";
 export const STORAGE_SUSPENDED_KEY = "ij.browser.suspended";
 
 /** Reconnect backoff, in milliseconds. Bounded at both ends. */
@@ -170,6 +172,9 @@ export class BridgeSocket {
   private readonly opts: BridgeSocketOptions;
   private ws: WebSocket | null = null;
   private token = "";
+  /** v1.266.0: minted once per BROWSER session; rides `browser.hello` so the daemon
+   *  can end per-tab approval grants when the browser (and its tab ids) restarts. */
+  private browserSession = "";
   private suspended = false;
   private state: BridgeState = "offline";
   private access = "";
@@ -212,6 +217,7 @@ export class BridgeSocket {
     this.token = typeof token === "string" ? token : "";
     this.suspended = stored[STORAGE_SUSPENDED_KEY] === true;
     this.hostPermission = await this.opts.hostPermission();
+    this.browserSession = await browserSessionId();
     if (this.suspended) {
       this.setState("suspended");
       return;
@@ -565,6 +571,8 @@ export class BridgeSocket {
       extension_version: this.opts.extensionVersion,
       host_permission: this.hostPermission,
       ...(browser ? { browser } : {}),
+      // v1.266.0: which browser SESSION — tab ids are only meaningful within one.
+      ...(this.browserSession ? { browser_session: this.browserSession } : {}),
     });
   }
 
@@ -596,4 +604,33 @@ export class BridgeSocket {
 /** UTF-8 byte length, which is what the daemon's cap counts. */
 function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+/**
+ * The id of THIS browser session (v1.266.0).
+ *
+ * `chrome.storage.session` is the primitive with exactly the right lifetime: it
+ * survives service-worker restarts (the worker is torn down after ~30 s idle and
+ * the socket reconnects — the tabs did NOT close, so a per-tab grant must not end
+ * there) and is cleared when the browser exits (tab ids restart, so every grant
+ * must). Where the area is missing, a fresh id per worker start is the safe
+ * fallback: it only ever ends a grant sooner, never keeps one past its tab.
+ */
+async function browserSessionId(): Promise<string> {
+  try {
+    const area = chrome.storage.session;
+    if (area) {
+      const stored = await area.get(STORAGE_SESSION_KEY);
+      const have = stored[STORAGE_SESSION_KEY];
+      if (typeof have === "string" && have) {
+        return have;
+      }
+      const fresh = crypto.randomUUID();
+      await area.set({ [STORAGE_SESSION_KEY]: fresh });
+      return fresh;
+    }
+  } catch {
+    // Fall through to a per-worker id.
+  }
+  return crypto.randomUUID();
 }

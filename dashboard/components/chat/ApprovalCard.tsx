@@ -87,10 +87,14 @@ export function ApprovalCard({
   // Which button is in flight; the card disables itself after one click. The
   // resolved frame (or stream end) unmounts it — a second decision has no
   // write path.
-  const [sent, setSent] = useState<"" | "once" | "conversation" | "deny">("");
+  const [sent, setSent] = useState<"" | "once" | "conversation" | "deny" | "tab">("");
   const [error, setError] = useState<string | null>(null);
+  // v1.266.0: a browser action can be allowed FOR ITS TAB — this call, and every
+  // later page action in the same tab until it closes. Offered only where it
+  // means something: a shell command has no tab.
+  const browserAction = approval.tool.startsWith("browser_");
 
-  async function decide(decision: "once" | "conversation" | "deny") {
+  async function decide(decision: "once" | "conversation" | "deny" | "tab") {
     if (sent) return;
     setSent(decision);
     setError(null);
@@ -181,9 +185,27 @@ export function ApprovalCard({
         )}
       </p>
 
+      {browserAction && (
+        <p data-testid="approval-tab-note" className="text-[11px] leading-relaxed text-zinc-400">
+          “Allow for this tab” covers every page action in that browser tab until you close
+          it. Payments, passwords and deletions still ask.
+        </p>
+      )}
+
       {error && <p className="text-[11px] text-rose-300">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
+        {browserAction && (
+          <button
+            type="button"
+            data-testid="approval-tab"
+            onClick={() => void decide("tab")}
+            disabled={!!sent}
+            className="btn-accent text-xs"
+          >
+            {sent === "tab" ? <LoaderInline label="Allowing…" /> : "Allow for this tab"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void decide("once")}

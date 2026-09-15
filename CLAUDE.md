@@ -1252,6 +1252,27 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **One approval per tab: the grant lives on the runtime, the lane consults
+  it, the risk gate never does** (v1.266.0). The user: "I need to keep on
+  providing approvals over and over." Every page action in the sidebar is
+  ask-armed (v1.262.0) and `conversation` covers one turn, so each Send
+  re-asked. `browser/grants.py` (`TabGrants`, owned by
+  `BrowserRuntime.tab_grants`) holds granted tab ids; the stream lane's
+  `_would_card`/`_needs_card` skip the card when
+  `runtime.tab_grant_covers(tool, args)` (an ACTING browser tool whose
+  effective tab — `tab_id` arg, else the cached active tab — is granted); the
+  decision word `tab` (DECISIONS; the panel's `scope: "tab"`; the chat card's
+  "Allow for this tab") grants the tab BEFORE the `approval_resolved` frame and
+  is then treated as `once` (the agent runtime reads `tab` as `once`). A grant
+  ends on the add-on's `tab_removed` event (`chrome.tabs.onRemoved`), on a new
+  `browser_session` in `browser.hello` (minted in `chrome.storage.session` —
+  survives worker restarts, dies with the browser; tab ids are per session), and
+  on Forget — NEVER on a socket reconnect, which happens every ~30 s idle and
+  would put the cards back. `_ActingTool.execute` / `risk.py` do not read
+  grants: a payment, a password field, the destructive vocabulary and a flagged
+  page still card. Pins: `tests/test_browser_tab_grant_v1266.py`,
+  `dashboard/__tests__/tab-grant-v1266.test.tsx`, the runtime panel test.
+
 - **Mint AFTER the check, and undo a mint that was not delivered** (v1.265.0).
   `BrowserRuntime.complete_pairing` minted the pairing row FIRST and looked for
   the requesting socket SECOND; when the add-on's socket had closed (a

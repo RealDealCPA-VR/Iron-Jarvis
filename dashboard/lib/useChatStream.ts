@@ -57,7 +57,7 @@ export type SSEEvent =
       id: string;
       call_id: string;
       tool: string;
-      decision: "once" | "conversation" | "deny" | "timeout";
+      decision: "once" | "conversation" | "deny" | "tab" | "timeout";
     }
   | { type: "meta"; provider: string; model: string }
   | { type: "round"; round: number }
@@ -258,7 +258,7 @@ export function sseEventFrom(
         call_id: str(data.call_id),
         tool: str(data.tool),
         decision:
-          d === "once" || d === "conversation" || d === "deny" ? d : "timeout",
+          d === "once" || d === "conversation" || d === "deny" || d === "tab" ? d : "timeout",
       };
     }
     case "meta":

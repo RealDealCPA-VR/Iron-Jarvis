@@ -79,6 +79,7 @@ from typing import Any, Protocol, runtime_checkable
 from ..core.logging import get_logger
 from . import protocol as P
 from .errors import BrowserError, BrowserErrorCode
+from .grants import TabGrants, is_acting_browser_tool, tab_key
 from .screenshot import decode_capture
 from .snapshot import PageSnapshot, SnapshotLimits, normalise_mode
 
@@ -443,6 +444,15 @@ class BrowserRuntime:
             backend.access_reader = self.access
         except Exception:  # noqa: BLE001 — a stand-in backend that refuses the attribute
             logger.debug("browser backend takes no access_reader", exc_info=True)
+        #: Per-tab approval grants (v1.266.0) — see ``browser/grants.py``. The
+        #: transport tells this object when a tab closes and which browser session
+        #: it is talking to; the chat lane asks it before raising a card.
+        self.tab_grants = TabGrants()
+        try:
+            backend.on_tab_removed = self.tab_grants.revoke
+            backend.on_browser_session = self.tab_grants.note_session
+        except Exception:  # noqa: BLE001 — a stand-in backend that refuses the attributes
+            logger.debug("browser backend takes no grant hooks", exc_info=True)
         # Same arrangement for the Ship 2 snapshot cache: the TRANSPORT learns that a
         # page navigated (that event only reaches the socket) and the RUNTIME holds
         # the cache, so the transport is handed one callable and knows nothing about
@@ -1239,6 +1249,43 @@ class BrowserRuntime:
         await self.backend.release(conn, reason="closed", detail="disconnected from Iron Jarvis")
         return True
 
+    # --- per-tab approval grants (v1.266.0) -----------------------------------
+
+    def effective_tab(self, args: Mapping[str, Any] | None) -> str:
+        """The tab an acting call lands on: its ``tab_id``, else the tab the user is looking at.
+
+        The same resolution ``prepare_action`` makes for the call itself, reduced
+        to the id: a grant is checked against the tab the click will hit, not
+        against whatever tab was in front when the card was answered.
+        """
+        given = args.get("tab_id") if isinstance(args, Mapping) else None
+        key = tab_key(given)
+        if key:
+            return key
+        active = getattr(self.backend, "active_tab", None) or {}
+        return tab_key(active.get("tab_id", active.get("id")))
+
+    def tab_grant_covers(self, tool_name: str, args: Mapping[str, Any] | None) -> bool:
+        """Whether the ORDINARY approval card may be skipped for this call.
+
+        Only an acting browser tool, and only when the tab it will act on holds a
+        grant. Never consulted by the risk gate inside the tool, which keeps its
+        own card for the decisions that are the user's (``grants.py``).
+        """
+        if not is_acting_browser_tool(tool_name):
+            return False
+        return self.tab_grants.covers(self.effective_tab(args))
+
+    def grant_tab_for(self, tool_name: str, args: Mapping[str, Any] | None) -> str:
+        """Record a grant for the tab this call acts on; the tab key, or ``""`` when none is known."""
+        if not is_acting_browser_tool(tool_name):
+            return ""
+        return self.tab_grants.grant(self.effective_tab(args))
+
+    def active_tab_allowed(self) -> bool:
+        """Whether the tab the user is looking at holds a grant — what the sidebar's header says."""
+        return self.tab_grants.covers(self.effective_tab(None))
+
     async def forget(self) -> int:
         """Revoke every pairing and drop the live socket; returns credentials killed.
 
@@ -1246,6 +1293,8 @@ class BrowserRuntime:
         in which the add-on reconnects with a credential that is still valid, and
         the user who just pressed Forget would watch it come back.
         """
+        # Every consent that rode on the pairing ends with it (v1.266.0).
+        self.tab_grants.clear()
         killed = 0
         if self.pairing is not None:
             killed = await asyncio.to_thread(self.pairing.revoke_all)

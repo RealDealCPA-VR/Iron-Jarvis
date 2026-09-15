@@ -176,11 +176,14 @@ ALL_DIRECTIVES: tuple[str, ...] = (
 EVENT_TAB_ACTIVATED = "tab_activated"
 EVENT_NAVIGATION_COMPLETED = "navigation_completed"
 EVENT_DOWNLOAD_COMPLETED = "download_completed"
+#: v1.266.0: ``{tab_id}`` — the user closed a tab. Ends that tab's approval grant.
+EVENT_TAB_REMOVED = "tab_removed"
 
 ALL_EVENTS: tuple[str, ...] = (
     EVENT_TAB_ACTIVATED,
     EVENT_NAVIGATION_COMPLETED,
     EVENT_DOWNLOAD_COMPLETED,
+    EVENT_TAB_REMOVED,
 )
 
 # --------------------------------------------------------------------------- #
@@ -506,6 +509,12 @@ class HelloFrame(TypedDict):
     #: "version": "153"}``. Optional: an older add-on sends no such key, and the
     #: daemon reads its absence as "unknown", never as Chrome.
     browser: NotRequired[dict[str, str]]
+    #: v1.266.0: an id the add-on mints once per BROWSER SESSION
+    #: (``chrome.storage.session``: cleared when the browser exits, kept across
+    #: service-worker restarts). Tab ids are unique only within a session, so the
+    #: per-tab approval grants are dropped when this changes. Optional: an older
+    #: add-on sends none, and the daemon then relies on ``tab_removed`` alone.
+    browser_session: NotRequired[str]
 
 
 class EventFrame(TypedDict):
@@ -1680,6 +1689,7 @@ __all__ = [
     "EVENT_ID_PREFIX",
     "EVENT_NAVIGATION_COMPLETED",
     "EVENT_TAB_ACTIVATED",
+    "EVENT_TAB_REMOVED",
     "EXTENSION_TO_DAEMON",
     "FRAME_COMMAND",
     "FRAME_CONNECTION_REPLACED",

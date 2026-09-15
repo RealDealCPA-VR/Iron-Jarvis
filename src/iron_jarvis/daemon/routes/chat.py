@@ -2533,6 +2533,31 @@ async def chat_stream(
                     _ct = d.platform.registry.get(_c.name)
                     return _ct.redact_args(_c.arguments) if _ct is not None else _c.arguments
 
+                # ONE APPROVAL PER TAB (v1.266.0). An acting browser call whose
+                # tab the user has already allowed ("Allow for this tab") gets
+                # no card — in this predicate AND the per-call one below; the
+                # two must agree or the batch card counts a call the per-call
+                # branch then runs without asking. The grant lives on the
+                # browser runtime and ends with the tab (browser/grants.py);
+                # the risk gate INSIDE the tool never reads it.
+                _browser_rt = getattr(d.platform, "browser", None)
+
+                def _tab_covered(_c) -> bool:
+                    if _browser_rt is None:
+                        return False
+                    try:
+                        return bool(_browser_rt.tab_grant_covers(_c.name, _c.arguments))
+                    except Exception:  # noqa: BLE001 — a grant lookup must never stop a turn
+                        return False
+
+                def _grant_tab(_c) -> str:
+                    if _browser_rt is None:
+                        return ""
+                    try:
+                        return str(_browser_rt.grant_tab_for(_c.name, _c.arguments) or "")
+                    except Exception:  # noqa: BLE001
+                        return ""
+
                 def _would_card(_c) -> str:
                     if approval_mode == "yolo" or _c.name not in {*armed, *ask_armed}:
                         return ""
@@ -2550,6 +2575,8 @@ async def chat_stream(
                             and _c.name not in card_grants
                             and _cm is not PermissionMode.DENY
                         )
+                    if _asks and _tab_covered(_c):
+                        return ""
                     return _cp if _asks else ""
 
                 _round_asks: dict[str, list] = {}
@@ -2629,6 +2656,8 @@ async def chat_stream(
                     else:
                         _needs_card = _engine_asks
                     if _unarmed:
+                        _needs_card = False
+                    if _needs_card and _tab_covered(tc):
                         _needs_card = False
                     if _needs_card:
                         if _perm_name in _round_answers:
@@ -2714,11 +2743,20 @@ async def chat_stream(
                                 # no frame is emitted (as every stop path).
                                 _persist_once(AgentState.CANCELLED)
                                 return
+                            if _decision == "tab":
+                                # Recorded BEFORE the resolved frame goes
+                                # out, so a panel painting "allowed in this
+                                # tab" from that frame reads a fact.
+                                _grant_tab(tc)
                             yield _sse("approval_resolved", {
                                 "id": _ap_id, "call_id": tc.id,
                                 "tool": tc.name, "decision": _decision,
                             })
                             _round_answers[_perm_name] = _decision
+                        if _decision == "tab":
+                            # The tab is granted (above); THIS call is "once".
+                            _round_answers[_perm_name] = "once"
+                            _decision = "once"
                         if _decision == "once":
                             _grant_extra = {tc.name, _perm_name}
                         elif _decision == "conversation":

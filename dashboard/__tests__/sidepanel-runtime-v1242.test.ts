@@ -407,6 +407,43 @@ if (absent.length) {
   /*  A steer                                                                 */
   /* ------------------------------------------------------------------------ */
 
+  describe("one approval per tab (v1.266.0)", () => {
+    it("Allow for this tab answers with scope tab and takes the card down", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true });
+      h.emit("approval", { id: "ask_9", text: "Jarvis wants to click Next." });
+      expect((el("approval") as HTMLElement).hidden).toBe(false);
+
+      (el("approve-tab") as HTMLButtonElement).click();
+      expect((el("approval") as HTMLElement).hidden).toBe(true);
+      await waitFor(() => {
+        const answer = h.sent.find((m) => m["action"] === "approve");
+        expect(answer).toBeTruthy();
+        const params = (answer?.["params"] ?? {}) as Record<string, unknown>;
+        expect(params["id"]).toBe("ask_9");
+        expect(params["scope"]).toBe("tab");
+      });
+    });
+
+    it("the header says this tab is allowed only when the daemon says so", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true });
+      const line = el("tab-allowed") as HTMLElement;
+      // Nothing claimed before the daemon has spoken.
+      expect(line.hidden).toBe(true);
+      h.emit("state", { running: false, tab_allowed: true });
+      await waitFor(() => expect(line.hidden).toBe(false));
+      expect(line.textContent).toContain("allowed until it closes");
+      // An older daemon sends no such key: that reads as NOT allowed, never as a
+      // stale "allowed" left on screen.
+      h.emit("state", { running: false });
+      await waitFor(() => expect(line.hidden).toBe(true));
+    });
+
+    it("the mode hint names the tab-wide allow", async () => {
+      await panelReady({ state: "connected", access: "interactive", paired: true });
+      await waitFor(() => expect(el("mode-hint").textContent).toContain("Allow for this tab"));
+    });
+  });
+
   describe("a steer note is pending until the daemon says it landed", () => {
     async function steering(): Promise<Harness> {
       const h = await panelReady({ state: "connected", access: "read_only", paired: true });

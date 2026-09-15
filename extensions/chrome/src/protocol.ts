@@ -11,7 +11,7 @@
 // --- Constants, from protocol.py ---
 
 export const ALL_DIRECTIVES = ["request_host_permissions", "disconnect"] as const;
-export const ALL_EVENTS = ["tab_activated", "navigation_completed", "download_completed"] as const;
+export const ALL_EVENTS = ["tab_activated", "navigation_completed", "download_completed", "tab_removed"] as const;
 export const ALL_FRAME_TYPES = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event", "browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
 export const ALL_METHODS = ["status", "list_tabs", "active_tab", "read_page", "get_elements", "screenshot", "activate_tab", "scroll", "create_tab", "close_tab", "click", "type_text", "press_key", "navigate"] as const;
 export const ALL_PANEL_ACTIONS = ["open", "send", "stop", "steer", "approve", "deny", "close"] as const;
@@ -26,6 +26,7 @@ export const EVENT_DOWNLOAD_COMPLETED = "download_completed";
 export const EVENT_ID_PREFIX = "evt_";
 export const EVENT_NAVIGATION_COMPLETED = "navigation_completed";
 export const EVENT_TAB_ACTIVATED = "tab_activated";
+export const EVENT_TAB_REMOVED = "tab_removed";
 export const EXTENSION_TO_DAEMON = ["browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
 export const FRAME_COMMAND = "browser.command";
 export const FRAME_CONNECTION_REPLACED = "browser.connection_replaced";
@@ -220,6 +221,7 @@ export interface HelloFrame {
   extension_version: string;
   host_permission: boolean;
   browser?: Record<string, string>;
+  browser_session?: string;
 }
 
 /** Extension -> daemon: something happened in the browser, unprompted. */
