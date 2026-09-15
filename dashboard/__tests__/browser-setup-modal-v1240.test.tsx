@@ -586,6 +586,34 @@ describe("a browser waiting to pair is offered Pair, right here (F2)", () => {
     expect(modalText()).not.toContain("no such pending pairing request");
   });
 
+  it("a browser that is paired and connected is named, with Forget as the remedy (v1.265.0)", async () => {
+    // The daemon's 409 for THIS case carries its code in the sentence; it is the
+    // one 409 a Pair press does not simply replace, and its remedy is a button on
+    // the card behind the dialog — so the words must say Forget, not "give it a
+    // moment", which would have the user wait for a state that never comes.
+    api.postErrors["/browser/pair"] = [
+      "AUTHENTICATION_FAILED: Another browser is paired and connected right now. Press Forget on the Browser page in Iron Jarvis to end that pairing, then press Pair for this one.",
+      409,
+    ];
+    await openModal(CARD_STATES.waiting);
+    fireEvent.click(screen.getByTestId("browser-setup-pair"));
+    await waitFor(() => expect(modalText()).toContain("Forget"));
+    expect(modalText()).toContain("paired and connected");
+    expect(modalText()).not.toContain("no longer waiting");
+    expect(modalText()).not.toContain("AUTHENTICATION_FAILED");
+  });
+
+  it("any other 409 on Pair is still the stale-request sentence (v1.265.0)", async () => {
+    api.postErrors["/browser/pair"] = [
+      "BROWSER_NOT_CONNECTED: The browser that asked to pair is no longer connected, so nothing was paired.",
+      409,
+    ];
+    await openModal(CARD_STATES.waiting);
+    fireEvent.click(screen.getByTestId("browser-setup-pair"));
+    await waitFor(() => expect(modalText()).toContain("no longer waiting"));
+    expect(modalText()).not.toContain("Forget");
+  });
+
   it("once paired, step 3 collapses to a check and step 4 opens", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await openFromCard(CARD_STATES.not_connected);

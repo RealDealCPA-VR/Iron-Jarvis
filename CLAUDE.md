@@ -1252,6 +1252,26 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **Mint AFTER the check, and undo a mint that was not delivered** (v1.265.0).
+  `BrowserRuntime.complete_pairing` minted the pairing row FIRST and looked for
+  the requesting socket SECOND; when the add-on's socket had closed (a
+  service-worker restart — it reconnects three seconds later) the row stayed
+  unrevoked with `last_seen_at` NULL, and `PairingStore.mint`'s already-paired
+  guard then refused every later press with "Press Forget…" while the card
+  rendered Forget only under Connected. Three fixes: the socket route's teardown
+  drops an unpaired socket's request from the store (`_drop_offer`); the service
+  checks pending + open socket before minting and calls `revoke_token` if
+  delivery fails; a Pair press passes `allow_replace=True` (old live rows are
+  revoked in the same transaction as the insert) and is refused ONLY when
+  another browser is paired AND `backend.connected`. The gone-socket test had
+  asserted `backend.connected is False` and nothing about the store — intent,
+  not outcome. Pins: `tests/test_browser_pairing_orphan_v1265.py`,
+  `dashboard/__tests__/browser-pairing-v1265.test.tsx`. Also: the add-on's
+  `sidepanel.html`/`setup.html` are two-palette (light default, dark under
+  `prefers-color-scheme`), every colour a `:root` token —
+  `tests/test_browser_addon_theme_v1265.py` scans for literals outside the
+  palettes and checks WCAG AA in both themes.
+
 - **A browser tab has no token, and "restart" is not the answer to a 401**
   (v1.264.0). The add-on's Open Jarvis opens the dashboard in the BROWSER; the
   page then 401s everywhere, and the Browser card read its own 401 as "no

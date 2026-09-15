@@ -772,6 +772,19 @@ export function YourBrowserCard() {
                         : `Unrecognised caller: ${data.pending_pairing.extension_id} — this is not the Iron Jarvis browser add-on`
                       : "This caller did not identify itself. Do not pair it unless you just loaded the add-on."}
                   </div>
+                  {/* v1.265.0: WHAT PAIR WILL DO TO THE PAIRING THIS INSTALL ALREADY
+                      HOLDS. A press replaces an idle one (a reinstalled add-on, a
+                      second browser, a credential minted for a socket that had
+                      already gone); only a browser that is paired AND connected
+                      right now needs Forget first — and that button is on this
+                      card now, not behind a state the user cannot reach. */}
+                  {data?.paired && (
+                    <div data-testid="browser-waiting-replace" className="mt-1.5">
+                      {data.connected
+                        ? "Another browser is paired and connected right now. Pairing this one needs Forget first — it is just below."
+                        : "A browser was paired before and is not connected. Pairing this one replaces that pairing."}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -826,7 +839,29 @@ export function YourBrowserCard() {
               >
                 <span className="font-semibold text-amber-200">This browser is paired</span> but
                 nothing is connected right now. Open the browser you paired, or load the Iron Jarvis
-                browser add-on again.
+                browser add-on again — pairing it again replaces this pairing.
+              </div>
+            )}
+
+            {/* FORGET IS REACHABLE WHEREVER A CREDENTIAL EXISTS (v1.265.0). It used
+                to render only under Connected, so the daemon's own remedy — "press
+                Forget on the Browser page" — pointed at a button the page did not
+                have in the one state that needed it: a pairing this install still
+                held for a browser that was not there. The connected state keeps its
+                own Forget (next to Test and Disconnect); every other state with a
+                live pairing gets this one. */}
+            {state !== "connected" && data?.paired && (
+              <div data-testid="browser-forget-line" className="flex flex-wrap items-center gap-2">
+                <ConfirmButton
+                  onConfirm={forget}
+                  label="Forget"
+                  title="Delete the pairing this install holds, so a browser must be paired again"
+                />
+                <span className="text-[11px] text-zinc-500">
+                  {state === "waiting" && data?.connected
+                    ? "Ends the connected browser's pairing so this one can be paired."
+                    : "Deletes the pairing this install still holds."}
+                </span>
               </div>
             )}
 

@@ -47,7 +47,7 @@ import secrets
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from sqlmodel import select
 
@@ -70,8 +70,12 @@ logger = get_logger(__name__)
 TOKEN_BYTES = 32
 
 #: How many unpaired sockets may be offering a pairing request at once. Reached
-#: only by a flood: a real user pairs one browser, and a reconnecting add-on
-#: replaces its own offer because ``_prune_locked`` retires the stale one first.
+#: only by a flood: a real user pairs one browser, and a reconnecting add-on's
+#: previous offer leaves the registry the moment its socket closes — the socket
+#: route calls :meth:`PairingStore.drop_request` from its teardown (v1.265.0;
+#: until then only the five-minute deadline retired it, so the card kept offering
+#: a Pair button for a socket that had closed seconds earlier, and a press on
+#: that offer minted a credential for nobody — ``tests/test_browser_pairing_orphan_v1265.py``).
 #: Small on purpose — every entry is a button the card would offer the user.
 MAX_PENDING_PAIRINGS = 8
 
@@ -262,6 +266,18 @@ class PairingStore:
         not retained: the row carries :func:`token_sha256` of it, and the caller's
         one legitimate use is the ``browser.paired`` frame.
 
+        Args:
+            allow_replace: whether a live pairing may be SUPERSEDED. When true,
+                every unrevoked row is stamped ``revoked_at`` in the SAME
+                transaction that inserts the new one, so there is never a moment
+                with two live credentials and never one with none. The service
+                passes this for a human Pair press (v1.265.0): a press on the card
+                is exactly as authoritative as Forget followed by Pair, and
+                refusing it left a user whose add-on had been reinstalled — or
+                whose credential had been minted for a socket that was already
+                gone — with a 409 whose only remedy the card did not show. The
+                default stays False so a direct caller of the store must opt in.
+
         Raises:
             BrowserError: ``PAIRING_REQUIRED`` when ``request_id`` is unknown or
                 past the deadline — the route maps that to **404**, matching plan
@@ -290,20 +306,61 @@ class PairingStore:
         # becomes the reason pairing failed (the v1.229.0 ring-handler lesson,
         # one layer down). Found by ``test_pairing_logs_no_credential``.
         announced = str(extension_id or record.extension_id or "")
+        now = self.clock()
         row = BrowserPairing(
             token_sha256=token_sha256(token),
             extension_id=announced,
             label=str(label or ""),
-            created_at=self.clock(),
+            created_at=now,
         )
+        replaced = 0
         with session_scope(self.engine) as db:
+            if allow_replace:
+                # Superseded in the same transaction as the insert (see Args).
+                replaced = self._revoke_live(db, now)
             db.add(row)
             db.commit()
         self.drop_request(request_id)
         # The TOKEN is deliberately not logged, at any level. A DEBUG line here
         # would put the credential in the user's diagnostics bundle forever.
+        if replaced:
+            logger.info("browser pairing replaced %d earlier credential(s)", replaced)
         logger.info("browser paired (extension_id=%s)", announced or "unknown")
         return token
+
+    def revoke_token(self, token: str) -> bool:
+        """Revoke the live pairing ``token`` belongs to; whether a row was stamped.
+
+        The compensating half of :meth:`mint` (v1.265.0). ``mint`` commits its row
+        BEFORE the token is delivered — it must, or a crash between delivery and
+        commit would leave a browser holding a credential the daemon never
+        recorded — so a delivery that fails afterwards has to undo the commit.
+        Without this the install is "paired" with nobody: the row sits unrevoked
+        with ``last_seen_at`` NULL forever, the add-on keeps asking to pair, and
+        every Pair press is refused as "already paired". That was this PC's state
+        from 2026-09-14 19:40 (row ``bpair_da25e8edbd72``, minted for a socket that
+        had closed two seconds earlier) until Forget was pressed by hand.
+
+        Takes the PLAINTEXT because the one caller,
+        ``BrowserRuntime.complete_pairing``, is the one place that legitimately
+        holds it for the length of a delivery; it is hashed here exactly as
+        :meth:`verify` hashes it and compared the same constant-time way.
+        """
+        if not token:
+            return False
+        digest = token_sha256(token).encode("ascii")
+        with session_scope(self.engine) as db:
+            rows = list(db.exec(select(BrowserPairing).where(BrowserPairing.revoked_at.is_(None))))
+            match = None
+            for row in rows:
+                if hmac.compare_digest(row.token_sha256.encode("ascii"), digest):
+                    match = row
+            if match is None:
+                return False
+            match.revoked_at = self.clock()
+            db.add(match)
+            db.commit()
+        return True
 
     def verify(self, token: str) -> BrowserPairing | None:
         """The live pairing this token belongs to, or ``None``.
@@ -387,14 +444,9 @@ class PairingStore:
         credential immediately after they asked to forget, which reads as Forget
         having failed.
         """
-        stamped = 0
         now = self.clock()
         with session_scope(self.engine) as db:
-            rows = list(db.exec(select(BrowserPairing).where(BrowserPairing.revoked_at.is_(None))))
-            for row in rows:
-                row.revoked_at = now
-                db.add(row)
-                stamped += 1
+            stamped = self._revoke_live(db, now)
             if stamped:
                 db.commit()
         with self._lock:
@@ -404,6 +456,21 @@ class PairingStore:
             self._retired.extend(self._pending.values())
             self._pending.clear()
         return stamped
+
+
+    @staticmethod
+    def _revoke_live(db: Any, now: datetime) -> int:
+        """Stamp every unrevoked row ``revoked_at=now`` inside the caller's session.
+
+        Shared by :meth:`revoke_all` (Forget) and :meth:`mint` with
+        ``allow_replace`` (a Pair press that supersedes), so the two cannot drift
+        on what "a live pairing" means. The caller commits.
+        """
+        rows = list(db.exec(select(BrowserPairing).where(BrowserPairing.revoked_at.is_(None))))
+        for row in rows:
+            row.revoked_at = now
+            db.add(row)
+        return len(rows)
 
 
 __all__ = [

@@ -371,19 +371,30 @@ async def test_pairing_a_second_browser_is_refused_until_forget(store):
     A shared code with the stale-request case would print the wrong sentence on the
     card half the time: "press Pair again" and "press Forget first" are different
     instructions.
+
+    v1.265.0 NARROWED this refusal to the one case it protects anything: the first
+    browser is paired AND CONNECTED (it is, here — ``complete_pairing`` adopted its
+    socket). An idle pairing is replaced by a Pair press instead; that case is
+    ``tests/test_browser_pairing_orphan_v1265.py``. What this pin now also says: the
+    connected browser's credential SURVIVES the refusal, and the refused socket
+    received no token.
     """
     backend = ExtensionBackend()
     _first, socket, first_request = _restricted(backend, store)
     runtime = _runtime(backend, store)
     await runtime.complete_pairing(first_request)
+    assert backend.connected is True, "the first browser is connected, which is the refusal's premise"
 
-    _second, _socket2, second_request = _restricted(backend, store)
+    _second, socket2, second_request = _restricted(backend, store)
     with pytest.raises(BrowserError) as caught:
         await runtime.complete_pairing(second_request)
 
     assert caught.value.code == BrowserErrorCode.AUTHENTICATION_FAILED.value
     assert "Forget" in caught.value.message
     assert len(socket.of_type(P.FRAME_PAIRED)) == 1, "the refused attempt minted nothing"
+    first_token = socket.of_type(P.FRAME_PAIRED)[0]["token"]
+    assert store.verify(first_token) is not None, "the connected browser's credential must survive"
+    assert not socket2.of_type(P.FRAME_PAIRED), "the refused socket must not receive a token"
 
 
 async def test_pairing_a_socket_that_has_gone_refuses_instead_of_minting_silently(store):
@@ -402,6 +413,15 @@ async def test_pairing_a_socket_that_has_gone_refuses_instead_of_minting_silentl
 
     assert caught.value.code == BrowserErrorCode.BROWSER_NOT_CONNECTED.value
     assert backend.connected is False
+    # v1.265.0: THE OUTCOME, NOT THE INTENT. This assertion was missing, and the
+    # test stayed green while the service minted FIRST and looked for the socket
+    # SECOND — a credential for nobody, and every later Pair press refused as
+    # "already paired" (this PC, 2026-09-14 19:40). A dead socket here is one that
+    # is still registered but whose send fails, so the mint happens and must then
+    # be undone: exactly one row, and it is revoked.
+    assert store.paired() is False, "a credential was left behind for a socket that had gone"
+    rows = store.rows()
+    assert len(rows) == 1 and rows[0]["revoked_at"] is not None, rows
 
 
 # --------------------------------------------------------------------------- #

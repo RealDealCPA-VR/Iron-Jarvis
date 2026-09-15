@@ -825,6 +825,28 @@ def register(app: FastAPI, d) -> None:
         runtime.backend.register_restricted(conn)
         return await conn.send(P.pairing_required_frame(record.request_id))
 
+    def _drop_offer(runtime: Any, request_id: str) -> None:
+        """Take a closed pairing socket's request off the card. Never raises.
+
+        Deliberately SYNCHRONOUS, unlike every other store call in this module.
+        ``drop_request`` is a lock and a dict pop — no SQLite, no hash, no prune —
+        so the to_thread rule that guards the store's DATABASE hops does not
+        apply. And it must not sit behind an await: a teardown that is being
+        cancelled re-raises at every later await (an anyio cancel scope — the
+        v1.228.0 lesson), and Starlette's ``TestClient`` cancels the app's scope
+        the instant after it sends the disconnect, so a drop written as
+        ``await asyncio.to_thread(...)`` was skipped under load and the pin went
+        red. A request already consumed by ``mint``, or already retired by the
+        deadline, is simply not there, and ``drop_request`` says so with False.
+        """
+        store = getattr(runtime, "pairing", None)
+        if store is None:
+            return
+        try:
+            store.drop_request(request_id)
+        except Exception:  # noqa: BLE001 — teardown must not raise into ASGI
+            logger.debug("pending pairing drop failed", exc_info=True)
+
     async def _pairing_lapsed(runtime: Any, conn: ExtensionConnection, expires_at: float) -> bool:
         """Whether this unpaired socket has run out of time (D06A).
 
@@ -974,6 +996,16 @@ def register(app: FastAPI, d) -> None:
                 recv = asyncio.ensure_future(ws.receive())
         finally:
             recv.cancel()
+            # A PAIRING SOCKET TAKES ITS OFFER WITH IT (v1.265.0). ``release`` forgets
+            # the socket, but its pending request lived in the store, which knew
+            # only the five-minute deadline — so the card kept offering Pair for a
+            # socket that had closed seconds earlier (the add-on reconnects on every
+            # service-worker restart), and a press on that offer minted a credential
+            # for nobody. A consumed request is already gone (``mint`` drops it), so
+            # only an UNPAIRED socket has anything to take. FIRST, and with no await
+            # in front of it — see ``_drop_offer`` for why.
+            if conn.pairing_request_id and not conn.paired:
+                _drop_offer(runtime, conn.pairing_request_id)
             try:
                 # In a finally, always: a socket that dies mid-command must fail its
                 # in-flight futures rather than leave a tool call awaiting forever.

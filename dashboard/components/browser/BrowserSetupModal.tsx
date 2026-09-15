@@ -170,6 +170,9 @@ function statusOf(e: unknown): number {
  */
 function humanFailure(what: "arm" | "pair" | "grant" | "access", e: unknown): string {
   const status = statusOf(e);
+  // The daemon prefixes its code into the sentence (`_refuse` in routes/browser.py),
+  // which is the one thing read from its words here: WHICH 409 this is.
+  const words = e instanceof Error ? e.message : String(e ?? "");
   if (status === 0) {
     return "Iron Jarvis did not answer. Check it is still running, then try again.";
   }
@@ -186,6 +189,13 @@ function humanFailure(what: "arm" | "pair" | "grant" | "access", e: unknown): st
       }
       return "Iron Jarvis could not open a setup window just now. The steps below still work, and Re-arm tries again.";
     case "pair":
+      // v1.265.0: a 409 is now one of two different things. AUTHENTICATION_FAILED
+      // is "another browser is paired and connected" — the one case a Pair press
+      // does not simply replace — and its remedy is a button on the card behind
+      // this dialog. Every other 404/409 is a request that is no longer pairable.
+      if (status === 409 && words.startsWith("AUTHENTICATION_FAILED")) {
+        return "Another browser is paired and connected to Iron Jarvis right now. Press Forget on the Browser card behind this dialog to end that pairing, then press Pair here again.";
+      }
       if (status === 404 || status === 409) {
         return "That pairing request is no longer waiting — your browser may have reconnected. Give it a moment; when it asks again, this button comes back.";
       }

@@ -1112,20 +1112,75 @@ class BrowserRuntime:
         in a JSON body lands in browser devtools, in an HTTP trace, and in whatever
         the user pastes into a bug report.
 
+        THE ORDER IS THE FIX (v1.265.0). Until then this minted FIRST and looked
+        for the socket SECOND, and the daemon.log of 2026-09-14 19:40 shows what
+        that costs: the add-on's pairing socket closed and reconnected three
+        seconds later, the card still offered the closed one, the press minted a
+        row for it, delivery found no socket and answered 409 — and from then on
+        every Pair press was refused as "already paired" by a credential no
+        browser had ever received. Now the request must be pending AND its socket
+        still open before anything is minted, and a delivery that fails after the
+        mint revokes what it minted, in the same call.
+
+        A HUMAN PAIR PRESS REPLACES AN IDLE PAIRING. A live credential whose
+        browser is NOT connected — a reinstalled add-on, a second browser opened
+        while the first is closed, a row minted for nobody — is superseded by the
+        new one (``allow_replace``). The press on the card is exactly as
+        authoritative as Forget followed by Pair, so refusing it added a step and
+        no safety. The ONE refusal kept: another browser is paired AND connected
+        right now. Replacing it would knock a working browser off on the strength
+        of an ``Origin`` header any local process can write, so that case still
+        needs the human to press Forget — which the card now shows in that state.
+
         Raises:
             BrowserError: ``PAIRING_REQUIRED`` for an unknown or expired request
-                (route: 404), ``AUTHENTICATION_FAILED`` when this install is already
-                paired (route: 409), ``BROWSER_NOT_CONNECTED`` when the socket that
-                asked has gone (route: 409 or 404 — it is no longer pairable).
+                (route: 404); ``BROWSER_NOT_CONNECTED`` when the socket that asked
+                has gone (route: 409) — its stale request is dropped so the card
+                stops offering it; ``AUTHENTICATION_FAILED`` when another browser
+                is paired and connected right now (route: 409).
         """
         if self.pairing is None:
             raise BrowserError(BrowserErrorCode.PAIRING_REQUIRED)
+        store = self.pairing
+        if await asyncio.to_thread(store.pending, request_id) is None:
+            raise BrowserError(BrowserErrorCode.PAIRING_REQUIRED)
         conn = self.backend.restricted_socket(request_id)
-        extension_id = conn.extension_id if conn is not None else ""
+        if conn is None:
+            await asyncio.to_thread(store.drop_request, request_id)
+            raise BrowserError(
+                BrowserErrorCode.BROWSER_NOT_CONNECTED,
+                message=(
+                    "The browser that asked to pair is no longer connected, so nothing "
+                    "was paired. Open the Iron Jarvis add-on's side panel (or reload the "
+                    "add-on) and press Pair when this card offers it again."
+                ),
+            )
+        if self.backend.connected and await asyncio.to_thread(store.paired):
+            raise BrowserError(
+                BrowserErrorCode.AUTHENTICATION_FAILED,
+                message=(
+                    "Another browser is paired and connected right now. Press Forget on "
+                    "the Browser page in Iron Jarvis to end that pairing, then press Pair "
+                    "for this one."
+                ),
+            )
         token = await asyncio.to_thread(
-            self.pairing.mint, request_id, extension_id=extension_id, label=label
+            store.mint,
+            request_id,
+            extension_id=conn.extension_id,
+            label=label,
+            allow_replace=True,
         )
-        await self.backend.deliver_pairing(request_id, token)
+        try:
+            await self.backend.deliver_pairing(request_id, token)
+        except BaseException:
+            # The compensating half of the mint: a credential that reached no
+            # browser must not stay live, or this install is paired with nobody.
+            try:
+                await asyncio.to_thread(store.revoke_token, token)
+            except Exception:  # noqa: BLE001 — the original refusal is the answer
+                logger.warning("could not revoke an undelivered pairing", exc_info=True)
+            raise
 
     async def verify_token(self, token: str) -> Any | None:
         """The live pairing a socket's ``?token=`` belongs to, or ``None``.

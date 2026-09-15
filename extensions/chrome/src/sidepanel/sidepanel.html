@@ -25,16 +25,51 @@
     <meta charset="utf-8" />
     <title>Iron Jarvis</title>
     <style>
+      /* THE PANEL FOLLOWS THE BROWSER'S THEME (v1.265.0). Every colour on this
+         page is a token below, so the light and the dark palette are the ONLY
+         two places a colour is written: a rule that hard-codes a hex value is a
+         rule that is wrong in one of the two themes, and
+         tests/test_browser_addon_theme_v1265.py scans for exactly that. The light
+         set is the default; the dark set applies under `prefers-color-scheme:
+         dark`, which is what Edge's Appearance setting and Chrome's colour mode
+         (or the operating system, when either is left on System) hand an
+         extension page. `color-scheme: light dark` lets the browser paint the
+         text box, the buttons' native parts and the scrollbar to match. The
+         light accents are deliberately darker than their dark-theme cousins:
+         #35d0e6 on white is decoration, not text, and the same test checks
+         every ink-on-ground pair below against WCAG AA. */
       :root {
-        color-scheme: dark;
-        --ink: #e8eef5;
-        --muted: #8fa1b5;
-        --bg: #0b1016;
-        --line: #1f2b38;
-        --cyan: #35d0e6;
-        --amber: #e0a84a;
-        --green: #4fd48a;
-        --dim: #5b6b7d;
+        color-scheme: light dark;
+        --ink: #17212c;
+        --muted: #55677a;
+        --dim: #97a5b4;
+        --bg: #ffffff;
+        --control: #f1f5f9;
+        --line: #d3dce6;
+        --cyan: #0c7d90;
+        --cyan-wash: rgba(12, 125, 144, 0.1);
+        --amber: #8a5a0b;
+        --amber-wash: rgba(138, 90, 11, 0.1);
+        --green: #1a7f4b;
+        --green-glow: rgba(26, 127, 75, 0.35);
+        --hover: brightness(0.95);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #e8eef5;
+          --muted: #8fa1b5;
+          --dim: #5b6b7d;
+          --bg: #0b1016;
+          --control: #10161e;
+          --line: #1f2b38;
+          --cyan: #35d0e6;
+          --cyan-wash: rgba(53, 208, 230, 0.14);
+          --amber: #e0a84a;
+          --amber-wash: rgba(224, 168, 74, 0.14);
+          --green: #4fd48a;
+          --green-glow: rgba(79, 212, 138, 0.6);
+          --hover: brightness(1.18);
+        }
       }
       * {
         box-sizing: border-box;
@@ -80,7 +115,7 @@
       }
       .state[data-tone="connected"] .dot {
         background: var(--green);
-        box-shadow: 0 0 8px rgba(79, 212, 138, 0.6);
+        box-shadow: 0 0 8px var(--green-glow);
       }
       .state[data-tone="waiting"] .dot {
         background: var(--amber);
@@ -159,7 +194,7 @@
         padding: 10px 12px;
         border: 1px solid var(--amber);
         border-radius: 8px;
-        background: rgba(224, 168, 74, 0.1);
+        background: var(--amber-wash);
       }
       #approval p {
         margin: 0 0 8px;
@@ -182,7 +217,7 @@
         resize: vertical;
         font: inherit;
         color: var(--ink);
-        background: #10161e;
+        background: var(--control);
         border: 1px solid var(--line);
         border-radius: 7px;
         padding: 8px 9px;
@@ -204,19 +239,19 @@
         border-radius: 7px;
         cursor: pointer;
         border: 1px solid var(--line);
-        background: #16202b;
+        background: var(--control);
         color: var(--ink);
       }
       button.primary {
         border-color: var(--cyan);
-        background: rgba(53, 208, 230, 0.14);
+        background: var(--cyan-wash);
       }
       button.warn {
         border-color: var(--amber);
-        background: rgba(224, 168, 74, 0.14);
+        background: var(--amber-wash);
       }
       button:hover {
-        filter: brightness(1.18);
+        filter: var(--hover);
       }
       button[disabled] {
         opacity: 0.5;

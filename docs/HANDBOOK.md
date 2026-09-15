@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.264.0 (2026-09-14).*
+holds itself to. Current as of v1.265.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,24 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**Pairing never dead-ends, and the sidebar matches your browser (v1.265.0).**
+If the Browser page ever told you "This install is already paired with a
+browser. Press Forget…" while no browser of yours was paired, this is the fix.
+The add-on reconnects whenever the browser restarts its background worker, and
+the page could keep offering **Pair** for the connection that had just closed;
+pressing it created a pairing for nobody, and every later press was refused by
+it. Now a closed connection takes its Pair offer with it, nothing is created
+until the browser that asked is confirmed to be there, and a pairing that could
+not be delivered is thrown away in the same step. **Pair replaces** a pairing
+whose browser is not connected — a reinstalled add-on, or a second browser
+opened while the first is closed — so there is no Forget-first step for the
+common cases; the one time Forget is still needed is when another browser is
+paired *and connected right now*, and **Forget is on the card in every state
+that has a pairing**, not only under Connected. And the sidebar and the add-on's
+site-access page now follow your browser's theme: light in a light Edge or
+Chrome, dark in a dark one (Edge: Settings › Appearance; Chrome: Appearance ›
+Mode; or the system setting when either is left on System).
 
 **The sidebar's first minute (v1.264.0).** Three things that used to go wrong
 right after loading the add-on, fixed: **Enter sends** in the sidebar (Steer
