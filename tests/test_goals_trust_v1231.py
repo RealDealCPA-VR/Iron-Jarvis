@@ -16,6 +16,8 @@ Converted from ``tests/_audit_20260904/test_a6_goals.py``.
 from __future__ import annotations
 
 import time
+
+import pytest
 from datetime import timedelta
 
 from iron_jarvis.agents import runtime as rt
@@ -201,16 +203,37 @@ async def test_unattended_ask_timeout_is_a_timeout_receipt_and_is_not_billed_as_
 
 
 async def test_an_iteration_with_no_ask_is_billed_in_full(platform, orchestrator, monkeypatch):
+    """An iteration that never asked bills its WHOLE elapsed time — by the engine's own clock.
+
+    v1.266.1: the clock is INJECTED. This case used to ``asyncio.sleep(0.05)``
+    inside the run and assert the bill was ``>= 0.05`` seconds of real wall
+    clock — a measurement of the runner, not of the engine. Windows' monotonic
+    clock ticks at 15.6 ms and asyncio fires a timer up to one clock resolution
+    EARLY, so a 50 ms sleep is billed as 47 ms on a loaded runner: the v1.266.0
+    Tests gate went red on exactly ``assert 0.047 >= 0.05`` with nothing in the
+    goals code changed. The engine reads ``time.monotonic()`` through its
+    module's ``time``, so a stand-in advanced BY THE RUN proves the property
+    deterministically — and exactly: no tolerance, no sleep, no clock.
+    """
+    from iron_jarvis.goals import engine as engine_module
+
+    class _Clock:
+        now = 1000.0
+
+        @staticmethod
+        def monotonic() -> float:
+            return _Clock.now
+
+    monkeypatch.setattr(engine_module, "time", _Clock)
     engine = GoalEngine(platform, orchestrator)
     goal = engine.store.create(name="g", contract_text="x", budget={"max_wallclock_s": 60})
 
     async def slow_run(session):
-        import asyncio
-
-        await asyncio.sleep(0.05)
+        _Clock.now += 0.05  # the run took 50 ms, by the clock the engine bills from
         return await _completed_run(session)
 
     monkeypatch.setattr(engine, "_run_session", slow_run)
     result = await engine.run_iteration(goal.id)
     assert "waited_s" not in result
-    assert engine.store.get(goal.id).decoded_spent()["wallclock_s"] >= 0.05
+    spent = engine.store.get(goal.id).decoded_spent()["wallclock_s"]
+    assert spent == pytest.approx(0.05), spent

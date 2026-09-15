@@ -1252,6 +1252,17 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **`asyncio.sleep(d)` measures LESS than `d` on Windows; bill by an injected
+  clock, never by a sleep** (v1.266.1). `test_goals_trust_v1231.py` slept 50 ms
+  inside a goal run and asserted the engine billed `>= 0.05` s of real wall
+  clock; the v1.266.0 Tests gate went red on `assert 0.047 >= 0.05` with no
+  goals code changed. Windows' monotonic clock ticks at 15.6 ms and asyncio
+  fires a timer up to one clock resolution EARLY, so the sleep is the runner's
+  fact, not the engine's. The engine reads `time.monotonic()` through its
+  module's `time`; the test now monkeypatches that name with a stand-in the
+  fake run advances by 0.05 and asserts the bill EXACTLY. Same family as the
+  p95 rule: a threshold on a sleep is a threshold on the hardware.
+
 - **One approval per tab: the grant lives on the runtime, the lane consults
   it, the risk gate never does** (v1.266.0). The user: "I need to keep on
   providing approvals over and over." Every page action in the sidebar is
