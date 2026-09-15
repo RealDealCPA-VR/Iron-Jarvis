@@ -257,9 +257,11 @@ if (absent.length) {
       expect(el("state").dataset.tone).toBe("off");
       // ABSENCE, NAMED. A blank where a mode belongs reads AS the mode.
       expect(el("access").textContent).toBe("Unknown — set in Jarvis");
-      // Offline offers no toggle: the bridge is already retrying, so a button
-      // here would be one whose press does nothing.
-      expect((el("toggle") as HTMLButtonElement).hidden).toBe(true);
+      // v1.264.0: offline offers Connect. The bridge retries on its own, but its
+      // backoff reaches 30 s and the user has usually just started the app; the
+      // press runs `resume`, which resets the backoff and connects at once.
+      expect((el("toggle") as HTMLButtonElement).hidden).toBe(false);
+      expect(el("toggle").textContent).toBe("Connect");
     });
 
     it("shows the pairing wait, with the button that ends it", async () => {

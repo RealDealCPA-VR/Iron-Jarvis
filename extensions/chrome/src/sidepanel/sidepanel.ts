@@ -425,6 +425,25 @@ el.toggle?.addEventListener("click", () => {
     .finally(() => el.toggle?.removeAttribute("disabled"));
 });
 
+// v1.264.0: ENTER SENDS. The composer used to take Enter as a newline and only
+// the button sent — "I need to physically click send". Enter now presses the
+// button that fits the moment: Send when idle, Steer while a turn is running
+// (Send is refused mid-turn anyway). Shift+Enter keeps the newline for people
+// who want one. Exported so the contract is pinned without a real keyboard.
+export function keyToPress(key: string, shift: boolean, running: boolean): "send" | "steer" | null {
+  if (key !== "Enter" || shift) return null;
+  return running ? "steer" : "send";
+}
+
+el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
+  // The ONE place the running state is written is `setTurn` (the body attribute
+  // the stylesheet reads), so it is the one place this reads it from.
+  const press = keyToPress(event.key, event.shiftKey, document.body.dataset["turn"] === "running");
+  if (!press) return;
+  event.preventDefault();
+  (press === "send" ? el.send : el.steer)?.click();
+});
+
 el.send?.addEventListener("click", () => {
   const text = (el.ask?.value ?? "").trim();
   if (!text) {

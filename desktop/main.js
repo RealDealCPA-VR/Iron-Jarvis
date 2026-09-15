@@ -1846,6 +1846,13 @@ function createMainWindow() {
   installDashboardReloadOnFailure(mainWin);
 
   mainWin.loadURL(DASHBOARD_URL);
+  // v1.264.0: a window born from an ironjarvis:// link opens at that page —
+  // AFTER the root load above, which tests/test_desktop_reliability_v1226.py
+  // pins as this function's tail.
+  if (pendingProtocolPath) {
+    mainWin.loadURL(`${DASHBOARD_URL}${pendingProtocolPath}`);
+    pendingProtocolPath = "";
+  }
 }
 
 // A dashboard-child outage used to strand the window on Chromium's error page
@@ -3933,12 +3940,80 @@ function setHwAccelPref(disabled) {
     .catch(() => refreshMenus());
 }
 
+// --- ironjarvis:// (v1.264.0) --------------------------------------------
+// The browser add-on's "Open Jarvis" button opens the dashboard in a BROWSER
+// TAB, and a browser tab has no token: the user landed on "Daemon rejected
+// your token" with every card empty. The dashboard's token banner now offers
+// "Open in the Iron Jarvis app" — a link to `ironjarvis://<path>` — and this
+// is the other end of it: the app owns the scheme, a launch with that URL
+// (argv on Windows/Linux, `open-url` on macOS) focuses the window and shows
+// that page. ONLY a dashboard path is honoured — never a host, never `..`.
+const APP_PROTOCOL = "ironjarvis";
+// No dots: dashboard paths never carry one, and `ironjarvis://evil.example.com/`
+// must read as "not ours" rather than as a page named after a host.
+const PROTOCOL_PATH_RX = /^\/[A-Za-z0-9/_\-?=&%]*$/;
+let pendingProtocolPath = "";
+
+/** The dashboard path an `ironjarvis://` URL names, or "" when it is not one
+ *  of ours. `ironjarvis://computeruse` and `ironjarvis:///computeruse` both
+ *  mean `/computeruse`; anything with a second host, a `..`, a stray
+ *  character, or over 200 chars is refused. */
+function dashboardPathFromProtocolUrl(raw) {
+  const url = String(raw || "").trim();
+  const prefix = `${APP_PROTOCOL}://`;
+  if (!url.toLowerCase().startsWith(prefix)) return "";
+  let path = url.slice(prefix.length).replace(/^\/+/, "");
+  path = `/${path}`;
+  // `..` needs no clause of its own: the character class above has no dot, so
+  // any dotted segment (a traversal, a host) already fails the test below.
+  if (path.length > 200 || path.includes("//")) return "";
+  if (!PROTOCOL_PATH_RX.test(path)) return "";
+  return path;
+}
+
+/** Show the window at a dashboard path — now when a window exists, or on the
+ *  first window when the app is still booting (the cold-start launch). */
+function openDashboardPath(path) {
+  if (!path) return false;
+  if (mainWin && !mainWin.isDestroyed()) {
+    showMainWindow();
+    mainWin.loadURL(`${DASHBOARD_URL}${path}`);
+    return true;
+  }
+  pendingProtocolPath = path;
+  if (bootComplete) showMainWindow();
+  else showWindowWhenReady = true;
+  return true;
+}
+
+function protocolUrlIn(argv) {
+  for (const arg of argv || []) {
+    if (typeof arg === "string" && arg.toLowerCase().startsWith(`${APP_PROTOCOL}://`)) return arg;
+  }
+  return "";
+}
+
 // Single-instance: a second launch focuses/opens the existing window instead of
 // spawning a duplicate daemon/dashboard pair.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  try {
+    // Packaged: the installed exe owns the scheme. Dev (`electron .`): the
+    // scheme must point at electron + this script, or Windows launches a bare
+    // electron with no app.
+    if (IS_PACKAGED) app.setAsDefaultProtocolClient(APP_PROTOCOL);
+    else app.setAsDefaultProtocolClient(APP_PROTOCOL, process.execPath, [path.resolve(process.argv[1] || ".")]);
+  } catch (err) {
+    desktopLog("warn", "[protocol] could not register ironjarvis://:", err && err.message);
+  }
+  // A cold start FROM the link: the URL is in this process's own argv.
+  pendingProtocolPath = dashboardPathFromProtocolUrl(protocolUrlIn(process.argv)) || "";
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    openDashboardPath(dashboardPathFromProtocolUrl(url));
+  });
   app.on("second-instance", () => {
     if (mainWin && !mainWin.isDestroyed()) {
       showMainWindow();
@@ -3957,6 +4032,15 @@ if (!gotLock) {
       // health gate passes.
       showWindowWhenReady = true;
     }
+  });
+
+  // A second launch that carries an ironjarvis:// URL is the link being
+  // followed: show THAT page. Its own listener, registered AFTER the plain
+  // second-launch handler above — which stays exactly what it was, because
+  // tests/test_desktop_lifecycle_v1192.py lifts the FIRST "second-instance"
+  // block verbatim — so the window is shown first and then moved to the page.
+  app.on("second-instance", (_event, argv) => {
+    openDashboardPath(dashboardPathFromProtocolUrl(protocolUrlIn(argv)));
   });
 
   app.whenReady().then(startup);

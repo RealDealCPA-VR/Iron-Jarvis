@@ -99,9 +99,9 @@ export const BRIDGE_STATES = ["offline", "pairing", "connected", "replaced", "su
  * never asked for, which nothing else in the product explains). One mapping, so
  * the word and the effect cannot disagree.
  *
- * `"none"` is a real answer, not a gap: while the bridge is merely offline it is
- * already retrying, there is nothing for a button to do, and D28's disconnected
- * state shows no second button at all.
+ * `"none"` is a real answer, not a gap: it renders no button at all. Until
+ * v1.264.0 the offline state answered it ("the bridge is already retrying"); it
+ * now offers Connect, because a press that resets the backoff IS something to do.
  */
 export type ToggleAction = "connect" | "disconnect" | "none";
 
@@ -117,6 +117,12 @@ export function toggleAction(state: BridgeState): ToggleAction {
       // user cannot revive from the only add-on surface there is.
       return "connect";
     case "offline":
+      // v1.264.0: offline offers Connect too. The bridge retries on its own, but
+      // its backoff reaches 30 s — and the moment a user reads "did not answer"
+      // is the moment they have just started the app. A press resets the backoff
+      // and tries NOW (`resume` is exactly that), instead of leaving them to wait
+      // for a timer they cannot see.
+      return "connect";
     default:
       return "none";
   }
@@ -253,7 +259,13 @@ export class BridgeSocket {
       // information), so the only honest words are that the socket failed.
       // `close` follows and drives the retry; this handler exists so the popup
       // has something true to show meanwhile.
-      this.lastError = this.lastError || "could not reach Iron Jarvis on 127.0.0.1:8787";
+      // v1.264.0: in words that say what to DO. The old "could not reach Iron
+      // Jarvis on 127.0.0.1:8787" read as a broken add-on; the usual cause is
+      // the app not running yet (it restarts during an update).
+      this.lastError =
+        this.lastError ||
+        "Iron Jarvis did not answer at 127.0.0.1:8787. Make sure the Iron Jarvis app is " +
+          "running on this PC (it restarts during an update), then press Connect.";
     });
   }
 

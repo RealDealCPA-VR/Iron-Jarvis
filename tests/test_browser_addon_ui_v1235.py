@@ -65,7 +65,11 @@ EXPECTED_ACTIONS = {
     "pairing": "disconnect",
     "replaced": "connect",
     "suspended": "connect",
-    "offline": "none",
+    # v1.264.0: offline offers Connect. It was "none" because the bridge retries on
+    # its own — but its backoff reaches 30 s, and the user reading "did not answer"
+    # has usually just started the app. The press runs `resume`, which resets the
+    # backoff and connects NOW, so the button's word is true.
+    "offline": "connect",
 }
 
 
@@ -212,7 +216,7 @@ def test_the_panel_never_writes_a_button_label_of_its_own():
 
 
 def test_the_button_is_hidden_when_there_is_nothing_for_it_to_do():
-    """D28's disconnected panel offers Open Jarvis only."""
+    """A state whose action is ``none`` draws no button (an unknown state, since v1.264.0)."""
     panel = _code(PANEL_TS)
     assert 'el.toggle.hidden = view.toggle === "";' in panel, (
         "the button must be hidden exactly when the action is none; a visible "

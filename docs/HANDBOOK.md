@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.263.0 (2026-09-14).*
+holds itself to. Current as of v1.264.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,19 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**The sidebar's first minute (v1.264.0).** Three things that used to go wrong
+right after loading the add-on, fixed: **Enter sends** in the sidebar (Steer
+while Jarvis is working; Shift+Enter for a new line). If the sidebar says
+"Iron Jarvis did not answer at 127.0.0.1:8787", the app is not running yet —
+it restarts during an update — so start it and press **Connect**, which tries
+again at once instead of waiting out the retry timer. And **Open Jarvis** from
+the sidebar opens the dashboard in a browser tab, which has no token: the
+banner at the top now offers **Open in the Iron Jarvis app**, which brings the
+app's own window to that same page (the app registers `ironjarvis://` links),
+and names the token file if you would rather paste it. A Browser card that
+says "not signed in" is that same browser-tab situation — not a reason to
+restart anything.
 
 **The sidebar works the page for you (v1.262.0).** With access set to
 **Interactive**, ask the sidebar for a job — "fill this form with my details",

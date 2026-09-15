@@ -558,10 +558,16 @@ export function YourBrowserCard() {
   const state = browserCardState(data);
   const access = data?.access ?? "off";
 
+  // v1.264.0: a 401/403 is THIS PAGE not being signed in — the dashboard opened
+  // in a plain browser tab (the add-on's Open Jarvis button does that) has no
+  // token — and it used to be reported as "no Browser surface", which sent the
+  // user to restart an app that was fine.
+  const notSignedIn =
+    !data && error !== null && (error.status === 401 || error.status === 403);
   // A daemon that predates this ship answers 404. Say so plainly rather than
   // rendering an "Off" card that no switch on it can change. A status-0 error
   // is the offline case, which the page's own OfflineHint already owns.
-  const unavailable = !data && error !== null && error.status !== 0;
+  const unavailable = !data && error !== null && error.status !== 0 && !notSignedIn;
 
   async function run(
     which: "pair" | "grant" | "test" | "disconnect" | "forget",
@@ -651,7 +657,15 @@ export function YourBrowserCard() {
       className="border-accent/20"
     >
       <div className="space-y-3.5" data-testid="your-browser-card">
-        {unavailable ? (
+        {notSignedIn ? (
+          <ErrorNote>
+            <span data-testid="browser-not-signed-in">
+              This page is not signed in to Iron Jarvis, so the Browser card cannot read your
+              setup. Open this page in the Iron Jarvis app itself (the banner at the top has a
+              link), or enter the app&apos;s token there.
+            </span>
+          </ErrorNote>
+        ) : unavailable ? (
           <ErrorNote>
             This daemon does not have the Browser surface yet — restart Iron Jarvis and reopen this
             page.

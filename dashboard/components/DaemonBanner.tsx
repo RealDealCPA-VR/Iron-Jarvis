@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, m } from "framer-motion";
 import { ServerCrash, ShieldAlert, X, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
@@ -17,6 +18,16 @@ function apiPort(): string {
   } catch {
     return "8787";
   }
+}
+
+/** v1.264.0: the desktop app registers `ironjarvis://` (desktop/main.js) and
+ *  opens its own window at the path this link names. Only a dashboard path:
+ *  nothing outside `/…`, and never a second host. */
+export function appLink(pathname: string | null | undefined): string {
+  const p = (pathname ?? "").trim();
+  // No dots and no `//`: the same rule desktop/main.js applies on the other end.
+  const safe = /^\/[A-Za-z0-9/_\-]*$/.test(p) && !p.includes("//") ? p : "/";
+  return `ironjarvis://${safe.replace(/^\//, "")}`;
 }
 
 /**
@@ -35,6 +46,7 @@ export function DaemonBanner() {
   // banner never suppresses a later token/error banner, and vice-versa.
   const [dismissed, setDismissed] = useState<string | null>(null);
   const port = apiPort();
+  const pathname = usePathname();
 
   // One current problem state, by priority. A fresh/different problem re-shows the
   // banner (the App Router root layout never remounts, so a plain flag was sticky).
@@ -133,10 +145,35 @@ export function DaemonBanner() {
             <div className="min-w-0 flex-1 text-sm text-rose-100/90">
               <span className="font-semibold text-rose-200">Daemon rejected your token.</span>{" "}
               <span className="text-rose-100/70">
-                The daemon is running but your access token is missing or stale — data
-                below may look empty. Re-enter it to reconnect.
+                {isDesktopShell() ? (
+                  <>
+                    The daemon is running but your access token is missing or stale — data
+                    below may look empty. Re-enter it to reconnect.
+                  </>
+                ) : (
+                  /* v1.264.0: the add-on's Open Jarvis button lands here — a
+                     browser tab has no token, and "re-enter it" sent the user
+                     hunting. Name the way out and the file. */
+                  <>
+                    This page was opened in a browser, so it has no token — data below may look
+                    empty. Open it in the Iron Jarvis app instead, or paste the token from{" "}
+                    <code className="rounded bg-rose-500/10 px-1 py-0.5 font-mono text-[11px]">
+                      %APPDATA%\Iron Jarvis\token.txt
+                    </code>
+                    .
+                  </>
+                )}
               </span>
             </div>
+            {!isDesktopShell() && (
+              <a
+                href={appLink(pathname)}
+                data-testid="open-in-app"
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/30 px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/15"
+              >
+                Open in the Iron Jarvis app
+              </a>
+            )}
             <Link
               href="/settings"
               className="flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/30 px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/15"

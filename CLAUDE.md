@@ -1252,6 +1252,28 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A browser tab has no token, and "restart" is not the answer to a 401**
+  (v1.264.0). The add-on's Open Jarvis opens the dashboard in the BROWSER; the
+  page then 401s everywhere, and the Browser card read its own 401 as "no
+  Browser surface — restart Iron Jarvis". Now: `desktop/main.js` owns
+  `ironjarvis://` (`setAsDefaultProtocolClient`; packaged AND dev forms), a
+  SEPARATE `second-instance` listener registered AFTER the plain one (that one
+  is lifted verbatim by `test_desktop_lifecycle_v1192` — the FIRST such block —
+  so it must not change shape, and `createMainWindow`'s `loadURL(DASHBOARD_URL)`
+  tail is pinned by `test_desktop_reliability_v1226`, so the pending path loads
+  AFTER it) plus `open-url` and the cold-start argv all funnel through
+  `dashboardPathFromProtocolUrl` (dashboard path only — no host, no dots, no
+  `..`, no `//`) into `openDashboardPath`, which shows the window at that page
+  or parks it in `pendingProtocolPath` for the first window. The token banner
+  outside the desktop shell links `ironjarvis://<path>` (`appLink`, same rule)
+  and names `token.txt`; `YourBrowserCard` tells 401/403 ("not signed in")
+  from 404 ("older daemon"). Add-on: Enter sends / Steer while running /
+  Shift+Enter newline (`keyToPress`, reading the ONE running flag
+  `document.body.dataset.turn`); `toggleAction("offline")` is `connect`
+  (`resume` resets the backoff and reconnects now); the offline words name the
+  cause. `tests/test_sidebar_first_minute_v1264.py`,
+  `dashboard/__tests__/sidebar-first-minute-v1264.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
