@@ -431,16 +431,96 @@ if (absent.length) {
       expect(line.hidden).toBe(true);
       h.emit("state", { running: false, tab_allowed: true });
       await waitFor(() => expect(line.hidden).toBe(false));
-      expect(line.textContent).toContain("allowed until it closes");
+      // v1.267.0: a pill, with the sentence in its tooltip.
+      expect(line.textContent).toContain("Tab allowed");
+      expect(line.title).toContain("until it closes");
       // An older daemon sends no such key: that reads as NOT allowed, never as a
       // stale "allowed" left on screen.
       h.emit("state", { running: false });
       await waitFor(() => expect(line.hidden).toBe(true));
     });
 
-    it("the mode hint names the tab-wide allow", async () => {
+    it("the mode explanation names the tab-wide allow — in the pill's tooltip (v1.267.0)", async () => {
       await panelReady({ state: "connected", access: "interactive", paired: true });
-      await waitFor(() => expect(el("mode-hint").textContent).toContain("Allow for this tab"));
+      await waitFor(() => expect(el("access").title).toContain("Allow for this tab"));
+      // And NOT as a paragraph: the minimal panel prints no instruction text.
+      expect(document.getElementById("mode-hint")).toBeNull();
+    });
+  });
+
+  describe("the model is the user's to pick (v1.267.0)", () => {
+    const MODELS = {
+      models: [
+        { provider: "anthropic", model: "claude-sonnet-4-6", available: true },
+        { provider: "ollama", model: "qwen3", name: "Qwen 3", available: false },
+      ],
+      default: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    };
+
+    it("fills the select from the daemon's list, names the default, greys the unconnected", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true, hostPermission: true });
+      const select = el("model") as HTMLSelectElement;
+      expect(select.options.length).toBe(1);
+      h.emit("models", MODELS);
+      await waitFor(() => expect(select.options.length).toBe(3));
+      expect(select.options[0].value).toBe("");
+      expect(select.options[0].textContent).toContain("Default");
+      expect(select.options[0].textContent).toContain("claude-sonnet-4-6");
+      expect(select.options[1].textContent).toBe("claude-sonnet-4-6 · anthropic");
+      expect(select.options[2].textContent).toBe("Qwen 3 · ollama");
+      expect(select.options[2].disabled).toBe(true);
+      expect(select.value).toBe("");
+    });
+
+    it("a pick rides the next Send; Default sends no pick", async () => {
+      const h = await panelReady({ state: "connected", access: "interactive", paired: true, hostPermission: true });
+      const select = el("model") as HTMLSelectElement;
+      h.emit("models", MODELS);
+      await waitFor(() => expect(select.options.length).toBe(3));
+      select.value = select.options[1].value;
+      select.dispatchEvent(new Event("change"));
+
+      (el("ask") as HTMLTextAreaElement).value = "hello";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => {
+        const sent = h.sent.find((m) => m["action"] === "send");
+        expect(sent).toBeTruthy();
+        const params = (sent?.["params"] ?? {}) as Record<string, unknown>;
+        expect(params["text"]).toBe("hello");
+        expect(params["provider"]).toBe("anthropic");
+        expect(params["model"]).toBe("claude-sonnet-4-6");
+      });
+
+      h.emit("done", {});
+      select.value = "";
+      select.dispatchEvent(new Event("change"));
+      (el("ask") as HTMLTextAreaElement).value = "again";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => {
+        const sends = h.sent.filter((m) => m["action"] === "send");
+        expect(sends.length).toBe(2);
+        const params = (sends[1]?.["params"] ?? {}) as Record<string, unknown>;
+        expect(params["text"]).toBe("again");
+        expect(params["provider"]).toBeUndefined();
+        expect(params["model"]).toBeUndefined();
+      });
+    });
+  });
+
+  describe("the panel is quiet when opened (v1.267.0)", () => {
+    it("prints no instruction paragraphs; the explanations are tooltips", async () => {
+      await panelReady({ state: "connected", access: "interactive", paired: true, hostPermission: true });
+      for (const gone of ["mode-hint", "running-hint", "keys-hint"]) {
+        expect(document.getElementById(gone)).toBeNull();
+      }
+      expect(document.querySelector("h1")).toBeNull();
+      expect((el("stop") as HTMLButtonElement).title).toContain("finishes");
+      expect((el("ask") as HTMLTextAreaElement).title).toContain("Enter sends");
+      await waitFor(() => expect(el("access").title).toContain("Interactive"));
+      // The connected, idle header carries no note and no visible action.
+      expect(el("note").textContent).toBe("");
+      expect((el("toggle") as HTMLButtonElement).hidden).toBe(false); // Disconnect is real here
+      expect(el("state-word").textContent).toBe("Connected");
     });
   });
 

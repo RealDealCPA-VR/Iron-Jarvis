@@ -156,11 +156,14 @@ def test_the_side_panel_declares_no_pairing_ui_and_no_settings(  # D28, narrowed
 ):
     """What D28 forbade in the popup, still forbidden in the panel that replaced it.
 
-    The sidebar plan supersedes exactly one line of D28 -- chat -- and re-affirms the
-    rest, so the list this pin walks is D28's minus the composer the user asked for.
-    A ``<textarea>`` is now legitimate; a ``<select>`` and a ``<form>`` are not,
-    because the first is how a model picker arrives and the second is how a
-    credential field arrives.
+    The sidebar plan superseded one line of D28 -- chat -- and v1.267.0 a second,
+    by the user's decision: the MODEL PICKER ("I should also be able to select
+    the model I want from this browser extension"). So the panel may hold exactly
+    ONE ``<select>``, the model picker (``id="model"``), and it is filled from the
+    daemon's own list, never a catalog of its own. Everything else D28 forbade
+    stays forbidden: a ``<form>`` or an ``<input>`` is how a credential field
+    arrives, a second select is how a tool switch or an access switch would, and
+    no button may offer to pair.
     """
     raw = PANEL_HTML.read_text(encoding="utf-8").replace("\r\n", "\n")
     # Strip HTML comments FIRST. The file explains in prose why it has no pairing
@@ -168,12 +171,16 @@ def test_the_side_panel_declares_no_pairing_ui_and_no_settings(  # D28, narrowed
     # rule — the pin has to read what the panel RENDERS, not what it says about
     # itself.
     html = re.sub(r"<!--.*?-->", "", raw, flags=re.S).lower()
-    for forbidden in ("<select", "<form", "<input"):
+    for forbidden in ("<form", "<input"):
         assert forbidden not in html, (
             f"the side panel must not contain {forbidden!r}: D28 keeps pairing "
-            "approval, model selection, automation UI and tool settings out of the "
-            "browser, and the sidebar plan lifted only the chat half of that rule"
+            "approval, automation UI and tool settings out of the browser; the sidebar "
+            "plan lifted the chat half and v1.267.0 the model picker, nothing else"
         )
+    selects = re.findall(r"<select[^>]*>", html)
+    assert len(selects) == 1 and 'id="model"' in selects[0], (
+        f"the side panel may hold exactly one select, the model picker: {selects}"
+    )
     # No control the user can press may offer to pair: pairing is approved in
     # Jarvis, and a second door to the same credential is a second thing to audit.
     for label in re.findall(r"<button[^>]*>(.*?)</button>", html, flags=re.S):

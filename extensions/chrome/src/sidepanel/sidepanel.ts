@@ -33,6 +33,7 @@ import {
   PANEL_EVENT_DELTA,
   PANEL_EVENT_DONE,
   PANEL_EVENT_ERROR,
+  PANEL_EVENT_MODELS,
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
   PANEL_EVENT_TOOL,
@@ -145,7 +146,7 @@ const el = {
   word: document.getElementById("state-word"),
   note: document.getElementById("note"),
   access: document.getElementById("access"),
-  modeHint: document.getElementById("mode-hint"),
+  model: document.getElementById("model") as HTMLSelectElement | null,
   version: document.getElementById("version"),
   open: document.getElementById("open") as HTMLButtonElement | null,
   toggle: document.getElementById("toggle") as HTMLButtonElement | null,
@@ -242,11 +243,9 @@ function paintStatus(status: BridgeStatus): void {
     // otherwise. An older daemon sends `browser.ready` with no `access` at all, and
     // a bare placeholder sitting where a mode belongs reads AS the mode.
     el.access.textContent = accessWord(status.access);
-  }
-  if (el.modeHint) {
-    const hint = modeHint(status.access);
-    el.modeHint.textContent = hint;
-    el.modeHint.hidden = hint === "";
+    // v1.267.0: what the mode MEANS lives in the pill's tooltip, not in a
+    // paragraph under the header — "not too much in the way of instruction".
+    el.access.title = modeHint(status.access);
   }
   // The empty state is driven by the SAME string the header prints from, so the
   // panel cannot offer a composer while its own header says access is off.
@@ -343,6 +342,10 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       if (el.tabAllowed) {
         el.tabAllowed.hidden = payload["tab_allowed"] !== true;
       }
+      return;
+    }
+    case PANEL_EVENT_MODELS: {
+      paintModels(payload);
       return;
     }
     case PANEL_EVENT_DELTA: {
@@ -463,7 +466,9 @@ el.send?.addEventListener("click", () => {
   }
   setTurn(true);
   streaming = null;
-  void post(PANEL_ACTION_SEND, { text }).then((sent) => {
+  // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
+  const pick = currentPick();
+  void post(PANEL_ACTION_SEND, { text, ...(pick ? pick : {}) }).then((sent) => {
     if (!sent) {
       setTurn(false);
       say("error", "That did not reach Iron Jarvis — this browser is not connected.");
@@ -532,6 +537,119 @@ el.deny?.addEventListener("click", () => {
   clearApproval();
   void post(PANEL_ACTION_DENY, { id });
 });
+
+// --- the model (v1.267.0) ---------------------------------------------------
+
+/** `chrome.storage.local` key for the model picked in THIS browser's sidebar. */
+export const STORAGE_MODEL_KEY = "ij.panel.model";
+
+interface ModelPick {
+  provider: string;
+  model: string;
+}
+
+interface ModelRow {
+  provider: string;
+  model: string;
+  name?: string;
+  available?: boolean;
+}
+
+/** The option label: the catalog's name when it has one, else the model id, then the provider. */
+export function modelLabel(row: ModelRow): string {
+  const head = row.name && row.name !== row.model ? row.name : row.model;
+  return `${head} · ${row.provider}`;
+}
+
+/** The option value is the pick itself, so a later Send needs no lookup. */
+export function pickValue(pick: ModelPick): string {
+  return JSON.stringify({ provider: pick.provider, model: pick.model });
+}
+
+export function pickFromValue(value: string): ModelPick | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<ModelPick>;
+    if (typeof parsed.provider === "string" && typeof parsed.model === "string" && parsed.model) {
+      return { provider: parsed.provider, model: parsed.model };
+    }
+  } catch {
+    // Not a pick this build wrote.
+  }
+  return null;
+}
+
+/** The pick the user last made here, or null for the app's default. */
+let storedPick: ModelPick | null = null;
+
+function currentPick(): ModelPick | null {
+  return pickFromValue(el.model?.value ?? "") ?? storedPick;
+}
+
+async function loadPick(): Promise<void> {
+  try {
+    const got = await chrome.storage?.local?.get(STORAGE_MODEL_KEY);
+    storedPick = pickFromValue(String(got?.[STORAGE_MODEL_KEY] ?? ""));
+  } catch {
+    // No storage here (the panel outside an add-on context): default it is.
+    storedPick = null;
+  }
+}
+
+function paintModels(payload: Record<string, unknown>): void {
+  const select = el.model;
+  if (!select) return;
+  const rows = Array.isArray(payload["models"]) ? (payload["models"] as ModelRow[]) : [];
+  const dflt = (payload["default"] ?? {}) as Partial<ModelPick>;
+  const defaultRow = rows.find((r) => r.provider === dflt.provider && r.model === dflt.model);
+  select.textContent = "";
+  const first = document.createElement("option");
+  first.value = "";
+  // The Default option NAMES the model Jarvis would use, so "Default" is never a
+  // word the user has to go and look up.
+  first.textContent = defaultRow
+    ? `Default · ${modelLabel(defaultRow)}`
+    : dflt.model
+      ? `Default · ${dflt.model}`
+      : "Default";
+  select.appendChild(first);
+  for (const row of rows) {
+    if (!row || typeof row.provider !== "string" || typeof row.model !== "string") continue;
+    const option = document.createElement("option");
+    option.value = pickValue(row);
+    option.textContent = modelLabel(row);
+    if (row.available === false) {
+      // Offered, greyed, and explained on hover: a model that vanished from the
+      // list would leave the user wondering where it went; one that is greyed
+      // says what to do about it.
+      option.disabled = true;
+      option.title = "Not connected in Jarvis";
+    }
+    select.appendChild(option);
+  }
+  // Restore the remembered pick only if the daemon still lists it — a pick the
+  // list no longer carries is Default, which is what the daemon would refuse it
+  // back to anyway.
+  const wanted = storedPick ? pickValue(storedPick) : "";
+  const present = Array.from(select.options).some((o) => o.value === wanted && !o.disabled);
+  select.value = present ? wanted : "";
+}
+
+el.model?.addEventListener("change", () => {
+  const pick = pickFromValue(el.model?.value ?? "");
+  storedPick = pick;
+  try {
+    if (pick) {
+      void chrome.storage?.local?.set({ [STORAGE_MODEL_KEY]: pickValue(pick) });
+    } else {
+      void chrome.storage?.local?.remove(STORAGE_MODEL_KEY);
+    }
+  } catch {
+    // No storage: the pick lasts for this panel's lifetime, which is still true.
+  }
+});
+
+void loadPick();
 
 // Tell the daemon the panel is gone, so a turn it is narrating to nobody can stop
 // narrating. `pagehide` rather than `unload`: Chrome does not reliably fire `unload`

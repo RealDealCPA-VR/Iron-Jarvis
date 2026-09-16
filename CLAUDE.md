@@ -1252,6 +1252,27 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The sidebar prints only what changes what the user can do, and it has a
+  model picker — the user's decision, reversing D28's "no model picker"**
+  (v1.267.0). "Not too much in the way of instruction when the extension is
+  opened. Super clean and minimal. I should also be able to select the model."
+  `sidepanel.html`: no `<h1>`, no `#mode-hint`/`#running-hint`/`#keys-hint`
+  paragraphs — every explanation is a `title=` tooltip (the v1242/v1264 pins
+  read the HTML SOURCE, so they still find the words); the access mode is a
+  pill; the add-on version + Open Jarvis sit in the footer meta line;
+  `tests/test_browser_sidepanel_minimal_v1267.py` counts the idle panel's
+  visible words and fails when instruction creeps back. THE MODEL: `open`
+  also emits `PANEL_EVENT_MODELS` — `PanelTurns.models()` runs
+  `routes.connections.selectable_models` (THE catalog behind `GET /models`)
+  off the loop, projected to `MODEL_ROW_KEYS`, cached `models_ttl_s` (open is
+  posted on every tab switch); the pick is stored in the add-on
+  (`chrome.storage.local` `ij.panel.model`) and rides every `send` as
+  `provider`/`model`; `_refuse_pick` refuses an unknown or unavailable pick with
+  one sentence BEFORE a turn starts; the pick rides `ChatBody.provider/model`
+  so routing, the v1.162.0 refusal and the route disclosure are the chat
+  page's; `_route_notice` prints one muted line only for `failover`/`mock`
+  (the receipt's amber cases). Do not add a second catalog in the add-on.
+
 - **`asyncio.sleep(d)` measures LESS than `d` on Windows; bill by an injected
   clock, never by a sleep** (v1.266.1). `test_goals_trust_v1231.py` slept 50 ms
   inside a goal run and asserted the engine billed `>= 0.05` s of real wall

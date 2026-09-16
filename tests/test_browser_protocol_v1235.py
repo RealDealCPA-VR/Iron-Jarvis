@@ -250,7 +250,12 @@ def test_a_restricted_socket_may_send_only_the_pairing_ack():
 
 
 def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
-    """BROWSER-SIDEBAR-PLAN section 3, verbatim. Both sides read these tuples."""
+    """BROWSER-SIDEBAR-PLAN section 3, verbatim, plus ONE event added since.
+
+    Both sides read these tuples. v1.267.0 added ``models`` — the daemon's model
+    list, sent on ``open`` for the sidebar's picker (the user's decision, which
+    reversed D28's "no model picker"); the seven actions are unchanged.
+    """
     assert P.ALL_PANEL_ACTIONS == ("open", "send", "stop", "steer", "approve", "deny", "close")
     assert P.ALL_PANEL_EVENTS == (
         "state",
@@ -260,6 +265,7 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "steered",
         "done",
         "error",
+        "models",
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
     assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)

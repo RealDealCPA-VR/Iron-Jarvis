@@ -333,6 +333,12 @@ class PanelTurns:
         #: none of them renders as an EMPTY answer unless this module says
         #: something true instead (:meth:`_translate`, the ``done`` branch).
         self._delta_seen = False
+        #: v1.267.0: the model list, cached with the loop time it was read at.
+        #: ``open`` is posted on every tab switch now, and the list probes live
+        #: providers; a minute is long enough that a switch never re-probes and
+        #: short enough that a provider connected in Jarvis shows up soon.
+        self._models_cache: tuple[float, dict[str, Any]] | None = None
+        self.models_ttl_s: float = 60.0
 
     # --- narration --------------------------------------------------------
 
@@ -366,9 +372,18 @@ class PanelTurns:
         params = params if isinstance(params, dict) else {}
         if act == P.PANEL_ACTION_OPEN:
             await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+            # v1.267.0: the model list rides the open, so the picker is filled
+            # before the user reaches for it. After the state frame, because the
+            # list may probe providers and the header must not wait on that.
+            await self.emit(conn, P.PANEL_EVENT_MODELS, await self.models())
             return
         if act == P.PANEL_ACTION_SEND:
-            await self._send(conn, str(params.get("text") or "").strip())
+            await self._send(
+                conn,
+                str(params.get("text") or "").strip(),
+                provider=str(params.get("provider") or "").strip(),
+                model=str(params.get("model") or "").strip(),
+            )
             return
         if act == P.PANEL_ACTION_STOP:
             await self._stop(conn)
@@ -393,7 +408,97 @@ class PanelTurns:
             {"text": f"Iron Jarvis does not know the sidebar action {act!r}."},
         )
 
-    async def _send(self, conn: Any, text: str) -> None:
+    # --- the model list (v1.267.0) -----------------------------------------
+
+    #: The keys a model row carries to the panel. Everything else the catalog
+    #: knows (base URLs, exec paths, context windows) is Jarvis's business.
+    MODEL_ROW_KEYS = ("provider", "model", "name", "available", "kind")
+
+    async def models(self, *, force: bool = False) -> dict[str, Any]:
+        """The ``models`` payload: THE catalog every Iron Jarvis picker reads, projected.
+
+        ``selectable_models`` (the function behind ``GET /models``) is the one
+        source, so the sidebar can never offer a model the app would not, and
+        never miss one it would. It probes live providers, so it runs off the
+        loop and is cached for :attr:`models_ttl_s`. A failure is reported as an
+        EMPTY list with the reason — the select then offers Default alone, which
+        is true — never as a guessed list.
+        """
+        now = asyncio.get_running_loop().time()
+        cached = self._models_cache
+        if cached is not None and not force and now - cached[0] < self.models_ttl_s:
+            return cached[1]
+        cfg = getattr(self.platform, "config", None)
+        default = {
+            "provider": str(getattr(cfg, "default_provider", "") or ""),
+            "model": str(getattr(cfg, "default_model", "") or ""),
+        }
+        try:
+            rows = await asyncio.to_thread(self._catalog)
+            payload: dict[str, Any] = {
+                "models": [
+                    {k: row[k] for k in self.MODEL_ROW_KEYS if k in row}
+                    for row in rows
+                    if row.get("provider") and row.get("model")
+                ],
+                "default": default,
+            }
+        except Exception as exc:  # noqa: BLE001 — an unreadable catalog is reported, not invented
+            logger.debug("panel model list failed", exc_info=True)
+            payload = {"models": [], "default": default, "error": f"{type(exc).__name__}: {exc}"[:200]}
+        self._models_cache = (now, payload)
+        return payload
+
+    def _catalog(self) -> list[dict[str, Any]]:
+        """Blocking: the same rows ``GET /models`` answers with."""
+        from ..daemon.routes.connections import selectable_models
+
+        deps = SimpleNamespace(
+            platform=self.platform, fleet=getattr(self.platform, "fleet", None)
+        )
+        return list(selectable_models(deps))
+
+    async def _refuse_pick(self, conn: Any, provider: str, model: str) -> bool:
+        """Whether a (provider, model) pick must be refused — and say why if so.
+
+        Checked against the daemon's own list BEFORE a turn starts. The router
+        would refuse an unreachable explicit pick on its own (v1.162.0: never a
+        silent substitute), but that refusal arrives as a failed turn; here the
+        user gets one sentence and their message stays in the box.
+        """
+        if not provider and not model:
+            return False
+        catalog = await self.models()
+        rows = catalog.get("models") or []
+        match = next(
+            (r for r in rows if r.get("provider") == provider and r.get("model") == model),
+            None,
+        )
+        if match is None:
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {
+                    "text": f"{model or provider} is not on Iron Jarvis's model list any"
+                    " more. Pick another model in the sidebar.",
+                    "reason": "model_unknown",
+                },
+            )
+            return True
+        if match.get("available") is False:
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {
+                    "text": f"{model} ({provider}) is not connected right now. Pick"
+                    " another model, or connect it in Jarvis → Connections.",
+                    "reason": "model_unavailable",
+                },
+            )
+            return True
+        return False
+
+    async def _send(self, conn: Any, text: str, *, provider: str = "", model: str = "") -> None:
         if not text:
             await self.emit(
                 conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."}
@@ -417,6 +522,9 @@ class PanelTurns:
             await self.emit(conn, P.PANEL_EVENT_ERROR, {"text": refusal,
                                                         "reason": "rate_limited"})
             return
+        # v1.267.0: the pick is checked before anything is spent on the turn.
+        if await self._refuse_pick(conn, provider, model):
+            return
         self._conn = conn
         self._turn_id = f"panel_{secrets.token_hex(8)}"
         self._steers.clear()
@@ -426,7 +534,9 @@ class PanelTurns:
         self._offered.clear()
         self._delta_seen = False
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
-        self._task = asyncio.ensure_future(self._run(conn, text, self._turn_id))
+        self._task = asyncio.ensure_future(
+            self._run(conn, text, self._turn_id, provider=provider, model=model)
+        )
 
     def _state(self, *, running: bool | None = None) -> dict[str, Any]:
         """The ``state`` frame: whether a turn runs, and whether THIS tab is allowed.
@@ -447,6 +557,24 @@ class PanelTurns:
             return bool(runtime is not None and runtime.active_tab_allowed())
         except Exception:  # noqa: BLE001 — a header line must never break the socket
             return False
+
+    @staticmethod
+    def _route_notice(route: Any) -> str:
+        """One sentence for a failover or a mock answer; ``""`` for everything else."""
+        if not isinstance(route, dict):
+            return ""
+        reason = str(route.get("reason") or "")
+        provider = str(route.get("provider") or "")
+        model = str(route.get("model") or "")
+        answered = "/".join(p for p in (provider, model) if p) or "another model"
+        if reason == "failover":
+            asked = str(route.get("from") or route.get("requested") or "the model you picked")
+            why = str(route.get("why") or "").strip()
+            tail = f" ({why})" if why else ""
+            return f"Answered by {answered} — {asked} was unreachable{tail}."
+        if reason == "mock":
+            return "Answered by the built-in mock model — no real model is connected in Jarvis."
+        return ""
 
     def _over_budget(self) -> str:
         """"" if this Send fits the rolling budget, else the sentence to say.
@@ -599,8 +727,17 @@ class PanelTurns:
             )
         return "\n".join(note["text"] for note in taken)
 
-    async def _run(self, conn: Any, text: str, turn_id: str) -> None:
-        """Run one turn and translate its SSE frames into panel events."""
+    async def _run(
+        self, conn: Any, text: str, turn_id: str, *, provider: str = "", model: str = ""
+    ) -> None:
+        """Run one turn and translate its SSE frames into panel events.
+
+        ``provider``/``model`` (v1.267.0) are the panel's pick, already checked
+        against the catalog; empty means the app's default, exactly as on the
+        chat page. They ride the same ``ChatBody`` fields, so the lane's routing,
+        its refusal of an unreachable explicit pick and its route disclosure are
+        all the chat page's, unchanged.
+        """
         from ..daemon.chat_stream import stream_chat_turn
         from ..daemon.schemas import ChatBody, ChatMessageBody
 
@@ -612,6 +749,8 @@ class PanelTurns:
             # VISIBLE-BUT-UNGRANTED and pauses for the card.
             auto_tools=True,
             turn_id=turn_id,
+            provider=provider,
+            model=model,
         )
         # THE CEILING. Computed here, per turn, from the live registry, and
         # passed to the chat lane — which drops anything outside it BEFORE the
@@ -749,6 +888,17 @@ class PanelTurns:
                 await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
             return
         if event == "done":
+            # THE ROUTE, WHEN IT IS NOT WHAT WAS ASKED (v1.267.0). The lane's
+            # route disclosure rides this frame; the dashboard renders it as the
+            # receipt under every reply. The panel prints nothing for the
+            # ordinary case — the select already says which model — and one
+            # muted line for the two cases the receipt paints amber: a failover
+            # (a different model answered) and the mock (no real model at all).
+            # Silence there would be the v1.165.0 accountability hole, one
+            # surface over.
+            notice = self._route_notice(data.get("route"))
+            if notice:
+                await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": "route", "text": notice})
             # NEVER AN EMPTY ANSWER. The panel paints its reply from `delta`
             # frames and ignores this frame's text entirely, so a turn that
             # streamed nothing renders as a question that vanished. Three

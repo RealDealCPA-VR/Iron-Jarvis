@@ -2,23 +2,31 @@
 <!--
   The side panel: a WINDOW onto a conversation that runs in Iron Jarvis (D32, D33).
 
-  It holds no model, no agent loop, no policy and no tool settings. Everything it
-  shows arrives as a `browser.panel_event` frame and everything the user presses
-  leaves as a `browser.panel` action, over the socket the service worker already
-  holds. D28's do-not-place list is superseded for chat and re-affirmed for the
-  rest: there is no model picker, no tool switch and no pairing control here, and
-  none may be added — those are governed in Jarvis, on surfaces that are reviewed.
+  It holds no agent loop, no policy and no tool settings. Everything it shows
+  arrives as a `browser.panel_event` frame and everything the user presses leaves
+  as a `browser.panel` action, over the socket the service worker already holds.
 
-  It also carries the connection readout the popup used to own. The popup is gone
-  (D32: Chrome ignores `openPanelOnActionClick` while `action.default_popup` is
-  set), so the status story lives here or nowhere.
+  ONE control lives here that D28 once kept out, by the user's decision
+  (v1.267.0): the MODEL that answers in this panel. The list comes from the
+  daemon (the same one every picker in Iron Jarvis reads) and a pick is
+  validated there before a turn starts — the panel never carries a catalog of
+  its own. The rest of D28 stands: no tool switch, no pairing control, no
+  access switch; those are governed in Jarvis, on surfaces that are reviewed.
+
+  MINIMAL BY RULE (v1.267.0). The user's words: "not too much in the way of
+  instruction when the extension is opened. Super clean and minimal." So the
+  chrome prints only what changes what the user can do right now — the
+  connection, the access mode, the model, the composer. Every explanation
+  lives in a tooltip (`title=`), never in a paragraph; the access-off state is
+  one line; an approval card says what it wants and offers its answers.
+  tests/test_browser_sidepanel_minimal_v1267.py counts the visible words of the
+  idle panel and fails when they creep back.
 
   Copy rule: this add-on is never called an "extension" in anything the user reads —
   in Iron Jarvis that word already means an MCP server.
 
   Naming rule: the place the user goes to change any of this has ONE name, and it is
-  the one the dashboard's own nav shows — "the Browser page in Iron Jarvis". Two
-  names for one page is two places to look for a user who can find neither.
+  the one the dashboard's own nav shows — "the Browser page in Iron Jarvis".
 -->
 <html lang="en">
   <head>
@@ -34,10 +42,10 @@
          dark`, which is what Edge's Appearance setting and Chrome's colour mode
          (or the operating system, when either is left on System) hand an
          extension page. `color-scheme: light dark` lets the browser paint the
-         text box, the buttons' native parts and the scrollbar to match. The
-         light accents are deliberately darker than their dark-theme cousins:
-         #35d0e6 on white is decoration, not text, and the same test checks
-         every ink-on-ground pair below against WCAG AA. */
+         text box, the select and the scrollbar to match. The light accents are
+         deliberately darker than their dark-theme cousins: #35d0e6 on white is
+         decoration, not text, and the same test checks every ink-on-ground pair
+         below against WCAG AA. */
       :root {
         color-scheme: light dark;
         --ink: #17212c;
@@ -86,29 +94,67 @@
         color: var(--ink);
         font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
       }
+      button {
+        appearance: none;
+        font: inherit;
+        font-weight: 600;
+        padding: 6px 11px;
+        border-radius: 7px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        background: var(--control);
+        color: var(--ink);
+      }
+      button.primary {
+        border-color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      button.warn {
+        border-color: var(--amber);
+        background: var(--amber-wash);
+      }
+      button.link {
+        border: 0;
+        background: none;
+        padding: 0;
+        font-weight: 500;
+        color: var(--muted);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      button:hover {
+        filter: var(--hover);
+      }
+      button[disabled] {
+        opacity: 0.5;
+        cursor: default;
+        filter: none;
+      }
 
-      /* --- header: the status readout the popup used to own ----------------- */
+      /* --- header: one line, plus a note only when there is one --------------- */
 
       header {
         flex: none;
-        padding: 12px 14px;
+        padding: 10px 12px 8px;
         border-bottom: 1px solid var(--line);
       }
-      h1 {
-        font-size: 14px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        margin: 0 0 8px;
+      .bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
       }
       .state {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 7px;
+        min-width: 0;
         font-weight: 600;
+        white-space: nowrap;
       }
       .dot {
-        width: 9px;
-        height: 9px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         background: var(--dim);
         flex: none;
@@ -123,21 +169,47 @@
       .state[data-tone="off"] .dot {
         background: var(--dim);
       }
+      .pill {
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 1px 7px;
+        cursor: default;
+        white-space: nowrap;
+      }
+      #model {
+        font: inherit;
+        font-size: 12px;
+        color: var(--ink);
+        background: var(--control);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 4px 6px;
+        max-width: 52%;
+        min-width: 0;
+      }
+      #model:focus {
+        outline: none;
+        border-color: var(--cyan);
+      }
       .note {
         color: var(--muted);
         margin: 6px 0 0;
       }
-      .access {
-        color: var(--muted);
-        margin: 6px 0 0;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.6px;
+      .note:empty {
+        display: none;
       }
       .actions {
         display: flex;
         gap: 8px;
-        margin-top: 10px;
+        margin-top: 8px;
+      }
+      .actions:has(> [hidden]:only-child) {
+        display: none;
       }
 
       /* --- transcript ------------------------------------------------------- */
@@ -145,7 +217,7 @@
       #transcript {
         flex: 1 1 auto;
         overflow-y: auto;
-        padding: 12px 14px;
+        padding: 12px;
       }
       .turn {
         margin: 0 0 12px;
@@ -178,19 +250,17 @@
       }
       #empty {
         color: var(--muted);
-        padding: 4px 0;
+        padding: 2px 0;
       }
       #empty strong {
         color: var(--ink);
-        display: block;
-        margin-bottom: 6px;
       }
 
       /* --- approval --------------------------------------------------------- */
 
       #approval {
         flex: none;
-        margin: 0 14px 10px;
+        margin: 0 12px 10px;
         padding: 10px 12px;
         border: 1px solid var(--amber);
         border-radius: 8px;
@@ -202,26 +272,30 @@
       .row {
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        gap: 6px;
+      }
+      .row button {
+        padding: 5px 9px;
+        font-size: 12px;
       }
 
       /* --- composer --------------------------------------------------------- */
 
       footer {
         flex: none;
-        padding: 10px 14px 12px;
+        padding: 8px 12px 10px;
         border-top: 1px solid var(--line);
       }
       textarea {
         width: 100%;
-        min-height: 58px;
+        min-height: 48px;
         resize: vertical;
         font: inherit;
         color: var(--ink);
         background: var(--control);
         border: 1px solid var(--line);
         border-radius: 7px;
-        padding: 8px 9px;
+        padding: 7px 9px;
       }
       textarea:focus {
         outline: none;
@@ -229,48 +303,22 @@
       }
       .controls {
         display: flex;
+        align-items: center;
         gap: 8px;
-        margin-top: 8px;
+        margin-top: 6px;
       }
-      button {
-        appearance: none;
-        font: inherit;
-        font-weight: 600;
-        padding: 7px 12px;
-        border-radius: 7px;
-        cursor: pointer;
-        border: 1px solid var(--line);
-        background: var(--control);
-        color: var(--ink);
-      }
-      button.primary {
-        border-color: var(--cyan);
-        background: var(--cyan-wash);
-      }
-      button.warn {
-        border-color: var(--amber);
-        background: var(--amber-wash);
-      }
-      button:hover {
-        filter: var(--hover);
-      }
-      button[disabled] {
-        opacity: 0.5;
-        cursor: default;
-        filter: none;
-      }
-      .hint {
-        color: var(--muted);
-        font-size: 11.5px;
-        margin: 8px 0 0;
+      .meta {
+        margin-left: auto;
+        color: var(--dim);
+        font-size: 11px;
+        white-space: nowrap;
       }
 
       /* Running and idle are one attribute on <body>, so every control that
          depends on the turn state is switched in one place rather than by five
          separate `hidden` writes that can disagree. */
       body[data-turn="idle"] #stop,
-      body[data-turn="idle"] #steer,
-      body[data-turn="idle"] #running-hint {
+      body[data-turn="idle"] #steer {
         display: none;
       }
       body[data-turn="running"] #send {
@@ -289,36 +337,28 @@
   </head>
   <body data-turn="idle" data-access="unknown">
     <header>
-      <h1>Jarvis</h1>
-      <div class="state" id="state" data-tone="off">
-        <span class="dot" aria-hidden="true"></span>
-        <span id="state-word">Checking…</span>
+      <div class="bar">
+        <div class="state" id="state" data-tone="off">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="state-word">Checking…</span>
+          <!-- The access mode as a pill. Its tooltip is the whole explanation
+               (`modeHint` in sidepanel.ts) — the sentence used to be a paragraph
+               under the header on every open. -->
+          <span class="pill" id="access" title="">—</span>
+          <!-- v1.266.0: whether the tab the user is looking at holds an approval
+               grant. Painted from the daemon's `state` frame (`tab_allowed`);
+               hidden until the daemon says so, re-asked on a tab switch. -->
+          <span class="pill" id="tab-allowed" hidden title="Page actions in this tab run without asking until it closes.">Tab allowed</span>
+        </div>
+        <!-- v1.267.0: THE MODEL. Filled from the daemon's `models` frame; the
+             Default option names the model Jarvis would use anyway. A pick is
+             remembered in this browser and validated by the daemon on Send. -->
+        <select id="model" aria-label="Model" title="The model that answers in this panel">
+          <option value="">Default</option>
+        </select>
       </div>
       <p class="note" id="note"></p>
-      <!-- ACCESS AND THE BUILD, on one line, because they answer the two questions
-           a wedged panel raises: what am I allowed to do, and WHICH COPY of the
-           add-on is Chrome actually running. The version is the manifest's own
-           (`chrome.runtime.getManifest().version`), not a constant written here,
-           and it is on screen because chrome://extensions showed 1.235.0 before
-           and after an app update — Chrome keeps serving the build it loaded until
-           somebody presses Reload, so a user updating Iron Jarvis had no way at all
-           to tell a stale add-on from a current one. Nothing can compare it here:
-           the daemon's `browser.ready` carries no app version, so the panel states
-           the fact and the Browser page in Iron Jarvis owns the comparison. -->
-      <p class="access">
-        Access: <span id="access">—</span> · Add-on <span id="version">—</span>
-      </p>
-      <!-- v1.262.0: what the access mode MEANS for this panel, in a sentence —
-           Read only used to strip every acting tool silently, and the user read
-           the result as "a chat bot next to the window". Filled by paintStatus;
-           hidden while the mode is off or unknown. -->
-      <p id="mode-hint" hidden></p>
-      <!-- v1.266.0: whether the tab the user is looking at holds an approval
-           grant. Painted from the daemon's `state` frame (`tab_allowed`), never
-           assumed: hidden until the daemon says so, and re-asked on a tab switch. -->
-      <p class="access" id="tab-allowed" hidden>This tab: allowed until it closes</p>
       <div class="actions">
-        <button class="primary" id="open" type="button">Open Jarvis</button>
         <!-- Empty and hidden until the worker says which action is real. A static
              "Disconnect" here is a promise the header may be about to contradict. -->
         <button id="toggle" type="button" hidden></button>
@@ -327,10 +367,8 @@
 
     <div id="transcript">
       <div id="empty">
-        <strong>Browser access is off.</strong>
-        This panel can run nothing while it is off — no reading a page, no acting on
-        one, and no answers about the tab you are looking at. Turn it on from the
-        Browser page in Iron Jarvis and this panel starts working.
+        <strong>Browser access is off.</strong> This panel can run nothing until you turn it on
+        from the Browser page in Iron Jarvis.
       </div>
     </div>
 
@@ -343,30 +381,30 @@
              call runs, and every later page action in this same tab runs without
              a card until the tab closes (or the browser restarts, or Forget). The
              risk cards — a payment, a password, a "delete" — still ask. -->
-        <button class="primary" id="approve-tab" type="button">Allow for this tab</button>
-        <button id="approve" type="button">Allow once</button>
+        <button class="primary" id="approve-tab" type="button" title="This action runs, and every later page action in this tab runs without asking until the tab closes. Payments, passwords and deletions still ask.">Allow for this tab</button>
+        <button id="approve" type="button" title="Runs this one action.">Allow once</button>
         <!-- v1.262.0: one press for the rest of THIS task. It answers the card
              with the chat lane's "conversation" grant, which covers the remaining
              rounds of this turn only — the next message asks again. -->
-        <button id="approve-task" type="button">Allow for this task</button>
-        <button id="deny" type="button">Deny</button>
+        <button id="approve-task" type="button" title="Covers the rest of this message. The next message asks again.">Allow for this task</button>
+        <button id="deny" type="button" title="Refuses this action; Jarvis is told you declined.">Deny</button>
       </div>
     </div>
 
     <footer>
-      <textarea id="ask" rows="3" placeholder="Ask Jarvis about this browser…"></textarea>
+      <!-- v1.264.0's keyboard contract, now in the tooltip: Enter sends (Steer
+           while Jarvis is working) · Shift+Enter starts a new line. -->
+      <textarea id="ask" rows="2" placeholder="Ask about this page…" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line"></textarea>
       <div class="controls">
         <button class="primary" id="send" type="button">Send</button>
-        <button class="warn" id="stop" type="button">Stop</button>
-        <button id="steer" type="button">Steer</button>
+        <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
+        <button id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>
+        <!-- WHICH COPY of the add-on the browser is running. Chrome keeps serving
+             the build it loaded until somebody presses Reload, so after an app
+             update this number is the only thing that tells a stale add-on from a
+             current one. Read from the manifest, never a constant written here. -->
+        <span class="meta">Add-on <span id="version">—</span> · <button class="link" id="open" type="button">Open Jarvis</button></span>
       </div>
-      <p class="hint" id="running-hint">
-        Stop prevents the next step. A tool that is already running finishes, and
-        what it wrote stays written. Steer adds a note the turn picks up at its next
-        step — it cannot interrupt a sentence already being written.
-      </p>
-      <!-- v1.264.0: the keyboard contract, said once. Enter used to do nothing. -->
-      <p class="hint" id="keys-hint">Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line.</p>
     </footer>
     <script src="sidepanel.js"></script>
   </body>

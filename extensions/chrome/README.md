@@ -93,12 +93,17 @@ You can narrow the grant afterwards in Chrome's own controls
 (`chrome://extensions` → this add-on → **Site access**). Iron Jarvis cannot grant
 or narrow it per site from its own screens.
 
-## The popup
+## The side panel
 
-Status only, by design: connection state, access mode, the current tab, **Open
-Jarvis**, and one button that disconnects or reconnects this browser. No chat, no
-model picker, no automation controls, no tool settings, no approvals. Jarvis is
-the product; the popup is a light on its dashboard.
+Minimal by rule (v1.267.0): the connection, the access mode (hover the pill for
+what it means), the model that answers here, and the box you type in. The model
+list is the same one Jarvis offers — **Default** names the model Jarvis would use
+anyway, a model that is not connected is greyed out, and your pick is remembered
+in this browser. Explanations are tooltips, not paragraphs. Every page action
+asks first: **Allow for this tab** covers that tab until it closes, **Allow for
+this task** the rest of the message, **Allow once** one action. No tool settings,
+no pairing control, no access switch — those are governed in Jarvis. Jarvis is
+the product; the panel is a window onto it.
 
 ## Known limits, named rather than discovered later
 

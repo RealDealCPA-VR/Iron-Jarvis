@@ -360,11 +360,14 @@ def _src(path: Path) -> str:
 def test_the_card_offers_allow_for_this_task_and_the_panel_explains_its_mode():
     html = _src(_ADDON / "sidepanel.html")
     assert re.search(r'id="approve-task"[^>]*>\s*Allow for this task\s*<', html), "no Allow-for-this-task button"
-    assert 'id="mode-hint"' in html
+    # v1.267.0: the explanation moved from a paragraph (`#mode-hint`) to the
+    # access pill's tooltip — the minimal panel prints no instruction paragraphs.
+    assert 'id="access"' in html
     ts = _src(_ADDON / "sidepanel.ts")
     assert re.search(r'approveTask\?\.addEventListener\("click"[\s\S]{0,300}scope: "task"', ts), "the button does not send scope: task"
     assert 'case "read_only":' in ts and "choose Interactive" in ts, "read-only mode is not explained"
     assert 'case "interactive":' in ts and "Allow for this task" in ts
+    assert "el.access.title = modeHint(status.access)" in ts, "the mode explanation has no home"
 
 
 def test_the_panel_module_no_longer_claims_to_arm_nothing():

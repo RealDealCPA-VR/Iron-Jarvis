@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.266.1 (2026-09-14).*
+holds itself to. Current as of v1.267.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,18 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**A quieter sidebar, and the model is yours to pick (v1.267.0).** The
+sidebar now shows only what changes what you can do: the connection, the
+access mode as a small pill, the tab-allowed pill when it applies, the model,
+and the box you type in. Every explanation that used to sit in a paragraph
+lives in a tooltip — hover the pill, the Stop button or the text box. And the
+sidebar has a **model picker**: the list is the same one the chat page
+offers, **Default** names the model Jarvis would use anyway, a model that is
+not connected is greyed out, and your pick is remembered in that browser.
+If a picked model cannot be reached, the sidebar says so before anything is
+sent; if the app answered with a different model than the one asked for
+(a failover, or the built-in mock), one muted line says which.
 
 **One approval per tab (v1.266.0).** The sidebar used to ask before every
 page action, and **Allow for this task** only covered the rest of that one

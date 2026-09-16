@@ -234,6 +234,10 @@ PANEL_EVENT_APPROVAL = "approval"
 PANEL_EVENT_STEERED = "steered"
 PANEL_EVENT_DONE = "done"
 PANEL_EVENT_ERROR = "error"
+#: v1.267.0: ``{models: [{provider, model, name?, available, kind?}], default:
+#: {provider, model}}`` — the list every picker in Iron Jarvis reads, sent on
+#: ``open`` so the panel's model select is filled from the daemon's own catalog.
+PANEL_EVENT_MODELS = "models"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -243,6 +247,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STEERED,
     PANEL_EVENT_DONE,
     PANEL_EVENT_ERROR,
+    PANEL_EVENT_MODELS,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1746,6 +1751,7 @@ __all__ = [
     "PANEL_EVENT_DELTA",
     "PANEL_EVENT_DONE",
     "PANEL_EVENT_ERROR",
+    "PANEL_EVENT_MODELS",
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",
     "PANEL_EVENT_TOOL",
