@@ -1252,6 +1252,26 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The sidebar's composer owns the model icon and a mic/send button;
+  dictation rides the panel socket into the app's OWN voice engine**
+  (v1.269.0). Model picker = the same `<select id="model">` (the D28 pin allows
+  exactly one) sitting invisibly over a small icon in the composer's bottom
+  row; its tooltip is where the pick shows. The button `#send` is decided from
+  the BOX'S CONTENT at the press (`composerMode`): empty → microphone, words →
+  arrow, listening → stop — never from a cached attribute, so a value set by
+  code sends. Voice: `PANEL_ACTION_VOICE` `{op: start|chunk|stop|cancel,
+  pcm_b64}` (16 kHz mono PCM16 from a ScriptProcessor + `floatTo16kPCM`) →
+  `PanelTurns._voice*`: the bundled Vosk model streams partials
+  (`PANEL_EVENT_TRANSCRIPT {text, partial, final}`), else the HTTP backend gets
+  one WAV at stop through `routes.voice.transcribe_clip` — the route's body,
+  LIFTED to module level with `voice_capability(d)` (what `/voice/status`
+  answers; the `models` frame carries it as `voice` so the mic greys honestly).
+  Never the browser vendor's speech service: the audio is the user's. Panel
+  vocabulary is now 8 actions / 9 events (protocol pin updated). Header: the
+  arc-reactor mark as inline SVG with the connection dot on it; no select up
+  there. Pins: `tests/test_browser_sidepanel_voice_v1269.py`, the runtime panel
+  suite.
+
 - **The add-on's worker is kept alive by the DAEMON's heartbeat; a timer in
   the worker cannot do it** (v1.268.0). "It randomly disconnected and
   reconnected": Chromium evicts an MV3 service worker after ~30 s without

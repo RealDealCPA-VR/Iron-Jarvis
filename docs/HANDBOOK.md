@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.268.0 (2026-09-14).*
+holds itself to. Current as of v1.269.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,20 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**Talk to the sidebar, and pick its model where you type (v1.269.0).** The
+sidebar's top is now just the Iron Jarvis mark (the connection dot sits on it)
+and the access pill. The model picker moved to the bottom right of the
+composer as a small icon — click it and Jarvis's models appear; hover it to
+see the one in use. Next to it is one button with two jobs: with nothing typed
+it is a **microphone**, and as soon as you type it becomes the **send arrow**.
+Press the microphone and speak; press it again to stop. What you said is
+written into the box for you to read, then send. The audio goes through Iron
+Jarvis's own speech engine — the bundled offline model when it is installed
+(words appear as you speak), otherwise the transcription endpoint you set up
+on the Connections page — and never through your browser's own cloud speech
+service. If no speech engine is set up, the microphone is greyed and its
+tooltip says what to connect.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

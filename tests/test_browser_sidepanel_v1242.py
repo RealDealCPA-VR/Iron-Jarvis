@@ -320,7 +320,9 @@ def test_a_panel_press_that_never_left_the_browser_is_reported_as_such():
         "truthy reply object is not the same fact, and it is true even when the "
         "socket dropped the action"
     )
-    send = _block(panel, 'el.send?.addEventListener("click"')
+    # v1.269.0: the press is dispatched (mic / send / stop) and the sending itself
+    # lives in `sendNow()`, which is where the verdict must be checked.
+    send = _block(panel, "function sendNow(")
     assert "if (!sent)" in send, (
         "the composer does not check whether its question reached Iron Jarvis"
     )

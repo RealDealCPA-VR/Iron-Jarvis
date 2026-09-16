@@ -310,9 +310,15 @@ class PanelTurns:
     orphans — a turn id nothing is running.
     """
 
-    def __init__(self, platform: Any, personas: dict | None = None) -> None:
+    def __init__(self, platform: Any, personas: dict | None = None, deps: Any = None) -> None:
         self.platform = platform
         self.personas = personas or {}
+        #: v1.269.0: the app's deps object, for the voice backend the daemon
+        #: already owns (``_voice_backend``, ``_vosk_model``). Optional: a panel
+        #: built without it simply has no microphone, and says so.
+        self.deps = deps
+        #: The dictation in progress, or None (v1.269.0).
+        self._voice_session: _VoiceSession | None = None
         #: The running turn's task and id, or ``(None, "")``.
         self._task: asyncio.Task | None = None
         self._turn_id: str = ""
@@ -396,6 +402,9 @@ class PanelTurns:
                 conn, act, str(params.get("id") or ""), str(params.get("scope") or "")
             )
             return
+        if act == P.PANEL_ACTION_VOICE:
+            await self._voice(conn, params)
+            return
         if act == P.PANEL_ACTION_CLOSE:
             # The panel is gone: a turn narrating to nobody keeps billing.
             # Stop is cooperative, so this is a request, not a kill.
@@ -442,10 +451,17 @@ class PanelTurns:
                     if row.get("provider") and row.get("model")
                 ],
                 "default": default,
+                # v1.269.0: whether the microphone can do anything, and via what.
+                "voice": self.voice_view(),
             }
         except Exception as exc:  # noqa: BLE001 — an unreadable catalog is reported, not invented
             logger.debug("panel model list failed", exc_info=True)
-            payload = {"models": [], "default": default, "error": f"{type(exc).__name__}: {exc}"[:200]}
+            payload = {
+                "models": [],
+                "default": default,
+                "voice": self.voice_view(),
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+            }
         self._models_cache = (now, payload)
         return payload
 
@@ -457,6 +473,184 @@ class PanelTurns:
             platform=self.platform, fleet=getattr(self.platform, "fleet", None)
         )
         return list(selectable_models(deps))
+
+    # --- dictation (v1.269.0) --------------------------------------------------
+
+    #: One PCM chunk may carry this much (a quarter second at 16 kHz is 8 KB;
+    #: this is generous, and a frame far past it is not a chunk).
+    VOICE_MAX_CHUNK_BYTES = 64 * 1024
+    #: A whole dictation, in PCM bytes: ~13 minutes at 16 kHz. Reached, the
+    #: daemon stops it and answers with what it heard, rather than growing.
+    VOICE_MAX_SESSION_BYTES = 25 * 1024 * 1024
+
+    def voice_view(self) -> dict[str, Any]:
+        """``{available, backend, hint}`` — the same answer ``GET /voice/status`` gives."""
+        deps = self.deps
+        if deps is None:
+            return {"available": False, "backend": None, "hint": "Voice is not wired in this copy of Iron Jarvis."}
+        try:
+            from ..daemon.routes.voice import voice_capability
+
+            cap = voice_capability(deps)
+            return {
+                "available": bool(cap.get("available")),
+                "backend": cap.get("backend"),
+                "hint": str(cap.get("hint") or ""),
+            }
+        except Exception as exc:  # noqa: BLE001 — a broken probe is reported, never a guess
+            logger.debug("panel voice capability failed", exc_info=True)
+            return {"available": False, "backend": None, "hint": f"Voice could not be checked: {exc}"[:200]}
+
+    async def _voice(self, conn: Any, params: dict[str, Any]) -> None:
+        """One ``voice`` action: start, chunk, stop or cancel a dictation.
+
+        THE AUDIO GOES WHERE THE APP'S OWN DICTATION GOES. The offline Vosk
+        model when it is bundled — streaming, partial words as they form, no
+        network — else the HTTP transcription backend the user configured, fed
+        one WAV clip at stop. Never a browser vendor's speech service: the
+        add-on runs beside the user's signed-in tabs, and what they say to it
+        is theirs.
+        """
+        op = str(params.get("op") or "")
+        if op == "start":
+            await self._voice_start(conn)
+        elif op == "chunk":
+            await self._voice_chunk(conn, params)
+        elif op == "stop":
+            await self._voice_stop(conn)
+        elif op == "cancel":
+            self._voice_session = None
+        else:
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {"text": f"Iron Jarvis does not know the voice step {op!r}.", "reason": "voice_failed"},
+            )
+
+    async def _voice_start(self, conn: Any) -> None:
+        self._voice_session = None
+        cap = self.voice_view()
+        if not cap.get("available"):
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {
+                    "text": cap.get("hint") or "Voice is not set up in Iron Jarvis yet.",
+                    "reason": "voice_unavailable",
+                },
+            )
+            return
+        if cap.get("backend") == "local":
+            loader = getattr(self.deps, "_vosk_model", None)
+            model = await asyncio.to_thread(loader) if callable(loader) else None
+            if model is None:
+                await self.emit(
+                    conn,
+                    P.PANEL_EVENT_ERROR,
+                    {"text": "The offline speech model could not be loaded.", "reason": "voice_unavailable"},
+                )
+                return
+            import vosk  # lazy: only where a model exists
+
+            recognizer = await asyncio.to_thread(vosk.KaldiRecognizer, model, 16000)
+            self._voice_session = _VoiceSession("stream", "local", recognizer)
+        else:
+            self._voice_session = _VoiceSession("clip", str(cap.get("backend") or ""))
+        await self.emit(
+            conn,
+            P.PANEL_EVENT_TRANSCRIPT,
+            {"text": "", "partial": "", "final": False, "listening": True, "backend": self._voice_session.backend},
+        )
+
+    async def _voice_chunk(self, conn: Any, params: dict[str, Any]) -> None:
+        session = self._voice_session
+        if session is None:
+            return  # a chunk after cancel/stop is ordinary, not an error
+        import base64
+
+        try:
+            raw = base64.b64decode(str(params.get("pcm_b64") or ""), validate=False)
+        except Exception:  # noqa: BLE001
+            raw = b""
+        if not raw:
+            return
+        if len(raw) > self.VOICE_MAX_CHUNK_BYTES:
+            self._voice_session = None
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {"text": "The add-on sent an audio chunk larger than a chunk can be.", "reason": "voice_failed"},
+            )
+            return
+        session.total += len(raw)
+        if session.mode == "stream":
+            done = await asyncio.to_thread(session.rec.AcceptWaveform, raw)
+            if done:
+                segment = str(json.loads(session.rec.Result()).get("text") or "").strip()
+                if segment:
+                    session.text = f"{session.text} {segment}".strip()
+                session.partial = ""
+            else:
+                session.partial = str(json.loads(session.rec.PartialResult()).get("partial") or "")
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_TRANSCRIPT,
+                {"text": session.text, "partial": session.partial, "final": False, "backend": session.backend},
+            )
+        else:
+            session.chunks.append(raw)
+        if session.total >= self.VOICE_MAX_SESSION_BYTES:
+            await self._voice_stop(conn)
+
+    async def _voice_stop(self, conn: Any) -> None:
+        session = self._voice_session
+        self._voice_session = None
+        if session is None:
+            return
+        if session.mode == "stream":
+            final = str(json.loads(await asyncio.to_thread(session.rec.FinalResult)).get("text") or "").strip()
+            text = f"{session.text} {final}".strip()
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_TRANSCRIPT,
+                {"text": text, "partial": "", "final": True, "backend": session.backend},
+            )
+            return
+        pcm = b"".join(session.chunks)
+        if not pcm:
+            await self.emit(
+                conn, P.PANEL_EVENT_TRANSCRIPT, {"text": "", "partial": "", "final": True, "backend": session.backend}
+            )
+            return
+        import base64
+
+        from fastapi import HTTPException
+
+        from ..daemon.routes.voice import transcribe_clip
+
+        try:
+            result = await transcribe_clip(
+                self.deps, audio_b64=base64.b64encode(_wav_bytes(pcm)).decode("ascii"), mime="audio/wav"
+            )
+        except HTTPException as exc:
+            await self.emit(conn, P.PANEL_EVENT_ERROR, {"text": str(exc.detail), "reason": "voice_failed"})
+            return
+        except Exception as exc:  # noqa: BLE001 — an honest failure, never silence
+            logger.debug("panel dictation failed", exc_info=True)
+            await self.emit(
+                conn, P.PANEL_EVENT_ERROR, {"text": f"Transcription failed: {exc}"[:300], "reason": "voice_failed"}
+            )
+            return
+        await self.emit(
+            conn,
+            P.PANEL_EVENT_TRANSCRIPT,
+            {
+                "text": str(result.get("text") or "").strip(),
+                "partial": "",
+                "final": True,
+                "backend": str(result.get("backend") or session.backend),
+            },
+        )
 
     async def _refuse_pick(self, conn: Any, provider: str, model: str) -> bool:
         """Whether a (provider, model) pick must be refused — and say why if so.
@@ -928,6 +1122,35 @@ class PanelTurns:
             return
 
 
+class _VoiceSession:
+    """One dictation in progress (v1.269.0): where the audio goes, and what was heard so far."""
+
+    def __init__(self, mode: str, backend: str, recognizer: Any = None) -> None:
+        #: ``"stream"`` (offline Vosk, partials as words form) or ``"clip"`` (an HTTP
+        #: backend fed one WAV at stop).
+        self.mode = mode
+        self.backend = backend
+        self.rec = recognizer
+        self.chunks: list[bytes] = []
+        self.total = 0
+        self.text = ""
+        self.partial = ""
+
+
+def _wav_bytes(pcm: bytes, *, rate: int = 16000) -> bytes:
+    """Wrap raw PCM16 mono in a WAV container — what every transcription backend accepts."""
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 def install(deps: Any) -> PanelTurns | None:
     """Give the add-on socket a panel handler, and return it.
 
@@ -941,7 +1164,7 @@ def install(deps: Any) -> PanelTurns | None:
     backend = getattr(getattr(platform, "browser", None), "backend", None)
     if backend is None:
         return None
-    turns = PanelTurns(platform, getattr(deps, "_PERSONAS", {}) or {})
+    turns = PanelTurns(platform, getattr(deps, "_PERSONAS", {}) or {}, deps=deps)
     try:
         backend.panel_handler = turns.handle
     except Exception:  # noqa: BLE001 — a stand-in backend that refuses the attribute

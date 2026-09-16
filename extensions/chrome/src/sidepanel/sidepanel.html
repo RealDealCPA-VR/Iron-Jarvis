@@ -14,19 +14,25 @@
   access switch; those are governed in Jarvis, on surfaces that are reviewed.
 
   MINIMAL BY RULE (v1.267.0). The chrome prints only what changes what the user
-  can do right now — the connection, the access mode, the model, the composer.
-  Every explanation lives in a tooltip (`title=`), never in a paragraph; the
-  access-off state is one line. tests/test_browser_sidepanel_minimal_v1267.py
-  counts the visible words of the idle panel and fails when they creep back.
+  can do right now. Every explanation lives in a tooltip (`title=`), never in a
+  paragraph; the access-off state is one line.
+  tests/test_browser_sidepanel_minimal_v1267.py counts the visible words.
 
-  THE APP'S LOOK, SLEEK (v1.268.0). "Very blocky" was the report: a border on
-  every element, square controls, a full-width box under a full-width row. Now
-  the panel wears what the dashboard wears — the arc-reactor accent (the dark
-  `--cyan` IS the dashboard's `--accent-rgb`), soft translucent lines instead of
-  hard ones, a faint accent glow at the top of the ground, your messages as
-  bubbles on the right and Jarvis's on the left, one rounded composer with the
-  send button inside it, pill buttons. tests/test_browser_sidepanel_look_v1268.py
-  pins the structure and the cross-file accent; the theme test owns contrast.
+  THE APP'S LOOK, SLEEK (v1.268.0): the arc-reactor accent, soft translucent
+  lines, an accent bloom on the ground, bubbles, one rounded composer, pill
+  buttons. tests/test_browser_sidepanel_look_v1268.py pins the structure.
+
+  THE TOP IS THE MARK; THE CONTROLS ARE IN THE COMPOSER (v1.269.0). "Clean up
+  the view at the top, it's very busy" — the header is now the Iron Jarvis
+  reactor mark (the same drawing the app's sidebar and Overview use, as inline
+  SVG) with the connection dot on it, the state word beside it in small type,
+  and the access pill. The model picker moved to the bottom right of the
+  composer as a small icon: the same `<select id="model">` sits invisibly over
+  it, so the native list opens on click and the tooltip names the pick. Next
+  to it, ONE button with two jobs: the microphone when nothing is typed, the
+  send arrow as soon as there are words, a stop square while listening.
+  Dictation goes through Iron Jarvis's own speech engine, never a browser
+  vendor's — see sidepanel.ts.
 
   Copy rule: this add-on is never called an "extension" in anything the user reads —
   in Iron Jarvis that word already means an MCP server.
@@ -158,39 +164,66 @@
         cursor: default;
         filter: none;
       }
+      .icon {
+        width: 16px;
+        height: 16px;
+        display: block;
+      }
 
-      /* --- header: one soft line, no divider ----------------------------------- */
+      /* --- header: the mark, the state, the mode; no divider --------------------- */
 
       header {
         flex: none;
-        padding: 12px 12px 6px;
+        padding: 10px 12px 4px;
       }
       .bar {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
       }
       .state {
         display: flex;
         align-items: center;
-        gap: 7px;
+        gap: 8px;
         min-width: 0;
-        padding: 5px 11px 5px 9px;
-        border-radius: 999px;
-        background: var(--surface);
-        border: 1px solid var(--line);
-        box-shadow: 0 1px 2px var(--shadow);
-        font-weight: 600;
-        font-size: 12.5px;
         white-space: nowrap;
       }
+      /* The arc-reactor mark: the app's own drawing (Sidebar.tsx ArcMark), as
+         inline SVG that takes its colour from `currentColor`. */
+      .brand {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--cyan);
+      }
+      .mark {
+        width: 24px;
+        height: 24px;
+        filter: drop-shadow(0 0 6px var(--cyan-glow));
+      }
+      .mark .core {
+        fill: var(--cyan-wash);
+      }
+      .mark .pupil {
+        fill: var(--cyan-soft);
+      }
+      .wordmark {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        color: var(--cyan);
+      }
       .dot {
+        position: absolute;
+        right: -3px;
+        bottom: -2px;
         width: 8px;
         height: 8px;
         border-radius: 50%;
         background: var(--dim);
-        flex: none;
+        border: 2px solid var(--bg);
+        box-sizing: content-box;
       }
       .state[data-tone="connected"] .dot {
         background: var(--green);
@@ -201,6 +234,11 @@
       }
       .state[data-tone="off"] .dot {
         background: var(--dim);
+      }
+      .word {
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--muted);
       }
       .pill {
         font-size: 10px;
@@ -218,44 +256,8 @@
         color: var(--cyan);
         background: var(--cyan-wash);
       }
-      .model-wrap {
-        position: relative;
+      .spacer {
         margin-left: auto;
-        max-width: 50%;
-        min-width: 0;
-      }
-      #model {
-        appearance: none;
-        -webkit-appearance: none;
-        width: 100%;
-        font: inherit;
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--ink);
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 5px 24px 5px 11px;
-        box-shadow: 0 1px 2px var(--shadow);
-        cursor: pointer;
-        text-overflow: ellipsis;
-      }
-      #model:focus {
-        outline: none;
-        border-color: var(--cyan);
-      }
-      /* The chevron, drawn with borders so it needs no colour literal. */
-      .model-wrap::after {
-        content: "";
-        position: absolute;
-        right: 11px;
-        top: 50%;
-        width: 6px;
-        height: 6px;
-        border-right: 1.5px solid var(--muted);
-        border-bottom: 1.5px solid var(--muted);
-        transform: translateY(-70%) rotate(45deg);
-        pointer-events: none;
       }
       .note {
         color: var(--muted);
@@ -359,7 +361,7 @@
         font-size: 12px;
       }
 
-      /* --- composer: one rounded card, the send inside it ---------------------- */
+      /* --- composer: one rounded card; the model icon and the mic/send at its corner */
 
       footer {
         flex: none;
@@ -395,8 +397,68 @@
         align-items: center;
         gap: 6px;
       }
-      .spacer {
-        margin-left: auto;
+      /* The model icon, with the real select laid invisibly over it so the
+         native list opens on click and the keyboard still works. */
+      .model-pick {
+        position: relative;
+        display: inline-grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 999px;
+        color: var(--muted);
+      }
+      .model-pick:hover {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      #model {
+        appearance: none;
+        -webkit-appearance: none;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        font: inherit;
+      }
+      #model:focus-visible + .icon {
+        color: var(--cyan);
+      }
+      /* The one button with two jobs. `data-mode` is painted by the panel from
+         the box's content; `body[data-voice]` from the dictation state. */
+      #send {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+      }
+      #send .icon {
+        display: none;
+      }
+      #send[data-mode="mic"] .icon-mic,
+      #send[data-mode="send"] .icon-send,
+      #send[data-mode="stop"] .icon-stop {
+        display: block;
+      }
+      body[data-voice="listening"] #send {
+        animation: listening 1.4s ease-in-out infinite;
+      }
+      @keyframes listening {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 var(--cyan-glow);
+        }
+        50% {
+          box-shadow: 0 0 0 7px var(--cyan-glow);
+        }
+      }
+      body[data-voice="transcribing"] #send,
+      #send[data-voice-off="true"] {
+        opacity: 0.55;
       }
       .meta {
         margin: 6px 4px 0;
@@ -426,13 +488,34 @@
       }
     </style>
   </head>
-  <body data-turn="idle" data-access="unknown">
+  <body data-turn="idle" data-access="unknown" data-voice="idle">
     <header>
       <div class="bar">
         <div class="state" id="state" data-tone="off">
-          <span class="dot" aria-hidden="true"></span>
-          <span id="state-word">Checking…</span>
+          <!-- The app's own arc-reactor mark (Sidebar.tsx / the Overview), with
+               the connection dot on its corner. -->
+          <span class="brand" title="Iron Jarvis">
+            <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <circle cx="12" cy="12" r="9.2" stroke-width="1.2" opacity="0.3" />
+              <g stroke-width="1.1" stroke-linecap="round" opacity="0.7">
+                <line x1="16.4" y1="12" x2="19.6" y2="12" />
+                <line x1="15.11" y1="15.11" x2="17.37" y2="17.37" />
+                <line x1="12" y1="16.4" x2="12" y2="19.6" />
+                <line x1="8.89" y1="15.11" x2="6.63" y2="17.37" />
+                <line x1="7.6" y1="12" x2="4.4" y2="12" />
+                <line x1="8.89" y1="8.89" x2="6.63" y2="6.63" />
+                <line x1="12" y1="7.6" x2="12" y2="4.4" />
+                <line x1="15.11" y1="8.89" x2="17.37" y2="6.63" />
+              </g>
+              <circle class="core" cx="12" cy="12" r="3.4" stroke-width="1.3" />
+              <circle class="pupil" cx="12" cy="12" r="1.2" stroke="none" />
+            </svg>
+            <span class="wordmark">IJ</span>
+            <span class="dot" aria-hidden="true"></span>
+          </span>
+          <span class="word" id="state-word">Checking…</span>
         </div>
+        <span class="spacer"></span>
         <!-- The access mode as a pill. Its tooltip is the whole explanation
              (`modeHint` in sidepanel.ts). -->
         <span class="pill" id="access" title="">—</span>
@@ -440,14 +523,6 @@
              grant. Painted from the daemon's `state` frame (`tab_allowed`);
              hidden until the daemon says so, re-asked on a tab switch. -->
         <span class="pill pill-accent" id="tab-allowed" hidden title="Page actions in this tab run without asking until it closes.">Tab allowed</span>
-        <!-- v1.267.0: THE MODEL. Filled from the daemon's `models` frame; the
-             Default option names the model Jarvis would use anyway. A pick is
-             remembered in this browser and validated by the daemon on Send. -->
-        <span class="model-wrap">
-          <select id="model" aria-label="Model" title="The model that answers in this panel">
-            <option value="">Default</option>
-          </select>
-        </span>
       </div>
       <p class="note" id="note"></p>
       <div class="actions">
@@ -492,7 +567,37 @@
           <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
           <button class="ghost" id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>
           <span class="spacer"></span>
-          <button class="primary" id="send" type="button" title="Send · Enter">Send</button>
+          <!-- v1.267.0/v1.269.0: THE MODEL, as a small icon. The select below is
+               the real control, laid invisibly over the icon: filled from the
+               daemon's `models` frame, Default names the model Jarvis would use,
+               the pick is remembered in this browser and shown in the tooltip. -->
+          <span class="model-pick">
+            <select id="model" aria-label="Model" title="Model">
+              <option value="">Default</option>
+            </select>
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3l1.9 4.8 4.8 1.9-4.8 1.9L12 16.4l-1.9-4.8-4.8-1.9 4.8-1.9z" />
+              <path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z" />
+            </svg>
+          </span>
+          <!-- v1.269.0: ONE BUTTON, TWO JOBS. The microphone when the box is
+               empty, the send arrow as soon as there are words, a stop square
+               while listening. The panel paints `data-mode`; the press decides
+               from the box's content. -->
+          <button class="primary" id="send" type="button" data-mode="mic" title="Dictate — Iron Jarvis writes what you say into the box">
+            <svg class="icon icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <path d="M12 18v3" />
+            </svg>
+            <svg class="icon icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 12h13" />
+              <path d="M12 6l6 6-6 6" />
+            </svg>
+            <svg class="icon icon-stop" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+              <rect x="7" y="7" width="10" height="10" rx="2.5" />
+            </svg>
+          </button>
         </div>
       </div>
       <!-- WHICH COPY of the add-on the browser is running. Chrome keeps serving

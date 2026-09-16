@@ -95,15 +95,21 @@ or narrow it per site from its own screens.
 
 ## The side panel
 
-Minimal by rule (v1.267.0): the connection, the access mode (hover the pill for
-what it means), the model that answers here, and the box you type in. The model
-list is the same one Jarvis offers — **Default** names the model Jarvis would use
-anyway, a model that is not connected is greyed out, and your pick is remembered
-in this browser. Explanations are tooltips, not paragraphs. Every page action
-asks first: **Allow for this tab** covers that tab until it closes, **Allow for
-this task** the rest of the message, **Allow once** one action. No tool settings,
-no pairing control, no access switch — those are governed in Jarvis. Jarvis is
-the product; the panel is a window onto it.
+Minimal by rule (v1.267.0, v1.269.0): the Iron Jarvis mark with the connection
+dot on it, the access mode as a pill (hover it for what it means), the
+conversation, and one composer. At the bottom right of the composer sit two
+small icons: the **model** (the same list Jarvis offers — Default names the
+model Jarvis would use anyway, a model that is not connected is greyed out,
+your pick is remembered in this browser and shown in the icon's tooltip) and
+the **microphone**, which becomes the **send arrow** the moment you type.
+Dictation goes through Iron Jarvis's own speech engine — the bundled offline
+model when it is present, else the transcription endpoint you configured — and
+never through a browser vendor's speech service; the words land in the box for
+you to read before you send. Explanations are tooltips, not paragraphs. Every
+page action asks first: **Allow for this tab** covers that tab until it closes,
+**Allow for this task** the rest of the message, **Allow once** one action. No
+tool settings, no pairing control, no access switch — those are governed in
+Jarvis. Jarvis is the product; the panel is a window onto it.
 
 ## Known limits, named rather than discovered later
 

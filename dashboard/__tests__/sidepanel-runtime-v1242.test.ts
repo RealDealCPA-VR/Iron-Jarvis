@@ -524,6 +524,111 @@ if (absent.length) {
     });
   });
 
+  describe("one button, two jobs; dictation through the app (v1.269.0)", () => {
+    const READY = { state: "connected", access: "interactive", paired: true, hostPermission: true };
+    const MODELS_WITH_VOICE = {
+      models: [{ provider: "anthropic", model: "claude-sonnet-4-6", available: true }],
+      default: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      voice: { available: true, backend: "local", hint: "" },
+    };
+
+    it("is the microphone with nothing typed and the arrow once there are words", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", MODELS_WITH_VOICE);
+      const button = el("send") as HTMLButtonElement;
+      await waitFor(() => expect(button.dataset.mode).toBe("mic"));
+      expect(button.disabled).toBe(false);
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "hello";
+      ask.dispatchEvent(new Event("input"));
+      await waitFor(() => expect(button.dataset.mode).toBe("send"));
+      expect(button.title).toContain("Send");
+      ask.value = "";
+      ask.dispatchEvent(new Event("input"));
+      await waitFor(() => expect(button.dataset.mode).toBe("mic"));
+    });
+
+    it("greys the microphone, with the app's hint, when no speech engine is set up", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", { ...MODELS_WITH_VOICE, voice: { available: false, backend: null, hint: "Connect an OpenAI API key." } });
+      const button = el("send") as HTMLButtonElement;
+      await waitFor(() => expect(button.dataset.voiceOff).toBe("true"));
+      expect(button.title).toContain("Connect an OpenAI API key");
+      // Greyed, never disabled: a press still answers with the sentence.
+      expect(button.disabled).toBe(false);
+      // Words still turn it into a working arrow.
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "typed anyway";
+      ask.dispatchEvent(new Event("input"));
+      await waitFor(() => expect(button.dataset.mode).toBe("send"));
+      expect(button.dataset.voiceOff).toBe("false");
+    });
+
+    it("a press with words sends; a press with none asks for the microphone and names a refusal", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", MODELS_WITH_VOICE);
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "send this";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "send")).toBe(true));
+      h.emit("done", {});
+      // The microphone, refused by the browser: one sentence, no voice frame.
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+      });
+      ask.value = "";
+      ask.dispatchEvent(new Event("input"));
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("Microphone blocked"));
+      expect(h.sent.some((m) => m["action"] === "voice")).toBe(false);
+    });
+
+    it("transcript frames write into the box and the final one hands it back as words", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", MODELS_WITH_VOICE);
+      const ask = el("ask") as HTMLTextAreaElement;
+      const button = el("send") as HTMLButtonElement;
+      // A dictation the daemon is streaming (the panel's own start is elsewhere).
+      h.emit("transcript", { text: "", partial: "hello wor", final: false });
+      await waitFor(() => expect(ask.value).toBe("hello wor"));
+      h.emit("transcript", { text: "hello world", partial: "", final: false });
+      await waitFor(() => expect(ask.value).toBe("hello world"));
+      h.emit("transcript", { text: "hello world again", partial: "", final: true });
+      await waitFor(() => expect(ask.value).toBe("hello world again"));
+      await waitFor(() => expect(button.dataset.mode).toBe("send"));
+      expect(document.body.dataset.voice).toBe("idle");
+    });
+
+    it("a voice error says what to do and does NOT end a turn that is running", async () => {
+      const h = await panelReady(READY);
+      const ask = el("ask") as HTMLTextAreaElement;
+      ask.value = "kept";
+      // A turn is streaming; a failed dictation beside it is not the turn's error.
+      h.emit("delta", { text: "Working" });
+      await waitFor(() => expect(document.body.dataset.turn).toBe("running"));
+      h.emit("error", { text: "Voice is not set up in Iron Jarvis yet.", reason: "voice_unavailable" });
+      await waitFor(() => expect(transcript()).toContain("Voice is not set up"));
+      expect(ask.value).toBe("kept");
+      expect(document.body.dataset.turn).toBe("running");
+      expect(document.body.dataset.voice).toBe("idle");
+    });
+
+    it("the top is the mark; the model icon sits in the composer and names the pick", async () => {
+      const h = await panelReady(READY);
+      expect(document.querySelector("header select")).toBeNull();
+      expect(document.querySelector("header .mark")).not.toBeNull();
+      expect(el("state").querySelector(".dot")).not.toBeNull();
+      const select = el("model") as HTMLSelectElement;
+      expect(select.closest(".composer")).not.toBeNull();
+      h.emit("models", MODELS_WITH_VOICE);
+      await waitFor(() => expect(select.options.length).toBe(2));
+      select.value = select.options[1].value;
+      select.dispatchEvent(new Event("change"));
+      await waitFor(() => expect(select.title).toContain("claude-sonnet-4-6"));
+    });
+  });
+
   describe("a steer note is pending until the daemon says it landed", () => {
     async function steering(): Promise<Harness> {
       const h = await panelReady({ state: "connected", access: "read_only", paired: true });

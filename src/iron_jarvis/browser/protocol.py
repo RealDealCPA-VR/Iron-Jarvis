@@ -224,6 +224,13 @@ PANEL_ACTION_STEER = "steer"
 PANEL_ACTION_APPROVE = "approve"
 PANEL_ACTION_DENY = "deny"
 PANEL_ACTION_CLOSE = "close"
+#: v1.269.0: dictation. ``params.op`` is ``start`` | ``chunk`` | ``stop`` |
+#: ``cancel``; a ``chunk`` carries ``pcm_b64`` — 16 kHz mono PCM16, little-endian,
+#: a quarter second or so. The daemon answers with ``transcript`` events. The
+#: audio goes to whatever Iron Jarvis is configured to transcribe with (the
+#: bundled offline model, or the user's own endpoint) — never to a browser
+#: vendor's speech service.
+PANEL_ACTION_VOICE = "voice"
 
 ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_OPEN,
@@ -233,6 +240,7 @@ ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_APPROVE,
     PANEL_ACTION_DENY,
     PANEL_ACTION_CLOSE,
+    PANEL_ACTION_VOICE,
 )
 
 #: ``browser.panel_event`` names -- everything the daemon narrates to the panel.
@@ -254,6 +262,10 @@ PANEL_EVENT_ERROR = "error"
 #: {provider, model}}`` — the list every picker in Iron Jarvis reads, sent on
 #: ``open`` so the panel's model select is filled from the daemon's own catalog.
 PANEL_EVENT_MODELS = "models"
+#: v1.269.0: ``{text, partial, final, backend}`` — the dictation so far. ``text``
+#: is what has settled, ``partial`` the words still forming (offline mode only),
+#: ``final`` true on the last frame of a dictation.
+PANEL_EVENT_TRANSCRIPT = "transcript"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -264,6 +276,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_DONE,
     PANEL_EVENT_ERROR,
     PANEL_EVENT_MODELS,
+    PANEL_EVENT_TRANSCRIPT,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1794,6 +1807,7 @@ __all__ = [
     "PANEL_ACTION_SEND",
     "PANEL_ACTION_STEER",
     "PANEL_ACTION_STOP",
+    "PANEL_ACTION_VOICE",
     "PANEL_EVENT_APPROVAL",
     "PANEL_EVENT_DELTA",
     "PANEL_EVENT_DONE",
@@ -1802,6 +1816,7 @@ __all__ = [
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",
     "PANEL_EVENT_TOOL",
+    "PANEL_EVENT_TRANSCRIPT",
     "PARAM_SHAPES",
     "PASSWORD_AUTOCOMPLETE",
     "PAYMENT_AUTOCOMPLETE",

@@ -259,7 +259,10 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
     list, sent on ``open`` for the sidebar's picker (the user's decision, which
     reversed D28's "no model picker"); the seven actions are unchanged.
     """
-    assert P.ALL_PANEL_ACTIONS == ("open", "send", "stop", "steer", "approve", "deny", "close")
+    assert P.ALL_PANEL_ACTIONS == (
+        "open", "send", "stop", "steer", "approve", "deny", "close",
+        "voice",  # v1.269.0: dictation through the app's own engine
+    )
     assert P.ALL_PANEL_EVENTS == (
         "state",
         "delta",
@@ -269,6 +272,7 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "done",
         "error",
         "models",
+        "transcript",  # v1.269.0
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
     assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)

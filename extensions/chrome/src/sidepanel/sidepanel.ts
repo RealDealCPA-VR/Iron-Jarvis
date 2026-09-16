@@ -29,6 +29,7 @@ import {
   PANEL_ACTION_SEND,
   PANEL_ACTION_STEER,
   PANEL_ACTION_STOP,
+  PANEL_ACTION_VOICE,
   PANEL_EVENT_APPROVAL,
   PANEL_EVENT_DELTA,
   PANEL_EVENT_DONE,
@@ -37,6 +38,7 @@ import {
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
   PANEL_EVENT_TOOL,
+  PANEL_EVENT_TRANSCRIPT,
 } from "../protocol";
 import { TOGGLE_LABELS, toggleAction, type BridgeStatus } from "../bridge/socket";
 
@@ -346,6 +348,14 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
     }
     case PANEL_EVENT_MODELS: {
       paintModels(payload);
+      const voice = (payload["voice"] ?? {}) as { available?: unknown; hint?: unknown };
+      voiceAvailable = voice.available === true;
+      voiceHint = typeof voice.hint === "string" ? voice.hint : "";
+      refreshComposer();
+      return;
+    }
+    case PANEL_EVENT_TRANSCRIPT: {
+      applyTranscript(payload);
       return;
     }
     case PANEL_EVENT_DELTA: {
@@ -396,6 +406,14 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       return;
     }
     case PANEL_EVENT_ERROR: {
+      const reason = typeof payload["reason"] === "string" ? (payload["reason"] as string) : "";
+      if (reason.startsWith("voice")) {
+        // A dictation that could not happen: the box keeps what it had, the
+        // microphone goes back to idle, and the sentence says what to do.
+        resetVoice();
+        say("error", text || "Iron Jarvis could not take dictation.");
+        return;
+      }
       setTurn(false);
       streaming = null;
       clearApproval();
@@ -455,7 +473,7 @@ el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
   (press === "send" ? el.send : el.steer)?.click();
 });
 
-el.send?.addEventListener("click", () => {
+function sendNow(): void {
   const text = (el.ask?.value ?? "").trim();
   if (!text) {
     return;
@@ -474,7 +492,27 @@ el.send?.addEventListener("click", () => {
       say("error", "That did not reach Iron Jarvis — this browser is not connected.");
     }
   });
+  refreshComposer();
+}
+
+// v1.269.0: ONE BUTTON, TWO JOBS. With nothing typed it is the microphone; the
+// moment there are words it is the arrow. Decided from the box's CONTENT at the
+// press, never from a cached mode — a value set by code (a test, a paste) must
+// send too. While a dictation runs, the press stops it.
+el.send?.addEventListener("click", () => {
+  if (voiceState === "listening") {
+    stopDictation();
+    return;
+  }
+  const text = (el.ask?.value ?? "").trim();
+  if (text) {
+    sendNow();
+  } else {
+    void startDictation();
+  }
 });
+
+el.ask?.addEventListener("input", () => refreshComposer());
 
 el.stop?.addEventListener("click", () => {
   // The button is NOT flipped to idle here. Stop is a request the daemon answers
@@ -537,6 +575,197 @@ el.deny?.addEventListener("click", () => {
   clearApproval();
   void post(PANEL_ACTION_DENY, { id });
 });
+
+// --- the composer button + dictation (v1.269.0) ---------------------------------
+
+type VoiceState = "idle" | "listening" | "transcribing";
+let voiceState: VoiceState = "idle";
+let voiceAvailable = false;
+let voiceHint = "";
+/** What the box held when dictation began; the transcript is appended to it. */
+let dictationBase = "";
+let voiceStream: MediaStream | null = null;
+let voiceCtx: AudioContext | null = null;
+let voiceProc: ScriptProcessorNode | null = null;
+
+/** Which face the composer button shows, from the box's content and the voice state. */
+export function composerMode(text: string, state: VoiceState): "mic" | "send" | "stop" {
+  if (state === "listening") return "stop";
+  return text.trim() ? "send" : "mic";
+}
+
+function refreshComposer(): void {
+  const button = el.send;
+  if (!button) return;
+  const mode = composerMode(el.ask?.value ?? "", voiceState);
+  button.dataset["mode"] = mode;
+  document.body.dataset["voice"] = voiceState;
+  // NEVER `disabled`: a click on a disabled button dispatches nothing (the
+  // repository's own v1.251.0 lesson), and a microphone with no engine behind it
+  // must still answer a press with the sentence that says what to connect. The
+  // greyed look is a data attribute the stylesheet reads.
+  button.disabled = false;
+  button.dataset["voiceOff"] = mode === "mic" && !voiceAvailable ? "true" : "false";
+  if (mode === "send") {
+    button.title = "Send · Enter";
+  } else if (mode === "stop") {
+    button.title = "Stop listening";
+  } else {
+    button.title = voiceAvailable
+      ? "Dictate — Iron Jarvis writes what you say into the box"
+      : voiceHint || "Voice is not set up in Iron Jarvis yet.";
+  }
+}
+
+function setVoiceState(state: VoiceState): void {
+  voiceState = state;
+  refreshComposer();
+}
+
+function resetVoice(): void {
+  teardownAudio();
+  dictationBase = "";
+  setVoiceState("idle");
+}
+
+function teardownAudio(): void {
+  try {
+    voiceProc?.disconnect();
+  } catch {
+    // already gone
+  }
+  voiceProc = null;
+  voiceStream?.getTracks().forEach((t) => t.stop());
+  voiceStream = null;
+  void voiceCtx?.close().catch(() => {});
+  voiceCtx = null;
+}
+
+/** The app's own downsampler: any input rate to 16 kHz mono PCM16 (little-endian). */
+export function floatTo16kPCM(input: Float32Array, inRate: number): ArrayBuffer {
+  let data = input;
+  if (inRate !== 16000 && inRate > 0) {
+    const ratio = inRate / 16000;
+    const outLen = Math.floor(input.length / ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) out[i] = input[Math.floor(i * ratio)] || 0;
+    data = out;
+  }
+  const pcm = new Int16Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const s = Math.max(-1, Math.min(1, data[i] ?? 0));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return pcm.buffer;
+}
+
+function base64Of(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function startDictation(): Promise<void> {
+  if (voiceState !== "idle") return;
+  if (!voiceAvailable) {
+    say("error", voiceHint || "Voice is not set up in Iron Jarvis yet.");
+    return;
+  }
+  const media = navigator.mediaDevices;
+  if (!media || typeof media.getUserMedia !== "function") {
+    say("error", "No microphone is available to this panel.");
+    return;
+  }
+  let stream: MediaStream;
+  try {
+    stream = await media.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (err) {
+    const name = err instanceof DOMException ? err.name : "";
+    say(
+      "error",
+      name === "NotAllowedError"
+        ? "Microphone blocked for Iron Jarvis. Allow it for this add-on in your browser's site permissions, then try again."
+        : "The microphone could not be opened.",
+    );
+    return;
+  }
+  type AC = typeof AudioContext;
+  const Ctor: AC | undefined =
+    (window as unknown as { AudioContext?: AC; webkitAudioContext?: AC }).AudioContext ??
+    (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
+  if (!Ctor) {
+    stream.getTracks().forEach((t) => t.stop());
+    say("error", "This browser cannot capture audio here.");
+    return;
+  }
+  let ctx: AudioContext;
+  try {
+    ctx = new Ctor({ sampleRate: 16000 });
+  } catch {
+    ctx = new Ctor();
+  }
+  voiceStream = stream;
+  voiceCtx = ctx;
+  dictationBase = el.ask?.value ?? "";
+  setVoiceState("listening");
+  const started = await post(PANEL_ACTION_VOICE, { op: "start" });
+  if (!started) {
+    resetVoice();
+    say("error", "That did not reach Iron Jarvis — this browser is not connected.");
+    return;
+  }
+  const source = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  voiceProc = proc;
+  proc.onaudioprocess = (e) => {
+    if (voiceState !== "listening") return;
+    const pcm = floatTo16kPCM(e.inputBuffer.getChannelData(0), ctx.sampleRate);
+    if (pcm.byteLength) {
+      void post(PANEL_ACTION_VOICE, { op: "chunk", pcm_b64: base64Of(pcm) });
+    }
+  };
+  source.connect(proc);
+  proc.connect(ctx.destination);
+}
+
+function stopDictation(): void {
+  if (voiceState !== "listening") return;
+  teardownAudio();
+  setVoiceState("transcribing");
+  void post(PANEL_ACTION_VOICE, { op: "stop" }).then((sent) => {
+    if (!sent) {
+      resetVoice();
+      say("error", "That did not reach Iron Jarvis — this browser is not connected.");
+    }
+  });
+}
+
+/** Paint the dictation so far into the box; the final frame hands the box back. */
+function applyTranscript(payload: Record<string, unknown>): void {
+  if (payload["listening"] === true && voiceState === "idle") {
+    // The daemon confirmed a start this panel did not initiate (a stale frame); ignore.
+    return;
+  }
+  const text = typeof payload["text"] === "string" ? (payload["text"] as string) : "";
+  const partial = typeof payload["partial"] === "string" ? (payload["partial"] as string) : "";
+  const heard = [text, partial].filter((s) => s.trim()).join(" ").trim();
+  if (el.ask && (heard || payload["final"] === true)) {
+    const base = dictationBase.replace(/\s+$/, "");
+    el.ask.value = base && heard ? `${base} ${heard}` : base || heard;
+  }
+  if (payload["final"] === true) {
+    dictationBase = "";
+    setVoiceState("idle");
+    el.ask?.focus();
+  } else {
+    refreshComposer();
+  }
+}
 
 // --- the model (v1.267.0) ---------------------------------------------------
 
@@ -633,11 +862,21 @@ function paintModels(payload: Record<string, unknown>): void {
   const wanted = storedPick ? pickValue(storedPick) : "";
   const present = Array.from(select.options).some((o) => o.value === wanted && !o.disabled);
   select.value = present ? wanted : "";
+  paintModelTitle();
+}
+
+/** v1.269.0: the select sits invisibly over a small icon, so its tooltip is the only place the pick shows. */
+function paintModelTitle(): void {
+  const select = el.model;
+  if (!select) return;
+  const label = select.selectedOptions[0]?.textContent ?? "Default";
+  select.title = `Model: ${label}`;
 }
 
 el.model?.addEventListener("change", () => {
   const pick = pickFromValue(el.model?.value ?? "");
   storedPick = pick;
+  paintModelTitle();
   try {
     if (pick) {
       void chrome.storage?.local?.set({ [STORAGE_MODEL_KEY]: pickValue(pick) });
@@ -661,6 +900,7 @@ window.addEventListener("pagehide", () => {
 paintVersion();
 void refresh();
 void post(PANEL_ACTION_OPEN);
+refreshComposer();
 
 // v1.266.0: the header's "allowed in this tab" line is about the tab the user is
 // looking at, so a tab switch asks the daemon for a fresh state frame. Guarded:
