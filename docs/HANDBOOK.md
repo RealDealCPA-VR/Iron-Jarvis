@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.267.0 (2026-09-14).*
+holds itself to. Current as of v1.268.0 (2026-09-14).*
 
 ---
 
@@ -834,6 +834,18 @@ the thread, sent on every turn, and the receipt under the reply says
 knob there is no control at all — nothing is sent, and nothing is quietly
 dropped. If a server refuses the parameter, Iron Jarvis asks again without it,
 so you get the answer rather than an error.
+
+**The sidebar stays connected, and looks like the app (v1.268.0).** The
+random "disconnected… reconnected" was the browser putting the add-on's
+background worker to sleep after half a minute of quiet, which closed its
+link; the next tab switch woke it and it came back. Iron Jarvis now sends the
+add-on a heartbeat every 20 seconds and the add-on answers, which is exactly
+what keeps that worker awake — so a connected sidebar stays connected. (If the
+app itself restarts, the sidebar says so and reconnects when it is back.) And
+the panel now wears the app's own look: the arc-reactor accent, soft surfaces
+instead of boxed lines, your messages as bubbles on the right and Jarvis's on
+the left, a rounded composer with the send button inside it, and the same
+light or dark ground as your browser.
 
 **A quieter sidebar, and the model is yours to pick (v1.267.0).** The
 sidebar now shows only what changes what you can do: the connection, the

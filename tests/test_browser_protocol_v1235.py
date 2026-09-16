@@ -217,6 +217,9 @@ def _one_of_every_frame() -> dict[str, dict]:
         P.FRAME_PAIRING_ACK: P.pairing_ack_frame("pair_abc"),
         P.FRAME_PANEL: P.panel_frame(P.PANEL_ACTION_SEND, {"text": "what is on this page?"}),
         P.FRAME_PANEL_EVENT: P.panel_event_frame(P.PANEL_EVENT_DELTA, {"text": "Reading"}),
+        # v1.268.0: the heartbeat pair.
+        P.FRAME_PING: P.ping_frame(1_700_000_000_000),
+        P.FRAME_PONG: P.pong_frame(1_700_000_000_000),
     }
 
 

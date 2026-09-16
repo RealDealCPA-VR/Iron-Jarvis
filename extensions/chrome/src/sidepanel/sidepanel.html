@@ -13,14 +13,20 @@
   its own. The rest of D28 stands: no tool switch, no pairing control, no
   access switch; those are governed in Jarvis, on surfaces that are reviewed.
 
-  MINIMAL BY RULE (v1.267.0). The user's words: "not too much in the way of
-  instruction when the extension is opened. Super clean and minimal." So the
-  chrome prints only what changes what the user can do right now — the
-  connection, the access mode, the model, the composer. Every explanation
-  lives in a tooltip (`title=`), never in a paragraph; the access-off state is
-  one line; an approval card says what it wants and offers its answers.
-  tests/test_browser_sidepanel_minimal_v1267.py counts the visible words of the
-  idle panel and fails when they creep back.
+  MINIMAL BY RULE (v1.267.0). The chrome prints only what changes what the user
+  can do right now — the connection, the access mode, the model, the composer.
+  Every explanation lives in a tooltip (`title=`), never in a paragraph; the
+  access-off state is one line. tests/test_browser_sidepanel_minimal_v1267.py
+  counts the visible words of the idle panel and fails when they creep back.
+
+  THE APP'S LOOK, SLEEK (v1.268.0). "Very blocky" was the report: a border on
+  every element, square controls, a full-width box under a full-width row. Now
+  the panel wears what the dashboard wears — the arc-reactor accent (the dark
+  `--cyan` IS the dashboard's `--accent-rgb`), soft translucent lines instead of
+  hard ones, a faint accent glow at the top of the ground, your messages as
+  bubbles on the right and Jarvis's on the left, one rounded composer with the
+  send button inside it, pill buttons. tests/test_browser_sidepanel_look_v1268.py
+  pins the structure and the cross-file accent; the theme test owns contrast.
 
   Copy rule: this add-on is never called an "extension" in anything the user reads —
   in Iron Jarvis that word already means an MCP server.
@@ -39,44 +45,52 @@
          rule that is wrong in one of the two themes, and
          tests/test_browser_addon_theme_v1265.py scans for exactly that. The light
          set is the default; the dark set applies under `prefers-color-scheme:
-         dark`, which is what Edge's Appearance setting and Chrome's colour mode
-         (or the operating system, when either is left on System) hand an
-         extension page. `color-scheme: light dark` lets the browser paint the
-         text box, the select and the scrollbar to match. The light accents are
-         deliberately darker than their dark-theme cousins: #35d0e6 on white is
-         decoration, not text, and the same test checks every ink-on-ground pair
-         below against WCAG AA. */
+         dark`. `color-scheme: light dark` lets the browser paint the text box,
+         the select and the scrollbar to match. Text-bearing tokens clear WCAG AA
+         on the ground in both themes (the theme test measures it): the light
+         accent is the dashboard's DEEP light accent for that reason — the bright
+         one is for fills and glow, not for words. */
       :root {
         color-scheme: light dark;
         --ink: #17212c;
         --muted: #55677a;
         --dim: #97a5b4;
         --bg: #ffffff;
-        --control: #f1f5f9;
-        --line: #d3dce6;
-        --cyan: #0c7d90;
-        --cyan-wash: rgba(12, 125, 144, 0.1);
+        --surface: #f4f7fb;
+        --surface-2: #e9eef5;
+        --line: rgba(23, 33, 44, 0.1);
+        --shadow: rgba(23, 33, 44, 0.08);
+        --cyan: #0054be;
+        --cyan-soft: #0071eb;
+        --cyan-wash: rgba(0, 113, 235, 0.1);
+        --cyan-glow: rgba(0, 113, 235, 0.14);
+        --on-cyan: #ffffff;
         --amber: #8a5a0b;
         --amber-wash: rgba(138, 90, 11, 0.1);
         --green: #1a7f4b;
         --green-glow: rgba(26, 127, 75, 0.35);
-        --hover: brightness(0.95);
+        --hover: brightness(0.96);
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --ink: #e8eef5;
           --muted: #8fa1b5;
           --dim: #5b6b7d;
-          --bg: #0b1016;
-          --control: #10161e;
-          --line: #1f2b38;
-          --cyan: #35d0e6;
-          --cyan-wash: rgba(53, 208, 230, 0.14);
+          --bg: #0a0f14;
+          --surface: #111821;
+          --surface-2: #18212c;
+          --line: rgba(232, 238, 245, 0.08);
+          --shadow: rgba(0, 0, 0, 0.35);
+          --cyan: #22d3ee;
+          --cyan-soft: #67e8f9;
+          --cyan-wash: rgba(34, 211, 238, 0.12);
+          --cyan-glow: rgba(34, 211, 238, 0.16);
+          --on-cyan: #0a0f14;
           --amber: #e0a84a;
           --amber-wash: rgba(224, 168, 74, 0.14);
           --green: #4fd48a;
           --green-glow: rgba(79, 212, 138, 0.6);
-          --hover: brightness(1.18);
+          --hover: brightness(1.15);
         }
       }
       * {
@@ -90,28 +104,39 @@
         display: flex;
         flex-direction: column;
         margin: 0;
-        background: var(--bg);
+        /* The arc-reactor glow the dashboard's ground carries, in miniature:
+           one soft accent bloom at the top, then the plain ground. */
+        background:
+          radial-gradient(70% 38% at 30% 0%, var(--cyan-glow), transparent 70%),
+          var(--bg);
         color: var(--ink);
         font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
       button {
         appearance: none;
         font: inherit;
         font-weight: 600;
-        padding: 6px 11px;
-        border-radius: 7px;
+        padding: 6px 13px;
+        border-radius: 999px;
         cursor: pointer;
         border: 1px solid var(--line);
-        background: var(--control);
+        background: var(--surface);
         color: var(--ink);
+        transition: filter 120ms ease, transform 120ms ease;
       }
       button.primary {
-        border-color: var(--cyan);
-        background: var(--cyan-wash);
+        border-color: transparent;
+        background: var(--cyan);
+        color: var(--on-cyan);
       }
       button.warn {
         border-color: var(--amber);
         background: var(--amber-wash);
+        color: var(--ink);
+      }
+      button.ghost {
+        background: transparent;
       }
       button.link {
         border: 0;
@@ -125,31 +150,39 @@
       button:hover {
         filter: var(--hover);
       }
+      button:active {
+        transform: translateY(1px);
+      }
       button[disabled] {
         opacity: 0.5;
         cursor: default;
         filter: none;
       }
 
-      /* --- header: one line, plus a note only when there is one --------------- */
+      /* --- header: one soft line, no divider ----------------------------------- */
 
       header {
         flex: none;
-        padding: 10px 12px 8px;
-        border-bottom: 1px solid var(--line);
+        padding: 12px 12px 6px;
       }
       .bar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
+        gap: 8px;
       }
       .state {
         display: flex;
         align-items: center;
         gap: 7px;
         min-width: 0;
+        padding: 5px 11px 5px 9px;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        box-shadow: 0 1px 2px var(--shadow);
         font-weight: 600;
+        font-size: 12.5px;
         white-space: nowrap;
       }
       .dot {
@@ -170,35 +203,63 @@
         background: var(--dim);
       }
       .pill {
-        font-size: 10.5px;
-        font-weight: 600;
-        letter-spacing: 0.4px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
         text-transform: uppercase;
         color: var(--muted);
-        border: 1px solid var(--line);
+        background: var(--surface-2);
         border-radius: 999px;
-        padding: 1px 7px;
+        padding: 2px 8px;
         cursor: default;
         white-space: nowrap;
       }
+      .pill-accent {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      .model-wrap {
+        position: relative;
+        margin-left: auto;
+        max-width: 50%;
+        min-width: 0;
+      }
       #model {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
         font: inherit;
         font-size: 12px;
+        font-weight: 500;
         color: var(--ink);
-        background: var(--control);
+        background: var(--surface);
         border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 4px 6px;
-        max-width: 52%;
-        min-width: 0;
+        border-radius: 999px;
+        padding: 5px 24px 5px 11px;
+        box-shadow: 0 1px 2px var(--shadow);
+        cursor: pointer;
+        text-overflow: ellipsis;
       }
       #model:focus {
         outline: none;
         border-color: var(--cyan);
       }
+      /* The chevron, drawn with borders so it needs no colour literal. */
+      .model-wrap::after {
+        content: "";
+        position: absolute;
+        right: 11px;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        border-right: 1.5px solid var(--muted);
+        border-bottom: 1.5px solid var(--muted);
+        transform: translateY(-70%) rotate(45deg);
+        pointer-events: none;
+      }
       .note {
         color: var(--muted);
-        margin: 6px 0 0;
+        margin: 8px 2px 0;
       }
       .note:empty {
         display: none;
@@ -212,45 +273,64 @@
         display: none;
       }
 
-      /* --- transcript ------------------------------------------------------- */
+      /* --- transcript: bubbles ---------------------------------------------- */
 
       #transcript {
         flex: 1 1 auto;
         overflow-y: auto;
-        padding: 12px;
+        padding: 8px 12px 12px;
+        display: flex;
+        flex-direction: column;
       }
       .turn {
-        margin: 0 0 12px;
+        margin: 0 0 8px;
+        max-width: 88%;
+        padding: 8px 12px;
+        border-radius: 16px;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+        line-height: 1.5;
       }
       .turn[data-who="you"] {
+        margin-left: auto;
         color: var(--ink);
-        border-left: 2px solid var(--cyan);
-        padding-left: 9px;
+        background: var(--cyan-wash);
+        border: 1px solid var(--line);
+        border-bottom-right-radius: 5px;
       }
       .turn[data-who="jarvis"] {
+        margin-right: auto;
         color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-bottom-left-radius: 5px;
       }
       .turn[data-who="tool"] {
+        max-width: 100%;
+        padding: 2px 4px;
         color: var(--muted);
-        font-size: 12px;
+        font-size: 11.5px;
       }
       .turn[data-who="error"] {
+        margin-right: auto;
         color: var(--amber);
+        background: var(--amber-wash);
+        border-bottom-left-radius: 5px;
       }
       /* A steer note is PENDING until the daemon says the turn took it. The word
          is written by sidepanel.ts, not here, so the two cannot disagree. */
       .turn[data-who="steer"] {
+        max-width: 100%;
+        padding: 2px 4px;
         color: var(--amber);
-        font-size: 12px;
+        font-size: 11.5px;
       }
       .turn[data-pending="true"] {
-        opacity: 0.75;
+        opacity: 0.7;
       }
       #empty {
         color: var(--muted);
-        padding: 2px 0;
+        padding: 4px 2px;
       }
       #empty strong {
         color: var(--ink);
@@ -261,10 +341,10 @@
       #approval {
         flex: none;
         margin: 0 12px 10px;
-        padding: 10px 12px;
-        border: 1px solid var(--amber);
-        border-radius: 8px;
+        padding: 10px 12px 11px;
+        border-radius: 14px;
         background: var(--amber-wash);
+        border: 1px solid var(--line);
       }
       #approval p {
         margin: 0 0 8px;
@@ -275,43 +355,54 @@
         gap: 6px;
       }
       .row button {
-        padding: 5px 9px;
+        padding: 5px 11px;
         font-size: 12px;
       }
 
-      /* --- composer --------------------------------------------------------- */
+      /* --- composer: one rounded card, the send inside it ---------------------- */
 
       footer {
         flex: none;
-        padding: 8px 12px 10px;
-        border-top: 1px solid var(--line);
+        padding: 0 12px 10px;
+      }
+      .composer {
+        border-radius: 16px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        box-shadow: 0 6px 20px var(--shadow);
+        padding: 8px 8px 6px 10px;
+      }
+      .composer:focus-within {
+        border-color: var(--cyan);
       }
       textarea {
+        display: block;
         width: 100%;
-        min-height: 48px;
-        resize: vertical;
+        min-height: 44px;
+        max-height: 160px;
+        resize: none;
         font: inherit;
         color: var(--ink);
-        background: var(--control);
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 7px 9px;
+        background: transparent;
+        border: 0;
+        padding: 4px 4px 2px;
       }
       textarea:focus {
         outline: none;
-        border-color: var(--cyan);
       }
       .controls {
         display: flex;
         align-items: center;
-        gap: 8px;
-        margin-top: 6px;
+        gap: 6px;
+      }
+      .spacer {
+        margin-left: auto;
       }
       .meta {
-        margin-left: auto;
+        margin: 6px 4px 0;
         color: var(--dim);
-        font-size: 11px;
-        white-space: nowrap;
+        font-size: 10.5px;
+        text-align: right;
       }
 
       /* Running and idle are one attribute on <body>, so every control that
@@ -341,27 +432,28 @@
         <div class="state" id="state" data-tone="off">
           <span class="dot" aria-hidden="true"></span>
           <span id="state-word">Checking…</span>
-          <!-- The access mode as a pill. Its tooltip is the whole explanation
-               (`modeHint` in sidepanel.ts) — the sentence used to be a paragraph
-               under the header on every open. -->
-          <span class="pill" id="access" title="">—</span>
-          <!-- v1.266.0: whether the tab the user is looking at holds an approval
-               grant. Painted from the daemon's `state` frame (`tab_allowed`);
-               hidden until the daemon says so, re-asked on a tab switch. -->
-          <span class="pill" id="tab-allowed" hidden title="Page actions in this tab run without asking until it closes.">Tab allowed</span>
         </div>
+        <!-- The access mode as a pill. Its tooltip is the whole explanation
+             (`modeHint` in sidepanel.ts). -->
+        <span class="pill" id="access" title="">—</span>
+        <!-- v1.266.0: whether the tab the user is looking at holds an approval
+             grant. Painted from the daemon's `state` frame (`tab_allowed`);
+             hidden until the daemon says so, re-asked on a tab switch. -->
+        <span class="pill pill-accent" id="tab-allowed" hidden title="Page actions in this tab run without asking until it closes.">Tab allowed</span>
         <!-- v1.267.0: THE MODEL. Filled from the daemon's `models` frame; the
              Default option names the model Jarvis would use anyway. A pick is
              remembered in this browser and validated by the daemon on Send. -->
-        <select id="model" aria-label="Model" title="The model that answers in this panel">
-          <option value="">Default</option>
-        </select>
+        <span class="model-wrap">
+          <select id="model" aria-label="Model" title="The model that answers in this panel">
+            <option value="">Default</option>
+          </select>
+        </span>
       </div>
       <p class="note" id="note"></p>
       <div class="actions">
         <!-- Empty and hidden until the worker says which action is real. A static
              "Disconnect" here is a promise the header may be about to contradict. -->
-        <button id="toggle" type="button" hidden></button>
+        <button class="ghost" id="toggle" type="button" hidden></button>
       </div>
     </header>
 
@@ -387,24 +479,27 @@
              with the chat lane's "conversation" grant, which covers the remaining
              rounds of this turn only — the next message asks again. -->
         <button id="approve-task" type="button" title="Covers the rest of this message. The next message asks again.">Allow for this task</button>
-        <button id="deny" type="button" title="Refuses this action; Jarvis is told you declined.">Deny</button>
+        <button class="ghost" id="deny" type="button" title="Refuses this action; Jarvis is told you declined.">Deny</button>
       </div>
     </div>
 
     <footer>
-      <!-- v1.264.0's keyboard contract, now in the tooltip: Enter sends (Steer
-           while Jarvis is working) · Shift+Enter starts a new line. -->
-      <textarea id="ask" rows="2" placeholder="Ask about this page…" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line"></textarea>
-      <div class="controls">
-        <button class="primary" id="send" type="button">Send</button>
-        <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
-        <button id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>
-        <!-- WHICH COPY of the add-on the browser is running. Chrome keeps serving
-             the build it loaded until somebody presses Reload, so after an app
-             update this number is the only thing that tells a stale add-on from a
-             current one. Read from the manifest, never a constant written here. -->
-        <span class="meta">Add-on <span id="version">—</span> · <button class="link" id="open" type="button">Open Jarvis</button></span>
+      <div class="composer">
+        <!-- v1.264.0's keyboard contract, in the tooltip: Enter sends (Steer
+             while Jarvis is working) · Shift+Enter starts a new line. -->
+        <textarea id="ask" rows="2" placeholder="Ask about this page…" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line"></textarea>
+        <div class="controls">
+          <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
+          <button class="ghost" id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>
+          <span class="spacer"></span>
+          <button class="primary" id="send" type="button" title="Send · Enter">Send</button>
+        </div>
       </div>
+      <!-- WHICH COPY of the add-on the browser is running. Chrome keeps serving
+           the build it loaded until somebody presses Reload, so after an app
+           update this number is the only thing that tells a stale add-on from a
+           current one. Read from the manifest, never a constant written here. -->
+      <p class="meta">Add-on <span id="version">—</span> · <button class="link" id="open" type="button">Open Jarvis</button></p>
     </footer>
     <script src="sidepanel.js"></script>
   </body>

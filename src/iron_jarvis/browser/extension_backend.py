@@ -359,6 +359,9 @@ class ExtensionConnection:
         #: socket that pairs on this same connection never sends hello, because
         #: it had no token when it opened.
         self.hello_seen = False
+        #: v1.268.0: when the add-on last answered a heartbeat, or None. The
+        #: daemon's own liveness stamp for ``GET /browser/status``.
+        self.last_pong_at: datetime | None = None
         #: Whether the restricted socket acknowledged its pairing offer.
         self.pairing_acked = False
         self.closed = False
@@ -652,6 +655,13 @@ class ExtensionBackend:
             "host_permission": bool(conn.host_permission) if conn else False,
             "connected_at": conn.connected_at.isoformat() if conn else None,
             "in_flight": len(conn.pending) if conn else 0,
+            # v1.268.0: the heartbeat, so a wedged bridge can be told from a quiet one.
+            "keepalive": {
+                "interval_s": P.KEEPALIVE_S,
+                "last_pong_at": (
+                    conn.last_pong_at.isoformat() if conn and conn.last_pong_at else None
+                ),
+            },
             "active_tab": dict(self.active_tab) if self.active_tab else None,
             "last_error": self.last_error or None,
             # The history behind that one line. The status ROUTE decides whether to
@@ -1253,6 +1263,12 @@ class ExtensionBackend:
             return True
         if kind == P.FRAME_PANEL:
             await self._handle_panel(conn, frame)
+            return True
+        if kind == P.FRAME_PONG:
+            # THE HEARTBEAT'S ANSWER (v1.268.0). Recorded, never reported as an
+            # error, never published: it is the one frame whose whole meaning is
+            # "still here".
+            conn.last_pong_at = self.clock()
             return True
         # An unknown type on a PAIRED socket is recorded, not fatal: a newer add-on
         # speaking a frame this daemon predates must not take the connection down,

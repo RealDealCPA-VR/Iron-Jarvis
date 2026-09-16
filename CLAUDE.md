@@ -1252,6 +1252,24 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The add-on's worker is kept alive by the DAEMON's heartbeat; a timer in
+  the worker cannot do it** (v1.268.0). "It randomly disconnected and
+  reconnected": Chromium evicts an MV3 service worker after ~30 s without
+  events and the socket dies with it; the next tab switch woke it and it paired
+  back in. WebSocket traffic inside the window resets the timer (Chrome 116+),
+  so `routes/browser.py::_keepalive` sends `browser.ping` every `KEEPALIVE_S`
+  (protocol.py, 20 s) on every idle tick of a PAIRED socket — adopted or inert,
+  never restricted — and `socket.ts` answers `browser.pong` (`pongFor`, pinned
+  under node); the backend stamps `conn.last_pong_at` and `GET /browser/status`
+  reports `keepalive`. Do not "simplify" the interval past 30 s, and do not add
+  `alarms` to the manifest for this (D26). Pins:
+  `tests/test_browser_keepalive_v1268.py`. Same release: `sidepanel.html` wears
+  the app's look — dark `--cyan` IS the dashboard's `--accent-rgb`, light
+  `--cyan` its light accent family; bubbles, a rounded composer, no hard
+  dividers, pill buttons — `tests/test_browser_sidepanel_look_v1268.py` pins
+  the structure and the cross-file accent, and the theme test still owns the
+  contrast.
+
 - **The sidebar prints only what changes what the user can do, and it has a
   model picker — the user's decision, reversing D28's "no model picker"**
   (v1.267.0). "Not too much in the way of instruction when the extension is

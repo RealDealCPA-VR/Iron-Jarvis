@@ -64,6 +64,13 @@ FRAME_CONNECTION_REPLACED = "browser.connection_replaced"
 #: for the same reason: the panel is a VIEW of a conversation the daemon is running,
 #: so the daemon narrates and the panel paints. See :data:`ALL_PANEL_EVENTS`.
 FRAME_PANEL_EVENT = "browser.panel_event"
+#: v1.268.0: the HEARTBEAT. Chromium tears an add-on's service worker down after
+#: ~30 s idle — and WebSocket traffic (a message sent or received) within that
+#: window resets the timer (Chrome 116+). The daemon sends ``browser.ping`` every
+#: :data:`KEEPALIVE_S` on a paired socket; the add-on answers ``browser.pong``.
+#: Two frames because BOTH directions count and either alone would do — the
+#: pair also gives the daemon a liveness stamp to report.
+FRAME_PING = "browser.ping"
 
 #: Extension -> daemon.
 FRAME_HELLO = "browser.hello"
@@ -74,6 +81,13 @@ FRAME_PAIRING_ACK = "browser.pairing_ack"
 #: close. Fire-and-forget UPWARD, exactly like ``browser.event``, and deliberately
 #: NOT a request/response pair -- see the note on :data:`ALL_PANEL_ACTIONS`.
 FRAME_PANEL = "browser.panel"
+#: v1.268.0: the add-on's answer to ``browser.ping`` (see :data:`FRAME_PING`).
+FRAME_PONG = "browser.pong"
+
+#: Seconds between heartbeats on a paired socket. Well inside Chromium's 30 s
+#: idle limit, and a value the daemon owns: the add-on cannot keep itself alive
+#: (a timer dies with the worker; ``alarms`` is kept out of the manifest by D26).
+KEEPALIVE_S = 20.0
 
 DAEMON_TO_EXTENSION: tuple[str, ...] = (
     FRAME_COMMAND,
@@ -83,6 +97,7 @@ DAEMON_TO_EXTENSION: tuple[str, ...] = (
     FRAME_READY,
     FRAME_CONNECTION_REPLACED,
     FRAME_PANEL_EVENT,
+    FRAME_PING,
 )
 
 EXTENSION_TO_DAEMON: tuple[str, ...] = (
@@ -91,6 +106,7 @@ EXTENSION_TO_DAEMON: tuple[str, ...] = (
     FRAME_EVENT,
     FRAME_PAIRING_ACK,
     FRAME_PANEL,
+    FRAME_PONG,
 )
 
 #: Every legal ``type`` value, both directions.
@@ -522,6 +538,20 @@ class HelloFrame(TypedDict):
     browser_session: NotRequired[str]
 
 
+class PingFrame(TypedDict):
+    """Daemon -> extension: a heartbeat (v1.268.0). ``t`` is the daemon's send time, ms."""
+
+    type: str
+    t: int
+
+
+class PongFrame(TypedDict):
+    """Extension -> daemon: the heartbeat's answer; ``t`` echoes the ping's."""
+
+    type: str
+    t: int
+
+
 class EventFrame(TypedDict):
     """Extension -> daemon: something happened in the browser, unprompted."""
 
@@ -574,6 +604,8 @@ FRAME_TYPEDDICTS: tuple[type, ...] = (
     EventFrame,
     PanelFrame,
     PanelEventFrame,
+    PingFrame,
+    PongFrame,
 )
 
 #: ``type`` string -> the ``TypedDict`` describing that frame. The round-trip test
@@ -592,6 +624,8 @@ FRAME_SHAPES: dict[str, type] = {
     FRAME_PAIRING_ACK: PairingAckFrame,
     FRAME_PANEL: PanelFrame,
     FRAME_PANEL_EVENT: PanelEventFrame,
+    FRAME_PING: PingFrame,
+    FRAME_PONG: PongFrame,
 }
 
 # --------------------------------------------------------------------------- #
@@ -1227,6 +1261,16 @@ def hello_frame(
     }
 
 
+def ping_frame(t: int) -> PingFrame:
+    """Build the ``browser.ping`` heartbeat (v1.268.0)."""
+    return {"type": FRAME_PING, "t": int(t)}
+
+
+def pong_frame(t: int) -> PongFrame:
+    """Build the ``browser.pong`` answer, echoing the ping's ``t``."""
+    return {"type": FRAME_PONG, "t": int(t)}
+
+
 def event_frame(event_id: str, event: str, payload: dict[str, Any] | None = None) -> EventFrame:
     """Build a ``browser.event`` frame."""
     return {"id": event_id, "type": FRAME_EVENT, "event": event, "payload": dict(payload or {})}
@@ -1706,10 +1750,13 @@ __all__ = [
     "FRAME_PAIRING_REQUIRED",
     "FRAME_PANEL",
     "FRAME_PANEL_EVENT",
+    "FRAME_PING",
+    "FRAME_PONG",
     "FRAME_READY",
     "FRAME_RESPONSE",
     "FRAME_SHAPES",
     "FRAME_TYPEDDICTS",
+    "KEEPALIVE_S",
     "FULL_TEXT_CHARS",
     "LOCAL_UI_METHODS",
     "MAX_AX_DEPTH",

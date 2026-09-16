@@ -136,6 +136,11 @@ TEST_METHOD = P.METHOD_ACTIVE_TAB
 _EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
 
 
+#: Seconds between ``browser.ping`` heartbeats on a paired socket (v1.268.0).
+#: Read at each tick rather than captured, so a test can shorten it on the
+#: module instead of waiting out twenty real seconds.
+KEEPALIVE_S: float = P.KEEPALIVE_S
+
 #: The pairing socket's path, named once so the doctor can say it out loud.
 WS_PATH = "/browser/ws"
 
@@ -444,6 +449,7 @@ def _disconnected_status() -> dict[str, Any]:
         "pending_pairing": None,
         "paired": False,
         "last_error": None,
+        "keepalive": {"interval_s": P.KEEPALIVE_S, "last_pong_at": None},
         # The setup window, SHUT unless an arm route opened one. Present in the
         # disconnected shape too, because the card that renders the countdown is
         # exactly the card a user is looking at while nothing is connected yet.
@@ -847,6 +853,25 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001 — teardown must not raise into ASGI
             logger.debug("pending pairing drop failed", exc_info=True)
 
+    async def _keepalive(conn: ExtensionConnection, loop: Any, next_ping: float) -> float:
+        """Send ``browser.ping`` when it is due; returns the next due time.
+
+        THE FIX FOR "IT RANDOMLY DISCONNECTED AND RECONNECTED" (v1.268.0).
+        Chromium evicts an add-on's service worker after ~30 s with no events,
+        and the socket dies with it; the next tab switch woke it and it paired
+        back in — a drop the user saw as flaky. WebSocket traffic inside that
+        window resets the idle timer (Chrome 116+), and only the daemon can
+        supply it: a timer in the worker dies with the worker. Sent on every
+        idle tick of a PAIRED socket (adopted or inert — an inert one must stay
+        alive too, or switching access back on would find no browser); never on
+        a restricted one, which may receive nothing but its pairing frames.
+        """
+        now = loop.time()
+        if now < next_ping:
+            return next_ping
+        await conn.send(P.ping_frame(int(now * 1000)))
+        return now + KEEPALIVE_S
+
     async def _pairing_lapsed(runtime: Any, conn: ExtensionConnection, expires_at: float) -> bool:
         """Whether this unpaired socket has run out of time (D06A).
 
@@ -903,6 +928,9 @@ def register(app: FastAPI, d) -> None:
         # (or the inert ready frame) just sent, so the first tick re-announces
         # only a word that has actually moved since.
         announced_access = backend.access_word()
+        # v1.268.0: the first heartbeat is one interval out; the add-on has just
+        # greeted us, so nothing needs saying sooner.
+        next_ping = loop.time() + KEEPALIVE_S
         reason, detail = "closed", ""
         recv = asyncio.ensure_future(ws.receive())
         try:
@@ -913,6 +941,7 @@ def register(app: FastAPI, d) -> None:
                     )
                     if not done:
                         if _access_off(runtime):
+                            next_ping = await _keepalive(conn, loop, next_ping)
                             continue
                         # The user turned Browser access back on: this socket may
                         # become the authoritative one now, and adopt() sends the
@@ -960,6 +989,7 @@ def register(app: FastAPI, d) -> None:
                             await conn.send(
                                 backend.ready_frame(active=not _access_off(runtime))
                             )
+                        next_ping = await _keepalive(conn, loop, next_ping)
                         continue
                 else:
                     done, _ = await asyncio.wait(
@@ -1121,6 +1151,10 @@ def register(app: FastAPI, d) -> None:
                     "browser_version": str(view.get("browser_version") or ""),
                     "active_tab": view.get("active_tab") or None,
                     "last_error": view.get("last_error") or None,
+                    # v1.268.0: the heartbeat, so a wedged bridge can be told
+                    # from a quiet one on the card and in the doctor.
+                    "keepalive": view.get("keepalive")
+                    or {"interval_s": P.KEEPALIVE_S, "last_pong_at": None},
                 }
             )
         except Exception:

@@ -28,13 +28,16 @@
 //     refuses to SEND one and says which method produced it. A response silently
 //     dropped by the daemon reads to the model as a timeout on a call that worked.
 //
-// MV3 lifetime, stated plainly because it is a real limitation and not a bug to
-// hunt later: a service worker is torn down when idle. WebSocket traffic resets
-// that idle timer, so an active bridge stays alive, but a bridge that has been
-// silent long enough is unloaded and its socket closes. It reconnects on the next
-// event that wakes the worker (browser startup, the popup opening, a tab
-// activating). A timer-based keepalive would need the `alarms` permission, which
-// D26 deliberately keeps out of the manifest.
+// MV3 lifetime, and what holds it (v1.268.0). A service worker is torn down
+// after ~30 s with no events, and its socket dies with it — the user's report was
+// "it randomly disconnected and reconnected": the worker slept, the next tab
+// switch woke it, and it paired back in. WebSocket traffic inside that window
+// resets the idle timer (Chrome 116+), and the DAEMON supplies it: `browser.ping`
+// every KEEPALIVE_S on a paired socket, answered here with `browser.pong`. A
+// timer in this worker could not do the job (it dies with the worker), and the
+// `alarms` permission stays out of the manifest (D26). A bridge that is silent
+// for longer than that is a daemon that is gone, and the reconnect below is the
+// right answer to that.
 
 import {
   FRAME_COMMAND,
@@ -47,6 +50,8 @@ import {
   FRAME_PAIRING_REQUIRED,
   FRAME_PANEL,
   FRAME_PANEL_EVENT,
+  FRAME_PING,
+  FRAME_PONG,
   FRAME_READY,
   FRAME_RESPONSE,
   MAX_FRAME_BYTES,
@@ -450,6 +455,11 @@ export class BridgeSocket {
       case FRAME_DIRECTIVE:
         void this.answerDirective(frame as unknown as DirectiveFrame);
         return;
+      case FRAME_PING:
+        // THE HEARTBEAT (v1.268.0). Answered at once, so both directions carry
+        // traffic inside Chromium's 30 s idle window and this worker stays up.
+        this.send(pongFor(frame));
+        return;
       case FRAME_PANEL_EVENT:
         // Handed straight on, unread. The socket does not know what a turn is and
         // must not learn: this is the one frame whose meaning lives in a page.
@@ -599,6 +609,12 @@ export class BridgeSocket {
   private emitStatus(): void {
     this.opts.onStatusChange?.(this.status());
   }
+}
+
+/** The `browser.pong` for one `browser.ping`, echoing its `t` (v1.268.0). Pure, so it is pinned under node. */
+export function pongFor(frame: Record<string, unknown>): { type: string; t: number } {
+  const t = typeof frame["t"] === "number" ? (frame["t"] as number) : Date.now();
+  return { type: FRAME_PONG, t };
 }
 
 /** UTF-8 byte length, which is what the daemon's cap counts. */

@@ -107,13 +107,13 @@ the product; the panel is a window onto it.
 
 ## Known limits, named rather than discovered later
 
-- **The service worker sleeps.** Manifest V3 evicts an idle worker. WebSocket
-  traffic keeps an active bridge alive, but a long-silent one is unloaded and its
-  socket closes, so the Browser card reads **Paired — not running** with the
-  browser plainly open. It is not broken and needs no re-pairing: it reconnects
-  when anything wakes the worker — browser startup, opening the popup, switching
-  tabs. A timer-based keepalive would need the `alarms` permission, which the
-  permission set deliberately excludes.
+- **The service worker is kept awake by the daemon.** Manifest V3 evicts an
+  idle worker after about 30 seconds, and its socket dies with it — that used to
+  read as a random disconnect and reconnect. Since v1.268.0 the daemon sends a
+  heartbeat every 20 seconds on a paired socket and the add-on answers it, which
+  is what Chromium counts as activity, so a connected bridge stays connected. If
+  the app itself stops (it restarts during an update), the panel says so and
+  reconnects when it is back; nothing needs re-pairing.
 - **Access mode is only as fresh as the daemon's last word.** The add-on cannot
   read Iron Jarvis's `browser_access` setting itself, so the popup shows "Set in
   Jarvis" until the daemon reports a mode. It never guesses one.

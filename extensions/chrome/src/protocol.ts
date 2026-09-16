@@ -12,12 +12,12 @@
 
 export const ALL_DIRECTIVES = ["request_host_permissions", "disconnect"] as const;
 export const ALL_EVENTS = ["tab_activated", "navigation_completed", "download_completed", "tab_removed"] as const;
-export const ALL_FRAME_TYPES = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event", "browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
+export const ALL_FRAME_TYPES = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event", "browser.ping", "browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel", "browser.pong"] as const;
 export const ALL_METHODS = ["status", "list_tabs", "active_tab", "read_page", "get_elements", "screenshot", "activate_tab", "scroll", "create_tab", "close_tab", "click", "type_text", "press_key", "navigate"] as const;
 export const ALL_PANEL_ACTIONS = ["open", "send", "stop", "steer", "approve", "deny", "close"] as const;
 export const ALL_PANEL_EVENTS = ["state", "delta", "tool", "approval", "steered", "done", "error", "models"] as const;
 export const COMMAND_TIMEOUTS_S = { "navigate": 30.0, "read_page": 20.0 };
-export const DAEMON_TO_EXTENSION = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event"] as const;
+export const DAEMON_TO_EXTENSION = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event", "browser.ping"] as const;
 export const DEFAULT_COMMAND_TIMEOUT_S = 15.0;
 export const DEFAULT_SNAPSHOT_MODE = "interactive";
 export const DIRECTIVE_DISCONNECT = "disconnect";
@@ -27,7 +27,7 @@ export const EVENT_ID_PREFIX = "evt_";
 export const EVENT_NAVIGATION_COMPLETED = "navigation_completed";
 export const EVENT_TAB_ACTIVATED = "tab_activated";
 export const EVENT_TAB_REMOVED = "tab_removed";
-export const EXTENSION_TO_DAEMON = ["browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
+export const EXTENSION_TO_DAEMON = ["browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel", "browser.pong"] as const;
 export const FRAME_COMMAND = "browser.command";
 export const FRAME_CONNECTION_REPLACED = "browser.connection_replaced";
 export const FRAME_DIRECTIVE = "browser.directive";
@@ -38,8 +38,11 @@ export const FRAME_PAIRING_ACK = "browser.pairing_ack";
 export const FRAME_PAIRING_REQUIRED = "browser.pairing_required";
 export const FRAME_PANEL = "browser.panel";
 export const FRAME_PANEL_EVENT = "browser.panel_event";
+export const FRAME_PING = "browser.ping";
+export const FRAME_PONG = "browser.pong";
 export const FRAME_READY = "browser.ready";
 export const FRAME_RESPONSE = "browser.response";
+export const KEEPALIVE_S = 20.0;
 export const FULL_TEXT_CHARS = 60000;
 export const LOCAL_UI_METHODS = ["activate_tab", "scroll", "create_tab", "close_tab"] as const;
 export const MAX_AX_DEPTH = 24;
@@ -245,6 +248,18 @@ export interface PanelEventFrame {
   type: string;
   event: string;
   payload: Record<string, unknown>;
+}
+
+/** Daemon -> extension: a heartbeat (v1.268.0). ``t`` is the daemon's send time, ms. */
+export interface PingFrame {
+  type: string;
+  t: number;
+}
+
+/** Extension -> daemon: the heartbeat's answer; ``t`` echoes the ping's. */
+export interface PongFrame {
+  type: string;
+  t: number;
 }
 
 /** ``read_page`` params. Every limit is sent, none is assumed. */
@@ -527,5 +542,7 @@ export type BrowserFrame =
   | HelloFrame
   | EventFrame
   | PanelFrame
-  | PanelEventFrame;
+  | PanelEventFrame
+  | PingFrame
+  | PongFrame;
 
