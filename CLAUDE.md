@@ -1252,6 +1252,23 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A covered call must CARRY its grant into the registry; a test that stubs
+  `invoke` cannot see that it did not** (v1.270.1). The user, switch on, on a
+  live tab: "tab creation needs your approval in Settings". The ledger:
+  `tool.denied browser_create_tab mode=ask` — "needs approval and nothing here
+  could ask". `routes/chat.py` skipped the card for a call covered by a tab
+  grant (v1.266.0) or the switch (v1.270.0) and left `_grant_extra` EMPTY, so
+  `registry.invoke`'s own permission gate — which is what a card's `once`
+  answer satisfies through `session_allow` — refused it. The tab grant shipped
+  with this hole for two days because every case stubbed `registry.invoke`
+  and asserted the stub was called with no `deny_reason`: intent, not outcome
+  ("Arming is granting", again). Now the covered branch sets `_grant_extra`
+  exactly as yolo does, and
+  `tests/test_browser_sidepanel_context_v1270.py` drives the REAL `invoke`
+  (only the tool's `execute` is stubbed) for the switch, the tab grant and a
+  no-grant/Deny control. When a lane skips a human gate, prove the call RAN
+  through the layer that would have refused it.
+
 - **The sidebar's conversation lives in the daemon; its ONE switch is the
   per-tab grant widened to every tab; its steps fold** (v1.270.0). The user:
   "not keeping the items within the chat in context", "instead of permissions

@@ -2658,7 +2658,19 @@ async def chat_stream(
                     if _unarmed:
                         _needs_card = False
                     if _needs_card and _tab_covered(tc):
+                        # A COVERED CALL CARRIES ITS GRANT (v1.270.1). The
+                        # card is skipped, but the registry's own permission
+                        # gate still runs inside `invoke` and refuses an
+                        # ask-tier call with no `session_allow` — exactly
+                        # what a card's 'once' answer supplies below. v1.266.0
+                        # (the tab grant) and v1.270.0 (the switch) both
+                        # skipped the card and forgot this line; every test
+                        # stubbed `invoke`, so the refusal — 'needs approval
+                        # and nothing here could ask' — reached only the
+                        # user's ledger. Same shape as yolo, three lines up.
                         _needs_card = False
+                        if _engine_asks:
+                            _grant_extra = {tc.name, _perm_name}
                     if _needs_card:
                         if _perm_name in _round_answers:
                             # ONE CARD FOR THE BATCH (v1.247.0): this call's

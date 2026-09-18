@@ -40,7 +40,8 @@ from iron_jarvis.browser.panel import PANEL_HISTORY_MESSAGES
 from iron_jarvis.browser.tools import BrowserPressKeyTool
 from iron_jarvis.computeruse.policy import ComputerUsePolicy
 from iron_jarvis.core.turns import TURNS
-from iron_jarvis.providers.adapters.base import LLMResponse
+from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
+from iron_jarvis.tools.base import ToolResult
 from tests._fakes.panel_harness import _FIRST, _SECOND, Gate, RealApp, _headers, _wait_for
 from tests.test_browser_actions_v1237 import (
     ActRuntime,
@@ -502,6 +503,136 @@ def test_the_status_route_reports_the_switch(tmp_path, monkeypatch):
         assert app.client.get("/browser/status", headers=_headers()).json()["auto_allow"] is False
         app.platform.browser.set_auto_allow(True)
         assert app.client.get("/browser/status", headers=_headers()).json()["auto_allow"] is True
+
+
+# --------------------------------------------------------------------------- #
+# 2b. The grant REACHES the registry (v1.270.1) — the real `invoke`, not a stub
+# --------------------------------------------------------------------------- #
+#
+# THE LIVE REPORT (2026-09-18, the user, switch on, a real tab): "I couldn't open
+# a browser page — tab creation needs your approval in Settings." The ledger:
+# `tool.denied browser_create_tab mode=ask: needs approval and nothing here could
+# ask`. The lane skipped the card for a covered call and never put the grant a
+# card's 'once' answer supplies into `session_allow`, so the registry's own gate
+# refused. Every case above stubs `registry.invoke` — intent, not outcome (the
+# repository's "Arming is granting" lesson, again). These cases keep the REAL
+# `invoke` (its permission gate, its arming gate, its ledger row) and stub only
+# the tool's `execute`, so a refusal inside the registry is visible.
+
+
+def _real_click(cid: str, n: int, tab_id: int | None = None) -> ToolCall:
+    """A click in the shape the REAL tool requires (`target`, not a bare `element_id`).
+
+    The v1266 helper's `{"element_id": 1}` was never checked by anything: with
+    `registry.invoke` stubbed, the argument-shape gate (v1.228.0) never ran. Against
+    the real registry it refuses `missing required: target` — which is a second
+    thing the stub hid.
+    """
+    args: dict[str, Any] = {"target": {"element_id": f"e{n}"}}
+    if tab_id is not None:
+        args["tab_id"] = tab_id
+    return ToolCall(id=cid, name="browser_click", arguments=args)
+
+
+def _stub_execute(app: RealApp, name: str, *, fail: str = "") -> list[dict]:
+    """Stub ONE tool's `execute` (the page is not here); everything before it is real."""
+    tool = app.platform.registry.get(name)
+    assert tool is not None, f"no tool {name}"
+    calls: list[dict] = []
+
+    async def fake_execute(args, ctx=None, *a, **kw):
+        calls.append(dict(args))
+        if fail:
+            return ToolResult(ok=False, output="", error=fail)
+        return ToolResult(ok=True, output="clicked")
+
+    tool.execute = fake_execute  # type: ignore[method-assign]
+    return calls
+
+
+def _tool_frames(app: RealApp, name: str) -> list[dict]:
+    return [p for e, p in app.panel.events() if e == P.PANEL_EVENT_TOOL and p.get("name") == name]
+
+
+
+def test_with_no_grant_the_real_registry_still_asks_and_deny_still_refuses(tmp_path, monkeypatch):
+    """The control: the stub below does not bypass the gate — with nothing granted, the card
+    comes and a Deny keeps `execute` from running (the refusal is the registry's)."""
+    with RealApp(tmp_path, monkeypatch, access="interactive") as app:
+        app.pair()
+        _look_at(app, 7)
+        ran = _stub_execute(app, "browser_click")
+        _script(app, [[_real_click("c1", 1)], "Done."])
+        app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
+        card = app.panel.wait_for(P.PANEL_EVENT_APPROVAL, "no grant, yet no card")
+        app.panel.send(P.PANEL_ACTION_DENY, id=card["id"])
+        app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
+        assert ran == [], "a denied call reached execute"
+        finished = [f for f in _tool_frames(app, "browser_click") if f["status"] == "finished"]
+        assert finished and finished[0]["ok"] is False
+
+
+def test_the_switch_carries_the_grant_into_the_real_registry(tmp_path, monkeypatch):
+    """THE LIVE REPORT, fixed: switch on → no card AND the call actually runs."""
+    with RealApp(tmp_path, monkeypatch, access="interactive") as app:
+        app.pair()
+        _look_at(app, 7)
+        ran = _stub_execute(app, "browser_click")
+        app.platform.browser.set_auto_allow(True)
+        _script(app, [[_real_click("c1", 1)], [_real_click("c2", 2, tab_id=9)], "Done."])
+        app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
+        app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
+        assert _cards(app) == [], "the switch did not skip the card"
+        assert [c["target"]["element_id"] for c in ran] == ["e1", "e2"], (
+            f"the covered calls never reached execute: {ran}; frames: {_tool_frames(app, 'browser_click')}"
+        )
+        finished = [f for f in _tool_frames(app, "browser_click") if f["status"] == "finished"]
+        assert [f["ok"] for f in finished] == [True, True], finished
+        assert not any("needs approval" in f["text"] for f in _tool_frames(app, "browser_click"))
+
+
+def test_the_per_tab_grant_carries_the_grant_into_the_real_registry(tmp_path, monkeypatch):
+    """v1.266.0's grant had the same hole. One card answered 'tab', then the next click in
+    that tab runs for real — through the registry, not a stub of it."""
+    with RealApp(tmp_path, monkeypatch, access="interactive") as app:
+        app.pair()
+        _look_at(app, 7)
+        ran = _stub_execute(app, "browser_click")
+        _script(app, [[_real_click("c1", 1)], [_real_click("c2", 2)], "Done."])
+        app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
+        card = app.panel.wait_for(P.PANEL_EVENT_APPROVAL, "the first click never raised a card")
+        app.panel.send(P.PANEL_ACTION_APPROVE, id=card["id"], scope="tab")
+        app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
+        assert len(_cards(app)) == 1, "the second click in the granted tab carded"
+        assert [c["target"]["element_id"] for c in ran] == ["e1", "e2"], (
+            f"a covered call never reached execute: {ran}; frames: {_tool_frames(app, 'browser_click')}"
+        )
+
+
+def test_a_failed_step_names_its_reason_in_the_folded_line(tmp_path, monkeypatch):
+    """The live report reached the user only as the model's paraphrase; the step line said
+    "Could not click on the page." and nothing more. Now the tool's own error rides the
+    finished frame's text, capped to a sentence."""
+    from iron_jarvis.browser.panel import STEP_REASON_CHARS, _short_reason
+
+    with RealApp(tmp_path, monkeypatch, access="interactive") as app:
+        app.pair()
+        _look_at(app, 7)
+        _stub_execute(app, "browser_click", fail="the page refused: that element is gone")
+        app.platform.browser.set_auto_allow(True)
+        _script(app, [[_real_click("c1", 1)], "Done."])
+        app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
+        app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
+        finished = [f for f in _tool_frames(app, "browser_click") if f["status"] == "finished"]
+        assert finished and finished[0]["ok"] is False
+        assert finished[0]["text"].startswith("Could not click"), finished
+        assert "the page refused: that element is gone" in finished[0]["text"], finished
+    # The cap: one line, no dump.
+    long = "x" * 500 + "\n" + "y" * 10
+    short = _short_reason(long)
+    assert len(short) <= STEP_REASON_CHARS and short.endswith("\u2026") and "\n" not in short
+    assert _short_reason("  spaced   out \n words ") == "spaced out words"
+    assert _short_reason(None) == ""
 
 
 # --------------------------------------------------------------------------- #

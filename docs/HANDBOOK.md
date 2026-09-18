@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.270.0 (2026-09-14).*
+holds itself to. Current as of v1.270.1 (2026-09-14).*
 
 ---
 
@@ -866,6 +866,14 @@ stop and ask — those are decisions that stay yours. *The work is folded:* whil
 Jarvis works a page, the steps ("Clicking 'Next'…", "Typing into 'Search' —
 done.") sit behind one **Working** line you can expand; when the turn ends it
 reads "4 steps". A notice that a different model answered stays visible.
+
+**Auto-allow actually allows (v1.270.1).** With the switch on, v1.270.0 skipped
+the card but still refused the action a moment later ("needs your approval in
+Settings"): the permission the card would have granted was never handed to the
+tool. Fixed, and the same hole in v1.266.0's Allow-for-this-tab is closed with
+it — a page action covered by the switch or by a tab grant now runs. And when
+a step does fail, the folded line under **Working** now says why ("Could not
+click 'Next'. the page refused: …") instead of only that it could not.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

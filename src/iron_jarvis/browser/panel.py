@@ -251,6 +251,18 @@ def _short(value: object) -> str:
     return text if len(text) <= _DESCRIBE_CHARS else text[: _DESCRIBE_CHARS - 1] + "…"
 
 
+#: How much of a failed step's reason the folded line carries (v1.270.1).
+STEP_REASON_CHARS = 160
+
+
+def _short_reason(output: object) -> str:
+    """One line of a failed tool's error for the step: trimmed, capped, no newlines."""
+    text = " ".join(str(output or "").split())
+    if len(text) > STEP_REASON_CHARS:
+        text = text[: STEP_REASON_CHARS - 1].rstrip() + "…"
+    return text
+
+
 def _cap(sentence: str) -> str:
     return sentence[:1].upper() + sentence[1:] if sentence else sentence
 
@@ -1244,8 +1256,17 @@ class PanelTurns:
             # browser_click…". The args here are the lane's REDACTED args.
             what = describe_browser_call(name, data.get("args"))
             finished = data.get("status") == "finished"
-            if finished:
-                text = f"{_cap(what)} — done." if data.get("ok") else f"Could not {what}."
+            if finished and data.get("ok"):
+                text = f"{_cap(what)} — done."
+            elif finished:
+                # v1.270.1: WHY, in the step itself. The lane's finished frame
+                # carries the tool's error as `output`; a step that says only
+                # "Could not click" leaves the user to guess whether the page,
+                # the risk door or a permission refused — the live report was
+                # a permission refusal the user only met through the model's
+                # paraphrase. Capped: a reason is a sentence, not a dump.
+                reason = _short_reason(data.get("output"))
+                text = f"Could not {what}." + (f" {reason}" if reason else "")
             else:
                 text = f"{_cap(what)}…"
             # v1.270.0: `status`/`ok` ride along so the panel folds a step's
