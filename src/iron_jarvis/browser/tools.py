@@ -821,7 +821,8 @@ class BrowserScreenshotTool(_BrowserTool):
     name = "browser_screenshot"
     description = (
         "Take a picture of one of the user's own browser tabs and save it as a "
-        "Jarvis artifact, so the user can open it later. Ask a question as well and "
+        "Jarvis artifact, so the user can open it later. A tab that is not on "
+        "screen is brought on screen first (the result says `activated`). Ask a question as well and "
         "a vision model describes the picture in the same call; leave question out "
         "and nothing is sent to a model, at no cost. Use this for layout, charts "
         "and anything the page draws rather than writes; browser_read_page is "

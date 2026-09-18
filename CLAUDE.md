@@ -1252,6 +1252,31 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The same failing call is not run a third time; the ledger is the
+  backlog** (v1.274.0). The daily driver's last 400 browser invocations were
+  the evidence: a page read refused with the identical add-on error FIVE
+  times in twenty seconds; a screenshot refused twice (background tab, then
+  "Either the '<all_urls>' or 'activeTab' permission is required" on a grant
+  covering the whole web). Fixes, each pinned: (1) BOTH chat lanes count
+  failures per (tool, canonical args) and answer the third with
+  `repeated_call_refusal` instead of running it — the stream lane BEFORE its
+  card (`REPEATED_CALL_LIMIT`, lock-step); (2) `captureVisible` brings the
+  tab on screen and captures; (3) `optional_host_permissions` is `<all_urls>`
+  (Chromium's `CanCaptureVisiblePage` asks whether the granted hosts CONTAIN
+  that pattern; two scheme patterns do not) — an older grant reads as "no site
+  access" once and the sidebar now carries a Grant button
+  (`request_host_permission`); (4) `PAGE_FAILED_TO_LOAD` (the eighteenth
+  code) for "Frame with ID 0 is showing error page"; (5) the Edge store in
+  `UNSUPPORTED_HOSTS`; (6) `open` sends the models frame from its own task
+  (`_emit_models`) — it was awaited inline in the socket's read loop and a
+  tab switch could stall every command; (7) `describe_browser_call` reads the
+  NESTED `target` (the tools' real shape — the old pins used invented flat
+  args) and never quotes the redaction marker; (8) `browser_agent_block`
+  renders the roster from the armed set. Pins:
+  `tests/test_repeated_call_breaker_v1274.py`,
+  `tests/test_browser_ledger_fixes_v1274.py`,
+  `tests/test_browser_sidebar_polish_v1274.py`.
+
 - **The tab the agent is working in GLOWS; the worker knows from the commands
   it answers** (v1.273.0). "A light glow around the tab it is controlling so I
   can visually see the tab that is being operated by the agent."

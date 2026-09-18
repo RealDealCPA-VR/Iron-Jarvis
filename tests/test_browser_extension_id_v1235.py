@@ -124,11 +124,13 @@ def test_no_install_time_host_permissions(  # Q02
     )
 
 
-def test_optional_host_permissions_carry_both_schemes():
-    assert sorted(_manifest()["optional_host_permissions"]) == [
-        "http://*/*",
-        "https://*/*",
-    ], "without both schemes the runtime grant cannot be requested at all"
+def test_optional_host_permissions_are_all_urls():
+    # v1.274.0: `<all_urls>`, because Chromium's screenshot check requires the
+    # granted hosts to CONTAIN that pattern — `http://*/*` + `https://*/*` did
+    # not, and every captureVisibleTab failed on a grant that covered the web.
+    assert _manifest()["optional_host_permissions"] == ["<all_urls>"], (
+        "screenshots need the <all_urls> grant; two scheme patterns cannot photograph a page"
+    )
 
 
 def test_the_permission_set_stays_minimal():

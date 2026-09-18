@@ -1122,6 +1122,34 @@ async def _final_answer_after_tools(
     )
 
 
+#: v1.274.0 — THE SAME FAILING CALL IS NOT RUN A THIRD TIME. The user's ledger
+#: showed one page read fail five times in twenty seconds with the identical
+#: error, the model retrying because a tool error reads as "try again". A tool
+#: with the same arguments that has failed this many times in ONE turn is
+#: answered by the lane, not run: the answer says so and asks for a different
+#: approach. Counted per (name, canonical arguments); a different argument is a
+#: different call and runs. Both lanes, lock-step.
+REPEATED_CALL_LIMIT = 2
+
+
+def _repeat_key(name: str, args: object) -> tuple[str, str]:
+    """The identity of a call for the repeat count: the tool and its arguments, canonically."""
+    try:
+        return (str(name), _json.dumps(args, sort_keys=True, default=str))
+    except Exception:  # noqa: BLE001 — an unserialisable argument still needs a key
+        return (str(name), repr(args))
+
+
+def repeated_call_refusal(name: str, times: int) -> str:
+    """What the model is told instead of a third identical failure."""
+    return (
+        f"NOT RUN: {name} with these exact arguments has already failed {times} "
+        "times this turn with the same outcome, so it was not run again. Change "
+        "the approach — different arguments, a different tool, or read the page "
+        "first — or tell the user what is blocking."
+    )
+
+
 def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
     """The reply when the model wrote nothing even after being asked once.
     Says what happened in plain words; never an empty bubble.
@@ -2133,9 +2161,7 @@ OUT_OF_STEPS_BROWSER_INSTRUCTION = (
 #: narrating steps that were never taken.
 BROWSER_AGENT_BLOCK = (
     "# Working in the user's browser\n"
-    "You can act in this browser yourself: browser_navigate, browser_create_tab, "
-    "browser_activate_tab, browser_scroll, browser_click, browser_type, "
-    "browser_press_key and browser_close_tab are yours to call. WORK IN THE TAB "
+    "You can act in this browser yourself: {tools} are yours to call. WORK IN THE TAB "
     "THE USER IS LOOKING AT: go to pages with browser_navigate (no tab_id), read "
     "that tab, act on it. Open a new tab ONLY when the user asks for one, or when "
     "they must keep the page they are on. Work the task "
@@ -2173,6 +2199,26 @@ def _is_office_turn(armed_names) -> bool:
     """Is a document-writing tool armed this turn? (v1.247.0) — the ONE
     answer both chat lanes use (the stream lane passes armed + ask_armed)."""
     return bool(_DOC_WRITING_TOOLS & set(armed_names or ()))
+
+
+def browser_agent_block(armed_names) -> str:
+    """The block with its roster rendered from what is ACTUALLY armed (v1.274.0).
+
+    The roster used to be a literal naming all eight acting tools — but a panel
+    turn's ceiling drops ``browser_create_tab`` unless the sentence asks for a
+    new tab (v1.271.0), so the block promised a tool the model could not see;
+    a sentence that half-suggested a tab then called it, was refused "not
+    armed", and spent a round. A brief that names a tool beside no such tool is
+    a lie in either direction (the v1.262.0 rule).
+    """
+    names = sorted(str(n) for n in armed_names if str(n) in _BROWSER_ACTING_TOOLS)
+    if not names:
+        roster = "the browser tools"
+    elif len(names) == 1:
+        roster = names[0]
+    else:
+        roster = ", ".join(names[:-1]) + " and " + names[-1]
+    return BROWSER_AGENT_BLOCK.replace("{tools}", roster)
 
 
 def _is_browser_agent_turn(armed_names) -> bool:
@@ -3532,7 +3578,8 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         ]
     tools_used: list[str] = []          # ONLY tools that actually executed
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
-    denied_tools: list[str] = []        # armed tools the engine refused this turn
+    denied_tools: list[str] = []
+    _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn        # armed tools the engine refused this turn
     # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating tool just
     # changed. Appended only inside the `if ran:` block below — the same gate
     # as tools_used, so a failed/denied call can never mint one. MIRROR NOTE
@@ -3583,7 +3630,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # THE AGENT'S BRIEF (v1.262.0) — lock-step with the stream lane: only
         # on a turn that can actually act in the browser.
         if _is_browser_agent_turn(armed):
-            system += "\n\n" + BROWSER_AGENT_BLOCK
+            system += "\n\n" + browser_agent_block(armed)
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -3782,6 +3829,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                                    raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
             for tc in calls:
                 ran = False
+                _call_key = _repeat_key(tc.name, tc.arguments)
                 try:
                     # THE ARMED SET IS THE GATE (v1.227.0, RT1). `armed` is
                     # what this turn showed the model; a call naming any
@@ -3793,12 +3841,23 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                     # its own armed set the same way — edit both or neither.
                     # v1.246.0: the agent run's tool deadline, so a hung
                     # tool ends as a failed result instead of a hung turn.
-                    result = await d.platform.registry.invoke(
-                        tc.name, tc.arguments, ctx, d.platform.permissions,
-                        overrides, session_allow=armed_grant,
-                        allowed_names=set(armed),
-                        deadline_s=chat_tool_deadline(d.platform),
-                    )
+                    if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
+                        # v1.274.0: answered, not run. MIRROR NOTE (lock-step):
+                        # the stream loop in routes/chat.py does the same
+                        # BEFORE its approval card — edit both or neither.
+                        from ..tools.base import ToolResult as _ToolResult
+
+                        result = _ToolResult(
+                            ok=False, output="",
+                            error=repeated_call_refusal(tc.name, _failed_calls[_call_key]),
+                        )
+                    else:
+                        result = await d.platform.registry.invoke(
+                            tc.name, tc.arguments, ctx, d.platform.permissions,
+                            overrides, session_allow=armed_grant,
+                            allowed_names=set(armed),
+                            deadline_s=chat_tool_deadline(d.platform),
+                        )
                     if result.ok:
                         content = result.output
                         ran = True
@@ -3812,6 +3871,8 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                             denied_tools.append(tc.name)
                 except Exception as exc:  # noqa: BLE001
                     content = f"{type(exc).__name__}: {exc}"
+                if not ran:
+                    _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                 # tools_used counts ONLY tools that actually executed — a denied
                 # or failed call is not honestly reported as run.
                 if ran:

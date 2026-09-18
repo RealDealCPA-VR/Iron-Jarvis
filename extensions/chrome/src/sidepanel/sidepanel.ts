@@ -77,7 +77,8 @@ export function describe(status: BridgeStatus): Rendered {
         : {
             tone: "waiting",
             word: "Connected — no site access",
-            note: "Open Jarvis and press Grant site access to let it see your open tabs.",
+            // v1.274.0: the button is HERE now (below), not in another app.
+            note: "Press Grant site access to let Iron Jarvis see the tabs you have open.",
             toggle,
           };
     case "pairing":
@@ -155,6 +156,7 @@ const el = {
   version: document.getElementById("version"),
   open: document.getElementById("open") as HTMLButtonElement | null,
   toggle: document.getElementById("toggle") as HTMLButtonElement | null,
+  grant: document.getElementById("grant") as HTMLButtonElement | null,
   transcript: document.getElementById("transcript"),
   approval: document.getElementById("approval"),
   approvalText: document.getElementById("approval-text"),
@@ -373,6 +375,12 @@ function paintStatus(status: BridgeStatus): void {
     el.toggle.textContent = view.toggle;
     el.toggle.hidden = view.toggle === "";
   }
+  if (el.grant) {
+    // v1.274.0: connected but no site grant — the one-click path the worker
+    // already implements (request_host_permission → the setup page), which
+    // the panel used to describe as "open Jarvis and press…".
+    el.grant.hidden = !(status.state === "connected" && !status.hostPermission);
+  }
 }
 
 function showApproval(id: string, text: string): void {
@@ -587,6 +595,14 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 
 el.open?.addEventListener("click", () => {
   void chrome.runtime.sendMessage({ kind: "open_jarvis" });
+});
+
+el.grant?.addEventListener("click", () => {
+  el.grant?.setAttribute("disabled", "true");
+  void chrome.runtime
+    .sendMessage({ kind: "request_host_permission" })
+    .then(() => refresh())
+    .finally(() => el.grant?.removeAttribute("disabled"));
 });
 
 el.toggle?.addEventListener("click", () => {

@@ -27,7 +27,7 @@ from typing import Any
 
 
 class BrowserErrorCode(str, Enum):
-    """The seventeen browser error codes of D15.
+    """The eighteen browser error codes of D15 (seventeen, plus PAGE_FAILED_TO_LOAD since v1.274.0).
 
     ``str`` mixin, so a code JSON-serialises as its own value and a comparison
     against a plain string read off the wire succeeds. That mirrors
@@ -48,6 +48,11 @@ class BrowserErrorCode(str, Enum):
     PERMISSION_DENIED = "PERMISSION_DENIED"
     ACTION_TIMEOUT = "ACTION_TIMEOUT"
     NAVIGATION_FAILED = "NAVIGATION_FAILED"
+    #: v1.274.0: the tab shows the BROWSER's error page (the site did not load),
+    #: so nothing can be read there and reading it again changes nothing. The
+    #: add-on maps "Frame with ID 0 is showing error page" to this; the model
+    #: used to see EXTENSION_ERROR and retry the same read five times.
+    PAGE_FAILED_TO_LOAD = "PAGE_FAILED_TO_LOAD"
     DOWNLOAD_FAILED = "DOWNLOAD_FAILED"
     UNSUPPORTED_PAGE = "UNSUPPORTED_PAGE"
     EXTENSION_ERROR = "EXTENSION_ERROR"
@@ -114,6 +119,11 @@ REMEDIES: dict[BrowserErrorCode, str] = {
     BrowserErrorCode.NAVIGATION_FAILED: (
         "Navigation to {url} failed. Check the address, then retry once or ask "
         "the user to open the page themselves."
+    ),
+    BrowserErrorCode.PAGE_FAILED_TO_LOAD: (
+        "Tab {tab_id} is showing the browser's error page: the site did not load. "
+        "Do not read it again. Navigate it to a URL that loads (or a different site), "
+        "or tell the user the site is unreachable."
     ),
     BrowserErrorCode.DOWNLOAD_FAILED: (
         "The download did not complete. Ask the user to check their browser's "

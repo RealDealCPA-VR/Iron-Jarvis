@@ -75,8 +75,11 @@ at length. Ask the Guide about the browser and it reads from that file.
 ## Site access, and why it is a separate page
 
 The add-on installs with **no** access to any site. `manifest.json` declares
-`http://*/*` and `https://*/*` as *optional* host permissions, and nothing is
-granted until you press the button on the setup page.
+`<all_urls>` as an *optional* host permission (v1.274.0 — screenshots need
+exactly that pattern; the earlier `http://*/*` + `https://*/*` pair could not
+photograph a page), and nothing is granted until you press the button on the
+setup page. If you granted the earlier pair, the Browser page shows "no site
+access" once; press Grant again.
 
 That page exists because of a hard Chrome rule: `chrome.permissions.request()`
 must be called inside a user gesture and cannot run in a service worker. Iron

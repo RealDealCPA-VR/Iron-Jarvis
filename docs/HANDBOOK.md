@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.273.0 (2026-09-14).*
+holds itself to. Current as of v1.274.0 (2026-09-14).*
 
 ---
 
@@ -913,6 +913,22 @@ purely visual), reads nothing on the page, and disappears when the turn ends,
 when the connection drops, or, for a job driven from the Iron Jarvis window,
 about twenty seconds after the last action. A page the browser closes to
 add-ons (a settings page, a new-tab page) cannot show it.
+
+**Fewer wasted steps, read off the day's ledger (v1.274.0).** Five things the
+agent used to trip on, each seen on a real job: a screenshot of a tab that was
+not on screen now brings that tab on screen and takes the picture, instead of
+refusing; the site-access grant is now `<all_urls>` (the only shape the
+browser accepts for screenshots — if you granted before, the Browser page and
+the sidebar say "no site access" once, and the sidebar has a **Grant site
+access** button now, so press it there); a tab showing the browser's own "can't
+reach this site" page is named as exactly that, with the advice to navigate
+elsewhere rather than read it again; the Edge Add-ons store is recognised as a
+page closed to add-ons; and in both chat lanes the same tool call with the
+same arguments is not run a third time after failing twice — the model is told
+to change approach or tell you what is blocking. Also: approval cards and
+Working steps now name the control ("click 'Sign in'") instead of "click on the
+page"; the model is told only the browser tools it actually has; and switching
+tabs no longer stalls the add-on while the model list refreshes.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

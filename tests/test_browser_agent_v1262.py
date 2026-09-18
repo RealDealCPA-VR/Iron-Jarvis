@@ -323,6 +323,14 @@ def test_a_browser_agent_turn_runs_past_six_rounds_and_ends_in_chat(tmp_path, mo
         ("browser_click", {"element_id": 12, "text_hint": "Search"}, "click 'Search'"),
         ("browser_click", {"element_id": 12}, "click 'element 12'"),
         ("browser_click", {}, "click on the page"),
+        # v1.274.0: the tools' REAL shapes nest the target — these rows are what
+        # a card actually receives; the flat rows above are older shapes.
+        ("browser_click", {"target": {"role": "button", "name": "Sign in"}, "tab_id": 7}, "click 'Sign in'"),
+        ("browser_click", {"target": {"element_id": "e17"}, "snapshot_id": "s1"}, "click 'element e17'"),
+        ("browser_click", {"target": {"css": "#submit"}}, "click '#submit'"),
+        ("browser_type", {"target": {"role": "textbox", "name": "Search"}, "text": "***REDACTED***", "press_enter": True},
+         "type some text into 'Search' and press Enter"),
+        ("browser_type", {"target": {"element_id": "e2"}, "text": "hello"}, "type 'hello' into 'element e2'"),
         ("browser_type", {"text": "flights to denver", "text_hint": "Search", "press_enter": True},
          "type 'flights to denver' into 'Search' and press Enter"),
         ("browser_type", {"text": "x" * 100}, "type '" + "x" * 59 + "…'"),

@@ -103,7 +103,7 @@ export const SENSITIVE_AUTOCOMPLETE = ["cc-csc", "cc-exp", "cc-exp-month", "cc-e
 export const SNAPSHOT_ID_PREFIX = "snap_";
 export const SNAPSHOT_MODES = ["summary", "interactive", "full"] as const;
 export const SUMMARY_TEXT_CHARS = 2000;
-export const UNSUPPORTED_HOSTS = ["chromewebstore.google.com", "chrome.google.com"] as const;
+export const UNSUPPORTED_HOSTS = ["chromewebstore.google.com", "chrome.google.com", "microsoftedge.microsoft.com"] as const;
 export const UNSUPPORTED_SCHEMES = ["chrome:", "edge:", "about:", "devtools:", "view-source:", "chrome-extension:"] as const;
 export const SCROLL_BOTTOM = "bottom";
 export const SCROLL_DIRECTIONS = ["up", "down", "top", "bottom"] as const;
@@ -130,6 +130,7 @@ export type BrowserErrorCode =
   | "PERMISSION_DENIED"
   | "ACTION_TIMEOUT"
   | "NAVIGATION_FAILED"
+  | "PAGE_FAILED_TO_LOAD"
   | "DOWNLOAD_FAILED"
   | "UNSUPPORTED_PAGE"
   | "EXTENSION_ERROR"
@@ -137,7 +138,7 @@ export type BrowserErrorCode =
   | "AUTHENTICATION_FAILED"
   | "CONNECTION_REPLACED";
 
-export const BROWSER_ERROR_CODES = ["BROWSER_NOT_CONNECTED", "BROWSER_ACCESS_OFF", "READ_ONLY_MODE", "TAB_NOT_FOUND", "PAGE_NOT_READY", "ELEMENT_NOT_FOUND", "STALE_ELEMENT", "STALE_SNAPSHOT", "PERMISSION_DENIED", "ACTION_TIMEOUT", "NAVIGATION_FAILED", "DOWNLOAD_FAILED", "UNSUPPORTED_PAGE", "EXTENSION_ERROR", "PAIRING_REQUIRED", "AUTHENTICATION_FAILED", "CONNECTION_REPLACED"] as const;
+export const BROWSER_ERROR_CODES = ["BROWSER_NOT_CONNECTED", "BROWSER_ACCESS_OFF", "READ_ONLY_MODE", "TAB_NOT_FOUND", "PAGE_NOT_READY", "ELEMENT_NOT_FOUND", "STALE_ELEMENT", "STALE_SNAPSHOT", "PERMISSION_DENIED", "ACTION_TIMEOUT", "NAVIGATION_FAILED", "PAGE_FAILED_TO_LOAD", "DOWNLOAD_FAILED", "UNSUPPORTED_PAGE", "EXTENSION_ERROR", "PAIRING_REQUIRED", "AUTHENTICATION_FAILED", "CONNECTION_REPLACED"] as const;
 
 export const REMEDIES: Record<BrowserErrorCode, string> = {
   "BROWSER_NOT_CONNECTED": "Your browser is not connected to Iron Jarvis. Ask the user to open the Browser page in Iron Jarvis and pair their browser, then retry.",
@@ -151,6 +152,7 @@ export const REMEDIES: Record<BrowserErrorCode, string> = {
   "PERMISSION_DENIED": "Site access has not been granted to the Iron Jarvis browser add-on. Open the Browser page in Iron Jarvis and press Grant site access.",
   "ACTION_TIMEOUT": "Your browser did not answer in time. Call browser_get_status to check the connection, then retry the call once.",
   "NAVIGATION_FAILED": "Navigation to {url} failed. Check the address, then retry once or ask the user to open the page themselves.",
+  "PAGE_FAILED_TO_LOAD": "Tab {tab_id} is showing the browser's error page: the site did not load. Do not read it again. Navigate it to a URL that loads (or a different site), or tell the user the site is unreachable.",
   "DOWNLOAD_FAILED": "The download did not complete. Ask the user to check their browser's downloads, then retry.",
   "UNSUPPORTED_PAGE": "{scheme} pages are closed to add-ons by the browser. Ask the user to switch to a normal tab.",
   "EXTENSION_ERROR": "Your browser reported an error: {detail}. Call browser_get_status; if it persists, ask the user to reload the add-on from chrome://extensions.",

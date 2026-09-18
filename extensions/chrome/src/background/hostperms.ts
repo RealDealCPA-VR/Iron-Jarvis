@@ -1,7 +1,8 @@
 // Site access: whether this add-on may read pages, and how the user grants it.
 //
 // The add-on installs with NO host permissions (Q02). `optional_host_permissions`
-// in the manifest declares that it *may* ask for `http://*/*` and `https://*/*`,
+// in the manifest declares that it *may* ask for `<all_urls>` (v1.274.0; it was
+// `http://*/*` and `https://*/*`, which screenshots cannot use — see HOST_ORIGINS),
 // and nothing more happens until the user says yes.
 //
 // The grant CANNOT be requested from here. `chrome.permissions.request()` requires
@@ -23,7 +24,14 @@
 // everything touching a page refuses with PERMISSION_DENIED.
 
 /** The two schemes the add-on ever asks for. Must match `optional_host_permissions`. */
-export const HOST_ORIGINS = ["http://*/*", "https://*/*"];
+// v1.274.0: `<all_urls>`, not `http://*/*` + `https://*/*`. Chromium's screenshot
+// check (`PermissionsData::CanCaptureVisiblePage`) asks whether the granted
+// hosts CONTAIN the `<all_urls>` pattern — two scheme patterns do not, so every
+// `captureVisibleTab` failed with "Either the '<all_urls>' or 'activeTab'
+// permission is required" on a grant that covered every web page. The prompt
+// Chrome shows the user is the same sentence for both shapes. An install that
+// granted the old pair sees "no site access" once and presses Grant again.
+export const HOST_ORIGINS = ["<all_urls>"];
 
 /** The bundled grant surface, relative to the extension root. */
 export const SETUP_PAGE = "dist/setup.html";

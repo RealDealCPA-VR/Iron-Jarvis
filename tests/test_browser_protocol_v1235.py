@@ -118,7 +118,9 @@ def test_optional_frame_fields_generate_as_optional():
 
 
 def test_all_seventeen_d15_codes_exist():
-    assert len(list(BrowserErrorCode)) == 17
+    # v1.274.0: seventeen from D15 plus PAGE_FAILED_TO_LOAD.
+    assert len(list(BrowserErrorCode)) == 18
+    assert BrowserErrorCode.PAGE_FAILED_TO_LOAD.value == "PAGE_FAILED_TO_LOAD"
     expected = {
         "BROWSER_NOT_CONNECTED",
         "BROWSER_ACCESS_OFF",
@@ -131,6 +133,7 @@ def test_all_seventeen_d15_codes_exist():
         "PERMISSION_DENIED",
         "ACTION_TIMEOUT",
         "NAVIGATION_FAILED",
+        "PAGE_FAILED_TO_LOAD",  # v1.274.0
         "DOWNLOAD_FAILED",
         "UNSUPPORTED_PAGE",
         "EXTENSION_ERROR",

@@ -42,6 +42,9 @@ from ..doors import collect_doors, door_for
 # here because POST /chat/stream deliberately keeps its own inline copy of
 # the loop (SSE stays out of this arc) and the thread routes share the caps.
 from ..chat_turn import (
+    REPEATED_CALL_LIMIT,
+    _repeat_key,
+    repeated_call_refusal,
     _DOC_WRITING_TOOLS,
     _ESCALATE_SPEC,
     _ESCALATE_TOOL,
@@ -66,7 +69,8 @@ from ..chat_turn import (
     _is_office_turn,
     _round_budget,
     # v1.262.0 — the browser-agent seams, lock-step with chat_turn.
-    BROWSER_AGENT_BLOCK,
+    BROWSER_AGENT_BLOCK,  # noqa: F401 — the template; rendered by browser_agent_block
+    browser_agent_block,
     _BROWSER_STATUS_TOOL,
     _filter_browser_tools,
     _is_browser_agent_turn,
@@ -2182,7 +2186,7 @@ async def chat_stream(
         # the browser — a brief that says "you can click" beside no click tool
         # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
         if _is_browser_agent_turn({*armed, *ask_armed}):
-            system += "\n\n" + BROWSER_AGENT_BLOCK
+            system += "\n\n" + browser_agent_block({*armed, *ask_armed})
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
@@ -2318,6 +2322,7 @@ async def chat_stream(
         usage_in = usage_out = completions = 0
         tools_used: list[str] = []          # ONLY tools that actually executed
         denied_tools: list[str] = []        # armed tools refused this turn
+        _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
         # tool just changed. Appended only inside the `if ran:` block —
         # the same gate as tools_used, so a failed/denied call can never
@@ -2610,6 +2615,26 @@ async def chat_stream(
                     #
                     # BEFORE the "started" frame, so the tool card never
                     # spins while the app is waiting on a human.
+                    # REPEATED CALL (v1.274.0): the same tool with the same
+                    # arguments already failed REPEATED_CALL_LIMIT times this
+                    # turn. It is answered, not run — and not CARDED: asking
+                    # the user to approve a call the lane will not run would
+                    # make their Allow a lie. MIRROR NOTE (lock-step):
+                    # chat_turn.py's loop does the same at its invoke.
+                    _call_key = _repeat_key(tc.name, tc.arguments)
+                    if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
+                        content = repeated_call_refusal(tc.name, _failed_calls[_call_key])
+                        yield _sse("tool_call", {
+                            "id": tc.id, "name": tc.name,
+                            "status": "started", "args": safe_args,
+                        })
+                        yield _sse("tool_call", {
+                            "id": tc.id, "name": tc.name, "status": "finished",
+                            "ok": False, "output": str(content)[:2000],
+                        })
+                        msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                               name=tc.name, content=str(content)[:12000]))
+                        continue
                     _deny_reason = ""
                     _grant_extra: set[str] = set()
                     _perm_name = _t.perm_key() if _t is not None else tc.name
@@ -2907,6 +2932,8 @@ async def chat_stream(
                                 if _inj["flagged"]
                                 else str(content)
                             )
+                    if not ran:
+                        _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                     yield _sse("tool_call", {
                         "id": tc.id, "name": tc.name, "status": "finished",
                         "ok": ran, "output": str(content)[:2000],

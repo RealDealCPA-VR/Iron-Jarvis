@@ -298,11 +298,22 @@ def describe_browser_call(name: str, args: object) -> str:
     ``redact_args``; only a bounded excerpt of a text or a URL is repeated.
     """
     a = args if isinstance(args, dict) else {}
+    # v1.274.0: THE REAL ARGS NEST THE TARGET. `browser_click`/`browser_type`
+    # carry `{"target": {"element_id"|"role","name"|"css"}}`, and this function
+    # read only flat keys — so every card read "click on the page" and the
+    # user could not tell a Search button from a Delete button. The target's
+    # own keys are read first, then the flat ones (older shapes, tests).
+    t = a.get("target") if isinstance(a.get("target"), dict) else {}
     target = _short(
-        a.get("text_hint")
+        t.get("text_hint")
+        or t.get("label")
+        or t.get("name")
+        or a.get("text_hint")
         or a.get("label")
         or a.get("name")
+        or t.get("css")
         or a.get("selector")
+        or (f"element {t['element_id']}" if t.get("element_id") not in (None, "") else "")
         or (f"element {a['element_id']}" if a.get("element_id") not in (None, "") else "")
     )
     quoted = f"'{target}'" if target else ""
@@ -312,6 +323,10 @@ def describe_browser_call(name: str, args: object) -> str:
         typed = _short(a.get("text"))
         into = f" into {quoted}" if quoted else ""
         enter = " and press Enter" if a.get("press_enter") else ""
+        if typed and "REDACTED" in typed:
+            # The tool's own redaction (the text is secret to the card too):
+            # say that text will be typed, never quote the marker.
+            return f"type some text{into}{enter}"
         return f"type '{typed}'{into}{enter}" if typed else f"type{into}{enter}"
     if name == "browser_press_key":
         key = _short(a.get("key"))
@@ -417,6 +432,9 @@ class PanelTurns:
         #: short enough that a provider connected in Jarvis shows up soon.
         self._models_cache: tuple[float, dict[str, Any]] | None = None
         self.models_ttl_s: float = 60.0
+        #: v1.274.0: the task sending the last `models` frame (kept so it is not
+        #: garbage-collected mid-flight; read by tests).
+        self._models_task: asyncio.Task | None = None
         #: v1.270.0: the conversation, oldest first — ``{"role", "content"}`` rows
         #: in the chat lane's own shape. Every turn carries it; ``reset`` empties it.
         self._history: list[dict[str, str]] = []
@@ -480,9 +498,14 @@ class PanelTurns:
             # the probe, past the reader's budget.
             await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
             # v1.267.0: the model list rides the open, so the picker is filled
-            # before the user reaches for it. Last, because it is the one frame
-            # here that can take real time.
-            await self.emit(conn, P.PANEL_EVENT_MODELS, await self.models())
+            # before the user reaches for it. v1.274.0: OFF THE READ LOOP. This
+            # handler is awaited inline by the socket's frame loop, and the
+            # catalog probes providers and shells out to CLIs — so an `open`
+            # (posted on every tab switch) used to stall the whole add-on
+            # socket for seconds: no command response could be read, no pong
+            # either, and a click in flight could run to ACTION_TIMEOUT. The
+            # list is now sent from its own task; `open` returns at once.
+            self._models_task = asyncio.ensure_future(self._emit_models(conn))
             return
         if act == P.PANEL_ACTION_RESET:
             await self._reset(conn)
@@ -523,6 +546,13 @@ class PanelTurns:
             P.PANEL_EVENT_ERROR,
             {"text": f"Iron Jarvis does not know the sidebar action {act!r}."},
         )
+
+    async def _emit_models(self, conn: Any) -> None:
+        """Send the ``models`` frame from its own task; never raises (v1.274.0)."""
+        try:
+            await self.emit(conn, P.PANEL_EVENT_MODELS, await self.models())
+        except Exception:  # noqa: BLE001 — a probe that fails must not become a socket error
+            logger.debug("panel model list failed", exc_info=True)
 
     # --- the model list (v1.267.0) -----------------------------------------
 

@@ -191,6 +191,12 @@ async function inject(tabId: number): Promise<void> {
     if (/cannot access|not granted|host permission|extension manifest/i.test(detail)) {
       throw new BridgeError("PERMISSION_DENIED");
     }
+    if (/showing error page/i.test(detail)) {
+      // v1.274.0: the browser's own "this site can't be reached" page. Nothing
+      // can be injected there, and reading it again changes nothing — say so
+      // with the remedy, instead of a bare add-on error the model retried.
+      throw new BridgeError("PAGE_FAILED_TO_LOAD", { tab_id: tabId });
+    }
     throw new BridgeError("EXTENSION_ERROR", {
       detail: `the page reader could not be injected into tab ${tabId}: ${detail}`,
     });
@@ -305,13 +311,34 @@ export async function captureVisible(
   }
   const tab = await pageTab(params["tab_id"]);
   refuseUnsupported(tab);
+  const tabId = tab.id as number;
+  let activated = false;
   if (tab.active !== true) {
-    throw new BridgeError("EXTENSION_ERROR", {
-      detail:
-        `Chrome can only photograph the tab that is on screen, and tab ${tab.id} is not ` +
-        "the active tab in its window. Ask the user to switch to it, or take the " +
-        "screenshot of the active tab instead",
-    });
+    // v1.274.0: the browser photographs only the tab on screen, so BRING IT ON
+    // SCREEN. This used to refuse and tell the model to activate the tab and
+    // call again — one wasted round per screenshot of a tab the agent had just
+    // opened in the background (the user's own ledger, 19:10Z on 2026-09-18).
+    // Switching the user's view is what the agent is for: it works in the tab
+    // the user is looking at, and a screenshot is the agent looking.
+    try {
+      await chrome.tabs.update(tabId, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } catch (err) {
+      throw new BridgeError("EXTENSION_ERROR", {
+        detail: `tab ${tabId} could not be brought on screen for the screenshot: ${reason(err)}`,
+      });
+    }
+    activated = true;
+    // The capture reads pixels; give the compositor a moment to paint the tab
+    // that just became active, bounded so a stuck tab cannot stall the call.
+    for (let i = 0; i < 10; i++) {
+      const now = await chrome.tabs.get(tabId).catch(() => null);
+      if (now?.active === true) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    await new Promise((r) => setTimeout(r, 120));
   }
   const windowId = tab.windowId;
   let largest = 0;
@@ -339,6 +366,8 @@ export async function captureVisible(
         data_b64: data,
         bytes: data.length,
         full_page: false,
+        // v1.274.0: true when the screenshot brought the tab on screen first.
+        activated,
       };
     }
   }

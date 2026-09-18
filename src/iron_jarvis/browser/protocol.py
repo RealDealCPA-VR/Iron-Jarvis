@@ -423,6 +423,9 @@ UNSUPPORTED_SCHEMES: tuple[str, ...] = (
 UNSUPPORTED_HOSTS: tuple[str, ...] = (
     "chromewebstore.google.com",
     "chrome.google.com",
+    # v1.274.0: Edge's own store. A read there answered "The extensions gallery
+    # cannot be scripted" as a bare add-on error on the user's install.
+    "microsoftedge.microsoft.com",
 )
 
 # --------------------------------------------------------------------------- #

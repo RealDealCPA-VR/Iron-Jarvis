@@ -790,6 +790,26 @@ if (absent.length) {
     });
   });
 
+  describe("the site grant is one press away (v1.274.0)", () => {
+    it("shows Grant site access only while connected without the grant, and it asks the worker", async () => {
+      const h = await panelReady({ state: "connected", paired: true, hostPermission: false, access: "read_only" });
+      const grant = el("grant") as HTMLButtonElement;
+      await waitFor(() => expect(grant.hidden).toBe(false));
+      expect(transcript()).not.toContain("Open Jarvis and press");
+      grant.click();
+      await waitFor(() => expect(h.sent.some((m) => m["kind"] === "request_host_permission")).toBe(true));
+      // Granted: the button goes away.
+      h.status = { ...h.status, hostPermission: true };
+      await h.restatus();
+      await waitFor(() => expect(grant.hidden).toBe(true));
+    });
+
+    it("is hidden while not connected", async () => {
+      await panelReady({ state: "offline", paired: false, hostPermission: false });
+      expect((el("grant") as HTMLButtonElement).hidden).toBe(true);
+    });
+  });
+
   describe("a steer note is pending until the daemon says it landed", () => {
     async function steering(): Promise<Harness> {
       const h = await panelReady({ state: "connected", access: "read_only", paired: true });

@@ -357,7 +357,7 @@
         gap: 8px;
         margin-top: 8px;
       }
-      .actions:has(> [hidden]:only-child) {
+      .actions:not(:has(> button:not([hidden]))) {
         display: none;
       }
 
@@ -675,6 +675,9 @@
       </div>
       <p class="note" id="note"></p>
       <div class="actions">
+        <!-- v1.274.0: shown only while connected WITHOUT the site grant. One press
+             opens the add-on's own setup page, where the browser asks. -->
+        <button class="primary" id="grant" type="button" hidden title="Opens the add-on's site-access page, where your browser asks once.">Grant site access</button>
         <!-- Empty and hidden until the worker says which action is real. A static
              "Disconnect" here is a promise the header may be about to contradict. -->
         <button class="ghost" id="toggle" type="button" hidden></button>
