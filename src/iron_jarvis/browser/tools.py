@@ -87,6 +87,8 @@ word to an MCP server. It is "your browser", or "the Iron Jarvis browser add-on"
 
 from __future__ import annotations
 
+import logging
+
 import asyncio
 import hashlib
 from collections.abc import Mapping
@@ -108,6 +110,8 @@ from .snapshot import (
     security_from_text,
     security_warning_text,
 )
+
+logger = logging.getLogger(__name__)
 
 #: The three access words, ordered. A tool runs when the live access level ranks
 #: at or above its own ``min_access``. Kept as a rank rather than a set of
@@ -1320,7 +1324,13 @@ class _ActingTool(_BrowserTool):
             return None
         req = await asyncio.to_thread(queue.create_request, run_id, action, decision.reason)
         resolver = getattr(self.browser, "approval_resolver", None)
-        granted = bool(resolver(req)) if resolver is not None else False
+        granted = (
+            await _consult_resolver(
+                resolver, req, ctx, name=self.name, args=self.redact_args(dict(args or {}))
+            )
+            if resolver is not None
+            else False
+        )
         if not granted:
             if resolver is not None:
                 await asyncio.to_thread(queue.deny, req.id)
@@ -1352,6 +1362,37 @@ class _ActingTool(_BrowserTool):
         # first in-process resolver Ship 4 wires up.
         await asyncio.to_thread(queue.consume, req.id)
         return None
+
+
+async def _consult_resolver(resolver: Any, req: Any, ctx: Any, *, name: str, args: dict[str, Any]) -> bool:
+    """Ask the runtime's approval resolver, whatever its shape (v1.276.0).
+
+    The original contract was ``resolver(req) -> bool``, synchronous, and only
+    tests ever supplied one — production had none, so the risk door's card was
+    a queue row nobody in the sidebar could see, and the tool refused with
+    "approve it in Iron Jarvis, then make the identical call again": a dead
+    end from the sidebar. The panel's resolver needs the tool context (to
+    answer only for its own turn), the words for the card, and time — it is
+    ``async``. A one-argument resolver is still called as before; a failure
+    inside the resolver is a refusal, never an exception out of the door.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(resolver).parameters
+        wide = len(params) >= 2 or any(
+            p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params.values()
+        )
+    except (TypeError, ValueError):
+        wide = False
+    try:
+        outcome = resolver(req, ctx, name=name, args=args) if wide else resolver(req)
+        if inspect.isawaitable(outcome):
+            outcome = await outcome
+        return bool(outcome)
+    except Exception:  # noqa: BLE001 — a resolver that fails has not granted anything
+        logger.debug("approval resolver failed; treating as refused", exc_info=True)
+        return False
 
 
 class BrowserActivateTabTool(_ActingTool):

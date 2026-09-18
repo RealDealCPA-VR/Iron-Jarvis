@@ -33,6 +33,11 @@ class ToolContext:
     #: project-grounded chat turn's generations reach the project's Media view
     #: instead of stranding in the global gallery with project_id NULL.
     project_id: str | None = None
+    #: The chat turn this call belongs to (v1.276.0) — the panel's `turn_id`
+    #: for a sidebar turn, "" elsewhere. A browser tool's risk door hands it
+    #: to the approval resolver, which answers only for ITS OWN turn: a card
+    #: for a chat-page click must never land in the sidebar.
+    turn_id: str = ""
 
 
 @dataclass

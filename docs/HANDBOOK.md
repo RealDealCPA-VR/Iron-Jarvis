@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.275.0 (2026-09-14).*
+holds itself to. Current as of v1.276.0 (2026-09-14).*
 
 ---
 
@@ -939,6 +939,17 @@ of going without them silently. Several files upload a few at a time, in the
 order you added them. And when a turn fails because the model you picked is
 not reachable while your default model is, the banner offers **Retry with the
 default model** in one press.
+
+**The questions that are yours are asked where you are (v1.276.0).** The
+four things Jarvis always stops for in a browser — a payment or password
+field, a delete-shaped control, a page that tried to instruct it, a control
+it cannot read — used to stop with a note telling you to approve it "in Iron
+Jarvis" and ask again: from the sidebar, a dead end. That stop is now a card
+in the sidebar itself, with the reason in it, and one Allow runs exactly that
+one action. Two quieter savings: a page still loading is read again after a
+moment instead of being handed back as a refusal, and a click named by what it
+says ("Sign in") on a page Jarvis has not yet read makes Jarvis read the page
+first, itself, rather than spend a turn being told to.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

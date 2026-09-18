@@ -174,6 +174,13 @@ logger = get_logger(__name__)
 #: this is a memory bound, not a context bound.
 PANEL_HISTORY_MESSAGES = 40
 
+#: How long a risk-door card waits for the user in the sidebar (v1.276.0).
+#: Bounded, unlike the lane's own attended ask, because it runs INSIDE a tool
+#: call that the lane's tool deadline (600 s) would otherwise end with a
+#: timeout sentence about the tool; a card left unanswered this long is a
+#: refusal with its own words.
+RISK_ASK_TIMEOUT_S = 300.0
+
 #: What the panel is told when a queued steer note was never consumed. The
 #: panel renders its own sentence for this from the ``done`` frame; this is the
 #: reason carried alongside it so a log or a later surface can say why.
@@ -546,6 +553,63 @@ class PanelTurns:
             P.PANEL_EVENT_ERROR,
             {"text": f"Iron Jarvis does not know the sidebar action {act!r}."},
         )
+
+    async def resolve_risk_ask(
+        self, req: Any, ctx: Any = None, *, name: str = "", args: Any = None
+    ) -> bool:
+        """The browser risk door's resolver for THIS panel's turn (v1.276.0).
+
+        The four floor cases — a payment or password field, the destructive
+        vocabulary, a flagged page, a target the daemon could not read — stop
+        inside the tool (``_ActingTool._require_approval``), after the lane's
+        own card (or the switch) already let the call through. Without a
+        resolver that stop was a queue row and a refusal telling the model to
+        have the user "approve it in Iron Jarvis, then make the identical call
+        again" — from the sidebar, a task that could not be completed. Now the
+        stop is a card HERE, with the door's own reason, answered through the
+        same registry as every other card, and one Allow authorises exactly
+        one call (the door approves and consumes in one breath).
+
+        Only for THIS panel's running turn: ``ctx.turn_id`` must be the id this
+        panel minted. Anything else — the chat page's turn, no turn at all —
+        is answered False, which leaves the door's original behaviour intact.
+        """
+        if not self.running or self._conn is None:
+            return False
+        if str(getattr(ctx, "turn_id", "") or "") != self._turn_id:
+            return False
+        from ..daemon.routes.chat import _approvals
+
+        registry = _approvals(SimpleNamespace(platform=self.platform))
+        safe_args = args if isinstance(args, dict) else {}
+        ap_id, fut = registry.request(name or "browser action", safe_args)
+        self._offered.add(ap_id)
+        what = describe_browser_call(name, safe_args)
+        reason = " ".join(str(getattr(req, "reason", "") or "").split())
+        await self.emit(
+            self._conn,
+            P.PANEL_EVENT_APPROVAL,
+            {
+                "id": ap_id,
+                "tool": name,
+                "text": (
+                    f"Iron Jarvis wants to {what}, and stops to ask because {reason}. Allow it?"
+                    if reason
+                    else f"Iron Jarvis wants to {what}. Allow it?"
+                ),
+                "floor": True,
+            },
+        )
+        try:
+            decision = await asyncio.wait_for(fut, RISK_ASK_TIMEOUT_S)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            registry.pop(ap_id)
+            return False
+        except Exception:  # noqa: BLE001 — an answer that failed to arrive is a refusal
+            registry.pop(ap_id)
+            return False
+        registry.pop(ap_id)
+        return str(decision) in ("once", "conversation", "tab")
 
     async def _emit_models(self, conn: Any) -> None:
         """Send the ``models`` frame from its own task; never raises (v1.274.0)."""
@@ -1461,4 +1525,12 @@ def install(deps: Any) -> PanelTurns | None:
     except Exception:  # noqa: BLE001 — a stand-in backend that refuses the attribute
         logger.debug("browser backend takes no panel_handler", exc_info=True)
         return None
+    # v1.276.0: the risk door's card reaches the sidebar. Only where nothing
+    # else resolves (a test runtime may bring its own).
+    runtime = getattr(platform, "browser", None)
+    if runtime is not None and getattr(runtime, "approval_resolver", None) is None:
+        try:
+            runtime.approval_resolver = turns.resolve_risk_ask
+        except Exception:  # noqa: BLE001
+            logger.debug("browser runtime takes no approval_resolver", exc_info=True)
     return turns

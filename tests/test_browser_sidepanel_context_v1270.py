@@ -172,9 +172,13 @@ def test_open_replays_the_conversation_and_reset_forgets_it(tmp_path, monkeypatc
             {"role": "assistant", "text": "Noted."},
         ], replay
 
+        # Count BEFORE sending: a reset is answered in microseconds now that
+        # `open` no longer waits on the model probe, and a count taken after
+        # the send could already include the answer (then wait for one more).
+        seen_histories = len(_histories(app))
         app.panel.send(P.PANEL_ACTION_RESET)
         cleared = app.panel.wait_for(
-            P.PANEL_EVENT_HISTORY, "reset never answered", nth=len(_histories(app)) + 1
+            P.PANEL_EVENT_HISTORY, "reset never answered", nth=seen_histories + 1
         )
         assert cleared["turns"] == []
         assert _panel_turns(app)._history == []

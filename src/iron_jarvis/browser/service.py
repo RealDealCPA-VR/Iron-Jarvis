@@ -91,6 +91,9 @@ logger = get_logger(__name__)
 ACCESS_OFF = "off"
 ACCESS_READ_ONLY = "read_only"
 ACCESS_INTERACTIVE = "interactive"
+
+#: v1.276.0: the pause before the one retry of a page read refused PAGE_NOT_READY.
+PAGE_NOT_READY_RETRY_S = 0.35
 ACCESS_LEVELS: tuple[str, ...] = (ACCESS_OFF, ACCESS_READ_ONLY, ACCESS_INTERACTIVE)
 
 
@@ -693,7 +696,18 @@ class BrowserRuntime:
             max_elements=limits.get("max_elements"),
         )
         params = P.read_page_params(_as_tab_id(row.get("id")), resolved_mode, caps.to_params())
-        result = await self.command(P.METHOD_READ_PAGE, params)
+        try:
+            result = await self.command(P.METHOD_READ_PAGE, params)
+        except BrowserError as exc:
+            # v1.276.0: ONE bounded retry on a page still parsing. The content
+            # script refuses while `document.readyState` is "loading", and a
+            # navigate that outran its settle reports "loading" too — so the
+            # model spent a whole round re-reading. A pause and a second read
+            # answer most of those; the second refusal keeps its own words.
+            if str(getattr(exc, "code", "") or "") != BrowserErrorCode.PAGE_NOT_READY.value:
+                raise
+            await asyncio.sleep(PAGE_NOT_READY_RETRY_S)
+            result = await self.command(P.METHOD_READ_PAGE, params)
         snapshot = PageSnapshot.from_result(
             result,
             tab_id=_as_tab_id(row.get("id")),
@@ -1002,6 +1016,17 @@ class BrowserRuntime:
                 # browser_read_page" keeps a half-wired install honest, rather
                 # than letting it act on ids nothing can validate.
                 raise BrowserError(BrowserErrorCode.STALE_SNAPSHOT)
+            if not wanted and not element_id and cache.get(resolved_tab) is None:
+                # v1.276.0: A NAMED CLICK READS FIRST. A `{"role","name"}` or
+                # `{"css"}` target on a tab nobody has read used to refuse
+                # STALE_SNAPSHOT, and the model spent a round on the read it
+                # was told to make — on essentially every "navigate, then click
+                # Sign in". The daemon reads on its behalf here and resolves the
+                # element from THAT read, so the risk door still sees the real
+                # control (a password field by role and name escalates exactly
+                # as by id). An `element_id` target still refuses: ids come from
+                # a read, and a fresh read renumbers them.
+                await self.read_page_snapshot(resolved_tab)
             used = cache.check(resolved_tab, wanted or None, None, element_id or None)
             cached = cache.get(resolved_tab)
             if cached is not None:

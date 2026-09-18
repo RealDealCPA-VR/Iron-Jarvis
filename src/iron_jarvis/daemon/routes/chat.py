@@ -2176,6 +2176,9 @@ async def chat_stream(
             )
         ctx = ToolContext(
             workspace=tool_ws, session_id="chat", agent_run_id="chat",
+            # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
+            # resolver; "" for the chat page (the ask stays a queue row).
+            turn_id=str(getattr(body, "turn_id", "") or ""),
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
             # v1.200.0: resolved-project tag for artifact sinks. MIRROR

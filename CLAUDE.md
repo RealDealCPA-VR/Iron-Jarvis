@@ -1252,6 +1252,24 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The risk door's card is answered where the turn is; a named click reads
+  first; a loading page is read twice** (v1.276.0, /goal wave 3).
+  `BrowserRuntime.approval_resolver` was None in production, so
+  `_ActingTool._require_approval` filed a queue row and REFUSED ("approve it in
+  Iron Jarvis, then make the identical call again") — a dead end from the
+  sidebar for every floor case. Now `_consult_resolver` calls a resolver of
+  any shape (sync one-arg as before; async with `(req, ctx, name=, args=)`),
+  `ToolContext.turn_id` carries the panel's turn id from BOTH lanes
+  (lock-step), and `PanelTurns.resolve_risk_ask` — wired by `panel.install`
+  when nothing else resolves — answers ONLY its own turn: it files the ask in
+  the one `ChatApprovals` registry, emits the panel's `approval` frame with
+  the door's reason (`floor: true`), waits `RISK_ASK_TIMEOUT_S`, and the
+  door's approve+consume keeps one Allow = one call. `read_page_snapshot`
+  retries PAGE_NOT_READY once after `PAGE_NOT_READY_RETRY_S`;
+  `prepare_action` auto-reads an unread tab for a role/name or css target
+  (never for an element_id — ids come from a read). Pins:
+  `tests/test_browser_capability_v1276.py`.
+
 - **A send never goes without its files, and a file alone is a message**
   (v1.275.0, /goal wave 2). `page.tsx::send` used to return on empty text and
   ignored `uploading`, so Enter during an upload sent WITHOUT the files and
