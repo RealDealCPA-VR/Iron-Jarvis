@@ -21,6 +21,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { WorkingMemory } from "./WorkingMemory";
+import { KnowsAboutYou } from "./KnowsAboutYou";
 import { Lessons } from "./Lessons";
 import { LongTerm } from "./LongTerm";
 import MemoryGraph from "./MemoryGraph";
@@ -95,6 +96,9 @@ export function MemorySurface({
           subtitle="Everything Iron Jarvis remembers — working notes, learned lessons, and the long-term knowledge base, in one place."
         />
       </Reveal>
+      {/* v1.279.0: the answer to "what do you know about me?" comes first —
+          the scopes below are where a person goes to look something up. */}
+      <KnowsAboutYou />
       <Suspense fallback={null}>
         <ScopedMemory initialScope={initialScope} />
       </Suspense>

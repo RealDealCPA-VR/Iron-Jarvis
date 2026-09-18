@@ -1252,6 +1252,31 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **Task reflections are not knowledge about the user; chat can remember a
+  stated preference; the Memory page says what it knows** (v1.279.0, /goal
+  memory wave 1). The live ledger: 25 lessons, 23 of them the orchestrator's
+  per-run `Worked well for '<task>': <summary>` reflections (weight 1, one
+  recording the offline mock's scripted answer), and the top-8 injection under
+  "What I've learned about working with you" was six of those. Now
+  `LearningEngine.lessons(exclude_sources=)` + `_PROMPT_EXCLUDED_SOURCES =
+  ("reflection",)` keep them OUT of `apply_to_prompt` (they still feed
+  `dedup`/`distill` and the Lessons tab; `counts_by_source` reports them).
+  `remember_preference` had sat in `AUTO_SAFE_TOOLS` since v1.141.0 with NO
+  autoselect rule — membership without a rule arms nothing — so "from now on
+  keep answers short" reached no memory from chat; a vocabulary rule
+  (lasting-instruction shapes: "from now on", "always/never <do>", "I
+  prefer", "call me") awards it 7, and `preference_block(armed)` rides the
+  Tools seam of BOTH lanes ONLY when the tool is armed (the v1.262.0 rule:
+  a brief beside no tool is a lie), lock-step. `memory/overview.py::
+  memory_overview(platform)` (never raises; off the loop at
+  `GET /memory/overview`) feeds `components/memory/KnowsAboutYou.tsx`, mounted
+  at the top of `MemorySurface`; silent when the daemon cannot answer. And
+  `_clean_setup` now stores `reasoning` (vocabulary-checked) — the page had
+  sent and read it since v1.263.0 while the whitelist dropped it, so the
+  level reset on every thread reopen. Pins: `tests/test_memory_knows_you_v1279.py`,
+  `dashboard/__tests__/knows-about-you-v1279.test.tsx`; the v1 lesson pin in
+  `tests/test_learning.py` moved (a reflection is asserted OUT of the prompt).
+
 - **A named chat turn takes steer notes from any connection, and a sent
   message is editable** (v1.278.0, /goal wave 5). The sidebar's steer
   contract (v1.242.0: `steer_source` consulted at the ROUND BOUNDARY, never

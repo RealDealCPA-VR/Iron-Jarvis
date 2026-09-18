@@ -1884,6 +1884,30 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         {"recall": 8, "ltm_search": 6, "ltm_append": 5},
     ),
+    # --- a STATED PREFERENCE (v1.279.0) -----------------------------------
+    # ``remember_preference`` sat in AUTO_SAFE_TOOLS since v1.141.0 with no
+    # rule awarding it — and membership without a rule arms NOTHING (see the
+    # note at the end of this table). So "from now on keep answers short" in
+    # chat reached no memory at all, while the same sentence inside an agent
+    # run became a weight-5 lesson. The vocabulary is the shape of a lasting
+    # instruction about HOW the user wants things done, not a one-off ask:
+    # "from now on", "always/never <do>", "I prefer", "call me". A one-off
+    # ("always" inside "is it always taxable?") costs one offered tool slot
+    # the model may ignore; the brief tells it what counts.
+    (
+        re.compile(
+            r"\b(?:from now on|going forward|in (?:the )?future|"
+            r"(?:i|we) (?:would |'d )?prefer|i'?d prefer|i (?:really )?like (?:it|my|when|things)|"
+            r"call me|my name is|remember that i|"
+            r"(?:please )?always (?:use|write|answer|reply|respond|give|format|keep|make|include|"
+            r"start|end|put|send|call|address|sign|speak|talk)|"
+            r"never (?:use|write|answer|reply|respond|give|format|include|call|send|address|sign)|"
+            r"don'?t (?:ever )?(?:use|write|give|include|call|send|address|sign)|"
+            r"stop (?:using|writing|giving|including|calling|sending))\b",
+            re.IGNORECASE,
+        ),
+        {"remember_preference": 7},
+    ),
     # --- the GENERAL calling vocabulary (v1.173.0) ------------------------
     # The user's words: "multiple agents are to utilize this centralized brain,
     # so much of what long-term details are needed should be ALWAYS REACHABLE.

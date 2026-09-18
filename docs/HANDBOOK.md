@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.278.0 (2026-09-14).*
+holds itself to. Current as of v1.279.0 (2026-09-14).*
 
 ---
 
@@ -972,6 +972,22 @@ now the chat page does too. And every message you sent carries a small
 pencil on hover — **Edit and resend** puts it back in the box with its files,
 removes everything after it, and Send runs it again over exactly the
 conversation that came before.
+
+**Jarvis learns how you like things, and the Memory page says what it knows
+(v1.279.0).** Say a lasting preference in chat the way you would to a
+colleague — "From now on, keep answers short", "Always give me numbered
+steps", "Call me VR" — and Jarvis keeps it as a lesson it reads into every
+later conversation; the receipt under the reply shows it was remembered, and
+the **What I've learned** tab is where you forget one. (Inside agent runs this
+already happened; in chat the tool was never offered.) The Memory page now
+opens on **What Jarvis knows about you**: your profile, the preferences it
+keeps, how many notes and past conversations it can search — and, when there
+is nothing yet, the one sentence to type. Two quieter fixes: the "worked well
+for …" notes Jarvis writes itself after every agent job are notes about past
+jobs, not knowledge about you, so they no longer take up the lesson lines in
+every conversation (they still feed the weekly distillation and the tab); and
+the reasoning level you pick for a conversation is remembered with it — it
+used to reset to the model's default every time you reopened the thread.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

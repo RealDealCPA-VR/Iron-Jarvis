@@ -2201,6 +2201,32 @@ def _is_office_turn(armed_names) -> bool:
     return bool(_DOC_WRITING_TOOLS & set(armed_names or ()))
 
 
+#: v1.279.0: THE MEMORY BRIEF — only beside an armed ``remember_preference``
+#: (a brief that says "you can remember" beside no such tool is a lie, the
+#: v1.262.0 rule). One sentence in the third person, only for a LASTING
+#: preference the user stated, never a one-off instruction, never a fact about
+#: someone else — the lesson lands under Memory where the user can forget it.
+PREFERENCE_BLOCK = (
+    "# Remembering how the user likes things\n"
+    "When the user states a LASTING preference about how they want things done "
+    "(\"from now on\u2026\", \"always\u2026\", \"I prefer\u2026\", \"call me\u2026\"), call "
+    "remember_preference ONCE with one plain third-person sentence "
+    "(\"Prefers short answers with numbered steps\"). It is honoured in every "
+    "later conversation and listed under Memory, where the user can forget it. "
+    "Do not record a one-off instruction for this turn, a fact about another "
+    "person, or anything the user did not actually say."
+)
+
+
+def preference_block(armed_names) -> str:
+    """The memory brief when ``remember_preference`` is armed, else ``""``."""
+    try:
+        armed = {str(n) for n in (armed_names or ())}
+    except TypeError:
+        return ""
+    return PREFERENCE_BLOCK if "remember_preference" in armed else ""
+
+
 def browser_agent_block(armed_names) -> str:
     """The block with its roster rendered from what is ACTUALLY armed (v1.274.0).
 
@@ -3634,6 +3660,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # on a turn that can actually act in the browser.
         if _is_browser_agent_turn(armed):
             system += "\n\n" + browser_agent_block(armed)
+        # THE MEMORY BRIEF (v1.279.0) — lock-step with the stream lane.
+        _pref = preference_block(armed)
+        if _pref:
+            system += "\n\n" + _pref
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]

@@ -149,6 +149,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=503, detail="improvement engine unavailable")
         return await d.platform.improvement.reflect(limit=limit)
 
+    @app.get("/memory/overview")
+    async def memory_overview_route() -> dict[str, Any]:
+        """What Jarvis knows about the user, for the Memory page (v1.279.0).
+        Off the loop: the note count is a folder glob."""
+        from ...memory.overview import memory_overview
+
+        return await asyncio.to_thread(memory_overview, d.platform)
+
     @app.get("/memory/search")
     def memory_search(q: str, k: int = 5) -> dict[str, Any]:
         hits = d.platform.memory.search(q, k=k)

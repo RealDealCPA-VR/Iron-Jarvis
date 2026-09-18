@@ -43,6 +43,7 @@ from ..doors import collect_doors, door_for
 # here because POST /chat/stream deliberately keeps its own inline copy of
 # the loop (SSE stays out of this arc) and the thread routes share the caps.
 from ..chat_turn import (
+    preference_block,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
@@ -434,6 +435,16 @@ def _clean_setup(raw: Any) -> str:
         mode = normalize_approval_mode(mode)
         if mode != "approve_for_me":
             out["approval_mode"] = mode
+    # The REASONING LEVEL persists with the thread too (v1.279.0). The page
+    # has sent it and read it back since v1.263.0, but this whitelist never
+    # stored it, so the level silently reset to the model's default on every
+    # reopen. Vocabulary-checked against the one table; "" (the default) is
+    # stored as nothing, like the posture above.
+    level = raw.get("reasoning")
+    if isinstance(level, str):
+        level = normalize_level(level)
+        if level:
+            out["reasoning"] = level
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -2221,6 +2232,11 @@ async def chat_stream(
         # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
         if _is_browser_agent_turn({*armed, *ask_armed}):
             system += "\n\n" + browser_agent_block({*armed, *ask_armed})
+        # THE MEMORY BRIEF (v1.279.0). MIRROR NOTE (lock-step): chat_turn's
+        # Tools seam.
+        _pref = preference_block({*armed, *ask_armed})
+        if _pref:
+            system += "\n\n" + _pref
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]

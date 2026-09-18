@@ -37,6 +37,15 @@ _LESSONS_HEADING = "\n\n# What I've learned about working with you\n"
 #: Keep reflection notes terse — long context defeats the point.
 _MAX_NOTE = 240
 
+#: Lesson sources that are TASK NOTES, not knowledge about the user (v1.279.0):
+#: the orchestrator's per-run "Worked well for '<task>': <summary>" rows. On the
+#: daily driver 23 of 25 lessons were these, and the top-8 injection under
+#: "What I've learned about working with you" was six of them — one recording
+#: the offline mock's scripted answer. They still feed ``dedup``/``distill``
+#: (which turns them into real lessons) and the Lessons tab; the prompt reads
+#: preferences, feedback, user-written and distilled lessons only.
+_PROMPT_EXCLUDED_SOURCES: tuple[str, ...] = ("reflection",)
+
 #: Reflection lessons about the same task ("Worked well for 'X': …") are echoes
 #: of each other — only the newest carries information.
 _TASK_ECHO = re.compile(r"^worked well for '(?P<task>.+?)':", re.IGNORECASE)
@@ -146,7 +155,11 @@ class LearningEngine:
 
     # -- retrieval / injection ---------------------------------------------
     def lessons(
-        self, scope: str | None = "user", limit: int = 12
+        self,
+        scope: str | None = "user",
+        limit: int = 12,
+        *,
+        exclude_sources: tuple[str, ...] = (),
     ) -> list[LessonRecord]:
         """Lessons ordered for injection: highest EFFECTIVE weight first, newest next.
 
@@ -161,6 +174,9 @@ class LearningEngine:
             query = select(LessonRecord)
             if scope is not None:
                 query = query.where(LessonRecord.scope == scope)
+            if exclude_sources:
+                # v1.279.0: the prompt asks for everything BUT task reflections.
+                query = query.where(LessonRecord.source.not_in(list(exclude_sources)))
             query = query.order_by(
                 effective.desc(), LessonRecord.created_at.desc()
             ).limit(limit)
@@ -173,11 +189,22 @@ class LearningEngine:
 
         Returns the prompt unchanged when there is nothing learned yet.
         """
-        items = self.lessons(scope=scope, limit=limit)
+        items = self.lessons(
+            scope=scope, limit=limit, exclude_sources=_PROMPT_EXCLUDED_SOURCES
+        )
         if not items:
             return system_prompt
         bullets = "\n".join(f"- {lesson.text}" for lesson in items)
         return f"{system_prompt}{_LESSONS_HEADING}{bullets}"
+
+    def counts_by_source(self, scope: str | None = "user") -> dict[str, int]:
+        """How many lessons each source holds (v1.279.0) — the Memory page's
+        "what Jarvis knows" card says how much of the pile is task notes."""
+        with session_scope(self.engine) as db:
+            query = select(LessonRecord.source, func.count()).group_by(LessonRecord.source)
+            if scope is not None:
+                query = query.where(LessonRecord.scope == scope)
+            return {str(src or ""): int(n) for src, n in db.exec(query)}
 
     # -- compaction ----------------------------------------------------------
     def dedup(self) -> int:

@@ -106,12 +106,16 @@ def test_apply_to_prompt_injects_ordered_lessons(learning):
     assert "What I've learned" in out
     assert "User prefers concise bullet-point summaries" in out
 
-    # preference/feedback (weight 5/3) must be injected before reflections (weight 1).
+    # preference (weight 5) is injected before feedback (weight 3).
     pref_idx = out.index("bullet-point summaries")
     feedback_idx = out.index("Too verbose")
-    reflection_idx = out.index("build a parser")
-    assert pref_idx < reflection_idx
-    assert feedback_idx < reflection_idx
+    assert pref_idx < feedback_idx
+    # v1.279.0: a task REFLECTION is a note about a job, not knowledge about the
+    # user — it stays in the store (for the Lessons tab and distillation) and
+    # out of the prompt. On the daily driver 23 of 25 lessons were reflections
+    # and six of the eight injected lines were "Worked well for '…'" rows.
+    assert "build a parser" not in out
+    assert any("build a parser" in l.text for l in learning.lessons(scope="user"))
 
 
 def test_apply_to_prompt_unchanged_when_empty(learning):
