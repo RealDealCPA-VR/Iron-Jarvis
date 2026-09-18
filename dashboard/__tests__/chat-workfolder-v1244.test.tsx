@@ -183,6 +183,81 @@ async function send(text: string) {
 
 const workfolderCalls = () => H.api.posts.filter((p) => p.path === "/documents/workfolder");
 
+describe("attaching without the hassle (v1.275.0)", () => {
+  /** A deferred upload: the POST is recorded at once; the reply waits for `release`. */
+  function deferredUploads() {
+    const pending: Array<() => void> = [];
+    H.api.postResponses["/documents/upload"] = (body: Record<string, unknown>) =>
+      new Promise((resolve) => {
+        pending.push(() => resolve(uploadFor(body)));
+      });
+    return {
+      get count() {
+        return pending.length;
+      },
+      releaseAll() {
+        for (const r of pending.splice(0)) r();
+      },
+    };
+  }
+
+  it("a pasted file becomes an attachment, exactly like a drop; text pastes fall through", async () => {
+    render(<ChatPage />);
+    const box = await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    const file = new File(["png"], "shot.png", { type: "image/png" });
+    fireEvent.paste(box, { clipboardData: { files: [file], items: [], getData: () => "" } });
+    await waitFor(() => expect(H.api.posts.some((p) => p.path === "/documents/upload")).toBe(true));
+    await screen.findByText("shot.png");
+    // Plain text on the clipboard uploads nothing.
+    const before = H.api.posts.length;
+    fireEvent.paste(box, { clipboardData: { files: [], items: [], getData: () => "hello" } });
+    expect(H.api.posts.length).toBe(before);
+  });
+
+  it("a file alone is a message: the arrow is enabled and the turn carries the attachment", async () => {
+    render(<ChatPage />);
+    await attach("k1.pdf");
+    await screen.findByText("k1.pdf");
+    const arrow = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    await waitFor(() => expect(arrow.disabled).toBe(false));
+    fireEvent.click(arrow);
+    await waitFor(() => expect(H.stream.bodies.length).toBe(1));
+    const body = H.stream.bodies[0] as { attachments?: string[]; messages: Array<{ content: string }> };
+    expect(body.attachments?.length).toBe(1);
+    expect(body.messages[body.messages.length - 1].content).toBe("");
+  });
+
+  it("a send pressed while files upload waits for them and goes WITH them", async () => {
+    const uploads = deferredUploads();
+    render(<ChatPage />);
+    await attach("slow.pdf");
+    await waitFor(() => expect(uploads.count).toBe(1));
+    const box = await screen.findByPlaceholderText(/Message Iron Jarvis/);
+    fireEvent.change(box, { target: { value: "summarise this" } });
+    fireEvent.keyDown(box, { key: "Enter", code: "Enter" });
+    // Nothing went out: the file is still on its way.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(H.stream.bodies.length).toBe(0);
+    uploads.releaseAll();
+    await waitFor(() => expect(H.stream.bodies.length).toBe(1));
+    const body = H.stream.bodies[0] as { attachments?: string[]; messages: Array<{ content: string }> };
+    expect(body.attachments?.length).toBe(1);
+    expect(body.messages[body.messages.length - 1].content).toBe("summarise this");
+  });
+
+  it("several files upload a few at a time, and the folder gets them in order", async () => {
+    const uploads = deferredUploads();
+    render(<ChatPage />);
+    await attach("a.pdf", "b.pdf", "c.pdf");
+    // All three POSTs are in flight before any reply — not one after another.
+    await waitFor(() => expect(uploads.count).toBe(3));
+    uploads.releaseAll();
+    await waitFor(() => expect(workfolderCalls().length).toBe(1));
+    const files = workfolderCalls()[0].body.files as string[];
+    expect(files.map((f) => f.split("\\").pop())).toEqual(["a.pdf", "b.pdf", "c.pdf"]);
+  });
+});
+
 describe("attach with no project → the conversation gets its own folder", () => {
   it("asks for a folder named after the file, and the chip points at the copy inside it", async () => {
     render(<ChatPage />);

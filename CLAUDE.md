@@ -1252,6 +1252,22 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A send never goes without its files, and a file alone is a message**
+  (v1.275.0, /goal wave 2). `page.tsx::send` used to return on empty text and
+  ignored `uploading`, so Enter during an upload sent WITHOUT the files and
+  nothing said so (the v1.244.0 "no output" shape by another door). Now:
+  `uploadingRef` (the state lags a frame) queues the send (`queuedSendRef`)
+  and `addFiles`' finally fires it with the box's CURRENT text; a send with
+  attachments and no text goes (the lane accepts an empty user message —
+  verified); `SendArrow` enables on attachments alone; `ComposerInput` has
+  `onPasteFiles` (there was no paste handler at all — `clipboardData.files`
+  → `addFilesRef`, plain text falls through); uploads run
+  `UPLOAD_CONCURRENCY` (3) at a time with order kept. `lib/providerFallback.
+  canRetryWithDefault` offers "Retry with the default model" ONLY when the
+  explicit pick's provider is known-down and the default known-up — never a
+  provider the user did not choose (v1.162.0). Pins: the workfolder suite
+  (`chat-workfolder-v1244.test.tsx`) + `provider-fallback-v1275.test.ts`.
+
 - **The same failing call is not run a third time; the ledger is the
   backlog** (v1.274.0). The daily driver's last 400 browser invocations were
   the evidence: a page read refused with the identical add-on error FIVE

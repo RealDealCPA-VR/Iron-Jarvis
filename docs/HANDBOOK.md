@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.274.0 (2026-09-14).*
+holds itself to. Current as of v1.275.0 (2026-09-14).*
 
 ---
 
@@ -929,6 +929,16 @@ to change approach or tell you what is blocking. Also: approval cards and
 Working steps now name the control ("click 'Sign in'") instead of "click on the
 page"; the model is told only the browser tools it actually has; and switching
 tabs no longer stalls the add-on while the model list refreshes.
+
+**Attaching without the hassle (v1.275.0).** In chat you can now paste a
+screenshot or a copied file straight into the message box (Ctrl+V) and it
+becomes an attachment, the same as dropping it. A file alone is a message —
+the send arrow works with no text typed. If you press Send while files are
+still uploading, the message waits for them and goes with the files instead
+of going without them silently. Several files upload a few at a time, in the
+order you added them. And when a turn fails because the model you picked is
+not reachable while your default model is, the banner offers **Retry with the
+default model** in one press.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

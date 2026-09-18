@@ -174,6 +174,7 @@ import {
   useComposer,
   type ComposerStore,
 } from "@/lib/composerStore";
+import { canRetryWithDefault } from "@/lib/providerFallback";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
@@ -831,6 +832,8 @@ interface WorkfolderResult {
 }
 
 // Attachment limits: keep uploads snappy and the /chat context sane.
+/** v1.275.0: how many attachment uploads run at once (order is kept). */
+const UPLOAD_CONCURRENCY = 3;
 const MAX_ATTACHMENTS = 4;
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 
@@ -1290,6 +1293,7 @@ const ComposerInput = memo(function ComposerInput({
   onOpened,
   onPickSkill,
   onTyped,
+  onPasteFiles,
 }: {
   store: ComposerStore;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -1308,6 +1312,9 @@ const ComposerInput = memo(function ComposerInput({
   /** A real keystroke — the page uses it to retire the voice auto-send, which
    *  must never fire for something the user typed by hand. */
   onTyped: () => void;
+  /** v1.275.0: files on the clipboard (a screenshot, a copied file) become
+   *  attachments exactly as a drop does; text pastes fall through untouched. */
+  onPasteFiles: (files: File[]) => void;
 }) {
   const { text, caret, slashDismissed } = useComposer(store);
 
@@ -1424,6 +1431,15 @@ const ComposerInput = memo(function ComposerInput({
       onFocus={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
       onSelect={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
       onKeyDown={onKeyDown}
+      onPaste={(e) => {
+        // v1.275.0: Ctrl+V of a screenshot or a copied file. There was no
+        // paste handler at all — the most-used attach path in every other
+        // chat app meant "save to disk, then + → Attach" here.
+        const files = Array.from(e.clipboardData?.files ?? []);
+        if (files.length === 0) return; // plain text: the browser's own paste
+        e.preventDefault();
+        onPasteFiles(files);
+      }}
       autoFocus
       rows={1}
       aria-label="Message"
@@ -1610,7 +1626,8 @@ const SendArrow = memo(function SendArrow({
   return (
     <button
       onClick={() => onSend(store.get().text)}
-      disabled={busy || !text.trim()}
+      // v1.275.0: a file alone is a message.
+      disabled={busy || !(text.trim() || hasAttachments)}
       aria-label="Send"
       title="Send (Enter)"
       className="btn-accent h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
@@ -2107,6 +2124,11 @@ export default function ChatPage() {
     };
   }, [workspaceDir]);
   const [uploading, setUploading] = useState(false);
+  // v1.275.0: `uploading` is React state (lags a frame); the ref is the truth a
+  // send checks synchronously. A send pressed while files are still uploading
+  // used to go WITHOUT the files and nothing said so; now it waits for them.
+  const uploadingRef = useRef(false);
+  const queuedSendRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   // v1.250.0 (S-05): the composer's text/caret/dismissals/highlight live in a
   // store, not in this component — a keystroke re-renders the textarea, the
@@ -3680,25 +3702,50 @@ export default function ChatPage() {
     }
     if (accepted.length === 0) return;
     setUploading(true);
+    uploadingRef.current = true;
     try {
-      const uploaded: UploadedFile[] = [];
-      for (const f of accepted) {
-        const content_b64 = await readAsBase64(f);
-        const res = await post<UploadResult>("/documents/upload", {
-          filename: f.name,
-          content_b64,
-        });
-        uploaded.push({ name: res.name, path: res.path, bytes: f.size });
-      }
+      // v1.275.0: uploads run a few at a time, results kept in the user's
+      // order. Four files used to be five sequential round trips (each with
+      // a main-thread base64 read) before the first chip appeared.
+      const uploaded: UploadedFile[] = new Array(accepted.length);
+      let next = 0;
+      const worker = async () => {
+        while (next < accepted.length) {
+          const i = next++;
+          const f = accepted[i];
+          const content_b64 = await readAsBase64(f);
+          const res = await post<UploadResult>("/documents/upload", {
+            filename: f.name,
+            content_b64,
+          });
+          uploaded[i] = { name: res.name, path: res.path, bytes: f.size };
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, accepted.length) }, worker),
+      );
       const placed = await placeInWorkfolder(uploaded);
       setAttachments((prev) => [...prev, ...placed].slice(0, MAX_ATTACHMENTS));
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
+      // A send the user pressed while this ran fires from the effect below,
+      // AFTER the render that commits the new attachments — firing here would
+      // build the body from `attachmentsRef` before it mirrored them.
     }
   }
+
+  // v1.275.0: the queued send goes the moment the uploads settle, with whatever
+  // the box holds at that moment (anything typed since counts).
+  useEffect(() => {
+    if (uploading || !queuedSendRef.current) return;
+    queuedSendRef.current = false;
+    send(composer.get().text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `send` is the component's own hoisted function
+  }, [uploading]);
 
   /**
    * THE CONVERSATION GETS A FOLDER (v1.244.0).
@@ -5682,9 +5729,17 @@ export default function ChatPage() {
 
   function send(text: string) {
     const message = text.trim();
+    // v1.275.0: a message can be a file alone ("here" + a PDF), and a send
+    // pressed mid-upload is QUEUED — it fires with the box's text the moment
+    // the uploads settle — instead of going out without the files.
+    const hasFiles = attachmentsRef.current.length > 0;
+    if (uploadingRef.current) {
+      queuedSendRef.current = true;
+      return;
+    }
     // `busy` is React state (lags a frame); `sendingRef` flips synchronously so
     // two Enter keydowns in the same tick can't both start a turn.
-    if (!message || busy || sendingRef.current) return;
+    if ((!message && !hasFiles) || busy || sendingRef.current) return;
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
@@ -6976,6 +7031,24 @@ export default function ChatPage() {
                       <RefreshCw size={14} /> Retry
                     </button>
                   )}
+                  {/* v1.275.0: the page already knows the explicit pick's
+                      provider is down and the default is up — one press,
+                      instead of the model menu after a typed request. Only
+                      that case: a different provider is the user's choice,
+                      never a fallback the page makes (the v1.162.0 rule). */}
+                  {failedTurn && !busy && canRetryWithDefault(choice, health) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChoice("");
+                        retryTurn();
+                      }}
+                      title={`${splitChoice(choice).provider} is not reachable; ${health.defaultProvider} is. Re-send with the default model.`}
+                      className="btn-ghost shrink-0 py-1.5 text-[13px]"
+                    >
+                      Retry with the default model
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -7821,6 +7894,7 @@ export default function ChatPage() {
                   onTyped={() => {
                     inputFromVoiceRef.current = false; // typed — never auto-send
                   }}
+                  onPasteFiles={(files) => void addFilesRef.current(files)}
                 />
                 {(awaiting || (chatBusy && stream.streaming)) && (
                   <button
