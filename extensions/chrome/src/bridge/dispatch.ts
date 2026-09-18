@@ -24,6 +24,13 @@ export class Dispatcher {
   private readonly handlers = new Map<string, CommandHandler>();
   private readonly inFlight = new Map<string, string>();
 
+  /**
+   * Called with every SUCCESSFUL result before it is sent (v1.273.0) — the worker's
+   * glow reads the tab id off it. A failed command calls nothing: a refusal touched
+   * no tab. Never awaited and never allowed to change the answer.
+   */
+  onResult?: (method: string, result: Record<string, unknown>) => void;
+
   /** Register `method`. Registering twice is a programming error, not a silent win. */
   register(method: string, handler: CommandHandler): void {
     if (this.handlers.has(method)) {
@@ -81,6 +88,11 @@ export class Dispatcher {
     this.inFlight.set(id, method);
     try {
       const result = await handler({ ...(frame.params ?? {}) });
+      try {
+        this.onResult?.(method, result);
+      } catch {
+        // An observer must never turn a finished command into a failed one.
+      }
       return { id, type: FRAME_RESPONSE, success: true, result };
     } catch (err) {
       return fail(id, envelopeFor(err));

@@ -74,6 +74,7 @@ import { BridgeError } from "../bridge/errors";
 import { Dispatcher } from "../bridge/dispatch";
 import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket";
 import { awaitDownload, watchDownloads } from "./downloads";
+import { AgentGlow } from "./glow";
 import { hasHostPermission, onHostPermissionChanged, openMicPage, openSetupPage } from "./hostperms";
 import {
   activateTab,
@@ -128,6 +129,13 @@ export type WorkerMessage =
 const manifest = chrome.runtime.getManifest();
 const dispatcher = new Dispatcher();
 
+// v1.273.0: THE GLOW. Every command that worked in a tab paints that tab's page;
+// the sidebar's turn frames, a lost socket and a closed tab clear it (glow.ts).
+const glow = new AgentGlow();
+dispatcher.onResult = (method, result) => {
+  void glow.afterCommand(method, result);
+};
+
 /** Monotonic within one worker lifetime, which is all an event id has to be. */
 let eventSeq = 0;
 
@@ -150,9 +158,15 @@ const socket = new BridgeSocket({
     // The panel's header is the only connection readout there is now that the popup
     // is retired (D32), and it is a page that may be open while this changes.
     broadcast({ kind: "panel_status" });
+    if (status.state !== "connected") {
+      // An agent that lost its socket is operating nothing (v1.273.0).
+      void glow.hideAll();
+    }
   },
   onPanelEvent: (event, payload) => {
     broadcast({ kind: "panel_event", event, payload });
+    // v1.273.0: the turn's own frames say when the glow may go.
+    glow.notePanelEvent(event, payload);
   },
 });
 
@@ -353,6 +367,7 @@ chrome.tabs.onActivated.addListener((info) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  glow.forget(tabId); // v1.273.0
   // THE TAB CLOSED (v1.266.0). The daemon ends that tab's approval grant — "one
   // approval per tab, for as long as the tab is open" is only true if the close
   // is reported — and drops its cached snapshot. No lookup: the tab is gone, and

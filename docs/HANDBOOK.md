@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.272.0 (2026-09-14).*
+holds itself to. Current as of v1.273.0 (2026-09-14).*
 
 ---
 
@@ -904,6 +904,15 @@ press the microphone again. Nothing is recorded on that page; it only earns the
 permission, which then covers the sidebar. If your browser had already blocked
 the microphone for the add-on, the page tells you where to unblock it (the icon
 left of the address bar).
+
+**The tab Jarvis is working in glows (v1.273.0).** While the sidebar's agent
+reads, clicks, types, scrolls or navigates a tab, that tab's page carries a soft
+cyan glow around its edges — the app's own accent — so you can see at a glance
+which tab the agent has. The glow lets every click of yours through (it is
+purely visual), reads nothing on the page, and disappears when the turn ends,
+when the connection drops, or, for a job driven from the Iron Jarvis window,
+about twenty seconds after the last action. A page the browser closes to
+add-ons (a settings page, a new-tab page) cannot show it.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

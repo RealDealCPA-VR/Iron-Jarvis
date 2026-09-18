@@ -1252,6 +1252,22 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The tab the agent is working in GLOWS; the worker knows from the commands
+  it answers** (v1.273.0). "A light glow around the tab it is controlling so I
+  can visually see the tab that is being operated by the agent."
+  `background/glow.ts`: `Dispatcher.onResult` hands every SUCCESSFUL command
+  result to `AgentGlow.afterCommand`; `glowTarget(method, result)` reads
+  `tab_id` off it for the commands that work in a tab (`GLOW_METHODS`; not
+  status/list_tabs/close_tab); `paintGlow(id)` runs INSIDE the page via
+  `chrome.scripting.executeScript` — self-contained (the id is an argument),
+  idempotent, `pointer-events:none`, max z-index, an inset box-shadow in the
+  dashboard's accent `34,211,238`, reads nothing. Cleared on the sidebar's
+  `done`/`error`/`state{running:false}` (`notePanelEvent`), on a socket that is
+  not connected, on a closed tab, and by `GLOW_LINGER_MS` after the last
+  command when no sidebar turn is known (the chat page's turns never reach the
+  worker). A navigation unloads it; the navigate result repaints it. Pins:
+  `tests/test_browser_agent_glow_v1273.py` (source + `glowTarget` under node).
+
 - **A side panel cannot show the microphone prompt; a page in a tab can**
   (v1.272.0). The user: "when I try to use the mic option, it doesn't say I
   have permission without the ability to give it permission." Chromium answers

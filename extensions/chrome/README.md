@@ -120,7 +120,9 @@ remembered in this browser. It never covers a payment or password field, a
 Jarvis cannot read — those still ask. While Jarvis works, its steps fold behind
 one **Working** line you can expand. Jarvis works in the tab you are looking
 at (v1.271.0): it goes to pages, reads and acts there, and opens a new tab only
-when you ask for one. No tool settings, no pairing control, no access switch —
+when you ask for one. The tab it is working in glows at the edges in the app's
+accent while it works (v1.273.0) — purely visual, nothing read, cleared when
+the turn ends. No tool settings, no pairing control, no access switch —
 those are governed in Jarvis. Jarvis is the product; the panel is a window onto
 it.
 
