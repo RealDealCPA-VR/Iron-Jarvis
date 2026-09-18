@@ -128,7 +128,12 @@ def test_an_interactive_sidebar_turn_is_offered_the_whole_browser_family(tmp_pat
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the panel turn never finished")
         offered = _offered_names(seen[0])
         assert _READ_TIER <= offered, f"read tier missing: {sorted(_READ_TIER - offered)}"
-        assert _ACT_TIER <= offered, f"acting tier missing: {sorted(_ACT_TIER - offered)}"
+        # v1.271.0: the new-tab tool is offered only to a sentence that asks for a
+        # new tab (tests/test_browser_sidepanel_tab_v1271.py); the rest of the
+        # acting tier is offered by surface exactly as before.
+        _act = _ACT_TIER - {"browser_create_tab"}
+        assert _act <= offered, f"acting tier missing: {sorted(_act - offered)}"
+        assert "browser_create_tab" not in offered, "a plain sentence was offered the new-tab tool"
         # Still scoped to the browser: nothing outside the family.
         assert all(n.startswith("browser_") for n in offered), sorted(offered)
 

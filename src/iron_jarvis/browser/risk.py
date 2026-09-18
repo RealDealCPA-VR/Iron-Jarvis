@@ -168,6 +168,23 @@ def base_risk(tool_name: str) -> RiskClass:
     return BASE_RISK.get(str(tool_name or ""), RiskClass.EXTERNAL_COMMIT)
 
 
+def navigation_words(url: object) -> str:
+    """The part of a URL the transactional vocabulary may read: scheme, host and
+    PATH — never the query string or the fragment (v1.271.0).
+
+    The vocabulary is a substring scan, and it used to read the whole URL, so a
+    Google search for "buy NVIDIA DGX Spark" (``/search?q=buy+...``) was refused
+    as a "destructive/transactional action ('buy')" — twice on the user's install,
+    with the switch on — while the model rewrote the query until a synonym slipped
+    past. The words a user SEARCHES for are not an action; the resource a URL
+    NAMES can be: ``/transfer`` and ``/checkout`` still ask, exactly as before, and
+    the domain allowlist still reads the host from the full URL elsewhere.
+    """
+    raw = str(url or "")
+    cut = min((i for i in (raw.find("?"), raw.find("#")) if i >= 0), default=len(raw))
+    return raw[:cut]
+
+
 def _classifier_action(
     tool_name: str,
     *,
@@ -194,7 +211,7 @@ def _classifier_action(
     if method == P.METHOD_TYPE_TEXT:
         return Action(kind="type", selector=selector, value=str(text or ""))
     if method == P.METHOD_NAVIGATE:
-        return Action(kind="navigate", value=str(url or ""))
+        return Action(kind="navigate", value=navigation_words(url))
     # click and press_key. A key press is a click for classification purposes:
     # both commit whatever the focused control does, and Enter on a "Delete
     # account" button is the same event as clicking it.

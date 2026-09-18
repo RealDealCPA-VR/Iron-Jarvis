@@ -116,9 +116,11 @@ each page action shows **Allow** · **Always allow** · **Deny**. The switch is
 remembered in this browser. It never covers a payment or password field, a
 "delete"-shaped control, a page that tried to instruct Jarvis, or a control
 Jarvis cannot read — those still ask. While Jarvis works, its steps fold behind
-one **Working** line you can expand. No tool settings, no pairing control, no
-access switch — those are governed in Jarvis. Jarvis is the product; the panel
-is a window onto it.
+one **Working** line you can expand. Jarvis works in the tab you are looking
+at (v1.271.0): it goes to pages, reads and acts there, and opens a new tab only
+when you ask for one. No tool settings, no pairing control, no access switch —
+those are governed in Jarvis. Jarvis is the product; the panel is a window onto
+it.
 
 ## Known limits, named rather than discovered later
 

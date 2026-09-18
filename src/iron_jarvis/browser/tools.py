@@ -1449,12 +1449,14 @@ class BrowserScrollTool(_ActingTool):
 class BrowserCreateTabTool(_ActingTool):
     name = "browser_create_tab"
     description = (
-        "Open a NEW tab in the user's own browser, optionally at a URL. Prefer "
-        "this over browser_navigate when the user should keep the page they are "
-        "on. The new tab uses the user's real browser session, so it is opened "
-        "logged in as them - so opening one at a URL is judged exactly like "
-        "browser_navigate: if the user has set a domain allowlist for computer "
-        "use, a URL outside it stops for their approval."
+        "Open a NEW tab in the user's own browser, optionally at a URL. ONLY when "
+        "the user asks for a new tab, or when they are in the middle of something "
+        "on the page they are looking at and must keep it. Otherwise go to the URL "
+        "in the tab they are looking at with browser_navigate: a tab the user did "
+        "not ask for is a flaw they reported. The new tab uses the user's real "
+        "browser session, so it is opened logged in as them - so opening one at a "
+        "URL is judged exactly like browser_navigate: if the user has set a domain "
+        "allowlist for computer use, a URL outside it stops for their approval."
     )
     permission_key = "browser_create_tab"
     input_schema = {
@@ -1485,7 +1487,8 @@ class BrowserCreateTabTool(_ActingTool):
         URL. LOCAL_UI short-circuits ``escalate_browser`` at rule 1, so the domain
         allowlist — the same list the computer-use page shows, which
         ``browser_navigate`` obeys — was never consulted, and this tool's own
-        description steers a model here ("prefer this over browser_navigate"). One
+        description STEERED a model here ("prefer this over browser_navigate" —
+        until v1.271.0, when the user reported the unasked-for tabs). One
         call routed around the navigation gate; measured, with
         ``domain_allowlist=["portal.example"]``, as navigate refused and create_tab
         allowed for the same off-list URL.
@@ -1859,9 +1862,13 @@ class BrowserPressKeyTool(_TargetedTool):
 class BrowserNavigateTool(_ActingTool):
     name = "browser_navigate"
     description = (
-        "Point one of the user's own browser tabs at a URL. This REPLACES what is "
-        "in that tab, so prefer browser_create_tab when the user should keep the "
-        "page they are on. The page loads in the user's real browser session, "
+        "Go to a URL in the tab the user is looking at (omit tab_id), or in a tab "
+        "you name. This is THE way to open a page: the user is working in this "
+        "tab and the sidebar is docked to it. It replaces what that tab shows, so "
+        "when the user is in the middle of something on the current page (a form "
+        "half filled, a page they asked to keep) and asks for another page, use "
+        "browser_create_tab instead; otherwise never open a new tab unless the "
+        "user asks for one. The page loads in the user's real browser session, "
         "logged in as them. Browser-internal pages (chrome:, about:, the Web "
         "Store) cannot be opened this way. If the user has set a domain allowlist "
         "for computer use, a URL outside it stops for their approval."

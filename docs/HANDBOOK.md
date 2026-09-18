@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.270.1 (2026-09-14).*
+holds itself to. Current as of v1.271.0 (2026-09-14).*
 
 ---
 
@@ -874,6 +874,17 @@ tool. Fixed, and the same hole in v1.266.0's Allow-for-this-tab is closed with
 it — a page action covered by the switch or by a tab grant now runs. And when
 a step does fail, the folded line under **Working** now says why ("Could not
 click 'Next'. the page refused: …") instead of only that it could not.
+
+**The sidebar works in the tab you are looking at (v1.271.0).** Every job used
+to start by opening a new tab — the tools' own descriptions told the model to
+prefer one. Now Jarvis goes to pages, reads and acts in the tab you have open,
+and opens a new tab only when you ask for one ("open a new tab…", "in another
+tab", "in a separate window") or when you are mid-way through something on the
+current page and must keep it. From the sidebar, the new-tab tool is not even
+offered to the model unless your sentence asks for it. Also fixed: a web search
+whose words include "buy" or "purchase" is no longer treated as a transaction —
+the safety check now reads what a URL names (a /checkout or /transfer page
+still asks) rather than the words you searched for.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

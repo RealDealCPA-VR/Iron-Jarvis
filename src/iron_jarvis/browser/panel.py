@@ -157,6 +157,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 from types import SimpleNamespace
 from typing import Any
@@ -211,6 +212,25 @@ BROWSER_TOOL_PREFIX = "browser_"
 #: widen it and nothing here asserts a duration.
 PANEL_TURN_WINDOW_S = 60.0
 PANEL_TURNS_PER_WINDOW = 12
+
+
+#: The user's own words for wanting a NEW tab (v1.271.0). Only a sentence that
+#: matches one of these puts ``browser_create_tab`` inside a panel turn's ceiling
+#: at all; every other sentence works in the tab the user is looking at. "It
+#: should simply work in the tab I'm using, not open a new one unless I tell it
+#: to." Word-bounded: "a table" is not "a tab". Read-only tab words ("list my
+#: tabs", "close this tab") deliberately match nothing here — those tools stay.
+NEW_TAB_PATTERNS: tuple[str, ...] = (
+    r"\b(?:new|another|second|separate|fresh|extra|other|its own|their own)\s+(?:tab|window)s?\b",
+    r"\bopen\s+(?:a|one|up a|one more)\s+tab\b",
+    r"\bin\s+(?:a|one)\s+(?:new\s+)?tab\b",
+)
+_NEW_TAB_RE = re.compile("|".join(NEW_TAB_PATTERNS), re.IGNORECASE)
+
+
+def wants_new_tab(text: object) -> bool:
+    """Whether the user's sentence asks for a new tab (v1.271.0)."""
+    return bool(_NEW_TAB_RE.search(" ".join(str(text or "").split())))
 
 
 def browser_tool_ceiling(platform: Any) -> frozenset[str]:
@@ -1150,6 +1170,14 @@ class PanelTurns:
         # armed (and thereby granted) whatever the user's sentence suggested:
         # `write_file` wrote a real file from a read_only sidebar with no card.
         ceiling = browser_tool_ceiling(self.platform)
+        # v1.271.0: THE TAB THE USER IS LOOKING AT. "It should simply work in the
+        # tab I'm using, not open a new one unless I tell it to." The new-tab
+        # tool is outside the ceiling — so nothing, not the autoselect pass and
+        # not the family, can arm it — unless the sentence asks for a new tab.
+        # The prompt and the tools' own descriptions say the same thing to the
+        # model; this is the bound that holds when words do not.
+        if not wants_new_tab(text):
+            ceiling = frozenset(ceiling - {"browser_create_tab"})
         emitted_done = False
         try:
             gen = await stream_chat_turn(

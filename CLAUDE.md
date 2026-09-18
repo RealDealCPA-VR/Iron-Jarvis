@@ -1252,6 +1252,23 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The sidebar works in the tab the user is looking at; a new tab is a thing
+  the user asks for** (v1.271.0). "It requires opening a new tab and doesn't
+  just work in the tab I already have open. This is a real flaw." The model was
+  TOLD to: `browser_navigate`'s description said "prefer browser_create_tab when
+  the user should keep the page they are on", `browser_create_tab`'s said
+  "Prefer this over browser_navigate", and `BROWSER_AGENT_BLOCK` never said
+  where to work. Now both descriptions and the block say "the tab the user is
+  looking at"; a PANEL turn's ceiling (`panel.py::_run`) drops
+  `browser_create_tab` unless `wants_new_tab(text)` (`NEW_TAB_PATTERNS`,
+  word-bounded) — the bound that holds when words do not; other surfaces keep
+  the whole family. Same release: the transactional vocabulary reads a
+  navigation's scheme+host+path (`risk.navigation_words`), never the query
+  string — a Google search for "buy …" was refused as a transaction twice on
+  the user's install while `/transfer` and `/checkout` still ask. Do not put
+  "prefer a new tab" back into a description, and do not widen the vocabulary
+  back over the query. Pins: `tests/test_browser_sidepanel_tab_v1271.py`.
+
 - **A covered call must CARRY its grant into the registry; a test that stubs
   `invoke` cannot see that it did not** (v1.270.1). The user, switch on, on a
   live tab: "tab creation needs your approval in Settings". The ledger:
