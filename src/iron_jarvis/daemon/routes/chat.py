@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..schemas import (
+    TurnSteerBody,
     ChatBody,
     ChatCompactBody,
     ChatCrystallizeBody,
@@ -1448,6 +1449,30 @@ def register(app: FastAPI, d) -> None:
             )
         return {"ok": True, "stopped": True}
 
+    @app.post("/chat/turns/{turn_id}/steer")
+    async def steer_chat_turn(turn_id: str, body: TurnSteerBody) -> dict[str, Any]:
+        """Queue a note for the running turn named ``turn_id`` (v1.278.0).
+
+        The sidebar has had this since v1.242.0 through its own socket; the
+        chat page had no way to say "shorter" to a turn already working
+        except Stop-and-retype. The note joins the conversation as the user's
+        own next message at the turn's NEXT ROUND BOUNDARY — the one place
+        the loop is re-entrant — and the ``round`` frame that follows carries
+        it back (``steer``), which is how the page learns it landed. It
+        cannot interrupt a sentence being written, and no surface may imply
+        that it can.
+
+        404 on an unknown or finished id (nothing will ever read the note),
+        and on an empty note — never a silent success.
+        """
+        if not TURNS.steer(turn_id, body.text):
+            raise HTTPException(
+                status_code=404,
+                detail=f"no such running turn: {turn_id}" if body.text.strip()
+                else "steer needs a note",
+            )
+        return {"ok": True, "queued": True}
+
 
 # --------------------------------------------------------------------------- #
 # THE STREAMING TURN (v1.241.0) — lifted out of the route so a caller with no
@@ -1556,6 +1581,12 @@ async def stream_chat_turn(
     """
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
+    if handle is not None and steer_source is None:
+        # v1.278.0: a named turn with no source of its own (the chat page)
+        # reads the registry's queue — ``POST /chat/turns/{id}/steer`` fills
+        # it. The sidebar keeps passing its own socket-backed source.
+        def steer_source() -> str:  # type: ignore[no-redef]
+            return "\n".join(handle.take_steers())
     if handle is None:
         # NO turn_id: byte-identical to the pre-v1.241.0 path — nothing
         # registered, nothing to release, the generator handed back bare.
@@ -2399,7 +2430,13 @@ async def chat_stream(
                 _note = await _steer()
                 if _note:
                     msgs.append(LLMMessage(role="user", content=_note))
-                yield _sse("round", {"round": _round})
+                # v1.278.0: the note rides the round frame it joined, so a
+                # caller with no socket of its own (the chat page) learns it
+                # landed — consumption is still the only signal; an unread
+                # note never appears in any frame.
+                yield _sse(
+                    "round", {"round": _round, **({"steer": _note} if _note else {})}
+                )
                 final_resp = None
                 async for frame in _router_frames(
                     d.platform.router,

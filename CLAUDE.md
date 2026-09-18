@@ -1252,6 +1252,31 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A named chat turn takes steer notes from any connection, and a sent
+  message is editable** (v1.278.0, /goal wave 5). The sidebar's steer
+  contract (v1.242.0: `steer_source` consulted at the ROUND BOUNDARY, never
+  inside a sentence) is now reachable by name: `TurnHandle` carries a note
+  queue (`queue_steer`/`take_steers`), `TURNS.steer(turn_id, text)` /
+  `TURNS.take_steers(turn_id)` (unknown or finished id → False/[]),
+  `POST /chat/turns/{turn_id}/steer {text}` (404 unknown/finished/empty —
+  never a silent success), and `stream_chat_turn` attaches a registry-backed
+  source to a NAMED turn that brought none (the sidebar keeps passing its
+  own). CONSUMPTION IS STILL THE ONLY SIGNAL: the `round` frame that follows
+  a consumed note carries it (`steer`), and NO new frame kind was added. The
+  page mints `turn_id` per turn (`mintTurnId`, sent on the stream body),
+  Enter while `busy` posts the box as a note (`steerTurn`; the placeholder
+  says so; a 404 keeps the words in the box), shows it under the live reply
+  (`#steer-notes`), and folds the notes the hook collected off round frames
+  (`ChatStreamResult.steered`) into the saved conversation as `user`
+  messages flagged `steer: true` BEFORE the reply — the model saw them so,
+  and the next turn resends the whole history. Stream lane only: `POST /chat`
+  has no round boundary to consult. EDIT AND RESEND: `RowHandlers.editMessage(i)`
+  cuts `messages` before a user bubble, saves the cut (`queueSave`) when
+  anything precedes it, puts the text + files back in the box; never mid-turn
+  and never on a steer note. Pins: `tests/test_chat_steer_v1278.py`,
+  `dashboard/__tests__/chat-steer-v1278.test.tsx`,
+  `dashboard/__tests__/chat-edit-message-v1278.test.tsx`.
+
 - **A key opens the panel, Esc stops, Open Jarvis focuses, and the model menu
   is typed into; a gate proves concurrency by construction** (v1.277.0, /goal
   wave 4). Add-on: `manifest.commands["open-panel"]` (Alt+J) → the worker's

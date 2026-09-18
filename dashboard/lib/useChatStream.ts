@@ -8,7 +8,7 @@
 //   approval  {"id","call_id","tool","args"?,"timeout_s"?}   (v1.187.0)
 //   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
-//   round     {"round":n}
+//   round     {"round":n,"steer"?:text}                       (steer: v1.278.0)
 //   done      {"reply","provider","model","tools_used","denied_tools","usage",
 //              "adapted": {model,changes}|null, ...}
 //   error     {"detail","status"?}
@@ -60,7 +60,7 @@ export type SSEEvent =
       decision: "once" | "conversation" | "deny" | "tab" | "timeout";
     }
   | { type: "meta"; provider: string; model: string }
-  | { type: "round"; round: number }
+  | { type: "round"; round: number; steer?: string }
   | {
       type: "done";
       reply: string;
@@ -163,6 +163,12 @@ export interface ChatStreamResult {
   workflowRun?: { run_id: string; name: string } | null;
   /** How much of the model's context window this turn used (v1.146.0). */
   context?: ContextUsage | null;
+  /** v1.278.0: the steer notes this turn READ, in order — each rode the
+   *  `round` frame it joined. The caller folds them into the saved
+   *  conversation as the user's own messages, because the model saw them as
+   *  such and the next turn resends the whole history. A note the turn never
+   *  reached is not here. */
+  steered?: string[];
 }
 
 /** What one turn cost against the answering model's window (v1.146.0). The
@@ -263,8 +269,15 @@ export function sseEventFrom(
     }
     case "meta":
       return { type: "meta", provider: str(data.provider), model: str(data.model) };
-    case "round":
-      return { type: "round", round: Number(data.round) || 0 };
+    case "round": {
+      const ev: Extract<SSEEvent, { type: "round" }> = {
+        type: "round",
+        round: Number(data.round) || 0,
+      };
+      // v1.278.0: the steer note this round READ (absent when none was).
+      if (typeof data.steer === "string" && data.steer) ev.steer = data.steer;
+      return ev;
+    }
     case "done": {
       const ev: Extract<SSEEvent, { type: "done" }> = {
         type: "done",
@@ -805,6 +818,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       // Did the server do real work for this turn (streamed a token or ran a
       // tool)? If so, a non-streaming re-POST on failure would re-execute it.
       let committed = false;
+      const steered: string[] = [];
 
       try {
         for await (const ev of streamSSE(
@@ -854,6 +868,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               provider = ev.provider;
               model = ev.model;
               break;
+            case "round":
+              if (ev.steer) steered.push(ev.steer);
+              break;
             case "done":
               done = {
                 reply: ev.reply || acc,
@@ -872,6 +889,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 workflowDraft: ev.workflow_draft,
                 workflowRun: ev.workflow_run,
                 context: ev.context,
+                ...(steered.length ? { steered: [...steered] } : {}),
               };
               break;
             case "error":

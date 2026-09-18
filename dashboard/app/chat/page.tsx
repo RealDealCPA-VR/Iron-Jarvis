@@ -285,6 +285,9 @@ interface SessionAsk {
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** v1.278.0: a note the user sent MID-TURN that the turn read at a round
+   *  boundary — kept as a user message because the model saw it as one. */
+  steer?: boolean;
   /** Set when a chat turn handed itself to the full agent (v1.108.0): the
    *  reason, shown in place of the reply while the agent works. There are no
    *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
@@ -374,6 +377,7 @@ interface ChatRequestMessage {
 // signature and stays assignable to the streaming hook's generic `run(body)`.
 type ChatRequestBody = {
   messages: ChatRequestMessage[];
+  turn_id?: string; // v1.278.0: names the turn so /chat/turns/{id}/steer can reach it
   provider?: string;
   model?: string;
   persona?: string;
@@ -988,6 +992,16 @@ const REASONING_LEVELS = ["low", "medium", "high"];
 /** v1.277.0: how many rows a typed model filter lists. */
 const MODEL_FILTER_MAX = 12;
 
+/** v1.278.0: a name for the turn about to run, so it can be steered (or stopped)
+ *  by name. Chosen here — the daemon mints none (v1.241.0). */
+function mintTurnId(): string {
+  const rnd =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `chat-${Date.now().toString(36)}-${rnd}`;
+}
+
 function splitChoice(choice: string): { provider?: string; model?: string } {
   const i = choice.indexOf("::");
   if (i === -1) return {};
@@ -1294,6 +1308,7 @@ const ComposerInput = memo(function ComposerInput({
   skills,
   onSend,
   onStop,
+  onSteer,
   onOpened,
   onPickSkill,
   onTyped,
@@ -1305,6 +1320,9 @@ const ComposerInput = memo(function ComposerInput({
   skills: SkillOption[] | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** v1.278.0: Enter while a turn runs sends the box as a STEER note — the
+   *  turn reads it at its next step. Absent, Enter mid-turn does nothing. */
+  onSteer?: (text: string) => void;
   /** Called when a "/" token opens — the page fetches the skill catalog once
    *  (v1.250.0, S-05: it used to be an effect on a page-level `slashActive`,
    *  and the page no longer watches the text). Idempotent on its own side. */
@@ -1407,9 +1425,15 @@ const ComposerInput = memo(function ComposerInput({
       onStop();
       return;
     }
-    // Enter sends; Shift+Enter inserts a newline.
+    // Enter sends; Shift+Enter inserts a newline. v1.278.0: while a turn is
+    // running, Enter STEERS it instead — the note reaches the turn at its
+    // next step — and the send path is not entered (it refuses mid-turn).
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (busy && onSteer) {
+        onSteer(store.get().text);
+        return;
+      }
       onSend(store.get().text);
     }
   }
@@ -1447,7 +1471,11 @@ const ComposerInput = memo(function ComposerInput({
       autoFocus
       rows={1}
       aria-label="Message"
-      placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+      placeholder={
+        busy && onSteer
+          ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Esc stops)"
+          : "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+      }
       className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
     />
   );
@@ -1683,6 +1711,9 @@ const VoiceAutoSend = memo(function VoiceAutoSend({
 export interface RowHandlers {
   retryTask: (task: string) => void;
   regenerate: () => void;
+  /** v1.278.0: put a sent message back in the box (with its files) and drop
+   *  everything after it — the resend is a fresh turn over what preceded it. */
+  editMessage: (index: number) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -1730,12 +1761,39 @@ const MessageRow = memo(function MessageRow({
 }) {
   if (m.role === "user") {
     return (
-      <Bubble role="user">
-        {m.content}
-        {m.attachmentNames && m.attachmentNames.length > 0 && (
-          <AttachmentFooter names={m.attachmentNames} />
+      <div className="group/msg">
+        <Bubble role="user">
+          {/* v1.278.0: a mid-turn note is a user message the model read; the
+              label says why it sits between a question and its answer. */}
+          {m.steer && (
+            <span
+              data-testid="steer-label"
+              className="mr-1.5 inline-block rounded-full border border-white/15 px-1.5 py-px align-middle text-[10px] uppercase tracking-wide text-zinc-400"
+            >
+              steer
+            </span>
+          )}
+          {m.content}
+          {m.attachmentNames && m.attachmentNames.length > 0 && (
+            <AttachmentFooter names={m.attachmentNames} />
+          )}
+        </Bubble>
+        {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
+            (it was read inside a turn; there is no "after it" to cut). */}
+        {!busy && !m.steer && (
+          <div className="mt-0.5 flex justify-end opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
+            <button
+              type="button"
+              onClick={() => h.editMessage(i)}
+              title="Edit and resend — the messages after this one are removed"
+              aria-label="Edit and resend"
+              className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+            >
+              <Pencil size={12} />
+            </button>
+          </div>
         )}
-      </Bubble>
+      </div>
     );
   }
   // The hand-off (v1.108.0). A turn that grew into a full agent run has no
@@ -2095,6 +2153,10 @@ export default function ChatPage() {
   }, []);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
+  // v1.278.0: the running turn's name (so a steer can reach it) and the notes
+  // sent to it so far — shown under the live reply until the turn ends.
+  const turnIdRef = useRef("");
+  const [pendingSteers, setPendingSteers] = useState<string[]>([]);
   // The folder THIS conversation was given for its files (v1.244.0 — see
   // placeInWorkfolder): shown as a chip, and later attachments join it. The
   // ref is what the next attach reads; the state is what the chip renders.
@@ -5084,12 +5146,26 @@ export default function ChatPage() {
     // completion later fails. Persists via the same setup save made-docs use.
     if (atts.length) rememberThreadDocs(atts.map((a) => a.path));
     const body = buildChatBody(history, atts);
+    // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
+    const turnId = mintTurnId();
+    body.turn_id = turnId;
+    turnIdRef.current = turnId;
+    setPendingSteers([]);
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
         const streamRes = await stream.run(body, (_delta, full) =>
           feedTTS(full, false),
         );
+        turnIdRef.current = "";
+        // The notes the turn READ join the conversation as the user's own
+        // messages, in order, before the reply — the model saw them so, and
+        // the next turn resends this history.
+        const steerBubbles: ChatMessage[] = (streamRes.steered ?? []).map((t) => ({
+          role: "user",
+          content: t,
+          steer: true,
+        }));
         const {
           reply,
           tools_used,
@@ -5149,6 +5225,7 @@ export default function ChatPage() {
         };
         const full: ChatMessage[] = [
           ...history,
+          ...steerBubbles,
           {
             role: "assistant",
             content: finalReply,
@@ -5164,6 +5241,7 @@ export default function ChatPage() {
         if (workflowDraft) {
           const done: ChatMessage[] = [
             ...history,
+            ...steerBubbles,
             {
               role: "assistant",
               content:
@@ -5205,6 +5283,7 @@ export default function ChatPage() {
         showDocPreview(madeDocs); // a generated doc appears beside the chat
         return; // streamed successfully
       } catch (e) {
+        turnIdRef.current = ""; // v1.278.0: nothing to steer any more
         if (chatGenRef.current !== gen) return; // torn down — no fallback
 
         // A non-streaming re-POST re-runs the WHOLE turn from round 0. When the
@@ -5495,6 +5574,33 @@ export default function ChatPage() {
       name: m.attachmentNames?.[i] ?? path.split(/[\\/]/).pop() ?? path,
       bytes: 0,
     }));
+  }
+
+  /** v1.278.0: STEER the running turn — a note it reads at its next step.
+   *  Posted to the turn BY NAME (the same registry Stop uses), so the daemon
+   *  answers 404 when nothing is running to read it, and the words stay in
+   *  the box for a plain send. */
+  async function steerTurn(text: string): Promise<void> {
+    const note = text.trim();
+    if (!note) return;
+    const id = turnIdRef.current;
+    if (!id) {
+      setError("Nothing is running to steer — send it as a message.");
+      return;
+    }
+    try {
+      await post(`/chat/turns/${encodeURIComponent(id)}/steer`, { text: note });
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : 0;
+      setError(
+        status === 404
+          ? "That turn has already finished — send it as a new message."
+          : `Couldn't send the steer note: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+    composer.reset();
+    setPendingSteers((prev) => [...prev, note]);
   }
 
   /** Re-send the last failed chat turn — same history + attachments, verbatim. */
@@ -6155,6 +6261,20 @@ export default function ChatPage() {
       inputRef.current?.focus();
     },
     regenerate: () => regenerate(),
+    editMessage: (index) => {
+      // v1.278.0: the message goes back into the box with its files and the
+      // conversation is cut BEFORE it. The cut is saved at once when anything
+      // precedes it; an emptied thread is re-saved by the resend itself.
+      if (busy) return;
+      const target = messagesRef.current[index];
+      if (!target || target.role !== "user") return;
+      const kept = messagesRef.current.slice(0, index);
+      setMessages(kept);
+      if (kept.length) queueSave(kept);
+      composer.setText(target.content);
+      setAttachments(attachmentsOf(target));
+      inputRef.current?.focus();
+    },
     crystallize: (id) => void crystallizeThread(id),
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
@@ -6167,6 +6287,7 @@ export default function ChatPage() {
     () => ({
       retryTask: (task) => rowImplRef.current.retryTask(task),
       regenerate: () => rowImplRef.current.regenerate(),
+      editMessage: (index) => rowImplRef.current.editMessage(index),
       crystallize: (id) => rowImplRef.current.crystallize(id),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
@@ -6916,6 +7037,22 @@ export default function ChatPage() {
                           onGrow={scrollLiveIntoView}
                           armFromApproval={armFromApproval}
                         />
+                        {/* v1.278.0: the steer notes sent to this turn. Honest
+                            wording — a note lands at the next step, never
+                            inside a sentence already being written. */}
+                        {pendingSteers.length > 0 && (
+                          <div data-testid="steer-notes" className="ml-11 mt-1 space-y-0.5">
+                            {pendingSteers.map((note, k) => (
+                              <p key={k} className="text-[11.5px] text-zinc-500">
+                                <span className="text-accent-soft">Steer sent:</span> {note}
+                                <span className="text-zinc-600">
+                                  {" "}
+                                  — Jarvis reads it at its next step.
+                                </span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                     {/* AGENT MODE: the live working bubble. Narrates the current
@@ -7917,6 +8054,7 @@ export default function ChatPage() {
                   skills={skills}
                   onSend={send}
                   onStop={stop}
+                  onSteer={(text) => void steerTurn(text)}
                   onOpened={loadSkillsOnce}
                   onPickSkill={pickSkill}
                   onTyped={() => {

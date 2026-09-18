@@ -169,6 +169,12 @@ class ChatMessageBody(BaseModel):
     content: str
 
 
+class TurnSteerBody(BaseModel):
+    """``POST /chat/turns/{turn_id}/steer`` (v1.278.0): one note for a running turn."""
+
+    text: str
+
+
 class ChatBody(BaseModel):
     """A DIRECT conversational turn — frontier-chat style: full history in,
     one reply out. No agent loop, no workspace; fast."""

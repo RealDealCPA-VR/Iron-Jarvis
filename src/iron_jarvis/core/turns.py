@@ -51,11 +51,16 @@ import threading
 class TurnHandle:
     """One running turn's stop flag. Read by the runner, set by the route."""
 
-    __slots__ = ("turn_id", "_stopped")
+    __slots__ = ("turn_id", "_stopped", "_steers", "_steer_lock")
 
     def __init__(self, turn_id: str) -> None:
         self.turn_id = turn_id
         self._stopped = False
+        # v1.278.0: notes queued for this turn from another connection, taken
+        # by the runner at its next round boundary (the sidebar's steer
+        # contract, now reachable by any caller that named its turn).
+        self._steers: list[str] = []
+        self._steer_lock = threading.Lock()
 
     @property
     def stopped(self) -> bool:
@@ -68,6 +73,22 @@ class TurnHandle:
 
     def stop(self) -> None:
         self._stopped = True
+
+    def queue_steer(self, text: str) -> None:
+        """Queue one note for the runner. Empty text is not a note."""
+        note = str(text or "").strip()
+        if not note:
+            return
+        with self._steer_lock:
+            self._steers.append(note)
+
+    def take_steers(self) -> list[str]:
+        """Every queued note, in order, once. The runner calls this at the
+        round boundary; the list is empty afterwards."""
+        with self._steer_lock:
+            taken = self._steers[:]
+            self._steers.clear()
+        return taken
 
 
 class TurnRegistry:
@@ -109,6 +130,26 @@ class TurnRegistry:
             return False
         handle.stop()
         return True
+
+    def steer(self, turn_id: str, text: str) -> bool:
+        """Queue a note for a running turn (v1.278.0). False = unknown or
+        finished (nothing will ever read it), or an empty note."""
+        note = str(text or "").strip()
+        if not note:
+            return False
+        with self._lock:
+            handle = self._turns.get(str(turn_id))
+        if handle is None:
+            return False
+        handle.queue_steer(note)
+        return True
+
+    def take_steers(self, turn_id: str) -> list[str]:
+        """The notes queued for ``turn_id`` since the last take — [] for an
+        unknown id, so a runner that outlived its registration reads nothing."""
+        with self._lock:
+            handle = self._turns.get(str(turn_id))
+        return handle.take_steers() if handle is not None else []
 
     def release(self, turn_id: str, handle: TurnHandle | None = None) -> None:
         """The runner is done with this id. After this, :meth:`stop` reports it

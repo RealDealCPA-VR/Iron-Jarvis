@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.277.0 (2026-09-14).*
+holds itself to. Current as of v1.278.0 (2026-09-14).*
 
 ---
 
@@ -959,6 +959,19 @@ to the front instead of opening another. In chat, the model menu opens with a
 box: type part of a model's name and every match across your providers is
 listed — Enter picks the first — and with the box empty the menu opens on the
 last three models you picked, above the provider list it always had.
+
+**Steer a running turn, and edit a sent message (v1.278.0).** While Jarvis is
+working on your message, the box says so, and **Enter** sends what you typed
+as a note to that turn — "shorter", "in French", "use the second file" —
+which Jarvis reads at its next step (it cannot interrupt a sentence it is
+already writing, and the note says so under the reply). A note Jarvis read
+stays in the conversation as your own message, marked **steer**, so the next
+turn remembers it; a note it never reached is not kept, and the box tells you
+if the turn had already finished. The sidebar has had this since v1.242.0;
+now the chat page does too. And every message you sent carries a small
+pencil on hover — **Edit and resend** puts it back in the box with its files,
+removes everything after it, and Send runs it again over exactly the
+conversation that came before.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's
