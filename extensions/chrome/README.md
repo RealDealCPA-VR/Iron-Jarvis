@@ -105,7 +105,9 @@ the **microphone**, which becomes the **send arrow** the moment you type.
 Dictation goes through Iron Jarvis's own speech engine — the bundled offline
 model when it is present, else the transcription endpoint you configured — and
 never through a browser vendor's speech service; the words land in the box for
-you to read before you send. Explanations are tooltips, not paragraphs.
+you to read before you send. The first press opens the add-on's microphone page
+in a tab (v1.272.0) — a side panel cannot show the browser's microphone prompt,
+a page can — allow it there once and the sidebar has it from then on. Explanations are tooltips, not paragraphs.
 
 It remembers (v1.270.0): the conversation lives in Iron Jarvis, so a second
 message can refer to the first, and reopening the panel shows it; the **+**

@@ -1252,6 +1252,23 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A side panel cannot show the microphone prompt; a page in a tab can**
+  (v1.272.0). The user: "when I try to use the mic option, it doesn't say I
+  have permission without the ability to give it permission." Chromium answers
+  `getUserMedia` from a side panel with NotAllowedError and NO prompt, and the
+  v1.269.0 panel then told the user to allow it in "site permissions" — a
+  place that does not exist for a side panel. Same shape as site access
+  (setup.html): `src/mic/mic.html` + `mic.ts` is one button that calls
+  `getUserMedia({audio: true})` INSIDE the click (no `await` before it — the
+  gesture rule), stops the tracks at once, reports granted/refused/error and
+  tells the worker (`mic_permission_result`); the panel's NotAllowedError
+  branch posts `request_microphone`, the worker `openMicPage()`s (shared
+  `openAddonPage`), then broadcasts `mic_permission` so the panel says
+  "Microphone allowed". The permission belongs to the add-on's ORIGIN, so a
+  grant on the page covers the panel. The page is in the bundler, the doctor's
+  `BROWSER_ADDON_RUNTIME_FILES`, the theme test's PAGES and the copy-rule scan.
+  Pins: `tests/test_browser_mic_page_v1272.py`, the runtime panel suite.
+
 - **A navigation is judged by its DESTINATION, never by the page it leaves**
   (v1.271.1). From Edge's new-tab page: "UNSUPPORTED_PAGE: edge: pages are
   closed to add-ons by Chrome" — `prepare_action` → `resolve_page_tab` refused

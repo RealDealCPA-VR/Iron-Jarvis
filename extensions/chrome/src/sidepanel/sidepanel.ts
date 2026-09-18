@@ -568,6 +568,18 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   }
   if (body.kind === "panel_status") {
     void refresh();
+    return;
+  }
+  if (body.kind === "mic_permission") {
+    // v1.272.0: the microphone page reported; the sidebar says so where the user
+    // will look next.
+    const granted = (body as { granted?: unknown }).granted === true;
+    say(
+      "tool",
+      granted
+        ? "Microphone allowed. Press the microphone to dictate."
+        : "The microphone was not allowed. Press the microphone to try again.",
+    );
   }
 });
 
@@ -866,12 +878,22 @@ async function startDictation(): Promise<void> {
     });
   } catch (err) {
     const name = err instanceof DOMException ? err.name : "";
-    say(
-      "error",
-      name === "NotAllowedError"
-        ? "Microphone blocked for Iron Jarvis. Allow it for this add-on in your browser's site permissions, then try again."
-        : "The microphone could not be opened.",
-    );
+    if (name === "NotAllowedError") {
+      // v1.272.0: A SIDE PANEL CANNOT SHOW THE MICROPHONE PROMPT. Chromium
+      // answers it with NotAllowedError and no prompt — "it doesn't say I have
+      // permission without the ability to give it". The worker opens the
+      // add-on's microphone page (a real tab, where the browser does ask); the
+      // user allows there and presses the microphone here again.
+      void chrome.runtime.sendMessage({ kind: "request_microphone" }).catch(() => {});
+      say(
+        "error",
+        "Your browser has to ask you once before Iron Jarvis can use the microphone, and it " +
+          "cannot ask inside this sidebar. A page just opened for that: allow the microphone " +
+          "there, then press the microphone here again.",
+      );
+      return;
+    }
+    say("error", "The microphone could not be opened.");
     return;
   }
   type AC = typeof AudioContext;

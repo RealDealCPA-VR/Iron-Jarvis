@@ -152,6 +152,8 @@ function mountPanel(over: Record<string, unknown> = {}): Harness {
       onMessage: {
         addListener: (fn: (message: unknown) => void) => {
           listener = fn;
+          // v1.272.0: reachable by a case that drives a non-panel message kind.
+          (globalThis as unknown as { __ijListener?: (m: unknown) => void }).__ijListener = fn;
         },
       },
     },
@@ -722,8 +724,25 @@ if (absent.length) {
       ask.value = "";
       ask.dispatchEvent(new Event("input"));
       (el("send") as HTMLButtonElement).click();
-      await waitFor(() => expect(transcript()).toContain("Microphone blocked"));
+      // v1.272.0: a side panel cannot show the prompt, so the panel asks the worker
+      // for the microphone page and says so — never "blocked" with nowhere to allow.
+      await waitFor(() => expect(transcript()).toContain("cannot ask inside this sidebar"));
+      await waitFor(() => expect(h.sent.some((m) => m["kind"] === "request_microphone")).toBe(true));
       expect(h.sent.some((m) => m["action"] === "voice")).toBe(false);
+      expect(transcript()).not.toContain("Microphone blocked");
+    });
+
+    it("says so when the microphone page reports the grant (v1.272.0)", async () => {
+      const h = await panelReady(READY);
+      h.emit("models", MODELS_WITH_VOICE);
+      // The worker's broadcast after the page's button: the panel speaks where the
+      // user will look next.
+      const listener = (globalThis as unknown as { __ijListener?: (m: unknown) => void }).__ijListener;
+      expect(typeof listener).toBe("function");
+      listener?.({ kind: "mic_permission", granted: true });
+      await waitFor(() => expect(transcript()).toContain("Microphone allowed"));
+      listener?.({ kind: "mic_permission", granted: false });
+      await waitFor(() => expect(transcript()).toContain("was not allowed"));
     });
 
     it("transcript frames write into the box and the final one hands it back as words", async () => {

@@ -358,7 +358,13 @@ _BROWSER_ADDON_ALIASES = ("browser_addon", "chrome-addon", "extension", "addon")
 #: with a regex, and ``test_browser_doctor_v1239`` reads them with the SAME regex and
 #: asserts this tuple equals what it found -- so a rename on either side fails a test
 #: here as well as the build, and the two lists cannot drift in silence.
-BROWSER_ADDON_RUNTIME_FILES: tuple[str, ...] = ("dist/content.js", "dist/setup.html")
+BROWSER_ADDON_RUNTIME_FILES: tuple[str, ...] = (
+    "dist/content.js",
+    "dist/setup.html",
+    # v1.272.0: the microphone grant page (src/mic/mic.html) — a side panel
+    # cannot show the browser's microphone prompt, this page can.
+    "dist/mic.html",
+)
 
 
 def _is_addon_dir(path: Path) -> bool:

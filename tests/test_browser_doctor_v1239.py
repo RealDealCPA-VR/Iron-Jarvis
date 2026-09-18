@@ -310,12 +310,14 @@ def test_the_runtime_loaded_files_are_the_ones_the_addon_sources_name():
     import re
 
     addon = Path(__file__).resolve().parents[1] / "extensions" / "chrome"
-    sources = {
-        "src/background/tabs.ts": r'CONTENT_SCRIPT_FILE = "([^"]+)"',
-        "src/background/hostperms.ts": r'SETUP_PAGE = "([^"]+)"',
-    }
+    sources = [
+        ("src/background/tabs.ts", r'CONTENT_SCRIPT_FILE = "([^"]+)"'),
+        ("src/background/hostperms.ts", r'SETUP_PAGE = "([^"]+)"'),
+        # v1.272.0: the microphone grant page, opened the same way as the setup page.
+        ("src/background/hostperms.ts", r'MIC_PAGE = "([^"]+)"'),
+    ]
     named: list[str] = []
-    for rel, pattern in sources.items():
+    for rel, pattern in sources:
         text = (addon / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
         match = re.search(pattern, text)
         assert match, f"{rel} no longer names its bundle the way the build reads it"

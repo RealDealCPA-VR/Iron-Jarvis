@@ -79,12 +79,15 @@ const ENTRY_POINTS = {
   content: join(ROOT, "src/content/index.ts"),
   sidepanel: join(ROOT, "src/sidepanel/sidepanel.ts"),
   setup: join(ROOT, "src/setup/setup.ts"),
+  // v1.272.0: the microphone grant page — see src/mic/mic.html for why a page.
+  mic: join(ROOT, "src/mic/mic.ts"),
 };
 
 /** HTML copied verbatim beside its bundle. */
 const HTML = [
   ["src/sidepanel/sidepanel.html", "sidepanel.html"],
   ["src/setup/setup.html", "setup.html"],
+  ["src/mic/mic.html", "mic.html"],
 ];
 
 async function main() {

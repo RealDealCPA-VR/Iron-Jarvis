@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.271.1 (2026-09-14).*
+holds itself to. Current as of v1.272.0 (2026-09-14).*
 
 ---
 
@@ -894,6 +894,16 @@ a new-tab page (or any browser-internal page), switching to such a tab and
 closing one now just work; reading or acting ON such a page still cannot,
 because the browser lets no add-on in there. The refusal now says "the
 browser" rather than naming Chrome to an Edge user.
+
+**The microphone can be allowed (v1.272.0).** Pressing the sidebar's
+microphone used to say it was blocked with nowhere to allow it — a browser
+side panel cannot show the microphone prompt at all. Now the first press opens
+a small Iron Jarvis page in a tab with one button, **Allow the microphone**;
+press it, choose Allow in your browser's prompt, come back to the sidebar and
+press the microphone again. Nothing is recorded on that page; it only earns the
+permission, which then covers the sidebar. If your browser had already blocked
+the microphone for the add-on, the page tells you where to unblock it (the icon
+left of the address bar).
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

@@ -53,6 +53,7 @@ ADDON = REPO / "extensions" / "chrome" / "src"
 PANEL_TS = ADDON / "sidepanel" / "sidepanel.ts"
 PANEL_HTML = ADDON / "sidepanel" / "sidepanel.html"
 SETUP_HTML = ADDON / "setup" / "setup.html"
+MIC_HTML = ADDON / "mic" / "mic.html"  # v1.272.0
 SOCKET_TS = ADDON / "bridge" / "socket.ts"
 WORKER_TS = ADDON / "background" / "index.ts"
 PROTOCOL_TS = ADDON / "protocol.ts"
@@ -335,7 +336,7 @@ def _visible_html(path: Path) -> str:
     return text
 
 
-@pytest.mark.parametrize("path", [PANEL_HTML, SETUP_HTML], ids=["sidepanel", "setup"])
+@pytest.mark.parametrize("path", [PANEL_HTML, SETUP_HTML, MIC_HTML], ids=["sidepanel", "setup", "mic"])
 def test_no_page_of_the_add_on_calls_itself_an_extension(path: Path):
     """In Iron Jarvis "extension" already means an MCP server (copy rule)."""
     visible = _visible_html(path)

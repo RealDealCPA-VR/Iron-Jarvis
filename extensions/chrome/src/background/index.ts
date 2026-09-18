@@ -74,7 +74,7 @@ import { BridgeError } from "../bridge/errors";
 import { Dispatcher } from "../bridge/dispatch";
 import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket";
 import { awaitDownload, watchDownloads } from "./downloads";
-import { hasHostPermission, onHostPermissionChanged, openSetupPage } from "./hostperms";
+import { hasHostPermission, onHostPermissionChanged, openMicPage, openSetupPage } from "./hostperms";
 import {
   activateTab,
   activeTab,
@@ -116,6 +116,11 @@ export type WorkerMessage =
   | { kind: "toggle_connection" }
   | { kind: "request_host_permission" }
   | { kind: "host_permission_result"; granted: boolean }
+  // v1.272.0: the panel asks for the microphone page; the page reports the grant;
+  // the worker tells the panel.
+  | { kind: "request_microphone" }
+  | { kind: "mic_permission_result"; granted: boolean }
+  | { kind: "mic_permission"; granted: boolean }
   | { kind: "panel_action"; action: string; params?: Record<string, unknown> }
   | { kind: "panel_event"; event: string; payload: Record<string, unknown> }
   | { kind: "panel_status" };
@@ -463,6 +468,20 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
         await openSetupPage();
         respond({ opened: true });
         return;
+      case "request_microphone":
+        // v1.272.0: A SIDE PANEL CANNOT SHOW THE MICROPHONE PROMPT. Chromium shows
+        // it for a page in a tab and answers a side panel with NotAllowedError and
+        // no prompt. So the panel asks here, this opens the add-on's microphone
+        // page, and its one button asks inside a click — the site-access shape.
+        await openMicPage();
+        respond({ opened: true });
+        return;
+      case "mic_permission_result": {
+        const granted = (message as { granted?: unknown }).granted === true;
+        broadcast({ kind: "mic_permission", granted });
+        respond({ noted: true });
+        return;
+      }
       case "panel_action": {
         // The panel asks; the DAEMON decides. Nothing here inspects the action, gates
         // it, or answers it locally: access mode, risk tier and the approval registry

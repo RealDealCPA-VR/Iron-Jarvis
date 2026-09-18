@@ -49,6 +49,7 @@ ADDON = REPO / "extensions" / "chrome" / "src"
 PAGES = {
     "sidepanel": ADDON / "sidepanel" / "sidepanel.html",
     "setup": ADDON / "setup" / "setup.html",
+    "mic": ADDON / "mic" / "mic.html",  # v1.272.0
 }
 
 #: Tokens that carry TEXT (or a text-weight accent) somewhere on the page, and

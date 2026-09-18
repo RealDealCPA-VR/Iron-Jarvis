@@ -115,6 +115,8 @@ function requiredFiles() {
   for (const [source, pattern, where] of [
     ["src/background/tabs.ts", /CONTENT_SCRIPT_FILE = "([^"]+)"/, "tabs.ts CONTENT_SCRIPT_FILE"],
     ["src/background/hostperms.ts", /SETUP_PAGE = "([^"]+)"/, "hostperms.ts SETUP_PAGE"],
+    // v1.272.0: the microphone grant page, opened the same way as the setup page.
+    ["src/background/hostperms.ts", /MIC_PAGE = "([^"]+)"/, "hostperms.ts MIC_PAGE"],
   ]) {
     const match = pattern.exec(readText(join(ADDON, source)));
     if (!match) {

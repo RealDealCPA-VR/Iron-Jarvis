@@ -27,6 +27,9 @@ export const HOST_ORIGINS = ["http://*/*", "https://*/*"];
 
 /** The bundled grant surface, relative to the extension root. */
 export const SETUP_PAGE = "dist/setup.html";
+/** v1.272.0: the microphone grant page — the same mechanism, for the same reason
+ * (a prompt the browser shows only for a page in a tab). See src/mic/mic.html. */
+export const MIC_PAGE = "dist/mic.html";
 
 /**
  * Whether the user has granted access to both schemes.
@@ -55,7 +58,17 @@ export async function hasHostPermission(): Promise<boolean> {
  * live.
  */
 export async function openSetupPage(): Promise<{ tab_id: number | null }> {
-  const url = chrome.runtime.getURL(SETUP_PAGE);
+  return openAddonPage(SETUP_PAGE);
+}
+
+/** v1.272.0: open (or focus) the microphone grant page. */
+export async function openMicPage(): Promise<{ tab_id: number | null }> {
+  return openAddonPage(MIC_PAGE);
+}
+
+/** Focus the page if a tab already shows it, else open it in a new active tab. */
+async function openAddonPage(page: string): Promise<{ tab_id: number | null }> {
+  const url = chrome.runtime.getURL(page);
   const open = await chrome.tabs.query({ url });
   const existing = open[0];
   if (existing?.id !== undefined) {

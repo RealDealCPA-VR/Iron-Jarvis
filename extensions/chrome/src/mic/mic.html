@@ -1,0 +1,160 @@
+<!doctype html>
+<!--
+  The microphone grant surface (v1.272.0).
+
+  This page exists for one mechanical reason, the same one setup.html exists for:
+  a side panel cannot show the browser's microphone prompt. Chromium shows that
+  prompt for a page in a TAB; a side panel calling getUserMedia is answered with
+  NotAllowedError and no prompt at all, which the user met as "it doesn't say I
+  have permission without the ability to give it". So the sidebar asks the
+  worker to open this page, the one button here makes the call inside a click,
+  the browser asks, and the permission — which belongs to the add-on's origin —
+  then covers the sidebar too.
+
+  Nothing is recorded here. The microphone is opened and closed again to earn
+  the permission; dictation itself happens in the sidebar and goes to Iron
+  Jarvis on this computer.
+
+  Copy rule: this add-on is never called an "extension" in anything the user
+  reads. In Iron Jarvis "extension" already means an MCP server.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Iron Jarvis — microphone</title>
+    <style>
+      /* THIS PAGE FOLLOWS THE BROWSER'S THEME (v1.265.0) — the same two-palette
+         rule as sidepanel.html and setup.html, checked by the same test: every
+         colour is a token here, light is the default, dark applies under
+         `prefers-color-scheme`. */
+      :root {
+        color-scheme: light dark;
+        --ink: #17212c;
+        --muted: #55677a;
+        --bg: #f6f8fa;
+        --panel: #ffffff;
+        --line: #d3dce6;
+        --cyan: #0c7d90;
+        --cyan-wash: rgba(12, 125, 144, 0.1);
+        --cyan-wash-strong: rgba(12, 125, 144, 0.18);
+        --amber: #8a5a0b;
+        --green: #1a7f4b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #e8eef5;
+          --muted: #93a4b8;
+          --bg: #0b1016;
+          --panel: #121a23;
+          --line: #1f2b38;
+          --cyan: #35d0e6;
+          --cyan-wash: rgba(53, 208, 230, 0.12);
+          --cyan-wash-strong: rgba(53, 208, 230, 0.22);
+          --amber: #e0a84a;
+          --green: #4fd48a;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 40px 24px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: flex;
+        justify-content: center;
+      }
+      main {
+        width: 100%;
+        max-width: 560px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 6px;
+        letter-spacing: 0.2px;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 24px;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+      }
+      ul {
+        margin: 0 0 20px;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      li + li {
+        margin-top: 6px;
+      }
+      button {
+        appearance: none;
+        border: 1px solid var(--cyan);
+        background: var(--cyan-wash);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 600;
+        padding: 11px 18px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        background: var(--cyan-wash-strong);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      #outcome {
+        margin: 18px 0 0;
+        min-height: 24px;
+        font-weight: 600;
+      }
+      #outcome[data-tone="granted"] {
+        color: var(--green);
+      }
+      #outcome[data-tone="refused"] {
+        color: var(--amber);
+      }
+      #outcome[data-tone="error"] {
+        color: var(--amber);
+      }
+      footer {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Let Iron Jarvis hear you</h1>
+      <p class="lede">
+        The sidebar's microphone needs your browser's permission once, and your
+        browser only asks on a page like this one — never inside the sidebar.
+      </p>
+      <section>
+        <ul>
+          <li>Press the button. Your browser will ask whether Iron Jarvis may use the microphone.</li>
+          <li>Choose Allow. Nothing is recorded here: the microphone is opened and closed again, only to earn the permission.</li>
+          <li>Go back to the sidebar and press the microphone. What you say goes to Iron Jarvis on this computer, never to a cloud speech service.</li>
+        </ul>
+        <button id="allow" type="button">Allow the microphone</button>
+        <p id="outcome" data-tone=""></p>
+      </section>
+      <footer>
+        If no prompt appears, your browser has already blocked the microphone for this add-on:
+        click the icon left of the address bar on this page, set Microphone to Allow, then press
+        the button again.
+      </footer>
+    </main>
+    <script src="mic.js"></script>
+  </body>
+</html>
