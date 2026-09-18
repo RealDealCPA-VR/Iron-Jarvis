@@ -748,8 +748,15 @@ class BrowserPeer:
             P.METHOD_NAVIGATE: self._h_navigate,
         }
 
-    def _tab_for(self, params: dict[str, Any], *, need_page: bool) -> FakeTab:
+    def _tab_for(
+        self, params: dict[str, Any], *, need_page: bool, page_matters: bool = True
+    ) -> FakeTab:
         """Resolve ``tab_id`` (absent means the active tab) and gate on the grant.
+
+        ``page_matters`` (v1.271.1): False for a navigation — it needs the host
+        grant (``need_page``) but neither reads nor runs anything in the page it
+        LEAVES, so an unsupported or still-loading current page is no refusal.
+        Mirrors the add-on's ``navigate``, which checks only the destination.
 
         ``need_page`` is the host-permission line drawn by plan section 6: tab
         *metadata* survives a missing grant, and everything that touches the page
@@ -763,12 +770,12 @@ class BrowserPeer:
         tab = self.page.tab(int(raw) if raw is not None else None)
         if tab is None:
             raise _PeerError(BrowserErrorCode.TAB_NOT_FOUND, tab_id=raw)
-        if need_page and not tab.supported:
+        if need_page and page_matters and not tab.supported:
             raise _PeerError(
                 BrowserErrorCode.UNSUPPORTED_PAGE,
                 scheme=P.unsupported_page_scheme(tab.url),
             )
-        if need_page and tab.status != "complete":
+        if need_page and page_matters and tab.status != "complete":
             raise _PeerError(BrowserErrorCode.PAGE_NOT_READY, tab_id=tab.id)
         return tab
 
@@ -898,7 +905,7 @@ class BrowserPeer:
         }
 
     def _h_navigate(self, params: dict[str, Any]) -> dict[str, Any]:
-        tab = self._tab_for(params, need_page=True)
+        tab = self._tab_for(params, need_page=True, page_matters=False)
         url = str(params.get("url") or "")
         if not url:
             raise _PeerError(BrowserErrorCode.NAVIGATION_FAILED, url=url)

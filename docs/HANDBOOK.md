@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.271.0 (2026-09-14).*
+holds itself to. Current as of v1.271.1 (2026-09-14).*
 
 ---
 
@@ -885,6 +885,15 @@ offered to the model unless your sentence asks for it. Also fixed: a web search
 whose words include "buy" or "purchase" is no longer treated as a transaction —
 the safety check now reads what a URL names (a /checkout or /transfer page
 still asks) rather than the words you searched for.
+
+**It works from a fresh tab (v1.271.1).** Asking the sidebar for a page from
+the browser's own new-tab page used to fail with "pages are closed to add-ons"
+— the tab you were on was judged as if Jarvis had to read it, when it only had
+to leave it — so Jarvis worked in some other tab instead. Navigating away from
+a new-tab page (or any browser-internal page), switching to such a tab and
+closing one now just work; reading or acting ON such a page still cannot,
+because the browser lets no add-on in there. The refusal now says "the
+browser" rather than naming Chrome to an Edge user.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

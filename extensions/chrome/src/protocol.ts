@@ -152,7 +152,7 @@ export const REMEDIES: Record<BrowserErrorCode, string> = {
   "ACTION_TIMEOUT": "Your browser did not answer in time. Call browser_get_status to check the connection, then retry the call once.",
   "NAVIGATION_FAILED": "Navigation to {url} failed. Check the address, then retry once or ask the user to open the page themselves.",
   "DOWNLOAD_FAILED": "The download did not complete. Ask the user to check their browser's downloads, then retry.",
-  "UNSUPPORTED_PAGE": "{scheme} pages are closed to add-ons by Chrome. Ask the user to switch to a normal tab.",
+  "UNSUPPORTED_PAGE": "{scheme} pages are closed to add-ons by the browser. Ask the user to switch to a normal tab.",
   "EXTENSION_ERROR": "Your browser reported an error: {detail}. Call browser_get_status; if it persists, ask the user to reload the add-on from chrome://extensions.",
   "PAIRING_REQUIRED": "This browser is not paired with Iron Jarvis. Ask the user to open the Browser page in Iron Jarvis and press Pair.",
   "AUTHENTICATION_FAILED": "Your browser's pairing was refused. Ask the user to press Forget on the Browser page in Iron Jarvis and pair the browser again.",

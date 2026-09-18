@@ -596,8 +596,19 @@ class BrowserRuntime:
 
     # --- BrowserService: the READ tier (Ship 2) --------------------------
 
-    async def resolve_page_tab(self, tab_id: Any = None) -> dict[str, Any]:
+    async def resolve_page_tab(
+        self, tab_id: Any = None, *, page_required: bool = True
+    ) -> dict[str, Any]:
         """The tab row a page-reading call will run against, or raise (§8.6, §9.7).
+
+        ``page_required`` (v1.271.1): False for a call that never touches the
+        page it finds — a navigation (judged by its DESTINATION, in
+        ``navigate_params``), activating a tab, closing one. The tab is still
+        resolved and ``TAB_NOT_FOUND`` still raised; only the "closed to
+        add-ons" check is skipped. THE LIVE REPORT: from Edge's new-tab page,
+        ``browser_navigate`` with no tab_id was refused UNSUPPORTED_PAGE for the
+        page it was about to LEAVE, and the model did the job in a background
+        tab instead.
 
         Two jobs in one call, because they answer one question — *which page am I
         about to read?*
@@ -636,11 +647,12 @@ class BrowserRuntime:
             row = next((r for r in rows if _as_tab_id(r.get("id")) == wanted), None)
             if row is None:
                 raise BrowserError(BrowserErrorCode.TAB_NOT_FOUND, tab_id=wanted)
-        scheme = P.unsupported_page_scheme(str(row.get("url") or ""))
-        if not scheme and row.get("supported") is False:
-            scheme = "These"
-        if scheme:
-            raise BrowserError(BrowserErrorCode.UNSUPPORTED_PAGE, scheme=scheme)
+        if page_required:
+            scheme = P.unsupported_page_scheme(str(row.get("url") or ""))
+            if not scheme and row.get("supported") is False:
+                scheme = "These"
+            if scheme:
+                raise BrowserError(BrowserErrorCode.UNSUPPORTED_PAGE, scheme=scheme)
         return dict(row)
 
     async def read_page_snapshot(
@@ -921,8 +933,13 @@ class BrowserRuntime:
         target: Mapping[str, Any] | None = None,
         snapshot_id: Any = None,
         need_snapshot: bool = True,
+        page_required: bool = True,
     ) -> ActionTarget:
         """Everything an acting tool must know BEFORE it decides risk (8.2, 9.3).
+
+        ``page_required`` (v1.271.1) is forwarded to :meth:`resolve_page_tab`:
+        False for navigate, activate_tab and close_tab, which never run anything
+        in the page they resolve. See the live report there.
 
         The tool layer cannot ask
         :func:`~iron_jarvis.browser.risk.browser_risk_decision` anything useful
@@ -966,7 +983,7 @@ class BrowserRuntime:
             BrowserError: every failure above, each with its D15 remedy.
         """
         self.require(ACCESS_INTERACTIVE)
-        row = await self.resolve_page_tab(tab_id)
+        row = await self.resolve_page_tab(tab_id, page_required=page_required)
         resolved_tab = _as_tab_id(row.get("id"))
         clean: dict[str, Any] | None = None
         element_id = ""
@@ -1067,7 +1084,7 @@ class BrowserRuntime:
         call, so activating a closed tab is ``TAB_NOT_FOUND`` with the remedy
         naming ``browser_list_tabs`` rather than a bare add-on error.
         """
-        plan = await self.prepare_action(tab_id, need_snapshot=False)
+        plan = await self.prepare_action(tab_id, need_snapshot=False, page_required=False)
         result = await self.command(
             P.METHOD_ACTIVATE_TAB, dict(P.activate_tab_params(plan.tab_id))
         )

@@ -1376,7 +1376,10 @@ class BrowserActivateTabTool(_ActingTool):
     method = P.METHOD_ACTIVATE_TAB
 
     async def plan(self, args: dict[str, Any]) -> tuple[ActionTarget, dict[str, Any]]:
-        plan = await self.browser.prepare_action(args.get("tab_id"), need_snapshot=False)
+        # v1.271.1: activating a browser-internal tab is fine — nothing runs in it.
+        plan = await self.browser.prepare_action(
+            args.get("tab_id"), need_snapshot=False, page_required=False
+        )
         return plan, dict(P.activate_tab_params(plan.tab_id))
 
     def render(self, args, plan, result, risk) -> ToolResult:
@@ -1557,7 +1560,10 @@ class BrowserCloseTabTool(_ActingTool):
     method = P.METHOD_CLOSE_TAB
 
     async def plan(self, args: dict[str, Any]) -> tuple[ActionTarget, dict[str, Any]]:
-        plan = await self.browser.prepare_action(args.get("tab_id"), need_snapshot=False)
+        # v1.271.1: closing a browser-internal tab is fine — nothing runs in it.
+        plan = await self.browser.prepare_action(
+            args.get("tab_id"), need_snapshot=False, page_required=False
+        )
         return plan, dict(P.close_tab_params(plan.tab_id))
 
     def render(self, args, plan, result, risk) -> ToolResult:
@@ -1890,7 +1896,15 @@ class BrowserNavigateTool(_ActingTool):
     approval_kind = "navigate"
 
     async def plan(self, args: dict[str, Any]) -> tuple[ActionTarget, dict[str, Any]]:
-        plan = await self.browser.prepare_action(args.get("tab_id"), need_snapshot=False)
+        # v1.271.1: A NAVIGATION IS JUDGED BY ITS DESTINATION, NEVER BY THE PAGE
+        # IT LEAVES. The tab must exist; what it currently shows is irrelevant —
+        # leaving Edge's new-tab page (edge://newtab/) for a real URL is the
+        # most ordinary thing the sidebar does, and it was refused
+        # UNSUPPORTED_PAGE for the page it was about to replace. The destination
+        # is checked two lines down.
+        plan = await self.browser.prepare_action(
+            args.get("tab_id"), need_snapshot=False, page_required=False
+        )
         # ``navigate_params`` refuses an empty URL (NAVIGATION_FAILED) and every
         # scheme Chrome closes to add-ons (UNSUPPORTED_PAGE) BEFORE the frame
         # exists. Pre-send on purpose: a chrome:// command that reached the add-on

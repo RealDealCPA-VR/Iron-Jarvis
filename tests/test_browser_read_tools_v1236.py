@@ -986,7 +986,8 @@ def test_a_page_closed_to_add_ons_is_refused_before_any_command_is_sent(tmp_path
         result = _run(tool, _ctx(tmp_path), {})
         assert not result.ok, tool.name
         assert result.data["code"] == BrowserErrorCode.UNSUPPORTED_PAGE.value
-        assert "closed to add-ons by Chrome" in result.error
+        # v1.271.1: "the browser", not Chrome — the user reading this may be on Edge.
+        assert "closed to add-ons by the browser" in result.error
         assert "switch to a normal tab" in result.error
     sent = [name for name, _ in runtime.calls]
     for method in (P.METHOD_READ_PAGE, P.METHOD_GET_ELEMENTS, P.METHOD_SCREENSHOT):

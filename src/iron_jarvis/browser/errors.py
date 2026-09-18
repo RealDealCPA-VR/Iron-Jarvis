@@ -121,7 +121,7 @@ REMEDIES: dict[BrowserErrorCode, str] = {
     ),
     # Verbatim from the implementation plan, section 9.7.
     BrowserErrorCode.UNSUPPORTED_PAGE: (
-        "{scheme} pages are closed to add-ons by Chrome. Ask the user to switch "
+        "{scheme} pages are closed to add-ons by the browser. Ask the user to switch "
         "to a normal tab."
     ),
     BrowserErrorCode.EXTENSION_ERROR: (

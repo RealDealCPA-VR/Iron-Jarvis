@@ -1252,6 +1252,19 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A navigation is judged by its DESTINATION, never by the page it leaves**
+  (v1.271.1). From Edge's new-tab page: "UNSUPPORTED_PAGE: edge: pages are
+  closed to add-ons by Chrome" — `prepare_action` → `resolve_page_tab` refused
+  the ACTIVE tab for being `edge://`, so `browser_navigate` (no tab_id) failed
+  and the model navigated a background tab instead; the job ran where the user
+  was not looking. `resolve_page_tab(..., page_required=False)` resolves the
+  tab (TAB_NOT_FOUND still) and skips the page check; navigate, activate_tab
+  and close_tab pass it (via `prepare_action(page_required=False)`); read,
+  click, type, press_key, scroll and screenshot keep it — a content script must
+  run there. The destination check (`navigate_params`) is untouched. The
+  refusal says "the browser", not Chrome. Pins:
+  `tests/test_browser_newtab_navigate_v12711.py`.
+
 - **The sidebar works in the tab the user is looking at; a new tab is a thing
   the user asks for** (v1.271.0). "It requires opening a new tab and doesn't
   just work in the tab I already have open. This is a real flaw." The model was
