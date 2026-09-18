@@ -1252,6 +1252,29 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The sidebar's conversation lives in the daemon; its ONE switch is the
+  per-tab grant widened to every tab; its steps fold** (v1.270.0). The user:
+  "not keeping the items within the chat in context", "instead of permissions
+  … a simple toggle for all permissions", "the specific detail of the process
+  should go behind a thinking word … expandable". (1) `PanelTurns._history`
+  (bounded by `PANEL_HISTORY_MESSAGES`) rides every turn's `ChatBody.messages`
+  — the lane's own planner budgets it; `open` replays it (`PANEL_EVENT_HISTORY`)
+  into an EMPTY transcript only, `reset` forgets it and is refused mid-turn.
+  The daemon holds it because a side panel is destroyed on close. (2)
+  `auto_allow {on}` → `TabGrants.grant_all` — `covers()` answers True for every
+  tab (unknown tab included), so the lane's `_would_card`/`_needs_card` skip the
+  card with NO lane change; turning it on resolves every card this panel has
+  offered as `once`; it dies with a new `browser_session` and with Forget, and
+  the panel re-asserts its `chrome.storage.local` setting on every `open`
+  (`open {auto_allow: bool}` — a non-bool is ignored). The risk door
+  (`_ActingTool._require_approval`) still never reads grants — the four floor
+  cases still card, and the Handbook says so. The sidebar's card is Allow ·
+  Always allow · Deny; the `tab`/`task` scopes remain for the chat page. (3)
+  `tool` frames carry `status`/`ok`; the panel folds a step's start and end into
+  one row under a collapsed `<details class="work">` — the route notice
+  (`name == "route"`) stays a visible line. Pins:
+  `tests/test_browser_sidepanel_context_v1270.py`, the runtime panel suite.
+
 - **The sidebar's composer owns the model icon and a mic/send button;
   dictation rides the panel socket into the app's OWN voice engine**
   (v1.269.0). Model picker = the same `<select id="model">` (the D28 pin allows

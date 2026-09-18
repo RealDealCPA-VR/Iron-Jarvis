@@ -450,6 +450,8 @@ def _disconnected_status() -> dict[str, Any]:
         "paired": False,
         "last_error": None,
         "keepalive": {"interval_s": P.KEEPALIVE_S, "last_pong_at": None},
+        # v1.270.0: the sidebar's one switch. False with no runtime to ask.
+        "auto_allow": False,
         # The setup window, SHUT unless an arm route opened one. Present in the
         # disconnected shape too, because the card that renders the countdown is
         # exactly the card a user is looking at while nothing is connected yet.
@@ -1169,6 +1171,12 @@ def register(app: FastAPI, d) -> None:
             answer["paired"] = bool(store is not None and await asyncio.to_thread(store.paired))
         except Exception:
             logger.debug("pairing lookup degraded", exc_info=True)
+        try:
+            # v1.270.0: whether the sidebar runs page actions without cards, so
+            # the Browser page can say so beside the access mode.
+            answer["auto_allow"] = bool(runtime.auto_allowed())
+        except Exception:
+            logger.debug("auto-allow lookup degraded", exc_info=True)
         try:
             answer["setup"] = _setup_view(runtime)
         except Exception:  # noqa: BLE001 - this route is documented never to fail

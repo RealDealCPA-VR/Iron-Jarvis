@@ -117,6 +117,40 @@ stopped turn returns WITHOUT a terminal ``done`` SSE frame (it persists the
 CANCELLED usage row and returns). A translator that only forwarded what it saw
 would leave the panel spinning "working…" forever on the one press whose whole
 purpose was to end that state.
+
+THE SIDEBAR REMEMBERS (v1.270.0). The user: "it is not keeping the items within
+the chat in context and doesn't know the reference." Every Send used to build a
+``ChatBody`` with ONE message — the sentence just typed — so "now the second
+one" referred to nothing. :attr:`PanelTurns._history` holds the conversation
+(user text, assistant answer, per turn, bounded by :data:`PANEL_HISTORY_MESSAGES`)
+and every turn carries it in ``messages``, where the chat lane's own history
+planner budgets it to the answering model's window exactly as the chat page's is.
+The daemon holds it, not the panel: a side panel is destroyed when it closes,
+and ``open`` replays the conversation (``history``) so a reopened panel shows
+what was said. ``reset`` forgets it. A stopped turn keeps the answer it had
+streamed — that is what the user read.
+
+THE ONE SWITCH (v1.270.0). "Instead of permissions in the browser extension,
+there should just be a simple toggle for all permissions required while using
+the extension so I don't have to keep approving." ``auto_allow {on}`` flips
+``TabGrants.grant_all`` (browser/grants.py) — the SAME grant the per-tab card
+wrote, widened to every tab — so the chat lane's ordinary card predicate finds
+the call covered and never cards. Nothing in the lane changed for this. Turning
+it on also answers the card that is up, so the turn the user was staring at
+continues. The risk door inside each acting tool never reads grants, so a
+payment, a password, a "delete", a flagged page or an unreadable target still
+stop at their own card — the Handbook's promise, kept. The ``state`` frame
+carries ``auto_allow`` so the header paints a fact, and ``open`` may carry the
+panel's remembered setting, because the flag dies with the browser session and
+with Forget while the user's preference does not.
+
+THE WORK IS FOLDED (v1.270.0). "The specific detail of the process should go
+behind a thinking word in the chat window that is expandable by the user."
+This module changes one thing for that: a ``tool`` frame now says whether it is
+a step's ``started`` or ``finished`` and whether it went ``ok``, so the panel
+can fold the two into one line under a collapsed "Working…" summary rather than
+printing each as a separate row. The route notice (a failover or the mock) is
+still a visible line — accountability does not fold.
 """
 
 from __future__ import annotations
@@ -132,6 +166,12 @@ from ..core.turns import TURNS
 from . import protocol as P
 
 logger = get_logger(__name__)
+
+#: How many messages (user AND assistant, so half as many exchanges) the
+#: sidebar's conversation keeps (v1.270.0). Oldest first out. The chat lane's
+#: history planner then fits what remains to the answering model's window, so
+#: this is a memory bound, not a context bound.
+PANEL_HISTORY_MESSAGES = 40
 
 #: What the panel is told when a queued steer note was never consumed. The
 #: panel renders its own sentence for this from the ``done`` frame; this is the
@@ -345,6 +385,22 @@ class PanelTurns:
         #: short enough that a provider connected in Jarvis shows up soon.
         self._models_cache: tuple[float, dict[str, Any]] | None = None
         self.models_ttl_s: float = 60.0
+        #: v1.270.0: the conversation, oldest first — ``{"role", "content"}`` rows
+        #: in the chat lane's own shape. Every turn carries it; ``reset`` empties it.
+        self._history: list[dict[str, str]] = []
+        self.history_limit: int = PANEL_HISTORY_MESSAGES
+        #: The running turn's streamed answer, piece by piece, so what the user
+        #: READ is what the conversation remembers — including a stopped turn's
+        #: half-answer and the empty-answer sentence.
+        self._answer: list[str] = []
+        #: The running turn's question, and whether its exchange has been written
+        #: to the conversation yet. Written ONCE, and BEFORE the terminal frame
+        #: (``done`` / the stop's ``done`` / an ``error``) leaves — a panel that
+        #: reopens on that frame must replay a complete conversation, and the
+        #: parallel suite caught the opposite order: ``open`` racing the turn's
+        #: own ``finally`` and replaying a question with no answer.
+        self._turn_text: str = ""
+        self._remembered: bool = True
 
     # --- narration --------------------------------------------------------
 
@@ -377,11 +433,30 @@ class PanelTurns:
         act = str(action or "")
         params = params if isinstance(params, dict) else {}
         if act == P.PANEL_ACTION_OPEN:
+            # v1.270.0: the panel's remembered switch setting rides the open
+            # (a bool, or absent). Applied BEFORE the state frame so the header
+            # paints the setting the user chose, not a flag the browser restart
+            # reset a moment ago.
+            if isinstance(params.get("auto_allow"), bool):
+                self._set_auto_allow(bool(params["auto_allow"]))
             await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
+            # v1.270.0: the conversation so far, so a reopened panel shows it —
+            # BEFORE the model list, because that list may probe providers and
+            # shell out to CLIs (seconds on a busy machine), and a reopened
+            # panel must not sit empty while the picker is being filled. The
+            # parallel suite found exactly that: a replay that arrived after
+            # the probe, past the reader's budget.
+            await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
             # v1.267.0: the model list rides the open, so the picker is filled
-            # before the user reaches for it. After the state frame, because the
-            # list may probe providers and the header must not wait on that.
+            # before the user reaches for it. Last, because it is the one frame
+            # here that can take real time.
             await self.emit(conn, P.PANEL_EVENT_MODELS, await self.models())
+            return
+        if act == P.PANEL_ACTION_RESET:
+            await self._reset(conn)
+            return
+        if act == P.PANEL_ACTION_AUTO_ALLOW:
+            await self._auto_allow(conn, params)
             return
         if act == P.PANEL_ACTION_SEND:
             await self._send(
@@ -727,6 +802,9 @@ class PanelTurns:
         # would only widen what this panel may resolve.
         self._offered.clear()
         self._delta_seen = False
+        self._answer = []
+        self._turn_text = text
+        self._remembered = False
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
         self._task = asyncio.ensure_future(
             self._run(conn, text, self._turn_id, provider=provider, model=model)
@@ -743,6 +821,8 @@ class PanelTurns:
         return {
             "running": self.running if running is None else bool(running),
             "tab_allowed": self._tab_allowed(),
+            # v1.270.0: the one switch, as the daemon holds it.
+            "auto_allow": self._auto_allowed(),
         }
 
     def _tab_allowed(self) -> bool:
@@ -751,6 +831,102 @@ class PanelTurns:
             return bool(runtime is not None and runtime.active_tab_allowed())
         except Exception:  # noqa: BLE001 — a header line must never break the socket
             return False
+
+    # --- the conversation and the switch (v1.270.0) -----------------------------
+
+    def history_view(self) -> dict[str, Any]:
+        """The ``history`` payload: the conversation as the panel paints it."""
+        return {
+            "turns": [
+                {"role": row["role"], "text": row["content"]} for row in self._history
+            ]
+        }
+
+    def _remember(self, role: str, text: str) -> None:
+        """Append one message and keep the bound. Empty text is not a message."""
+        text = str(text or "").strip()
+        if not text:
+            return
+        self._history.append({"role": role, "content": text})
+        if self.history_limit > 0:
+            del self._history[: -self.history_limit]
+
+    def _remember_exchange(self) -> None:
+        """Write the running turn's question and what the user READ, once.
+
+        Called at every exit — the ``done`` branch of :meth:`_translate` (before
+        the frame is sent), the failure branch and the ``finally`` of
+        :meth:`_run` — and idempotent, so the first caller wins and a stopped
+        turn (no ``done`` frame at all) is still written before its stop frame.
+        """
+        if self._remembered:
+            return
+        self._remembered = True
+        self._remember("user", self._turn_text)
+        self._remember(
+            "assistant",
+            "".join(self._answer) or "(Iron Jarvis gave no answer.)",
+        )
+        self._answer = []
+
+    async def _reset(self, conn: Any) -> None:
+        """Forget the conversation. Refused while a turn runs — its answer would
+        land in a conversation the user just emptied."""
+        if self.running:
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_ERROR,
+                {
+                    "text": "Iron Jarvis is still working on the last message."
+                    " Stop it before starting a new conversation.",
+                    "reason": "still_running",
+                },
+            )
+            return
+        self._history.clear()
+        await self.emit(conn, P.PANEL_EVENT_HISTORY, self.history_view())
+
+    def _auto_allowed(self) -> bool:
+        runtime = getattr(self.platform, "browser", None)
+        try:
+            return bool(runtime is not None and runtime.auto_allowed())
+        except Exception:  # noqa: BLE001 — a header line must never break the socket
+            return False
+
+    def _set_auto_allow(self, on: bool) -> bool:
+        runtime = getattr(self.platform, "browser", None)
+        if runtime is None:
+            return False
+        try:
+            return bool(runtime.set_auto_allow(on))
+        except Exception:  # noqa: BLE001
+            logger.debug("auto-allow could not be set", exc_info=True)
+            return False
+
+    async def _auto_allow(self, conn: Any, params: dict[str, Any]) -> None:
+        """Flip the one switch, answer the card that is up, and say what is true.
+
+        The switch is ``TabGrants.grant_all`` — the grant the per-tab card
+        already wrote, widened to every tab — so the chat lane's card predicate
+        skips the ordinary card with no change of its own. Turning it ON also
+        resolves every card this panel has offered and not yet answered, as
+        ``once``: the user pressed "always" while looking at one, and a switch
+        that left that card waiting would look broken. Ids already answered
+        resolve False and are ignored. The ``state`` frame that follows is what
+        the header paints from — a fact, recorded before it is said.
+        """
+        on = bool(params.get("on"))
+        state = self._set_auto_allow(on)
+        if state:
+            from ..daemon.routes.chat import _approvals
+
+            registry = _approvals(SimpleNamespace(platform=self.platform))
+            for approval_id in list(self._offered):
+                try:
+                    registry.resolve(approval_id, "once")
+                except Exception:  # noqa: BLE001 — an already-answered card
+                    logger.debug("auto-allow: card %s not resolvable", approval_id, exc_info=True)
+        await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
 
     @staticmethod
     def _route_notice(route: Any) -> str:
@@ -935,8 +1111,18 @@ class PanelTurns:
         from ..daemon.chat_stream import stream_chat_turn
         from ..daemon.schemas import ChatBody, ChatMessageBody
 
+        # v1.270.0: THE CONVERSATION RIDES EVERY TURN. The lane's own history
+        # planner fits it to the model's window and reports what it dropped,
+        # exactly as for the chat page; a single-message body is what made
+        # "now the second one" refer to nothing.
         body = ChatBody(
-            messages=[ChatMessageBody(role="user", content=text)],
+            messages=[
+                *(
+                    ChatMessageBody(role=row["role"], content=row["content"])
+                    for row in self._history
+                ),
+                ChatMessageBody(role="user", content=text),
+            ],
             # NO explicit tool picks: arming is granting (see the module
             # docstring). `auto_tools` runs the ordinary selection pass, so the
             # read tier is armed and the page-acting tier is armed
@@ -979,6 +1165,8 @@ class PanelTurns:
             raise
         except Exception as exc:  # noqa: BLE001 — an honest failure, never silence
             logger.debug("panel turn failed", exc_info=True)
+            # v1.270.0: what was read is remembered BEFORE the panel is told.
+            self._remember_exchange()
             await self.emit(
                 conn,
                 P.PANEL_EVENT_ERROR,
@@ -988,6 +1176,10 @@ class PanelTurns:
         finally:
             self._task = None
             self._turn_id = ""
+            # v1.270.0: a STOPPED turn reaches here with no `done` frame sent
+            # and its exchange unwritten — the half-answer the user read is
+            # written now, before the stop's own terminal frame below.
+            self._remember_exchange()
             if not emitted_done:
                 # A STOPPED turn returns with no terminal `done` frame — it
                 # writes the CANCELLED usage row and returns. Without this the
@@ -1043,6 +1235,7 @@ class PanelTurns:
             piece = str(data.get("text") or "")
             if piece:
                 self._delta_seen = True
+                self._answer.append(piece)
             await self.emit(conn, P.PANEL_EVENT_DELTA, {"text": piece})
             return
         if event == "tool_call":
@@ -1050,11 +1243,23 @@ class PanelTurns:
             # v1.262.0: in WORDS — "Clicking 'Search'…", not "Running
             # browser_click…". The args here are the lane's REDACTED args.
             what = describe_browser_call(name, data.get("args"))
-            if data.get("status") == "finished":
+            finished = data.get("status") == "finished"
+            if finished:
                 text = f"{_cap(what)} — done." if data.get("ok") else f"Could not {what}."
             else:
                 text = f"{_cap(what)}…"
-            await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": name, "text": text})
+            # v1.270.0: `status`/`ok` ride along so the panel folds a step's
+            # start and end into ONE line under its collapsed summary.
+            await self.emit(
+                conn,
+                P.PANEL_EVENT_TOOL,
+                {
+                    "name": name,
+                    "text": text,
+                    "status": "finished" if finished else "started",
+                    "ok": bool(data.get("ok")) if finished else None,
+                },
+            )
             return
         if event == "approval":
             tool = str(data.get("tool") or "a step")
@@ -1104,9 +1309,16 @@ class PanelTurns:
             # is the only frame the panel renders as words.
             text = str(data.get("text") or "")
             if not self._delta_seen and not text:
-                await self.emit(
-                    conn, P.PANEL_EVENT_DELTA, {"text": self._empty_answer(data)}
-                )
+                sentence = self._empty_answer(data)
+                self._answer.append(sentence)
+                await self.emit(conn, P.PANEL_EVENT_DELTA, {"text": sentence})
+            elif not self._delta_seen:
+                # A reply that arrived whole (no token frames): the panel paints
+                # nothing from `done`, so the conversation remembers the text.
+                self._answer.append(text)
+            # v1.270.0: the exchange is written BEFORE `done` leaves, so an
+            # `open` that arrives on that frame replays a complete conversation.
+            self._remember_exchange()
             await self.emit(conn, P.PANEL_EVENT_DONE, {"text": text})
             return
         if event == "error":

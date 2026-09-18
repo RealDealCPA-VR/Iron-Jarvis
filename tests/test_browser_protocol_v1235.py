@@ -262,6 +262,8 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
     assert P.ALL_PANEL_ACTIONS == (
         "open", "send", "stop", "steer", "approve", "deny", "close",
         "voice",  # v1.269.0: dictation through the app's own engine
+        "reset",  # v1.270.0: a new conversation (the daemon holds the old one)
+        "auto_allow",  # v1.270.0: the sidebar's one switch for the ordinary cards
     )
     assert P.ALL_PANEL_EVENTS == (
         "state",
@@ -273,6 +275,7 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "error",
         "models",
         "transcript",  # v1.269.0
+        "history",  # v1.270.0: the conversation, replayed on open
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
     assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)

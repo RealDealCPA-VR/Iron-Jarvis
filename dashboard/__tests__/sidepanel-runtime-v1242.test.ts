@@ -104,6 +104,9 @@ function turns(): HTMLElement[] {
  * complete before the bundle runs, exactly as it is in Chrome, and the bundle's
  * module-level `document.getElementById` calls find real nodes.
  */
+/** `chrome.storage.local` as a test sees it: seed it before mounting, read it after. */
+let seedStorage: Record<string, unknown> = {};
+
 function mountPanel(over: Record<string, unknown> = {}): Harness {
   const html = readFileSync(PANEL_HTML, "utf8").replace(/\r\n/g, "\n");
 
@@ -149,6 +152,18 @@ function mountPanel(over: Record<string, unknown> = {}): Harness {
       onMessage: {
         addListener: (fn: (message: unknown) => void) => {
           listener = fn;
+        },
+      },
+    },
+    // v1.270.0: the switch and the model pick are remembered per browser.
+    storage: {
+      local: {
+        get: async (key: string) => ({ [key]: seedStorage[key] }),
+        set: async (items: Record<string, unknown>) => {
+          Object.assign(seedStorage, items);
+        },
+        remove: async (key: string) => {
+          delete seedStorage[key];
         },
       },
     },
@@ -208,6 +223,7 @@ if (absent.length) {
   });
 } else {
   afterEach(() => {
+    seedStorage = {};
     document.head.innerHTML = "";
     document.body.innerHTML = "";
     for (const name of Array.from(document.body.attributes).map((a) => a.name)) {
@@ -340,13 +356,23 @@ if (absent.length) {
       expect(getComputedStyle(el("stop")).display).toBe("none");
     });
 
-    it("a tool round is its own line, and the next delta starts a new answer", async () => {
+    it("a tool step folds behind the Working line, and the next delta starts a new answer", async () => {
       const h = await panelReady({ state: "connected", access: "read_only", paired: true });
       h.emit("delta", { text: "First" });
       h.emit("tool", { name: "read_page", text: "Reading the page" });
       h.emit("delta", { text: "Second" });
       const said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
-      expect(said).toEqual(["jarvis:First", "tool:Reading the page", "jarvis:Second"]);
+      // v1.270.0: the step is not a bubble; it sits inside the folded block.
+      expect(said).toEqual(["jarvis:First", "jarvis:Second"]);
+      const block = el("transcript").querySelector("details.work") as HTMLDetailsElement | null;
+      expect(block).not.toBeNull();
+      expect(block?.open).toBe(false);
+      expect(block?.querySelector("summary")?.textContent).toBe("Working · Reading the page");
+      expect(block?.querySelectorAll(".step").length).toBe(1);
+      // In DOM order: the first answer, the work, the second answer.
+      const order = Array.from(el("transcript").children).map((n) => n.className);
+      expect(order.indexOf("work")).toBeGreaterThan(order.indexOf("turn"));
+      expect(order.lastIndexOf("turn")).toBeGreaterThan(order.indexOf("work"));
     });
 
     it("Stop promises only what a stop can do", async () => {
@@ -408,20 +434,27 @@ if (absent.length) {
   /* ------------------------------------------------------------------------ */
 
   describe("one approval per tab (v1.266.0)", () => {
-    it("Allow for this tab answers with scope tab and takes the card down", async () => {
+    it("Always allow approves the card and then turns the switch on (v1.270.0)", async () => {
       const h = await panelReady({ state: "connected", access: "interactive", paired: true });
       h.emit("approval", { id: "ask_9", text: "Jarvis wants to click Next." });
       expect((el("approval") as HTMLElement).hidden).toBe(false);
 
-      (el("approve-tab") as HTMLButtonElement).click();
+      (el("approve-always") as HTMLButtonElement).click();
       expect((el("approval") as HTMLElement).hidden).toBe(true);
       await waitFor(() => {
         const answer = h.sent.find((m) => m["action"] === "approve");
         expect(answer).toBeTruthy();
         const params = (answer?.["params"] ?? {}) as Record<string, unknown>;
         expect(params["id"]).toBe("ask_9");
-        expect(params["scope"]).toBe("tab");
+        // A plain approve — no scope — so an older daemon still runs the call.
+        expect(params["scope"]).toBeUndefined();
+        const flip = h.sent.find((m) => m["action"] === "auto_allow");
+        expect(flip).toBeTruthy();
+        expect(((flip?.["params"] ?? {}) as Record<string, unknown>)["on"]).toBe(true);
       });
+      // The approve went first: the card's call is answered before the switch.
+      const order = h.sent.filter((m) => m["action"] === "approve" || m["action"] === "auto_allow");
+      expect(order[0]?.["action"]).toBe("approve");
     });
 
     it("the header says this tab is allowed only when the daemon says so", async () => {
@@ -440,11 +473,120 @@ if (absent.length) {
       await waitFor(() => expect(line.hidden).toBe(true));
     });
 
-    it("the mode explanation names the tab-wide allow — in the pill's tooltip (v1.267.0)", async () => {
+    it("the mode explanation names the switch — in the pill's tooltip (v1.267.0, v1.270.0)", async () => {
       await panelReady({ state: "connected", access: "interactive", paired: true });
-      await waitFor(() => expect(el("access").title).toContain("Allow for this tab"));
+      await waitFor(() => expect(el("access").title).toContain("Auto-allow"));
       // And NOT as a paragraph: the minimal panel prints no instruction text.
       expect(document.getElementById("mode-hint")).toBeNull();
+    });
+  });
+
+  describe("it remembers, it has one switch, the work is folded (v1.270.0)", () => {
+    const READY = { state: "connected", access: "interactive", paired: true, hostPermission: true };
+
+    it("a history frame paints the conversation into an empty transcript, once", async () => {
+      const h = await panelReady(READY);
+      h.emit("history", {
+        turns: [
+          { role: "user", text: "remember 41" },
+          { role: "assistant", text: "Noted: 41." },
+        ],
+      });
+      let said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      expect(said).toEqual(["you:remember 41", "jarvis:Noted: 41."]);
+      // The same frame again (a tab switch re-opens): nothing is painted twice.
+      h.emit("history", {
+        turns: [
+          { role: "user", text: "remember 41" },
+          { role: "assistant", text: "Noted: 41." },
+        ],
+      });
+      said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      expect(said).toEqual(["you:remember 41", "jarvis:Noted: 41."]);
+    });
+
+    it("the new-conversation button empties the transcript and posts reset", async () => {
+      const h = await panelReady(READY);
+      h.emit("history", { turns: [{ role: "user", text: "old" }, { role: "assistant", text: "older" }] });
+      h.emit("tool", { name: "browser_click", text: "Clicking 'Go'…" });
+      h.emit("done", {});
+      expect(turns().length).toBe(2);
+      (el("reset") as HTMLButtonElement).click();
+      expect(turns().length).toBe(0);
+      expect(el("transcript").querySelector("details.work")).toBeNull();
+      await waitFor(() => expect(h.sent.some((m) => m["action"] === "reset")).toBe(true));
+      // The daemon's answer to a reset is an empty history: still nothing painted.
+      h.emit("history", { turns: [] });
+      expect(turns().length).toBe(0);
+    });
+
+    it("the switch posts the opposite of what the header shows, and paints only from the daemon", async () => {
+      const h = await panelReady(READY);
+      const auto = el("auto");
+      expect(auto.getAttribute("aria-checked")).toBe("false");
+      auto.click();
+      await waitFor(() => {
+        const flip = h.sent.find((m) => m["action"] === "auto_allow");
+        expect(flip).toBeTruthy();
+        expect(((flip?.["params"] ?? {}) as Record<string, unknown>)["on"]).toBe(true);
+      });
+      // Not painted on the press: the daemon's `state` frame is the fact.
+      expect(auto.getAttribute("aria-checked")).toBe("false");
+      h.emit("state", { running: false, auto_allow: true, tab_allowed: true });
+      expect(auto.getAttribute("aria-checked")).toBe("true");
+      expect(document.body.dataset.auto).toBe("on");
+      // A second press asks for off.
+      auto.click();
+      await waitFor(() => {
+        const flips = h.sent.filter((m) => m["action"] === "auto_allow");
+        expect(flips.length).toBe(2);
+        expect(((flips[1]?.["params"] ?? {}) as Record<string, unknown>)["on"]).toBe(false);
+      });
+      // An older daemon sends no key: that reads as off, never as a stale on.
+      h.emit("state", { running: false });
+      expect(auto.getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("the remembered setting rides the open", async () => {
+      seedStorage = { "ij.panel.auto_allow": true };
+      const h = await panelReady(READY);
+      await waitFor(() => {
+        const open = h.sent.find((m) => m["action"] === "open");
+        expect(open).toBeTruthy();
+        expect(((open?.["params"] ?? {}) as Record<string, unknown>)["auto_allow"]).toBe(true);
+      });
+      // The daemon confirms it; the next press asks for OFF and writes that back.
+      h.emit("state", { running: false, auto_allow: true });
+      expect(el("auto").getAttribute("aria-checked")).toBe("true");
+      el("auto").click();
+      await waitFor(() => expect(seedStorage["ij.panel.auto_allow"]).toBe(false));
+    });
+
+    it("a step's finish rewrites its own line, and the finished block shows the count", async () => {
+      const h = await panelReady(READY);
+      h.emit("tool", { name: "browser_click", text: "Clicking 'Next'…", status: "started", ok: null });
+      h.emit("tool", { name: "browser_click", text: "Clicking 'Next' — done.", status: "finished", ok: true });
+      h.emit("tool", { name: "browser_type", text: "Typing into 'Search'…", status: "started", ok: null });
+      h.emit("tool", { name: "browser_type", text: "Could not type into 'Search'.", status: "finished", ok: false });
+      const block = el("transcript").querySelector("details.work") as HTMLDetailsElement;
+      const steps = Array.from(block.querySelectorAll<HTMLElement>(".step"));
+      expect(steps.map((s) => s.textContent)).toEqual(["Clicking 'Next' — done.", "Could not type into 'Search'."]);
+      expect(steps[1]?.dataset["ok"]).toBe("false");
+      expect(block.dataset["live"]).toBe("true");
+      h.emit("done", {});
+      expect(block.dataset["live"]).toBe("false");
+      expect(block.querySelector("summary")?.textContent).toBe("2 steps");
+      // The next turn gets its own block.
+      h.emit("tool", { name: "browser_scroll", text: "Scrolling…" });
+      expect(el("transcript").querySelectorAll("details.work").length).toBe(2);
+    });
+
+    it("a route notice stays a visible line, never folded", async () => {
+      const h = await panelReady(READY);
+      h.emit("tool", { name: "route", text: "A different model answered this (failover)." });
+      expect(turns().map((t) => t.dataset["who"])).toEqual(["tool"]);
+      expect(transcript()).toContain("A different model answered");
+      expect(el("transcript").querySelector("details.work")).toBeNull();
     });
   });
 

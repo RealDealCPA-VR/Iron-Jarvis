@@ -41,6 +41,19 @@ is yours" is the Handbook's sentence, and a grant that covered a whole tab
 would otherwise cover "Delete account" on it. The card predicate this feeds is
 the ORDINARY ask — the one that used to fire on every scroll and click.
 
+ONE SWITCH FOR ALL OF THEM (v1.270.0). The user, two days after the per-tab
+grant: "instead of permissions in the browser extension, there should just be a
+simple toggle for all permissions required while using the extension so I don't
+have to keep approving." :meth:`TabGrants.grant_all` is that switch. While it is
+on, :meth:`TabGrants.covers` answers True for EVERY tab — including a call whose
+tab the daemon cannot name — so the ordinary card never appears; off, the per-tab
+grants answer as before. It ends exactly where a tab grant ends (a new browser
+session, Forget) plus the switch itself; the sidebar remembers the user's setting
+and re-asserts it on every open, so the daemon's flag is a mirror, not a second
+memory. What it does NOT cover is the same list as above: the risk door inside
+each acting tool never reads this module, so a payment, a password, a "delete",
+a flagged page or a target the daemon cannot read still stop at their own card.
+
 Every method is a lock and a set operation: no database, no hash, so it is safe
 to call on the event loop (unlike the pairing store).
 """
@@ -81,6 +94,8 @@ class TabGrants:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._tabs: set[str] = set()
+        #: v1.270.0: the sidebar's one switch — every tab, until it is turned off.
+        self._all: bool = False
         #: The ``browser_session`` the grants were made under, or ``""`` before any
         #: hello has said. A grant made before the first hello is kept by the first
         #: hello (nothing to compare it with) and cleared by a DIFFERENT one later.
@@ -89,11 +104,23 @@ class TabGrants:
     # --- reads ---------------------------------------------------------------
 
     def covers(self, tab_id: Any) -> bool:
+        with self._lock:
+            if self._all:
+                # v1.270.0: the switch covers a call whose tab is unknown too —
+                # the user asked for no cards, and "which tab" is the daemon's
+                # bookkeeping, not the user's.
+                return True
         key = tab_key(tab_id)
         if not key:
             return False
         with self._lock:
             return key in self._tabs
+
+    @property
+    def all_allowed(self) -> bool:
+        """Whether the sidebar's switch is on (v1.270.0)."""
+        with self._lock:
+            return self._all
 
     def tab_ids(self) -> list[str]:
         with self._lock:
@@ -124,11 +151,18 @@ class TabGrants:
             self._tabs.discard(key)
         return had
 
+    def grant_all(self, on: bool) -> bool:
+        """Turn the sidebar's switch on or off (v1.270.0); returns the new state."""
+        with self._lock:
+            self._all = bool(on)
+            return self._all
+
     def clear(self) -> int:
-        """Drop every grant (Forget, or a new browser session). How many died."""
+        """Drop every grant AND the switch (Forget, or a new browser session). How many tabs died."""
         with self._lock:
             n = len(self._tabs)
             self._tabs.clear()
+            self._all = False
         return n
 
     def note_session(self, session_id: Any) -> int:
@@ -147,6 +181,9 @@ class TabGrants:
             if self._session and self._session != sid:
                 n = len(self._tabs)
                 self._tabs.clear()
+                # The switch rode on the old session too; the sidebar re-asserts
+                # the user's setting on its next open (v1.270.0).
+                self._all = False
             else:
                 n = 0
             self._session = sid

@@ -105,11 +105,20 @@ the **microphone**, which becomes the **send arrow** the moment you type.
 Dictation goes through Iron Jarvis's own speech engine — the bundled offline
 model when it is present, else the transcription endpoint you configured — and
 never through a browser vendor's speech service; the words land in the box for
-you to read before you send. Explanations are tooltips, not paragraphs. Every
-page action asks first: **Allow for this tab** covers that tab until it closes,
-**Allow for this task** the rest of the message, **Allow once** one action. No
-tool settings, no pairing control, no access switch — those are governed in
-Jarvis. Jarvis is the product; the panel is a window onto it.
+you to read before you send. Explanations are tooltips, not paragraphs.
+
+It remembers (v1.270.0): the conversation lives in Iron Jarvis, so a second
+message can refer to the first, and reopening the panel shows it; the **+**
+icon in the header starts a new one. The header's **Auto-allow** switch (shown
+at Interactive) is the one control for page-action approvals: on, Jarvis acts
+without asking each time, across tabs and messages, until you turn it off; off,
+each page action shows **Allow** · **Always allow** · **Deny**. The switch is
+remembered in this browser. It never covers a payment or password field, a
+"delete"-shaped control, a page that tried to instruct Jarvis, or a control
+Jarvis cannot read — those still ask. While Jarvis works, its steps fold behind
+one **Working** line you can expand. No tool settings, no pairing control, no
+access switch — those are governed in Jarvis. Jarvis is the product; the panel
+is a window onto it.
 
 ## Known limits, named rather than discovered later
 

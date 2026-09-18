@@ -357,16 +357,30 @@ def _src(path: Path) -> str:
     return path.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def test_the_card_offers_allow_for_this_task_and_the_panel_explains_its_mode():
+def test_the_card_is_three_answers_and_the_panel_explains_its_mode():
+    """v1.270.0: the per-task button gave way to the one switch.
+
+    The daemon still answers ``scope: "task"`` as the chat lane's
+    ``conversation`` grant (the parametrised case above proves it, and the chat
+    page's card uses it); the SIDEBAR's card now offers Allow · Always allow ·
+    Deny — the user's own words were "instead of permissions in the browser
+    extension, there should just be a simple toggle".
+    """
     html = _src(_ADDON / "sidepanel.html")
-    assert re.search(r'id="approve-task"[^>]*>\s*Allow for this task\s*<', html), "no Allow-for-this-task button"
+    assert re.search(r'id="approve"[^>]*>\s*Allow\s*<', html), "no Allow button"
+    assert re.search(r'id="approve-always"[^>]*>\s*Always allow\s*<', html), "no Always-allow button"
+    assert 'id="approve-task"' not in html and 'id="approve-tab"' not in html, (
+        "the sidebar's card grew back a per-task or per-tab button beside the switch"
+    )
     # v1.267.0: the explanation moved from a paragraph (`#mode-hint`) to the
     # access pill's tooltip — the minimal panel prints no instruction paragraphs.
     assert 'id="access"' in html
     ts = _src(_ADDON / "sidepanel.ts")
-    assert re.search(r'approveTask\?\.addEventListener\("click"[\s\S]{0,300}scope: "task"', ts), "the button does not send scope: task"
+    assert re.search(r'approveAlways\?\.addEventListener\("click"[\s\S]{0,300}setAuto\(true\)', ts), (
+        "Always allow does not turn the switch on"
+    )
     assert 'case "read_only":' in ts and "choose Interactive" in ts, "read-only mode is not explained"
-    assert 'case "interactive":' in ts and "Allow for this task" in ts
+    assert 'case "interactive":' in ts and "Auto-allow" in ts
     assert "el.access.title = modeHint(status.access)" in ts, "the mode explanation has no home"
 
 

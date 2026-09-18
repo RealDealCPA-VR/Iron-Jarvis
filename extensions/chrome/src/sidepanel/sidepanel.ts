@@ -23,9 +23,11 @@
 
 import {
   PANEL_ACTION_APPROVE,
+  PANEL_ACTION_AUTO_ALLOW,
   PANEL_ACTION_CLOSE,
   PANEL_ACTION_DENY,
   PANEL_ACTION_OPEN,
+  PANEL_ACTION_RESET,
   PANEL_ACTION_SEND,
   PANEL_ACTION_STEER,
   PANEL_ACTION_STOP,
@@ -34,6 +36,7 @@ import {
   PANEL_EVENT_DELTA,
   PANEL_EVENT_DONE,
   PANEL_EVENT_ERROR,
+  PANEL_EVENT_HISTORY,
   PANEL_EVENT_MODELS,
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
@@ -127,8 +130,8 @@ export function modeHint(access: string): string {
     case "interactive":
       return (
         "Interactive: Jarvis can work this page for you — navigate, click, type. " +
-        "Each action that changes a page asks you first; Allow for this tab covers this tab " +
-        "until you close it, Allow for this task covers the rest of this message."
+        "Each action that changes a page asks you first unless Auto-allow is on. " +
+        "Payments, passwords and deletions always ask."
       );
     default:
       return "";
@@ -156,9 +159,10 @@ const el = {
   approval: document.getElementById("approval"),
   approvalText: document.getElementById("approval-text"),
   approve: document.getElementById("approve") as HTMLButtonElement | null,
-  approveTask: document.getElementById("approve-task") as HTMLButtonElement | null,
-  approveTab: document.getElementById("approve-tab") as HTMLButtonElement | null,
+  approveAlways: document.getElementById("approve-always") as HTMLButtonElement | null,
   tabAllowed: document.getElementById("tab-allowed"),
+  auto: document.getElementById("auto") as HTMLButtonElement | null,
+  reset: document.getElementById("reset") as HTMLButtonElement | null,
   deny: document.getElementById("deny") as HTMLButtonElement | null,
   ask: document.getElementById("ask") as HTMLTextAreaElement | null,
   send: document.getElementById("send") as HTMLButtonElement | null,
@@ -177,6 +181,11 @@ const pendingSteers = new Map<string, HTMLElement>();
 
 /** Monotonic within one panel lifetime, which is all a steer note id has to be. */
 let steerSeq = 0;
+
+/** The running turn's folded work block (v1.270.0), or null until its first step. */
+let work: HTMLDetailsElement | null = null;
+/** Steps in the current block — the count the summary shows once the turn ends. */
+let stepCount = 0;
 
 // --- painting ---------------------------------------------------------------
 
@@ -227,6 +236,111 @@ function say(who: string, text: string): HTMLElement {
   el.transcript?.appendChild(node);
   el.transcript?.scrollTo({ top: el.transcript.scrollHeight });
   return node;
+}
+
+// --- the work, folded (v1.270.0) ----------------------------------------------
+
+/**
+ * The block a turn's steps fold into: one collapsed <details> per turn, its
+ * summary the latest step while the turn runs ("Working · Clicking 'Next'…")
+ * and the count once it ends ("4 steps"). The user expands it if they choose.
+ * "The specific detail of the process should go behind a thinking word."
+ */
+function ensureWork(): HTMLDetailsElement {
+  if (work) return work;
+  const block = document.createElement("details");
+  block.className = "work";
+  block.dataset["live"] = "true";
+  block.appendChild(document.createElement("summary"));
+  el.transcript?.appendChild(block);
+  work = block;
+  stepCount = 0;
+  return block;
+}
+
+/** The label a finished block shows: how much work it holds. */
+export function workSummary(steps: number): string {
+  return `${steps} ${steps === 1 ? "step" : "steps"}`;
+}
+
+/**
+ * One step, in words. A `finished` frame for a step that is still `started`
+ * rewrites that step's line instead of adding a second one, so a click reads
+ * "Clicking 'Next' — done." on one row rather than two.
+ */
+function step(name: string, text: string, status: string, ok: boolean | null): void {
+  const block = ensureWork();
+  let row: HTMLElement | null = null;
+  if (status === "finished") {
+    const open = Array.from(block.querySelectorAll<HTMLElement>('.step[data-status="started"]')).filter(
+      (n) => n.dataset["name"] === name,
+    );
+    row = open[open.length - 1] ?? null;
+  }
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "step";
+    row.dataset["name"] = name;
+    block.appendChild(row);
+    stepCount += 1;
+  }
+  row.dataset["status"] = status === "finished" ? "finished" : "started";
+  if (ok !== null) {
+    row.dataset["ok"] = ok ? "true" : "false";
+  }
+  row.textContent = text;
+  const summary = block.querySelector("summary");
+  if (summary) {
+    summary.textContent = `Working · ${text}`;
+  }
+  el.transcript?.scrollTo({ top: el.transcript.scrollHeight });
+}
+
+/** The turn ended: the block stops being live and its summary becomes the count. */
+function finishWork(): void {
+  const block = work;
+  if (!block) return;
+  block.dataset["live"] = "false";
+  const summary = block.querySelector("summary");
+  if (summary) {
+    summary.textContent = workSummary(stepCount);
+  }
+  work = null;
+  stepCount = 0;
+}
+
+/** Empty the transcript (a new conversation); the off-state line stays. */
+function clearTranscript(): void {
+  for (const node of Array.from(el.transcript?.querySelectorAll(".turn, .work") ?? [])) {
+    node.remove();
+  }
+  streaming = null;
+  work = null;
+  stepCount = 0;
+  pendingSteers.clear();
+}
+
+/**
+ * The conversation the daemon holds, painted into an EMPTY transcript only. A
+ * side panel is destroyed when it closes; on reopen the daemon replays what was
+ * said. On a tab switch the same frame arrives again and the transcript already
+ * holds it, so nothing is painted twice.
+ */
+function paintHistory(payload: Record<string, unknown>): void {
+  const turns = Array.isArray(payload["turns"]) ? (payload["turns"] as Array<Record<string, unknown>>) : [];
+  if (turns.length === 0) return;
+  if (el.transcript?.querySelector(".turn, .work")) return;
+  for (const turn of turns) {
+    const text = typeof turn["text"] === "string" ? (turn["text"] as string) : "";
+    if (!text) continue;
+    say(turn["role"] === "user" ? "you" : "jarvis", text);
+  }
+}
+
+/** The switch, painted from the daemon's `state` frame — a fact, not a wish. */
+function paintAuto(on: boolean): void {
+  el.auto?.setAttribute("aria-checked", on ? "true" : "false");
+  document.body.dataset["auto"] = on ? "on" : "off";
 }
 
 function paintStatus(status: BridgeStatus): void {
@@ -344,6 +458,12 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       if (el.tabAllowed) {
         el.tabAllowed.hidden = payload["tab_allowed"] !== true;
       }
+      // v1.270.0: the one switch. Absent (an older daemon) reads as off.
+      paintAuto(payload["auto_allow"] === true);
+      return;
+    }
+    case PANEL_EVENT_HISTORY: {
+      paintHistory(payload);
       return;
     }
     case PANEL_EVENT_MODELS: {
@@ -371,7 +491,16 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       setTurn(true);
       const name = typeof payload["name"] === "string" ? (payload["name"] as string) : "a tool";
       streaming = null;
-      say("tool", text || name);
+      if (name === "route") {
+        // A failover or the mock answered: accountability stays a visible line
+        // (v1.267.0), never folded away with the steps.
+        say("tool", text || name);
+        return;
+      }
+      // v1.270.0: a step goes behind the "Working" line, expandable.
+      const status = typeof payload["status"] === "string" ? (payload["status"] as string) : "started";
+      const ok = typeof payload["ok"] === "boolean" ? (payload["ok"] as boolean) : null;
+      step(name, text || name, status, ok);
       return;
     }
     case PANEL_EVENT_APPROVAL: {
@@ -396,6 +525,7 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       setTurn(false);
       streaming = null;
       clearApproval();
+      finishWork();
       // A turn that ended without consuming a steer never will. Saying so is the
       // whole reason the note was marked pending in the first place.
       for (const [id, node] of pendingSteers) {
@@ -417,6 +547,7 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       setTurn(false);
       streaming = null;
       clearApproval();
+      finishWork();
       say("error", text || "Iron Jarvis could not finish that.");
       return;
     }
@@ -484,6 +615,7 @@ function sendNow(): void {
   }
   setTurn(true);
   streaming = null;
+  finishWork();
   // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
   const pick = currentPick();
   void post(PANEL_ACTION_SEND, { text, ...(pick ? pick : {}) }).then((sent) => {
@@ -551,23 +683,71 @@ el.approve?.addEventListener("click", () => {
   void post(PANEL_ACTION_APPROVE, { id });
 });
 
-// v1.262.0: one press for the rest of this task. `scope: "task"` is answered by
-// the daemon as the chat lane's "conversation" grant — the remaining rounds of
-// THIS turn only; the next message starts with a clean slate and asks again.
-el.approveTask?.addEventListener("click", () => {
+// v1.270.0: ALWAYS ALLOW, from the card. This action runs (a plain approve,
+// so an older daemon still answers it) and then the switch turns on; the
+// daemon's next `state` frame paints the header. The per-tab and per-task
+// scopes still exist in the daemon for the chat page's card; the sidebar
+// offers the one wider answer the user asked for.
+el.approveAlways?.addEventListener("click", () => {
   const id = pendingApprovalId;
   clearApproval();
-  void post(PANEL_ACTION_APPROVE, { id, scope: "task" });
+  void post(PANEL_ACTION_APPROVE, { id }).then(() => setAuto(true));
 });
 
-// v1.266.0: ONE APPROVAL PER TAB. `scope: "tab"` is answered by the daemon with
-// the "tab" decision: this call runs, and the tab it acts on is granted until it
-// closes — across messages, not just this one. The daemon's next `state` frame
-// says so in the header.
-el.approveTab?.addEventListener("click", () => {
-  const id = pendingApprovalId;
-  clearApproval();
-  void post(PANEL_ACTION_APPROVE, { id, scope: "tab" });
+// --- the one switch and the new conversation (v1.270.0) ------------------------
+
+/** `chrome.storage.local` key for the switch as the user last set it in THIS browser. */
+export const STORAGE_AUTO_KEY = "ij.panel.auto_allow";
+
+/** The remembered setting, or null when the user has never touched the switch. */
+let storedAuto: boolean | null = null;
+
+async function loadAuto(): Promise<void> {
+  try {
+    const got = await chrome.storage?.local?.get(STORAGE_AUTO_KEY);
+    const value = got?.[STORAGE_AUTO_KEY];
+    storedAuto = typeof value === "boolean" ? value : null;
+  } catch {
+    storedAuto = null;
+  }
+}
+
+/**
+ * What an `open` carries: the remembered switch setting, when there is one. The
+ * daemon's flag dies with the browser session and with Forget; the user's
+ * setting does not, so every open re-asserts it and the header paints the
+ * daemon's answer.
+ */
+export function openParams(auto: boolean | null): Record<string, unknown> {
+  return auto === null ? {} : { auto_allow: auto };
+}
+
+async function setAuto(on: boolean): Promise<void> {
+  storedAuto = on;
+  try {
+    await chrome.storage?.local?.set({ [STORAGE_AUTO_KEY]: on });
+  } catch {
+    // No storage: the setting lasts for this panel's lifetime, which is still true.
+  }
+  const sent = await post(PANEL_ACTION_AUTO_ALLOW, { on });
+  if (!sent) {
+    say("error", "That did not reach Iron Jarvis — this browser is not connected.");
+  }
+}
+
+el.auto?.addEventListener("click", () => {
+  // The press asks for the OPPOSITE of what the header shows; the header then
+  // changes only when the daemon's `state` frame says it did.
+  void setAuto(el.auto?.getAttribute("aria-checked") !== "true");
+});
+
+el.reset?.addEventListener("click", () => {
+  clearTranscript();
+  void post(PANEL_ACTION_RESET).then((sent) => {
+    if (!sent) {
+      say("error", "That did not reach Iron Jarvis — this browser is not connected.");
+    }
+  });
 });
 
 el.deny?.addEventListener("click", () => {
@@ -899,12 +1079,13 @@ window.addEventListener("pagehide", () => {
 
 paintVersion();
 void refresh();
-void post(PANEL_ACTION_OPEN);
+// v1.270.0: the remembered switch setting rides the first open.
+void loadAuto().then(() => post(PANEL_ACTION_OPEN, openParams(storedAuto)));
 refreshComposer();
 
 // v1.266.0: the header's "allowed in this tab" line is about the tab the user is
 // looking at, so a tab switch asks the daemon for a fresh state frame. Guarded:
 // the panel also runs where `chrome.tabs` is absent (the runtime test's stub).
 chrome.tabs?.onActivated?.addListener?.(() => {
-  void post(PANEL_ACTION_OPEN);
+  void post(PANEL_ACTION_OPEN, openParams(storedAuto));
 });

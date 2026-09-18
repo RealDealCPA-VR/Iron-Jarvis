@@ -1286,6 +1286,14 @@ class BrowserRuntime:
         """Whether the tab the user is looking at holds a grant — what the sidebar's header says."""
         return self.tab_grants.covers(self.effective_tab(None))
 
+    def auto_allowed(self) -> bool:
+        """Whether the sidebar's one switch is on (v1.270.0): no ordinary cards for any tab."""
+        return self.tab_grants.all_allowed
+
+    def set_auto_allow(self, on: bool) -> bool:
+        """Turn the sidebar's switch on or off; returns the new state (v1.270.0)."""
+        return self.tab_grants.grant_all(on)
+
     async def forget(self) -> int:
         """Revoke every pairing and drop the live socket; returns credentials killed.
 

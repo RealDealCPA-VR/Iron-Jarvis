@@ -231,6 +231,18 @@ PANEL_ACTION_CLOSE = "close"
 #: bundled offline model, or the user's own endpoint) — never to a browser
 #: vendor's speech service.
 PANEL_ACTION_VOICE = "voice"
+#: v1.270.0: a new conversation. The daemon keeps the sidebar's conversation
+#: (``PanelTurns._history``) so a second message can refer to the first; ``reset``
+#: forgets it. Refused while a turn runs — Stop first.
+PANEL_ACTION_RESET = "reset"
+#: v1.270.0: ``{on: bool}`` — the sidebar's ONE switch for the ordinary approval
+#: cards. On, every page action a panel turn makes runs without a card; off, the
+#: cards come back. The risk door inside each acting tool (a payment or password
+#: field, the destructive vocabulary, a flagged page, an unreadable target) never
+#: reads it — those still ask. ``open`` may carry the same key: the panel
+#: re-asserts its remembered setting on every open, so the daemon's flag is a
+#: mirror of the user's preference, not a second memory of it.
+PANEL_ACTION_AUTO_ALLOW = "auto_allow"
 
 ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_OPEN,
@@ -241,6 +253,8 @@ ALL_PANEL_ACTIONS: tuple[str, ...] = (
     PANEL_ACTION_DENY,
     PANEL_ACTION_CLOSE,
     PANEL_ACTION_VOICE,
+    PANEL_ACTION_RESET,
+    PANEL_ACTION_AUTO_ALLOW,
 )
 
 #: ``browser.panel_event`` names -- everything the daemon narrates to the panel.
@@ -266,6 +280,13 @@ PANEL_EVENT_MODELS = "models"
 #: is what has settled, ``partial`` the words still forming (offline mode only),
 #: ``final`` true on the last frame of a dictation.
 PANEL_EVENT_TRANSCRIPT = "transcript"
+#: v1.270.0: ``{turns: [{role: "user"|"assistant", text}]}`` — the conversation
+#: the daemon holds for this sidebar, sent on ``open`` (so a reopened panel shows
+#: what was said) and after ``reset`` (empty). ``state`` also carries
+#: ``auto_allow`` since this version, and ``tool`` carries ``status``
+#: (``started`` | ``finished``) and ``ok`` so the panel can fold a step's start
+#: and end into one line.
+PANEL_EVENT_HISTORY = "history"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -277,6 +298,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_ERROR,
     PANEL_EVENT_MODELS,
     PANEL_EVENT_TRANSCRIPT,
+    PANEL_EVENT_HISTORY,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1801,9 +1823,11 @@ __all__ = [
     "PAIRING_DEADLINE_S",
     "PAIRING_ID_PREFIX",
     "PANEL_ACTION_APPROVE",
+    "PANEL_ACTION_AUTO_ALLOW",
     "PANEL_ACTION_CLOSE",
     "PANEL_ACTION_DENY",
     "PANEL_ACTION_OPEN",
+    "PANEL_ACTION_RESET",
     "PANEL_ACTION_SEND",
     "PANEL_ACTION_STEER",
     "PANEL_ACTION_STOP",
@@ -1812,6 +1836,7 @@ __all__ = [
     "PANEL_EVENT_DELTA",
     "PANEL_EVENT_DONE",
     "PANEL_EVENT_ERROR",
+    "PANEL_EVENT_HISTORY",
     "PANEL_EVENT_MODELS",
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",

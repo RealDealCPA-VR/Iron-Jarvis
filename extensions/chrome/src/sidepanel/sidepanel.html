@@ -34,6 +34,18 @@
   Dictation goes through Iron Jarvis's own speech engine, never a browser
   vendor's — see sidepanel.ts.
 
+  IT REMEMBERS, IT HAS ONE SWITCH, AND THE WORK IS FOLDED (v1.270.0). The
+  conversation lives in the daemon and is replayed into an empty transcript on
+  `open` (the `history` frame); the `+` icon in the header starts a new one.
+  The header's Auto-allow switch (`#auto`, shown at Interactive) is the ONE
+  control for the ordinary approval cards: on, page actions run without a card;
+  off, the card is Allow · Always allow · Deny. Payments, passwords, deletions
+  and pages that tried to instruct Jarvis still ask — that floor is the
+  daemon's, not this page's. Each turn's steps fold into a collapsed
+  <details class="work"> whose summary reads "Working · <the latest step>"
+  while a turn runs and "N steps" after; the user expands it if they choose.
+  A route notice (a failover, the mock) stays a visible line.
+
   Copy rule: this add-on is never called an "extension" in anything the user reads —
   in Iron Jarvis that word already means an MCP server.
 
@@ -259,6 +271,80 @@
       .spacer {
         margin-left: auto;
       }
+      /* THE ONE SWITCH (v1.270.0): a pill with a knob. `aria-checked` is painted
+         from the daemon's `state` frame, so it shows a fact. */
+      .switch {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 8px 2px 3px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .switch .knob {
+        position: relative;
+        width: 22px;
+        height: 12px;
+        border-radius: 999px;
+        background: var(--dim);
+        transition: background 120ms ease;
+      }
+      .switch .knob::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--bg);
+        transition: transform 120ms ease;
+      }
+      .switch[aria-checked="true"] {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+        border-color: transparent;
+      }
+      .switch[aria-checked="true"] .knob {
+        background: var(--cyan);
+      }
+      .switch[aria-checked="true"] .knob::after {
+        transform: translateX(10px);
+      }
+      /* Nothing to allow at Read only or Off: the switch is not drawn. */
+      body:not([data-access="interactive"]) #auto {
+        display: none;
+      }
+      /* With the switch on, "Tab allowed" says nothing the switch does not. */
+      body[data-auto="on"] #tab-allowed {
+        display: none;
+      }
+      /* The new-conversation icon (v1.270.0). Hidden while a turn runs: the
+         daemon refuses a reset then, and a button that is refused is noise. */
+      .iconbtn {
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+      }
+      .iconbtn:hover {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      body[data-turn="running"] #reset {
+        display: none;
+      }
       .note {
         color: var(--muted);
         margin: 8px 2px 0;
@@ -329,6 +415,53 @@
       }
       .turn[data-pending="true"] {
         opacity: 0.7;
+      }
+      /* THE WORK, FOLDED (v1.270.0): one <details> per turn, collapsed; the
+         summary is the latest step while the turn runs and the count after.
+         Built by sidepanel.ts, never written here. */
+      .work {
+        max-width: 100%;
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .work summary {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 6px;
+        border-radius: 8px;
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+      }
+      .work summary::-webkit-details-marker {
+        display: none;
+      }
+      .work summary::before {
+        content: "";
+        width: 0;
+        height: 0;
+        border-left: 4px solid var(--dim);
+        border-top: 3.5px solid transparent;
+        border-bottom: 3.5px solid transparent;
+        transition: transform 120ms ease;
+      }
+      .work[open] summary::before {
+        transform: rotate(90deg);
+      }
+      .work[data-live="true"] summary::before {
+        border-left-color: var(--cyan);
+      }
+      .work summary:hover {
+        background: var(--surface);
+      }
+      .work .step {
+        padding: 1px 6px 1px 20px;
+        overflow-wrap: anywhere;
+      }
+      .work .step[data-ok="false"] {
+        color: var(--amber);
       }
       #empty {
         color: var(--muted);
@@ -488,7 +621,7 @@
       }
     </style>
   </head>
-  <body data-turn="idle" data-access="unknown" data-voice="idle">
+  <body data-turn="idle" data-access="unknown" data-voice="idle" data-auto="off">
     <header>
       <div class="bar">
         <div class="state" id="state" data-tone="off">
@@ -523,6 +656,22 @@
              grant. Painted from the daemon's `state` frame (`tab_allowed`);
              hidden until the daemon says so, re-asked on a tab switch. -->
         <span class="pill pill-accent" id="tab-allowed" hidden title="Page actions in this tab run without asking until it closes.">Tab allowed</span>
+        <!-- v1.270.0: THE ONE SWITCH. On, page actions run without a card; off,
+             each asks. Payments, passwords, deletions and a page that tried to
+             instruct Jarvis still ask either way — the daemon's floor. Painted
+             from the daemon's `state` frame; the setting is remembered in this
+             browser and re-asserted on every open. -->
+        <button class="switch" id="auto" type="button" role="switch" aria-checked="false" title="Auto-allow: on, Jarvis acts on pages without asking each time. Payments, passwords, deletions and pages that tried to instruct Jarvis still ask.">
+          <span class="knob" aria-hidden="true"></span>
+          <span>Auto-allow</span>
+        </button>
+        <!-- v1.270.0: a new conversation. The daemon forgets this one. -->
+        <button class="iconbtn" id="reset" type="button" title="New conversation — Jarvis forgets this one" aria-label="New conversation">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z" />
+            <path d="M12 6.8v5.4M9.3 9.5h5.4" />
+          </svg>
+        </button>
       </div>
       <p class="note" id="note"></p>
       <div class="actions">
@@ -544,16 +693,12 @@
     <div id="approval" hidden>
       <p id="approval-text"></p>
       <div class="row">
-        <!-- v1.266.0: ONE APPROVAL PER TAB. Answers with the "tab" decision: this
-             call runs, and every later page action in this same tab runs without
-             a card until the tab closes (or the browser restarts, or Forget). The
-             risk cards — a payment, a password, a "delete" — still ask. -->
-        <button class="primary" id="approve-tab" type="button" title="This action runs, and every later page action in this tab runs without asking until the tab closes. Payments, passwords and deletions still ask.">Allow for this tab</button>
-        <button id="approve" type="button" title="Runs this one action.">Allow once</button>
-        <!-- v1.262.0: one press for the rest of THIS task. It answers the card
-             with the chat lane's "conversation" grant, which covers the remaining
-             rounds of this turn only — the next message asks again. -->
-        <button id="approve-task" type="button" title="Covers the rest of this message. The next message asks again.">Allow for this task</button>
+        <button class="primary" id="approve" type="button" title="Runs this one action.">Allow</button>
+        <!-- v1.270.0: the switch, from the card. This action runs and Auto-allow
+             turns on, so nothing asks again until you turn it off. The daemon's
+             "tab" and "task" scopes still exist for the chat page's card; the
+             sidebar offers ONE wider answer, the one the user asked for. -->
+        <button id="approve-always" type="button" title="Runs this action and turns Auto-allow on: page actions stop asking until you turn it off. Payments, passwords and deletions still ask.">Always allow</button>
         <button class="ghost" id="deny" type="button" title="Refuses this action; Jarvis is told you declined.">Deny</button>
       </div>
     </div>

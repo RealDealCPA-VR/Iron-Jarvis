@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.269.0 (2026-09-14).*
+holds itself to. Current as of v1.270.0 (2026-09-14).*
 
 ---
 
@@ -848,6 +848,24 @@ Jarvis's own speech engine — the bundled offline model when it is installed
 on the Connections page — and never through your browser's own cloud speech
 service. If no speech engine is set up, the microphone is greyed and its
 tooltip says what to connect.
+
+**The sidebar remembers, has one switch, and folds its work (v1.270.0).**
+Three changes from one report. *It remembers:* the sidebar's conversation now
+lives in Iron Jarvis, so "now do the second one" refers to what you said
+before; reopening the panel shows the conversation, and the **+** icon in the
+header starts a new one (Jarvis forgets the old). The conversation is kept in
+memory only — it ends when Iron Jarvis restarts. *One switch:* the header's
+**Auto-allow** switch (shown at Interactive) replaces the per-action cards: on,
+Jarvis acts on pages without asking each time, across every tab and every
+message, until you turn it off; off, each page action shows a card with
+**Allow**, **Always allow** (which turns the switch on) and **Deny**. The switch
+is remembered in your browser. What it does NOT cover, on purpose: a payment or
+password field, anything with "delete"/"remove"/"cancel" in its name, a page
+that tried to give Jarvis instructions, and a control Jarvis cannot read still
+stop and ask — those are decisions that stay yours. *The work is folded:* while
+Jarvis works a page, the steps ("Clicking 'Next'…", "Typing into 'Search' —
+done.") sit behind one **Working** line you can expand; when the turn ends it
+reads "4 steps". A notice that a different model answered stays visible.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

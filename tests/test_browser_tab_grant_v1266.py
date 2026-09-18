@@ -412,10 +412,13 @@ def test_the_addon_reports_closed_tabs_and_its_browser_session():
     assert "chrome.storage.session" in socket and "browser_session: this.browserSession" in socket, (
         "the hello does not carry a per-browser-session id"
     )
-    assert re.search(r'id="approve-tab"[^>]*>\s*Allow for this tab\s*<', panel_html), "no Allow-for-this-tab button"
-    assert re.search(r'approveTab\?\.addEventListener\("click"[\s\S]{0,300}scope: "tab"', panel_ts), (
-        "the button does not send scope: tab"
-    )
+    # v1.270.0: the per-tab BUTTON gave way to the sidebar's one switch (the
+    # daemon's `tab` decision and the chat page's card are untouched — every
+    # case above still drives them). The header still reads `tab_allowed`,
+    # because a grant the chat page made is a fact this panel should show.
+    assert 'id="approve-tab"' not in panel_html, "the per-tab button is back beside the switch"
+    assert re.search(r'id="approve-always"[^>]*>\s*Always allow\s*<', panel_html), "no Always-allow button"
+    assert 'id="auto"' in panel_html and 'role="switch"' in panel_html, "no Auto-allow switch"
     assert 'payload["tab_allowed"] !== true' in panel_ts, "the header does not read tab_allowed"
     assert "onActivated" in panel_ts and "PANEL_ACTION_OPEN" in panel_ts, "no re-ask on a tab switch"
     assert 'EVENT_TAB_REMOVED = "tab_removed"' in generated and "browser_session?: string" in generated, (
