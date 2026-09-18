@@ -174,8 +174,12 @@ async function pickModel(model: string) {
   fireEvent.click(await screen.findByTitle("Switch model"));
   // The provider row's accessible name carries its badge; the model row's text
   // is the id itself. Both are reached by their visible words, then clicked as
-  // the buttons they sit in.
-  const providerRow = (await screen.findByText(/^openai$/i)).closest("button") as HTMLButtonElement;
+  // the buttons they sit in. v1.277.0: the menu also opens on the last picks,
+  // whose rows carry the provider's name as a badge — the provider row is the
+  // one that expands (`aria-expanded`).
+  const providerRow = (await screen.findAllByText(/^openai$/i))
+    .map((el) => el.closest("button"))
+    .find((b) => b?.hasAttribute("aria-expanded")) as HTMLButtonElement;
   fireEvent.click(providerRow);
   const modelRow = (await screen.findByText(model)).closest("button") as HTMLButtonElement;
   fireEvent.click(modelRow);

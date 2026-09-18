@@ -48,6 +48,7 @@
 // messages — and the reason is MV3 lifetime: a worker that also held the DOM walk
 // would be a worker that gets evicted in the middle of one.
 
+import { focusOrOpen, sitePattern } from "./openpage";
 import {
   DIRECTIVE_DISCONNECT,
   DIRECTIVE_REQUEST_HOST_PERMISSIONS,
@@ -196,6 +197,42 @@ try {
   void chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true })?.catch(() => {});
 } catch {
   // No side panel API in this browser. The bridge below is unaffected.
+}
+
+// v1.277.0: A KEY OPENS THE PANEL. The toolbar icon is the only way to open a
+// side panel by hand, and a freshly loaded add-on is not even on the toolbar
+// (it sits behind the puzzle-piece menu until pinned). The manifest's
+// `commands` block suggests Alt+J; the browser's own shortcuts page
+// (chrome://extensions/shortcuts, edge://extensions/shortcuts) lets the user
+// change it or notice that another add-on already took it. A command IS a user
+// gesture, which is what `sidePanel.open` requires. The panel opens in the
+// window the key was pressed in; the command's `tab` names it, and the last
+// focused window stands in when it does not.
+const PANEL_COMMAND = "open-panel";
+
+async function openPanelFromCommand(tab: chrome.tabs.Tab | undefined): Promise<void> {
+  let windowId = tab?.windowId;
+  if (windowId === undefined) {
+    windowId = (await chrome.windows.getLastFocused()).id;
+  }
+  if (windowId === undefined) {
+    return;
+  }
+  await chrome.sidePanel.open({ windowId });
+}
+
+try {
+  chrome.commands?.onCommand.addListener((command, tab) => {
+    if (command !== PANEL_COMMAND) {
+      return;
+    }
+    void openPanelFromCommand(tab).catch(() => {
+      // A window that closed between the press and the open. Nothing to report to.
+    });
+  });
+} catch {
+  // No commands API in this browser (or a manifest without the block). The
+  // toolbar icon still opens the panel.
 }
 
 // --- the three tab-metadata read methods ------------------------------------
@@ -457,10 +494,13 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
       case "status":
         respond(lastStatus ?? socket.status());
         return;
-      case "open_jarvis":
-        await chrome.tabs.create({ url: JARVIS_URL, active: true });
-        respond({ opened: true });
+      case "open_jarvis": {
+        // v1.277.0: the dashboard tab the user already has — on any of its
+        // pages — comes to the front; a new tab only when there is none.
+        const opened = await focusOrOpen(JARVIS_URL, sitePattern(JARVIS_URL));
+        respond({ opened: true, reused: opened.reused });
         return;
+      }
       case "toggle_connection": {
         // One button, both directions, and the DIRECTION comes from the same
         // function that writes the button's word (`toggleAction`), so the press can

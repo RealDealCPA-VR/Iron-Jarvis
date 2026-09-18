@@ -112,6 +112,15 @@ you to read before you send. The first press opens the add-on's microphone page
 in a tab (v1.272.0) — a side panel cannot show the browser's microphone prompt,
 a page can — allow it there once and the sidebar has it from then on. Explanations are tooltips, not paragraphs.
 
+Keys (v1.277.0): **Alt+J** opens the sidebar in the window you are in — no
+reach for a toolbar icon that a freshly loaded add-on does not even have yet.
+The browser owns the key: `chrome://extensions/shortcuts` (in Edge,
+`edge://extensions/shortcuts`) shows it, lets you change it, and is where you
+would notice another add-on already holds it. In the box, **Enter** sends,
+**Shift+Enter** starts a new line, and **Esc** stops a running turn. **Open
+Jarvis** in the footer brings the Iron Jarvis tab you already have to the
+front — on any of its pages — and opens one only when there is none.
+
 It remembers (v1.270.0): the conversation lives in Iron Jarvis, so a second
 message can refer to the first, and reopening the panel shows it; the **+**
 icon in the header starts a new one. The header's **Auto-allow** switch (shown

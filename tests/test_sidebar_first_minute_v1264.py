@@ -150,6 +150,7 @@ process.stdout.write(JSON.stringify([
   keyToPress("Enter", false, false), keyToPress("Enter", false, true),
   keyToPress("Enter", true, false), keyToPress("Enter", true, true),
   keyToPress("a", false, false), keyToPress("Escape", false, true),
+  keyToPress("Escape", false, false),
 ]) + "\\n");
 """
 
@@ -160,9 +161,12 @@ def test_enter_sends_steers_while_running_and_shift_enter_does_not(tmp_path):
     fn = _lift(src, "export function keyToPress").replace("export function", "function")
     # The lift is TypeScript; node runs JavaScript. Only the annotations go —
     # the body is byte-identical to what the add-on ships.
-    fn = re.sub(r": (?:string|boolean)\b", "", fn).replace(': "send" | "steer" | null', "")
+    fn = re.sub(r": (?:string|boolean)\b", "", fn)
+    # v1.277.0: the return type spans lines now (Escape → "stop" while running).
+    fn = re.sub(r"\)\s*:\s*\"send\"\s*\|\s*\"steer\"\s*\|\s*\"stop\"\s*\|\s*null\s*\{", ") {", fn)
     out = _run(_KEYS_HARNESS.replace("__KEYS__", fn), tmp_path, "keys")
-    assert out == ["send", "steer", None, None, None, None], out
+    # v1.277.0: Escape stops a running turn and does nothing idle.
+    assert out == ["send", "steer", None, None, None, "stop", None], out
     # And the handler is wired to the composer, reading the ONE running flag.
     assert 'el.ask?.addEventListener("keydown"' in src
     assert 'document.body.dataset["turn"] === "running"' in src

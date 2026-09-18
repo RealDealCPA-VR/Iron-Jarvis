@@ -175,6 +175,7 @@ import {
   type ComposerStore,
 } from "@/lib/composerStore";
 import { canRetryWithDefault } from "@/lib/providerFallback";
+import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
@@ -983,6 +984,9 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
 // server pick its default). Split it back out only when it carries both halves.
 /** v1.263.0: the levels the composer may offer — the daemon's vocabulary. */
 const REASONING_LEVELS = ["low", "medium", "high"];
+
+/** v1.277.0: how many rows a typed model filter lists. */
+const MODEL_FILTER_MAX = 12;
 
 function splitChoice(choice: string): { provider?: string; model?: string } {
   const i = choice.indexOf("::");
@@ -2486,6 +2490,30 @@ export default function ChatPage() {
   const compactionGenRef = useRef(0);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSub, setModelSub] = useState<string | null>(null);
+  // v1.277.0: FIND A MODEL BY TYPING, AND THE LAST PICKS FIRST. The tree below
+  // is 12 providers deep on the daily driver; a typed word lists every model
+  // whose id, provider or name contains it (Enter picks the first), and an
+  // empty box opens on the last three picks. Both are read when the menu
+  // opens, never per keystroke of the composer (S-05).
+  const [modelFilter, setModelFilter] = useState("");
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    setModelFilter("");
+    setRecentModels(readRecentModels());
+  }, [modelMenuOpen]);
+  const modelMatches = useMemo(
+    () => matchModels(models, modelFilter, MODEL_FILTER_MAX),
+    [models, modelFilter],
+  );
+  /** The ONE way a menu row picks: the choice, the thread setup, the menu, the memory. */
+  function pickModel(v: string) {
+    setChoice(v);
+    markSetupChanged();
+    setModelMenuOpen(false);
+    setModelSub(null);
+    if (v) setRecentModels(rememberRecentModel(v));
+  }
   /**
    * Providers for the composer's model menu, LOCAL FIRST (v1.148.0).
    *
@@ -8043,14 +8071,86 @@ export default function ChatPage() {
                     <ChevronDown size={11} className="shrink-0" />
                   </button>
                   {modelMenuOpen && (
-                    <div className="absolute bottom-full right-0 z-20 mb-1.5 w-52 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                    <div
+                      data-testid="model-menu"
+                      className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                    >
+                      {/* v1.277.0: type to find a model across every provider. */}
+                      <input
+                        data-testid="model-filter"
+                        value={modelFilter}
+                        onChange={(e) => setModelFilter(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && modelMatches[0]) {
+                            e.preventDefault();
+                            pickModel(`${modelMatches[0].provider}::${modelMatches[0].model}`);
+                          } else if (e.key === "Escape") {
+                            setModelMenuOpen(false);
+                            setModelSub(null);
+                          }
+                        }}
+                        placeholder="Type to find a model…"
+                        aria-label="Find a model"
+                        autoFocus
+                        className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[11.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+                      />
+                      {modelFilter.trim() ? (
+                        modelMatches.length === 0 ? (
+                          <p className="px-2.5 py-1.5 text-[11.5px] text-zinc-500">No model matches.</p>
+                        ) : (
+                          modelMatches.map((m) => {
+                            const v = `${m.provider}::${m.model}`;
+                            return (
+                              <button
+                                key={`match-${v}`}
+                                type="button"
+                                data-testid="model-match"
+                                onClick={() => pickModel(v)}
+                                disabled={m.available === false}
+                                title={m.available === false ? `${m.name || m.provider} isn't connected` : undefined}
+                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                                  choice === v ? "text-accent-soft" : "text-zinc-300"
+                                }`}
+                              >
+                                <span className="min-w-0 truncate">{m.model}</span>
+                                <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                                  {m.name || m.provider}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )
+                      ) : (
+                        <>
+                      {recentModels.length > 0 && (
+                        <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                          <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                          {recentModels.map((v) => {
+                            const { provider, model } = splitChoice(v);
+                            const row = models.find((m) => m.provider === provider && m.model === model);
+                            if (!row) return null;
+                            return (
+                              <button
+                                key={`recent-${v}`}
+                                type="button"
+                                onClick={() => pickModel(v)}
+                                disabled={row.available === false}
+                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                                  choice === v ? "text-accent-soft" : "text-zinc-300"
+                                }`}
+                              >
+                                <span className="min-w-0 truncate">{model}</span>
+                                <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                                  {row.name || row.provider}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                       <button
                         type="button"
-                        onClick={() => {
-                          setChoice("");
-                          markSetupChanged();
-                          setModelMenuOpen(false);
-                        }}
+                        onClick={() => pickModel("")}
                         className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
                           !choice ? "text-accent-soft" : "text-zinc-300"
                         }`}
@@ -8108,12 +8208,7 @@ export default function ChatPage() {
                                     <button
                                       key={v}
                                       type="button"
-                                      onClick={() => {
-                                        setChoice(v);
-                                        markSetupChanged();
-                                        setModelMenuOpen(false);
-                                        setModelSub(null);
-                                      }}
+                                      onClick={() => pickModel(v)}
                                       className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] ${
                                         choice === v
                                           ? "text-accent-soft"
@@ -8131,6 +8226,8 @@ export default function ChatPage() {
                           )}
                         </div>
                       ))}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

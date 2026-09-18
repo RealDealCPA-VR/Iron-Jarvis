@@ -1252,6 +1252,27 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A key opens the panel, Esc stops, Open Jarvis focuses, and the model menu
+  is typed into; a gate proves concurrency by construction** (v1.277.0, /goal
+  wave 4). Add-on: `manifest.commands["open-panel"]` (Alt+J) → the worker's
+  `chrome.commands.onCommand` → `chrome.sidePanel.open({windowId})` (a command
+  IS the user gesture that API needs); `background/openpage.ts::focusOrOpen`
+  is the ONE opener — Open Jarvis matches `sitePattern(JARVIS_URL)` so any
+  dashboard tab comes to the front, and the grant pages delegate to it;
+  `keyToPress` answers `"stop"` for Escape while running (the v1264 pin
+  moved). Chat: `lib/recentModels.ts` (`readRecentModels`/`rememberRecentModel`
+  /`matchModels`) + the popover's `#model-filter` box — matches replace the
+  tree while a word is typed, Enter picks the first, and `pickModel` is the
+  one row handler (choice + setup + memory); the page reads storage only when
+  the menu OPENS (S-05). GATES: `test_mcp_parallel_connect_v1257` asserted a
+  wall-clock ratio and went red on the release runner at 3.21x with nothing
+  wrong — it now proves overlap with a two-party `threading.Barrier` (serial
+  code breaks the barrier; no clock is compared with any other). The
+  batch-card test scopes its progress wait to the card (`within`) so a miss
+  prints the card's DOM, and pins the row BEFORE the events. Pins:
+  `tests/test_browser_sidebar_keys_v1277.py`,
+  `dashboard/__tests__/model-menu-v1277.test.tsx`.
+
 - **The risk door's card is answered where the turn is; a named click reads
   first; a loading page is read twice** (v1.276.0, /goal wave 3).
   `BrowserRuntime.approval_resolver` was None in production, so

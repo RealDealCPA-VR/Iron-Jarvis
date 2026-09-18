@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const H = vi.hoisted(() => {
   class FakeApiError extends Error {
@@ -279,6 +279,13 @@ describe("a folder of documents is offered as one summary sheet", () => {
     await screen.findByTestId("batch-suggest-card");
     fireEvent.click(screen.getByRole("button", { name: /Make the summary sheet/i }));
     await waitFor(() => expect(runCalls()).toHaveLength(1));
+    // v1.277.0: `running` is set AT THE PRESS (before the post is awaited), so the
+    // progress row is on screen before any event arrives. Pinned here so a
+    // failure below can say WHERE the row went: the v1.276.0 release gate lost
+    // it on the loaded runner with the page's DOM dump cut off above the card.
+    expect(within(screen.getByTestId("batch-suggest-card")).getByTestId("batch-progress")).toHaveTextContent(
+      "Starting on 7 documents",
+    );
 
     fileDone(1, 7, "doc1.pdf");
     fileDone(2, 7, "doc2.pdf");
@@ -297,7 +304,13 @@ describe("a folder of documents is offered as one summary sheet", () => {
     // card arrives one import-resolution after its gate opens; findBy's default
     // 1 s ceiling missed it on a loaded machine. 8 s is under the 15 s per-test
     // budget, so a missing card still reports THIS message rather than a timeout.
-    const progress = await screen.findByTestId("batch-progress", {}, { timeout: 8000 });
+    // Scoped to the card so a miss prints the CARD's DOM (its state is the
+    // diagnosis), not the first 7000 characters of the page.
+    const progress = await within(screen.getByTestId("batch-suggest-card")).findByTestId(
+      "batch-progress",
+      {},
+      { timeout: 8000 },
+    );
     expect(progress).toHaveTextContent("Reading 2 of 7: doc2.pdf");
 
     resolveRun({ output: "done", report: { processed: 7 }, created_paths: [SHEET] });

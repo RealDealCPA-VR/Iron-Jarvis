@@ -23,6 +23,8 @@
 // `chrome.scripting.executeScript` rejects. So tab metadata degrades honestly and
 // everything touching a page refuses with PERMISSION_DENIED.
 
+import { focusOrOpen } from "./openpage";
+
 /** The two schemes the add-on ever asks for. Must match `optional_host_permissions`. */
 // v1.274.0: `<all_urls>`, not `http://*/*` + `https://*/*`. Chromium's screenshot
 // check (`PermissionsData::CanCaptureVisiblePage`) asks whether the granted
@@ -74,20 +76,11 @@ export async function openMicPage(): Promise<{ tab_id: number | null }> {
   return openAddonPage(MIC_PAGE);
 }
 
-/** Focus the page if a tab already shows it, else open it in a new active tab. */
+/** Focus the page if a tab already shows it, else open it in a new active tab
+ * (v1.277.0: the one opener in `openpage.ts`, shared with Open Jarvis). */
 async function openAddonPage(page: string): Promise<{ tab_id: number | null }> {
-  const url = chrome.runtime.getURL(page);
-  const open = await chrome.tabs.query({ url });
-  const existing = open[0];
-  if (existing?.id !== undefined) {
-    await chrome.tabs.update(existing.id, { active: true });
-    if (existing.windowId !== undefined) {
-      await chrome.windows.update(existing.windowId, { focused: true });
-    }
-    return { tab_id: existing.id };
-  }
-  const created = await chrome.tabs.create({ url, active: true });
-  return { tab_id: created.id ?? null };
+  const { tab_id } = await focusOrOpen(chrome.runtime.getURL(page));
+  return { tab_id };
 }
 
 /**

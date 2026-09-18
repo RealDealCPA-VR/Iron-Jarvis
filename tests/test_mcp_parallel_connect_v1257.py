@@ -5,17 +5,22 @@ to wait for each one to say hello in turn. Now it greets them all together, so
 the wait is about as long as the slowest single pack instead of all of them
 added up.
 
-HOW THE SLOWNESS IS REPRODUCED: by DELAYING the one step that actually waits --
-building the transport -- not by raising a bound and hoping. Every timing
-assertion here is a RATIO between two measurements taken on the same machine in
-the same test (one pack vs several), never an absolute wall-clock threshold,
-because an absolute threshold measures the hardware and goes red on CI.
+HOW THE CONCURRENCY IS PROVEN (v1.277.0): by CONSTRUCTION, not by a stopwatch.
+The fake transport build waits at a ``threading.Barrier`` that only releases
+once TWO builds are inside it at the same moment. A serial loop parks the first
+build there alone until the barrier's timeout breaks it, so serial code cannot
+pass; concurrent code passes however starved the machine is. The v1.257.0 cut
+asserted a wall-clock RATIO (four packs under twice one pack) and went red on
+the release runner at 3.21x with nothing wrong -- a ratio between two sleeps is
+still a measurement of the scheduler, and a loaded scheduler starts four threads
+late enough to look serial.
 
-Fully offline: FakeTransport, and a deliberate sleep.
+Fully offline: FakeTransport, and a barrier.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -67,22 +72,42 @@ def _elapsed(configs) -> tuple[float, list]:
     return time.perf_counter() - start, tools
 
 
-def test_several_packs_cost_about_one_pack_not_the_sum_of_them(monkeypatch):
-    """The whole point of S-01. Serially this is 4x one pack; together it is ~1x."""
-    _slow_transport(monkeypatch, lambda _name: DELAY)
+def test_several_packs_connect_at_once_not_one_after_another(monkeypatch):
+    """The whole point of S-01, proven by construction (v1.277.0).
 
-    one, tools_one = _elapsed([_pack("solo")])
-    four, tools_four = _elapsed([_pack(f"p{i}") for i in range(4)])
+    Every build waits at a two-party barrier. Four packs: the first two builds
+    meet and release, then the next two. A serial loop never has two builds in
+    flight, so its first build waits alone until the barrier times out and
+    breaks — the failure names itself. No clock is compared with any other.
+    """
+    barrier = threading.Barrier(2, timeout=5.0)
+    broken: list[str] = []
 
-    assert len(tools_one) == 2, "the fake pack really did hand over its two tools"
+    def _build(cfg, _resolver):
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            broken.append(cfg.get("name") or "mcp")
+            raise
+        return FakeTransport({"tools/list": TOOLS_LIST})
+
+    monkeypatch.setattr(mcp_tools_mod, "_build_transport", _build)
+
+    tools_four = mcp_tools([_pack(f"p{i}") for i in range(4)])
+
+    assert not broken, (
+        f"builds {broken} waited alone at the barrier until it broke - the packs "
+        "were connected one after another, not together"
+    )
     assert len(tools_four) == 8, "all four packs loaded — this is not a speedup by skipping"
 
-    # RATIO, not a wall clock. Serial gives ~4.0; concurrent gives ~1.0-1.3.
-    # 2.0 sits far from both, so this is not a coin flip on a busy runner.
-    assert four < one * 2.0, (
-        f"four packs took {four:.3f}s against one pack's {one:.3f}s "
-        f"(ratio {four / one:.2f}x) - that is the serial sum, not a concurrent connect"
-    )
+
+def test_one_pack_alone_still_connects(monkeypatch):
+    """A single pack needs no companion: the pool is sized to the config, and one
+    build must not wait for a second that never comes."""
+    _slow_transport(monkeypatch, lambda _name: 0.0)
+    _, tools_one = _elapsed([_pack("solo")])
+    assert len(tools_one) == 2, "the fake pack really did hand over its two tools"
 
 
 def test_tools_come_back_in_config_order_even_when_a_later_pack_answers_first(monkeypatch):

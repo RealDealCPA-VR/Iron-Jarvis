@@ -24,14 +24,29 @@ import time
 from fastapi.testclient import TestClient
 
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.terminals.backend import FakeBackend
 
 
-def test_studio_say_refuses_an_exited_cli_whose_stale_marker_lingers(tmp_path):
+def test_studio_say_refuses_an_exited_cli_whose_stale_marker_lingers(tmp_path, monkeypatch):
     """SAFETY: a mid-turn crash leaves the last 'esc to interrupt' repaint in the
     tail right next to the shell prompt that replaced it. The say gate must judge
     that marker by its AGE (as studio_tail does) and still refuse — otherwise the
     brief is typed into a bare PowerShell prompt and RUNS."""
-    client = TestClient(create_app(str(tmp_path)))
+    app = create_app(str(tmp_path))
+    client = TestClient(app)
+    # v1.277.0: NO REAL SHELL. The refusal under test happens before anything is
+    # typed, so the backend's only job is to print nothing it was not given. A
+    # real PowerShell that booted slowly on the release runner printed its
+    # prompt AFTER the crash shape below was installed — appending to the tail
+    # and stamping `last_output_at` fresh — so the leftover marker read as a
+    # live turn and the brief was typed (`{"typed": true, "chars": 12}`).
+    manager = app.state.platform.terminals
+    real_spawn = manager._spawn
+
+    def _fake_spawn(cwd, name, argv, cols, rows, backend=None, env=None):
+        return real_spawn(cwd, name, argv, cols, rows, FakeBackend(), env)
+
+    monkeypatch.setattr(manager, "_spawn", _fake_spawn)
     term = client.post("/terminals", json={"cwd": str(tmp_path)})
     tid = term.json()["id"]
     try:

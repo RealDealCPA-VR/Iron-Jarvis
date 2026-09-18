@@ -618,7 +618,15 @@ el.toggle?.addEventListener("click", () => {
 // button that fits the moment: Send when idle, Steer while a turn is running
 // (Send is refused mid-turn anyway). Shift+Enter keeps the newline for people
 // who want one. Exported so the contract is pinned without a real keyboard.
-export function keyToPress(key: string, shift: boolean, running: boolean): "send" | "steer" | null {
+export function keyToPress(
+  key: string,
+  shift: boolean,
+  running: boolean,
+): "send" | "steer" | "stop" | null {
+  // v1.277.0: ESC STOPS. While a turn runs, Escape presses Stop from the box
+  // the user is already typing in — no reach for the button. Idle, it does
+  // nothing (the box keeps its words; a key that emptied it would be a surprise).
+  if (key === "Escape") return running ? "stop" : null;
   if (key !== "Enter" || shift) return null;
   return running ? "steer" : "send";
 }
@@ -629,7 +637,7 @@ el.ask?.addEventListener("keydown", (event: KeyboardEvent) => {
   const press = keyToPress(event.key, event.shiftKey, document.body.dataset["turn"] === "running");
   if (!press) return;
   event.preventDefault();
-  (press === "send" ? el.send : el.steer)?.click();
+  (press === "send" ? el.send : press === "steer" ? el.steer : el.stop)?.click();
 });
 
 function sendNow(): void {

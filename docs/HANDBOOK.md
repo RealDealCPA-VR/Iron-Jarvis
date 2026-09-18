@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.276.0 (2026-09-14).*
+holds itself to. Current as of v1.277.0 (2026-09-14).*
 
 ---
 
@@ -950,6 +950,15 @@ one action. Two quieter savings: a page still loading is read again after a
 moment instead of being handed back as a refusal, and a click named by what it
 says ("Sign in") on a page Jarvis has not yet read makes Jarvis read the page
 first, itself, rather than spend a turn being told to.
+
+**Fewer reaches (v1.277.0).** Four small things that each cost a reach every
+time. In the browser, **Alt+J** opens the sidebar (your browser's own shortcuts
+page shows and changes the key), **Esc** stops a running turn from the box you
+are typing in, and **Open Jarvis** brings the Iron Jarvis tab you already have
+to the front instead of opening another. In chat, the model menu opens with a
+box: type part of a model's name and every match across your providers is
+listed — Enter picks the first — and with the box empty the menu opens on the
+last three models you picked, above the provider list it always had.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's
