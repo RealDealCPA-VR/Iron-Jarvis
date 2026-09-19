@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.279.0 (2026-09-14).*
+holds itself to. Current as of v1.280.0 (2026-09-14).*
 
 ---
 
@@ -988,6 +988,16 @@ jobs, not knowledge about you, so they no longer take up the lesson lines in
 every conversation (they still feed the weekly distillation and the tab); and
 the reasoning level you pick for a conversation is remembered with it — it
 used to reset to the model's default every time you reopened the thread.
+
+**Build knows who you are and what you are working on (v1.280.0).** The
+AI-assist bar in a Build pane used to answer with nothing but the pane's
+output — it was the one place in the app that knew neither your profile, nor
+the project the folder belongs to, nor a single lesson. Now it gets the same
+three things every chat turn gets, plus one line naming the pane, its folder
+and the CLI running in it. Two quieter things: the Build page tidies up after
+panes that no longer exist (their view, chat thread and canvas position used
+to stay in the browser forever), and the Agents page's job card opens on the
+agent you last handed work to instead of the Team every time.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

@@ -109,6 +109,9 @@ beforeEach(() => {
   hooks.posts = [];
   hooks.postResult = { id: "s-new", status: "active" };
   hooks.postFail = null;
+  // v1.280.0: the card remembers its last target per browser; a pick made by
+  // an earlier case must not leak into the next fresh visit.
+  window.localStorage.clear();
 });
 afterEach(cleanup);
 

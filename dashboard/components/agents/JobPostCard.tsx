@@ -34,6 +34,30 @@ export const JOB_ORIGIN = "job:agents";
  *  lists supervisor as non-delegable (it carries the delegate tool). */
 export const TEAM_TARGET = "__team__";
 
+/** v1.280.0: the agent the last job went to, per browser. The card used to
+ *  open on the Team every visit; a person who hands most work to one agent
+ *  picked it every time. Restored only while the roster still lists it —
+ *  `effectiveTarget` below falls back to the Team, visibly, otherwise. */
+export const LAST_TARGET_KEY = "ij_agents_last_target";
+
+export function readLastTarget(): string {
+  try {
+    const v = window.localStorage.getItem(LAST_TARGET_KEY);
+    return typeof v === "string" && v ? v : TEAM_TARGET;
+  } catch {
+    return TEAM_TARGET;
+  }
+}
+
+export function rememberLastTarget(target: string): void {
+  try {
+    if (target === TEAM_TARGET) window.localStorage.removeItem(LAST_TARGET_KEY);
+    else window.localStorage.setItem(LAST_TARGET_KEY, target);
+  } catch {
+    /* a browser that refuses storage forgets, which is what it did before */
+  }
+}
+
 /** How many recent jobs render before the honest "showing the latest N" line. */
 const MAX_JOBS = 8;
 
@@ -173,7 +197,7 @@ export function JobPostCard({
   assign?: JobAssign | null;
 } = {}) {
   const [task, setTask] = useState("");
-  const [target, setTarget] = useState(TEAM_TARGET);
+  const [target, setTarget] = useState(readLastTarget);
   const [projectId, setProjectId] = useState("");
   // Optional per-session step budget (v1.174.0). Kept as TEXT, because "" is a
   // real value here — "use the configured default" — and a number input that
@@ -299,7 +323,10 @@ export function JobPostCard({
             <select
               id="job-target"
               value={effectiveTarget}
-              onChange={(e) => setTarget(e.target.value)}
+              onChange={(e) => {
+                setTarget(e.target.value);
+                rememberLastTarget(e.target.value);
+              }}
               className="field"
             >
               <option value={TEAM_TARGET}>

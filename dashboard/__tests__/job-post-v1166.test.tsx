@@ -195,6 +195,9 @@ beforeEach(() => {
   hooks.postFail = null;
   hooks.postDelayMs = 0;
   hooks.pollIntervals = [];
+  // v1.280.0: the card remembers its last target per browser; each case here
+  // assumes a fresh visit, so a pick made by an earlier case must not leak.
+  window.localStorage.clear();
   // jsdom has no scrollIntoView, and these components are rendered inside
   // pages that call it — stubbed so a stray call is never the failure.
   window.HTMLElement.prototype.scrollIntoView = vi.fn();

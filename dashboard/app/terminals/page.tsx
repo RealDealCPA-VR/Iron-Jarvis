@@ -37,6 +37,7 @@ import {
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
 import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
+import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
 import {
   PaneStateSummary,
@@ -83,7 +84,7 @@ type Rect = { x: number; y: number; width: number; height: number };
 // an explicit toggle, so existing users' storage is byte-for-byte untouched.
 type PaneView = "terminal" | "chat";
 
-const paneViewKey = (id: string) => `ij.pane.view.${id}`;
+const paneViewKey = (id: string) => `${PANE_VIEW_PREFIX}${id}`;
 
 /** Rail or canvas. Its own key — "ij_term_layout" is the RECT map. */
 const SHAPE_KEY = "ij.build.shape";
@@ -674,6 +675,10 @@ export default function TerminalsPage() {
         // longer offers — closed by an agent or another window, or a shell
         // that exited — so no socket stays open for a pane nobody can see.
         retainPaneHosts(alive.map((t) => t.id));
+        // v1.280.0: the per-pane keys (view, thread, rect) of panes the daemon
+        // no longer offers are removed — they were never removed before, and
+        // grew for the life of the install. Only after a SUCCESSFUL answer.
+        prunePaneStorage(alive.map((t) => t.id));
         setTerminals(alive);
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands

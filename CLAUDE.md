@@ -1252,6 +1252,25 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **The Build assist carries the pane, the profile, the project and the
+  lessons; dead pane keys are pruned; the job card remembers its target**
+  (v1.280.0, /goal surfaces wave). `POST /terminals/{id}/ai` was the one
+  model call with no user context (two sentences + skills + other panes'
+  output). Now, in the chat lanes' order: `_pane_identity_block(session)`
+  (name, folder, CLI), `_profile_section(platform)`, `project_context_block(
+  project_for_path(engine, session.cwd))` and `learning.apply_to_prompt` —
+  each "" when there is nothing. `projects/locate.py` is the daemon-side
+  twin of the dashboard's `projectForCwd` (most specific ACTIVE root at a
+  segment boundary, case-folded; never raises). `components/terminal/
+  paneKeys.ts::prunePaneStorage(liveIds)` removes `ij.pane.view.<id>`,
+  `ij.pane.thread.<id>` and `ij_term_layout` entries for panes the daemon no
+  longer offers — called ONLY after a successful `/terminals` answer (a
+  booting daemon answers 503, never an empty list). `JobPostCard` opens on
+  `ij_agents_last_target` while the roster still lists it (`effectiveTarget`
+  falls back to the Team visibly otherwise). Pins:
+  `tests/test_build_context_v1280.py`, `pane-keys-v1280.test.ts`,
+  `job-target-v1280.test.tsx`.
+
 - **Task reflections are not knowledge about the user; chat can remember a
   stated preference; the Memory page says what it knows** (v1.279.0, /goal
   memory wave 1). The live ledger: 25 lessons, 23 of them the orchestrator's

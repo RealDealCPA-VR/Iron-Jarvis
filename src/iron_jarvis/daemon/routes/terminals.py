@@ -13,6 +13,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
+from ...projects.locate import project_context_block, project_for_path
+from ..chat_turn import _profile_section
 
 from ..app import _first_code_block, _ws_token_ok
 from ..schemas import (
@@ -456,6 +458,22 @@ def register(app: FastAPI, d) -> None:
             except Exception:
                 pass
 
+    def _pane_identity_block(session) -> str:
+        """One line naming the pane: its name, folder and the CLI running in it."""
+        parts = []
+        name = str(getattr(session, "pane_name", "") or "").strip()
+        if name:
+            parts.append(f"named {name!r}")
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if cwd:
+            parts.append(f"in the folder {cwd}")
+        cli = str(getattr(session, "agent_cli", "") or "").strip()
+        if cli:
+            parts.append(f"running the {cli} CLI")
+        if not parts:
+            return ""
+        return "\n\nThis pane is " + ", ".join(parts) + "."
+
     @app.post("/terminals/{term_id}/ai")
     async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
         """Per-terminal AI assist with a PER-PANE model choice.
@@ -487,6 +505,23 @@ def register(app: FastAPI, d) -> None:
             "put EXACTLY ONE command alone in a fenced code block; explain in "
             "one or two sentences at most. Never invent output."
         )
+        # THE PANE, THE PROJECT AND THE USER (v1.280.0). This prompt used to be
+        # the two sentences above and nothing else: a pane sitting in a project
+        # folder answered knowing neither the project, nor the user's profile,
+        # nor a single lesson — the only surface in the app that did. The same
+        # three seams every chat turn gets, in the same order, each "" when
+        # there is nothing to say.
+        system += _pane_identity_block(session)
+        system += _profile_section(d.platform)
+        _proj_block = project_context_block(
+            project_for_path(d.platform.engine, getattr(session, "cwd", "") or "")
+        )
+        if _proj_block:
+            system += "\n\n" + _proj_block
+        try:
+            system = d.platform.learning.apply_to_prompt(system)
+        except Exception:  # noqa: BLE001 — lessons must never break assist
+            pass
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,
         # so it works identically on models with weak/no tool support.
