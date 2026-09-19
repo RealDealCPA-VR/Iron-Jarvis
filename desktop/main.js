@@ -2218,6 +2218,24 @@ function installSpotlightIpc() {
     if (!isTrustedDashboardSender(event)) return null;
     return openLogsFolder();
   });
+  // POP-OUT WINDOWS (v1.283.0). Sender-checked like every privileged handler:
+  // a page that is not the dashboard must not open windows on the user's desk.
+  ipcMain.handle("popout:open", (event, rawPath) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return openPopout(rawPath);
+  });
+  ipcMain.handle("popout:list", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return popoutPaths();
+  });
+  ipcMain.handle("popout:focus", (event, rawPath) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return focusPopout(rawPath);
+  });
+  ipcMain.handle("popout:close", (event, rawPath) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return closePopout(rawPath);
+  });
   ipcMain.handle("update:check", async () => {
     const au = initUpdater();
     if (!au) {
@@ -3984,6 +4002,184 @@ function openDashboardPath(path) {
   if (bootComplete) showMainWindow();
   else showWindowWhenReady = true;
   return true;
+}
+
+// --- Pop-out windows (v1.283.0) ---------------------------------------------
+// A module in its OWN window, so Chat can sit on one screen while Build fills
+// another. One BrowserWindow per dashboard route, the same chrome as the main
+// window (hidden title bar + native controls overlay, the preload, the token,
+// the external-link guards), placed by windowState.popoutPlacement — on the
+// other screen when the desk has one — and remembered per route. A pop-out is
+// never the tray window: closing it just closes it, the main window keeps its
+// keep-running prompt, and Quit closes them all. The renderer learns it is a
+// pop-out from the preload (`--ij-popout=<route>`), which survives in-window
+// navigation where a query string would not.
+const popouts = new Map(); // dashboard route -> BrowserWindow
+
+/** A dashboard route a pop-out may open ("/chat", "/terminals", …) or "". Same
+ *  rules as the ironjarvis:// link: route only, no host, no dots, no "//", and
+ *  the query string dropped — a pop-out is a module, not a filter. */
+function normalizePopoutPath(raw) {
+  let p = String(raw || "").trim();
+  if (!p) return "";
+  const cut = p.search(/[?#]/);
+  if (cut >= 0) p = p.slice(0, cut);
+  p = `/${p.replace(/^\/+/, "")}`;
+  if (p.length > 200 || p.includes("//")) return "";
+  if (!PROTOCOL_PATH_RX.test(p)) return "";
+  if (p === "/") return ""; // the Overview is the main window's job
+  return p;
+}
+
+function popoutPaths() {
+  return [...popouts.keys()];
+}
+
+function livePopout(route) {
+  const win = popouts.get(route);
+  if (!win || win.isDestroyed()) {
+    popouts.delete(route);
+    return null;
+  }
+  return win;
+}
+
+function focusPopout(rawPath) {
+  const route = normalizePopoutPath(rawPath);
+  const win = route ? livePopout(route) : null;
+  if (!win) return { ok: false, path: route };
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  win.focus();
+  return { ok: true, path: route };
+}
+
+function closePopout(rawPath) {
+  const route = normalizePopoutPath(rawPath);
+  const win = route ? livePopout(route) : null;
+  if (!win) return { ok: false, path: route };
+  win.close();
+  return { ok: true, path: route };
+}
+
+function initialPopoutBounds(route) {
+  const saved = userDataDir ? windowState.loadPopoutBounds(userDataDir, route) : null;
+  const main = mainWin && !mainWin.isDestroyed() ? mainWin.getBounds() : null;
+  return windowState.popoutPlacement(saved, screen.getAllDisplays(), main, popouts.size);
+}
+
+function openPopout(rawPath) {
+  const route = normalizePopoutPath(rawPath);
+  if (!route) return { ok: false, path: "", reason: "not a dashboard route" };
+  const existing = livePopout(route);
+  if (existing) {
+    focusPopout(route);
+    return { ok: true, path: route, reused: true };
+  }
+  const placed = initialPopoutBounds(route);
+  const win = new BrowserWindow({
+    width: placed.width,
+    height: placed.height,
+    ...(Number.isFinite(placed.x) && Number.isFinite(placed.y)
+      ? { x: placed.x, y: placed.y }
+      : { center: true }),
+    backgroundColor: "#0a0a0f",
+    show: false,
+    title: "Iron Jarvis",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#0a0a0f", symbolColor: "#a6b0ba", height: 40 },
+    icon: path.join(__dirname, "assets", "icon.png"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      spellcheck: true,
+      additionalArguments: [`--ij-token=${authToken || ""}`, `--ij-popout=${route}`],
+    },
+  });
+  popouts.set(route, win);
+  installSpellcheckMenu(win);
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.show();
+  });
+  // The token safety net, exactly as the main window has it (v1.111.0).
+  let tokenEnsured = false;
+  win.webContents.on("did-finish-load", () => {
+    if (tokenEnsured || !authToken) return;
+    const lit = JSON.stringify(authToken);
+    const js =
+      "(() => { try {" +
+      `  if (localStorage.getItem('ij_token') !== ${lit}) {` +
+      `    localStorage.setItem('ij_token', ${lit}); return 'set';` +
+      "  } return 'present';" +
+      "} catch (e) { return 'error'; } })()";
+    win.webContents
+      .executeJavaScript(js)
+      .then((result) => {
+        tokenEnsured = true;
+        if (result === "set" && !win.isDestroyed()) win.webContents.reload();
+      })
+      .catch(() => {
+        tokenEnsured = true;
+      });
+  });
+  // Links leave for the system browser; the window stays on the dashboard.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!isDashboardUrl(url)) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  win.webContents.on("will-redirect", (event, url) => {
+    if (!isDashboardUrl(url)) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  // A dashboard-child outage must not strand the window on Chromium's error
+  // page: wait for the dashboard and load again (the main window's loop,
+  // per window here).
+  let reloadPending = false;
+  win.webContents.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
+    if (code === -3 || !isMainFrame || !isDashboardUrl(url) || reloadPending) return;
+    reloadPending = true;
+    waitForDashboard(60000, 500)
+      .then(() => {
+        reloadPending = false;
+        if (!win.isDestroyed()) win.loadURL(popoutUrl(route));
+      })
+      .catch(() => {
+        reloadPending = false;
+      });
+  });
+  // Remember the rectangle per route as the user moves/resizes it.
+  let saveTimer = null;
+  const scheduleSave = () => {
+    if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      if (userDataDir && !win.isDestroyed() && win.isVisible()) {
+        windowState.savePopoutBounds(userDataDir, route, win.getBounds());
+      }
+    }, 600);
+  };
+  win.on("resize", scheduleSave);
+  win.on("move", scheduleSave);
+  win.on("closed", () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    if (popouts.get(route) === win) popouts.delete(route);
+  });
+  win.loadURL(popoutUrl(route));
+  return { ok: true, path: route, reused: false, secondary: !!placed.secondary };
+}
+
+function popoutUrl(route) {
+  return `${DASHBOARD_URL}${route}${route.includes("?") ? "&" : "?"}popout=1`;
 }
 
 function protocolUrlIn(argv) {

@@ -17,12 +17,20 @@ const { contextBridge, ipcRenderer } = require("electron");
 // a PERMANENT 401.
 const IJ_TOKEN_KEY = "ij_token";
 
-function readTokenArg() {
-  const prefix = "--ij-token=";
+function readArg(prefix) {
   // additionalArguments are appended to process.argv (works in sandbox too).
   const arg = (process.argv || []).find((a) => typeof a === "string" && a.startsWith(prefix));
   return arg ? arg.slice(prefix.length) : "";
 }
+
+function readTokenArg() {
+  return readArg("--ij-token=");
+}
+
+// Pop-out windows (v1.283.0): main.js hands a pop-out its dashboard path here,
+// so the renderer knows it is one — through every in-window navigation, where
+// a `?popout=1` in the first URL would not survive.
+const POPOUT_PATH = readArg("--ij-popout=");
 
 (function injectToken() {
   const token = readTokenArg();
@@ -88,6 +96,17 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     // Settings → Maintenance → "Open logs folder". Resolves { ok, path,
     // error? }, or null when the main process refuses the sender.
     openLogs: () => ipcRenderer.invoke("shell:openLogs"),
+  },
+  // Pop-out windows (v1.283.0): a module in its own window — on another screen
+  // when the desk has one. `isPopout`/`path` say whether THIS window is one.
+  // Every call is sender-checked in main.js and resolves null when refused.
+  popout: {
+    isPopout: POPOUT_PATH !== "",
+    path: POPOUT_PATH,
+    open: (path) => ipcRenderer.invoke("popout:open", String(path ?? "")),
+    list: () => ipcRenderer.invoke("popout:list"),
+    focus: (path) => ipcRenderer.invoke("popout:focus", String(path ?? "")),
+    close: (path) => ipcRenderer.invoke("popout:close", String(path ?? "")),
   },
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {

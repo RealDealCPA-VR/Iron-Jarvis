@@ -20,6 +20,7 @@
 import { useEffect, useRef } from "react";
 
 import { useEvents } from "@/lib/useEvents";
+import { isPopoutWindow } from "@/lib/desktopShell";
 
 interface NotifyBridge {
   notify?: (title: string, body: string) => Promise<boolean>;
@@ -27,6 +28,10 @@ interface NotifyBridge {
 
 export function DesktopNotifyBridge() {
   const { events } = useEvents(50);
+  // v1.283.0: every window holds its own events socket, so with a module
+  // popped out the same comm.desktop event would toast once per window. The
+  // main window is the one that speaks for the app; a pop-out stays quiet.
+  const quiet = isPopoutWindow();
   // Events arrive newest-first and re-render as a rolling window — remember
   // what was already shown or a reconnect would replay toasts.
   const seenRef = useRef<Set<string>>(new Set());
@@ -35,6 +40,7 @@ export function DesktopNotifyBridge() {
     const bridge = (window as unknown as { ironjarvis?: NotifyBridge }).ironjarvis;
     if (!bridge?.notify) return;
     for (const ev of events) {
+      if (quiet) break;
       if (ev.type !== "comm.desktop" || !ev.id || seenRef.current.has(ev.id)) continue;
       seenRef.current.add(ev.id);
       const payload = (ev.payload ?? {}) as { title?: string; message?: string };

@@ -1252,6 +1252,36 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A module pops out into its own window, on the other screen when there
+  is one** (v1.283.0, pop-out windows). `desktop/main.js` keeps ONE
+  BrowserWindow per dashboard route (`popouts` Map; `openPopout` focuses an
+  existing one), with the main window's chrome (hidden title bar + native
+  overlay, the preload, the token safety net, the external-link guards, a
+  per-window `did-fail-load` retry) and NONE of its tray behaviour (no close
+  interception; `window-all-closed` stays a no-op; Quit closes them all).
+  Placement is `windowState.popoutPlacement(saved, displays, mainBounds,
+  offset)` — pure, electron-free, node-tested: the saved rectangle while its
+  display exists, else centred on the screen that does NOT hold the main
+  window, else cascaded off it; bounds remembered per route in
+  `popout-windows.json` (`loadPopoutBounds`/`savePopoutBounds`).
+  `normalizePopoutPath` keeps the ironjarvis:// path rules and drops the
+  query; "/" never pops out. IPC `popout:open|list|focus|close`, every
+  handler `isTrustedDashboardSender`-checked. The renderer learns it is a
+  pop-out from the PRELOAD (`--ij-popout=<path>` → `ironjarvis.popout.
+  isPopout/path`) — a `?popout=1` would not survive in-window navigation.
+  Dashboard: `lib/desktopShell.popoutBridge()/isPopoutWindow()`;
+  `lib/nav.labelForPath` (the title bar's rule, now shared); TitleBar's
+  `#popout-open` door (desktop, not in a pop-out, never for "/"), the
+  `#popout-badge` and the window title via `<html data-ij-title>` (the
+  NotificationBell prefixes its count onto that base); Sidebar rows'
+  `#popout-row-<route>` hover doors; `DesktopNotifyBridge` stays quiet in a
+  pop-out (each window holds its own events socket — one toast per event).
+  NOT attached to pop-outs: the renderer watchdog (module-global state; the
+  main window keeps it) and `installDashboardReloadOnFailure` (same). Two
+  windows on the SAME chat thread both autosave — the thread PUT's
+  `updated_at` check is the only guard. Pins:
+  `tests/test_desktop_popout_v1283.py`, `dashboard/__tests__/popout-v1283.test.tsx`.
+
 - **A kept preference is said on the receipt, in the user's words**
   (v1.282.0, /goal memory wave 2). `remember_preference`'s `data` carries
   `text`; `chat_turn.remembered_from_result(name, result)` reads it (or the

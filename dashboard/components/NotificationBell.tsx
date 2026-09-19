@@ -606,10 +606,13 @@ export function NotificationBell() {
     const prev = prevCount.current;
     prevCount.current = count;
 
+    // v1.283.0: a popped-out module titles its window by name (TitleBar
+    // leaves the base title on <html data-ij-title>); the count rides in front.
+    const base = document.documentElement.dataset.ijTitle || "Iron Jarvis";
     if (count === 0) {
-      document.title = "Iron Jarvis";
+      document.title = base;
     } else {
-      document.title = `(${count}) Iron Jarvis`;
+      document.title = `(${count}) ${base}`;
     }
 
     if (count > prev) {

@@ -513,3 +513,21 @@ export const NAV: NavSectionDef[] = [
 
 /** Flattened, in nav order. */
 export const NAV_ENTRIES: NavEntry[] = NAV.flatMap((s) => s.items);
+
+/**
+ * The nav label for a pathname — longest-prefix match so nested routes
+ * (`/sessions/abc123`) resolve to their parent entry; "/" and unknown paths
+ * answer null rather than a guess. The title bar's "where am I" and a pop-out
+ * window's title share this one rule (v1.283.0).
+ */
+export function labelForPath(pathname: string | null | undefined): string | null {
+  if (!pathname || pathname === "/") return null;
+  let best: NavEntry | null = null;
+  for (const entry of NAV_ENTRIES) {
+    if (entry.href === "/") continue; // matches everything; never a useful label
+    const hit = pathname === entry.href || pathname.startsWith(`${entry.href}/`);
+    if (!hit) continue;
+    if (!best || entry.href.length > best.href.length) best = entry;
+  }
+  return best?.label ?? null;
+}

@@ -18,3 +18,30 @@ export function isDesktopShell(): boolean {
 /** The one line both offline surfaces show inside the desktop shell. */
 export const DESKTOP_OFFLINE_HINT =
   "Iron Jarvis is restarting its local service… if this persists, use the tray → Quit and relaunch.";
+
+/** The desktop shell's pop-out bridge (v1.283.0) — see desktop/preload.js. */
+export interface PopoutBridge {
+  isPopout: boolean;
+  path: string;
+  open: (path: string) => Promise<{ ok: boolean; path: string; reused?: boolean } | null>;
+  list: () => Promise<string[] | null>;
+  focus: (path: string) => Promise<{ ok: boolean; path: string } | null>;
+  close: (path: string) => Promise<{ ok: boolean; path: string } | null>;
+}
+
+/** The bridge, or null outside the desktop shell (or on an older shell). */
+export function popoutBridge(): PopoutBridge | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const b = (window as unknown as { ironjarvis?: { popout?: Partial<PopoutBridge> } }).ironjarvis
+      ?.popout;
+    return b && typeof b.open === "function" ? (b as PopoutBridge) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Is THIS window a popped-out module? False in the main window and in a browser. */
+export function isPopoutWindow(): boolean {
+  return popoutBridge()?.isPopout === true;
+}

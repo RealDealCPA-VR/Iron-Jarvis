@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.282.0 (2026-09-14).*
+holds itself to. Current as of v1.283.0 (2026-09-14).*
 
 ---
 
@@ -1012,6 +1012,19 @@ under a reply now reads **Remembered: …** with the sentence Jarvis kept —
 "Prefers short answers with numbered steps" — the moment it keeps one, in the
 same place the reply's model and tools are named. Nothing about you is written
 in silence; the What I've learned tab is where you forget it.
+
+**A module in its own window, on your other screen (v1.283.0).** Two or three
+modules at once, each on its own monitor: the small window icon in the title
+bar opens the page you are on in a new window, and every row of the
+navigation drawer has the same icon on hover for that module. When your desk
+has a second screen the new window opens centred there; on one screen it
+steps off the main window. Each window remembers where you left it, per
+module, and comes back there next time (or on-screen, if that monitor is
+gone). A popped-out window says **own window** in its strip and is named by
+its module in the taskbar, so two Iron Jarvis windows never look like the app
+opened twice. Closing it just closes it — the main window keeps its
+keep-running behaviour, and Quit closes them all. Opening a module that is
+already popped out brings that window to the front instead of making another.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

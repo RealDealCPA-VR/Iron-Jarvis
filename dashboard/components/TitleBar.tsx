@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, Search } from "lucide-react";
-import { NAV_ENTRIES } from "@/lib/nav";
+import { Menu, Search, AppWindow } from "lucide-react";
+import { labelForPath } from "@/lib/nav";
+import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 
 /** The desktop bridge surface this component uses (preload.js exposes it). */
 interface DesktopBridge {
@@ -78,17 +79,24 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
   // only orientation cue. Longest-prefix match so nested routes (e.g.
   // /sessions/abc123) still resolve to their parent entry; "/" and unknown
   // paths deliberately render nothing rather than guessing.
-  const pageLabel = useMemo(() => {
-    if (!pathname || pathname === "/") return null;
-    let best: (typeof NAV_ENTRIES)[number] | null = null;
-    for (const entry of NAV_ENTRIES) {
-      if (entry.href === "/") continue; // matches everything; never a useful label
-      const hit = pathname === entry.href || pathname.startsWith(`${entry.href}/`);
-      if (!hit) continue;
-      if (!best || entry.href.length > best.href.length) best = entry;
-    }
-    return best?.label ?? null;
-  }, [pathname]);
+  const pageLabel = useMemo(() => labelForPath(pathname), [pathname]);
+
+  // POP-OUT WINDOWS (v1.283.0). The bridge exists only in the desktop shell;
+  // read in an effect so the server render and the first client render agree.
+  const [popout, setPopout] = useState<PopoutBridge | null>(null);
+  useEffect(() => {
+    setPopout(popoutBridge());
+  }, []);
+  const isPopout = popout?.isPopout === true;
+  // A popped-out window is titled by its module — the OS taskbar and Alt+Tab
+  // are how the user tells two Iron Jarvis windows apart. The NotificationBell
+  // prefixes its count onto whatever base title this leaves behind.
+  useEffect(() => {
+    if (!isPopout) return;
+    const title = `${pageLabel ?? "Iron Jarvis"} — Iron Jarvis`;
+    document.documentElement.dataset.ijTitle = title;
+    document.title = title;
+  }, [isPopout, pageLabel]);
 
   // The nav drawer owns its own open/closed state and listens for this event.
   // The bar deliberately does NOT hold nav state: it renders above the drawer,
@@ -193,6 +201,17 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             <span className="truncate text-[13px] text-zinc-500">{pageLabel}</span>
           </>
         )}
+        {isPopout && (
+          // v1.283.0: this module lives in its own window. Said on the strip so
+          // two Iron Jarvis windows never read as one app opened twice.
+          <span
+            data-testid="popout-badge"
+            title="This module is open in its own window. Close the window to put it away."
+            className="ml-1 shrink-0 rounded-full border border-accent/25 bg-accent/[0.06] px-1.5 py-px text-[10px] uppercase tracking-wide text-accent-soft"
+          >
+            own window
+          </span>
+        )}
 
         {/* SEARCH — the front door. */}
         <div className="flex min-w-0 flex-1 justify-center px-2">
@@ -221,6 +240,24 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             </kbd>
           </button>
         </div>
+
+        {/* POP OUT (v1.283.0): this page in its own window — on the other
+            screen when the desk has one — so two modules can be worked at
+            once. Desktop only, never inside a pop-out, never for the Overview
+            (that is the main window's job). */}
+        {popout && !isPopout && pathname && pathname !== "/" && (
+          <button
+            type="button"
+            data-testid="popout-open"
+            onClick={() => void popout.open(pathname)}
+            aria-label={`Open ${pageLabel ?? "this page"} in a new window`}
+            title={`Open ${pageLabel ?? "this page"} in a new window — work in two modules at once`}
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+          >
+            <AppWindow size={14} strokeWidth={2} />
+          </button>
+        )}
 
         {/* Right slot: status/notification chrome supplied by the layout. Also
             no-drag — whatever the caller puts here is interactive by nature. */}

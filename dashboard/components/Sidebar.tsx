@@ -10,9 +10,11 @@ import {
   Settings,
   SlidersHorizontal,
   X,
+  AppWindow,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { recordOpen } from "@/lib/appTiles";
+import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { useDaemon } from "@/lib/daemon";
 import { NAV, type NavEntry as NavItem, type NavSectionDef as NavSection } from "@/lib/nav";
 
@@ -152,6 +154,14 @@ function NavLinks({
   const pathname = usePathname();
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
+  // POP-OUT WINDOWS (v1.283.0): each row carries a hover door to open that
+  // module in its own window. Desktop only; never offered inside a pop-out
+  // (a window within a window is not the feature); never for the Overview.
+  const [popout, setPopout] = useState<PopoutBridge | null>(null);
+  useEffect(() => {
+    const b = popoutBridge();
+    setPopout(b && !b.isPopout ? b : null);
+  }, []);
   return (
     <>
       {NAV.map((section) => {
@@ -169,9 +179,10 @@ function NavLinks({
           {items.map((item) => {
             const active = isActive(item.href);
             const Icon = item.icon;
+            const door = popout && !collapsed && item.href !== "/";
             return (
+              <div key={item.href} className="group/row relative">
               <Link
-                key={item.href}
                 href={item.href}
                 // v1.151.0: count opens LOCALLY so the Overview's app grid can
                 // lead with what this person actually uses. Never leaves the
@@ -207,6 +218,24 @@ function NavLinks({
                   <span className="relative z-10 font-medium">{item.label}</span>
                 )}
               </Link>
+              {door && (
+                <button
+                  type="button"
+                  data-testid={`popout-row-${item.href.slice(1)}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void popout.open(item.href);
+                    onNavigate?.();
+                  }}
+                  aria-label={`Open ${item.label} in a new window`}
+                  title={`Open ${item.label} in a new window`}
+                  className="absolute right-2 top-1/2 z-20 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.08] hover:text-zinc-100 focus:opacity-100 group-hover/row:opacity-100"
+                >
+                  <AppWindow size={13} strokeWidth={2} />
+                </button>
+              )}
+              </div>
             );
           })}
         </div>
