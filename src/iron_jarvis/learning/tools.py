@@ -46,7 +46,13 @@ class RememberPreferenceTool(Tool):
         return ToolResult(
             ok=True,
             output=f"remembered preference: {record.text}",
-            data={"id": record.id, "weight": record.weight, "scope": record.scope},
+            data={
+                "id": record.id,
+                "weight": record.weight,
+                "scope": record.scope,
+                # v1.282.0: the sentence itself, for the receipt under the reply.
+                "text": record.text,
+            },
         )
 
 

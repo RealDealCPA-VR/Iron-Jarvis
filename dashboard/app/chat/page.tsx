@@ -288,6 +288,8 @@ interface ChatMessage {
   /** v1.278.0: a note the user sent MID-TURN that the turn read at a round
    *  boundary — kept as a user message because the model saw it as one. */
   steer?: boolean;
+  /** v1.282.0: the preference sentences this turn kept (the receipt says them). */
+  remembered?: string[];
   /** Set when a chat turn handed itself to the full agent (v1.108.0): the
    *  reason, shown in place of the reply while the agent works. There are no
    *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
@@ -397,6 +399,8 @@ interface ChatResponse {
   route?: TurnRoute;
   /** Armed tools the engine refused this turn. */
   denied_tools?: string[];
+  /** v1.282.0: the preference sentences this turn kept. */
+  remembered?: string[];
   images?: string[];
   skill?: string;
   tools_used?: string[];
@@ -1908,6 +1912,7 @@ const MessageRow = memo(function MessageRow({
             adapted={m.adapted}
             toolsUsed={m.toolsUsed}
             deniedTools={m.deniedTools}
+            remembered={m.remembered}
             documents={m.documents}
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
@@ -5170,6 +5175,7 @@ export default function ChatPage() {
           reply,
           tools_used,
           deniedTools,
+          remembered,
           route,
           provider: servedBy,
           documents: madeDocs,
@@ -5219,6 +5225,7 @@ export default function ChatPage() {
           ...(route ? { route } : {}),
           ...(adapted ? { adapted } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
+          ...(remembered?.length ? { remembered } : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
           ...(doors ? { doors } : {}),
@@ -5355,6 +5362,7 @@ export default function ChatPage() {
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
+        ...(res.remembered?.length ? { remembered: res.remembered } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
         ...(doorsPost ? { doors: doorsPost } : {}),

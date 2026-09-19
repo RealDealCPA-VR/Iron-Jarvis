@@ -133,6 +133,9 @@ export interface TurnReceiptProps {
   toolsUsed?: string[];
   /** Armed tools the engine refused to run. */
   deniedTools?: string[];
+  /** v1.282.0: the preference sentences this turn kept — said on the line,
+   *  in the user's own words, so a capture is never a silent write. */
+  remembered?: string[];
   /** ABSOLUTE paths of files this turn created or edited. */
   documents?: string[];
   usage?: { input_tokens?: number; output_tokens?: number } | null;
@@ -259,6 +262,7 @@ export function TurnReceipt({
   adapted,
   toolsUsed = [],
   deniedTools = [],
+  remembered = [],
   documents = [],
   usage,
   contextPct,
@@ -304,7 +308,8 @@ export function TurnReceipt({
   // Zero-noise guard: nothing to account for, render nothing at all. A route
   // carrying a WARNING always renders — the warning is the whole point; an
   // adaptation note alone also renders (a bent turn must never be silent).
-  if (!rt && !tools.length && !denied.length && !docs.length && !adaptedText) {
+  const kept = names(remembered);
+  if (!rt && !tools.length && !denied.length && !docs.length && !adaptedText && !kept.length) {
     return null;
   }
 
@@ -366,6 +371,15 @@ export function TurnReceipt({
   }
   if (docs.length > 0) {
     parts.push(<span key="docs">{count(docs.length, "file")}</span>);
+  }
+  if (kept.length > 0) {
+    // v1.282.0: VISIBLE WITHOUT EXPANDING, in the accent — this is the app
+    // learning something about the user, and it says so where they stand.
+    parts.push(
+      <span key="remembered" data-testid="turn-remembered" className="text-accent-soft">
+        Remembered: {kept.join("; ")}
+      </span>,
+    );
   }
 
   return (

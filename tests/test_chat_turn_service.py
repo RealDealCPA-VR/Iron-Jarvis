@@ -408,12 +408,17 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # adaptation disclosure ({model, changes} | null, always present — null
     # on every trusted/unmeasured route). Same key in the SSE done frame; the
     # semantics are pinned by tests/test_chat_envelope_v1202.py.
+    # v1.282.0 (remembered): one more — "remembered", the preference sentences
+    # a successful remember_preference call kept this turn ([str], always
+    # present). Same key in the SSE done frame; the semantics are pinned by
+    # tests/test_remembered_receipt_v1282.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
-        "route", "doors", "adapted",
+        "route", "doors", "adapted", "remembered",
     }
+    assert body["remembered"] == []
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"
     assert body["attached"] == 0 and body["images"] == 0

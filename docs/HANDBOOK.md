@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.281.0 (2026-09-14).*
+holds itself to. Current as of v1.282.0 (2026-09-14).*
 
 ---
 
@@ -1006,6 +1006,12 @@ the same thing the chat page's "Make this folder a project" does — and from
 then on this pane's chat, its assist bar and any agent handed work here are
 grounded in it, with its brief and instructions wherever you fill them in on
 the Projects page.
+
+**When Jarvis learns something about you, it says so (v1.282.0).** The line
+under a reply now reads **Remembered: …** with the sentence Jarvis kept —
+"Prefers short answers with numbered steps" — the moment it keeps one, in the
+same place the reply's model and tools are named. Nothing about you is written
+in silence; the What I've learned tab is where you forget it.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

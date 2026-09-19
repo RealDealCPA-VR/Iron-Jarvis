@@ -44,6 +44,7 @@ from ..doors import collect_doors, door_for
 # the loop (SSE stays out of this arc) and the thread routes share the caps.
 from ..chat_turn import (
     preference_block,
+    remembered_from_result,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
@@ -2371,6 +2372,7 @@ async def chat_stream(
     async def gen():
         usage_in = usage_out = completions = 0
         tools_used: list[str] = []          # ONLY tools that actually executed
+        remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         denied_tools: list[str] = []        # armed tools refused this turn
         _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
@@ -2915,6 +2917,13 @@ async def chat_stream(
                         # (lock-step): chat_turn.py's tool loop carries
                         # the same append — edit both or neither.
                         door_entries.append(door_for(tc.name, result))
+                        # REMEMBERED (v1.282.0): the sentence a preference
+                        # call kept, for the receipt — same gate as
+                        # tools_used. MIRROR NOTE (lock-step): chat_turn.py
+                        # carries the same append.
+                        _kept = remembered_from_result(tc.name, result)
+                        if _kept:
+                            remembered.append(_kept)
                         # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                         # SUCCESSFUL workflow_run's {run_id, workflow}
                         # rides the done frame as `workflow_run` so the
@@ -3139,6 +3148,9 @@ async def chat_stream(
                 "reasoning": route_reasoning,
             },
             "tools_used": tools_used,
+            # REMEMBERED (v1.282.0) — MIRROR NOTE (lock-step): chat_turn.py's
+            # response carries the identical key — edit both or neither.
+            "remembered": remembered,
             # DOORS (v1.199.0): server-derived links into the surfaces
             # this turn's SUCCESSFUL creating tools changed — deduped by
             # href, capped at 4, ALWAYS present (possibly empty). Files

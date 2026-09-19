@@ -81,6 +81,8 @@ export type SSEEvent =
       };
       tools_used?: string[];
       denied_tools?: string[];
+      /** v1.282.0: the preference sentences this turn kept. */
+      remembered?: string[];
       /** SERVER-derived doors into the surfaces this turn touched (v1.199.0)
        *  — executed-ok tools only, files excluded (the ArtifactsRail owns
        *  files). The client renders, never derives. */
@@ -129,6 +131,8 @@ export interface ChatStreamResult {
    *  v1.148.0 but DROPPED here until v1.165.0 — the page could never show a
    *  denial, which is how a silently-blocked tool stays invisible. */
   deniedTools?: string[];
+  /** v1.282.0: the preference sentences this turn kept (remember_preference). */
+  remembered?: string[];
   /** Server-side route disclosure (v1.165.0) — see the done-frame field. */
   route?: {
         requested?: string;
@@ -294,6 +298,11 @@ export function sseEventFrom(
       if (Array.isArray(data.tools_used)) ev.tools_used = data.tools_used as string[];
       if (Array.isArray(data.denied_tools))
         ev.denied_tools = data.denied_tools as string[];
+      // Remembered (v1.282.0): the preference sentences this turn kept.
+      if (Array.isArray(data.remembered))
+        ev.remembered = (data.remembered as unknown[]).filter(
+          (x): x is string => typeof x === "string" && x.length > 0,
+        );
       // Doors (v1.199.0): pass through verbatim — this decoder WHITELISTS
       // fields, so an un-listed field silently vanishes from exactly the lane
       // users watch (the denied_tools lesson, learned twice already).
@@ -876,6 +885,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 reply: ev.reply || acc,
                 tools_used: ev.tools_used,
                 deniedTools: ev.denied_tools,
+                remembered: ev.remembered,
                 doors: ev.doors,
                 adapted: ev.adapted,
                 route: ev.route,

@@ -1252,6 +1252,20 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A kept preference is said on the receipt, in the user's words**
+  (v1.282.0, /goal memory wave 2). `remember_preference`'s `data` carries
+  `text`; `chat_turn.remembered_from_result(name, result)` reads it (or the
+  older `remembered preference: …` output) for a SUCCESSFUL call; BOTH lanes
+  append it to `remembered` inside their `if ran:` block (the tools_used
+  gate) and carry `"remembered"` ALWAYS (possibly `[]`) on the done frame /
+  POST response, like doors — lock-step. The hook decodes it (whitelist!),
+  the page stores it on the message (`ChatMessage.remembered`, both lanes'
+  receipts) and `TurnReceipt` puts `Remembered: …` on the COLLAPSED line in
+  the accent (`#turn-remembered`) — visible without expanding, because a
+  write about the user must never be silent. Pins:
+  `tests/test_remembered_receipt_v1282.py`,
+  `dashboard/__tests__/turn-receipt-remembered-v1282.test.tsx`.
+
 - **A Build pane outside any project can make one in one press** (v1.281.0,
   /goal surfaces wave 2). `PaneChat` shows `#pane-chat-make-project` beside
   the folder name when `projectForCwd` finds nothing; `makeProject` POSTs

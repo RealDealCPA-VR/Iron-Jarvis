@@ -2218,6 +2218,34 @@ PREFERENCE_BLOCK = (
 )
 
 
+#: v1.282.0: the tool whose successful result is said on the receipt.
+_REMEMBER_TOOL = "remember_preference"
+_REMEMBERED_PREFIX = "remembered preference: "
+_REMEMBERED_MAX_CHARS = 240
+
+
+def remembered_from_result(name: str, result: Any) -> str:
+    """The preference sentence a successful ``remember_preference`` call kept,
+    or ``""`` (v1.282.0). Reads the tool's ``data["text"]`` first and the
+    output's ``remembered preference: …`` shape second (an older tool copy),
+    clipped; never raises. MIRROR NOTE (lock-step): both lanes append this to
+    ``remembered`` inside their ``if ran:`` block — edit both or neither."""
+    try:
+        if name != _REMEMBER_TOOL or not getattr(result, "ok", False):
+            return ""
+        data = getattr(result, "data", None)
+        text = ""
+        if isinstance(data, dict):
+            text = str(data.get("text") or "").strip()
+        if not text:
+            out = str(getattr(result, "output", "") or "").strip()
+            if out.lower().startswith(_REMEMBERED_PREFIX):
+                text = out[len(_REMEMBERED_PREFIX):].strip()
+        return text[:_REMEMBERED_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — a receipt line never breaks a turn
+        return ""
+
+
 def preference_block(armed_names) -> str:
     """The memory brief when ``remember_preference`` is armed, else ``""``."""
     try:
@@ -3603,6 +3631,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             _WORKFLOW_DRAFT_SPEC,
         ]
     tools_used: list[str] = []          # ONLY tools that actually executed
+    remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
     denied_tools: list[str] = []
     _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn        # armed tools the engine refused this turn
@@ -3916,6 +3945,12 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                     # MIRROR NOTE (lock-step): routes/chat.py's stream loop
                     # carries the same append — edit both or neither.
                     door_entries.append(door_for(tc.name, result))
+                    # REMEMBERED (v1.282.0): the sentence a preference call
+                    # kept, for the receipt — same gate as tools_used. MIRROR
+                    # NOTE (lock-step): routes/chat.py carries the same append.
+                    _kept = remembered_from_result(tc.name, result)
+                    if _kept:
+                        remembered.append(_kept)
                     # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                     # SUCCESSFUL workflow_run's {run_id, workflow} rides the
                     # response as `workflow_run` so the client can render the
@@ -4134,6 +4169,11 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,
+        # REMEMBERED (v1.282.0): the preference sentences this turn kept —
+        # ALWAYS present (possibly empty), like doors, so clients never branch
+        # on absence. MIRROR NOTE (lock-step): the stream done-frame carries
+        # the identical key — edit both or neither.
+        "remembered": remembered,
         # DOORS (v1.199.0): server-derived links into the surfaces this turn's
         # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
         # ALWAYS present (possibly empty) so clients never branch on absence.
