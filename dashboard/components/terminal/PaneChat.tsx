@@ -369,6 +369,30 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     };
   }, [cwd]);
 
+  // v1.281.0: MAKE THIS FOLDER A PROJECT, from the pane. The chip above says
+  // which project grounds this pane; when none does, the folder is just a
+  // folder — the daemon's assist, this chat and every agent handed work here
+  // know nothing about it. One press creates a project rooted at the pane's
+  // folder (the same POST the chat page's "Make this folder a project" makes)
+  // and the chip appears; the next turn carries `project_id`, and the assist
+  // bar finds the project by path on its own.
+  const [makingProject, setMakingProject] = useState(false);
+  async function makeProject(): Promise<void> {
+    if (!cwd || project || makingProject) return;
+    setMakingProject(true);
+    setError(null);
+    try {
+      const made = await post<PaneProjectOption>("/projects", { name: folder, root: cwd });
+      if (made && typeof made.id === "string") {
+        setProject({ id: made.id, name: made.name || folder, root: made.root ?? cwd });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMakingProject(false);
+    }
+  }
+
   // ------------------------------------------------ file cards: open + undo
   const refreshUndoRows = useCallback(async () => {
     try {
@@ -1215,9 +1239,24 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
               <span className="truncate">{project.name}</span>
             </span>
           ) : (
-            <span className="truncate" title={cwd}>
-              {folder}
-            </span>
+            <>
+              <span className="truncate" title={cwd}>
+                {folder}
+              </span>
+              {cwd ? (
+                <button
+                  type="button"
+                  data-testid="pane-chat-make-project"
+                  onClick={() => void makeProject()}
+                  disabled={makingProject}
+                  title="Creates a project rooted in this folder, so this chat, the assist bar and any agent handed work here are grounded in it"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10.5px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+                >
+                  <FolderKanban size={10} className="shrink-0" />
+                  {makingProject ? "Making…" : "Make this a project"}
+                </button>
+              ) : null}
+            </>
           )}
           {threadId ? (
             <span className="ml-auto shrink-0 text-zinc-600">saved</span>

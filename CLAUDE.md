@@ -1252,6 +1252,15 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A Build pane outside any project can make one in one press** (v1.281.0,
+  /goal surfaces wave 2). `PaneChat` shows `#pane-chat-make-project` beside
+  the folder name when `projectForCwd` finds nothing; `makeProject` POSTs
+  `/projects {name: <folder>, root: cwd}` (the chat page's own promotion)
+  and sets the chip, so the next turn carries `project_id` and the assist
+  route's `project_for_path` finds it by path. The daily driver's two Build
+  panes sit in a folder no project covers — this is the door. Pins:
+  `dashboard/__tests__/pane-chat-project-v1281.test.tsx`.
+
 - **The Build assist carries the pane, the profile, the project and the
   lessons; dead pane keys are pruned; the job card remembers its target**
   (v1.280.0, /goal surfaces wave). `POST /terminals/{id}/ai` was the one

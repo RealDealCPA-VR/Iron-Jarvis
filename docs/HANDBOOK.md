@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.280.0 (2026-09-14).*
+holds itself to. Current as of v1.281.0 (2026-09-14).*
 
 ---
 
@@ -998,6 +998,14 @@ and the CLI running in it. Two quieter things: the Build page tidies up after
 panes that no longer exist (their view, chat thread and canvas position used
 to stay in the browser forever), and the Agents page's job card opens on the
 agent you last handed work to instead of the Team every time.
+
+**A Build pane can make its folder a project in one press (v1.281.0).** When
+a pane's folder belongs to no project, the pane chat shows the folder name and
+**Make this a project** beside it. One press creates a project rooted there —
+the same thing the chat page's "Make this folder a project" does — and from
+then on this pane's chat, its assist bar and any agent handed work here are
+grounded in it, with its brief and instructions wherever you fill them in on
+the Projects page.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's
