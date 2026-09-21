@@ -307,8 +307,12 @@ describe("a thread dispatches real work", () => {
       expect(call!.path).toBe("/sessions");
       // THE BODY IS THE EVIDENCE — pinned whole, because a dropped field
       // fails silently (no origin ⇒ invisible to every recent-jobs list).
+      // v1.284.0: the task is the words FIRST, then the thread's conversation
+      // under a rule (thread-dispatch-context-v1284 pins that shape).
       expect(call!.body).toEqual({
-        task: "Rename all 26 files in this folder",
+        task: expect.stringMatching(
+          /^Rename all 26 files in this folder\n\n---\nContext — the panel conversation so far/,
+        ),
         agent_type: "builder",
         wait: false,
         origin: JOB_ORIGIN,
@@ -324,7 +328,7 @@ describe("a thread dispatches real work", () => {
       const call = dispatchCall();
       expect(call).toBeTruthy();
       expect(call!.path).toBe("/agents/remy/spawn");
-      expect(call!.body.task).toBe("Rename all 26 files in this folder");
+      expect(String(call!.body.task).startsWith("Rename all 26 files in this folder")).toBe(true);
       expect(call!.body.origin).toBe(JOB_ORIGIN);
     });
   });
@@ -385,7 +389,7 @@ describe("a thread dispatches real work", () => {
       // The Team means a SUPERVISOR session that plans and delegates — not the
       // builder this thread happens to be with.
       expect(call!.body.agent_type).toBe("supervisor");
-      expect(call!.body.task).toBe("Plan the whole migration");
+      expect(String(call!.body.task).startsWith("Plan the whole migration")).toBe(true);
     });
   });
 
@@ -550,10 +554,10 @@ describe("a dispatch is visibly distinct from a chat round", () => {
     // THE SENTENCE THAT MAKES THE TWO ACTS DISTINGUISHABLE.
     expect(receipt).toHaveTextContent(/not a round/i);
     expect(receipt).toHaveTextContent(/nobody spoke in the thread/i);
-    // …and what did NOT go with it: the body's `task` is the composer text and
-    // nothing else, so a user who has been talking here for ten messages is
-    // told the transcript stayed behind rather than assuming it rode along.
-    expect(receipt).toHaveTextContent(/only the text you typed went with it/i);
+    // …and what went with it (v1.284.0): the thread's recent conversation
+    // rides under the task now, and the receipt states the count read off the
+    // body that was sent (this fixture's thread holds two messages).
+    expect(receipt).toHaveTextContent(/the last 2 messages of this thread went with it as context/i);
     expect(screen.getByRole("link", { name: /watch it run/i })).toHaveAttribute(
       "href",
       "/sessions/s-new",

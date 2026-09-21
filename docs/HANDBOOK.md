@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.283.0 (2026-09-14).*
+holds itself to. Current as of v1.284.0 (2026-09-14).*
 
 ---
 
@@ -154,8 +154,13 @@ Chat is where most work happens, and it is wired into everything:
   others, the card says which were refused instead of just "Sent". Needs your
   email account in Channels (IMAP to save drafts, SMTP to send).
 - **"/" skills** anywhere in a message invoke a skill; **@mentions** pull
-  agents into a panel bound to the thread; **escalation** hands a chat request
-  to a real background agent session when it outgrows a chat turn.
+  agents into a panel bound to the thread — the agent is shown the chat so
+  far, the conversation then stays with it (a strip above the box says
+  **Talking to builder**; **Back to Jarvis** ends it), and an ask for WORK
+  ("write me a PDF …", a file attached, or **Have builder do this**) runs as a
+  real session of that agent with its tools and brings the file back into the
+  chat (v1.284.0); **escalation** hands a chat request to a real background
+  agent session when it outgrows a chat turn.
 - **Projects (the context spine)**: ground a chat in a project and every turn
   carries the project's folder, knowledge, and recap. File tools then operate
   inside that folder. A folder you cannot save in is refused when you pick it,
@@ -208,7 +213,10 @@ Chat is where most work happens, and it is wired into everything:
 - **Roster**: who can take work, with measured success stats. "Give work"
   posts a job at a specific agent; "Talk" opens a conversation instead.
 - **Round table**: persistent multi-agent conversation threads — panelists
-  answer in turn and see each other.
+  answer in turn and see each other. A round is talk (no tools); **Give it to
+  builder** starts a real session, carries the thread's recent conversation
+  with the job, and shows the finished job's files under the receipt with
+  preview, open and download (v1.284.0).
 - **Custom agents**: author your own (name, prompt, tool list, pinned
   provider/model). **Remote agents**: register an agent running elsewhere
   (URL + bearer token, encrypted at rest; edits never eat the credential).
@@ -1025,6 +1033,35 @@ its module in the taskbar, so two Iron Jarvis windows never look like the app
 opened twice. Closing it just closes it — the main window keeps its
 keep-running behaviour, and Quit closes them all. Opening a module that is
 already popped out brings that window to the front instead of making another.
+
+**An @-mentioned agent remembers the chat, stays in the conversation, and can
+do the work (v1.284.0).** Four things were wrong, and you found all four.
+First, "@builder make that a PDF" arrived with no "that": the agent was shown
+only the panel's own transcript, never the chat that led up to it. Now every
+agent you @-mention is shown the conversation so far — what you and Jarvis
+said, and what earlier agents answered, in order and by name — fitted to its
+model; if a long chat does not all fit, the reply says how many earlier
+messages were left out. Second, you no longer type "@" every time: after a
+round, a strip above the box says **Talking to builder** and the box reads
+**Message builder…**; plain follow-ups go to builder, in your words, until you
+press **Back to Jarvis** or @-mention someone else. Reopening the conversation
+later picks up where it was. When you do go back, Jarvis reads the agent's
+replies as the agent's, not as its own earlier words. Third, a brand-new
+chat's first two @-rounds landed in two different rooms (the conversation had
+no saved id yet), so the agent forgot the first exchange — one room now.
+Fourth, and the one behind the PDF: a panel seat has no tools by design, so it
+could only describe a PDF. Now when you ask one local agent for work — "write
+me a PDF summary", "convert this to pdf", "draft a memo", or anything with a
+file attached — Jarvis hands it to a real session of that agent with its
+tools, says so ("builder is doing it in a real session"), and the reply comes
+back with the file: preview beside the chat, download and open in the Files
+rail, attributed to the agent. A question stays a conversation; under any
+agent's answer, **Have builder do this** turns the proposal into that session
+on your press. On the Agents page, **Give it to builder** now carries the
+thread's recent conversation with the job (the receipt says how many
+messages), and the finished job's files appear under the receipt — Finished,
+the agent's summary, and each file with preview, open and download — instead
+of on another page.
 
 **The sidebar stays connected, and looks like the app (v1.268.0).** The
 random "disconnected… reconnected" was the browser putting the add-on's

@@ -31,6 +31,22 @@ commits a panel to long-term memory the way ``POST /chat/threads/{id}/remember``
 commits a chat — same distill/verbatim ladder, same honest-mock refusal, same
 LTM front door — and defaults to a PREVIEW, so what a panel concluded is
 reviewed before it becomes something the app quotes back later as fact.
+
+AN @-MENTIONED AGENT REMEMBERS THE CHAT (v1.284.0). The user's report: "it
+basically starts up with no memory of the previous conversation". A panel
+speaker used to be handed the ROOM's transcript only — the chat that led up to
+"@builder make that a PDF" never reached it, so "that" pointed at nothing. Now
+``POST /chat/panel`` carries the chat so far (``history``: ``{who, content}``
+rows, ``who`` = ``user`` | ``jarvis`` | a participant key) and
+:meth:`AgentThreads.run_round` renders it as the speaker's transcript,
+BUDGETED to the answering model's window (newest kept, the omission counted
+and reported in ``context.chat_dropped`` — never a silent cut). The room's own
+entries still persist, so the Agents page shows the conversation as before.
+Two more halves of the same report live here: an orphaned room is ADOPTED
+(:meth:`AgentThreads.for_chat` ``adopt=`` — a brand-new chat has no thread id
+until its first save, so its first @-round bound to ``""`` and the second
+opened a second room), and explicit addressees (``directed=``) let a
+follow-up WITHOUT an "@" keep talking to the same agent.
 """
 
 from __future__ import annotations
@@ -62,6 +78,25 @@ SOURCES = ("builtin", "dynamic", "remote")
 
 _MAX_MESSAGES = 400  # per thread; oldest trimmed (matches chat's cap spirit)
 _TRANSCRIPT_CHARS = 24_000  # context handed to each speaker, newest kept
+#: The chat-history transcript's ceiling when the speaker's window IS known
+#: (v1.284.0): the budget scales with the model, but a 1M-token window must not
+#: turn one panel round into a megabyte of prompt.
+_TRANSCRIPT_CHARS_MAX = 240_000
+#: Share of a known window the chat transcript may take (the system prompt,
+#: the guide material and the reply need the rest); chars-per-token is the
+#: conservative English ratio ``context/budget`` uses.
+_TRANSCRIPT_WINDOW_SHARE = 0.5
+_TRANSCRIPT_CHARS_PER_TOKEN = 3.5
+#: Speaker labels for the chat-history rows the client sends (v1.284.0).
+#: ``who`` is ``"user"`` / ``"jarvis"`` / a participant key; a key resolves to
+#: the participant's name+role like the room's own entries do.
+_CHAT_WHO_LABELS = {"user": "User", "jarvis": "Iron Jarvis"}
+#: The header a chat-backed transcript opens with, so a speaker knows the
+#: "Iron Jarvis" lines are the assistant's earlier answers in the same chat.
+_CHAT_TRANSCRIPT_HEADER = (
+    "The conversation so far — the user's chat with Iron Jarvis and this "
+    "panel, oldest first:"
+)
 
 #: THE PANELIST IS THE REAL AGENT, AND THE REAL AGENT HAS NO HANDS HERE
 #: (v1.193.0). A local panelist now carries the SAME system prompt its agent
@@ -151,6 +186,37 @@ def parse_mentions(text: str) -> list[str]:
         if token and token not in out:
             out.append(token)
     return out
+
+
+def needs_hands(message: str) -> list[str]:
+    """The file-changing tools an @-mentioned ask would arm (v1.284.0), or ``[]``.
+
+    The user's report: asked a panel seat for a PDF and got prose — because a
+    panelist speaks with ``tools=[]`` (:data:`PANEL_NO_TOOLS`) and is TOLD to
+    hand work back. So the panel route asks this first: run the SAME scorer the
+    chat lanes arm tools with (``tools/autoselect.select_auto_tools``, imperative
+    position and negation already weighed) and keep only the members of its
+    ``_CHANGE_TOOLS`` — the tools that write or convert the user's files. A
+    non-empty answer means "this is work, not a question", and the route hands
+    it to a REAL session of that agent instead of a tool-less round. ONE
+    vocabulary, deliberately: a second list of "work words" here would drift
+    from the one chat uses. Never raises; a scorer failure is a plain round.
+    CPU-bound on long text — callers hop it off the loop (v1.153.1 rule).
+    """
+    # The ADDRESS is not part of the sentence. The scorer's imperative-position
+    # test wants the verb at the clause start, and "@builder write me a PDF"
+    # puts a name there — measured: every one of these scored [] with the
+    # mention left in and armed `write_document` with it stripped.
+    text = _MENTION_RE.sub("", str(message or "")).strip().lstrip(",:;-— ").strip()
+    if not text:
+        return []
+    try:
+        from ..tools.autoselect import _CHANGE_TOOLS, select_auto_tools
+
+        picked = select_auto_tools(text, cap=8)
+    except Exception:  # noqa: BLE001 — arming is advisory; a failure is a round
+        return []
+    return [name for name in picked if name in _CHANGE_TOOLS]
 
 
 def participant_key(source: str, name: str) -> str:
@@ -396,14 +462,26 @@ class AgentThreads:
             db.refresh(rec)
         return rec
 
-    def for_chat(self, chat_thread_id: str, title: str = "") -> AgentThreadRecord:
+    def for_chat(
+        self, chat_thread_id: str, title: str = "", adopt: str = ""
+    ) -> AgentThreadRecord:
         """The panel bound to a chat thread — created on first use (v1.150.0).
 
         Get-or-create, because "chat with several agents at once" means the room
         persists: turn 3's ``@builder`` must be able to see what ``@critic`` said
         in turn 2, which only works if it is the same thread.
+
+        ``adopt`` (v1.284.0) is the room id the client already holds from an
+        earlier round of THIS conversation. A brand-new chat has no thread id
+        until its first save, so its first @-round was bound to ``""`` and the
+        next round — now carrying a real chat id that no room was bound to —
+        opened a second room; the agent "forgot" the first exchange. An
+        UNBOUND room named here is bound to the chat and reused; a room that
+        belongs to another chat is never stolen (a fresh room is made instead),
+        and with no chat id yet the same orphan keeps being used.
         """
         chat_thread_id = (chat_thread_id or "").strip()
+        adopt = (adopt or "").strip()
         with session_scope(self.engine) as db:
             if chat_thread_id:
                 found = db.exec(
@@ -413,6 +491,16 @@ class AgentThreads:
                 ).first()
                 if found is not None:
                     return AgentThreadRecord(**found.model_dump())
+            if adopt:
+                orphan = db.get(AgentThreadRecord, adopt)
+                if orphan is not None and not (orphan.chat_thread_id or "").strip():
+                    if chat_thread_id:
+                        orphan.chat_thread_id = chat_thread_id
+                        orphan.updated_at = utcnow()
+                        db.add(orphan)
+                        db.commit()
+                        db.refresh(orphan)
+                    return AgentThreadRecord(**orphan.model_dump())
         rec = AgentThreadRecord(
             title=(title or "").strip() or "Panel from chat",
             participants_json="[]",
@@ -557,6 +645,157 @@ class AgentThreads:
         return text[-_TRANSCRIPT_CHARS:]
 
     @staticmethod
+    def _label_for(who: str, names: dict[str, str]) -> str:
+        """A speaker label for a chat-history row or a room entry (v1.284.0).
+
+        ``user``/``jarvis`` have fixed words; a participant key renders as the
+        room does ("builder (participant)"); an unknown key falls back to its
+        name part, never to the raw ``source:name`` plumbing.
+        """
+        who = str(who or "user")
+        fixed = _CHAT_WHO_LABELS.get(who)
+        if fixed:
+            return fixed
+        if who in names:
+            return names[who]
+        # An agent that answered in this chat but is not (or no longer) in THIS
+        # room — still an agent, never the user and never Iron Jarvis.
+        return f"{who.split(':', 1)[1]} (agent)" if ":" in who else who
+
+    @classmethod
+    def chat_transcript(
+        cls,
+        history: list[dict[str, Any]],
+        round_entries: list[dict[str, Any]],
+        participants: list[dict],
+        budget_chars: int = _TRANSCRIPT_CHARS,
+    ) -> tuple[str, int]:
+        """The CHAT so far plus this round's entries, fitted to a budget.
+
+        Returns ``(transcript, dropped)`` where ``dropped`` is how many of the
+        oldest chat rows did not fit — reported, never silent (the "History is
+        BUDGETED, never sliced" rule: the newest rows are kept whole, the
+        omission is counted, and the round's own entries are ALWAYS present
+        because they are what the speaker is answering). Pure and
+        deterministic; runs in a worker thread when the history is large.
+        """
+        names = {
+            str(p.get("key") or ""): f"{p.get('name') or '?'} ({p.get('role') or 'participant'})"
+            for p in participants
+        }
+        names.pop("", None)
+
+        def _line(row: dict[str, Any]) -> str:
+            content = str(row.get("content") or "").strip()
+            if not content:
+                error = str(row.get("error") or "").strip()
+                if not error:
+                    return ""
+                content = f"(could not answer: {error})"
+            return f"{cls._label_for(str(row.get('who') or 'user'), names)}: {content}"
+
+        round_lines = [ln for ln in (_line(e) for e in round_entries) if ln]
+        round_text = "\n\n".join(round_lines)
+        chat_lines = [ln for ln in (_line(r) for r in history) if ln]
+        budget = max(int(budget_chars or 0), _TRANSCRIPT_CHARS // 4)
+        # The round always fits — keep its TAIL only if it alone overflows, and
+        # say so (the one place this lane cuts inside a message).
+        if len(round_text) > budget:
+            marker = "[the start of this round was cut to fit this model's context window]\n\n"
+            return marker + round_text[-(budget - len(marker)) :], len(chat_lines)
+        # Reserve for the header, the joins, and the omission banner that a
+        # drop will add — so adding the banner can never push the rows it
+        # accounts for back out.
+        banner_reserve = 96
+        remaining = budget - len(round_text) - len(_CHAT_TRANSCRIPT_HEADER) - banner_reserve
+        kept: list[str] = []
+        used = 0
+        dropped = 0
+        # NEWEST FIRST, and the first row that does not fit ends the fill: the
+        # rows older than it are dropped too. Skipping only the oversized row
+        # and admitting older, shorter ones would hand the model a
+        # conversation with a hole in the middle while the banner said
+        # "earlier messages".
+        for idx in range(len(chat_lines) - 1, -1, -1):
+            ln = chat_lines[idx]
+            cost = len(ln) + 2
+            if used + cost > remaining:
+                dropped = idx + 1
+                break
+            kept.append(ln)
+            used += cost
+        kept.reverse()
+        parts: list[str] = [_CHAT_TRANSCRIPT_HEADER]
+        if dropped:
+            parts.append(
+                f"[{dropped} earlier message{'s' if dropped != 1 else ''} omitted — "
+                "they did not fit this model's context window]"
+            )
+        parts.extend(kept)
+        if round_text:
+            parts.append(round_text)
+        return "\n\n".join(parts), dropped
+
+    @classmethod
+    def _transcript_for(
+        cls,
+        p: dict[str, str],
+        d: Any,
+        history: list[dict[str, Any]],
+        round_entries: list[dict[str, Any]],
+        participants: list[dict],
+    ) -> tuple[str, int]:
+        """Budget + render for ONE speaker, in a worker thread: the budget
+        reads the window ladder (config, envelope, fleet) and the render walks
+        the whole chat — neither belongs on the loop (v1.153.1 rule)."""
+        budget = cls._transcript_budget(p, d)
+        return cls.chat_transcript(history, round_entries, participants, budget)
+
+    @staticmethod
+    def _provider_model_for(p: dict[str, str], d: Any) -> tuple[str, str]:
+        """The (provider, model) a LOCAL seat answers with: the seat's own pin,
+        else a dynamic record's, else the configured defaults. One resolver for
+        the speaker and for its transcript budget, so they cannot disagree."""
+        provider = str(p.get("provider") or "")
+        model = str(p.get("model") or "")
+        if p.get("source") == "dynamic" and (not provider or not model):
+            try:
+                row = d.platform.agents_registry.get(p["name"])
+            except Exception:  # noqa: BLE001 — the defaults still answer
+                row = None
+            if row is not None:
+                provider = provider or str(getattr(row, "provider", "") or "")
+                model = model or str(getattr(row, "model", "") or "")
+        provider = provider or str(d.platform.config.default_provider or "")
+        model = model or str(d.platform.config.default_model or "")
+        return provider, model
+
+    @classmethod
+    def _transcript_budget(cls, p: dict[str, str], d: Any) -> int:
+        """Chars of chat transcript this speaker may be shown (v1.284.0).
+
+        The SAME window ladder both chat lanes plan against
+        (``chat_turn._context_window``: pin → measured envelope → fleet probe →
+        unknown), scaled by a share and a conservative chars-per-token, clamped
+        between the old fixed cap and :data:`_TRANSCRIPT_CHARS_MAX`. Unknown
+        window (and every remote seat, whose model this daemon cannot see) →
+        the fixed cap. Never raises: a budget failure must not sink a round.
+        """
+        if p.get("source") == "remote":
+            return _TRANSCRIPT_CHARS
+        try:
+            from ..daemon.chat_turn import _context_window
+
+            provider, model = cls._provider_model_for(p, d)
+            window = _context_window(d, provider, model)
+        except Exception:  # noqa: BLE001 — unknown window → fixed cap
+            window = None
+        if not window or int(window) <= 0:
+            return _TRANSCRIPT_CHARS
+        chars = int(int(window) * _TRANSCRIPT_WINDOW_SHARE * _TRANSCRIPT_CHARS_PER_TOKEN)
+        return max(_TRANSCRIPT_CHARS, min(chars, _TRANSCRIPT_CHARS_MAX))
+
+    @staticmethod
     def _system_for(p: dict[str, str], others: list[dict[str, str]], base_prompt: str) -> str:
         panel = ", ".join(f"{o['name']} ({o['role']})" for o in others) or "nobody else"
         role_line = (
@@ -632,7 +871,9 @@ class AgentThreads:
         return f"{anchor}\n\n{stored}" if stored else anchor
 
     @staticmethod
-    def _mentioned(user_message: str, participants: list[dict]) -> list[dict]:
+    def _mentioned(
+        user_message: str, participants: list[dict], extra: list[str] | None = None
+    ) -> list[dict]:
         """Participants the user @-mentioned, in PANEL order (never mention
         order). A mention token matches a participant when it equals — case-
         insensitively — the participant's name, its role, or the name part of
@@ -643,10 +884,17 @@ class AgentThreads:
         verbatim, so a name that really ends in punctuation is still
         addressable as ``@"name."``. A mid-word ``@`` (an email address, an
         identifier) never produces a token at all — see :data:`_MENTION_RE`.
+
+        ``extra`` (v1.284.0): addressees named OUTSIDE the text — chat's sticky
+        "still talking to builder" follow-ups carry them as ``mentions`` so the
+        user's words stay verbatim in the transcript. Same matching rule.
         """
         tokens = [
             (quoted if quoted else bare.rstrip("._-")).strip().lower()
             for quoted, bare in _MENTION_RE.findall(user_message or "")
+        ]
+        tokens += [
+            str(x).strip().lstrip("@").strip().strip('"').lower() for x in (extra or [])
         ]
         tokens = [t for t in tokens if t]
         if not tokens:
@@ -675,8 +923,25 @@ class AgentThreads:
         except Exception:  # noqa: BLE001 — an event must never sink a round
             log.warning("agent_thread.updated publish failed", exc_info=True)
 
-    async def run_round(self, thread_id: str, user_message: str, d: Any) -> dict[str, Any]:
+    async def run_round(
+        self,
+        thread_id: str,
+        user_message: str,
+        d: Any,
+        *,
+        directed: list[str] | None = None,
+        chat_history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """One round: persist the user turn, then each speaker in panel order.
+
+        ``directed`` (v1.284.0): addressees named outside the text (see
+        :meth:`_mentioned` ``extra``). ``chat_history`` (v1.284.0): the chat
+        the round belongs to, as ``{who, content}`` rows — when given, each
+        speaker is shown THAT (budgeted to its own model's window, see
+        :meth:`chat_transcript`) followed by this round's entries, instead of
+        the room's stored transcript, and the response carries
+        ``context: {chat_messages, chat_dropped}``. ``None`` keeps the Agents
+        page's behaviour byte-identical.
 
         LIVE: each entry is persisted atomically as it lands (not batched at
         the end) and publishes AGENT_THREAD_UPDATED {thread_id, who, entries}
@@ -714,6 +979,7 @@ class AgentThreads:
         new_entries: list[dict[str, Any]] = []
         spoke: list[str] = []
         skipped: list[str] = []
+        chat_dropped = 0
         if (user_message or "").strip():
             user_entry = {
                 "who": "user",
@@ -725,11 +991,24 @@ class AgentThreads:
             count = self._append(thread_id, [user_entry])
             await self._publish_updated(thread_id, "user", count, d)
 
-        speakers = self._mentioned(user_message or "", participants) or participants
+        speakers = (
+            self._mentioned(user_message or "", participants, extra=directed) or participants
+        )
 
         for p in speakers:
             others = [o for o in participants if o["key"] != p["key"]]
-            transcript = self._transcript(messages, participants)
+            if chat_history is not None:
+                # THE CHAT IS THE SPINE (v1.284.0): everything the user and
+                # Iron Jarvis said, plus earlier panel replies as they landed in
+                # chat, then this round's entries so the second speaker sees
+                # the first's answer. Budgeting + rendering is real work over
+                # a possibly long conversation — off the loop (v1.153.1 rule).
+                transcript, dropped = await asyncio.to_thread(
+                    self._transcript_for, p, d, chat_history, new_entries, participants
+                )
+                chat_dropped = max(chat_dropped, dropped)
+            else:
+                transcript = self._transcript(messages, participants)
             entry: dict[str, Any] = {
                 "who": p["key"],
                 "role": p["role"],
@@ -765,7 +1044,19 @@ class AgentThreads:
             count = self._append(thread_id, [entry])
             await self._publish_updated(thread_id, p["key"], count, d)
 
-        return {"entries": new_entries, "spoke": spoke, "skipped": skipped}
+        out: dict[str, Any] = {"entries": new_entries, "spoke": spoke, "skipped": skipped}
+        if chat_history is not None:
+            # Both counts on the SAME denominator — rows with words.
+            spoken_rows = sum(
+                1
+                for r in chat_history
+                if str(r.get("content") or "").strip() or str(r.get("error") or "").strip()
+            )
+            out["context"] = {
+                "chat_messages": spoken_rows,
+                "chat_dropped": chat_dropped,
+            }
+        return out
 
     async def _speak_local(
         self, p: dict[str, str], others: list[dict], transcript: str, d: Any
@@ -773,23 +1064,19 @@ class AgentThreads:
         """A builtin/dynamic participant answers via the one-shot LLM path
         (retry + cross-provider failover — the same path terminal assist uses)."""
         base_prompt = ""
-        provider = p.get("provider") or ""
-        model = p.get("model") or ""
         if p["source"] == "dynamic":
             registry = d.platform.agents_registry
             row = registry.get(p["name"])
             if row is None:
                 raise RuntimeError(f"dynamic agent {p['name']!r} no longer exists")
             # The COMPOSED definition, not the raw row — the identity anchor is
-            # applied at composition time (v1.193.0). ``row`` is still read for
-            # the pinned provider/model, which the definition does not carry.
+            # applied at composition time (v1.193.0). The pinned provider/model
+            # (which the definition does not carry) come from the ONE resolver
+            # the transcript budget also uses (v1.284.0).
             base_prompt = self._dynamic_prompt(registry, p["name"], row)
-            provider = provider or row.provider or ""
-            model = model or row.model or ""
         else:
             base_prompt = self._builtin_prompt(p["name"])
-        provider = provider or d.platform.config.default_provider
-        model = model or d.platform.config.default_model
+        provider, model = self._provider_model_for(p, d)
         adapter = d.platform.providers.get(provider, model)
         from ..providers.adapters.base import LLMMessage
 

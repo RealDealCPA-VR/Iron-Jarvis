@@ -1252,6 +1252,45 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **An @-mentioned agent is shown the CHAT, stays addressed, and hands WORK to
+  a session** (v1.284.0). The user: "i need to continually use the @ …
+  it basically starts up with no memory of the previous conversation …
+  asked for a PDF and it only answered in text". Four defects, one wave.
+  (1) `POST /chat/panel` takes `history` (`{who, content}`: `user` |
+  `jarvis` | a participant key) and `AgentThreads.run_round(chat_history=)`
+  renders it as the speaker's transcript — `chat_transcript` fits it to the
+  speaker's window (`_transcript_budget` reads the SAME `_context_window`
+  ladder the chat lanes use; newest kept, the drop COUNTED and returned as
+  `context.chat_dropped`, shown under the reply as `panelNote`). No
+  `history` (the Agents page's `/say`) keeps the room's transcript
+  byte-identical. (2) A new chat has no thread id until its first save, so
+  round one bound a room to `""` and round two opened a second: the page sends
+  `panel_thread_id` (the room the last reply carried) and `for_chat(adopt=)`
+  binds an UNBOUND room — never one bound to another chat. (3) `mentions` on
+  the body names addressees OUTSIDE the text (`_mentioned(extra=)`), so the
+  page's sticky `addressee` (participant keys; `addresseeOf` restores it from
+  the saved messages; the `#addressee-strip` + "Back to Jarvis"; the box
+  reads "Message builder…") sends follow-ups verbatim. The Jarvis lanes send
+  panel replies through `toRequestMessages`, LABELLED as the agent's — a plain
+  message after a round used to make Jarvis answer as if it had said them.
+  (4) A panelist has `tools=[]` by design (`PANEL_NO_TOOLS`); when ONE local
+  agent is addressed and `needs_hands(message)` (the chat lanes' own
+  `select_auto_tools` ∩ `_CHANGE_TOOLS`, scored with the @-address STRIPPED —
+  the imperative test wants the verb first) is non-empty, or `hands: true`
+  (attachments; the "Have builder do this" chip), the route answers
+  `mode: "session"` + the roster `target` and the page opens the SAME tooled
+  lane a chat escalation opens (`sendAgent(agentType=)`), the reply attributed
+  via `awaitingWhoRef` and its files through the run result. `hands: false`
+  forces a round; two agents or a remote stay a round. Agents page: `jobTask`
+  appends the thread's recent entries under the composer text (the receipt
+  says the count read off the body — the old "only the text you typed" line is
+  gone) and `JobOutcome` polls the job and renders `SessionFiles` under the
+  receipt. Do NOT add a second "work words" list beside `needs_hands`, and do
+  not put the chat history into the ROOM's stored messages (the room shows the
+  Agents page what happened there). Pins: `tests/test_chat_panel_v1284.py`,
+  `dashboard/__tests__/chat-sticky-agent-v1284.test.tsx`,
+  `dashboard/__tests__/thread-dispatch-context-v1284.test.tsx`.
+
 - **A module pops out into its own window, on the other screen when there
   is one** (v1.283.0, pop-out windows). `desktop/main.js` keeps ONE
   BrowserWindow per dashboard route (`popouts` Map; `openPopout` focuses an

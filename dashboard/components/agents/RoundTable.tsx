@@ -75,6 +75,7 @@
 import {
   createContext,
   isValidElement,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -101,7 +102,11 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { timeAgo } from "@/lib/format";
+import { SessionFiles } from "@/components/sessions/SessionFiles";
+import { DocPreview } from "@/components/chat/DocPreview";
+import { Modal } from "@/components/Modal";
 import { Badge, Empty, ErrorNote, OfflineHint, SkeletonRows, StatusDot, SuccessNote } from "@/components/ui";
 import type { Project, SessionView } from "@/lib/types";
 import AgentFace, { faceIdentity } from "./AgentFace";
@@ -762,6 +767,139 @@ interface DispatchReceipt {
   steps: number | null;
   /** The grounding project's NAME, or "" — never an id the user never saw. */
   project: string;
+  /** v1.284.0: how many of this thread's messages rode along as context
+   *  (0 = the thread had nothing to carry). Read off the body that was sent. */
+  context: number;
+}
+
+/* ------------------------------------------------ the job's context --- */
+
+/** How much of the thread rides with a job (v1.284.0): the newest entries,
+ *  each clipped — the same shape chat's hand-off recap uses. The receipt used
+ *  to say "only the text you typed went with it — not this thread's
+ *  conversation", which was honest and also the reason a job started blind
+ *  after ten messages of planning it. */
+export const JOB_CONTEXT_ENTRIES = 12;
+export const JOB_CONTEXT_CLIP = 600;
+
+/** The transcript lines a job carries: "You: …" / "builder (lead): …", newest
+ *  last, error-only entries skipped (a seat that could not answer said nothing
+ *  worth carrying). Exported so the test pins the SHAPE, not a substring. */
+export function jobContextLines(detail: ThreadDetail | null): string[] {
+  if (!detail || !Array.isArray(detail.messages) || detail.messages.length === 0) return [];
+  const names = new Map(
+    (detail.participants ?? []).map((p) => [p.key, `${p.name} (${p.role || "participant"})`]),
+  );
+  const lines: string[] = [];
+  for (const m of detail.messages.slice(-JOB_CONTEXT_ENTRIES)) {
+    const text = (m.content || "").trim();
+    if (!text) continue;
+    const who =
+      m.who === "user" ? "You" : (names.get(m.who) ?? m.who.split(":").pop() ?? m.who);
+    lines.push(
+      `${who}: ${text.length > JOB_CONTEXT_CLIP ? `${text.slice(0, JOB_CONTEXT_CLIP)}…` : text}`,
+    );
+  }
+  return lines;
+}
+
+/** The task a job is posted with: the user's words FIRST (the session's title
+ *  and the runtime's never-dropped `messages[0]` both start there), then the
+ *  thread's recent conversation under a rule. */
+export function jobTask(task: string, detail: ThreadDetail | null): string {
+  const lines = jobContextLines(detail);
+  if (lines.length === 0) return task;
+  const total = detail?.messages.length ?? lines.length;
+  return (
+    `${task}\n\n---\nContext — the panel conversation so far in "${detail?.title ?? "this thread"}" ` +
+    `(${lines.length} of ${total} messages, newest last):\n${lines.join("\n")}`
+  );
+}
+
+/* ------------------------------------------------ the job's outcome --- */
+
+const JOB_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const JOB_POLL_MS = 2500;
+const JOB_SUMMARY_CLIP = 280;
+/** Reads that came back empty before the outcome stops asking (~1 min): a
+ *  session the daemon cannot show is said so, not polled forever. */
+const JOB_MAX_MISSES = 24;
+
+/** What a dispatched job PRODUCED, inline (v1.284.0). The user asked a seat for
+ *  a PDF and "was unable to see the actual PDF the agent created": the files
+ *  lived on the session's own page. This polls the session while it runs
+ *  (visible-only), then puts its files — preview, open, download — right under
+ *  the receipt through the SAME `SessionFiles` the session page uses. It claims
+ *  nothing it cannot prove: no files → a status line only, and a session the
+ *  daemon cannot show stays "Working…" rather than inventing an outcome. */
+export function JobOutcome({ sessionId }: { sessionId: string }) {
+  const [session, setSession] = useState<SessionView | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [misses, setMisses] = useState(0);
+  const status = (session?.status || "").toLowerCase();
+  const done = JOB_TERMINAL.has(status);
+  const gaveUp = !session && misses >= JOB_MAX_MISSES;
+  const load = useCallback(async () => {
+    try {
+      // `GET /sessions/{id}` is NESTED ({session, transcript}) — the hard rule.
+      const res = await get<{ session?: SessionView } & Partial<SessionView>>(
+        `/sessions/${encodeURIComponent(sessionId)}`,
+      );
+      const s = (res?.session ?? (res as SessionView)) as SessionView | undefined;
+      if (s && typeof s.status === "string") {
+        setSession(s);
+        setMisses(0);
+      } else {
+        setMisses((n) => n + 1);
+      }
+    } catch {
+      setMisses((n) => n + 1); // optional panel — absent beats wrong
+    }
+  }, [sessionId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useVisibleInterval(() => void load(), JOB_POLL_MS, !done && !gaveUp);
+
+  const summary = (session?.summary || "").trim();
+  const clipped =
+    summary.length > JOB_SUMMARY_CLIP ? `${summary.slice(0, JOB_SUMMARY_CLIP)}…` : summary;
+  return (
+    <div data-testid="job-outcome" className="mt-2">
+      <div className="text-[11px] text-emerald-200/80">
+        {!session
+          ? gaveUp
+            ? "Couldn't read this session from here — Watch it run above."
+            : "Working…"
+          : done
+            ? status === "completed"
+              ? "Finished."
+              : `Stopped (${status}).`
+            : `Working… (${status})`}
+        {done && clipped ? <span className="text-emerald-100/80"> {clipped}</span> : null}
+      </div>
+      {done && (
+        <SessionFiles
+          sessionId={sessionId}
+          workspacePath={session?.workspace_path ?? ""}
+          active={false}
+          onPreview={setPreview}
+        />
+      )}
+      {preview && (
+        <Modal
+          label={`Preview — ${preview.split(/[\\/]/).pop() || preview}`}
+          onClose={() => setPreview(null)}
+          className="w-full max-w-4xl"
+          testId="job-file-preview"
+        >
+          <div className="h-[34rem]">
+            <DocPreview path={preview} onClose={() => setPreview(null)} />
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
 }
 
 /* ----------------------------------------------------------------- view --- */
@@ -1395,12 +1533,16 @@ export function RoundTable({
     setDispatchError(null);
     setDispatched(null);
     try {
-      const req = jobRequest(jobTarget, task, projectId, maxSteps);
+      // THE THREAD RIDES ALONG (v1.284.0): the recent conversation is
+      // appended under the user's words — see jobTask.
+      const carried = jobContextLines(detail).length;
+      const req = jobRequest(jobTarget, jobTask(task, detail), projectId, maxSteps);
       const session = await post<SessionView>(req.path, req.body);
       if (genRef.current !== gen) return; // switched threads mid-dispatch
       setDispatched({
         id: typeof session?.id === "string" ? session.id : "",
         label: jobLabel,
+        context: carried,
         // WHAT THE DISPATCH CARRIED, off the body — not off the box, which is
         // about to be cleared. Without it a user who typed 60 and later reads
         // "reached max steps" cannot tell whether the budget was ignored.
@@ -1966,13 +2108,15 @@ export function RoundTable({
             <p className="mt-1 text-[11px] leading-relaxed text-emerald-200/80">
               This was a job, not a round: nobody spoke in the thread. It runs
               with tools on its own session page.{" "}
-              {/* WHAT DID NOT GO WITH IT. The body's `task` is exactly the text
-                  that was in the composer — the thread's transcript is not
-                  attached to a session, and a user who has been talking here for
-                  ten messages would otherwise assume it was. Saying so is the
-                  difference between a limit and a silent one. */}
-              Only the text you typed went with it — not this thread&apos;s
-              conversation.
+              {/* WHAT WENT WITH IT (v1.284.0). The body's `task` is the
+                  composer text PLUS the thread's recent conversation
+                  (jobTask); the receipt states the count read off what was
+                  sent, and says so when there was nothing to carry. */}
+              {dispatched.context > 0
+                ? `The last ${dispatched.context} message${
+                    dispatched.context === 1 ? "" : "s"
+                  } of this thread went with it as context.`
+                : "Only the text you typed went with it — this thread had no conversation to carry."}
             </p>
             {dispatched.id ? (
               <Link
@@ -1989,6 +2133,8 @@ export function RoundTable({
                 on the Sessions page.
               </p>
             )}
+            {/* THE FILES, HERE (v1.284.0) — not a page away. */}
+            {dispatched.id ? <JobOutcome sessionId={dispatched.id} /> : null}
             <span className="mt-1 block text-[11px] text-emerald-200/70">
               {dispatched.steps !== null
                 ? `Running with the ${dispatched.steps}-step budget you set.`

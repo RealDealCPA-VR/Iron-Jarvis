@@ -621,6 +621,37 @@ def register(app: FastAPI, d) -> None:
                 continue
         return {"agents": out}
 
+    #: Chat-history rows the panel route accepts per call (v1.284.0). The
+    #: speaker's transcript is BUDGETED downstream; this is only a transport
+    #: bound so a runaway client cannot post megabytes of rows per round.
+    _PANEL_HISTORY_ROWS = 600
+    #: A participant key — "<source>:<name>" as the room stores it. Anything
+    #: that is not this, "user" or "jarvis" is attributed to the USER: a row
+    #: must not be able to spell "Iron Jarvis" (or any free label) and put
+    #: words in the assistant's mouth inside the speaker's prompt.
+    _PANEL_HISTORY_KEY = re.compile(r"^(builtin|dynamic|remote):[A-Za-z0-9._\- ]{1,120}$")
+
+    def _clean_panel_history(raw: Any) -> list[dict[str, str]] | None:
+        """``history`` off the wire → ``[{who, content}]``, or None when the
+        client sent none (an older page / the Agents page): None keeps the
+        room's own transcript, ``[]`` means "a chat with nothing before this"."""
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            return []
+        out: list[dict[str, str]] = []
+        for item in raw[-_PANEL_HISTORY_ROWS:]:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            who = str(item.get("who") or "user").strip()
+            if who not in ("user", "jarvis") and not _PANEL_HISTORY_KEY.match(who):
+                who = "user"
+            out.append({"who": who, "content": content})
+        return out
+
     @app.post("/chat/panel")
     async def chat_panel(body: dict) -> dict[str, Any]:
         """Run one panel round for an @-mentioned chat message (v1.150.0).
@@ -632,21 +663,57 @@ def register(app: FastAPI, d) -> None:
         already — does the work. Because the panel IS an ordinary agent thread,
         the conversation appears on the Agents page with no extra plumbing, which
         is the point: the inter-agent transcript lives where agents live.
+
+        v1.284.0 — THE AGENT REMEMBERS, STAYS ADDRESSED, AND CAN ACT. The body
+        also takes ``history`` (the chat so far — the speaker's transcript,
+        budgeted; see ``AgentThreads.run_round``), ``panel_thread_id`` (the room
+        an earlier round answered with — adopted when this chat has no room
+        yet, so a new chat's first two rounds share one room), ``mentions``
+        (addressees for a follow-up whose text carries no "@" — chat's sticky
+        "still talking to builder"), and ``hands`` (``true`` = do it in a real
+        session; ``false`` = always a round; absent = decide from the ask).
+        When ONE local agent is addressed and the ask would arm a file-changing
+        tool (``threads.needs_hands``), the answer is ``mode: "session"`` with
+        the roster ``target`` — the page then opens the SAME tooled session a
+        chat escalation does, and the result (files included) lands in chat.
+        A panelist cannot make a PDF, and a round that says so is not the
+        answer the user asked for. Rounds answer ``mode: "panel"``.
         """
         from ...agents.roster import resolve_target
-        from ...agents.threads import AgentThreads, clean_participants, parse_mentions
+        from ...agents.threads import (
+            AgentThreads,
+            clean_participants,
+            needs_hands,
+            parse_mentions,
+        )
 
         message = str(body.get("message") or "").strip()
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
         chat_thread_id = str(body.get("chat_thread_id") or "").strip()
+        panel_thread_id = str(body.get("panel_thread_id") or "").strip()
+        history = _clean_panel_history(body.get("history"))
+        hands = body.get("hands")
+        hands = hands if isinstance(hands, bool) else None
 
         mentions = parse_mentions(message)
+        if not mentions:
+            # A follow-up addressed outside the text (v1.284.0). Same token
+            # rule as the text form: lower-cased, "@" and quotes shed.
+            raw = body.get("mentions")
+            if isinstance(raw, list):
+                seen: set[str] = set()
+                for item in raw:
+                    tok = str(item or "").strip().lstrip("@").strip().strip('"').lower()
+                    if tok and tok not in seen:
+                        seen.add(tok)
+                        mentions.append(tok)
         if not mentions:
             raise HTTPException(
                 status_code=400, detail="no @mentions in this message"
             )
         resolved: list[dict[str, str]] = []
+        entries_found: list[Any] = []
         unknown: list[str] = []
         for token in mentions:
             # Conversation, not delegation: a mention of a coordinator
@@ -660,25 +727,58 @@ def register(app: FastAPI, d) -> None:
                 unknown.append(token)
                 continue
             resolved.append(_roster_to_participant(entry))
+            entries_found.append(entry)
         if not resolved:
             raise HTTPException(
                 status_code=404,
                 detail=f"no agent matched {', '.join('@' + u for u in unknown)}",
             )
 
+        # WORK GOES TO A SESSION (v1.284.0). One LOCAL addressee only: a remote
+        # has no session-shaped run here, and a multi-agent mention is a
+        # conversation by construction. `hands` is the page's override (the
+        # "Have builder do this" chip sends true; the Agents page never sends).
+        if len(resolved) == 1 and resolved[0]["source"] in ("builtin", "dynamic"):
+            if hands is None:
+                tools = await asyncio.to_thread(needs_hands, message)
+            else:
+                tools = ["requested"] if hands else []
+            if tools:
+                entry = entries_found[0]
+                bare = resolved[0]["name"]
+                who = f"{resolved[0]['source']}:{bare}"
+                return {
+                    "mode": "session",
+                    "target": entry.name,
+                    "who": who,
+                    "tools": tools,
+                    "reason": (
+                        f"this is work, not a question — {bare} is doing it in a "
+                        "real session, with tools"
+                    ),
+                    "unknown_mentions": unknown,
+                }
+
         threads = AgentThreads(d.platform.engine)
-        rec = threads.for_chat(chat_thread_id, title=message[:60])
+        rec = threads.for_chat(chat_thread_id, title=message[:60], adopt=panel_thread_id)
         try:
             threads.add_participants(rec.id, clean_participants(resolved))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         try:
-            round_out = await threads.run_round(rec.id, message, d)
+            round_out = await threads.run_round(
+                rec.id,
+                message,
+                d,
+                directed=[p["name"] for p in resolved],
+                chat_history=history,
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail="panel thread vanished")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {
+            "mode": "panel",
             "thread_id": rec.id,
             "unknown_mentions": unknown,
             **round_out,

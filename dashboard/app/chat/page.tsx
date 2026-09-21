@@ -156,6 +156,27 @@ interface PanelEntry {
   error?: boolean;
   at?: string;
 }
+/** What POST /chat/panel answers (v1.284.0): a ROUND (`mode: "panel"`), or a
+ *  HAND-OFF (`mode: "session"`) when one local agent was asked for work a
+ *  panel seat cannot do — the page then opens the same tooled session a chat
+ *  escalation opens, naming `target`. An older daemon answers with no `mode`,
+ *  which reads as a round. */
+interface PanelResponse {
+  mode?: "panel" | "session";
+  thread_id?: string;
+  entries?: PanelEntry[];
+  spoke?: string[];
+  skipped?: string[];
+  unknown_mentions?: string[];
+  /** Session mode: the roster target ("builder", "custom:<slug>") and the
+   *  participant key the reply bubble is attributed to. */
+  target?: string;
+  who?: string;
+  reason?: string;
+  tools?: string[];
+  /** Panel mode: how much of the chat the speakers were shown (honesty). */
+  context?: { chat_messages?: number; chat_dropped?: number };
+}
 import { useEvents } from "@/lib/useEvents";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
@@ -368,6 +389,11 @@ interface ChatMessage {
   panelThreadId?: string;
   /** That agent failed this round; its content is an honest error, not a reply. */
   panelError?: boolean;
+  /** v1.284.0: what the speakers were NOT shown — "3 earlier messages did not
+   *  fit the agent's context window" — on the round's first reply. Never
+   *  silent: a forgotten turn the user can see is a limit, an invisible one
+   *  reads as a broken feature. */
+  panelNote?: string;
 }
 
 /** What POST /chat expects. */
@@ -432,6 +458,77 @@ interface ChatResponse {
  *  the user typed after "@" — the source prefix is plumbing, not identity. */
 function agentDisplayName(key: string): string {
   return key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
+}
+
+/** Who a saved conversation is TALKING TO (v1.284.0): the agents of the
+ *  trailing panel round (a round may hold several), else nobody — Iron
+ *  Jarvis. Trailing user messages (a follow-up not yet answered, a failed
+ *  send) keep the addressee: the follow-up is theirs. Read on thread open and
+ *  after every round, so a reload keeps the conversation where it was. */
+function addresseeOf(msgs: ChatMessage[]): string[] {
+  let i = msgs.length - 1;
+  while (i >= 0 && msgs[i].role === "user") i--;
+  const keys: string[] = [];
+  for (; i >= 0 && msgs[i].role === "assistant"; i--) {
+    const who = msgs[i].panelWho;
+    if (!who) break;
+    if (!keys.includes(who)) keys.unshift(who);
+  }
+  return keys;
+}
+
+/** A participant key → the target `sendAgent` can open a session on
+ *  ("builtin:builder" → "builder", "dynamic:remy" → "custom:remy"). A remote
+ *  has no session-shaped run on this machine → null (the panel keeps it). */
+function sessionTargetOf(key: string | undefined): string | null {
+  if (!key) return null;
+  const at = key.indexOf(":");
+  const source = at >= 0 ? key.slice(0, at) : "builtin";
+  const name = (at >= 0 ? key.slice(at + 1) : key).trim();
+  if (!name) return null;
+  if (source === "builtin") return name;
+  if (source === "dynamic") return `custom:${name}`;
+  return null;
+}
+
+/** The message without its addresses — the task a hand-off session gets.
+ *  Same token rule as the daemon's `_MENTION_RE`; the user's bubble keeps the
+ *  original words. Falls back to the original when nothing else is left. */
+function stripMentions(text: string): string {
+  const out = text
+    .replace(/(?<![A-Za-z0-9._-])@(?:"[^"]+"|[A-Za-z0-9][A-Za-z0-9._-]*)\s*/g, "")
+    .replace(/^[\s,:;\-—]+/, "")
+    .trim();
+  return out || text.trim();
+}
+
+/** The chat so far as the panel route reads it (v1.284.0): who said each
+ *  line — the user, Iron Jarvis, or a panel agent by its key — and the words.
+ *  Empty bubbles (hand-off markers, a stopped turn) carry nothing and are
+ *  skipped; the daemon budgets the rest to the speaker's model. */
+function panelHistoryOf(msgs: ChatMessage[]): { who: string; content: string }[] {
+  const out: { who: string; content: string }[] = [];
+  for (const m of msgs) {
+    const content = (m.content || "").trim();
+    if (!content) continue;
+    out.push({ who: m.role === "user" ? "user" : m.panelWho || "jarvis", content });
+  }
+  return out;
+}
+
+/** The conversation as the Iron Jarvis lanes send it (v1.284.0). A panel
+ *  agent's reply is LABELLED, so Jarvis reads it as what builder said — not as
+ *  its own earlier words. Before this, a plain message after an @-round made
+ *  Jarvis answer as if it had made the agent's claims. Both Jarvis-lane
+ *  request builders (the turn and compaction) go through here. */
+function toRequestMessages(msgs: ChatMessage[]): ChatRequestMessage[] {
+  return msgs.map((m) => ({
+    role: m.role,
+    content:
+      m.role === "assistant" && m.panelWho
+        ? `[Reply from the agent ${agentDisplayName(m.panelWho)}, on the agent panel — not Iron Jarvis]\n${m.content}`
+        : m.content,
+  }));
 }
 
 /** Validate a wire `workflow_run` payload (v1.170.0, contract 2) into the
@@ -1317,6 +1414,7 @@ const ComposerInput = memo(function ComposerInput({
   onPickSkill,
   onTyped,
   onPasteFiles,
+  talkingTo = "",
 }: {
   store: ComposerStore;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -1324,6 +1422,10 @@ const ComposerInput = memo(function ComposerInput({
   skills: SkillOption[] | null;
   onSend: (text: string) => void;
   onStop: () => void;
+  /** v1.284.0: the agent(s) the conversation is with — the placeholder says
+   *  so, because a box that still reads "Message Iron Jarvis" while the reply
+   *  will come from builder is the confusion the strip above it exists to end. */
+  talkingTo?: string;
   /** v1.278.0: Enter while a turn runs sends the box as a STEER note — the
    *  turn reads it at its next step. Absent, Enter mid-turn does nothing. */
   onSteer?: (text: string) => void;
@@ -1478,7 +1580,9 @@ const ComposerInput = memo(function ComposerInput({
       placeholder={
         busy && onSteer
           ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Esc stops)"
-          : "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+          : talkingTo
+            ? `Message ${talkingTo}…  (Enter to send · @ to bring in someone else · Back to Jarvis above)`
+            : "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
       }
       className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
     />
@@ -1718,6 +1822,9 @@ export interface RowHandlers {
   /** v1.278.0: put a sent message back in the box (with its files) and drop
    *  everything after it — the resend is a fresh turn over what preceded it. */
   editMessage: (index: number) => void;
+  /** v1.284.0: "Have builder do this" — the panel seat proposed; a REAL
+   *  session of that agent carries it out, with the conversation as recap. */
+  handOff: (index: number) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -1844,9 +1951,45 @@ const MessageRow = memo(function MessageRow({
             </Link>
           )}
         </div>
-        <Bubble role="assistant">
-          <MemoMarkdown content={m.content} />
-        </Bubble>
+        {(m.content || !m.runResult) && (
+          <Bubble role="assistant">
+            <MemoMarkdown content={m.content} />
+          </Bubble>
+        )}
+        {/* A hand-off's reply is the AGENT's AND a run (v1.284.0): the ledger
+            card — files, tools, revert — renders here exactly as it does for
+            an unnamed escalation. This branch returns before the `runResult`
+            one below, so without this line the files would vanish from the
+            very replies that make them. */}
+        {m.runResult && (
+          <RunResultCard
+            result={m.runResult}
+            onRetry={() => h.retryTask(m.runResult?.task || "")}
+          />
+        )}
+        {/* What the speakers were NOT shown (v1.284.0) — said, never silent. */}
+        {m.panelNote && (
+          <div data-testid="panel-note" className="ml-11 text-[11px] text-zinc-500">
+            {m.panelNote}
+          </div>
+        )}
+        {/* HANDS (v1.284.0): a panel seat only advises. When the newest reply
+            is from a LOCAL agent, one press has that agent DO it — a real
+            session with tools, the conversation as its recap, and the files
+            it makes back here in chat. A remote agent has no local session
+            shape, so it gets no chip rather than a chip that lies; a reply
+            that already IS a run gets none either. */}
+        {isLast && !busy && !m.panelError && !m.fromSession && sessionTargetOf(m.panelWho) && (
+          <button
+            type="button"
+            data-testid="panel-hand-off"
+            onClick={() => h.handOff(i)}
+            className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12]"
+          >
+            <Wrench size={12} />
+            Have {agentDisplayName(m.panelWho)} do this
+          </button>
+        )}
       </div>
     );
   // v1.149.0: an agent turn shows the LEDGER's account under the model's own —
@@ -2060,6 +2203,11 @@ function LiveReply({
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // WHO that session runs on (v1.284.0): the roster target it was OPENED with
+  // ("builder", "reviewer", "custom:<slug>"). A named hand-off to a different
+  // agent opens a new session instead of continuing this one under a false
+  // name. "" = no session / the builder default.
+  const sessionTargetRef = useRef<string>("");
   // AGENT MODE: the session id of the turn currently in flight (null when idle).
   // Drives the live "working" bubble, the completion watcher, and the polling
   // fallback.
@@ -2262,6 +2410,16 @@ export default function ChatPage() {
   // alone when they change.
   // "@" agent picker (v1.150.0): the catalog + whether Esc closed the dropdown.
   const [mentionable, setMentionable] = useState<MentionableAgent[] | null>(null);
+  // TALKING TO AN AGENT (v1.284.0): after "@builder …" the follow-ups keep
+  // going to builder — participant keys ("builtin:builder"); [] = Iron Jarvis.
+  // Set after every round, restored from the saved conversation on open,
+  // cleared by "Back to Jarvis", a new chat, or a different @ in the text.
+  const [addressee, setAddressee] = useState<string[]>([]);
+  const addresseeRef = useRef<string[]>([]);
+  addresseeRef.current = addressee;
+  // The agent a running hand-off session belongs to (v1.284.0), so its reply
+  // bubble is attributed to it when the run lands; null = a plain escalation.
+  const awaitingWhoRef = useRef<string | null>(null);
   // Caret offset in the composer. The picker keys off the "/" token AT THE
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
@@ -3516,11 +3674,13 @@ export default function ChatPage() {
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
     tts.cancel(); // stop reading the previous thread's reply
     awaitingIdRef.current = null;
+    awaitingWhoRef.current = null;
     setAwaitingId(null);
     setChatBusy(false);
     setFailedTurn(null);
     setSaveFailure(null); // its Retry belonged to the conversation being left
     setSessionId(null);
+    sessionTargetRef.current = "";
     setAttachments([]);
     // The conversation folder chip belongs to the conversation that made it;
     // a reopened thread still works in its saved folder (setup.workspace_dir).
@@ -3564,6 +3724,7 @@ export default function ChatPage() {
       const msgs = t.messages ?? [];
       setMessages(msgs);
       setThreadId(t.id);
+      setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
       // Does a compaction summary stand over this thread? Server-checked on
       // every open (v1.169.0) — the chip must reflect the store, not memory.
       void refreshCompaction(t.id);
@@ -4392,9 +4553,19 @@ export default function ChatPage() {
       } catch {
         /* no card; the reply still lands */
       }
+      // A hand-off's reply is the AGENT's, and says so (v1.284.0) — the same
+      // chip a panel reply wears, so "who said this" reads the same either way.
+      const who = awaitingWhoRef.current;
+      awaitingWhoRef.current = null;
       const full: ChatMessage[] = [
         ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
-        { role: "assistant", content, fromSession: id, ...(runResult ? { runResult } : {}) },
+        {
+          role: "assistant",
+          content,
+          fromSession: id,
+          ...(runResult ? { runResult } : {}),
+          ...(who ? { panelWho: who } : {}),
+        },
       ];
       setMessages(full);
       // A file an AGENT made deserves the same right-rail preview a chat turn's
@@ -4435,6 +4606,7 @@ export default function ChatPage() {
       }
       // Hard failure: surface it and stop waiting so the turn doesn't hang forever.
       setError(e instanceof ApiError ? e.message : String(e));
+      awaitingWhoRef.current = null;
       // The typed message still survives navigation — minus the wait mark
       // (v1.226.0), or a reopen would resume a wait that already failed.
       const kept = stripAwaiting(messagesRef.current);
@@ -4698,7 +4870,7 @@ export default function ChatPage() {
         model?: string;
         trigger?: string;
       }>("/chat/compact", {
-        messages: messages.map(({ role, content }) => ({ role, content })),
+        messages: toRequestMessages(messages),
         ...(splitChoice(choice).provider
           ? { provider: splitChoice(choice).provider }
           : {}),
@@ -4755,7 +4927,7 @@ export default function ChatPage() {
     const personaValue = personaForSend();
     return {
       // Full conversation every turn — the backend is stateless here.
-      messages: history.map(({ role, content }) => ({ role, content })),
+      messages: toRequestMessages(history),
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       ...(personaValue ? { persona: personaValue } : {}),
@@ -5670,7 +5842,21 @@ export default function ChatPage() {
     // the daemon itself uses for its own escalations), and a "remote:<name>"
     // has no session-shaped run at all — it stays on the unnamed builder
     // default, the same call the daemon's comm escalation makes for remotes.
-    const picked = (!sessionId && opts.agentType) || "";
+    // A NAMED hand-off to a DIFFERENT agent than this conversation's session
+    // runs on OPENS A NEW SESSION (v1.284.0): continuing builder's session
+    // while the bubble and the "Talking to" strip say taxpro would be three
+    // lies in one turn. The same agent (or no name at all) continues as
+    // before, keeping its workspace and the files it already made.
+    const wanted = opts.agentType || "";
+    const wouldRun = wanted.startsWith("custom:")
+      ? wanted
+      : wanted && !wanted.includes(":")
+        ? wanted
+        : "builder";
+    const reopen =
+      Boolean(sessionId) && Boolean(wanted) && wouldRun !== (sessionTargetRef.current || "builder");
+    const opensSession = !sessionId || reopen;
+    const picked = (opensSession && opts.agentType) || "";
     // Slug stripped from the CANONICAL name (roster.py's NAME CONTRACT: the
     // remainder after ":" is the registry key, original casing preserved).
     const customSlug = picked.startsWith("custom:")
@@ -5736,7 +5922,7 @@ export default function ChatPage() {
       // escalated run still asks once per ask-tier tool.
       const posture =
         approvalMode !== "approve_for_me" ? { approval_mode: approvalMode } : {};
-      if (sessionId) {
+      if (sessionId && !reopen) {
         // Continue the same chat — runs in the background (wait:false).
         session = await post<SessionView>(`/sessions/${sessionId}/continue`, {
           message: task,
@@ -5844,6 +6030,9 @@ export default function ChatPage() {
         return;
       }
       setSessionId(session.id);
+      // Remember who it runs on ONLY when this turn opened it — a continue
+      // carries no name and must not relabel the running session.
+      if (opensSession) sessionTargetRef.current = customSlug ? picked : builtinPick || "builder";
       setMessages(marked);
       messagesRef.current = marked;
       queueSave(marked, box);
@@ -5908,8 +6097,22 @@ export default function ChatPage() {
     // Jarvis — "@builder @critic draft this" asks those two, in order, each
     // seeing the previous one's answer. Only fires when a mention resolves to a
     // real agent, so "@ 9am" or an email address is an ordinary message.
-    if (liveMentionsIn(message).length > 0) {
-      void sendPanel(message);
+    const live = liveMentionsIn(message);
+    if (live.length > 0) {
+      void sendPanel(message, live);
+      return;
+    }
+    // STILL TALKING TO AN AGENT (v1.284.0): no "@" in the text, but the
+    // conversation is with builder — the follow-up goes to builder, the words
+    // verbatim and the addressees on the side. "Back to Jarvis" (the strip
+    // above the composer) is the way out; another @ in the text switches.
+    if (addresseeRef.current.length > 0) {
+      // A file alone is a message (v1.275.0) — here it is work for the agent,
+      // and the route wants words: name the files.
+      const text =
+        message ||
+        `Attached: ${attachmentsRef.current.map((a) => a.name).join(", ")}`;
+      void sendPanel(text, addresseeRef.current.map(agentDisplayName));
       return;
     }
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
@@ -5924,38 +6127,91 @@ export default function ChatPage() {
    * The panel is an ordinary agent thread bound to this chat thread, so the
    * inter-agent conversation shows up on the Agents page for free — and turn 3
    * can mention someone new who then sees what was already said.
+   *
+   * v1.284.0 — THE AGENT REMEMBERS, STAYS ADDRESSED, AND CAN ACT. The body
+   * carries the chat so far (`history`, the speaker's transcript — budgeted by
+   * the daemon), the room an earlier round answered with (`panel_thread_id`,
+   * adopted when this chat has no thread id yet — a new chat's first two
+   * rounds used to land in two rooms), and the addressees (`mentions`, so a
+   * follow-up without "@" keeps talking to the same agent with its words
+   * verbatim). A `mode: "session"` verdict means the ask is WORK a panel seat
+   * cannot do: it opens the same tooled session a chat escalation opens, and
+   * the reply comes back with the files. Attachments make it work by
+   * definition (`hands: true`) — a panel seat cannot read a file.
    */
-  async function sendPanel(message: string) {
+  async function sendPanel(message: string, mentions: string[]) {
     setChatBusy(true);
+    const before = messagesRef.current;
+    const atts = attachmentsRef.current;
     const history: ChatMessage[] = [
-      ...messagesRef.current,
-      { role: "user", content: message },
+      ...before,
+      {
+        role: "user",
+        content: message,
+        ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
+      },
     ];
     setMessages(history);
+    const priorRoom = [...before].reverse().find((m) => m.panelThreadId)?.panelThreadId;
+    // The files ride the wire by PATH (the kanban/agent precedent), so a round
+    // that cannot open them at least knows they exist; a session gets them
+    // through sendAgent's own attach lines instead (never both).
+    const wire = atts.length
+      ? message + atts.map((a) => `\n\nAttached file: ${a.path}`).join("")
+      : message;
     try {
-      const res = await post<{
-        thread_id: string;
-        entries: PanelEntry[];
-        spoke: string[];
-        skipped: string[];
-        unknown_mentions: string[];
-      }>("/chat/panel", {
-        message,
+      const res = await post<PanelResponse>("/chat/panel", {
+        message: wire,
+        mentions,
         ...(threadId ? { chat_thread_id: threadId } : {}),
+        ...(priorRoom ? { panel_thread_id: priorRoom } : {}),
+        history: panelHistoryOf(before),
+        ...(atts.length ? { hands: true } : {}),
       });
+      if (atts.length) setAttachments([]); // consumed — the daemon has them now
+      if (res.mode === "session" && res.target) {
+        // WORK, NOT A QUESTION: the same lane a chat escalation takes. The
+        // user's bubble is already on screen (hence escalatedFrom), the reply
+        // is attributed to the agent when it lands (awaitingWhoRef), and the
+        // conversation stays with that agent.
+        const who = res.who || `builtin:${res.target}`;
+        setAddressee([who]);
+        awaitingWhoRef.current = who;
+        setChatBusy(false);
+        await sendAgent(stripMentions(message), {
+          escalatedFrom: {
+            atts,
+            reason:
+              res.reason ||
+              `${agentDisplayName(who)} is doing this in a real session, with tools`,
+          },
+          agentType: res.target,
+        });
+        return;
+      }
       // The user's own turn is already in `history`; keep only the agents'.
       const replies = (res.entries ?? []).filter((e) => e.who && e.who !== "user");
+      const dropped = res.context?.chat_dropped ?? 0;
+      const note =
+        dropped > 0
+          ? `${dropped} earlier message${dropped === 1 ? "" : "s"} did not fit the agent's context window`
+          : "";
       const full: ChatMessage[] = [
         ...history,
-        ...replies.map((e) => ({
+        ...replies.map((e, idx) => ({
           role: "assistant" as const,
           content: e.content || "(no reply)",
           panelWho: e.who,
           panelThreadId: res.thread_id,
           ...(e.error ? { panelError: true } : {}),
+          ...(idx === 0 && note ? { panelNote: note } : {}),
         })),
       ];
       setMessages(full);
+      // The conversation is WITH these agents now — the next plain message
+      // goes to them too. The daemon's `spoke` is the truth of who answered.
+      const spoke = (res.spoke ?? []).filter(Boolean);
+      setAddressee(spoke.length ? spoke : addresseeOf(full));
       queueSave(full);
       if (res.unknown_mentions?.length) {
         setError(
@@ -5968,11 +6224,46 @@ export default function ChatPage() {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setError(err.status === 0 ? "Daemon offline — the panel didn't run." : err.message);
       composer.setText(message); // never lose the typed message
-      setMessages(messagesRef.current.slice(0, -1));
+      if (atts.length) setAttachments(atts); // ...nor the files (never cleared before the POST landed)
+      setMessages(before);
     } finally {
       setChatBusy(false);
       sendingRef.current = false;
     }
+  }
+
+  /**
+   * "Have builder do this" (v1.284.0). The panel seat answered in words; a
+   * REAL session of that agent now carries it out — the ask it answered as
+   * the task, the conversation (its own proposal included) as the recap
+   * `sendAgent` prepends, the files back in chat through the run result.
+   * Explicitly the user's press, so the daemon is not asked to judge it.
+   */
+  async function handOffPanelReply(index: number) {
+    if (busy || sendingRef.current) return;
+    const reply = messagesRef.current[index];
+    const who = reply?.panelWho;
+    const target = sessionTargetOf(who);
+    if (!who || !target) return;
+    let ask = "";
+    for (let j = index - 1; j >= 0; j--) {
+      const m = messagesRef.current[j];
+      if (m.role === "user" && !m.steer) {
+        ask = m.content;
+        break;
+      }
+    }
+    const task =
+      `${stripMentions(ask) || "Carry out what you proposed."}\n\n` +
+      "You already answered this on the agent panel (see the conversation " +
+      "above) — now DO it with your tools, and report the files you made.";
+    sendingRef.current = true;
+    setAddressee([who]);
+    awaitingWhoRef.current = who;
+    await sendAgent(task, {
+      escalatedFrom: { atts: [], reason: `you asked ${agentDisplayName(who)} to do it` },
+      agentType: target,
+    });
   }
 
   // Stop the in-flight turn and keep whatever streamed so far as the answer.
@@ -6023,6 +6314,7 @@ export default function ChatPage() {
     setMessages(full);
     queueSave(full); // the (aborted) turn still completed a visible exchange
     awaitingIdRef.current = null;
+    awaitingWhoRef.current = null; // a stopped hand-off names nobody later
     setAwaitingId(null); // also tears down the event watcher + polling interval
   }
 
@@ -6032,6 +6324,7 @@ export default function ChatPage() {
     tts.cancel(); // stop reading the old thread's reply
     setMessages([]);
     setSessionId(null);
+    sessionTargetRef.current = "";
     awaitingIdRef.current = null;
     setAwaitingId(null); // also tears down any polling interval
     setChatBusy(false);
@@ -6083,6 +6376,8 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setThreadId(null);
+    setAddressee([]); // a fresh conversation is with Iron Jarvis
+    awaitingWhoRef.current = null;
     setCommMeta(null); // a fresh conversation is browser-owned again
     // Back to the defaults — the project folder while a project is selected,
     // else the user's own saved workspace/persona choices.
@@ -6284,6 +6579,7 @@ export default function ChatPage() {
       inputRef.current?.focus();
     },
     crystallize: (id) => void crystallizeThread(id),
+    handOff: (index) => void handOffPanelReply(index),
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -6297,6 +6593,7 @@ export default function ChatPage() {
       regenerate: () => rowImplRef.current.regenerate(),
       editMessage: (index) => rowImplRef.current.editMessage(index),
       crystallize: (id) => rowImplRef.current.crystallize(id),
+      handOff: (index) => rowImplRef.current.handOff(index),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),
@@ -7484,6 +7781,35 @@ export default function ChatPage() {
                   )}
                 </div>
               )}
+              {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
+                  conversation stays with builder: plain follow-ups go to the
+                  panel, and this strip says so — with the way back. */}
+              {addressee.length > 0 && !commMeta && (
+                <div
+                  data-testid="addressee-strip"
+                  className="flex items-center gap-2 border-t hairline px-3 py-1.5 text-[11.5px]"
+                >
+                  <Bot size={12} className="shrink-0 text-accent-soft" />
+                  <span className="min-w-0 truncate text-zinc-300">
+                    Talking to{" "}
+                    <span className="font-medium text-accent-soft">
+                      {addressee.map(agentDisplayName).join(", ")}
+                    </span>
+                    <span className="text-zinc-500">
+                      {" "}
+                      — replies come from {addressee.length > 1 ? "them" : "it"}, not Iron
+                      Jarvis. Use @ to bring in someone else.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setAddressee([])}
+                    className="ml-auto shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                  >
+                    Back to Jarvis
+                  </button>
+                </div>
+              )}
               {/* Composer */}
               <div className="relative flex items-end gap-2 border-t hairline p-3">
                 {/* "/" skill picker — floats above the composer */}
@@ -8069,6 +8395,7 @@ export default function ChatPage() {
                     inputFromVoiceRef.current = false; // typed — never auto-send
                   }}
                   onPasteFiles={(files) => void addFilesRef.current(files)}
+                  talkingTo={addressee.map(agentDisplayName).join(", ")}
                 />
                 {(awaiting || (chatBusy && stream.streaming)) && (
                   <button
