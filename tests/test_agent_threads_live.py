@@ -308,7 +308,10 @@ def test_enabled_but_failing_remote_keeps_the_honest_error_path(
         "mini", "http://127.0.0.1:9", "http-task", enabled=True
     )
 
-    async def fail(self, p, transcript, d, record=None):
+    # `**kw`: the round hands the seat its conversation (history=, message=,
+    # conversation_id= since v1.285.0) — a fake that refuses keywords turns
+    # every future kwarg into a TypeError that reads as the remote's failure.
+    async def fail(self, p, transcript, d, record=None, **kw):
         assert record is not None  # run_round hands over the preloaded row
         raise RuntimeError("endpoint exploded")
 
