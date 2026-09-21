@@ -2533,6 +2533,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # ``GET /search/{...}`` catch-all to shadow ``/search/history`` (the
     # /skills/learning lesson below). Pair S4 detects a 404 to switch its
     # palette lane off — see routes/search.py's degradation contract.
+    # The deps object is reachable from tests as ``app.state.d`` (v1.285.0):
+    # a route that reaches the phone lane (``d.inbound_poller``,
+    # ``d.comm_thread_store``) is only provable with a test double in its
+    # place, and a closure cannot be handed one any other way.
+    app.state.d = d
+
+    # THE WINDOW LADDER, handed to the agents package (v1.285.0): the panel's
+    # per-speaker transcript budget reads the same pin → envelope → fleet →
+    # default ladder both chat lanes plan against, but ``agents/threads.py``
+    # may not import from the daemon — so the daemon lends it the resolver.
+    def _context_window_for(provider: str, model: str):
+        from .chat_turn import _context_window
+
+        return _context_window(d, provider, model)
+
+    d.context_window = _context_window_for
     _routes.search.register(app, d)
     _routes.chat.register(app, d)
     _routes.projects.register(app, d)

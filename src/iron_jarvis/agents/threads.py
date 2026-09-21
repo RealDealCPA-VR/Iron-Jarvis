@@ -91,6 +91,9 @@ _TRANSCRIPT_CHARS_PER_TOKEN = 3.5
 #: ``who`` is ``"user"`` / ``"jarvis"`` / a participant key; a key resolves to
 #: the participant's name+role like the room's own entries do.
 _CHAT_WHO_LABELS = {"user": "User", "jarvis": "Iron Jarvis"}
+#: Rows of conversation a REMOTE is sent as messages (v1.285.0) — its transport
+#: has no window ladder this daemon can read, so a fixed, generous tail.
+_REMOTE_HISTORY_ROWS = 80
 #: The header a chat-backed transcript opens with, so a speaker knows the
 #: "Iron Jarvis" lines are the assistant's earlier answers in the same chat.
 _CHAT_TRANSCRIPT_HEADER = (
@@ -783,11 +786,17 @@ class AgentThreads:
         """
         if p.get("source") == "remote":
             return _TRANSCRIPT_CHARS
+        # The window ladder is the DAEMON's (``chat_turn._context_window``), and
+        # this package must not import from the daemon
+        # (``test_agents_threads_does_not_import_from_daemon_routes``) — so the
+        # daemon hands the resolver in on ``d.context_window``; a caller without
+        # one (the phone lane's shim, a bare test) gets the fixed cap.
+        resolver = getattr(d, "context_window", None)
+        if not callable(resolver):
+            return _TRANSCRIPT_CHARS
         try:
-            from ..daemon.chat_turn import _context_window
-
             provider, model = cls._provider_model_for(p, d)
-            window = _context_window(d, provider, model)
+            window = resolver(provider, model)
         except Exception:  # noqa: BLE001 — unknown window → fixed cap
             window = None
         if not window or int(window) <= 0:
@@ -1031,7 +1040,29 @@ class AgentThreads:
                     continue
             try:
                 if p["source"] == "remote":
-                    reply = await self._speak_remote(p, transcript, d, record=remote_record)
+                    # A CONVERSATION for the remote (v1.285.0): the chat rows
+                    # when the round has them, else the room before this
+                    # round, plus this round's earlier speakers — and the
+                    # user's own line as the task.
+                    prior = (
+                        chat_history
+                        if chat_history is not None
+                        else messages[: len(messages) - len(new_entries)]
+                    )
+                    others_this_round = [e for e in new_entries if e.get("who") != "user"]
+                    rows = self.remote_history(
+                        list(prior) + others_this_round, p, participants
+                    )
+                    reply, extra = await self._speak_remote(
+                        p,
+                        transcript,
+                        d,
+                        record=remote_record,
+                        history=rows,
+                        message=(user_message or "").strip(),
+                        conversation_id=thread_id,
+                    )
+                    entry.update(extra)
                 else:
                     reply = await self._speak_local(p, others, transcript, d)
                 entry["content"] = reply
@@ -1176,10 +1207,68 @@ class AgentThreads:
         except Exception:  # noqa: BLE001 — unreadable registry == offline
             return None
 
+    @classmethod
+    def remote_history(
+        cls, entries: list[dict[str, Any]], p: dict[str, str], participants: list[dict]
+    ) -> list[dict[str, str]]:
+        """The exchange as the REMOTE should read it (v1.285.0): ``[{role,
+        content}]`` — the user's lines as ``user``; its OWN earlier lines as
+        ``assistant`` unprefixed; everyone else (Iron Jarvis, other seats) as
+        ``assistant`` with the speaker named, so a two-party transport still
+        carries a many-party conversation honestly. Blank rows are skipped."""
+        names = {
+            str(q.get("key") or ""): f"{q.get('name') or '?'} ({q.get('role') or 'participant'})"
+            for q in participants
+        }
+        names.pop("", None)
+        rows: list[dict[str, str]] = []
+        for e in entries:
+            content = str(e.get("content") or "").strip()
+            if not content:
+                continue
+            if e.get("pending"):
+                # "hermes has the task and will report back" is IRON JARVIS's
+                # note about the remote, not the remote's own words — never
+                # hand it back to the remote as something it said.
+                continue
+            who = str(e.get("who") or "user")
+            if who == "user":
+                rows.append({"role": "user", "content": content})
+            elif who == p.get("key"):
+                rows.append({"role": "assistant", "content": content})
+            else:
+                rows.append(
+                    {"role": "assistant", "content": f"{cls._label_for(who, names)}: {content}"}
+                )
+        return rows[-_REMOTE_HISTORY_ROWS:]
+
+    @staticmethod
+    def _inbound_url(record: Any) -> str:
+        """Where the remote may message back, or "" when inbound is off."""
+        if not bool(getattr(record, "inbound_enabled", False)):
+            return ""
+        return str(getattr(record, "inbound_url", "") or "")
+
     async def _speak_remote(
-        self, p: dict[str, str], transcript: str, d: Any, record: Any = None
-    ) -> str:
-        """A remote participant answers over its registered transport."""
+        self,
+        p: dict[str, str],
+        transcript: str,
+        d: Any,
+        record: Any = None,
+        *,
+        history: list[dict[str, Any]] | None = None,
+        message: str = "",
+        conversation_id: str = "",
+    ) -> tuple[str, dict[str, Any]]:
+        """A remote participant answers over its registered transport.
+
+        Returns ``(reply, extra)`` — ``extra`` is folded into the room entry
+        (``pending: True`` when the remote ACCEPTED the task to answer later,
+        v1.285.0). With ``history`` the remote gets a CONVERSATION — the rows
+        as messages, the user's line as the task, the room id as
+        ``conversation_id`` and its inbound address — instead of one blob.
+        Without it (an older caller) the v1.150.0 blob is sent unchanged.
+        """
         from .remote import RemoteAgentRegistry
 
         registry = RemoteAgentRegistry(d.platform.engine)
@@ -1187,15 +1276,72 @@ class AgentThreads:
             record = registry.get(p["name"])
         if record is None:
             raise RuntimeError(f"remote agent {p['name']!r} is not registered")
-        task = (
-            f"You are {p['name']}, the {p['role']} on a panel. Read the "
-            f"conversation and contribute your {p['role']} perspective (under "
-            f"~200 words):\n\n{transcript or '(no messages yet)'}"
-        )
-        out = await registry.run(record, task, d.platform.secrets.get)
+        if history is not None:
+            brief = (
+                f"You are {p['name']}, the {p['role']} in this conversation with the "
+                f"user (and Iron Jarvis, their assistant). Answer the user's latest "
+                f"message; keep it under ~200 words unless asked for more."
+            )
+            task = f"{brief}\n\n{message or transcript or '(no message)'}"
+            out = await registry.run(
+                record,
+                task,
+                d.platform.secrets.get,
+                history=history,
+                conversation_id=conversation_id,
+                reply_to=self._inbound_url(record),
+            )
+        else:
+            task = (
+                f"You are {p['name']}, the {p['role']} on a panel. Read the "
+                f"conversation and contribute your {p['role']} perspective (under "
+                f"~200 words):\n\n{transcript or '(no messages yet)'}"
+            )
+            out = await registry.run(record, task, d.platform.secrets.get)
         if not out.get("ok"):
             raise RuntimeError(out.get("detail") or "remote agent failed")
-        return str(out.get("result") or "").strip()
+        if out.get("accepted"):
+            where = "here" if self._inbound_url(record) else "on its own side"
+            return (
+                f"{p['name']} has the task and will report back {where} when it has "
+                "something.",
+                {"pending": True},
+            )
+        return str(out.get("result") or "").strip(), {}
+
+    async def add_inbound_entry(
+        self,
+        thread_id: str,
+        who: str,
+        content: str,
+        d: Any,
+        *,
+        kind: str = "message",
+        documents: list[str] | None = None,
+    ) -> int:
+        """A remote MESSAGED BACK (v1.285.0): land its line in the room as an
+        entry of its own — ``inbound: True`` and ``kind`` (message / progress /
+        question / done) so every surface can render it for what it is — and
+        announce it like any round entry. Returns the room's new entry count.
+        Raises ``KeyError`` for an unknown room (the route turns it into 404)."""
+        if self.get(thread_id) is None:
+            raise KeyError(thread_id)
+        entry: dict[str, Any] = {
+            "who": who,
+            "role": "participant",
+            "source": who.split(":", 1)[0] if ":" in who else "remote",
+            "content": str(content or "").strip(),
+            "at": utcnow().isoformat(),
+            "inbound": True,
+            "kind": kind,
+        }
+        if documents:
+            entry["documents"] = list(documents)
+        # The append is a locked read-modify-write on SQLite — off the loop
+        # (v1.153.1 rule), because a third party can call this 60×/min.
+        count = await asyncio.to_thread(self._append, thread_id, [entry])
+        await self._publish_updated(thread_id, who, count, d)
+        return count
 
     # -- long-term memory -----------------------------------------------------
 

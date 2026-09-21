@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from collections import deque
 import os
 import re
 import time
@@ -15,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from ..app import _session_view
 from ..schemas import (
@@ -29,6 +31,7 @@ from ..schemas import (
     RemoteAgentCreate,
     RemoteAgentPatch,
     RemoteAgentRun,
+    RemoteInboundEnable,
     SkillApplyBody,
     SkillCreate,
     SpawnBody,
@@ -37,6 +40,10 @@ from ..schemas import (
 
 # Importing this registers the RemoteAgentRecord table on the shared metadata.
 from ...agents.remote import RemoteAgentRegistry
+from ...core.events import EventType
+from ...core.logging import get_logger
+
+log = get_logger("daemon.routes.agents")
 
 # Face overrides (v1.180.0). Imported as a MODULE, never as loose names: the
 # route looks every helper up on `faces` at call time so a test can monkeypatch
@@ -802,6 +809,10 @@ def register(app: FastAPI, d) -> None:
             "timeout_s": r.timeout_s,
             "has_credential": bool(r.secret_name),
             "created_at": r.created_at.isoformat() if r.created_at else None,
+            # v1.285.0: whether the remote may message back, and where it posts.
+            # The inbound TOKEN is never here — it was shown once, at enable.
+            "inbound_enabled": bool(getattr(r, "inbound_enabled", False)),
+            "inbound_url": str(getattr(r, "inbound_url", "") or ""),
         }
 
     @app.get("/agents/remote")
@@ -877,6 +888,13 @@ def register(app: FastAPI, d) -> None:
             fields["enabled"] = bool(body.enabled)
         if body.timeout_s is not None:
             fields["timeout_s"] = max(1, int(body.timeout_s))
+        if body.inbound_url is not None:
+            inbound_url = body.inbound_url.strip()
+            if not inbound_url.lower().startswith(("http://", "https://")):
+                raise HTTPException(
+                    status_code=400, detail="inbound_url must start with http:// or https://"
+                )
+            fields["inbound_url"] = inbound_url
 
         # CREDENTIAL: three distinct intents, and conflating any two of them
         # loses a secret the user cannot retype.
@@ -936,6 +954,381 @@ def register(app: FastAPI, d) -> None:
             # 424 Failed Dependency — the remote agent itself failed to answer.
             raise HTTPException(status_code=424, detail=res.get("detail") or "remote call failed")
         return {"result": res.get("result") or "", "agent": name, "kind": rec.kind}
+
+    # --- A remote agent messages back (v1.285.0) ----------------------------
+    # The user's question: "what is stopping me from interacting with my
+    # remote agents the way I can with Slack?" — nothing could come BACK. These
+    # three routes are the way in: the user enables it (a token minted once,
+    # shown once), the remote posts into the room it sits in with that token,
+    # and the line lands where the user is — the room, the desktop chat that
+    # mirrors it, and the phone when the room belongs to a phone conversation.
+
+    #: Inbound posts per remote per minute before a 429 — a chatty remote is
+    #: fine, a runaway one is not.
+    _INBOUND_RATE_MAX = 60
+    _INBOUND_RATE_WINDOW_S = 60.0
+    _INBOUND_MAX_BODY_BYTES = 96 * 1024 * 1024
+    #: Posts that CARRY FILES are rarer and heavier: a tighter per-minute cap and
+    #: a per-agent, per-day byte budget for the inbox — nothing prunes it, so
+    #: "60 posts × 60 MB a minute" must not be within the rules.
+    _INBOUND_FILE_POSTS_MAX = 10
+    _INBOUND_INBOX_DAILY_BYTES = 512 * 1024 * 1024
+    #: Phone pushes per agent per 10 minutes — the room keeps every line; the
+    #: phone does not have to buzz for each one.
+    _INBOUND_PHONE_MAX = 20
+    _INBOUND_PHONE_WINDOW_S = 600.0
+    _inbound_hits: dict[str, deque] = {}
+    _inbound_file_hits: dict[str, deque] = {}
+    _inbound_phone_hits: dict[str, deque] = {}
+    _inbound_inbox_bytes: dict[str, tuple[str, int]] = {}  # name -> (day, bytes)
+
+    def _windowed_ok(table: dict[str, deque], name: str, limit: int, window_s: float) -> bool:
+        now = time.monotonic()
+        q = table.setdefault(name, deque())
+        while q and now - q[0] > window_s:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+    def _inbound_rate_ok(name: str) -> bool:
+        return _windowed_ok(_inbound_hits, name, _INBOUND_RATE_MAX, _INBOUND_RATE_WINDOW_S)
+
+    def _inbound_inbox_budget_ok(name: str, more: int) -> bool:
+        """Charge ``more`` bytes to today's inbox budget for ``name``; False
+        when it would overflow (nothing is charged then)."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        prev_day, used = _inbound_inbox_bytes.get(name, (day, 0))
+        if prev_day != day:
+            used = 0
+        if used + more > _INBOUND_INBOX_DAILY_BYTES:
+            return False
+        _inbound_inbox_bytes[name] = (day, used + more)
+        return True
+
+    def _lan_address() -> str:
+        """This machine's LAN IPv4, best-effort (a UDP socket 'connect' picks
+        the route; nothing is sent). "" when there is none to find."""
+        import socket
+
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("10.255.255.255", 1))
+                return str(s.getsockname()[0])
+            finally:
+                s.close()
+        except Exception:  # noqa: BLE001 — offline / no route
+            return ""
+
+    def _inbound_url_for(request: Request, name: str) -> str:
+        """The address a remote is told to post to. The DASHBOARD reaches this
+        daemon on 127.0.0.1 — an address no other machine can use — so a
+        loopback request derives the LAN address of this machine instead, on
+        the same port; a request that already came over a real host keeps it.
+        Editable afterwards (PATCH inbound_url) for tunnels and proxies."""
+        from ..auth import _host_label
+
+        host = (request.headers.get("host") or "").strip()
+        scheme = request.url.scheme or "http"
+        if not host:
+            return ""
+        label = _host_label(host).lower()
+        if label in ("127.0.0.1", "localhost", "::1", "[::1]", "testserver"):
+            lan = _lan_address()
+            if lan:
+                port = host.rsplit(":", 1)[1] if host.count(":") == 1 else ""
+                host = f"{lan}:{port}" if port else lan
+        return f"{scheme}://{host}/agents/remote/{quote(name, safe='')}/inbound"
+
+    def _inbound_reachability(url: str) -> dict[str, Any]:
+        """Whether THIS daemon would even accept a request addressed to
+        ``url``'s host, and what it takes if not. The packaged app binds the
+        daemon to 127.0.0.1 and the Host guard admits loopback only, so a
+        remote on another machine needs two things the user must do on purpose
+        — said here, in the same answer as the token, never discovered as a
+        bare 403 in the remote's logs."""
+        from urllib.parse import urlparse
+
+        from ..auth import _host_ok
+
+        try:
+            host = urlparse(url).netloc or ""
+        except Exception:  # noqa: BLE001
+            host = ""
+        allowed = bool(host) and _host_ok(host)
+        note = ""
+        if not allowed:
+            label = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+            note = (
+                f"This daemon currently accepts requests addressed to 127.0.0.1 or "
+                f"localhost only, so a remote on another machine cannot reach it yet. "
+                f"To allow it: run the daemon listening on your LAN address "
+                f"(ironjarvis serve --host {label or '<your LAN IP>'}) and set "
+                f"IRONJARVIS_HOST_ALLOWLIST={label or '<your LAN IP>'} before starting it "
+                f"— or point a tunnel or reverse proxy at 127.0.0.1:8787 and paste its "
+                f"address here (Edit → inbound URL). A remote running on THIS machine "
+                f"can post to http://127.0.0.1:8787 as is."
+            )
+        return {"host_allowed": allowed, "note": note}
+
+    def _bearer_of(request: Request) -> str:
+        header = request.headers.get("authorization") or ""
+        return header[7:].strip() if header.lower().startswith("bearer ") else ""
+
+    @app.post("/agents/remote/{name}/inbound/enable")
+    def enable_remote_inbound(
+        name: str, request: Request, body: RemoteInboundEnable | None = None
+    ) -> dict[str, Any]:
+        """Turn inbound ON for a remote: mint (or ROTATE) its inbound token and
+        return it ONCE — it lives in the vault afterwards and no listing ever
+        carries it again. The remote sends it as ``Authorization: Bearer``."""
+        reg = _remote_reg()
+        rec = reg.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        url = ((body.url if body else "") or "").strip() or _inbound_url_for(request, name)
+        if url and not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+        out = reg.enable_inbound(name, d.platform.secrets.set, url=url)
+        if out is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        row, token = out
+        return {
+            **_remote_view(row),
+            "token": token,
+            "url": row.inbound_url,
+            "reachable": _inbound_reachability(row.inbound_url),
+        }
+
+    @app.post("/agents/remote/{name}/inbound/disable")
+    def disable_remote_inbound(name: str) -> dict[str, Any]:
+        reg = _remote_reg()
+        row = reg.disable_inbound(name, d.platform.secrets.delete)
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        return _remote_view(row)
+
+    @app.post("/agents/remote/{name}/inbound")
+    async def remote_inbound(name: str, request: Request) -> dict[str, Any]:
+        """A remote agent posts INTO a conversation (v1.285.0).
+
+        Token-exempt in the middleware (``auth._is_exempt``) because the remote
+        holds its OWN inbound token, never the install bearer — verified here
+        FAIL-CLOSED: inbound off / no vault entry → 403, wrong or missing
+        token → 401. The remote may only post into a room it is a participant
+        of (403 otherwise), so a token for one agent cannot write as another.
+        Body: ``{conversation_id, message, kind?, files?}`` — ``kind`` one of
+        message / progress / question / done; ``files`` in the v1.157.0 shape,
+        landed under ``<home>/remote-inbox/<agent>/`` through the same trust
+        boundary the delegate tool uses (names sanitised, sizes capped, URLs on
+        the remote's own host only). The line lands in the room (an
+        ``AGENT_THREAD_UPDATED`` like any round entry, plus ``REMOTE_MESSAGE``)
+        and — when the room belongs to a PHONE conversation — on that thread
+        and that phone, named.
+        """
+        from ...agents import remote_files as rf
+        from ...agents.remote import INBOUND_KINDS, INBOUND_MESSAGE_CHARS
+        from ...agents.threads import AgentThreads
+
+        reg = _remote_reg()
+        # DB + vault reads off the loop: a third party drives this route.
+        rec = await asyncio.to_thread(reg.get, name)
+        # A DISABLED remote is disabled in both directions: the user's one
+        # switch must silence it, not leave it writing into conversations.
+        if (
+            rec is None
+            or not bool(getattr(rec, "enabled", True))
+            or not bool(getattr(rec, "inbound_enabled", False))
+        ):
+            raise HTTPException(
+                status_code=403, detail="inbound is not enabled for this remote agent"
+            )
+        ok = await asyncio.to_thread(
+            reg.verify_inbound, rec, _bearer_of(request), d.platform.secrets.get
+        )
+        if not ok:
+            raise HTTPException(status_code=401, detail="invalid inbound token")
+        if not _inbound_rate_ok(name):
+            raise HTTPException(status_code=429, detail="too many inbound messages — slow down")
+        # Refuse an oversized body BEFORE parsing it: 20 files × 25 MB in base64
+        # is the legitimate ceiling (~80 MB); anything past that is not a message.
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > _INBOUND_MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="inbound body too large")
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 — not JSON
+            raise HTTPException(status_code=400, detail="body must be JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+        conversation_id = str(body.get("conversation_id") or "").strip()
+        message = str(body.get("message") or "").strip()
+        kind = str(body.get("kind") or "message").strip().lower()
+        if kind not in INBOUND_KINDS:
+            raise HTTPException(
+                status_code=400, detail=f"kind must be one of {', '.join(INBOUND_KINDS)}"
+            )
+        if not conversation_id:
+            raise HTTPException(status_code=400, detail="conversation_id is required")
+        raw_files = body.get("files")
+        if not message and not raw_files:
+            raise HTTPException(status_code=400, detail="message (or files) is required")
+        if len(message) > INBOUND_MESSAGE_CHARS:
+            raise HTTPException(
+                status_code=413, detail=f"message longer than {INBOUND_MESSAGE_CHARS} characters"
+            )
+        threads = AgentThreads(d.platform.engine)
+        room = await asyncio.to_thread(threads.get, conversation_id)
+        who = f"remote:{name}"
+        try:
+            participants = json.loads(room.participants_json or "[]") if room is not None else []
+        except Exception:  # noqa: BLE001
+            participants = []
+        # ONE answer for "no such room" and "not your room": a token holder
+        # must not be able to enumerate which conversation ids exist.
+        if room is None or not any(
+            str(p.get("key") or "") == who for p in participants if isinstance(p, dict)
+        ):
+            raise HTTPException(
+                status_code=403, detail="this remote agent is not a participant of that conversation"
+            )
+
+        # FILES — the same trust boundary the delegate tool uses; landed in a
+        # per-agent inbox, never in a workspace the remote did not earn.
+        documents: list[str] = []
+        notes: list[str] = []
+        entries = rf.parse_files({"files": raw_files}) if raw_files else []
+        if entries:
+            if not _windowed_ok(
+                _inbound_file_hits, name, _INBOUND_FILE_POSTS_MAX, _INBOUND_RATE_WINDOW_S
+            ):
+                raise HTTPException(
+                    status_code=429, detail="too many file deliveries — slow down"
+                )
+            import httpx
+
+            from ...tools.base import safe_path
+
+            async def _fetch(url: str) -> bytes:
+                # STREAMED, aborted past the cap — never buffer a body whose
+                # size the other machine chose.
+                async with httpx.AsyncClient(timeout=min(rec.timeout_s or 120, 60)) as c:
+                    async with c.stream("GET", url) as r:
+                        r.raise_for_status()
+                        got = bytearray()
+                        async for chunk in r.aiter_bytes():
+                            got.extend(chunk)
+                            if len(got) > rf.MAX_FILE_BYTES:
+                                raise ValueError("too large")
+                        return bytes(got)
+
+            files, notes = await rf.collect(entries, base_url=rec.base_url or "", fetch=_fetch)
+            total = sum(len(b) for _n, b in files)
+            if files and not _inbound_inbox_budget_ok(name, total):
+                notes.append(
+                    f"{len(files)} file(s) not saved — {name} has used today's inbox "
+                    f"budget ({_INBOUND_INBOX_DAILY_BYTES // (1024 * 1024)} MB)"
+                )
+                files = []
+            inbox = d.platform.config.home / "remote-inbox" / rf.safe_filename(name, fallback="remote")
+
+            def _land() -> list[str]:
+                inbox.mkdir(parents=True, exist_ok=True)
+                saved: list[str] = []
+                for fname, blob in files:
+                    try:
+                        target = rf.unique_path(inbox, fname)
+                        # The SECOND lock (v1.157.0's invariant): even a name
+                        # that survived sanitising cannot resolve outside the
+                        # inbox.
+                        checked = safe_path(inbox, target.name)
+                        checked.write_bytes(blob)
+                        saved.append(str(checked.resolve()))
+                    except Exception as exc:  # noqa: BLE001
+                        notes.append(f"{fname}: could not be written ({type(exc).__name__})")
+                return saved
+
+            documents = await asyncio.to_thread(_land)
+
+        text = message
+        if documents:
+            listed = "\n".join(f"- {p}" for p in documents)
+            text = (text + "\n\n" if text else "") + f"Files from {name}:\n{listed}"
+        if notes:
+            text += "\n\nNot saved:\n" + "\n".join(f"- {n}" for n in notes)
+
+        try:
+            count = await threads.add_inbound_entry(
+                room.id, who, text, d, kind=kind, documents=documents or None
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such conversation")
+        try:
+            await d.platform.event_bus.publish(
+                EventType.REMOTE_MESSAGE,
+                {"agent": name, "thread_id": room.id, "kind": kind, "documents": documents},
+            )
+        except Exception:  # noqa: BLE001 — an event must never fail the post
+            pass
+
+        # A PHONE conversation hears it too — on the thread and on the phone.
+        phoned = False
+        phone_rate_limited = False
+        chat_thread_id = str(getattr(room, "chat_thread_id", "") or "")
+        store = getattr(d, "comm_thread_store", None)
+        poller = getattr(d, "inbound_poller", None)
+        if (
+            chat_thread_id
+            and store is not None
+            and await asyncio.to_thread(store.is_daemon_owned, chat_thread_id)
+        ):
+            try:
+                await asyncio.to_thread(
+                    store.append,
+                    chat_thread_id,
+                    "assistant",
+                    text,
+                    extra={"panelWho": who, "panelKind": kind, "documents": documents or None},
+                )
+            except Exception:  # noqa: BLE001 — the room already has it
+                log.warning("remote inbound: comm thread append failed", exc_info=True)
+            pair = await asyncio.to_thread(store.thread_channel, chat_thread_id)
+            if pair and poller is not None:
+                channel_name, sender_id = pair
+                ch = next(
+                    (c for n, c in poller.inbound_channels() if n == channel_name), None
+                )
+                if ch is not None and not _windowed_ok(
+                    _inbound_phone_hits, name, _INBOUND_PHONE_MAX, _INBOUND_PHONE_WINDOW_S
+                ):
+                    # The thread keeps the line; the phone stops buzzing.
+                    phone_rate_limited = True
+                elif ch is not None:
+                    try:
+                        phoned = bool(
+                            await poller.send_chunked(
+                                ch, text, chat_id=sender_id, prefix=f"{name}: "
+                            )
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.warning("remote inbound: phone send failed", exc_info=True)
+        return {
+            "ok": True,
+            "thread_id": room.id,
+            "entries": count,
+            "kind": kind,
+            # Names only — the other machine has no business learning where
+            # this user's home folder is.
+            "documents": [Path(p).name for p in documents],
+            "skipped": notes,
+            "phoned": phoned,
+            "phone_rate_limited": phone_rate_limited,
+        }
 
     # --- Agent portraits (v1.171.0) -----------------------------------------
     # Registered AFTER the /agents/remote/* block on purpose: /agents/remote/…

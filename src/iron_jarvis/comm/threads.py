@@ -50,6 +50,22 @@ _MAX_MESSAGES = 200
 #: truncates each message to 12000 chars before the provider sees it).
 _MAX_CONTENT = 12000
 
+#: The ONLY extra fields an append may carry (v1.285.0) — the dashboard's
+#: chat-message vocabulary for an attributed line; anything else is dropped.
+_EXTRA_KEYS = ("panelWho", "panelKind", "documents")
+
+#: The ``setup_json`` key the phone lane keeps its sticky addressee under
+#: (v1.285.0): "remote:hermes" while the conversation is with hermes, "" or
+#: absent while it is with Iron Jarvis.
+ADDRESSEE_KEY = "addressee"
+
+
+def agent_line_label(name: str) -> str:
+    """The one sentence that marks another agent's words in a model's history
+    (v1.285.0) — the SAME words ``dashboard/app/chat/page.tsx::toRequestMessages``
+    uses, so both lanes tell the model the same thing."""
+    return f"[Reply from the agent {name}, on the agent panel — not Iron Jarvis]"
+
 
 class CommThreadStore:
     """Find-or-create + atomic append for daemon-owned chat threads."""
@@ -179,8 +195,16 @@ class CommThreadStore:
             return True
 
     # -- the atomic append ---------------------------------------------------
-    def append(self, thread_id: str, role: str, content: str) -> int:
+    def append(
+        self, thread_id: str, role: str, content: str, *, extra: dict[str, Any] | None = None
+    ) -> int:
         """Append one message atomically; returns the new message count.
+
+        ``extra`` (v1.285.0): a few WHITELISTED fields the dashboard's chat
+        message shape already knows — ``panelWho`` (the agent a line came
+        from, e.g. ``remote:hermes``), ``panelKind`` (``progress`` / ``question``
+        / ``done``) and ``documents`` (absolute paths) — so a remote agent's
+        line on a phone thread renders attributed on the desktop too.
 
         Read-modify-write of ``messages_json`` in ONE session under the store
         lock; tail-capped to the same 200 messages PUT keeps; content capped
@@ -196,11 +220,14 @@ class CommThreadStore:
         searchable as a desktop one, and the transcript can never commit
         without its docs.
         """
-        entry = {
+        entry: dict[str, Any] = {
             "role": role,
             "content": str(content or "")[:_MAX_CONTENT],
             "at": utcnow().isoformat(),
         }
+        for key in _EXTRA_KEYS:
+            if extra and extra.get(key):
+                entry[key] = extra[key]
         with self._lock, session_scope(self.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
             if r is None:
@@ -292,11 +319,92 @@ class CommThreadStore:
                 if not isinstance(m, dict):
                     continue
                 role = "user" if m.get("role") == "user" else "assistant"
-                out.append({"role": role, "content": str(m.get("content") or "")})
+                content = str(m.get("content") or "")
+                who = str(m.get("panelWho") or "") if role == "assistant" else ""
+                if who:
+                    # ANOTHER AGENT'S LINE (v1.285.0) — labelled the way the
+                    # desktop lane labels it (``toRequestMessages``), so the
+                    # model reads "what hermes said", never its OWN prior turn.
+                    # A remote's words must not become Iron Jarvis's memory of
+                    # what Iron Jarvis committed to.
+                    name = who.split(":", 1)[1] if ":" in who else who
+                    content = f"{agent_line_label(name)}\n{content}"
+                out.append({"role": role, "content": content})
             return out
         except Exception:  # noqa: BLE001 — a read helper must never take out a turn
             log.warning("history_body failed for %s", thread_id, exc_info=True)
             return []
+
+    def history_rows(self, thread_id: str, limit: int = 60) -> list[dict[str, str]]:
+        """The thread tail as the panel route reads a chat (v1.285.0):
+        ``[{who, content}]`` with ``who`` = ``user`` / ``jarvis`` / the agent key
+        an attributed line carries — so a remote addressed from the phone is
+        shown the same conversation a desktop @-mention would be. ``[]`` on
+        any failure."""
+        try:
+            with session_scope(self.engine) as db:
+                r = db.get(ChatThreadRecord, thread_id)
+                if r is None:
+                    return []
+                msgs = json.loads(r.messages_json or "[]")
+            if not isinstance(msgs, list) or int(limit) <= 0:
+                return []
+            out: list[dict[str, str]] = []
+            for m in msgs[-int(limit):]:
+                if not isinstance(m, dict):
+                    continue
+                content = str(m.get("content") or "")
+                if not content.strip():
+                    continue
+                if m.get("role") == "user":
+                    who = "user"
+                else:
+                    who = str(m.get("panelWho") or "jarvis")
+                out.append({"who": who, "content": content})
+            return out
+        except Exception:  # noqa: BLE001 — a read helper must never take out a turn
+            log.warning("history_rows failed for %s", thread_id, exc_info=True)
+            return []
+
+    def get_setup_value(self, thread_id: str, key: str) -> str:
+        """One string out of the thread's ``setup_json`` ("" when absent).
+        Never raises."""
+        try:
+            with session_scope(self.engine) as db:
+                r = db.get(ChatThreadRecord, thread_id)
+                raw = (r.setup_json or "") if r is not None else ""
+            setup = json.loads(raw) if raw else {}
+            val = setup.get(key) if isinstance(setup, dict) else None
+            return str(val) if isinstance(val, str) else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def set_setup_value(self, thread_id: str, key: str, value: str) -> bool:
+        """Merge one string into the thread's ``setup_json`` (an empty value
+        removes the key). Daemon-owned threads only get written here; the
+        dashboard never PUTs them. Never raises; False when it did not land."""
+        try:
+            with self._lock, session_scope(self.engine) as db:
+                r = db.get(ChatThreadRecord, thread_id)
+                if r is None:
+                    return False
+                try:
+                    setup = json.loads(r.setup_json or "{}")
+                except Exception:  # noqa: BLE001
+                    setup = {}
+                if not isinstance(setup, dict):
+                    setup = {}
+                if value:
+                    setup[key] = value
+                else:
+                    setup.pop(key, None)
+                r.setup_json = json.dumps(setup) if setup else ""
+                db.add(r)
+                db.commit()
+                return True
+        except Exception:  # noqa: BLE001
+            log.warning("set_setup_value failed for %s", thread_id, exc_info=True)
+            return False
 
     def is_daemon_owned(self, thread_id: str) -> bool:
         """True iff the daemon writes this thread. Pre-reconciler rows read

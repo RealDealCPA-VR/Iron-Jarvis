@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.284.0 (2026-09-14).*
+holds itself to. Current as of v1.285.0 (2026-09-14).*
 
 ---
 
@@ -1033,6 +1033,49 @@ its module in the taskbar, so two Iron Jarvis windows never look like the app
 opened twice. Closing it just closes it — the main window keeps its
 keep-running behaviour, and Quit closes them all. Opening a module that is
 already popped out brings that window to the front instead of making another.
+
+**A remote agent is a conversation, both ways — from your desk and from your
+phone (v1.285.0).** You asked what was stopping you from talking to your
+remote agents the way you talk to Jarvis over Slack. The answer was the
+plumbing: every call to a remote agent was one request carrying only the task
+text, it kept no memory between calls, and it had no way to reach you. Now a
+remote agent is sent the conversation — what you said, what Jarvis and the
+other agents said, its own earlier replies — as real prior turns, with a
+stable conversation id, so a remote that keeps state can hold the thread and
+one that does not still answers in context. It can take a long job and say
+"I have it" (an HTTP 202) instead of timing out; the chat says it is working
+and will report back. And it can **message you back**: on the Agents page,
+under Set up agents, each remote agent has **Let it message back** — press it
+and Jarvis mints a token for that agent, shows it once with the address to
+post to, and from then on the agent's progress lines, questions, results and
+files arrive in the conversation it belongs to: as attributed lines in the
+chat (a quiet one-liner for progress, a normal reply for a question or a
+result, files in the Files rail with preview and download), on the Agents
+page's round table, and — when the conversation is one you are having from
+your phone — on your phone, named ("hermes: Done — 3 files."). **Rotate
+token** mints a new one and the old stops working; **Turn off message-back**
+forgets it, and disabling the agent silences it in both directions. One
+honest limit: out of the box the daemon listens on this machine only
+(127.0.0.1) and answers only requests addressed to it, so a remote agent
+running on THIS machine can message back as is, while one on another
+machine cannot until you choose to open a door — the token box says so and
+names the two settings: start the daemon listening on your LAN address
+(`ironjarvis serve --host <your LAN IP>`) with
+`IRONJARVIS_HOST_ALLOWLIST=<your LAN IP>` set, or put a tunnel or reverse
+proxy in front of 127.0.0.1:8787 and paste its address as the inbound URL.
+Nothing opens on its own. Files a remote sends land under the app's remote inbox folder,
+never in a project it was not given, with the same name, size and host checks
+its earlier file hand-backs had. From your phone (Telegram, Slack, or any
+chat-enabled channel), "@hermes what is the ledger total?" goes to hermes as a
+conversation; the reply comes back named on the same thread; your next
+messages keep going to hermes until you say **@jarvis**, which hands the
+conversation back to Iron Jarvis. A local agent named from the phone still
+goes through Jarvis. For someone wiring a remote agent: its outward request
+now carries `conversation_id`, `history` and `reply_to` beside `task` (the
+OpenAI-style kinds get real multi-turn `messages` / `input`); answering `202`
+or `{"accepted": true}` means "working, will message back"; and messaging
+back is a POST to `reply_to` with `Authorization: Bearer <inbound token>` and
+`{conversation_id, message, kind: message|progress|question|done, files}`.
 
 **An @-mentioned agent remembers the chat, stays in the conversation, and can
 do the work (v1.284.0).** Four things were wrong, and you found all four.

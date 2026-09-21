@@ -480,6 +480,12 @@ def _is_exempt(path: str) -> bool:
     # the channel's signing secret; no secret configured = 403).
     if path.startswith("/comm/slack/events/"):
         return True
+    # A remote agent messaging back (v1.285.0): the remote holds its OWN
+    # inbound token, never the install bearer — the handler verifies it
+    # fail-closed (inbound off or no vault entry = 403, wrong token = 401).
+    # Exactly the ".../inbound" leaf: enable/disable beneath it stay guarded.
+    if path.startswith("/agents/remote/") and path.endswith("/inbound"):
+        return True
     return False
 
 

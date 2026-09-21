@@ -1252,6 +1252,71 @@ does not need a bump, stop and bump it.
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
   table; never send a level the table did not offer.
 
+- **A remote agent is a CONVERSATION, both ways** (v1.285.0). The user: "what
+  is stopping me from interacting with my remote agents the way I can with
+  Slack?" — `RemoteAgentRegistry.run` was one POST carrying only the task text.
+  Now `run(..., history=, conversation_id=, reply_to=)`: the OpenAI dialects
+  get real prior turns (`messages` / list-form `input`), `http-task` gets
+  `conversation_id` + `history` + `reply_to` BESIDE `task` and a bare `{"task"}`
+  when none is given (older endpoints see the v1.157.0 body byte for byte); a
+  `202` or `{"accepted": true}` with no result answers `{ok, accepted}` and the
+  round records "working — will report back" (`pending: True` on the entry).
+  `AgentThreads.remote_history` renders the exchange for the remote (user as
+  user, its own lines unprefixed, everyone else named); `_speak_remote` returns
+  `(reply, extra)`. INWARD: `RemoteAgentRecord.inbound_enabled /
+  inbound_secret_name / inbound_url` (additive), `enable_inbound` mints a
+  `token_urlsafe(32)` into the vault and returns it ONCE (re-enable ROTATES),
+  `verify_inbound` is constant-time via `auth.token_matches` and FAIL-CLOSED;
+  `POST /agents/remote/{name}/inbound` is token-EXEMPT in `auth._is_exempt`
+  (exactly the `/inbound` leaf — `/inbound/enable|disable` stay guarded) and
+  verified in the handler (inbound off → 403, wrong token → 401, not a
+  participant of that room → 403, 60/min → 429, 12k chars → 413); files land
+  under `<home>/remote-inbox/<agent>/` through `agents/remote_files` (the same
+  trust boundary as the delegate tool); the line is a room entry (`inbound:
+  True`, `kind`, `documents`) → `AGENT_THREAD_UPDATED` + `REMOTE_MESSAGE`, and
+  a room bound to a DAEMON-owned (phone) thread mirrors it there
+  (`CommThreadStore.append(extra=)` whitelists `panelWho/panelKind/documents`)
+  and sends it to the phone through `d.inbound_poller`. THE PHONE:
+  `InboundPoller._remote_addressee` (after the user append in `_handle_chat`)
+  routes "@<remote>" — or a follow-up while `setup_json.addressee` is
+  `remote:<name>` — to `_handle_remote_chat`: `AgentThreads.for_chat(thread.id)`
+  + `run_round(directed=[name], chat_history=store.history_rows(...))` with a
+  `SimpleNamespace(platform=)` shim as `d`, the reply appended attributed and
+  sent as "<name>: …"; "@jarvis" clears it (`BACK_TO_JARVIS_REPLY`). A LOCAL
+  agent named from the phone stays on the Jarvis lane. DASHBOARD: the chat
+  page mirrors inbound room entries (`mirrorRoomInbound`, dedupe by `panelAt`,
+  on `agent_thread.updated`/`remote.message` for `roomOf(messages)` and on
+  open); `panelKind: progress` is a quiet line; `SetupCard`'s remote row has
+  Let it message back / Rotate token / Turn off (token shown once, `#inbound-
+  minted`). `app.state.d = d` exists so a test can put a poller double where
+  the route looks. Pins: `tests/test_remote_conversation_v1285.py`,
+  `dashboard/__tests__/remote-inbound-v1285.test.tsx`,
+  `dashboard/__tests__/chat-remote-live-v1285.test.tsx`.
+  REVIEW ROUND, each a real defect in the first cut: (1) the packaged daemon
+  binds `--host 127.0.0.1` (desktop/main.js) and `auth._host_ok` admits
+  loopback Hosts only unless `IRONJARVIS_HOST_ALLOWLIST` is set — so the
+  inbound door is unreachable from another machine BY DEFAULT; `enable`
+  derives the URL from this machine's LAN address (`_lan_address`, a UDP
+  route probe) and answers `reachable: {host_allowed, note}` from the SAME
+  `_host_ok`, and the token box + Handbook say the two knobs — never open a
+  bind on the user's behalf. (2) `CommThreadStore.history_body` used to hand
+  a remote's `panelWho` line to the Jarvis turn as Jarvis's OWN prior turn;
+  it now prefixes `agent_line_label(name)` — the exact sentence
+  `toRequestMessages` uses, so both lanes tell the model the same thing.
+  (3) `rec.enabled` gates inbound too. (4) `remote_agent.inbound.<name>` —
+  the vault key uses a "." the remote-name rule cannot produce, because
+  `remote_agent_inbound_hermes` collided with the OUTBOUND key of a remote
+  named `inbound_hermes`. (5) Unknown room and foreign room both answer 403
+  (no id oracle); the response carries file NAMES, not the user's paths;
+  `safe_path(inbox, …)` is the second lock; `_fetch` streams and aborts past
+  the cap; file posts 10/min + a 512 MB/day inbox budget per agent; phone
+  pushes 20 per 10 min (the thread keeps every line). (6) `mirrorRoomInbound`
+  captures `chatGenRef` and re-checks `roomOf(current)` after the fetch and
+  is single-flight per room. (7) "@jarvis <question>" clears the sticky AND
+  falls through to the Jarvis turn (`_words_beyond_mentions`); a remote named
+  in the same text wins. (8) `remote_history` skips `pending` notes (Jarvis's
+  words about the remote, not the remote's).
+
 - **An @-mentioned agent is shown the CHAT, stays addressed, and hands WORK to
   a session** (v1.284.0). The user: "i need to continually use the @ …
   it basically starts up with no memory of the previous conversation …

@@ -1181,6 +1181,60 @@ function RemoteRow({
   const [test, setTest] = useState<{ ok: boolean; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // MESSAGE BACK (v1.285.0): the inbound token is shown ONCE, right here,
+  // right after it is minted — the daemon never returns it again.
+  const [inboundBusy, setInboundBusy] = useState(false);
+  const [minted, setMinted] = useState<{ token: string; url: string; note: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function enableInbound() {
+    setInboundBusy(true);
+    setError(null);
+    setCopied(false);
+    try {
+      const r = await post<{
+        token?: string;
+        url?: string;
+        reachable?: { host_allowed?: boolean; note?: string };
+      }>(`/agents/remote/${encodeURIComponent(agent.name)}/inbound/enable`, {});
+      setMinted({
+        token: r.token ?? "",
+        url: r.url ?? "",
+        // The daemon says out loud when a remote on another machine could not
+        // reach this address yet — and what it takes. Never a bare 403 later.
+        note: r.reachable && r.reachable.host_allowed === false ? r.reachable.note ?? "" : "",
+      });
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setInboundBusy(false);
+    }
+  }
+
+  async function disableInbound() {
+    setInboundBusy(true);
+    setError(null);
+    try {
+      await post(`/agents/remote/${encodeURIComponent(agent.name)}/inbound/disable`);
+      setMinted(null);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setInboundBusy(false);
+    }
+  }
+
+  async function copyToken() {
+    if (!minted?.token) return;
+    try {
+      await navigator.clipboard.writeText(minted.token);
+      setCopied(true); // only when writeText resolved — never a fake check
+    } catch {
+      setCopied(false);
+    }
+  }
 
   async function runTest() {
     setTesting(true);
@@ -1228,7 +1282,48 @@ function RemoteRow({
             disabled
           </span>
         )}
+        {agent.inbound_enabled && (
+          <span
+            data-testid="inbound-on"
+            className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-emerald-300"
+            title={agent.inbound_url ? `Posts to ${agent.inbound_url}` : undefined}
+          >
+            messages back
+          </span>
+        )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={agent.inbound_enabled ? disableInbound : enableInbound}
+            disabled={inboundBusy}
+            data-testid="inbound-toggle"
+            title={
+              agent.inbound_enabled
+                ? `Stop "${agent.name}" from messaging back (forgets its token)`
+                : `Let "${agent.name}" message back — progress, questions, results and files land in your chats`
+            }
+            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+          >
+            {inboundBusy ? (
+              <LoaderInline label="…" />
+            ) : agent.inbound_enabled ? (
+              <>Turn off message-back</>
+            ) : (
+              <>Let it message back</>
+            )}
+          </button>
+          {agent.inbound_enabled && (
+            <button
+              type="button"
+              onClick={enableInbound}
+              disabled={inboundBusy}
+              data-testid="inbound-rotate"
+              title="Mint a new inbound token — the old one stops working at once"
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+            >
+              Rotate token
+            </button>
+          )}
           <button
             type="button"
             onClick={runTest}
@@ -1254,6 +1349,55 @@ function RemoteRow({
           />
         </span>
       </div>
+      {minted && (
+        <div
+          data-testid="inbound-minted"
+          className="mt-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-[11.5px] text-emerald-100"
+        >
+          <div className="font-medium">
+            {agent.name} can message back now. Copy the token — it is shown once.
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 truncate rounded-md bg-black/30 px-2 py-1 font-mono text-[11px] text-emerald-50">
+              {minted.token}
+            </code>
+            <button
+              type="button"
+              onClick={() => void copyToken()}
+              className="rounded-lg border border-emerald-400/30 px-2 py-1 text-[11px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/10"
+            >
+              {copied ? "Copied" : "Copy token"}
+            </button>
+          </div>
+          <p className="mt-1.5 leading-relaxed text-emerald-200/80">
+            Have {agent.name} POST JSON to <code className="font-mono">{minted.url}</code> with{" "}
+            <code className="font-mono">Authorization: Bearer &lt;token&gt;</code> and a body of{" "}
+            <code className="font-mono">
+              {"{"}conversation_id, message, kind: message|progress|question|done, files{"}"}
+            </code>
+            . Its outward calls now carry <code className="font-mono">conversation_id</code>,{" "}
+            <code className="font-mono">history</code> and <code className="font-mono">reply_to</code>;
+            answering <code className="font-mono">202</code> means &ldquo;working — I&apos;ll message
+            back&rdquo;. Message-back is its own switch: disabling the agent above silences it in
+            both directions.
+          </p>
+          {minted.note && (
+            <p
+              data-testid="inbound-reach-note"
+              className="mt-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.08] px-2.5 py-1.5 leading-relaxed text-amber-100"
+            >
+              {minted.note}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setMinted(null)}
+            className="btn-ghost mt-1 py-0.5 text-[11px]"
+          >
+            Done
+          </button>
+        </div>
+      )}
       {editing && (
         <>
           <RemoteEditForm

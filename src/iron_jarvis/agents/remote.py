@@ -29,6 +29,28 @@ recognisable, so the user should not have to guess it.
 
 The credential is stored ONLY in the encrypted secrets vault (referenced by
 ``secret_name``); it is resolved at call time and NEVER logged.
+
+A REMOTE AGENT IS A CONVERSATION, BOTH WAYS (v1.285.0). The user's question:
+"what is stopping me from interacting with my remote agents the way I can with
+Slack?" — the answer was this module: one POST per turn carrying only the task
+text, no memory between calls, and no way for the remote to reach back. Now:
+
+* OUTWARD, :meth:`RemoteAgentRegistry.run` takes ``history`` (the exchange so
+  far as ``[{role, content}]``), a stable ``conversation_id`` (the panel room
+  the remote sits in) and ``reply_to`` (its inbound address, below). The
+  OpenAI dialects send real multi-turn ``messages`` / ``input``; ``http-task``
+  adds ``conversation_id``, ``history`` and ``reply_to`` beside ``task`` — a
+  bare ``{"task"}`` when none is given, so older endpoints see no change.
+* ASYNC: a remote may answer ``202`` (or ``{"accepted": true}``) meaning "I
+  have it and will message you back" — the round records that honestly
+  instead of timing out on a long job.
+* INWARD, a remote the user enabled for it (``inbound_enabled``) may POST
+  ``{conversation_id, message, kind, files}`` to ``/agents/remote/{name}/inbound``
+  with its OWN inbound token (vault key ``inbound_secret_name``; minted by
+  :meth:`RemoteAgentRegistry.enable_inbound`, shown to the user once, rotated
+  on re-enable). The daemon lands the message in that room — and, when the
+  room belongs to a phone conversation, on the phone — so progress, questions,
+  results and files arrive where the user is, unprompted.
 """
 
 from __future__ import annotations
@@ -54,6 +76,32 @@ SecretResolver = Callable[[str], "str | None"]
 
 #: The remote-agent transports.
 KINDS = ("http-task", "openai-chat", "openai-responses")
+
+#: Conversation rows sent outward per call (v1.285.0), and the per-row cap —
+#: a remote's own transport window is unknown here, so a fixed, generous tail.
+_HISTORY_ROWS = 80
+_HISTORY_ROW_CHARS = 12_000
+
+#: What a remote may post back (v1.285.0), and the per-message cap.
+INBOUND_KINDS = ("message", "progress", "question", "done")
+INBOUND_MESSAGE_CHARS = 12_000
+
+
+def _history_messages(history: Any) -> list[dict[str, str]]:
+    """``history`` rows → clean ``[{role, content}]`` (user/assistant only,
+    blank rows dropped, a bounded tail). Never raises."""
+    if not isinstance(history, list):
+        return []
+    out: list[dict[str, str]] = []
+    for row in history:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or "").strip()
+        if not content:
+            continue
+        role = "user" if str(row.get("role") or "") == "user" else "assistant"
+        out.append({"role": role, "content": content[:_HISTORY_ROW_CHARS]})
+    return out[-_HISTORY_ROWS:]
 
 
 def _responses_text(data: Any) -> str:
@@ -123,6 +171,16 @@ class RemoteAgentRecord(SQLModel, table=True):
     enabled: bool = True
     timeout_s: int = 120
     created_at: datetime = Field(default_factory=utcnow)
+    #: v1.285.0 — the remote may MESSAGE BACK (progress, questions, results,
+    #: files) through ``POST /agents/remote/{name}/inbound`` with its own
+    #: inbound token (vault key ``inbound_secret_name``). Off by default.
+    #: ``inbound_url`` is the address the remote is told to post to — derived
+    #: from the request that enabled it and editable, because a remote on
+    #: another machine cannot reach this daemon's 127.0.0.1. Additive columns
+    #: (auto-reconciled on boot).
+    inbound_enabled: bool = False
+    inbound_secret_name: str | None = None
+    inbound_url: str = ""
 
 
 class RemoteAgentRegistry:
@@ -209,6 +267,7 @@ class RemoteAgentRegistry:
         """
         allowed = {
             "base_url", "kind", "secret_name", "model", "enabled", "timeout_s",
+            "inbound_enabled", "inbound_secret_name", "inbound_url",
         }
         unknown = set(fields) - allowed
         if unknown:  # a typo'd key would silently no-op — refuse instead
@@ -253,6 +312,67 @@ class RemoteAgentRegistry:
             db.expunge(row)
             return row
 
+    # --- inbound: the remote may message back (v1.285.0) ------------------
+
+    def enable_inbound(
+        self, name: str, set_secret: Any, *, url: str = ""
+    ) -> "tuple[RemoteAgentRecord, str] | None":
+        """Mint the remote's INBOUND token, vault it, mark the record.
+
+        Returns ``(record, plaintext token)`` — the token is shown to the user
+        ONCE and lives nowhere but the vault afterwards. Re-enabling ROTATES it
+        (the previous token stops working at once), which is also the recovery
+        path for a token the user lost. ``url`` is what the remote is told to
+        post to; empty keeps whatever the record already carries.
+        """
+        import secrets as _secrets
+
+        token = _secrets.token_urlsafe(32)
+        # A separator the remote-name rule (`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
+        # cannot produce: "remote_agent_inbound_hermes" would COLLIDE with the
+        # OUTBOUND key of a remote named "inbound_hermes" and overwrite (or, on
+        # disable, delete) a credential the user cannot retype.
+        secret_name = f"remote_agent.inbound.{name}"
+        set_secret(secret_name, token, kind="token")
+        fields: dict[str, Any] = {"inbound_enabled": True, "inbound_secret_name": secret_name}
+        if url:
+            fields["inbound_url"] = url
+        row = self.update(name, **fields)
+        if row is None:
+            return None
+        return row, token
+
+    def disable_inbound(self, name: str, delete_secret: Any = None) -> "RemoteAgentRecord | None":
+        """Turn inbound off and forget the token (the vault entry too)."""
+        row = self.get(name)
+        if row is None:
+            return None
+        if row.inbound_secret_name and delete_secret is not None:
+            try:
+                delete_secret(row.inbound_secret_name)
+            except Exception:  # noqa: BLE001 — an absent secret is fine
+                pass
+        return self.update(name, inbound_enabled=False, inbound_secret_name=None)
+
+    @staticmethod
+    def verify_inbound(record: Any, candidate: str | None, secret_resolver: SecretResolver) -> bool:
+        """Constant-time check of a remote's inbound token. FAIL-CLOSED: inbound
+        off, no vault entry, an empty candidate or a resolver error → False."""
+        if record is None or not bool(getattr(record, "inbound_enabled", False)):
+            return False
+        secret_name = getattr(record, "inbound_secret_name", None)
+        if not secret_name or not candidate:
+            return False
+        try:
+            expected = secret_resolver(secret_name) or ""
+        except Exception:  # noqa: BLE001 — a vault miss is a refusal
+            return False
+        if not expected:
+            return False
+        from ..daemon.auth import token_matches
+
+        return token_matches(str(candidate), str(expected))
+
     # --- invocation -------------------------------------------------------
 
     async def run(
@@ -262,15 +382,32 @@ class RemoteAgentRegistry:
         secret_resolver: SecretResolver,
         *,
         timeout_s: int | None = None,
+        history: list[dict[str, Any]] | None = None,
+        conversation_id: str = "",
+        reply_to: str = "",
     ) -> dict[str, Any]:
         """Hand ``task`` to a remote agent and relay its reply.
 
         Returns ``{ok, result, detail}`` — fail-closed with an honest ``detail``
         on timeout, a non-2xx status, or a reply that doesn't match the shape.
         The secret is resolved here and NEVER logged.
+
+        v1.285.0 — A CONVERSATION: ``history`` (``[{role, content}]``, the
+        exchange so far) rides as real prior turns on the OpenAI dialects and
+        as ``history`` beside ``task`` on ``http-task``; ``conversation_id``
+        and ``reply_to`` (the remote's inbound address, when enabled) ride on
+        ``http-task`` so a stateful remote can keep the thread and message
+        back. None of them is sent when empty — an older endpoint sees the
+        v1.157.0 body byte for byte. A ``202`` (or ``{"accepted": true}`` with
+        no result) answers ``{ok: True, accepted: True}``: the remote took the
+        task and will report through its inbound endpoint.
         """
         import httpx
 
+        # ``_history_messages`` is a MODULE function on purpose: older tests call
+        # ``run`` unbound (``RemoteAgentRegistry.run(None, rec, ...)``), so this
+        # method must not reach for ``self``.
+        rows = _history_messages(history)
         timeout = timeout_s or record.timeout_s or 120
         token = ""
         if record.secret_name:
@@ -287,18 +424,29 @@ class RemoteAgentRegistry:
             url = base if base.endswith("completions") else base + "/chat/completions"
             payload: dict[str, Any] = {
                 "model": record.model or "",
-                "messages": [{"role": "user", "content": task}],
+                "messages": [*rows, {"role": "user", "content": task}],
             }
         elif record.kind == "openai-responses":
             base = (record.base_url or "").rstrip("/")
             url = base if base.endswith("responses") else base + "/responses"
             # The Responses API takes `input`, not `messages`. The plain-string
             # form is accepted by every implementation of it and avoids the
-            # richer content-part shape, which servers disagree about.
-            payload = {"model": record.model or "", "input": task}
+            # richer content-part shape, which servers disagree about — so it
+            # stays the shape for a lone task; a CONVERSATION is the message
+            # list form, which every implementation also takes.
+            payload = {
+                "model": record.model or "",
+                "input": [*rows, {"role": "user", "content": task}] if rows else task,
+            }
         else:  # http-task (default / unknown kind falls here)
             url = record.base_url or ""
             payload = {"task": task}
+            if conversation_id:
+                payload["conversation_id"] = conversation_id
+            if rows:
+                payload["history"] = rows
+            if reply_to:
+                payload["reply_to"] = reply_to
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -307,6 +455,10 @@ class RemoteAgentRegistry:
             return {"ok": False, "result": "", "detail": f"request failed: {exc}"}
 
         status = getattr(resp, "status_code", 0)
+        if status == 202:
+            # "I have it; I'll message you back" — honest, and only meaningful
+            # when the remote CAN message back; the caller says which.
+            return {"ok": True, "accepted": True, "result": "", "detail": "accepted", "files": []}
         if status // 100 != 2:
             snippet = ""
             try:
@@ -325,6 +477,13 @@ class RemoteAgentRegistry:
             data = resp.json()
         except Exception:  # noqa: BLE001 — not JSON
             return {"ok": False, "result": "", "detail": "remote returned a non-JSON body"}
+
+        if (
+            isinstance(data, dict)
+            and data.get("accepted") is True
+            and not str(data.get("result") or data.get("output") or "").strip()
+        ):
+            return {"ok": True, "accepted": True, "result": "", "detail": "accepted", "files": []}
 
         if record.kind == "openai-chat":
             try:

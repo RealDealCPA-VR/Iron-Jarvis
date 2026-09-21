@@ -404,6 +404,22 @@ function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Pa
           </span>
           <RolePill role={role} />
           <KindBadge source={source} />
+          {/* A remote that MESSAGED BACK (v1.285.0) — the line arrived through
+              its inbound door, not from a round; progress/question/done say
+              what kind of line it is. */}
+          {entry.inbound && (
+            <span
+              data-testid="inbound-pill"
+              className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.08] px-1.5 py-px text-[9.5px] font-medium text-emerald-300"
+            >
+              {entry.kind && entry.kind !== "message" ? entry.kind : "messaged back"}
+            </span>
+          )}
+          {entry.pending && (
+            <span className="rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-1.5 py-px text-[9.5px] font-medium text-amber-300">
+              working — will report back
+            </span>
+          )}
           <span className="text-[10px] text-zinc-600">{timeAgo(entry.at)}</span>
         </div>
         {entry.error ? (

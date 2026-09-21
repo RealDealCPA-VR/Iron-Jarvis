@@ -39,6 +39,14 @@ export interface ThreadEntry {
   content: string;
   at: string;
   error?: string;
+  /** v1.285.0: the line came through the remote's inbound door (not a round). */
+  inbound?: boolean;
+  /** v1.285.0: message | progress | question | done (inbound lines). */
+  kind?: string;
+  /** v1.285.0: the remote accepted the task and will report back later. */
+  pending?: boolean;
+  /** v1.285.0: absolute paths of files the line delivered. */
+  documents?: string[];
 }
 
 /** GET /agents/threads/{id}. */
@@ -55,6 +63,10 @@ export interface RemoteAgentInfo {
   enabled?: boolean;
   timeout_s?: number | null;
   has_credential?: boolean;
+  /** v1.285.0: the remote may message back (progress, questions, results,
+   *  files) through `inbound_url` with its own token — shown once at enable. */
+  inbound_enabled?: boolean;
+  inbound_url?: string;
 }
 
 /** Role presets offered at panel setup — free text is equally valid. */

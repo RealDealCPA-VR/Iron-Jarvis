@@ -394,6 +394,13 @@ interface ChatMessage {
    *  silent: a forgotten turn the user can see is a limit, an invisible one
    *  reads as a broken feature. */
   panelNote?: string;
+  /** v1.285.0: a REMOTE agent's line that came through its inbound door —
+   *  `progress` renders as a quiet line, `question`/`done` as a reply;
+   *  `pending` = the remote took the task and will report back. */
+  panelKind?: string;
+  /** v1.285.0: the room entry's timestamp the line was mirrored from — the
+   *  dedupe key, so a live event and a reopen never show one line twice. */
+  panelAt?: string;
 }
 
 /** What POST /chat expects. */
@@ -514,6 +521,26 @@ function panelHistoryOf(msgs: ChatMessage[]): { who: string; content: string }[]
     out.push({ who: m.role === "user" ? "user" : m.panelWho || "jarvis", content });
   }
   return out;
+}
+
+/** The room this conversation's @-rounds live in — the last panel reply's
+ *  room id — or "" (v1.285.0). */
+function roomOf(msgs: ChatMessage[]): string {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const r = msgs[i].panelThreadId;
+    if (r) return r;
+  }
+  return "";
+}
+
+/** One entry of GET /agents/threads/{id} as this page reads it (v1.285.0). */
+interface RoomEntry {
+  who?: string;
+  content?: string;
+  at?: string;
+  inbound?: boolean;
+  kind?: string;
+  documents?: string[];
 }
 
 /** The conversation as the Iron Jarvis lanes send it (v1.284.0). A panel
@@ -1923,6 +1950,19 @@ const MessageRow = memo(function MessageRow({
         )}
       </div>
     );
+  // v1.285.0: a remote's PROGRESS line is a quiet one-liner, not a reply —
+  // unless it delivered files, which deserve the full bubble and the rail.
+  if (m.panelWho && m.panelKind === "progress" && !m.documents?.length)
+    return (
+      <div
+        data-testid="panel-progress"
+        className="ml-11 flex min-w-0 items-center gap-2 text-[12px] text-zinc-400"
+      >
+        <Bot size={11} className="shrink-0 text-accent-soft/70" />
+        <span className="shrink-0 font-medium text-zinc-300">{agentDisplayName(m.panelWho)}</span>
+        <span className="truncate">{m.content}</span>
+      </div>
+    );
   // v1.150.0: a panel reply is attributed. Without a name on it, a three-way
   // conversation is an unreadable wall of anonymous assistant bubbles.
   if (m.panelWho)
@@ -1941,6 +1981,16 @@ const MessageRow = memo(function MessageRow({
           </span>
           {m.panelError && (
             <span className="text-[11px] text-rose-400/80">couldn&apos;t answer</span>
+          )}
+          {/* v1.285.0: what KIND of line a remote sent back, when it is not
+              a plain reply — a question, a "done", or "still working". */}
+          {m.panelKind && m.panelKind !== "message" && m.panelKind !== "progress" && (
+            <span
+              data-testid="panel-kind"
+              className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.08] px-1.5 py-px text-[10px] font-medium text-emerald-300"
+            >
+              {m.panelKind === "pending" ? "working — will report back" : m.panelKind}
+            </span>
           )}
           {m.panelThreadId && (
             <Link
@@ -3441,6 +3491,82 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events]);
 
+  // A REMOTE AGENT MESSAGED BACK (v1.285.0). Its line lands in the ROOM this
+  // conversation's @-rounds live in (the daemon owns the room; the browser
+  // owns this thread), and the room announces it as agent_thread.updated
+  // with who = "remote:<name>". When that room is ours, pull the room and
+  // mirror every inbound entry we have not shown — then the thread's own
+  // save keeps it. Same seen-boundary idiom as the comm effect above.
+  const roomEventSeenRef = useRef<string | null>(null);
+  const mirrorInFlightRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const newest = events[0];
+    if (!newest) return;
+    const boundary = roomEventSeenRef.current;
+    roomEventSeenRef.current = newest.id;
+    const room = roomOf(messagesRef.current);
+    if (!room) return;
+    let stale = false;
+    for (const e of events) {
+      if (e.id === boundary) break;
+      if (e.type !== "agent_thread.updated" && e.type !== "remote.message") continue;
+      const p = e.payload as { thread_id?: unknown; who?: unknown; agent?: unknown } | null;
+      if (p?.thread_id !== room) continue;
+      if (e.type === "remote.message" || String(p?.who ?? "").startsWith("remote:")) stale = true;
+    }
+    if (stale) void mirrorRoomInbound(room);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events]);
+
+  /** Pull the room and append every inbound remote line not shown yet
+   *  (v1.285.0). `base` is the message list to build on when the caller
+   *  holds a fresher one than the ref (a thread just opened). Best-effort:
+   *  a room the daemon cannot show leaves the conversation as it is. */
+  async function mirrorRoomInbound(room: string, base?: ChatMessage[]) {
+    // ONE mirror per room at a time, and only into the conversation it was
+    // started for: two in-flight fetches would both append against the same
+    // pre-append list, and a thread switch during the fetch would land the
+    // line — and SAVE it — into whatever the user opened next.
+    if (mirrorInFlightRef.current.has(room)) return;
+    mirrorInFlightRef.current.add(room);
+    const gen = chatGenRef.current;
+    let detail: { messages?: RoomEntry[] } | null = null;
+    try {
+      detail = await get<{ messages?: RoomEntry[] }>(`/agents/threads/${encodeURIComponent(room)}`);
+    } catch {
+      return;
+    } finally {
+      mirrorInFlightRef.current.delete(room);
+    }
+    if (chatGenRef.current !== gen) return; // the conversation changed under us
+    const current = base ?? messagesRef.current;
+    if (roomOf(current) !== room) return; // not this conversation's room any more
+    const seen = new Set(current.map((m) => m.panelAt).filter(Boolean));
+    const fresh: ChatMessage[] = [];
+    for (const e of detail?.messages ?? []) {
+      if (!e || !e.inbound || !e.who?.startsWith("remote:")) continue;
+      if (!e.at || seen.has(e.at)) continue;
+      const content = (e.content || "").trim();
+      if (!content) continue;
+      fresh.push({
+        role: "assistant",
+        content,
+        panelWho: e.who,
+        panelThreadId: room,
+        panelKind: e.kind || "message",
+        panelAt: e.at,
+        ...(e.documents?.length ? { documents: e.documents } : {}),
+      });
+    }
+    if (fresh.length === 0) return;
+    if (base && messagesRef.current !== base && messagesRef.current.length > base.length) return; // the user moved on
+    const full = [...current, ...fresh];
+    setMessages(full);
+    queueSave(full);
+    const docs = fresh.flatMap((m) => m.documents ?? []);
+    if (docs.length) showDocPreview(docs);
+  }
+
   /** The thread-setup snapshot for saves: exactly what's armed right now. All
    *  five keys always ride along so a cleared skill/model reads as deliberately
    *  cleared, not merely omitted. */
@@ -3725,6 +3851,9 @@ export default function ChatPage() {
       setMessages(msgs);
       setThreadId(t.id);
       setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
+      // A remote may have messaged back while this was closed (v1.285.0).
+      const room = roomOf(msgs);
+      if (room) void mirrorRoomInbound(room, msgs);
       // Does a compaction summary stand over this thread? Server-checked on
       // every open (v1.169.0) — the chip must reflect the store, not memory.
       void refreshCompaction(t.id);

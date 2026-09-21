@@ -162,6 +162,11 @@ class EventType:
     # entries} — who = "user" or the participant key "<source>:<name>";
     # entries = the thread's NEW total message count after the append.
     AGENT_THREAD_UPDATED = "agent_thread.updated"
+    # A remote agent MESSAGED BACK (v1.285.0) through its inbound endpoint —
+    # progress, a question, a result or files landed in a room (and, for a
+    # phone conversation, on the phone). {agent, thread_id, kind, documents}.
+    # AGENT_THREAD_UPDATED fires for the same entry; this one names the door.
+    REMOTE_MESSAGE = "remote.message"
     # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
     # Ambient facts about a browser, so they carry NO session_id: nothing here
     # belongs to one conversation. No payload ever carries the pairing token;

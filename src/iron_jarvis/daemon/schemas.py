@@ -1426,10 +1426,21 @@ class RemoteAgentPatch(BaseModel):
     clear_token: bool = False  # explicit removal, so it can never be accidental
     enabled: bool | None = None
     timeout_s: int | None = None
+    #: v1.285.0: where the remote is told to message back (see
+    #: ``RemoteAgentRecord.inbound_url``). Omit to keep; "" is refused.
+    inbound_url: str | None = None
 
 
 class RemoteAgentRun(BaseModel):
     task: str
+
+
+class RemoteInboundEnable(BaseModel):
+    """Turn a remote's inbound on (v1.285.0). ``url`` overrides the address
+    derived from this request — for a daemon reached through a tunnel or a
+    reverse proxy the remote sees a different host than the dashboard does."""
+
+    url: str = ""
 
 
 class AgentPatch(BaseModel):

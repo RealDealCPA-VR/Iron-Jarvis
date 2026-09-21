@@ -42,6 +42,7 @@ from ..core.logging import get_logger
 from ..core.models import AgentType
 from .base import Channel, ChannelAuthError, InboundMessage, split_message
 from .models import InboundOffsetRecord
+from .threads import ADDRESSEE_KEY
 from .prompts import (
     ALREADY_ANSWERED_REPLY,
     ANSWER_USAGE_REPLY,
@@ -79,6 +80,24 @@ RATE_WINDOW_SECONDS = 60.0
 #: and the per-message char cap inside the recap block.
 _RECAP_MESSAGES = 6
 _RECAP_CHARS = 500
+
+#: v1.285.0 — the phone lane's words for talking to a REMOTE agent.
+BACK_TO_JARVIS_REPLY = "Back to Iron Jarvis — your next message is for me."
+#: The tokens that end a remote conversation from the phone ("@jarvis").
+JARVIS_MENTIONS = frozenset({"jarvis", "ironjarvis", "iron jarvis", "iron-jarvis"})
+#: How much of the phone thread a remote is shown as conversation.
+_REMOTE_CHAT_ROWS = 60
+
+
+def _words_beyond_mentions(text: str) -> bool:
+    """True when the message says something besides "@name" tokens — the
+    part Iron Jarvis should answer after a hand-back. Never raises."""
+    try:
+        from ..agents.threads import _MENTION_RE
+
+        return bool(_MENTION_RE.sub("", text or "").strip(" \t\r\n,:;-—"))
+    except Exception:  # noqa: BLE001
+        return bool((text or "").strip())
 
 
 class InboundPoller:
@@ -304,14 +323,19 @@ class InboundPoller:
         dq.append(now)
         return True
 
-    async def send_chunked(self, ch: Channel, reply: str, *, chat_id: Any) -> bool:
+    async def send_chunked(
+        self, ch: Channel, reply: str, *, chat_id: Any, prefix: str | None = None
+    ) -> bool:
         """Send ``reply`` (prefixed) split on the channel's ``chunk_limit`` —
         the full-chat replacement for the one-shot ``[:max_reply_chars]``
         truncation (a long answer must ARRIVE, not get cut). True iff every
-        chunk reported ok."""
+        chunk reported ok. ``prefix`` (v1.285.0) names another speaker —
+        ``"hermes: "`` for a remote agent's line — instead of the assistant's
+        own ``reply_prefix``; ``None`` keeps Iron Jarvis's."""
         limit = int(getattr(ch, "chunk_limit", 3500) or 3500)
         ok = True
-        for chunk in split_message(f"{self.reply_prefix}{reply}", limit):
+        lead = self.reply_prefix if prefix is None else prefix
+        for chunk in split_message(f"{lead}{reply}", limit):
             res = await asyncio.to_thread(ch.send, chunk, chat_id=chat_id)
             ok = ok and bool(res.get("ok"))
         return ok
@@ -325,6 +349,7 @@ class InboundPoller:
         channel: str | None = None,
         sender_id: Any = None,
         display: str = "",
+        extra: dict[str, Any] | None = None,
     ) -> str:
         """Append that never raises into the per-message pipeline.
 
@@ -337,15 +362,16 @@ class InboundPoller:
         """
         if self.thread_store is None:
             return ""
+        kw: dict[str, Any] = {"extra": extra} if extra else {}
         try:
-            self.thread_store.append(thread_id, role, content)
+            self.thread_store.append(thread_id, role, content, **kw)
             return thread_id
         except ValueError:
             if channel is None:
                 return ""
             try:
                 fresh = self.thread_store.resolve(channel, str(sender_id), display)
-                self.thread_store.append(fresh.id, role, content)
+                self.thread_store.append(fresh.id, role, content, **kw)
                 return fresh.id
             except Exception:  # noqa: BLE001
                 log.warning(
@@ -769,6 +795,31 @@ class InboundPoller:
             thread.id, "user", text,
             channel=name, sender_id=msg.sender_id, display=display,
         )
+        # A REMOTE AGENT, ADDRESSED FROM THE PHONE (v1.285.0). "@hermes …" (or
+        # a follow-up while the conversation is still with hermes) goes to the
+        # remote as a conversation — not to Iron Jarvis — and its reply comes
+        # back on this same thread and this same phone, named. "@jarvis" ends
+        # it. A local agent named here still takes the Jarvis lane below.
+        remote_name, back_to_jarvis = self._remote_addressee(thread, tid, text)
+        if back_to_jarvis and _words_beyond_mentions(text):
+            # "@jarvis what's my calendar?" — the hand-back happened (the
+            # sticky is cleared); the question is Jarvis's to answer NOW, so
+            # fall through to the ordinary turn instead of costing a round trip.
+            back_to_jarvis = False
+        if back_to_jarvis:
+            # The user's line is already on the thread (above) — only the
+            # answer lands here, then goes to the phone.
+            if tid:
+                self._safe_append(
+                    tid, "assistant", BACK_TO_JARVIS_REPLY,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                )
+            sent = await self.send_chunked(ch, BACK_TO_JARVIS_REPLY, chat_id=msg.reply_to)
+            return {"channel": name, "status": "remote_cleared", "thread_id": tid, "sent": sent}
+        if remote_name:
+            return await self._handle_remote_chat(
+                name, ch, msg, thread, tid, text, display, remote_name
+            )
         history = self.thread_store.history_body(tid, limit=30) if tid else []
         if not history:
             # The append could not land (or the read hiccuped): the turn still
@@ -879,6 +930,123 @@ class InboundPoller:
             "status": "chat_escalated",
             "thread_id": tid,
             "session_id": session.id,
+            "sent": sent,
+        }
+
+    # -- a remote agent from the phone (v1.285.0) ---------------------------
+
+    def _remote_addressee(self, thread: Any, tid: str, text: str) -> tuple[str, bool]:
+        """Who this phone message is for: ``(remote name, False)`` when a
+        REMOTE agent is @-mentioned — or the conversation is still with one and
+        the text names nobody — ``("", True)`` when "@jarvis" ends it, else
+        ``("", False)`` for Iron Jarvis. A LOCAL agent named here is left to the
+        Jarvis lane (the daemon's own escalation handles those). Never raises:
+        a resolution problem is a plain Jarvis turn."""
+        if self.platform is None or self.thread_store is None or not tid:
+            return "", False
+        try:
+            from ..agents.roster import resolve_target
+            from ..agents.threads import parse_mentions
+
+            tokens = parse_mentions(text)
+            # A REMOTE named in the text wins ("@hermes ask @jarvis about it"
+            # is still for hermes); "@jarvis" without one ends the remote
+            # conversation — and the rest of the sentence, if any, is Jarvis's
+            # to answer (the caller falls through), never dropped.
+            for token in tokens:
+                if token in JARVIS_MENTIONS:
+                    continue
+                entry = resolve_target(self.platform, token, require_delegable=False)
+                if entry is None:
+                    continue
+                if str(getattr(entry, "kind", "")) == "remote":
+                    return str(entry.name).split(":", 1)[-1], False
+                return "", False  # a local agent — the Jarvis lane's business
+            if any(t in JARVIS_MENTIONS for t in tokens):
+                sticky = self.thread_store.get_setup_value(tid, ADDRESSEE_KEY)
+                self.thread_store.set_setup_value(tid, ADDRESSEE_KEY, "")
+                return "", bool(sticky)
+            sticky = self.thread_store.get_setup_value(tid, ADDRESSEE_KEY)
+            if sticky.startswith("remote:"):
+                return sticky.split(":", 1)[1], False
+        except Exception:  # noqa: BLE001 — never let addressing sink a turn
+            log.warning("remote addressee resolution failed", exc_info=True)
+        return "", False
+
+    async def _handle_remote_chat(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        thread: Any,
+        tid: str,
+        text: str,
+        display: str,
+        remote_name: str,
+    ) -> dict[str, Any]:
+        """One turn WITH a remote agent from the phone (v1.285.0).
+
+        The room is the same panel a desktop @-mention would use, bound to
+        this phone thread (``AgentThreads.for_chat``), so the Agents page shows
+        the exchange and the remote's inbound messages land on this thread. The
+        remote is shown the phone conversation as rows (``history_rows``), its
+        reply is appended attributed (``panelWho``) and sent to the phone
+        named, and the conversation STAYS with it until "@jarvis".
+        """
+        from types import SimpleNamespace
+
+        from ..agents.threads import AgentThreads, clean_participants
+
+        who = f"remote:{remote_name}"
+        try:
+            threads = AgentThreads(self.engine)
+            room = threads.for_chat(thread.id, title=text[:60])
+            threads.add_participants(
+                room.id,
+                clean_participants(
+                    [{"source": "remote", "name": remote_name, "role": "participant"}]
+                ),
+            )
+            rows = self.thread_store.history_rows(tid, limit=_REMOTE_CHAT_ROWS) if tid else []
+            # The user's line was appended above — it is the MESSAGE, not history.
+            if rows and rows[-1].get("who") == "user" and rows[-1].get("content") == text:
+                rows = rows[:-1]
+            shim = SimpleNamespace(platform=self.platform)
+            out = await threads.run_round(
+                room.id, text, shim, directed=[remote_name], chat_history=rows
+            )
+            spoken = [e for e in out.get("entries", []) if e.get("who") != "user"]
+            last = spoken[-1] if spoken else {}
+            reply = str(last.get("content") or "").strip()
+            failed = str(last.get("error") or "").strip()
+            if not reply:
+                reply = failed or f"{remote_name} did not answer."
+            pending = bool(last.get("pending"))
+        except Exception as exc:  # noqa: BLE001 — the phone still gets an answer
+            log.exception("remote chat failed on %r for %r", name, remote_name)
+            reply = f"{remote_name} couldn't answer: {type(exc).__name__}: {exc}"
+            pending = False
+        # The conversation is with the remote now — until "@jarvis".
+        if tid:
+            self.thread_store.set_setup_value(tid, ADDRESSEE_KEY, who)
+            tid = self._safe_append(
+                tid, "assistant", reply,
+                channel=name, sender_id=msg.sender_id, display=display,
+                extra={"panelWho": who, **({"panelKind": "pending"} if pending else {})},
+            ) or tid
+        sent = await self.send_chunked(
+            ch, reply, chat_id=msg.reply_to, prefix=f"{remote_name}: "
+        )
+        await self._publish(
+            EventType.COMM_RECEIVED,
+            {"channel": name, "sender": str(msg.sender_id), "task": text, "remote": remote_name},
+        )
+        return {
+            "channel": name,
+            "status": "remote_chat",
+            "thread_id": tid,
+            "remote": remote_name,
+            "pending": pending,
             "sent": sent,
         }
 
