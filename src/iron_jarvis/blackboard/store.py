@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Engine, and_, or_
+from sqlalchemy import Engine, and_, literal_column, or_
 from sqlmodel import Session, select
 
 from ..core.db import session_scope
@@ -240,8 +240,15 @@ class BlackboardStore:
                 stmt = stmt.where(BlackboardRecord.to_agent == to_agent)
             elif to_name:
                 stmt = stmt.where(by_name)
-            # Deterministic chronological order; id is a stable tiebreak.
-            stmt = stmt.order_by(BlackboardRecord.created_at, BlackboardRecord.id)
+            # Chronological order, ties broken by INSERTION order (the implicit
+            # SQLite rowid). On Windows Python 3.12 -- CI and the shipped app --
+            # utcnow() ticks every 15.6 ms, so two posts in one tick share a
+            # created_at; the old tiebreak was the RANDOM ``bb_`` id, which listed
+            # them in coin-flip order. rowid only ever grows for a live board.
+            stmt = stmt.order_by(
+                BlackboardRecord.created_at,
+                literal_column("blackboardrecord.rowid"),
+            )
             return list(db.exec(stmt))
 
     def _seed_runs(self, board_id: str) -> list[str]:

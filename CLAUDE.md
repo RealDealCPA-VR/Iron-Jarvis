@@ -1794,6 +1794,27 @@ does not need a bump, stop and bump it.
   cause. `tests/test_sidebar_first_minute_v1264.py`,
   `dashboard/__tests__/sidebar-first-minute-v1264.test.tsx`.
 
+- **The gate collects what CI collects, runs on CI's Python, and a hang fails
+  BY NAME** (v1.286.0, deep review wave 1). The local full suite hung at 97%
+  twice on 2026-09-21 while CI passed the same commit: pytest recursed into
+  UNTRACKED review scratch dirs (`tests/_audit_*`, `tests/_review_*`) whose
+  stale approval tests wait forever. `norecursedirs` in pyproject now names
+  them — and because setting it REPLACES pytest's defaults, the defaults are
+  repeated there; put review scratch tests ONLY under those prefixes (named
+  explicitly they still run). `pytest-timeout` sets `timeout = 300` per test:
+  under xdist a hung test fails as "worker 'gwN' crashed while running
+  '<node id>'" and the run finishes; a test that honestly needs longer takes
+  `@pytest.mark.timeout(N)`, never a higher global. Every CI job carries
+  `timeout-minutes` (~2x its measured runtime). `.python-version` pins the dev
+  venv to 3.12 — CI's and the frozen app's interpreter; on 3.12 Windows
+  `utcnow()` ticks every 15.6 ms, so `created_at` TIES ARE ROUTINE: never break
+  one with a random `new_id()` (the blackboard did, and flipped order on CI) —
+  tie-break on the SQLite `rowid` (insertion order). Liveness tests assert the
+  offloaded work ran OFF the loop thread (thread identity / heartbeat reaching
+  a target), never a max-gap bar: a 1.83 s unrelated stall on CI failed correct
+  code. `tests/test_suite_collection_v1286.py`,
+  `tests/test_gate_timeouts_v1286.py`, `tests/test_blackboard_order_v1286.py`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

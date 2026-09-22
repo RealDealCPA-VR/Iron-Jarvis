@@ -14,9 +14,16 @@ on:
 permissions:
   contents: read
 
+# EVERY JOB CARRIES timeout-minutes (v1.286.0). GitHub's default is 360: a hung
+# job held the pipeline for six hours before saying anything. Each bound is ~2x
+# the job's measured CI time (backend ~27m, dashboard ~6m, the other two <1m),
+# a ceiling on a hang, not a speed test. A hung TEST is named sooner, by
+# pytest-timeout (`timeout` in pyproject.toml); this is the backstop behind it.
+# tests/test_gate_timeouts_v1286.py fails if a job is added without one.
 jobs:
   backend:
     runs-on: windows-latest # mirrors the packaged product (ConPTY terminals etc.)
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +50,7 @@ jobs:
 
   dashboard:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -109,6 +117,7 @@ jobs:
   # product ships for.
   browser-addon:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -135,6 +144,7 @@ jobs:
   # otherwise — no test covers desktop/. Pure `node --check`, no deps needed.
   desktop:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

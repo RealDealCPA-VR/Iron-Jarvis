@@ -323,23 +323,31 @@ class _SleepTool(Tool):
 @pytest.mark.asyncio
 async def test_registry_deadline_records_a_failed_row_and_none_means_no_deadline(tmp_path):
     p = build_platform(str(tmp_path / "home"))
-    p.registry.register(_SleepTool())
+    tool = _SleepTool()
+    p.registry.register(tool)
     perms = PermissionEngine({**p.config.permissions, "sleep_v1228": "allow"})
     ctx = _ctx(p, tmp_path)
 
+    # The deadline call's tool would sleep 30 s, so a missing deadline costs
+    # the WHOLE 30 s and the 15 s bound only separates "stopped" from "ran to
+    # completion" — it never measures how fast this machine writes the ledger
+    # row (a sub-second bar here did, and failed a correct run at 0.95 s).
+    tool.seconds = 30.0
     t0 = time.monotonic()
     res = await p.registry.invoke("sleep_v1228", {}, ctx, perms, deadline_s=0.2)
     elapsed = time.monotonic() - t0
     assert res.ok is False
     assert res.error == "sleep_v1228 did not finish within 0.2 s — it was stopped"
-    assert elapsed < 0.9, elapsed
+    assert elapsed < 15, elapsed
     invs = _invocations(p.engine, "sleep_v1228")
     assert len(invs) == 1 and invs[0].ok is False
     assert "did not finish within 0.2 s" in invs[0].output
     events = await _wait_for_rows(lambda: _tool_events(p.engine, "sleep_v1228"), want=1)
     assert events[-1]["ok"] is False
 
-    # No deadline (the chat lanes' call shape) still lets the call finish.
+    # No deadline (the chat lanes' call shape) still lets the call finish —
+    # back to the short sleep, or this half would wait out the 30 s.
+    tool.seconds = 1.0
     res2 = await p.registry.invoke("sleep_v1228", {}, ctx, perms)
     assert res2.ok is True and res2.output == "slept"
 

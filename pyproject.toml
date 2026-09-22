@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.285.1"
+version = "1.286.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -63,6 +63,15 @@ dev = [
     # If a future test needs true isolation, mark it rather than reverting
     # this — a 3.5x slower gate is paid on every release, forever.
     "pytest-xdist>=3.6",
+    # A HANG MUST BE A FAILURE THAT NAMES ITS TEST (v1.286.0). ~30 tests await
+    # an event with no bound and 14 join() with none, so a regression that stops
+    # the event from firing hung the gate silently: locally it cost two full
+    # attempts on 2026-09-21, and on CI a job waits out GitHub's 6-hour default.
+    # With the `timeout` below, the hung xdist worker is killed ("worker 'gw0'
+    # crashed while running '<node id>'"), a fresh worker takes over and the
+    # rest of the suite finishes. faulthandler_timeout was tried: its stack for
+    # an async test shows only pytest_asyncio frames, and the run never ends.
+    "pytest-timeout>=2.3",
     "pyinstaller>=6.21",
 ]
 # Bundled OFFLINE speech-to-text. Kept OPTIONAL (not a base dep) so a plain
@@ -86,3 +95,12 @@ packages = ["src/iron_jarvis"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Per-test ceiling on a HANG, not a speed test (see pytest-timeout in the dev
+# extra). The slowest test measured is ~15s, so 300s is a 20x margin; a test
+# that truly needs longer marks itself with @pytest.mark.timeout(N).
+timeout = 300
+# Untracked review/audit scratch dirs under tests/ must never join the local
+# full-suite run: CI never sees them, and stale ones park an xdist worker on an
+# approval nobody answers. Setting this REPLACES pytest's defaults, so they are
+# repeated here. A scratch file still runs when named explicitly on the CLI.
+norecursedirs = [".*", "*.egg", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "__pycache__", "_audit_*", "_review_*"]

@@ -20,6 +20,7 @@ of the whole application.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
@@ -55,36 +56,76 @@ def _tree(root: Path, *, files: int = 40, junk: bool = True) -> Path:
     return root
 
 
-async def _max_tick_gap(tool, args, root: Path, slow_walk) -> float:
-    """Run *tool* beside a heartbeat and return the worst stall the loop took.
+_TICK_S = 0.01
+_MIN_TICKS = 3
+_WAIT_S = 10.0
 
-    Latency, not tick count: a blocked loop delays the heartbeat, it does not
-    cancel it, so only the gap between ticks can see the freeze.
+
+async def _walk_under_heartbeat(tool, args, root: Path) -> dict:
+    """Run *tool* with a blocking walk beside a heartbeat; report what the
+    walk saw from the inside.
+
+    NO WALL-CLOCK BAR. This used to return the worst gap between heartbeat
+    ticks and assert it stayed under 0.5s, and CI went red at 1.83s on a busy
+    runner with the walk correctly offloaded — the bar measured the machine.
+    The signals now are structural (the v1226 ``_Ticks`` shape): the stub
+    records the thread it ran on and whether it saw a running loop, then
+    BLOCKS ITS THREAD until the loop's heartbeat has advanced ``_MIN_TICKS``
+    past the value it read on entry. An inline walk runs on the loop thread,
+    so the heartbeat cannot tick while it blocks: the wait runs out and the
+    delta is exactly 0. An offloaded walk sees the ticks arrive — on a loaded
+    runner they arrive later, which costs time, never a false red (wait for
+    the thing you assert).
     """
-    gaps: list[float] = []
+    seen: dict = {"loop_thread": threading.get_ident()}
+    ticks = {"n": 0, "target": None, "stop": False}
+    reached = threading.Event()
 
     async def heartbeat():
-        last = time.monotonic()
-        for _ in range(40):
-            await asyncio.sleep(0.02)
-            now = time.monotonic()
-            gaps.append(now - last)
-            last = now
+        while not ticks["stop"]:
+            await asyncio.sleep(_TICK_S)
+            ticks["n"] += 1
+            if ticks["target"] is not None and ticks["n"] >= ticks["target"]:
+                reached.set()
+
+    def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
+        seen["walk_thread"] = threading.get_ident()
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        before = ticks["n"]
+        ticks["target"] = before + _MIN_TICKS
+        # Blocking, like a real filesystem stall — and it lasts until the loop
+        # proves it is alive, or until _WAIT_S says it never will be.
+        reached.wait(_WAIT_S)
+        seen["ticks_inside"] = ticks["n"] - before
+        return [], ""
 
     original = B._walk_files
     B._walk_files = slow_walk
+    hb = asyncio.create_task(heartbeat())
     try:
-        # The heartbeat must ALREADY BE RUNNING when the tool blocks. Handing
-        # both to `gather` is not enough and silently defeated this test once:
-        # the loop ran `execute` to completion first, so the stall happened
-        # before the heartbeat's first tick and no gap was ever recorded.
-        hb = asyncio.create_task(heartbeat())
-        await asyncio.sleep(0.05)
         await tool.execute(args, _ctx(root))
-        await hb
     finally:
         B._walk_files = original
-    return max(gaps) if gaps else 0.0
+        ticks["stop"] = True
+        await hb
+    return seen
+
+
+def _assert_offloaded(seen: dict, what: str) -> None:
+    assert "walk_thread" in seen, f"{what}: the slow walk never ran"
+    assert seen["walk_thread"] != seen["loop_thread"], (
+        f"{what}: the walk ran ON the event-loop thread — it is still inline, "
+        "and every other request freezes with it"
+    )
+    assert seen["on_loop"] is False, f"{what}: the walk saw a running loop (inline)"
+    assert seen["ticks_inside"] >= _MIN_TICKS, (
+        f"{what}: the loop starved during the walk ({seen['ticks_inside']} ticks "
+        "inside) — it is back on the event loop"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -93,44 +134,24 @@ async def _max_tick_gap(tool, args, root: Path, slow_walk) -> float:
 def test_a_slow_walk_does_not_block_the_event_loop(tmp_path):
     """A slow filesystem must cost ONE request, not the whole daemon.
 
-    The walk is replaced by a synchronous sleep — precisely what a huge or
-    network-mounted tree feels like from the loop's point of view. A heartbeat
-    runs alongside it and we measure the LARGEST GAP between its ticks.
-
-    Counting ticks does not work, and proving that cost a rewrite: ``gather``
-    waits for the heartbeat to finish either way, so the total is always 40
-    whether the loop stalled or not. The stall is only visible as latency —
-    which is also exactly how the user experienced it.
+    The walk is replaced by a synchronous block — precisely what a huge or
+    network-mounted tree feels like from the loop's point of view. The stub
+    reports the thread it ran on and how far the heartbeat advanced while it
+    blocked (see :func:`_walk_under_heartbeat` for why not a latency bar).
     """
     _tree(tmp_path)
-
-    def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
-        time.sleep(1.2)  # blocking, like a real filesystem stall
-        return [], ""
-
-    gap = asyncio.run(_max_tick_gap(B.ListFilesTool(), {"path": "."}, tmp_path, slow_walk))
-    # 0.5s sits well clear of both outcomes: blocked reads ~1.2s, offloaded
-    # reads ~0.02s. A wide gap matters because a loaded CI runner can stall the
-    # loop briefly for reasons that have nothing to do with this code.
-    assert gap < 0.5, (
-        f"the event loop stalled for {gap:.2f}s during a 1.2s walk — it is still "
-        "running inline, and every other request freezes with it"
-    )
+    seen = asyncio.run(_walk_under_heartbeat(B.ListFilesTool(), {"path": "."}, tmp_path))
+    _assert_offloaded(seen, "list_files")
 
 
 def test_grep_also_stays_off_the_event_loop(tmp_path):
     """grep walked the tree AND read every file's full text inline — the same
     defect, with more work attached to it."""
     _tree(tmp_path)
-
-    def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
-        time.sleep(1.2)
-        return [], ""
-
-    gap = asyncio.run(
-        _max_tick_gap(B.GrepTool(), {"pattern": "value"}, tmp_path, slow_walk)
+    seen = asyncio.run(
+        _walk_under_heartbeat(B.GrepTool(), {"pattern": "value"}, tmp_path)
     )
-    assert gap < 0.5, f"the event loop stalled for {gap:.2f}s during grep"
+    _assert_offloaded(seen, "grep")
 
 
 # --------------------------------------------------------------------------- #

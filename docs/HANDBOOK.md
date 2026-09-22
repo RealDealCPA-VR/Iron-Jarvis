@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.285.1 (2026-09-14).*
+holds itself to. Current as of v1.286.0 (2026-09-14).*
 
 ---
 
@@ -1491,6 +1491,24 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## What the deep review fixed (v1.286.0 →)
+
+A review of the whole app, in eight parts: chat, agents, the daemon, packs
+and documents, the two sets of pages, the desktop app and the test suite.
+Every problem it reported had to be proven first by a test that failed on the
+code as it was, and a second pass tried to knock each proof down: 65 were
+proven, 41 survived. Each fix was made by one agent and reviewed by another
+that read the actual change and broke it on purpose to watch its test catch
+it, then shipped only after the full suite and the release gate passed.
+**v1.286.0 (Wave 1, the safety net):** the checks that guard every update
+are trustworthy again — the local run no longer stalls near the end on old
+leftover review tests, a stuck test now fails within five minutes and names
+itself (a stuck GitHub run stops within the hour instead of six), the
+developer's copy runs the same Python as your installed app, notes posted
+to the Team board at the same instant keep the order they were posted in,
+and three checks that measured how busy the computer was now test what the
+code does.
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 
