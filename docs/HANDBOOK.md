@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.286.0 (2026-09-14).*
+holds itself to. Current as of v1.287.0 (2026-09-14).*
 
 ---
 
@@ -1508,7 +1508,16 @@ itself (a stuck GitHub run stops within the hour instead of six), the
 developer's copy runs the same Python as your installed app, notes posted
 to the Team board at the same instant keep the order they were posted in,
 and three checks that measured how busy the computer was now test what the
-code does.
+code does. **v1.287.0 (Wave 2, chat that stops when you say stop):**
+pressing Stop, closing the tab or pressing Retry on an answer from your
+Claude, Codex or OpenCode subscription now ends that program instead of
+leaving it running on your plan for minutes; the side panel's Stop works
+even before the first word appears; a correction you type while Jarvis is
+finishing comes back in the message box ("Jarvis finished before reading
+this") instead of vanishing; a reply that reads several large documents
+on a small local model stays inside what the model can hold; and a cloud
+model that drops halfway says the reply is incomplete and to retry,
+instead of a bare "stream error".
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

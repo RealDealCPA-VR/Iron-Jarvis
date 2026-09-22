@@ -21,6 +21,7 @@ import subprocess
 from typing import Any, Callable
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
+from .subprocess_cli import _run as _cli_run, run_cli
 
 log = logging.getLogger(__name__)
 
@@ -31,11 +32,8 @@ _TIMEOUT_S = 300.0
 def _run(
     argv: list[str], stdin: str | None = None, timeout: float = _TIMEOUT_S
 ) -> tuple[int, str, str]:
-    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        argv, capture_output=True, text=True, timeout=timeout,
-        input=stdin, encoding="utf-8", errors="replace",
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    """Blocking run with a REAL bound — the shared CLI runner (chat-01)."""
+    return _cli_run(argv, stdin, timeout)
 
 
 def _flatten(system: str, messages: list[LLMMessage]) -> str:
@@ -110,7 +108,9 @@ class OpencodeCliAdapter(LLMAdapter):
     ) -> None:
         self.model = model or ""
         self._allowed = allowed or (lambda: [])
-        self._runner = runner or _run
+        #: An injected ``runner(argv, stdin)`` (test doubles) keeps the plain
+        #: to_thread path; None = the real, cancel-killable `run_cli` (chat-01).
+        self._runner = runner
         self._which = which
 
     def _resolve_model(self) -> str:
@@ -173,7 +173,11 @@ class OpencodeCliAdapter(LLMAdapter):
         # from piped stdin.
         argv = [exe, "run", "--format", "json", "-m", model]
         try:
-            code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
+            if self._runner is not None:
+                code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
+            else:
+                # Stop / a closed tab kills the CLI tree, not just the await.
+                code, out, err = await run_cli(argv, prompt, timeout=_TIMEOUT_S)
         except subprocess.TimeoutExpired as exc:
             raise ProviderError(
                 f"opencode-cli: CLI timed out after {_TIMEOUT_S:.0f}s", transient=True

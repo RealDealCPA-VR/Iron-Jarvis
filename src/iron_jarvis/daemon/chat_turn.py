@@ -406,6 +406,71 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
         )
 
 
+def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, head: int):
+    """Fit the tool loop's GROWING transcript to the window, every completion.
+
+    ``_plan_context`` fits the HISTORY once, before round 0. Each tool round
+    then appends an assistant turn plus its ``role="tool"`` results (up to
+    12,000 chars each) and re-sends the lot, so by round 5 a 16k local model
+    was being sent far more than 16k tokens (v1.287.0, chat-04). The agent
+    lane budgets every step with ``plan_agent_transcript``; this is that SAME
+    ladder, not a second planner — older rounds' tool output becomes the
+    trimmed marker first, then whole rounds go oldest-first, an assistant
+    ``tool_use`` and its results always moving as ONE unit.
+
+    ``msgs[:head]`` is the planned history ending in the user's question. The
+    question is the ladder's protected task; the history before it is a fixed
+    cost (it was already fitted). Returns ``(messages, system)`` to SEND —
+    copies, never ``msgs`` edited in place, because the loop keeps appending to
+    it. Any recap of dropped rounds rides in the returned SYSTEM prompt.
+
+    Acts ONLY when the window is known and the transcript overflows it: an
+    unknown window, a turn that fits, or a plan that would lose the question or
+    the current round's results sends exactly what it sent before. Never raises.
+
+    Shared by both lanes so they can never disagree. MIRROR NOTE (lock-step):
+    every completion in chat_turn's loop AND the stream lane's goes through it.
+    """
+    try:
+        window = _context_window(d, provider, model)
+        if not window or head <= 0 or len(msgs) <= head:
+            return msgs, system
+        q = head - 1
+        while q >= 0 and getattr(msgs[q], "role", "") != "user":
+            q -= 1
+        if q < 0:
+            return msgs, system
+        from ..context.agent_window import blocks_of, plan_agent_transcript
+
+        tail = list(msgs[head:])
+        fixed = "\n".join(getattr(m, "content", "") or "" for m in msgs[:q])
+        fixed += "\n".join(getattr(m, "content", "") or "" for m in msgs[q + 1 : head])
+        plan = plan_agent_transcript(
+            [msgs[q], *tail],
+            window=window,
+            system_text=system + "\n" + fixed,
+            chars_per_token=_history_ratio(d, provider, model),
+        )
+        if not plan.changed:
+            return msgs, system
+        sent = plan.messages
+        # The question must survive whole, and the newest round must arrive
+        # INTACT (its results are what the model is about to act on) — else a
+        # smaller-but-wrong transcript would be worse than today's overflow.
+        newest = blocks_of(tail)[-1]
+        if plan.clipped_task or not sent or sent[0] is not msgs[q]:
+            return msgs, system
+        if len(sent) < len(newest) or any(
+            a is not b for a, b in zip(sent[-len(newest):], newest)
+        ):
+            return msgs, system
+        fitted_system = system + ("\n\n" + plan.recap if plan.recap else "")
+        return [*msgs[:q], *sent[:1], *msgs[q + 1 : head], *sent[1:]], fitted_system
+    except Exception:  # noqa: BLE001 — a budget refinement never breaks a turn
+        log.warning("in-turn context fitting failed; sending as-is", exc_info=True)
+        return msgs, system
+
+
 #: Tells the model how to mark a draft the USER will send (v1.161.0).
 #:
 #: The dashboard renders a ```email fence as a card with one-press copy that
@@ -1165,6 +1230,20 @@ def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
         "The model returned an empty answer — no tool ran and nothing was "
         "written. Press Retry, or pick a different model."
     )
+
+
+def _error_detail(exc: Exception) -> str:
+    """The error text a chat turn shows — never blank (v1.287.0, chat-07).
+    httpx's ReadTimeout/ReadError often carry an EMPTY message, and an empty
+    detail reached the page as the placeholder "stream error". Falls back to
+    the exception's type and ``failure_reason``'s one word.
+    MIRROR NOTE (lock-step): both chat lanes' error handlers call this."""
+    text = str(exc).strip()
+    if text:
+        return text
+    from ..providers.router import failure_reason
+
+    return f"{type(exc).__name__}: {failure_reason(exc)}"
 
 
 def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
@@ -3817,13 +3896,20 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # (lock-step with the stream lane's `_stays_in_chat`).
     _office = _stays_in_chat(armed)
     _cut_office = False
+    # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
+    # history; each completion sends `msgs` FITTED to the window (the rounds
+    # grow it). Lock-step: the stream lane fits every completion the same way.
+    _head = len(msgs)
     try:
         for _round in range(_rounds):
+            _send, _send_system = _fit_turn_transcript(
+                d, msgs, system, provider_choice, model_choice, head=_head
+            )
             route = await d.platform.router.complete(
                 provider=provider_choice or None,
                 model=model_choice or None,
-                system=system,
-                messages=msgs,
+                system=_send_system,
+                messages=_send,
                 tools=tool_specs,
                 task_class="chat",
                 # v1.263.0: the user's reasoning level; the router applies it
@@ -4039,7 +4125,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started,
             )
-        raise HTTPException(status_code=502, detail=str(exc))
+        raise HTTPException(status_code=502, detail=_error_detail(exc))
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
     # completion is billed like any other. Operates on the MODEL's text, not on
     # the assembled reply: our own honesty notes are written in English by
@@ -4050,13 +4136,18 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # it once, without tools, for the answer. Before the language guard, so
     # the answer is checked like any other; billed below like any other.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    # The post-loop completions re-send the whole transcript too — fitted the
+    # same way (v1.287.0). Lock-step: stream lane.
+    _send, _send_system = _fit_turn_transcript(
+        d, msgs, system, provider_choice, model_choice, head=_head
+    )
     if _cut_office or _wants_final_answer(
         model_text, workflow_draft, escalate, completions,
     ):
         _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
             d.platform,
-            system=system,
-            messages=msgs,
+            system=_send_system,
+            messages=_send,
             provider=provider_choice,
             model=model_choice,
             # v1.247.0 / v1.262.0: a turn cut at its last round is told so, in
@@ -4071,8 +4162,8 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         d.platform,
         text=model_text,
         user_text=_last_user_text(body.messages),
-        system=system,
-        messages=msgs,
+        system=_send_system,
+        messages=_send,
         provider=provider_choice,
         model=model_choice,
     )
@@ -4224,4 +4315,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # key — edit both or neither.
     if workflow_run_info is not None:
         out["workflow_run"] = workflow_run_info
+    # UNREAD STEER NOTES (v1.287.0) — the stream done-frame's conditional
+    # `unread_steers` key is ABSENT here by construction, not by omission:
+    # this lane never registers a turn (TURNS), so no steer note can be
+    # queued for it and none can be left unread. MIRROR NOTE (lock-step): a
+    # change that makes POST /chat steerable must close the queue and add
+    # the key exactly as routes/chat.py's stream lane does.
     return out

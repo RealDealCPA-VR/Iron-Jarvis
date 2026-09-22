@@ -44,6 +44,7 @@ def _which_cli(binary: str) -> str | None:
         return shutil.which(binary)
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -80,13 +81,114 @@ _STEP_SCHEMA = {
 }
 
 
-def _run(argv: list[str], stdin: str | None = None) -> tuple[int, str, str]:
-    """Blocking subprocess run (called via to_thread)."""
-    proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        argv, capture_output=True, text=True, timeout=_TIMEOUT_S,
-        input=stdin, encoding="utf-8", errors="replace",
+def _spawn(argv: list[str]) -> "subprocess.Popen[str]":
+    """Start the CLI with its own pipes — the caller owns the handle.
+
+    POSIX: its own session, so ``_kill_tree``'s ``killpg`` reaches the CLI's
+    helpers and nothing else. Windows: ``taskkill /T`` walks the PID tree.
+    """
+    popen_kw: dict[str, Any] = {}
+    if os.name != "nt":
+        popen_kw["start_new_session"] = True
+    return subprocess.Popen(  # noqa: S603 — argv list, no shell
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", **popen_kw,
     )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _kill(proc: "subprocess.Popen[str]") -> None:
+    """Kill the CLI AND its descendants — the ONE tree-kill (sandbox/native)."""
+    from ...sandbox.native import _kill_tree
+
+    _kill_tree(proc)
+
+
+def _drain(
+    proc: "subprocess.Popen[str]", stdin: str | None, timeout: float
+) -> tuple[int, str, str]:
+    """Blocking: feed stdin, wait at most ``timeout``, return the result.
+
+    v1.287.0 (chat-01): ``subprocess.run(timeout=)`` was not a bound. On a
+    timeout it killed only the direct child, then drained the pipes with NO
+    timeout — an npm ``.cmd`` shim's node, or any helper the CLI started,
+    held stdout open and the "240 s cap" waited for it (a 1 s cap measured
+    8 s). Here the whole tree dies and the drain itself is bounded, then the
+    TimeoutExpired propagates exactly as before (→ transient ProviderError).
+    """
+    try:
+        out, err = proc.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill(proc)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:  # noqa: BLE001 — a wedged drain must still return
+            pass
+        raise
+    return proc.returncode, out or "", err or ""
+
+
+def _run(
+    argv: list[str], stdin: str | None = None, timeout: float | None = None
+) -> tuple[int, str, str]:
+    """Blocking subprocess run with a REAL wall-clock bound (see `_drain`)."""
+    return _drain(_spawn(argv), stdin, _TIMEOUT_S if timeout is None else timeout)
+
+
+async def run_cli(
+    argv: list[str], stdin: str | None, *, timeout: float
+) -> tuple[int, str, str]:
+    """Run a CLI off the loop — and KILL it when the awaiting turn is cancelled.
+
+    v1.287.0 (chat-01): the adapters awaited ``to_thread(subprocess.run)``.
+    Stop / a closed tab / Retry cancelled only the AWAIT; the thread and the
+    CLI ran on for up to the full cap, spending the user's plan and a pool
+    thread (the v1.228.0 trap: a cancelled await does not cancel the thread).
+    The spawn happens in the worker thread (nothing blocks the loop); the
+    handle is published under a lock, so a cancel that lands before the spawn
+    finishes is honoured by the thread itself. The CancelledError is always
+    re-raised — the ledger's CANCELLED row depends on it.
+    """
+    lock = threading.Lock()
+    box: dict[str, Any] = {"proc": None, "cancelled": False}
+
+    def _work() -> tuple[int, str, str]:
+        proc = _spawn(argv)
+        with lock:
+            box["proc"] = proc
+            cancelled = box["cancelled"]
+        if cancelled:
+            _kill(proc)
+            try:
+                proc.communicate(timeout=5)
+            except Exception:  # noqa: BLE001 — reaping is best-effort
+                pass
+            return -1, "", ""
+        return _drain(proc, stdin, timeout)
+
+    try:
+        return await asyncio.to_thread(_work)
+    except asyncio.CancelledError:
+        with lock:
+            box["cancelled"] = True
+            proc = box["proc"]
+        if proc is not None:
+            # Off the loop (taskkill is a process spawn), and shielded so a
+            # second cancel cannot abandon the kill half-way.
+            try:
+                await asyncio.shield(asyncio.to_thread(_kill, proc))
+            except asyncio.CancelledError:
+                pass
+        raise
+
+
+async def _call(
+    runner: Callable[..., tuple[int, str, str]] | None, argv: list[str], stdin: str
+) -> tuple[int, str, str]:
+    """The adapters' one door to the CLI: the injected runner, else `run_cli`
+    with the cap read at CALL time (tests shrink ``_TIMEOUT_S``)."""
+    if runner is not None:
+        return await asyncio.to_thread(runner, argv, stdin)
+    return await run_cli(argv, stdin, timeout=_TIMEOUT_S)
 
 
 # --- Codex (`codex exec …`) — TEXT-ONLY -------------------------------------
@@ -132,7 +234,9 @@ class SubprocessCliAdapter(LLMAdapter):
         self._binary = binary
         self._argv_builder = argv_builder
         self._parse = parse
-        self._runner = runner or _run
+        #: An injected 2-arg ``runner(argv, stdin)`` (test doubles) keeps the
+        #: plain to_thread path; None = the real, cancel-killable `run_cli`.
+        self._runner = runner
         self._which = which
         #: v1.263.0: how THIS CLI spells a reasoning level on its command line
         #: (codex: `-c model_reasoning_effort=<level>`), or None when it has no
@@ -180,7 +284,7 @@ class SubprocessCliAdapter(LLMAdapter):
             try:
                 # The prompt rides STDIN (never argv): Windows caps a command
                 # line at 32,767 chars, and an extracted-PDF prompt exceeds it.
-                code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
+                code, out, err = await _call(self._runner, argv, prompt)
             except subprocess.TimeoutExpired as exc:
                 # A wedged CLI is a TRANSIENT failure (typed) — the router should
                 # fail over to another provider, not surface it as a hard error.
@@ -344,7 +448,7 @@ class ClaudeCliAdapter(LLMAdapter):
         which: Callable[[str], str | None] = _which_cli,
     ) -> None:
         self.model = model
-        self._runner = runner or _run
+        self._runner = runner  # None = the real, cancel-killable `run_cli`
         self._which = which
 
     def _argv(
@@ -401,7 +505,7 @@ class ClaudeCliAdapter(LLMAdapter):
         prompt = _flatten_for_claude(system, messages, tools)
         argv = self._argv(exe, tools, reasoning)
         try:
-            code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
+            code, out, err = await _call(self._runner, argv, prompt)
         except subprocess.TimeoutExpired as exc:
             # Transient (typed): a wedged CLI should fail over, not hard-error.
             raise ProviderError(

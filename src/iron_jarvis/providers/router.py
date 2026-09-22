@@ -750,6 +750,13 @@ class ModelRouter:
             " Bring that endpoint back up, or pick another model for this"
             " chat, and retry.",
         )
+        if kind == "interrupted" and not is_local_provider(wanted):
+            # v1.287.0 (chat-07 review): a cloud API has no endpoint the user
+            # runs, so "check that endpoint" names nothing they can check.
+            fix = (
+                " Press Retry — if it keeps happening, check your internet"
+                " connection or pick another model for this chat."
+            )
         return ProviderError(detail + fix)
 
     def _signed_out_cli(self, wanted: str) -> str | None:
@@ -1009,7 +1016,14 @@ class ModelRouter:
         Returns the honest ``interrupted`` refusal for a LOCAL primary whose
         transport broke (a dropped socket's ``httpx.ReadError`` often carries
         an EMPTY message, which the chat lane rendered as a blank error
-        line), else ``None`` — the caller re-raises the original."""
+        line), else ``None`` — the caller re-raises the original.
+
+        v1.287.0 (chat-07): a CLOUD primary (OpenRouter/xAI/OpenAI key/
+        Google — all on httpx) raised the same empty ``ReadTimeout``/
+        ``ReadError`` mid-answer and the page showed "stream error" under
+        half a reply. Any transport-shaped death now gets the incomplete-
+        reply wording. WORDING ONLY: nothing is swapped (the no-swap rule
+        stands), and the endpoint banner stays local-only."""
         self.health.record_failure(adapter.provider)
         await self.event_bus.publish(
             EventType.PROVIDER_FAILED,
@@ -1020,10 +1034,11 @@ class ModelRouter:
             },
             session_id=session_id,
         )
-        if is_local_provider(adapter.provider) and local_failure_kind(exc):
-            await self._publish_not_connected(
-                adapter.provider, session_id, kind="interrupted"
-            )
+        if local_failure_kind(exc):
+            if is_local_provider(adapter.provider):
+                await self._publish_not_connected(
+                    adapter.provider, session_id, kind="interrupted"
+                )
             return self._unavailable_error(
                 adapter.provider, pinned, kind="interrupted", exc=exc, partial=True
             )

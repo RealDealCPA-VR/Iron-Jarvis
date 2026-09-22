@@ -2360,6 +2360,9 @@ export default function ChatPage() {
   // sent to it so far — shown under the live reply until the turn ends.
   const turnIdRef = useRef("");
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
+  // v1.287.0: set when the turn finished before reading a steer note — the
+  // note is back in the box and this line says why. Cleared by the next turn.
+  const [steerBack, setSteerBack] = useState(false);
   // The folder THIS conversation was given for its files (v1.244.0 — see
   // placeInWorkfolder): shown as a chip, and later attachments join it. The
   // ref is what the next attach reads; the state is what the chip renders.
@@ -3838,6 +3841,7 @@ export default function ChatPage() {
     setToolQuery("");
     setActiveSkill(""); // so is the active skill
     composer.reset(); // and so is anything half-typed for the old thread
+    setSteerBack(false); // a returned steer note went with the box
     setError(null);
     setOffline(false);
     sinceRef.current = null;
@@ -5457,6 +5461,7 @@ export default function ChatPage() {
     body.turn_id = turnId;
     turnIdRef.current = turnId;
     setPendingSteers([]);
+    setSteerBack(false);
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
@@ -5488,6 +5493,15 @@ export default function ChatPage() {
         } = streamRes;
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         if (ctxUsage) setContextUsage(ctxUsage);
+        // v1.287.0: notes the turn ACCEPTED but finished before reading go
+        // back in the box — ahead of anything typed since — so Enter sends
+        // them. "Steer sent" was a promise; this keeps it or says it didn't.
+        const unread = streamRes.unreadSteers ?? [];
+        if (unread.length) {
+          const typed = composer.get().text.trim();
+          composer.setText([...unread, ...(typed ? [typed] : [])].join("\n"));
+          setSteerBack(true);
+        }
         // One tick so the final tool_call frame's state flush lands before the
         // cards are read for source extraction (this resolve microtask can
         // outrun React's batched setTools render).
@@ -7601,8 +7615,16 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {(error || (failedTurn && !busy)) && (
+              {(error || steerBack || (failedTurn && !busy)) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline p-3">
+                  {steerBack && (
+                    <div
+                      data-testid="steer-unread"
+                      className="min-w-0 flex-1 text-[12px] text-zinc-400"
+                    >
+                      Jarvis finished before reading this — press Enter to send it.
+                    </div>
+                  )}
                   {error && (
                     <div className="min-w-0 flex-1">
                       <ErrorNote>{error}</ErrorNote>

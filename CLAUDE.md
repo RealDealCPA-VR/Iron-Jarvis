@@ -1815,6 +1815,34 @@ does not need a bump, stop and bump it.
   code. `tests/test_suite_collection_v1286.py`,
   `tests/test_gate_timeouts_v1286.py`, `tests/test_blackboard_order_v1286.py`.
 
+- **Stop is a KILL, a steer is never dropped, a tool round is budgeted**
+  (v1.287.0, deep review wave 2). (1) A CLI provider (`subprocess_cli`,
+  `opencode_cli`) runs as Popen in a worker thread with
+  `communicate(timeout)`; on CancelledError or TimeoutExpired the TREE is
+  killed (`sandbox/native._kill_tree`) and the error re-raised —
+  `to_thread(subprocess.run(timeout=))` is neither cancellable nor bounded
+  when a `.cmd` shim or helper holds the pipe. The injected
+  `runner(argv, stdin)` seam is for test doubles only. (2) A named turn races
+  every router frame against `TurnHandle.wait_stopped()`
+  (`_frames_until_stop`; `stop()` wakes it via `call_soon_threadsafe`), so a
+  Stop before the first word lands now. ONE pump task drives the router
+  stream (task-affine timeouts/cancel scopes held across a yield keep
+  working), and a pump that dies without its end marker fails the turn
+  instead of parking it. (3) A steer note that reaches no round boundary is
+  handed back as `done.unread_steers` (`TurnHandle.close_steers` → later notes
+  404), read from the REGISTRY queue only; the page puts it back in the
+  composer. (4) Every completion in both chat lanes sends
+  `chat_turn._fit_turn_transcript(...)` (reuses `plan_agent_transcript`, the
+  question protected, acts only when the window is known and overflowed) —
+  never pass raw `msgs` to a completion again. (5) A transport death mid-answer
+  gets the "incomplete, retry" refusal for ANY provider (wording only, no
+  failover; cloud advice names the connection, not an endpoint), and both
+  lanes build error text with `chat_turn._error_detail`, never an empty
+  `str(exc)`. Pins: `tests/test_cli_cancel_kill_v1287.py`,
+  `test_chat_stop_first_token_v1287.py`, `test_chat_steer_unread_v1287.py`,
+  `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
+  `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

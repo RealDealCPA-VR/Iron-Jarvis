@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -68,6 +69,7 @@ from ..chat_turn import (
     _final_answer_after_tools,
     _last_user_text,
     _no_text_reply,
+    _error_detail,
     OUT_OF_ROUNDS_INSTRUCTION,
     _is_office_turn,
     _round_budget,
@@ -85,6 +87,7 @@ from ..chat_turn import (
     chat_tool_deadline,
     _apply_compaction,
     _plan_context,
+    _fit_turn_transcript,
     _profile_section,
     _resolve_armed_tools,
     _resolve_connectors,
@@ -257,6 +260,105 @@ async def _router_frames(router, **kwargs):
         "from": getattr(route, "from_provider", ""),
         "why": getattr(route, "why", ""),
     }
+
+
+#: The frame :func:`_frames_until_stop` yields when Stop wins the race. It is
+#: never sent to anyone: the lane's per-frame stop check reads the handle's
+#: flag and ends the turn before any frame kind is looked at.
+_STOP_FRAME_TYPE = "stopped"
+
+
+async def _frames_until_stop(frames, handle):
+    """``frames``, until the turn ``handle`` names is stopped (v1.287.0).
+
+    THE SILENT FAILURE THIS PREVENTS: the side panel's Stop (and closing the
+    panel, and ``POST /chat/turns/{id}/stop``) doing nothing until the model
+    sent its first word. The lane read the stop flag once per FRAME, and
+    while the model had not produced one — a subscription CLI that answers in
+    one chunk after the whole reply, a local model loading into memory — no
+    frame came, nothing read the flag, and the turn ran on, billing, while
+    the panel said it had stopped. The chat page never showed it only because
+    it also drops the connection, which Starlette turns into a cancel; a
+    panel turn owns no connection to drop.
+
+    So every frame is RACED against :meth:`TurnHandle.wait_stopped`. When
+    Stop wins, the model's work is cancelled — the CancelledError reaches the
+    provider's await, which closes its HTTP stream or kills the CLI's process
+    tree (chat-01) — ``frames`` is closed, and one frame of type
+    :data:`_STOP_FRAME_TYPE` is yielded so the lane's ordinary stop check
+    ends the turn through its ONE ``_persist_once`` writer.
+
+    ONE TASK OWNS THE MODEL'S STREAM. ``frames`` is driven start to finish by
+    a single pump task, not a fresh task per frame, so nothing in the router
+    or an adapter that is bound to the task it began in (a timeout or a
+    cancel scope held across a yield) is ever resumed in another. The queue
+    holds one frame: the pump reads at most that far ahead.
+
+    ``handle`` None (a turn with no ``turn_id``): nothing can address the
+    turn, so there is nothing to race, and ``frames`` is iterated in THIS
+    task exactly as before — only now closed promptly when the lane leaves.
+
+    The caller must close this generator (``contextlib.aclosing``): its
+    ``finally`` is what cancels the pump when the lane returns mid-stream.
+    """
+    if handle is None:
+        async with contextlib.aclosing(frames):
+            async for frame in frames:
+                yield frame
+        return
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    end = object()
+
+    async def _pump() -> None:
+        try:
+            async with contextlib.aclosing(frames):
+                async for frame in frames:
+                    await queue.put((frame, None))
+        except Exception as exc:  # noqa: BLE001 — re-raised in the lane, below
+            await queue.put((end, exc))
+        else:
+            await queue.put((end, None))
+
+    pump = asyncio.ensure_future(_pump())
+    stopped = asyncio.ensure_future(handle.wait_stopped())
+    got = None
+    try:
+        while True:
+            got = asyncio.ensure_future(queue.get())
+            await asyncio.wait({got, stopped, pump}, return_when=asyncio.FIRST_COMPLETED)
+            if not got.done():
+                if stopped.done():
+                    # Stop, while the model is still working. The `finally`
+                    # below cancels that work before the lane ends the turn.
+                    yield {"type": _STOP_FRAME_TYPE}
+                    return
+                # The pump ended first. Normally its end marker is already on
+                # the queue and `got` resolves on the next tick; but a pump
+                # that died on a BaseException (a stray CancelledError from an
+                # adapter) put nothing there, and waiting on `got` would park
+                # the turn forever. Say so instead.
+                if pump.cancelled() or pump.exception() is not None:
+                    cause = None if pump.cancelled() else pump.exception()
+                    raise RuntimeError(
+                        "the model's stream ended without a result"
+                    ) from cause
+                await got
+            frame, exc = got.result()
+            got = None
+            if frame is end:
+                if exc is not None:
+                    raise exc
+                return
+            yield frame
+    finally:
+        for task in (got, stopped, pump):
+            if task is not None and not task.done():
+                task.cancel()
+        # Wait for the pump to unwind, so the provider's own cleanup (closing
+        # its stream, killing a CLI) has run before the turn is over.
+        await asyncio.wait({pump})
+        if not pump.cancelled():
+            pump.exception()  # retrieved: an error on the way out is not news
 
 
 def _share_transcript(title: str, persona: str, updated_at, msgs: list) -> str:
@@ -2432,6 +2534,10 @@ async def chat_stream(
         # answer; the final-answer wording is chosen by the same helper.
         _office = _stays_in_chat({*armed, *ask_armed})
         _cut_office = False
+        # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
+        # history; each completion sends `msgs` FITTED to the window (the
+        # rounds grow it). MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        _head = len(msgs)
         try:
             for _round in range(_rounds):
                 if await _stop():
@@ -2456,12 +2562,19 @@ async def chat_stream(
                     "round", {"round": _round, **({"steer": _note} if _note else {})}
                 )
                 final_resp = None
-                async for frame in _router_frames(
+                _send, _send_system = _fit_turn_transcript(
+                    d, msgs, system, provider_choice, model_choice, head=_head
+                )
+                # v1.287.0: raced against Stop (see `_frames_until_stop`), so a
+                # Stop pressed before the model's first frame ends the turn now
+                # instead of when that frame finally arrives — and CLOSED when
+                # the lane leaves this loop, whichever way it leaves.
+                async with contextlib.aclosing(_frames_until_stop(_router_frames(
                     d.platform.router,
                     provider=provider_choice or None,
                     model=model_choice or None,
-                    system=system,
-                    messages=msgs,
+                    system=_send_system,
+                    messages=_send,
                     tools=tool_specs,
                     task_class="chat",
                     # v1.263.0: the user's reasoning level; the router applies
@@ -2469,56 +2582,57 @@ async def chat_stream(
                     # when set, so every router double that predates the knob
                     # sees the call it always saw. Lock-step: chat_turn.
                     **_reasoning_kw(body),
-                ):
-                    if await _stop():
-                        # STOP MID-ANSWER (v1.241.0). The round-TOP check
-                        # above only comes round at a tool-round boundary, so
-                        # a Stop pressed while the model was writing did
-                        # nothing until the whole answer finished — and for a
-                        # caller with no connection to drop (a panel turn),
-                        # nothing at all. Ends exactly the way the round-top
-                        # check ends: the completed rounds were billed, so the
-                        # ledger says CANCELLED through the ONE `_persist_once`
-                        # writer, and no frame is emitted (the SSE frame
-                        # sequence is a fixed contract).
-                        #
-                        # HONESTY: this does not kill a tool that is already
-                        # running. Its worker thread finishes and its write
-                        # lands (v1.228.0). Stop ends the answer being
-                        # generated and prevents the NEXT round.
-                        _persist_once(AgentState.CANCELLED)
-                        return
-                    ftype = frame.get("type")
-                    if ftype == "text":
-                        txt = frame.get("text") or ""
-                        if txt:
-                            yield _sse("token", {"text": txt})
-                    elif ftype == "meta":
-                        route_provider = frame.get("provider") or route_provider
-                        route_model = frame.get("model") or route_model
-                        yield _sse(
-                            "meta",
-                            {"provider": route_provider, "model": route_model},
-                        )
-                    elif ftype == "reset":
-                        # A pre-first-token failover swapped providers — tell the
-                        # client to discard any partial text streamed so far.
-                        yield _sse("reset", {"reason": frame.get("reason", "")})
-                    elif ftype == "final":
-                        final_resp = frame.get("response")
-                        route_provider = frame.get("provider") or route_provider
-                        route_model = frame.get("model") or route_model
-                        # Route disclosure off the final frame (v1.165.0).
-                        # `requested` is legitimately "" on the default
-                        # route, so test MEMBERSHIP, not truthiness — an
-                        # `or` here would silently keep the seed value and
-                        # mask a router that reports differently.
-                        if "requested" in frame:
-                            route_requested = str(frame.get("requested") or "")
-                        route_reason = str(frame.get("reason") or route_reason)
-                        route_from = str(frame.get("from") or route_from)
-                        route_why = str(frame.get("why") or route_why)
-                        route_reasoning = str(frame.get("reasoning") or route_reasoning)
+                ), handle)) as _frames:
+                    async for frame in _frames:
+                        if await _stop():
+                            # STOP MID-ANSWER (v1.241.0). The round-TOP check
+                            # above only comes round at a tool-round boundary, so
+                            # a Stop pressed while the model was writing did
+                            # nothing until the whole answer finished — and for a
+                            # caller with no connection to drop (a panel turn),
+                            # nothing at all. Ends exactly the way the round-top
+                            # check ends: the completed rounds were billed, so the
+                            # ledger says CANCELLED through the ONE `_persist_once`
+                            # writer, and no frame is emitted (the SSE frame
+                            # sequence is a fixed contract).
+                            #
+                            # HONESTY: this does not kill a tool that is already
+                            # running. Its worker thread finishes and its write
+                            # lands (v1.228.0). Stop ends the answer being
+                            # generated and prevents the NEXT round.
+                            _persist_once(AgentState.CANCELLED)
+                            return
+                        ftype = frame.get("type")
+                        if ftype == "text":
+                            txt = frame.get("text") or ""
+                            if txt:
+                                yield _sse("token", {"text": txt})
+                        elif ftype == "meta":
+                            route_provider = frame.get("provider") or route_provider
+                            route_model = frame.get("model") or route_model
+                            yield _sse(
+                                "meta",
+                                {"provider": route_provider, "model": route_model},
+                            )
+                        elif ftype == "reset":
+                            # A pre-first-token failover swapped providers — tell the
+                            # client to discard any partial text streamed so far.
+                            yield _sse("reset", {"reason": frame.get("reason", "")})
+                        elif ftype == "final":
+                            final_resp = frame.get("response")
+                            route_provider = frame.get("provider") or route_provider
+                            route_model = frame.get("model") or route_model
+                            # Route disclosure off the final frame (v1.165.0).
+                            # `requested` is legitimately "" on the default
+                            # route, so test MEMBERSHIP, not truthiness — an
+                            # `or` here would silently keep the seed value and
+                            # mask a router that reports differently.
+                            if "requested" in frame:
+                                route_requested = str(frame.get("requested") or "")
+                            route_reason = str(frame.get("reason") or route_reason)
+                            route_from = str(frame.get("from") or route_from)
+                            route_why = str(frame.get("why") or route_why)
+                            route_reasoning = str(frame.get("reasoning") or route_reasoning)
                 if final_resp is None:
                     # The stream ended without an aggregate — honest error, not
                     # a fabricated reply. Completed rounds still get counted.
@@ -3010,7 +3124,7 @@ async def chat_stream(
             # frame (mirrors chat_complete's failure path); the client sees
             # the same error either way.
             _persist_once(AgentState.FAILED)
-            yield _sse("error", {"detail": str(exc)})
+            yield _sse("error", {"detail": _error_detail(exc)})
             return
         except BaseException:
             # STOP MID-GENERATION. When the client aborts DURING a round,
@@ -3040,14 +3154,18 @@ async def chat_stream(
         try:
             # FINAL ANSWER (v1.246.0) — lock-step copy of chat_turn's. The
             # heartbeat keeps the stream alive while it runs, and the answer
-            # lands in the authoritative `done` frame.
+            # lands in the authoritative `done` frame. Both post-loop
+            # completions send the transcript FITTED (v1.287.0, lock-step).
+            _send, _send_system = _fit_turn_transcript(
+                d, msgs, system, provider_choice, model_choice, head=_head
+            )
             if _cut_office or _wants_final_answer(
                 reply_text or "", workflow_draft, escalate, completions,
             ):
                 _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
                     d.platform,
-                    system=system,
-                    messages=msgs,
+                    system=_send_system,
+                    messages=_send,
                     provider=provider_choice,
                     model=model_choice,
                     # v1.247.0 / v1.262.0 — lock-step with chat_turn: the
@@ -3065,8 +3183,8 @@ async def chat_stream(
                 d.platform,
                 text=reply_text or "",
                 user_text=_last_user_text(body.messages),
-                system=system,
-                messages=msgs,
+                system=_send_system,
+                messages=_send,
                 provider=provider_choice,
                 model=model_choice,
             )
@@ -3124,6 +3242,19 @@ async def chat_stream(
                 f"\n\n_Note: {provider_choice} can't run tools — this "
                 f"turn was answered text-only._"
             )
+        # UNREAD STEER NOTES (v1.287.0). A note posted while the model wrote
+        # its final answer never met a round boundary — every plain question
+        # ends after round 0 — yet the steer route had answered "queued".
+        # Close the queue now (a later note gets the route's 404) and hand
+        # the leftovers back so the page can return them to the composer.
+        # The REGISTRY's queue only, never `_steer()`: a caller with its own
+        # source (the sidebar) narrates consumption from it and flushes its
+        # own pending notes on `done` (browser/panel.py STEER_NOT_TAKEN), so
+        # reading it here would announce a note as landed that never did.
+        # After every stop check on purpose: a stopped turn returned above
+        # and reports nothing as work handed to it. MIRROR NOTE (lock-step):
+        # chat_turn.run_chat_turn names no turn and has no queue to close.
+        unread_steers = handle.close_steers() if handle is not None else []
         done_frame: dict[str, Any] = {
             "reply": reply,
             "provider": route_provider,
@@ -3190,6 +3321,9 @@ async def chat_stream(
         # neither.
         if workflow_run_info is not None:
             done_frame["workflow_run"] = workflow_run_info
+        # v1.287.0: present ONLY when a note was left unread (see above).
+        if unread_steers:
+            done_frame["unread_steers"] = unread_steers
         yield _sse("done", done_frame)
 
     # The prep ran EAGERLY above (so a 400/404 still lands as a status code,

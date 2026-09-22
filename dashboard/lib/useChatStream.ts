@@ -10,7 +10,8 @@
 //   meta      {"provider","model"}
 //   round     {"round":n,"steer"?:text}                       (steer: v1.278.0)
 //   done      {"reply","provider","model","tools_used","denied_tools","usage",
-//              "adapted": {model,changes}|null, ...}
+//              "adapted": {model,changes}|null, "unread_steers"?: [text],
+//              ...}                                   (unread_steers: v1.287.0)
 //   error     {"detail","status"?}
 //
 // with a ": keepalive" comment every ~15s of idle. This library turns that raw
@@ -108,6 +109,9 @@ export type SSEEvent =
       usage?: { input_tokens?: number; output_tokens?: number };
       /** Context-window accounting for this turn (v1.146.0). */
       context?: ContextUsage | null;
+      /** v1.287.0: steer notes the turn accepted but never READ (it ended
+       *  before another step came round). Absent when there were none. */
+      unread_steers?: string[];
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
 
@@ -173,6 +177,10 @@ export interface ChatStreamResult {
    *  such and the next turn resends the whole history. A note the turn never
    *  reached is not here. */
   steered?: string[];
+  /** v1.287.0: the steer notes this turn accepted and never READ — it
+   *  finished first. The caller hands them back to the user; they are not
+   *  part of the conversation (the model never saw them). */
+  unreadSteers?: string[];
 }
 
 /** What one turn cost against the answering model's window (v1.146.0). The
@@ -337,6 +345,14 @@ export function sseEventFrom(
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
       if (data.context && typeof data.context === "object")
         ev.context = data.context as ContextUsage;
+      // v1.287.0: whitelisted like every field here, or the notes vanish
+      // again — the very failure this key exists to end.
+      if (Array.isArray(data.unread_steers)) {
+        const unread = (data.unread_steers as unknown[]).filter(
+          (x): x is string => typeof x === "string" && x.trim().length > 0,
+        );
+        if (unread.length) ev.unread_steers = unread;
+      }
       return ev;
     }
     case "error": {
@@ -900,6 +916,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 workflowRun: ev.workflow_run,
                 context: ev.context,
                 ...(steered.length ? { steered: [...steered] } : {}),
+                ...(ev.unread_steers?.length
+                  ? { unreadSteers: [...ev.unread_steers] }
+                  : {}),
               };
               break;
             case "error":

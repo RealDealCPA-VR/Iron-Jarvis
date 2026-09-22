@@ -25,10 +25,19 @@ right to stop one, together, which is the correct outcome for both.
 LOOP-AWARE, for the same reason approvals are: the turn may be driven on one
 loop (an SSE response on the daemon's main loop, or a panel turn on whatever
 loop the socket lives on) while ``POST /chat/turns/{id}/stop`` answers on
-another. Stop therefore sets a plain flag — no future, no ``set_result``, no
-wake-up needed — and the runner reads it at its own next checkpoint. A flag
-crosses loops and threads safely where a future does not; the price is that
-stop is COOPERATIVE, which is honest about what it can actually interrupt.
+another. Stop therefore sets a plain flag — no future, no ``set_result`` —
+and the runner reads it at its own next checkpoint. A flag crosses loops and
+threads safely where a future does not; the price is that stop is
+COOPERATIVE, which is honest about what it can actually interrupt.
+
+THE ONE WAKE-UP (v1.287.0): a checkpoint that only comes round when the model
+sends a frame is no checkpoint while the model has not sent its FIRST one —
+a subscription CLI answers in one chunk after the whole reply, a cold local
+model loads for seconds — so the side panel's Stop and close did nothing for
+exactly that stretch. The runner therefore parks on :meth:`wait_stopped`
+while it waits for the model, and :meth:`stop` wakes it through
+``loop.call_soon_threadsafe`` on the RUNNER's loop (recorded by the runner
+itself), which is the one call that is safe from any thread or loop.
 
 WHAT STOP DOES NOT DO: it does not kill a tool that is already executing. A
 tool call runs on a worker thread (v1.228.0); that thread finishes and its
@@ -45,22 +54,33 @@ because a double-click races the release and the second click must read as
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 
 class TurnHandle:
     """One running turn's stop flag. Read by the runner, set by the route."""
 
-    __slots__ = ("turn_id", "_stopped", "_steers", "_steer_lock")
+    __slots__ = (
+        "turn_id", "_stopped", "_steers", "_steer_lock", "_steers_closed",
+        "_wake", "_loop",
+    )
 
     def __init__(self, turn_id: str) -> None:
         self.turn_id = turn_id
         self._stopped = False
+        # v1.287.0: the runner's wake-up, bound by the runner on its own loop
+        # the first time it parks (see :meth:`wait_stopped`). None until then.
+        self._wake: asyncio.Event | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         # v1.278.0: notes queued for this turn from another connection, taken
         # by the runner at its next round boundary (the sidebar's steer
         # contract, now reachable by any caller that named its turn).
         self._steers: list[str] = []
         self._steer_lock = threading.Lock()
+        # v1.287.0: set once the runner has read its LAST note (see
+        # :meth:`close_steers`); a note arriving after that is refused.
+        self._steers_closed = False
 
     @property
     def stopped(self) -> bool:
@@ -73,14 +93,42 @@ class TurnHandle:
 
     def stop(self) -> None:
         self._stopped = True
+        # Wake a runner parked on the model (v1.287.0). The flag is written
+        # FIRST and the runner binds its event BEFORE it reads the flag, so
+        # either this sees the event or the runner sees the flag — a stop can
+        # never fall between the two.
+        loop, wake = self._loop, self._wake
+        if loop is not None and wake is not None:
+            try:
+                loop.call_soon_threadsafe(wake.set)
+            except RuntimeError:  # the runner's loop is closed: nothing to wake
+                pass
 
-    def queue_steer(self, text: str) -> None:
-        """Queue one note for the runner. Empty text is not a note."""
+    async def wait_stopped(self) -> None:
+        """Return once somebody asks this turn to stop (v1.287.0).
+
+        Called by the runner, on the runner's loop, to race the model's next
+        frame against Stop. Binds the wake-up to THIS loop on first use,
+        then reads the flag, so a stop that landed earlier returns at once.
+        """
+        if self._wake is None:
+            self._wake = asyncio.Event()
+            self._loop = asyncio.get_running_loop()
+        if self._stopped:
+            return
+        await self._wake.wait()
+
+    def queue_steer(self, text: str) -> bool:
+        """Queue one note for the runner. Empty text is not a note, and a turn
+        that has closed its queue takes none (v1.287.0) — False either way."""
         note = str(text or "").strip()
         if not note:
-            return
+            return False
         with self._steer_lock:
+            if self._steers_closed:
+                return False
             self._steers.append(note)
+        return True
 
     def take_steers(self) -> list[str]:
         """Every queued note, in order, once. The runner calls this at the
@@ -89,6 +137,23 @@ class TurnHandle:
             taken = self._steers[:]
             self._steers.clear()
         return taken
+
+    def close_steers(self) -> list[str]:
+        """The notes still queued, once, and NO MORE after this (v1.287.0).
+
+        THE SILENT FAILURE THIS PREVENTS: a note typed while the model writes
+        its final answer. There is no round boundary left to read it, the
+        route had already answered "queued", and the handle's release threw
+        it away — the user's words vanished. The runner calls this once its
+        loop is over, hands what it gets back to the caller as unread, and
+        from then on :meth:`queue_steer` refuses, so the route answers 404
+        instead of accepting a note that nothing will ever read or return.
+        """
+        with self._steer_lock:
+            self._steers_closed = True
+            left = self._steers[:]
+            self._steers.clear()
+        return left
 
 
 class TurnRegistry:
@@ -141,8 +206,8 @@ class TurnRegistry:
             handle = self._turns.get(str(turn_id))
         if handle is None:
             return False
-        handle.queue_steer(note)
-        return True
+        # v1.287.0: False too once the runner has read its last note.
+        return handle.queue_steer(note)
 
     def take_steers(self, turn_id: str) -> list[str]:
         """The notes queued for ``turn_id`` since the last take — [] for an
