@@ -139,6 +139,16 @@ class Tool(ABC):
     #: bar, never drop it, and ``DENY_FLOOR_TOOLS`` stays authoritative — otherwise
     #: a dynamically created tool could declare its way down off the floor.
     risk_class: RiskClass = RiskClass.EXTERNAL_COMMIT
+    #: OUTSIDE THE PER-CALL DEADLINE (v1.288.0). True only for a tool whose
+    #: ``execute`` awaits a WHOLE sub-agent run (``delegate``, ``spawn_agent``).
+    #: The v1.228.0 deadline (``config.tool_call_timeout_s``) is a guard for a
+    #: wedged subprocess/MCP/HTTP call; applied to a sub-agent it killed a
+    #: worker still doing real work at minute 10 and recorded it "cancelled by
+    #: the user". Such a run is bounded by its OWN step budget, its own
+    #: per-tool deadlines, the provider timeouts and the user's Cancel (which
+    #: reaches it through the parent). ``ToolRegistry.invoke`` reads this — the
+    #: one place — so every lane (agent runtime, both chat lanes) obeys it.
+    deadline_exempt: bool = False
 
     def perm_key(self) -> str:
         return self.permission_key or self.name

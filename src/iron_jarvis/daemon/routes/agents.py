@@ -845,7 +845,9 @@ def register(app: FastAPI, d) -> None:
             secret_name=secret_name,
             model=(body.model or "").strip() or None,
             enabled=body.enabled,
-            timeout_s=int(body.timeout_s or 120),
+            # max(1, …) as PATCH does (v1.288.0): the value is now a TOTAL
+            # deadline (asyncio.timeout), and a stored negative expires at once.
+            timeout_s=max(1, int(body.timeout_s or 120)),
         )
         return _remote_view(rec)
 

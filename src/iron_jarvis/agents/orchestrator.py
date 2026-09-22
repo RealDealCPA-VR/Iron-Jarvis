@@ -134,6 +134,40 @@ def inherited_workspace_root(config, parent: Session | None) -> str | None:
     return str(path)
 
 
+def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
+    """The up-front tool grant and approval posture a DELEGATED/SPAWNED child
+    inherits from its parent: ``(allow_tools, approval_mode)`` (v1.288.0).
+
+    ``delegate``/``spawn_agent`` forwarded the parent's folder and project and
+    never its GRANTS, so a Team job the user started with shell pre-approved
+    handed the actual work to a child with ``allow_tools=[]``. The child has no
+    origin, so it cannot pause to ask either (the module docstring of
+    ``delegate_tool``: a subagent never contacts the user) — every ask-tier call
+    it made died on the headless resolver with "grant it with allow_tools",
+    which the user had already done. One predicate, both doors, like
+    ``inherited_workspace_root``.
+
+    Exactly what the user granted the parent, never more: a session grant never
+    lifts a base ``deny`` or an agent definition's floor (``invoke`` refuses
+    those in every posture), and ``create_session`` normalises the posture
+    through ``inherited_approval_mode`` so ``yolo`` reaches no row.
+
+    ``always_ask`` forwards the posture but NO grant list. Under that posture
+    the stored list does not pre-approve — the parent asks once per run — and
+    the child has no channel to ask through, so handing it the list would let
+    it silently run what its own parent would have asked about. It keeps the
+    honest headless refusal instead (fail closed). The ORIGIN is deliberately
+    not forwarded: a child's ask would card under its own session id, which
+    the chat page the parent was started from does not render.
+    """
+    if parent is None:
+        return [], ""
+    mode = inherited_approval_mode(getattr(parent, "approval_mode", ""))
+    if mode == "always_ask":
+        return [], mode
+    return _stored_allow_tools(parent), mode
+
+
 #: Default cap on how many children ONE delegating parent may run AT ONCE
 #: (v1.193.0). Config-overridable with ``max_concurrent_children``; <= 0 means
 #: unlimited, i.e. exactly the pre-v1.193.0 behavior.
@@ -975,13 +1009,47 @@ class Orchestrator:
             _prose(session.summary) or f"Session failed: {type(error).__name__}: {error}",
         )
         session.finished_at = utcnow()
+        error_text = f"{type(error).__name__}: {error}"
+
+        def _settle_failed() -> tuple[list[str], str | None]:
+            # v1.288.0 (agents-04): settle the session's AgentRun rows with it,
+            # as the cancel finalizer and the boot reconcile already do — a
+            # provider crash escapes AgentRuntime.run with its row RUNNING, and
+            # nothing else ever revisits a FAILED session, so the team tree
+            # showed a live agent inside a failed job forever.
+            try:
+                with session_scope(self.p.engine) as db:
+                    for r in db.exec(
+                        select(AgentRun).where(AgentRun.session_id == session.id)
+                    ):
+                        if r.state not in (
+                            AgentState.COMPLETED,
+                            AgentState.FAILED,
+                            AgentState.CANCELLED,
+                        ):
+                            r.state = AgentState.FAILED
+                            r.finished_at = utcnow()
+                            if not r.result:
+                                r.result = error_text
+                            db.add(r)
+                    db.commit()
+            except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
+                log.exception("failed to settle the run rows of %s", session.id)
+            return self._settle_finished_run(session, "", session.status)
+
+        # v1.227.1 order: let a pause's shielded WAITING -> RUNNING restore
+        # land BEFORE the settle, or it could resurrect RUNNING afterwards.
+        drain = getattr(getattr(self, "runtime", None), "drain_inflight_state", None)
+        if drain is not None:
+            try:
+                await asyncio.shield(drain())
+            except asyncio.CancelledError:
+                pass  # a cancel mid-teardown: the restore finishes on its own task
         try:
             # v1.227.0: a crashed run hands its worklist claims back (A8) and
             # still gets an honest verdict — ``needs_you`` when an ask timed
             # out before the crash. Off the loop; never fatal to the teardown.
-            _tools, outcome = await asyncio.to_thread(
-                self._settle_finished_run, session, "", session.status
-            )
+            _tools, outcome = await asyncio.to_thread(_settle_failed)
             session.outcome = outcome
         except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
             log.exception("failed to settle the ledger for %s", session.id)
@@ -1013,11 +1081,18 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("worktree cleanup failed after failing %s", session.id)
 
-    async def _finalize_cancelled(self, session: Session) -> None:
-        """Mark a cancelled run CANCELLED, persist, notify, and GC its worktree."""
+    async def _finalize_cancelled(
+        self, session: Session, *, reason: str | None = None
+    ) -> None:
+        """Mark a cancelled run CANCELLED, persist, notify, and GC its worktree.
+
+        ``reason`` (v1.288.0) replaces the default words when the caller KNOWS
+        the stop was not the user — a sub-agent stopped by a tool time limit
+        must not be recorded as "cancelled by the user"."""
         session.status = SessionStatus.CANCELLED
         session.summary = _with_folder_note(
-            session.summary, _prose(session.summary) or "Session cancelled by the user."
+            session.summary,
+            reason or _prose(session.summary) or "Session cancelled by the user.",
         )
         session.finished_at = utcnow()
 
@@ -1581,8 +1656,40 @@ class Orchestrator:
                     if not r.result:
                         r.result = "interrupted by a daemon restart"
                     db.add(r)
-            if marked:
+            # v1.288.0 (agents-04, the one-off repair): rows left RUNNING or
+            # WAITING under a session that is ALREADY terminal — the ghosts the
+            # pre-v1.288.0 failure finalizer made, which no later path revisits
+            # because it only looks at ACTIVE/QUEUED sessions.
+            terminal_ids = {
+                s.id
+                for s in db.exec(
+                    select(Session).where(
+                        Session.status.in_(  # type: ignore[attr-defined]
+                            (SessionStatus.FAILED, SessionStatus.CANCELLED, SessionStatus.COMPLETED)
+                        )
+                    )
+                )
+            }
+            ghosts = 0
+            for r in db.exec(
+                select(AgentRun).where(
+                    AgentRun.state.in_(  # type: ignore[attr-defined]
+                        (AgentState.RUNNING, AgentState.WAITING)
+                    )
+                )
+            ):
+                if r.session_id not in terminal_ids:
+                    continue
+                r.state = AgentState.FAILED
+                r.finished_at = utcnow()
+                if not r.result:
+                    r.result = "its session had already ended"
+                db.add(r)
+                ghosts += 1
+            if marked or ghosts:
                 db.commit()
+            if ghosts:
+                log.info("settled %d run row(s) left running under ended sessions", ghosts)
         # …and their worklist claims go back on the board, so a resumed job
         # is handed the work instead of being told to wait for a run that no
         # longer exists. Sync on purpose: this runs once at boot, before the

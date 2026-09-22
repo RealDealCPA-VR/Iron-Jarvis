@@ -236,6 +236,9 @@ class SpawnAgentTool(Tool):
         "required": ["agent", "task"],
     }
     permission_key = "spawn_agent"
+    #: It awaits a whole child run — outside the per-call deadline (v1.288.0),
+    #: exactly like ``delegate``.
+    deadline_exempt = True
 
     def __init__(self, platform, registry: "DynamicAgentRegistry") -> None:
         self.platform = platform
@@ -243,8 +246,10 @@ class SpawnAgentTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # Lazy imports: avoid an agents-package import cycle at module load.
+        from ..tools.registry import tool_deadline_expired
         from .delegate_tool import (
             _MAX_DELEGATION_DEPTH,
+            TIME_LIMIT_REASON,
             DelegateTool,
             _with_handle,
             delegation_handle,
@@ -255,6 +260,7 @@ class SpawnAgentTool(Tool):
             Orchestrator,
             child_fanout_key,
             child_slot,
+            inherited_grants,
             inherited_workspace_root,
         )
         from .runtime import AgentRuntime
@@ -332,6 +338,9 @@ class SpawnAgentTool(Tool):
         # child, so the team's output lands in one place; a managed/worktree
         # parent keeps the child isolated. One predicate, both doors.
         workspace_root = inherited_workspace_root(self.platform.config, parent)
+        # …and the GRANTS (v1.288.0), through the same predicate `delegate`
+        # uses: what the user pre-approved on the parent, never its origin.
+        allow_tools, approval_mode = inherited_grants(parent)
 
         # BOUNDED FAN-OUT (v1.193.0), the same cap `delegate` takes — spawn is
         # the other door onto the identical hazard. Deliberately NOT
@@ -348,6 +357,8 @@ class SpawnAgentTool(Tool):
                 model=model,
                 project_id=project_id,
                 workspace_root=workspace_root,
+                allow_tools=allow_tools,
+                approval_mode=approval_mode,
                 # Credit the run to the teammate that actually ran (v1.193.0) —
                 # the same stamp `delegate` makes, so attribution survives a
                 # dropped or renamed event instead of falling back to the base
@@ -383,7 +394,12 @@ class SpawnAgentTool(Tool):
                     child_session, definition, parent_id=ctx.agent_run_id
                 )
             except asyncio.CancelledError:
-                await orch._finalize_cancelled(child_session)
+                # A deadline is not the user (v1.288.0) — as in `delegate`.
+                by_deadline = tool_deadline_expired()
+                await orch._finalize_cancelled(
+                    child_session,
+                    reason=TIME_LIMIT_REASON if by_deadline else None,
+                )
                 try:
                     await publish_delegation_completed(
                         self.platform,
@@ -393,7 +409,7 @@ class SpawnAgentTool(Tool):
                         child_session_id=child_session.id,
                         target=agent_name,
                         ok=False,
-                        result="cancelled",
+                        result=TIME_LIMIT_REASON if by_deadline else "cancelled",
                     )
                 except Exception:  # noqa: BLE001 - never block the unwind
                     pass

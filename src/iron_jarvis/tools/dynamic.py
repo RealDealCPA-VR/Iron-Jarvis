@@ -29,7 +29,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.models import DynamicToolRecord
-from ..sandbox.native import host_os_line
+from ..sandbox.native import _as_text, child_env, host_os_line
 from .base import Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
@@ -236,16 +236,25 @@ class CommandTool(Tool):
             # the daemon's single event loop and blocks for up to self._timeout
             # (capped at MAX_TIMEOUT_SECONDS), so inline it would freeze every
             # request and every other session while a custom tool runs.
-            proc = await asyncio.to_thread(
-                lambda: subprocess.run(
+            def _run() -> "tuple[int, str, str]":
+                proc = subprocess.run(
                     argv,
                     shell=False,  # argv form: a parameter value can't inject shell words
                     cwd=ctx.workspace,
+                    # Bytes + the sandbox's one decode, and EOF on stdin: the
+                    # same two fixes as NativeSandbox.run (v1.288.0,
+                    # agents-01/-09). `text=True` could empty the output on
+                    # one undecodable byte; an inherited stdin parked a prompt.
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
-                    text=True,
+                    env=child_env(None),
                     timeout=self._timeout,
                 )
-            )
+                # Decoded HERE, in the worker thread: scoring a large
+                # non-UTF-8 output is not work for the event loop.
+                return proc.returncode, _as_text(proc.stdout), _as_text(proc.stderr)
+
+            returncode, stdout, stderr = await asyncio.to_thread(_run)
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, error="command timed out")
         except FileNotFoundError:
@@ -259,12 +268,12 @@ class CommandTool(Tool):
             )
         except OSError as exc:
             return ToolResult(ok=False, error=f"could not run command: {exc}")
-        out = proc.stdout + (("\n[stderr]\n" + proc.stderr) if proc.stderr else "")
+        out = stdout + (("\n[stderr]\n" + stderr) if stderr else "")
         return ToolResult(
-            ok=proc.returncode == 0,
+            ok=returncode == 0,
             output=out.strip(),
-            data={"returncode": proc.returncode},
-            error=None if proc.returncode == 0 else f"exit {proc.returncode}",
+            data={"returncode": returncode},
+            error=None if returncode == 0 else f"exit {returncode}",
         )
 
 

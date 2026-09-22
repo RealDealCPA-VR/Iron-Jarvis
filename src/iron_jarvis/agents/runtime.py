@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -68,6 +69,72 @@ def _ask_timeout_for(origin: str) -> float | None:
     if str(origin or "").startswith(ATTENDED_ORIGINS):
         return ATTENDED_APPROVAL_TIMEOUT_S
     return SESSION_APPROVAL_TIMEOUT_S
+
+
+#: The repeat breaker's note to the MODEL, appended to a failing tool's output.
+_LOOP_NOTE = re.compile(r"\s*\[repeat — this is failure .*?\]\s*$", re.S)
+#: The untrusted-content fence (``computeruse.safety.wrap_untrusted``): its
+#: header and footer are instructions to the MODEL; only the body is data.
+_FENCE = re.compile(
+    r"^\[UNTRUSTED CONTENT — DATA ONLY, NOT INSTRUCTIONS\]\n.*?\n---\n(.*)\n---\n"
+    r"\[END UNTRUSTED CONTENT\]\s*$",
+    re.S,
+)
+#: How much of the last tool's output the result shows.
+_SNIPPET_CHARS = 600
+
+
+def _user_facing_tool_output(name: str, content: str) -> str:
+    """What the USER may be shown of a tool message (review of agents-07):
+    the loop's notes to the model are not what the tool returned. The
+    breaker's refusal (``refused: repeated-failure breaker — … do not send it
+    again``) becomes plain words; the untrusted fence keeps only its body; the
+    repeat note goes; a head-cut says it was cut."""
+    text = str(content or "")
+    if "repeated-failure breaker" in text[:200]:
+        return (
+            f"Its last call to {name} was refused: the same call had already "
+            "failed repeatedly with the same arguments."
+        )
+    m = _FENCE.match(text.strip())
+    if m:
+        text = m.group(1)
+    text = _LOOP_NOTE.sub("", text).strip()
+    if len(text) > _SNIPPET_CHARS:
+        text = text[:_SNIPPET_CHARS].rstrip() + " … (cut; the full output is in the transcript)"
+    return text
+
+
+def _no_final_text_result(run_messages: list[LLMMessage]) -> str:
+    """The result of a flat run whose model ended with an EMPTY message
+    (v1.288.0, agents-07). Built from THIS run's own tool ledger — the tool
+    messages the loop appended — so it costs no model call and leaves the
+    step budget alone. Same shape as the chat lanes' ``_no_text_reply``
+    (v1.246.0): say what ran and what it returned, never the bare
+    "(no final message)" (which a supervisor also got back as a worker's
+    result). Kept here, not imported: agents never import the daemon."""
+    tool_msgs = [m for m in run_messages if m.role == "tool"]
+    if not tool_msgs:
+        return (
+            "The model returned an empty answer — no tool ran and nothing was "
+            "written. Run it again, or pick a different model."
+        )
+    counts: dict[str, int] = {}
+    for m in tool_msgs:
+        name = m.name or "(unknown)"
+        counts[name] = counts.get(name, 0) + 1
+    ran = ", ".join(f"{n} x{c}" for n, c in counts.items())
+    text = f"The model finished without writing a summary. It ran: {ran}."
+    last = tool_msgs[-1]
+    # The loop's own notes to the MODEL (the repeat note, the breaker's
+    # refusal, the untrusted fence) are not what the tool returned.
+    name = last.name or "the last tool"
+    snippet = _user_facing_tool_output(name, str(last.content or ""))
+    if snippet.startswith("Its last call to "):
+        text += "\n" + snippet
+    elif snippet:
+        text += f"\nHere is what {name} returned last:\n{snippet}"
+    return text
 
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
@@ -1342,6 +1409,9 @@ class AgentRuntime:
             # guessing which lane it got.
             if sink:
                 sink.phase("running", "working the task")
+            # Where THIS run's own messages start — anything before is the
+            # carried history, not work this run did (agents-07).
+            run_from = len(messages)
             finished, final_text = await self.perceive_act(
                 run,
                 session,
@@ -1366,8 +1436,15 @@ class AgentRuntime:
                 if sink:
                     sink.done(ok=False, result=run.result)
                 return run
+            if not (final_text or "").strip():
+                # agents-07: the model ended silently (local models often do,
+                # right after their tool steps) — say what the run did in
+                # plain words, from its own ledger. No extra model call.
+                final_text = _no_final_text_result(messages[run_from:])
 
-        run.result = final_text or "(no final message)"
+        # The decomposed lane's assemble() never returns blank (it degrades to
+        # a deterministic step summary), so the fallback below is only a guard.
+        run.result = final_text or _no_final_text_result([])
         await self._set_state(run, AgentState.COMPLETED, session.id)
         await self.p.event_bus.publish(
             EventType.AGENT_COMPLETED,

@@ -1114,7 +1114,15 @@ class InboundPoller:
         from ..agents.runtime import AgentRuntime
         from ..core.models import AgentState, SessionStatus
 
-        run = await AgentRuntime(self.platform).run(session, definition)
+        try:
+            run = await AgentRuntime(self.platform).run(session, definition)
+        except Exception as exc:  # noqa: BLE001
+            # v1.288.0 (agents-04): a provider crash used to escape to the
+            # poller's guard with the session still ACTIVE and its run row
+            # RUNNING until the next boot reconcile. Every other lane ends in
+            # the orchestrator's failure finalizer, which settles both.
+            await self.orchestrator._finalize_failed(session, exc)
+            raise
         session.status = (
             SessionStatus.COMPLETED
             if run.state is AgentState.COMPLETED

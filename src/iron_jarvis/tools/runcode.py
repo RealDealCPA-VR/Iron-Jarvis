@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ..sandbox.native import _as_text, child_env
 from .base import Reversibility, Tool, ToolContext, ToolResult
 
 #: ``(name, language, code, session_id, exit_code, output, purpose) -> None``
@@ -78,6 +79,25 @@ def script_argv(language: str, script: "Path") -> list[str]:
     return ["bash", str(script)]
 
 
+def _run_captured(argv: list[str], cwd: "Path", timeout: int) -> "tuple[int, str, str]":
+    """Run ``argv`` and return ``(returncode, stdout, stderr)`` as text -- the
+    ONE capture both script paths share (v1.288.0, agents-01/-09). Blocking:
+    callers run it in a worker thread.
+
+    Same capture as ``NativeSandbox.run``: BYTES decoded by the sandbox's one
+    decode (``text=True`` let a single byte the locale codec could not map --
+    PowerShell's OEM 0x90 for "É" -- kill ``communicate()``'s reader thread
+    and return ``""`` with exit 0), ``stdin=DEVNULL`` (a ``Read-Host`` or
+    ``input()`` reads EOF at once instead of parking on the daemon's
+    never-written stdin for the whole timeout), and ``child_env`` (Python
+    children print UTF-8)."""
+    proc = subprocess.run(
+        argv, cwd=str(cwd), stdin=subprocess.DEVNULL, capture_output=True,
+        env=child_env(None), timeout=timeout, shell=False,
+    )
+    return proc.returncode, _as_text(proc.stdout), _as_text(proc.stderr)
+
+
 async def execute_script(
     language: str, code: str, cwd: "Path", timeout_s: int = 60
 ) -> "tuple[int, str]":
@@ -103,15 +123,8 @@ async def execute_script(
     try:
         argv = script_argv(language, script)
 
-        def _run() -> "tuple[int, str, str]":
-            proc = subprocess.run(
-                argv, cwd=str(cwd), capture_output=True, text=True,
-                timeout=timeout, shell=False,
-            )
-            return proc.returncode, proc.stdout or "", proc.stderr or ""
-
         try:
-            rc, out, err = await asyncio.to_thread(_run)
+            rc, out, err = await asyncio.to_thread(_run_captured, argv, cwd, timeout)
         except subprocess.TimeoutExpired:
             raise ScriptRunFailed(f"script timed out after {timeout}s")
         except FileNotFoundError:
@@ -234,15 +247,8 @@ class RunCodeTool(Tool):
             script.unlink(missing_ok=True)
             return ToolResult(ok=False, error=str(exc))
 
-        def _run() -> "tuple[int, str, str]":
-            proc = subprocess.run(
-                argv, cwd=str(ws), capture_output=True, text=True,
-                timeout=timeout, shell=False,
-            )
-            return proc.returncode, proc.stdout or "", proc.stderr or ""
-
         try:
-            rc, out, err = await asyncio.to_thread(_run)
+            rc, out, err = await asyncio.to_thread(_run_captured, argv, ws, timeout)
         except subprocess.TimeoutExpired:
             if not keep:
                 script.unlink(missing_ok=True)

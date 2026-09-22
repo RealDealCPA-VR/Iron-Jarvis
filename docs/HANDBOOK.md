@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.287.0 (2026-09-14).*
+holds itself to. Current as of v1.288.0 (2026-09-14).*
 
 ---
 
@@ -1517,7 +1517,18 @@ finishing comes back in the message box ("Jarvis finished before reading
 this") instead of vanishing; a reply that reads several large documents
 on a small local model stays inside what the model can hold; and a cloud
 model that drops halfway says the reply is incomplete and to retry,
-instead of a bare "stream error".
+instead of a bare "stream error". **v1.288.0 (Wave 3, agents that finish
+honestly):** an agent that lists a client folder or prints a file through
+the shell now sees accented names as they are (José, Müller, Muñoz), where
+one accented letter used to make the folder look empty; a command that
+stops to ask a question carries on at once instead of freezing for a
+minute; a Team worker that needs more than ten minutes keeps going and is
+never recorded as "cancelled by the user"; workers can use the tools you
+approved for the job; a job that fails no longer leaves an agent showing as
+still running; a remote agent that answers too slowly stops at its time
+limit instead of holding up the chat and your phone; and a job whose model
+goes quiet after doing real work says what it ran and what came back,
+instead of "(no final message)".
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

@@ -1843,6 +1843,53 @@ does not need a bump, stop and bump it.
   `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
   `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
 
+- **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
+  and custom-tool output is captured as BYTES and decoded ONLY by
+  `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by
+  WORD SHAPE (`_plausibility`) with `errors="replace"`. Never put `text=True`
+  back on a subprocess whose output reaches the model — one undecodable byte
+  kills `communicate()`'s reader thread and returns `''` with rc 0, an EMPTY
+  success. The page cannot be fixed at the source: measured, `dir` into a pipe
+  writes OEM whatever `chcp` says, and `chcp` in a child flips the DAEMON's
+  shared console. Counting accented letters is not enough (ANSI curly
+  quotes/dashes 0x91-0x97 ARE OEM letters "æÆôöòûù"; OEM "ö" is ANSI's ”) —
+  position decides (review: a box-drawing run with a letter at BOTH ends is
+  a word read wrong, "N┌╤EZ"; a capital accent inside a lower-case word is
+  a hump, "JosÚ" — OEM 850's reading of ANSI é/í/ç/ë; 850's Ð/Ý/Þ/þ/Ù/Ë
+  weigh half). Measured on BOTH pairs (437+1252, 850+1252) — the numbers
+  and the known losses are in `_decode_fallback`'s docstring; the 850
+  all-caps ties (ANSI "BJÖRN" vs OEM "GARCÍA" are the same bytes) are
+  documented, not forced. Children get `stdin=DEVNULL` (the packaged daemon's stdin is a pipe
+  Electron never writes). ARGV children only (`run_code`, `custom:*`) get
+  `native.child_env` (PYTHONIOENCODING=utf-8); the `shell` child does NOT — a
+  shell line pipes and redirects, and a forced UTF-8 breaks `type x.csv |
+  python` on an ANSI byte (pinned). A stdin pin must not use `communicate()`
+  (it closes stdin → EOF anyway).
+  (2) A tool that awaits a whole sub-agent run sets `Tool.deadline_exempt`;
+  tell a deadline from a user Cancel with `registry.tool_deadline_expired()`,
+  never "the parent is still ACTIVE". (3) A delegated/spawned child inherits
+  the parent's stored `allow_tools` + normalised `approval_mode`
+  (`orchestrator.inherited_grants`), NEVER its origin — so a worker still
+  cannot pause to ASK (its card would route under its own session id, which
+  the parent's chat page does not render); that half of agents-03 is open.
+  (4) Every terminal path (`_finalize_cancelled`, `_finalize_failed`, the
+  phone's `_run_dynamic_session`, boot reconcile) settles the session's
+  AgentRun rows — the finalizers after draining in-flight WAITING→RUNNING
+  restores — and the boot reconcile also repairs rows left RUNNING/WAITING
+  under an already-terminal session (the ghosts older finalizers made). The
+  `delegation.completed` event names the time limit too, not "cancelled". (5) httpx `timeout=` is PER
+  PHASE; a remote call that must end within N s wraps `asyncio.timeout(N) as
+  cm` and only `cm.expired()` earns the deadline wording. (6) An empty final
+  message after tool steps becomes `runtime._no_final_text_result` (which tools
+  ran, the last one's output through `_user_facing_tool_output`: the breaker's
+  repeat note and refusal and the untrusted fence are the loop's words to the
+  MODEL, never shown; a head-cut says so) — no extra model call. A remote's
+  `timeout_s` is clamped >= 1 on create as on PATCH (it is a total deadline).
+  Pins: `tests/test_shell_output_encoding_v1288.py`,
+  `test_subagent_deadline_v1288.py`, `test_team_child_grants_v1288.py`,
+  `test_failed_run_rows_settle_v1288.py`, `test_remote_deadline_v1288.py`,
+  `test_agent_empty_final_v1288.py`, `test_wave3_leftovers_v1288.py`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

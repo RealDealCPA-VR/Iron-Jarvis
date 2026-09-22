@@ -55,6 +55,7 @@ text, no memory between calls, and no way for the remote to reach back. Now:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -448,9 +449,25 @@ class RemoteAgentRegistry:
             if reply_to:
                 payload["reply_to"] = reply_to
 
+        # v1.288.0 — ``timeout`` is a TOTAL deadline. httpx's ``timeout=`` is
+        # per phase (the read timeout is the gap between chunks), so a remote
+        # or a gateway trickling keep-alive bytes never tripped it and hung the
+        # chat room — and, from the phone, the poller for every channel. Only
+        # this scope expiring earns the deadline wording: a TimeoutError raised
+        # INSIDE the call keeps its own message (the v1.228.0 lesson).
+        deadline = asyncio.timeout(timeout)
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+            async with deadline:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+        except TimeoutError as exc:
+            if deadline.expired():
+                return {
+                    "ok": False,
+                    "result": "",
+                    "detail": f"{record.name} did not answer within {timeout}s",
+                }
+            return {"ok": False, "result": "", "detail": f"request failed: {exc}"}
         except Exception as exc:  # noqa: BLE001 — timeout / connection / DNS
             return {"ok": False, "result": "", "detail": f"request failed: {exc}"}
 

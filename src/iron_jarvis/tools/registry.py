@@ -13,6 +13,7 @@ import dataclasses
 import json
 import os
 from collections import OrderedDict
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,6 +27,26 @@ from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult, safe_
 from .permissions import PermissionDecision, PermissionEngine
 from .undo import make_file_descriptor
 from .undo import finalize_post_hash
+
+
+#: The per-call deadline scope of the tool call now executing (v1.288.0) —
+#: set by ``ToolRegistry.invoke`` around ``tool.execute`` and read through
+#: :func:`tool_deadline_expired`. A ContextVar, so a nested call (a sub-agent's
+#: own tools) sees ITS scope and the outer call's comes back when it returns.
+_DEADLINE_SCOPE: "ContextVar[asyncio.Timeout | None]" = ContextVar(
+    "tool_deadline_scope", default=None
+)
+
+
+def tool_deadline_expired() -> bool:
+    """Is the cancellation now unwinding this tool's ``execute`` the registry's
+    per-call deadline, rather than the user or the client going away?
+
+    For a tool that catches ``CancelledError`` to settle something it started
+    (``delegate`` finalizing its child): a deadline is not the user, and the
+    record must not say "cancelled by the user" when nobody pressed Stop."""
+    cm = _DEADLINE_SCOPE.get()
+    return cm is not None and cm.expired()
 
 
 #: Tools whose output is routinely LARGE enough to be worth keeping out of the
@@ -579,9 +600,22 @@ class ToolRegistry:
             # formatting ``None``. Only `cm.expired()` is OUR deadline; every
             # other TimeoutError falls through to the generic clause below
             # with its real message, exactly as before this deadline existed.
-            armed = deadline_s is not None and deadline_s > 0
+            # A SUB-AGENT IS NOT A WEDGED CALL (v1.288.0): a tool that runs a
+            # whole child agent (`Tool.deadline_exempt`) is never armed here,
+            # whichever lane called — see the attribute for what bounds it.
+            armed = (
+                deadline_s is not None
+                and deadline_s > 0
+                and not getattr(tool, "deadline_exempt", False)
+            )
             async with asyncio.timeout(float(deadline_s) if armed else None) as cm:
-                result = await tool.execute(args, ctx)
+                # The scope is visible to the tool (`tool_deadline_expired`),
+                # so a cancel it catches can say whether it was THIS deadline.
+                _scope = _DEADLINE_SCOPE.set(cm)
+                try:
+                    result = await tool.execute(args, ctx)
+                finally:
+                    _DEADLINE_SCOPE.reset(_scope)
         except TimeoutError as exc:
             if cm.expired():
                 result = ToolResult(

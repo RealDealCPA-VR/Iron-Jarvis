@@ -30,6 +30,7 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, SessionStatus
 from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.registry import tool_deadline_expired
 
 #: Hardest cap on the coordinator→subagent delegation chain. Combined with
 #: "no delegating to any target whose definition itself carries the delegate
@@ -125,6 +126,15 @@ async def publish_delegation_completed(
     )
 
 
+#: The child's summary when an outer tool time limit (not the user) stopped it
+#: (v1.288.0). ``delegate`` and ``spawn_agent`` are exempt from the registry's
+#: deadline, so this is the belt: if any future deadline wraps a sub-agent
+#: again, its record still names the limit instead of blaming the user.
+TIME_LIMIT_REASON = (
+    "Stopped by the tool time limit before it finished (not by the user)."
+)
+
+
 class DelegateTool(Tool):
     name = "delegate"
     description = (
@@ -149,6 +159,8 @@ class DelegateTool(Tool):
         "required": ["task"],
     }
     permission_key = "delegate"
+    #: It awaits a whole child run — outside the per-call deadline (v1.288.0).
+    deadline_exempt = True
 
     def __init__(self, platform) -> None:
         self.platform = platform
@@ -177,6 +189,7 @@ class DelegateTool(Tool):
             Orchestrator,
             child_fanout_key,
             child_slot,
+            inherited_grants,
             inherited_workspace_root,
         )
         from .runtime import AgentRuntime
@@ -314,6 +327,10 @@ class DelegateTool(Tool):
         # parent and the user never look at. See ``inherited_workspace_root``
         # for why a worktree/managed parent keeps its isolation.
         workspace_root = inherited_workspace_root(self.platform.config, parent)
+        # …and the GRANTS (v1.288.0): the tools the user pre-approved on the
+        # parent's job, so a Team worker can use the shell the user already
+        # allowed. Never the origin — see ``inherited_grants``.
+        allow_tools, approval_mode = inherited_grants(parent)
         target_name = entry.name if entry is not None else agent_type.value
 
         # BOUNDED FAN-OUT (v1.193.0). A coordinator emitting 8 delegate calls in
@@ -333,6 +350,8 @@ class DelegateTool(Tool):
                 model=model,
                 project_id=project_id,
                 workspace_root=workspace_root,
+                allow_tools=allow_tools,
+                approval_mode=approval_mode,
                 # Credit the run to the teammate that actually ran (v1.193.0).
                 # The event below carries the same name, but stamping the row
                 # makes attribution survive a dropped or renamed event instead
@@ -360,7 +379,14 @@ class DelegateTool(Tool):
                     parent_id=ctx.agent_run_id,
                 )
             except asyncio.CancelledError:
-                await orch._finalize_cancelled(child_session)
+                # A DEADLINE IS NOT THE USER (v1.288.0): only when the
+                # registry's own deadline is what cancelled us do the words
+                # change; every other cancel keeps "cancelled by the user".
+                by_deadline = tool_deadline_expired()
+                await orch._finalize_cancelled(
+                    child_session,
+                    reason=TIME_LIMIT_REASON if by_deadline else None,
+                )
                 # …and CLOSE THE ANNOUNCED EDGE. `delegation.started` is already
                 # out; a Stop on the supervisor would otherwise leave that edge
                 # open in the event stream FOREVER, so a timeline reader sees a
@@ -377,7 +403,9 @@ class DelegateTool(Tool):
                         child_session_id=child_session.id,
                         target=target_name,
                         ok=False,
-                        result="cancelled",
+                        # The timeline reads this event, not the child row:
+                        # it must not say "cancelled" for a time limit either.
+                        result=TIME_LIMIT_REASON if by_deadline else "cancelled",
                     )
                 except Exception:  # noqa: BLE001 - never block the unwind
                     pass
