@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.288.0 (2026-09-14).*
+holds itself to. Current as of v1.289.0 (2026-09-14).*
 
 ---
 
@@ -1529,6 +1529,10 @@ still running; a remote agent that answers too slowly stops at its time
 limit instead of holding up the chat and your phone; and a job whose model
 goes quiet after doing real work says what it ran and what came back,
 instead of "(no final message)".
+**v1.289.0:** an Overview tile can no longer be dragged off the screen —
+it stops at the edge — and in the desktop app pushing a tile past the
+edge opens that module in its own window instead, with your arrangement
+left as it was.
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

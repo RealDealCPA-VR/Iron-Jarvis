@@ -1843,6 +1843,24 @@ does not need a bump, stop and bump it.
   `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
   `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
 
+- **An Overview tile never leaves the screen; pushing it off opens the
+  module in its own window** (v1.289.0). Sortable's transform followed the
+  pointer without limit, so a tile could be dragged clean off the window
+  (the auto-scroller chasing it) and the Overview was wrecked until a
+  reload. `lib/tileDrag.ts` is pure: `clampToWindow` (the dnd-kit modifier
+  on `AppGrid`'s DndContext keeps the dragged tile's rect inside the
+  viewport) and `offscreenEdge` (more than half the tile past an edge, read
+  from the RAW translate — the modifier records it in a ref because
+  dnd-kit's drag-move `delta` is post-modifier and would hide the intent).
+  While armed the tile rings (`data-armed`) and a hint says what the drop
+  does (`#tile-edge-hint`, `data-edge`). On release past an edge: the
+  v1.283.0 pop-out (`popoutBridge().open(href)`) in the desktop app, the
+  arrangement untouched (it was not a rearrange); in a browser nothing to
+  open, the tile stays where the clamp held it. `@dnd-kit/modifiers` is
+  NOT a dependency — the clamp is nine lines. Pin:
+  `dashboard/__tests__/tile-offscreen-popout-v1289.test.tsx` (the gesture
+  driven through the real grid with PointerSensor on jsdom).
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

@@ -39,6 +39,8 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
+  type Modifier,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -56,6 +58,8 @@ import {
   writeOrder,
   type AppTile,
 } from "@/lib/appTiles";
+import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
+import { clampToWindow, offscreenEdge, type Edge, type Translate } from "@/lib/tileDrag";
 
 /** Where the hover card should sit, in viewport coordinates. */
 interface HoverAt {
@@ -67,10 +71,14 @@ interface HoverAt {
 function Tile({
   tile,
   dragging,
+  armed,
   onHover,
 }: {
   tile: AppTile;
   dragging: boolean;
+  /** v1.289.0: this tile is being pushed past the screen edge — a drop pops
+   *  the module out instead of rearranging. */
+  armed: boolean;
   onHover: (at: HoverAt | null) => void;
 }) {
   const {
@@ -88,6 +96,8 @@ function Tile({
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`group/tile relative ${isDragging ? "z-30 opacity-90" : ""}`}
+      data-testid={`tile-${tile.href.slice(1)}`}
+      data-armed={isDragging && armed ? "true" : undefined}
       onPointerEnter={(e) => {
         if (isDragging) return;
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -114,7 +124,7 @@ function Tile({
         <span
           className={`relative flex h-14 w-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04] text-zinc-300 shadow-sm transition-all duration-200 group-hover/tile:border-accent/30 group-hover/tile:bg-accent/[0.08] group-hover/tile:text-accent-soft group-hover/tile:shadow-glow-sm ${
             isDragging ? "border-accent/40 bg-accent/[0.12]" : ""
-          }`}
+          } ${isDragging && armed ? "ring-2 ring-accent/60 shadow-glow-sm" : ""}`}
         >
           <Icon size={22} />
           {/* Opened-often marker. Deliberately a dot, not a number: the count
@@ -183,12 +193,36 @@ export function AppGrid() {
   const [ready, setReady] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState<HoverAt | null>(null);
+  // v1.289.0: the edge the dragged tile is being pushed past, if any.
+  const [edge, setEdge] = useState<Edge | null>(null);
+  const [activeHref, setActiveHref] = useState<string>("");
+  const [popout, setPopout] = useState<PopoutBridge | null>(null);
 
   useEffect(() => {
     setUsage(readUsage());
     setOrder(readOrder());
     setReady(true);
+    setPopout(popoutBridge());
   }, []);
+
+  // A TILE NEVER LEAVES THE SCREEN (v1.289.0). Sortable's transform followed
+  // the pointer without limit, so a tile could be dragged clean off the window
+  // and the auto-scroller chased it — the Overview was wrecked until a reload.
+  // The modifier clamps the tile's rectangle to the viewport. It also keeps the
+  // RAW translate (dnd-kit reports only the modified one on drag-move), which
+  // is where the "push it off the screen" intent is read from.
+  const rawTranslate = useRef<Translate>({ x: 0, y: 0 });
+  const clampModifier = useCallback<Modifier>(({ transform, draggingNodeRect, windowRect }) => {
+    rawTranslate.current = { x: transform.x, y: transform.y };
+    if (!draggingNodeRect) return transform;
+    const win = windowRect ?? {
+      width: typeof window !== "undefined" ? window.innerWidth : 1440,
+      height: typeof window !== "undefined" ? window.innerHeight : 900,
+    };
+    const c = clampToWindow(transform, draggingNodeRect, win);
+    return { ...transform, x: c.x, y: c.y };
+  }, []);
+  const modifiers = useMemo(() => [clampModifier], [clampModifier]);
 
   const tiles = useMemo(() => orderedTiles(usage, order), [usage, order]);
   const ids = useMemo(() => tiles.map((t) => t.href), [tiles]);
@@ -240,10 +274,38 @@ export function AppGrid() {
     useSensor(KeyboardSensor),
   );
 
+  // PUSHING A TILE PAST THE EDGE IS A GESTURE (v1.289.0): the intent to put
+  // the module somewhere else. Read on every move from the raw translate and
+  // the tile's initial rectangle; more than half the tile beyond an edge arms
+  // the drop. Only ARMS: nothing opens until the tile is released.
+  const onDragMove = useCallback(
+    (e: DragMoveEvent) => {
+      const rect = e.active.rect.current.initial;
+      if (!rect || typeof window === "undefined") return;
+      const next = offscreenEdge(rawTranslate.current, rect, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+      setEdge((prev) => (prev === next ? prev : next));
+    },
+    [],
+  );
+
   const onDragEnd = useCallback(
     (e: DragEndEvent) => {
       setDragging(false);
       const { active, over } = e;
+      const pushed = edge;
+      setEdge(null);
+      if (pushed) {
+        // Off the screen means "in its own window" — the v1.283.0 pop-out,
+        // desktop only ("/" never pops out, and no tile is "/"). The
+        // arrangement is left exactly as it was: this was not a rearrange.
+        // In a browser there is no other window to open, so the tile simply
+        // stays where the clamp held it.
+        if (popout) void popout.open(String(active.id));
+        return;
+      }
       if (!over || active.id === over.id) return;
       const from = ids.indexOf(String(active.id));
       const to = ids.indexOf(String(over.id));
@@ -252,10 +314,11 @@ export function AppGrid() {
       setOrder(next);
       writeOrder(next);
     },
-    [ids],
+    [ids, edge, popout],
   );
 
   const customised = order.length > 0;
+  const activeTile = edge && dragging ? tiles.find((t) => t.href === activeHref) : null;
 
   return (
     <div>
@@ -280,11 +343,18 @@ export function AppGrid() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragStart={() => {
+        modifiers={modifiers}
+        onDragStart={(e) => {
           suppressClick.current = true;
           setDragging(true);
+          setEdge(null);
+          setActiveHref(String(e.active.id));
         }}
-        onDragCancel={() => setDragging(false)}
+        onDragMove={onDragMove}
+        onDragCancel={() => {
+          setDragging(false);
+          setEdge(null);
+        }}
         onDragEnd={onDragEnd}
       >
         <SortableContext items={ids} strategy={rectSortingStrategy}>
@@ -296,7 +366,13 @@ export function AppGrid() {
             style={{ opacity: ready ? 1 : 0, transition: "opacity 150ms" }}
           >
             {tiles.map((t) => (
-              <Tile key={t.href} tile={t} dragging={dragging} onHover={setHover} />
+              <Tile
+                key={t.href}
+                tile={t}
+                dragging={dragging}
+                armed={edge !== null}
+                onHover={setHover}
+              />
             ))}
           </div>
         </SortableContext>
@@ -304,6 +380,21 @@ export function AppGrid() {
       {/* Suppressed while dragging: a card following the cursor during a
           rearrange is noise on top of the thing you are actually doing. */}
       <HoverCard at={dragging ? null : hover} />
+      {/* v1.289.0: the tile is being pushed off the screen. Said once, at the
+          bottom, so the user knows what the drop will do before letting go. */}
+      {dragging && edge && (
+        <div
+          data-testid="tile-edge-hint"
+          data-edge={edge}
+          className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
+        >
+          <div className="rounded-full border border-accent/40 bg-zinc-900/95 px-4 py-1.5 text-[12px] text-zinc-100 shadow-lg shadow-black/40 backdrop-blur-sm">
+            {popout
+              ? `Release to open ${activeTile?.label ?? "this module"} in its own window`
+              : "Tiles stay on this screen — the desktop app can open a module in its own window"}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
