@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.289.0 (2026-09-14).*
+holds itself to. Current as of v1.290.0 (2026-09-14).*
 
 ---
 
@@ -745,11 +745,15 @@ are kept and Jarvis adds itself alongside them; you can delete the `iron-jarvis`
 whenever you like, and the next launch writes it back.
 
 **What the Capabilities boxes do, and what they do not.** The list has five boxes —
-Files, Shell, Browser, Extensions, Memory — and in this version **only Browser is
-enforced**. The other four are recorded and shown so you can see what a pane is meant
-to be for, but nothing gates on them yet: a harness in that pane still has whatever
-file and shell access its own CLI came with. Enforcing the other four is Phase 2
-work, and this line will change when it lands rather than before. One more honest
+Files, Shell, Browser, Extensions, Memory. **Browser** is fully enforced. **Memory**
+(v1.290.0) gates what a harness launched in the pane can read through Jarvis: with it
+ticked, the harness may search and read your Jarvis memory (read-only — it can never
+write to it); unticked, it gets none of it. Memory does not change what the pane's own
+chat can do. So, of the boxes that reach a harness, only Browser is enforced for
+the pane's chat as well. Files, Shell and Extensions are recorded and shown so you can
+see what a pane is meant to be for, but nothing gates on them yet: a harness in that
+pane still has whatever file and shell access its own CLI came with. Enforcing those
+three is Phase 2 work, and this line will change when it lands rather than before. One more honest
 edge, from the CLIs' side: some builds cannot be told to switch off their *own* web
 tools, and where Jarvis cannot verify that it says so in the Launch menu instead of
 implying an isolation it did not get.
@@ -1221,7 +1225,8 @@ Element ids belong to one reading and are
 refused once the page has moved on. Screenshots capture the visible part of the tab,
 not a whole long page stitched together. A flagged page constrains what happens next
 but does not end your turn. A pane's credential dies with the daemon, so relaunch the
-harness after a restart. Only the Browser capability is enforced per pane. Keeping a
+harness after a restart. Browser is enforced per pane; Memory is enforced only for
+what a launched harness can read through Jarvis (read-only). Keeping a
 harness away from its *own* web tools is best effort and is reported honestly. There
 is no Jarvis browser yet. And Chrome unloads a browser add-on that has gone quiet, so
 a long-idle bridge reads as **Paired — not running** with Chrome open in front of
@@ -1533,6 +1538,20 @@ instead of "(no final message)".
 it stops at the edge — and in the desktop app pushing a tile past the
 edge opens that module in its own window instead, with your arrangement
 left as it was.
+**v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
+looks at what its agents did — commands, files, web requests — against a set
+of safety rules (reading a password or key file, sending secrets out,
+download-and-run, deleting a whole drive, disabling Defender, and more) and
+shows anything worth a look. It never blocks anything; a serious finding also
+rings the bell. Below the timeline, **Other agents** lists your Claude Code and
+Codex sessions on this PC, read-only, with the same checks — nothing is
+changed and nothing is sent anywhere. And in Build, ticking **Memory** on a
+pane now lets the program you launch there search and read your Jarvis memory
+(never write to it). Several rules are adapted from the open-source
+agent-beacon project (MIT licence). One thing to know: anyone holding this
+install's access token — including a phone you connected with it — can read
+those Claude Code and Codex transcripts through Jarvis, just as they can read
+everything else Jarvis holds.
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

@@ -1843,6 +1843,65 @@ does not need a bump, stop and bump it.
   `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
   `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
 
+- **Safety checks, other agents' history, and a read-only Memory door**
+  (v1.290.0, from agent-beacon, MIT). THREE parts, one normalized EVENT dict
+  (`action`, `session_id`, `source`, `ts`, `tool`, `command`, `path`, `url`,
+  `text`, `ok`, `ref`, optional `subagent`).
+  (1) `iron_jarvis/detections/`: YAML rules (`rules/*.rule.yaml`, Beacon's
+  shape with a DECLARATIVE matcher instead of CEL — no new dependency;
+  `correlation:` for ordered multi-step rules in one session within a window).
+  `load_rules` REFUSES a rule without both a match and a no_match fixture and
+  the pin runs every fixture. Commands are judged ONE LINE at a time, every
+  segment class stops at `\n`, command/path/url are capped (ReDoS: an
+  unbounded `.*` rule took 12.8 s on 4 KB; a regex opening `\b(word|…)` only
+  runs when a word is present). A heredoc that only WRITES a file is content,
+  not a command; one fed to an interpreter is code and is scanned. Correlation
+  is linear (per-step match index + bisect); both perf pins are RATIOS.
+  `ledger.py` maps ToolInvocation rows (denial = a persisted `tool.denied`
+  event, which is authoritative — an ask refusal keeps verdict `ask`). CHAT has
+  no per-turn id in the ledger (`session_id`/`agent_run_id` = "chat"): rows are
+  grouped by the turn's AgentRun window (`_persist_chat_usage`) into
+  `chat:<run id>`, and the post-turn scan hooks there (both lanes). `bell.py`
+  publishes `detection.finding` for high/critical ONLY, once per (rule,
+  session) per process, dedup marked AFTER a successful publish. THE BELL
+  PAYLOAD CARRIES NO COMMAND, URL OR OUTPUT (`BELL_EVIDENCE_KEYS`: action,
+  tool, ref, masked path, ts, source): the event lands in EventRecord, the
+  WebSocket AND the daemon log (platform.py logs payloads), and the rule most
+  likely to fire is the one that selects commands carrying tokens.
+  `redact.mask` masks secrets (Authorization values, key=value secrets,
+  `-u user:pass`, `user:pass@` URLs, ghp_/sk-/sk-ant-/xox/AKIA shapes) in
+  every `Finding.to_dict`. Scans are bounded: 2 running + 32 queued, the rest
+  dropped and counted. Routes `/detections/rules`, `/detections/findings`. Tuning rule: every false positive found on real
+  history becomes a generic no_match fixture BEFORE the regex changes.
+  (2) `iron_jarvis/history/`: READ-ONLY reader of `~/.claude/projects` (or
+  CLAUDE_CONFIG_DIR) and `~/.codex/sessions` (or CODEX_HOME) — `open(…, "rb")`
+  only, in-memory cache keyed by (path, mtime_ns, size, subagent signature),
+  evicted when the file goes. Claude SUBAGENT transcripts
+  (`<uuid>/subagents/**`) are FOLDED into their session (tagged `subagent`) —
+  they hold ~85% of the tool calls on this PC, so leaving them out made "no
+  findings" a false claim. Cap is by BYTES read (50 MB), `truncated` from what
+  was really skipped. The session id is MATCHED against the listing, never
+  joined into a path. Routes `/history/sessions[/{harness}/{id}]`; the detail
+  is PAGED (`offset`/`limit` ≤ 2000, default 500, `events_total`) — a heavy
+  session is 20k events / 20-39 MB — with `findings` over ALL events cached
+  per (session, file signature), and at most 2 session loads at once. The
+  listing stats first and summarises only the newest `limit` files; a cold
+  full listing byte-scans the subagent logs (~3 s, off the loop). Anyone with
+  the install token can read these transcripts (said in the Handbook).
+  (3) `mcpserver/server.py` `CAPABILITY_TOOLS`: a capability is a prefix OR an
+  EXACT name set; `memory` = {memory_search, memory_read, ltm_search} — never a
+  `memory_` prefix (that would arm memory_write/memory_propose). Enforced on the
+  Build-pane MCP door ONLY — the pane's chat is not gated, which is why
+  `terminals/session.ENFORCED_PANE_CAPABILITIES` stays ("browser",).
+  `ltm/mcp_brain._pick_search` refuses write-like tool names (whole words) and
+  tools without a string query parameter, and calls nothing when no safe
+  search tool exists. Dashboard: `components/SafetyChecks.tsx` (Activity
+  `#safety`; a chat finding links to /chat), `AgentHistory.tsx`, the bell's
+  `toActivity` maps `detection.finding`. Pins:
+  `tests/test_detections_v1290.py`, `test_history_v1290.py`,
+  `test_mcp_memory_capability_v1290.py`, `test_mcp_brain_search_pick_v1290.py`,
+  `dashboard/__tests__/safety-and-history-v1290.test.tsx`.
+
 - **An Overview tile never leaves the screen; pushing it off opens the
   module in its own window** (v1.289.0). Sortable's transform followed the
   pointer without limit, so a tile could be dragged clean off the window

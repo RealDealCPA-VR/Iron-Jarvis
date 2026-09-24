@@ -7,6 +7,8 @@ import { PageShell, Reveal } from "@/components/motion";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, Stat } from "@/components/ui";
 import { TimeTravelFeed, type FeedStats } from "@/components/TimeTravelFeed";
+import { SafetyChecksCard } from "@/components/SafetyChecks";
+import { AgentHistoryCard } from "@/components/AgentHistory";
 
 export default function ActivityPage() {
   const [stats, setStats] = useState<FeedStats | null>(null);
@@ -75,12 +77,23 @@ export default function ActivityPage() {
         </div>
       </Reveal>
 
+      {/* v1.290.0: what the agents did that looks bad — above the timeline,
+          reachable as /activity#safety (the bell links here). */}
+      <Reveal>
+        <SafetyChecksCard />
+      </Reveal>
+
       <Reveal>
         <Card title="Timeline" icon={<History size={15} />} pad={false}>
           <div className="p-5">
             <TimeTravelFeed onStats={setStats} />
           </div>
         </Card>
+      </Reveal>
+
+      {/* v1.290.0: Claude Code / Codex sessions on this PC, read-only. */}
+      <Reveal>
+        <AgentHistoryCard />
       </Reveal>
     </PageShell>
   );

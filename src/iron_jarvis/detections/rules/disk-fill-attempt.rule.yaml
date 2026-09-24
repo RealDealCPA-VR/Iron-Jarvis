@@ -1,0 +1,82 @@
+id: disk-fill-attempt
+version: 1
+title: Command that fills the disk
+description: >
+  A command writes a huge file or an endless stream to disk - dd from
+  /dev/zero, fallocate/truncate to gigabytes, yes redirected into a file,
+  fsutil file createnew of a gigabyte or more, or a .SetLength() of GB/TB.
+  Small test files and ordinary copies do not count.
+severity: medium
+status: stable
+posture: detect
+category: resource-consumption
+adapted_from: agent-beacon disk-fill-attempt (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM10
+
+match:
+  action: command.executed
+  command:
+    regex_any:
+      - '\bdd\b[^;&|\n]*\bif\s*=\s*/dev/(zero|urandom|random)\b[^;&|\n]*\bof\s*=\s*[^\s;&|]+'
+      - '\b(fallocate|truncate)\b\s+(-[ls]\s+[0-9]+[GTP]|--size\s+[0-9]+[GTP])'
+      - '(^|[;&|\n]\s*)yes(\s+[^\s;&|>]+)?\s*>\s*\S+'
+      - '\bfsutil(\.exe)?\s+file\s+createnew\s+\S+\s+\d{10,}'
+      - '\.SetLength\(\s*[\d.]+\s*(GB|TB|PB)\s*\)'
+
+emit:
+  reason: "Command writes an unbounded or very large amount of data to disk"
+
+tests:
+  - name: dd_zero
+    verdict: match
+    events:
+      - {action: command.executed, command: 'dd if=/dev/zero of=/tmp/fill bs=1M count=100000'}
+  - name: fallocate_big
+    verdict: match
+    events:
+      - {action: command.executed, command: 'fallocate -l 500G /var/tmp/big'}
+  - name: fsutil_createnew_100gb
+    verdict: match
+    events:
+      - {action: command.executed, command: 'fsutil file createnew C:\fill.bin 107374182400'}
+  - name: yes_to_file
+    verdict: match
+    events:
+      - {action: command.executed, command: 'yes > C:\Temp\y.txt'}
+  - name: powershell_setlength
+    verdict: match
+    events:
+      - {action: command.executed, command: '$f=[IO.File]::Create(''C:\big''); $f.SetLength(200GB)'}
+  - name: fsutil_small_test_file
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'fsutil file createnew test.bin 1024'}
+  - name: dd_image_copy
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'dd if=disk.img of=backup.img bs=4M'}
+  - name: yes_piped_to_installer
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'yes | npm init'}
+  - name: truncate_log_to_zero
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'truncate -s 0 app.log'}
+  - name: setlength_zero
+    verdict: no_match
+    events:
+      - {action: command.executed, command: '$stream.SetLength(0)'}
+  - name: yes_in_a_printed_string_then_redirect
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'echo "answer yes to continue" > prompt.txt'}
+  - name: yes_inside_html_then_redirect
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'printf "<b>yes</b> or no" > page.html'}
+  - name: yes_in_a_test_string
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'python -c "assert ask() == ''yes''" 2> err.txt'}

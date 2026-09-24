@@ -1,0 +1,23 @@
+{"timestamp":"2026-02-03T04:05:01.000Z","type":"session_meta","payload":{"id":"0199aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee","timestamp":"2026-02-03T04:05:00.000Z","cwd":"C:\\work\\codexdemo","originator":"codex_cli_rs","cli_version":"9.9.9"}}
+{"timestamp":"2026-02-03T04:05:02.000Z","type":"turn_context","payload":{"cwd":"C:\\work\\codexdemo","model":"synthetic-model"}}
+{"timestamp":"2026-02-03T04:05:03.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer instructions"}]}}
+{"timestamp":"2026-02-03T04:05:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>C:\\work</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-02-03T04:05:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Rename the helper module and show the key file"}]}}
+{"timestamp":"2026-02-03T04:05:06.000Z","type":"event_msg","payload":{"type":"user_message","message":"Rename the helper module and show the key file"}}
+{"timestamp":"2026-02-03T04:05:07.000Z","type":"response_item","payload":{"type":"reasoning","summary":[]}}
+{"timestamp":"2026-02-03T04:05:08.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\": [\"powershell\", \"-Command\", \"Get-Content $env:USERPROFILE\\\\.ssh\\\\id_rsa\"]}","call_id":"call_1"}}
+{"timestamp":"2026-02-03T04:05:09.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{\"output\": \"-----BEGIN FAKE KEY-----\", \"metadata\": {\"exit_code\": 0}}"}}
+{"timestamp":"2026-02-03T04:05:10.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_2","input":"*** Begin Patch\n*** Update File: src/helper.py\n@@\n-a\n+b\n*** Delete File: src/old_helper.py\n*** End Patch\n"}}
+{"timestamp":"2026-02-03T04:05:11.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":"Success. Updated the following files"}}
+{"timestamp":"2026-02-03T04:05:12.000Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\": \"git status\", \"workdir\": \"C:\\\\work\\\\codexdemo\"}","call_id":"call_3"}}
+{"timestamp":"2026-02-03T04:05:13.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_3","output":"Exit code: 1\nWall time: 0.1 seconds\nOutput:\nfatal: not a git repository"}}
+{"timestamp":"2026-02-03T04:05:14.000Z","type":"response_item","payload":{"type":"function_call","name":"view_image","arguments":"{\"path\": \"C:\\\\work\\\\codexdemo\\\\shot.png\"}","call_id":"call_4"}}
+{"timestamp":"2026-02-03T04:05:15.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_4","output":[{"type":"input_text","text":"image attached"}]}}
+{"timestamp":"2026-02-03T04:05:16.000Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"plan\": [{\"step\": \"a\", \"status\": \"pending\"}]}","call_id":"call_5"}}
+{"timestamp":"2026-02-03T04:05:17.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_5","output":"Plan updated"}}
+{"timestamp":"2026-02-03T04:05:18.000Z","type":"response_item","payload":{"type":"local_shell_call","call_id":"call_6","status":"completed","action":{"type":"exec","command":["bash","-lc","ls"]}}}
+{"timestamp":"2026-02-03T04:05:19.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_orphan","output":"orphan output"}}
+{"timestamp":"2026-02-03T04:05:20.000Z","type":"world_state","payload":{"full":true,"state":{}}}
+{broken
+{"timestamp":"2026-02-03T04:05:21.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Renamed the helper."}]}}
+{"timestamp":"2026-02-03T04:05:22.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1"}}

@@ -1,0 +1,2 @@
+{"sessionId":"11111111-2222-4333-8444-555555555555","cwd":"C:\\work\\demo","isSidechain":true,"agentId":"aaaa","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w1","name":"Read","input":{"file_path":"C:/work/demo/notes.md"}}]}}
+{"sessionId":"11111111-2222-4333-8444-555555555555","cwd":"C:\\work\\demo","isSidechain":true,"agentId":"aaaa","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w1","content":"notes"}]}}

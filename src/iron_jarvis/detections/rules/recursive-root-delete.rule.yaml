@@ -1,0 +1,155 @@
+id: recursive-root-delete
+version: 1
+title: Recursive delete or wipe of a whole drive or home folder
+description: >
+  A command deletes everything under a drive root, the Windows or Users
+  folder, the home folder, or a bare wildcard - rm -rf /, rd /s /q C:\,
+  del /s /q C:\*, Remove-Item -Recurse -Force C:\ or $env:USERPROFILE - or
+  formats a drive. Deleting a project folder like .\build is not this.
+severity: critical
+status: stable
+posture: detect
+category: risky-command
+adapted_from: agent-beacon recursive-root-delete (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM08
+
+match:
+  action: command.executed
+  command:
+    regex_any:
+      # POSIX rm with a recursive flag aimed at /, ~, $HOME or a bare *
+      - '\brm\b(?=[^;&|\n]*(\s-[a-zA-Z]*[rR]|\s--recursive))[^;&|\n]*\s["'']?(/|/\*|/[a-zA-Z]/?|/[a-zA-Z]/\*|~/?|~/\*|\$HOME/?)["'']?(?=\s|$|[;&|])'
+      # a bare `*` only when no `cd` moved somewhere first on that line
+      - '^(?![^\n]*\bcd\s)[^\n]*?\brm\b(?=[^;&|\n]*(\s-[a-zA-Z]*[rR]|\s--recursive))[^;&|\n]*\s["'']?\*["'']?(?=\s|$|[;&|])'
+      # a script told to delete the home folder or a drive root
+      - '\brmtree\(\s*(os\.path\.expanduser\(\s*["'']~[\\/]?["'']\s*\)|Path\.home\(\)|os\.environ\[\s*["''](USERPROFILE|HOME|SystemDrive)["'']\s*\]|[rR]?["''](/|~|[A-Za-z]:[\\/]{0,2})["'']|Path\(\s*[rR]?["''](/|~|[A-Za-z]:[\\/]{0,2})["'']\s*\))\s*[,)]'
+      - '\brm\b[^;&|\n]*--no-preserve-root'
+      # cmd rd/rmdir /s at a drive root, a system folder or a profile variable
+      - '\b(rd|rmdir)\b(?=[^;&|\n]*\s/s\b)[^;&|\n]*\s["'']?(?:[A-Za-z]:\\?|[A-Za-z]:\\(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)\\?|%(?:USERPROFILE|SystemRoot|SystemDrive|windir|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA)%\\?)(?:\*(?:\.\*)?)?["'']?(?=\s|$|[;&|])'
+      # cmd del/erase /s of everything at a root
+      - '\b(del|erase)\b(?=[^;&|\n]*\s/s\b)[^;&|\n]*\s["'']?(?:[A-Za-z]:\\?|[A-Za-z]:\\(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)\\?|%(?:USERPROFILE|SystemRoot|SystemDrive|windir|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA)%\\?)(?:\*(?:\.\*)?)?["'']?(?=\s|$|[;&|])'
+      # PowerShell Remove-Item (and its aliases) -Recurse at a root / profile
+      - '\b(Remove-Item|ri|rm|rmdir|del|rd|erase)\b(?=[^;&|\n]*\s-r(ecurse)?\b)[^;&|\n]*\s["'']?(?:[A-Za-z]:\\?|[A-Za-z]:\\(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)\\?|\$env:(?:USERPROFILE|SystemRoot|SystemDrive|windir|HOMEDRIVE|APPDATA|LOCALAPPDATA)\\?|\$HOME\\?|~[\\/]?)(?:\*(?:\.\*)?)?["'']?(?=\s|$|[;&|])'
+      # a drive root listed and piped into Remove-Item
+      - '\b(Get-ChildItem|gci|ls|dir)\b(\s+-\S+)*\s+["'']?(?:[A-Za-z]:\\?|[A-Za-z]:\\(?:Windows|Users|Program Files(?: \(x86\))?|ProgramData)\\?|\$env:(?:USERPROFILE|SystemRoot|SystemDrive|windir|HOMEDRIVE|APPDATA|LOCALAPPDATA)\\?|\$HOME\\?|~[\\/]?)(?:\*(?:\.\*)?)?["'']?(\s+-\S+)*\s*\|\s*(Remove-Item|ri|rm|del|erase)\b'
+      # formatting / clearing a whole disk
+      - '(^|[;&|\n(]\s*|\bcmd(\.exe)?\s+/[ck]\s+["'']?)format(\.com)?\s+[A-Za-z]:(\s|$|/)'
+      - '\b(Format-Volume|Clear-Disk)\b'
+
+emit:
+  reason: "Recursive delete or wipe aimed at a drive root, system folder or home"
+
+tests:
+  - name: rm_rf_root
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rm -rf /'}
+  - name: rm_rf_home
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rm -rf ~'}
+  - name: rm_no_preserve_root
+    verdict: match
+    events:
+      - {action: command.executed, command: 'sudo rm -rf --no-preserve-root /'}
+  - name: rd_s_q_c_root
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rd /s /q C:\'}
+  - name: del_s_q_c_star
+    verdict: match
+    events:
+      - {action: command.executed, command: 'del /s /q C:\*'}
+  - name: remove_item_recurse_force_c
+    verdict: match
+    events:
+      - {action: command.executed, command: 'Remove-Item -Recurse -Force C:\'}
+  - name: remove_item_userprofile
+    verdict: match
+    events:
+      - {action: command.executed, command: 'Remove-Item -Path $env:USERPROFILE -Recurse -Force'}
+  - name: rmdir_userprofile_quoted
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rmdir /s /q "%USERPROFILE%"'}
+  - name: format_drive
+    verdict: match
+    events:
+      - {action: command.executed, command: 'format D: /q'}
+  - name: remove_build_folder
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Remove-Item -Recurse .\build'}
+  - name: remove_project_dist_under_users
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Remove-Item -Recurse -Force C:\Users\me\project\dist'}
+  - name: rd_node_modules
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'rd /s /q .\node_modules'}
+  - name: rm_rf_build
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'rm -rf ./build'}
+  - name: rm_rf_tmp_cache
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'rm -rf /tmp/build-cache'}
+  - name: del_logs_no_recursion
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'del /q C:\temp\*.log'}
+  - name: list_drive_recursively
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-ChildItem -Recurse C:\'}
+  - name: format_table_is_not_format
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-Volume | Format-Table -AutoSize'}
+  - name: git_bash_drive_root
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rm -rf /c/'}
+  - name: gci_drive_root_piped_to_remove_item
+    verdict: match
+    events:
+      - {action: command.executed, command: 'Get-ChildItem C:\ | Remove-Item -Recurse -Force'}
+  - name: git_bash_project_folder
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'rm -rf /c/Users/me/project/build'}
+  - name: gci_build_folder_piped_to_remove_item
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-ChildItem .\build | Remove-Item -Recurse -Force'}
+  - name: python_rmtree_home
+    verdict: match
+    events:
+      - {action: command.executed, command: 'python -c "import shutil,os; shutil.rmtree(os.path.expanduser(''~''))"'}
+  - name: python_rmtree_drive_root
+    verdict: match
+    events:
+      - {action: command.executed, tool: run_code, command: 'import shutil; shutil.rmtree(r"C:\\", ignore_errors=True)'}
+  - name: rm_rf_star_with_no_cd
+    verdict: match
+    events:
+      - {action: command.executed, command: 'rm -rf *'}
+  - name: rm_rf_star_after_cd_to_scratch
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'cd $TMPDIR/scratch && rm -rf *'}
+  - name: format_in_a_printed_string
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'python -c "print(''format C: done'')"'}
+  - name: python_rmtree_build_dir
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'python -c "import shutil; shutil.rmtree(''build'')"'}
+  - name: python_rmtree_under_home
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'python -c "import shutil,os; shutil.rmtree(os.path.expanduser(''~/.cache/pip''))"'}

@@ -3245,7 +3245,7 @@ def _persist_chat_usage(
         from ..core.models import AgentRun
 
         with session_scope(d.platform.engine) as db:
-            db.add(AgentRun(
+            run = AgentRun(
                 session_id="chat",
                 agent_type=AgentType.BUILDER,
                 provider=provider,
@@ -3256,9 +3256,20 @@ def _persist_chat_usage(
                 output_tokens=usage_out,
                 finished_at=_now(),
                 **({"created_at": started_at} if started_at is not None else {}),
-            ))
+            )
+            run_id = run.id
+            db.add(run)
             db.commit()
     except Exception:  # noqa: BLE001 — accounting must never break a reply
+        return
+    # DETECTIONS (v1.290.0): this is the ONE end-of-turn point both chat lanes
+    # pass, and the run row just written is what names the turn — scan its
+    # tool calls on a daemon thread (never waited on, never raises).
+    try:
+        from ..detections.bell import schedule_chat_turn_scan
+
+        schedule_chat_turn_scan(d.platform, run_id)
+    except Exception:  # noqa: BLE001 — a detection must never touch a reply
         pass
 
 

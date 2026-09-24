@@ -77,12 +77,14 @@ PANE_CAPABILITY_KEYS: tuple[str, ...] = (
     "memory",
 )
 
-#: Of those five, the ones a gate actually READS today. Only ``browser`` is
-#: enforced in the browser ships; ``files``/``shell``/``extensions``/``memory``
-#: are recorded and displayed, and their enforcement seams are Phase 2 (they
-#: reach into the permission engine and the agent runtime, which is not browser
-#: work). This constant exists so no reader has to infer that from prose, and so
-#: any surface claiming enforcement can be checked against it.
+#: Of those five, the ones a gate reads for the WHOLE pane (its chat and what it
+#: launches). Only ``browser``. ``memory`` is enforced on ONE door only since
+#: v1.290.0 — the Build-pane MCP link (``mcpserver.server.CAPABILITY_TOOLS``:
+#: read-only memory_search/memory_read/ltm_search for a launched harness); the
+#: pane's chat is not gated by it, so it is deliberately NOT listed here.
+#: ``files``/``shell``/``extensions`` are recorded and displayed; their seams are
+#: Phase 2. This constant exists so no reader has to infer that from prose, and
+#: so any surface claiming enforcement can be checked against it.
 ENFORCED_PANE_CAPABILITIES: tuple[str, ...] = ("browser",)
 
 

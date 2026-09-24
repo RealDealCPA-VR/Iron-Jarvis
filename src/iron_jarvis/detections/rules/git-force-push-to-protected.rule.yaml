@@ -1,0 +1,72 @@
+id: git-force-push-to-protected
+version: 1
+title: Force-push to a main branch
+description: >
+  The agent force-pushed (--force, --force-with-lease, -f, or a +refspec) to
+  main, master, develop, production or a release/ branch, which overwrites
+  what everyone else has. A normal push, or a force-push to a personal
+  feature branch, does not count.
+severity: high
+status: stable
+posture: detect
+category: source-control
+adapted_from: agent-beacon git-force-push-to-protected (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM08
+
+match:
+  action: command.executed
+  command:
+    contains: [git]
+    regex_any:
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bpush\b[^;&|\n]*(\s--force(-with-lease)?\b|\s-f\b)[^;&|\n]*(?:^|\s)(main|master|develop|production|release/[^\s;&|]+)(?:\s|$)'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bpush\b[^;&|\n]*(?:^|\s)(main|master|develop|production|release/[^\s;&|]+)\b[^;&|\n]*(\s--force(-with-lease)?\b|\s-f\b)'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bpush\b[^;&|\n]*\+\s*(main|master|develop|production|release/[^\s;&|]+)(?:\s|$)'
+
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bpush\b[^;&|\n]*(\s--force(-with-lease)?\b|\s-f\b)[^;&|\n]*\s\+?[^\s;&|:]*:(refs/heads/)?(main|master|develop|production|release/[^\s;&|]+)(?:\s|$)'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bpush\b[^;&|\n]*\s\+[^\s;&|:]*:(refs/heads/)?(main|master|develop|production|release/[^\s;&|]+)(?:\s|$)'
+
+emit:
+  reason: "Force-push to a protected branch"
+
+tests:
+  - name: force_main
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push --force origin main'}
+  - name: f_master
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push -f origin master'}
+  - name: plus_refspec
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push origin +main'}
+  - name: trailing_lease
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push origin main --force-with-lease'}
+  - name: feature_branch_push
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git push origin feature/login'}
+  - name: force_to_own_branch
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git push --force-with-lease origin my-feature'}
+  - name: plain_push_main
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git push origin main'}
+  - name: force_head_to_main
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push -f origin HEAD:main'}
+  - name: plus_head_to_master
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git push origin +HEAD:master'}
+  - name: force_head_to_feature
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git push -f origin HEAD:feature/login'}

@@ -304,10 +304,17 @@ describe("the Capabilities popover", () => {
     expect(word("t1", "files")).toMatch(/not enforced yet/i);
     expect(word("t1", "shell")).toMatch(/not enforced yet/i);
     expect(word("t1", "extensions")).toMatch(/not enforced yet/i);
-    expect(word("t1", "memory")).toMatch(/not enforced yet/i);
-    expect(screen.getByTestId("rail-caps-panel-t1").textContent).toMatch(
-      /nothing gates on them yet/i,
-    );
+    // v1.290.0: Memory IS enforced now — but only for a launched agent's
+    // read-only MCP tools, never the pane's own chat, and the word says both.
+    expect(word("t1", "memory")).not.toMatch(/not enforced/i);
+    expect(word("t1", "memory")).toMatch(/launched agent gets no memory tools/i);
+    expect(word("t1", "memory")).toMatch(/this pane's chat is not affected/i);
+    const panel = screen.getByTestId("rail-caps-panel-t1").textContent ?? "";
+    expect(panel).toMatch(/Files, Shell and Extensions are recorded/i);
+    expect(panel).toMatch(/nothing gates\s+on them yet/i);
+    expect(panel).toMatch(/Memory is enforced only for a program\s+launched here/i);
+    expect(panel).toMatch(/read-only; this pane.s own chat is not affected/i);
+    expect(panel).not.toMatch(/Only Browser is enforced/i);
   });
 
   it("THE WORD MATCHES THE GATE: an unticked Browser box says the pane gets nothing", async () => {
@@ -428,8 +435,24 @@ describe("capabilityStatus — the pure rule the boxes read", () => {
     }
   });
 
-  it("says the other four are recorded, never enforced", () => {
-    for (const cap of PANE_CAPABILITIES.filter((c) => c.key !== "browser")) {
+  it("says Memory gates launched agents read-only and never the pane's chat (v1.290.0)", () => {
+    const on = capabilityStatus("memory", "interactive", false, true);
+    const off = capabilityStatus("memory", "interactive", false, false);
+    expect(on.word).toMatch(/may search and read memory through Jarvis \(read-only\)/i);
+    expect(off.word).toMatch(/gets no memory tools/i);
+    for (const st of [on, off]) {
+      expect(st.word).toMatch(/this pane's chat is not affected/i);
+      expect(st.word).not.toMatch(/not enforced/i);
+      expect(st.available).toBe(true);
+    }
+    // Memory does not depend on the BROWSER install setting.
+    expect(capabilityStatus("memory", "off", false, true).offForInstall).toBe(false);
+  });
+
+  it("says the other three are recorded, never enforced", () => {
+    for (const cap of PANE_CAPABILITIES.filter(
+      (c) => c.key !== "browser" && c.key !== "memory",
+    )) {
       const st = capabilityStatus(cap.key, "interactive", false);
       expect(st.word).toMatch(/not enforced/i);
       expect(st.available).toBe(true);

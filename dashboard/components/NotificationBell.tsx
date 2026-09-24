@@ -66,9 +66,10 @@ function reviewKey(e: IJEvent): string {
 
 /** An informational, stream-driven notification (nothing waits on the user):
  *  an inbound comm message that spawned a session, a schedule that fired, or a
- *  computer-use run that finished. comm.rejected / webhook.received are
+ *  computer-use run that finished, or (v1.290.0) a high/critical safety
+ *  finding from the post-session scan. comm.rejected / webhook.received are
  *  deliberately NOT notified — they'd be pure noise; the event stream has them. */
-interface ActivityItem {
+export interface ActivityItem {
   id: string;
   ts: string;
   href: string;
@@ -78,8 +79,22 @@ interface ActivityItem {
 }
 
 /** Map one live event to an activity notification (null = not a notified type). */
-function toActivity(e: IJEvent): ActivityItem | null {
+export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
+  if (e.type === "detection.finding") {
+    // v1.290.0: a post-session safety scan found something high/critical.
+    // Payload: Finding.to_dict(text=False) — {rule_id, title, severity,
+    // reason, session_id, source, count, events} (routes/detections.py).
+    const title = typeof p.title === "string" && p.title ? p.title : "a finding";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/activity#safety",
+      icon: ShieldAlert,
+      title: `Safety check: ${title}`,
+      body: typeof p.reason === "string" ? p.reason : "",
+    };
+  }
   if (e.type === "comm.received") {
     // Payload: {channel, sender, task} + session_id on the event (comm/inbound.py).
     const channel = typeof p.channel === "string" && p.channel ? p.channel : "a channel";

@@ -31,9 +31,13 @@
  * WHAT IT ALSO OWNS (v1.238.0). Per-pane CAPABILITIES, for the same reason
  * renaming moved here in v1.219.0: this is the only surface that lists every
  * pane, so it is the only one where you can set five of them without visiting
- * five panes. Only Browser is enforced in these ships, and the popover says so
- * in its own copy rather than shipping four checkboxes that look live and gate
- * nothing — which is the v1.218.0 lesson written as a rule.
+ * five panes. Browser is enforced (v1.238.0); Memory is enforced from v1.290.0
+ * but ONLY for what a program launched in the pane (Claude Code, Codex…) can
+ * read through Jarvis's MCP link — memory_search, memory_read and ltm_search,
+ * read-only — and the pane's own chat is not gated by it. Files, Shell and
+ * Extensions are recorded, not enforced. The popover says each of those in its
+ * own copy rather than shipping checkboxes that look live and gate nothing —
+ * which is the v1.218.0 lesson written as a rule.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -74,11 +78,23 @@ export const PANE_CAPABILITIES: {
   { key: "shell", label: "Shell", hint: "run commands in this pane" },
   { key: "browser", label: "Browser", hint: "drive your browser through Jarvis" },
   { key: "extensions", label: "Extensions", hint: "use this install's extensions" },
-  { key: "memory", label: "Memory", hint: "read this install's memory" },
+  {
+    key: "memory",
+    label: "Memory",
+    hint: "search and read this install's memory (read-only)",
+  },
 ];
 
-/** The one capability these five ships actually gate on. */
+/** The capability whose box also waits on an INSTALL setting (browser_access). */
 export const ENFORCED_CAPABILITY: RailCapabilityKey = "browser";
+
+/**
+ * v1.290.0: Memory is enforced, but narrowly — the daemon's MCP server admits
+ * EXACTLY memory_search, memory_read and ltm_search (read-only) to a program
+ * launched in a pane whose Memory box is ticked. The pane's own chat is not
+ * gated by it. The word says both halves so the box never claims more.
+ */
+export const MEMORY_CAPABILITY: RailCapabilityKey = "memory";
 
 /** The two `browser_access` words under which a pane's Browser box can be live. */
 const BROWSER_ACCESS_LIVE = ["read_only", "interactive"];
@@ -127,6 +143,15 @@ export function capabilityStatus(
   failed: boolean,
   on = false,
 ): { word: string; available: boolean; offForInstall: boolean } {
+  if (key === MEMORY_CAPABILITY) {
+    return {
+      word: on
+        ? "enforced — a launched agent may search and read memory through Jarvis (read-only); this pane's chat is not affected"
+        : "enforced — a launched agent gets no memory tools through Jarvis; this pane's chat is not affected",
+      available: true,
+      offForInstall: false,
+    };
+  }
   if (key !== ENFORCED_CAPABILITY) {
     return {
       word: "recorded, not enforced yet — nothing gates on it",
@@ -591,10 +616,14 @@ export function PaneRail({
                         data-testid={`rail-caps-footnote-${p.id}`}
                         className="mt-1.5 border-t border-white/[0.06] px-1 pt-1.5 text-[10px] leading-relaxed text-zinc-500"
                       >
-                        Only <span className="text-zinc-300">Browser</span> is enforced today. A pane
+                        <span className="text-zinc-300">Browser</span> is enforced. A pane
                         starts unticked, and an unticked Browser box means this pane&rsquo;s chat and
-                        anything it launches get no browser tools. Files, Shell, Extensions and Memory
-                        are recorded here and shown to you; nothing gates on them yet.
+                        anything it launches get no browser tools.{" "}
+                        <span className="text-zinc-300">Memory</span> is enforced only for a program
+                        launched here (Claude Code, Codex&hellip;): ticked, it may search and read
+                        memory through Jarvis, read-only; this pane&rsquo;s own chat is not affected.
+                        Files, Shell and Extensions are recorded here and shown to you; nothing gates
+                        on them yet.
                       </p>
                       {capsError ? (
                         <p

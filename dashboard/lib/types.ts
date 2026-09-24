@@ -376,9 +376,12 @@ export interface TerminalInfo {
   degraded?: boolean;
   /** What this pane's harness may reach through Jarvis (v1.238.0). Absent on a
    *  pane created before the field existed, which reads as nothing granted —
-   *  no pane gains a capability by upgrade. Only Browser is ENFORCED in the
-   *  v1.235.0-v1.239.0 ships; the other four are recorded and displayed, and
-   *  the rail's copy says so rather than implying a gate that is not there. */
+   *  no pane gains a capability by upgrade. Browser is ENFORCED (v1.238.0);
+   *  Memory is enforced from v1.290.0 only for what a program launched in the
+   *  pane can read through Jarvis's MCP link (memory_search, memory_read,
+   *  ltm_search — read-only), never the pane's own chat. Files, Shell and
+   *  Extensions are recorded and displayed, and the rail's copy says so rather
+   *  than implying a gate that is not there. */
   capabilities?: PaneCapabilities;
   /** v1.245.0: the CLI that was running in this pane before Iron Jarvis
    *  restarted (the shell came back fresh), and the command that picks its
@@ -811,4 +814,128 @@ export interface DynamicAgent {
 export interface AgentsResponse {
   builtin: string[];
   dynamic: DynamicAgent[];
+}
+
+/* -------------------------------------------------------------------------- */
+/*  v1.290.0 — Safety checks (detections) + other agents' history             */
+/* -------------------------------------------------------------------------- */
+
+/** One normalized agent action (the shape the detections engine scans and the
+ *  history reader emits). Every key but `action` and `session_id` is optional. */
+export interface AgentEvent {
+  action:
+    | "command.executed"
+    | "file.read"
+    | "file.write"
+    | "file.delete"
+    | "network.request"
+    | "tool.called"
+    | "approval.denied"
+    | "prompt.submitted"
+    | "response.completed"
+    | string;
+  session_id: string;
+  source?: "ironjarvis" | "claude-code" | "codex" | string;
+  ts?: string | null;
+  tool?: string;
+  command?: string;
+  path?: string;
+  url?: string;
+  /** Tool output / prompt / response text, truncated server-side (4000 chars). */
+  text?: string;
+  ok?: boolean | null;
+  ref?: string;
+  /** v1.290.0: the Claude Code subagent transcript this event came from. */
+  subagent?: string;
+}
+
+export type DetectionSeverity = "low" | "medium" | "high" | "critical";
+
+/** GET /detections/findings -> findings[] (Finding.to_dict()). */
+export interface DetectionFinding {
+  rule_id: string;
+  title: string;
+  severity: DetectionSeverity | string;
+  category?: string;
+  description?: string;
+  /** Plain-words why this fired. */
+  reason: string;
+  session_id: string;
+  source: "ironjarvis" | "claude-code" | "codex" | string;
+  /** How many times the rule matched in that session. */
+  count?: number;
+  first_ts?: string | null;
+  last_ts?: string | null;
+  /** The evidence events. The BELL's copy (detection.finding) carries only
+   *  action, tool, ref and path — never command, url or text — so nothing
+   *  reading an event payload may assume those exist. */
+  events: AgentEvent[];
+}
+
+export interface DetectionFindingsResponse {
+  findings: DetectionFinding[];
+  count: number;
+  /** How many ledger events the scan read — the empty state's "N checked". */
+  events_scanned: number;
+  session_id: string | null;
+  hours: number | null;
+}
+
+/** GET /detections/rules -> rules[] (Rule.summary()). */
+export interface DetectionRule {
+  id: string;
+  title: string;
+  severity: DetectionSeverity | string;
+  description: string;
+  category?: string;
+  kind?: "match" | "correlation" | string;
+  /** Non-empty when the rule is adapted from agent-beacon (MIT, Asymptote Labs). */
+  adapted_from?: string;
+}
+
+export interface DetectionRulesResponse {
+  rules: DetectionRule[];
+  count: number;
+}
+
+/** GET /history/sessions -> sessions[]: a Claude Code or Codex session on this PC. */
+export interface HistorySession {
+  harness: "claude-code" | "codex" | string;
+  id: string;
+  project: string;
+  title: string;
+  started: string | null;
+  ended: string | null;
+  /** Record count (lines) in the log. */
+  events: number;
+  /** Tool calls in the log. */
+  tools: number;
+  file: string;
+  size?: number;
+  /** The log is over the full-read limit; only its first lines are read. */
+  truncated?: boolean;
+  /** Claude Code subagent transcripts folded into this session's events. */
+  subagents?: number;
+  /** Tool calls inside those subagent transcripts. */
+  subagent_tools?: number;
+}
+
+export interface HistorySessionsResponse {
+  sessions: HistorySession[];
+  count: number;
+}
+
+/** GET /history/sessions/{harness}/{id}?offset=&limit= — the events are PAGED
+ *  (default limit 500); the findings always cover the WHOLE session. */
+export interface HistorySessionDetail {
+  session: HistorySession;
+  /** This page of events. */
+  events: AgentEvent[];
+  /** Every event in the session (the page is `events.length` of these). */
+  events_total: number;
+  offset: number;
+  limit: number;
+  findings: DetectionFinding[];
+  /** Present when the detections engine could not run over this session. */
+  findings_error?: string;
 }

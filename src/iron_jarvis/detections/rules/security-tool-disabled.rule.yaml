@@ -1,0 +1,67 @@
+id: security-tool-disabled
+version: 1
+title: Antivirus or firewall switched off
+description: >
+  The agent turned off or weakened this computer's protection - Microsoft
+  Defender's real-time scanning, a Defender exclusion for a folder or
+  program, the Windows firewall, the Defender service, or on Linux ufw /
+  SELinux / AppArmor / auditd. Only checking their status does not count.
+severity: high
+status: stable
+posture: detect
+category: defense-evasion
+taxonomy:
+  owasp_llm: LLM08
+  mitre_attack: T1562
+
+match:
+  action: command.executed
+  command:
+    regex_any:
+      - '\bSet-MpPreference\b[^;&|\n]*-Disable(RealtimeMonitoring|BehaviorMonitoring|IOAVProtection|ScriptScanning|BlockAtFirstSeen|IntrusionPreventionSystem)\s+(\$true|1)\b'
+      - '\bAdd-MpPreference\b[^;&|\n]*-Exclusion(Path|Process|Extension)\b'
+      - '\bnetsh(\.exe)?\s+(adv)?firewall\s+set\s+[^;&|\n]*\bstate\s+off\b'
+      - '\bSet-NetFirewallProfile\b[^;&|\n]*-Enabled\s+(False|\$false|0)\b'
+      - '\breg(\.exe)?\s+add\s+[^;&|\n]*\\Windows Defender\\[^;&|\n]*\bDisable(AntiSpyware|AntiVirus|RealtimeMonitoring)\b'
+      - '\bsc(\.exe)?\s+(stop|config)\s+WinDefend\b'
+      - '\bStop-Service\b[^;&|\n]*\bWinDefend\b'
+      - '\bsetenforce\s+0\b'
+      - '\bufw\s+disable\b'
+      - '\bsystemctl\s+(stop|disable|mask)\s+(apparmor|auditd|firewalld)\b'
+
+emit:
+  reason: "Endpoint protection or firewall was disabled or weakened"
+
+tests:
+  - name: defender_realtime_off
+    verdict: match
+    events:
+      - {action: command.executed, command: 'Set-MpPreference -DisableRealtimeMonitoring $true'}
+  - name: defender_exclusion
+    verdict: match
+    events:
+      - {action: command.executed, command: 'Add-MpPreference -ExclusionPath C:\Users\me\AppData\Local\Temp'}
+  - name: firewall_off
+    verdict: match
+    events:
+      - {action: command.executed, command: 'netsh advfirewall set allprofiles state off'}
+  - name: ufw_disable
+    verdict: match
+    events:
+      - {action: command.executed, command: 'sudo ufw disable'}
+  - name: read_defender_prefs
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-MpPreference | Select-Object DisableRealtimeMonitoring'}
+  - name: defender_status
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-MpComputerStatus'}
+  - name: firewall_show_state
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'netsh advfirewall show allprofiles state'}
+  - name: realtime_turned_back_on
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Set-MpPreference -DisableRealtimeMonitoring $false'}

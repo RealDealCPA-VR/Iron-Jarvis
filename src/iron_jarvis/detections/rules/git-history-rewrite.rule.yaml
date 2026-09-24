@@ -1,0 +1,72 @@
+id: git-history-rewrite
+version: 1
+title: Git history rewritten
+description: >
+  The agent rewrote git history that already existed - filter-branch or
+  filter-repo, an interactive rebase, amending a commit, git replace, or a
+  hard reset that throws away the last commits (HEAD~N). Continuing a rebase,
+  a plain commit, or a hard reset that only drops uncommitted changes does
+  not count.
+severity: medium
+status: stable
+posture: detect
+category: source-control
+adapted_from: agent-beacon git-history-rewrite (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM08
+
+match:
+  action: command.executed
+  command:
+    contains: [git]
+    regex_any:
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bfilter-(branch|repo)\b'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\brebase\b[^;&|\n]*(\s-i\b|\s--interactive\b)'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\bcommit\b[^;&|\n]*\s--amend\b'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\breplace\b\s+(--edit|--graft|--convert-forkpoint)'
+      - '(^|[;&|\n]\s*|\bsudo\s+)\s*git(\.exe)?\b[^;&|\n]*\breset\b[^;&|\n]*--hard\b[^;&|\n]*\bHEAD(~\d*|\^+)'
+
+emit:
+  reason: "Existing git history was rewritten"
+
+tests:
+  - name: filter_branch
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git filter-branch --tree-filter "rm -f secrets.txt" HEAD'}
+  - name: filter_repo
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git filter-repo --path secrets.txt --invert-paths'}
+  - name: interactive_rebase
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git rebase -i HEAD~3'}
+  - name: amend
+    verdict: match
+    events:
+      - {action: command.executed, command: 'git commit --amend --no-edit'}
+  - name: hard_reset_drops_commits_after_cd
+    verdict: match
+    events:
+      - {action: command.executed, command: 'cd C:\repo && git reset --hard HEAD~2'}
+  - name: log
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git log --oneline -n 20'}
+  - name: rebase_continue
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git rebase --continue'}
+  - name: commit_message_mentions_rebase
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git commit -m "explain the rebase flow"'}
+  - name: echo_mentions_interactive_rebase
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'echo git rebase -i is interactive'}
+  - name: hard_reset_uncommitted_only
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'git reset --hard'}

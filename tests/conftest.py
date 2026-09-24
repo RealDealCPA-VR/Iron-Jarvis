@@ -221,3 +221,19 @@ def _isolate_pi_store():
         yield
     finally:
         _mod.pi_sessions_root = original
+
+
+@pytest.fixture(autouse=True)
+def _join_detection_scans():
+    """v1.290.0: a finished session or chat turn starts a detection scan in a
+    daemon thread that reads THAT test's temporary database. Join it before the
+    test's tmp dir and engine are torn down, so no scan thread outlives the
+    database it is reading (a Windows xdist worker crashed mid-suite with
+    several such threads alive). Cheap when nothing was scheduled."""
+    yield
+    try:
+        from iron_jarvis.detections.bell import wait_for_scans
+
+        wait_for_scans(timeout=15.0)
+    except Exception:  # noqa: BLE001 — cleanup must never fail a test
+        pass

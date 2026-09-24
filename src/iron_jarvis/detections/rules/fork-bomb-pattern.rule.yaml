@@ -1,0 +1,73 @@
+id: fork-bomb-pattern
+version: 1
+title: Fork bomb
+description: >
+  A command that copies itself forever until the computer freezes - the
+  classic :(){ :|:& };: shell bomb, a batch file running %0|%0, an endless
+  PowerShell loop that keeps starting new processes, a loop that backgrounds
+  itself, or perl's "fork while fork". Ordinary polling loops that sleep do
+  not count.
+severity: high
+status: stable
+posture: detect
+category: resource-consumption
+adapted_from: agent-beacon fork-bomb-pattern (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM10
+
+match:
+  action: command.executed
+  command:
+    regex_any:
+      - ':\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:'
+      - '\bwhile\s+true\s*;?\s*do\b[^;&|\n]*&\s*\S'
+      - '%0\s*\|\s*%0'
+      - '\bstart\s+(""\s+)?%0\b'
+      - '\bwhile\s*\(\s*(\$true|1)\s*\)\s*\{\s*(Start-Process|Start-Job|saps|start(?![-\w]))'
+      - '\bfork\s+while\s+fork\b'
+      - '\bwhile\s+(1|True)\s*:[^''"]*\bfork\(\)'
+
+emit:
+  reason: "Self-replicating process loop (fork bomb)"
+
+tests:
+  - name: classic_bash_bomb
+    verdict: match
+    events:
+      - {action: command.executed, command: ':(){ :|:& };:'}
+  - name: batch_bomb
+    verdict: match
+    events:
+      - {action: command.executed, command: 'echo %0|%0 > bomb.bat'}
+  - name: background_loop
+    verdict: match
+    events:
+      - {action: command.executed, command: 'while true; do bash -c "sleep 1" & done'}
+  - name: powershell_spawn_loop
+    verdict: match
+    events:
+      - {action: command.executed, command: 'while($true){Start-Process powershell.exe}'}
+  - name: perl_fork_while_fork
+    verdict: match
+    events:
+      - {action: command.executed, command: 'perl -e "fork while fork"'}
+  - name: polling_loop_that_sleeps
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'while true; do sleep 5; done'}
+  - name: powershell_poll_with_sleep
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'while ($true) { Start-Sleep 5; Get-Process }'}
+  - name: echo_batch_arg
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'echo %0'}
+  - name: start_notepad
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'start notepad.exe'}
+  - name: python_getpid
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'python -c "import os; print(os.getpid())"'}

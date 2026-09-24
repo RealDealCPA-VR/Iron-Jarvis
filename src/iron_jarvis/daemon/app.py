@@ -2596,6 +2596,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.undo.register(app, d)
     _routes.fleet.register(app, d)
     _routes.system.register(app, d)
+    # History (v1.290.0): the user's Claude Code / Codex sessions, read-only.
+    from .routes import history as _history_routes
+
+    _history_routes.register(app, d)
+    # Detections (v1.290.0): rule findings over the tool ledger + the
+    # post-session scan that puts high/critical ones on the bell.
+    from .routes import detections as _detections_routes
+
+    _detections_routes.register(app, d)
     # Worklist (v1.174.0): the durable per-item checkpoints a chunked
     # job reports progress through — without this the store exists and
     # no surface can read it.

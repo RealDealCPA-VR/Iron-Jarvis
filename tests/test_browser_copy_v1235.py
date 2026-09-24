@@ -552,7 +552,7 @@ def test_the_handbook_states_the_security_model_and_the_limits():
         ("one reading", "limit 10, element ids"),
         ("visible part of the tab", "limit 11, screenshots"),
         ("credential dies with the daemon", "limit 13, pane tokens"),
-        ("only the Browser capability is enforced", "limit 14"),
+        ("Browser is enforced per pane; Memory is enforced only for", "limit 14"),
         ("best effort", "limit 15, harness isolation"),
         ("no Jarvis browser yet", "limit 16"),
     ):

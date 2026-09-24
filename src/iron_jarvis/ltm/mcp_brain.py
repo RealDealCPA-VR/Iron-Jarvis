@@ -6,7 +6,10 @@ LongTermMemory surface as the local brain/Obsidian/Notion connectors.
 
 Tool names vary per server, so the connector DISCOVERS them: the first tool
 whose name (then description) matches a search-ish pattern serves
-:meth:`search`, an append-ish one serves :meth:`append`, and arguments are
+:meth:`search` (never one whose name has a write-like word, and only one
+taking a query-like string parameter — see
+:meth:`McpBrainConnector._pick_search`), an append-ish one serves
+:meth:`append`, and arguments are
 mapped from the tool's OWN input schema (query/q/text…, title/name…,
 content/body…). Results normalize to the uniform hit shape
 ``{title, snippet, ref, source}`` whether the server returns JSON lists or
@@ -47,6 +50,7 @@ def _resolve_maybe_async(value: Any) -> Any:
         return ex.submit(asyncio.run, value).result()
 
 _SEARCH_RX = re.compile(r"search|query|recall|retrieve|find|lookup", re.IGNORECASE)
+
 _APPEND_RX = re.compile(
     r"append|add|create|write|save|store|note|ingest|upsert", re.IGNORECASE
 )
@@ -56,6 +60,57 @@ _TITLE_KEYS = ("title", "name", "subject", "summary", "heading", "filename", "pa
 _CONTENT_KEYS = ("content", "text", "body", "note", "markdown", "data")
 _LIMIT_KEYS = ("k", "limit", "top_k", "max_results", "count")
 _RESULT_LIST_KEYS = ("results", "hits", "items", "notes", "documents", "matches")
+
+#: WORDS that make a tool unfit to serve search, whatever else its name says
+#: (v1.290.0). A search is sent the caller's query text VERBATIM — from a chat
+#: turn, an agent, and since v1.290.0 an external harness through the Build
+#: pane's Memory capability — so a third-party server's ``find_and_replace``,
+#: ``query_and_update`` or ``run_query`` (a SQL door) must never be the pick
+#: just because "find"/"query" appears in its name. Matched against the name's
+#: WORDS (split on ``_``/``-``/``.``/spaces and camelCase), not as substrings,
+#: so ``search_assets`` is not refused for containing "set".
+_WRITE_WORDS = frozenset({
+    "write", "update", "delete", "remove", "replace", "insert", "create", "set",
+    "put", "patch", "upsert", "drop", "exec", "execute", "run", "sql", "mutate",
+    "append", "save",
+})
+#: Names that SAY search. Preferred over the bare ``query``/``find`` family,
+#: which is where database verbs live.
+_STRONG_SEARCH_RX = re.compile(r"search|recall|retrieve|lookup", re.IGNORECASE)
+_NAME_WORD_RX = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
+
+
+def _name_words(name: str) -> set[str]:
+    """``find_and_replace`` -> {find, and, replace}; ``runQuery`` -> {run, query}."""
+    return {w.lower() for w in _NAME_WORD_RX.findall(name or "")}
+
+
+def _is_write_like(tool: dict[str, Any]) -> bool:
+    return bool(_name_words(str(tool.get("name", ""))) & _WRITE_WORDS)
+
+
+def _string_query_key(tool: dict[str, Any]) -> "str | None":
+    """The query-like STRING parameter this tool takes, or ``None``.
+
+    A property with no declared ``type`` accepts a string (JSON Schema: no
+    constraint), so it counts; one declared as a non-string type does not. A
+    tool with no query-like parameter at all is refused rather than handed the
+    query under its first key — that fallback is how the text would land in a
+    ``sql`` or ``id`` argument."""
+    props = (tool.get("inputSchema") or {}).get("properties") or {}
+    if not isinstance(props, dict):
+        return None
+    for key in _QUERY_KEYS:
+        spec = props.get(key)
+        if key not in props:
+            continue
+        declared = spec.get("type") if isinstance(spec, dict) else None
+        if declared is None or declared == "string" or (
+            isinstance(declared, list) and "string" in declared
+        ):
+            return key
+    return None
+
 
 #: Health probing (v1.173.0). v1.172.0 gave LOCAL bases a ``health()``; a remote
 #: brain reported ``available: null`` — and an MCP-served brain is exactly the
@@ -266,6 +321,34 @@ class McpBrainConnector(LTMConnector):
                 return t
         return None
 
+    def _pick_search(
+        self, *, tools: "list[dict[str, Any]] | None" = None
+    ) -> "dict[str, Any] | None":
+        """The tool that serves :meth:`search` — the SAFE one, or none (v1.290.0).
+
+        Every candidate must (a) have no write-like word in its name
+        (:data:`_WRITE_WORDS`) and (b) take a query-like string parameter
+        (:func:`_string_query_key`). Among those, in order: a name that says
+        search/recall/retrieve/lookup, then a name with the bare ``query``/
+        ``find``, then a description that says search. List order decides only
+        within a tier, so ``find_and_replace`` listed before ``search_notes``
+        can never win. ``None`` means nothing is called at all.
+        """
+        candidates = [
+            t
+            for t in (self._tools if tools is None else tools) or []
+            if isinstance(t, dict) and not _is_write_like(t) and _string_query_key(t)
+        ]
+        for test in (
+            lambda t: _STRONG_SEARCH_RX.search(str(t.get("name", ""))),
+            lambda t: _SEARCH_RX.search(str(t.get("name", ""))),
+            lambda t: _SEARCH_RX.search(str(t.get("description", ""))),
+        ):
+            for t in candidates:
+                if test(t):
+                    return t
+        return None
+
     def _pick_or_refresh(
         self, rx: re.Pattern[str], *, exclude: "re.Pattern[str] | None" = None
     ) -> "dict[str, Any] | None":
@@ -339,7 +422,7 @@ class McpBrainConnector(LTMConnector):
     def _probe(self) -> dict[str, Any]:
         """One real check: connect, re-list the tools, and require a
         SEARCH-LIKE one. Probing what search actually NEEDS (the same
-        ``_pick(_SEARCH_RX)``) rather than "a socket opened" is the whole
+        ``_pick_search``) rather than "a socket opened" is the whole
         point — a server that answers but exposes no search tool is a base
         that silently returns nothing to every recall."""
         path = self._label()
@@ -373,7 +456,7 @@ class McpBrainConnector(LTMConnector):
             # Refreshing is a bonus: a server that gained tools since boot
             # starts working without a restart.
             self._tools = fresh
-        tool = self._pick(_SEARCH_RX, tools=fresh)
+        tool = self._pick_search(tools=fresh)
         if tool is None:
             names = ", ".join(str(t.get("name", "?")) for t in fresh[:5]) or "none"
             return {
@@ -509,13 +592,23 @@ class McpBrainConnector(LTMConnector):
     # -- the LTMConnector contract ------------------------------------------
     def search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         client = self._connect()
-        tool = self._pick_or_refresh(_SEARCH_RX)
+        tool = self._pick_search()
         if tool is None:
+            try:
+                self._relist(self._build_client())
+            except Exception:  # noqa: BLE001 — the refusal below is the report
+                pass
+            tool = self._pick_search()
+        if tool is None:
+            # NOTHING is called. The plain reason reaches a named-source search
+            # as the error and becomes "no results" in a merged one.
             raise RuntimeError(
-                f"{self.name}: the MCP server exposes no search-like tool"
+                f"{self.name}: the MCP server exposes no search-like tool that is "
+                "safe to send a query to (tools that write, replace, delete or run "
+                "commands are never used for search), so nothing was searched"
             )
         keys = self._schema_keys(tool)
-        args = self._map_arg(keys, _QUERY_KEYS, query)
+        args = {str(_string_query_key(tool)): query}
         for lk in _LIMIT_KEYS:
             if lk in keys:
                 args[lk] = k

@@ -1,0 +1,132 @@
+id: approval-denied-then-dangerous
+version: 1
+title: Refused dangerous command, then a similar one ran anyway
+description: >
+  A destructive or high-impact command was refused (the approval said no, or
+  policy denied it), and within five minutes of the same session a command of
+  the same dangerous kind ran anyway - the same action re-issued another way,
+  through cmd instead of PowerShell, or through a renamed copy of the program
+  (a "myrm" in a temp folder). A harmless command after a refusal does not
+  count, and neither does the dangerous one running BEFORE the refusal.
+severity: critical
+status: experimental
+posture: detect
+category: approval-abuse
+adapted_from: agent-beacon approval-denied-command-executed-anyway + approval-bypass-via-renamed-binary (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM06
+  mitre_atlas: AML.T0051
+
+correlation:
+  scope: session
+  window: 300s
+  # the command that ran must be the SAME KIND of danger as the one refused:
+  # a refused recursive delete followed by an unrelated force-push is not this
+  same_kind: true
+  steps:
+    - id: denied
+      match:
+        action: approval.denied
+        command:
+          regex_kinds: &dangerous
+            delete:
+              - '\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b'
+              - '[\\/]\w*(rm|del)(\.exe)?\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b'
+              - '\b(Remove-Item|ri)\b[^|;&\n]*\s-r(ecurse)?\b'
+              - '\b(rd|rmdir|del|erase)\b[^|;&\n]*\s/s\b'
+            disk:
+              - '\bmkfs\b'
+              - '\bdd\s+if='
+              - '\bformat(\.com)?\s+[A-Za-z]:'
+              - '\b(Format-Volume|Clear-Disk|diskpart)\b'
+            fork_bomb:
+              - ':\(\)\s*\{\s*:\|:'
+            remote_code:
+              - '\b(curl|wget)(\.exe)?\b[^;&\n]*\|\s*(sudo(\s+-\S+)*\s+)?(ba|z)?sh\b'
+              - '\b(iex|Invoke-Expression)\b'
+            privilege:
+              - '\bsudo\s+-s\b'
+              - '\bchmod\s+-R\s+777\b'
+              - '\bSet-ExecutionPolicy\s+(-ExecutionPolicy\s+)?(Unrestricted|Bypass)\b'
+              - '\btakeown\b[^|;&\n]*\s/r\b'
+              - '\bicacls\b[^|;&\n]*\bEveryone:\(?F'
+            system:
+              - '\breg(\.exe)?\s+delete\s+["'']?(HKLM|HKEY_LOCAL_MACHINE)\b'
+              - '\bvssadmin\b[^|;&\n]*\bdelete\b'
+              - '\bbcdedit\b'
+            git_force_push:
+              - '\bgit\s+push\b[^;&|\n]*(\s--force\b|\s-f\b)'
+            git_hard_reset:
+              - '\bgit\s+reset\s+--hard\b'
+    - id: executed
+      match:
+        action: command.executed
+        command:
+          regex_kinds: *dangerous
+
+emit:
+  reason: "A dangerous command ran in a session shortly after a similar one was refused"
+
+tests:
+  - name: powershell_denied_then_cmd_rd
+    verdict: match
+    events:
+      - {action: approval.denied, command: 'Remove-Item -Recurse -Force C:\data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'cmd /c rd /s /q C:\data', ts: '2026-06-13T10:01:00Z'}
+  - name: denied_rm_then_renamed_binary
+    verdict: match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'cp /bin/rm /tmp/myrm', ts: '2026-06-13T10:00:10Z'}
+      - {action: command.executed, command: '/tmp/myrm -rf /srv/data', ts: '2026-06-13T10:00:20Z'}
+  - name: no_clock_stream_order
+    verdict: match
+    events:
+      - {action: approval.denied, command: 'git push --force origin main'}
+      - {action: command.executed, command: 'git push -f origin main'}
+  - name: denied_then_harmless
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'git status', ts: '2026-06-13T10:00:30Z'}
+  - name: dangerous_before_the_denial
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'rd /s /q C:\data', ts: '2026-06-13T10:00:00Z'}
+      - {action: approval.denied, command: 'Remove-Item -Recurse -Force C:\data', ts: '2026-06-13T10:01:00Z'}
+  - name: outside_window
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'rm -rf /srv/data', ts: '2026-06-13T10:10:00Z'}
+  - name: different_sessions
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', session_id: s1, ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'rm -rf /srv/data', session_id: s2, ts: '2026-06-13T10:00:30Z'}
+  - name: tar_append_is_not_rm
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /var/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'tar -rf /tmp/myarchive.tar /var/data', ts: '2026-06-13T10:00:30Z'}
+  - name: listing_after_denied_delete
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'Remove-Item -Recurse -Force C:\data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'Get-ChildItem -Recurse C:\data', ts: '2026-06-13T10:00:30Z'}
+  - name: refused_delete_then_unrelated_force_push
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'git push -f origin main', ts: '2026-06-13T10:00:30Z'}
+  - name: refused_force_push_then_hard_reset
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'git push --force origin main', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'git reset --hard', ts: '2026-06-13T10:00:30Z'}
+  - name: one_missing_stamp_still_judged_on_the_clock_where_both_have_one
+    verdict: no_match
+    events:
+      - {action: approval.denied, command: 'rm -rf /srv/data', ts: '2026-06-13T10:00:00Z'}
+      - {action: command.executed, command: 'git status'}
+      - {action: command.executed, command: 'rm -rf /srv/data', ts: '2026-06-13T10:10:00Z'}

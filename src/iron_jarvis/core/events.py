@@ -190,6 +190,12 @@ class EventType:
     # local_path is ABSOLUTE (chrome.downloads gives the real destination), which
     # is what lets the existing file tools reach the file at all.
     BROWSER_DOWNLOAD_COMPLETED = "browser.download_completed"
+    #: Detections (v1.290.0): after a session completes its tool ledger is
+    #: scanned (``iron_jarvis.detections``) and ONE event is published per
+    #: high/critical finding — ``Finding.to_dict(text=False)`` (rule_id, title,
+    #: severity, reason, count, evidence without tool output). At most once
+    #: per (rule_id, session_id) per process. Tagged with the session's id.
+    DETECTION_FINDING = "detection.finding"
 
 
 @dataclass

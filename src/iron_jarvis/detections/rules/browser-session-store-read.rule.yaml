@@ -1,0 +1,60 @@
+id: browser-session-store-read
+version: 1
+title: Agent read a browser's saved passwords or cookies
+description: >
+  The agent opened or copied a browser's saved-password or cookie store
+  (Chrome, Edge, Brave, Opera, Vivaldi "Login Data" / "Cookies" / "Local
+  State", Firefox logins.json / cookies.sqlite / key4.db). With those a
+  stranger can sign in as you. Bookmarks and history do not count.
+severity: high
+status: stable
+posture: detect
+category: credential-access
+adapted_from: agent-beacon browser-session-store-read (MIT, Asymptote Labs)
+taxonomy:
+  owasp_llm: LLM02
+  mitre_atlas: AML.T0024
+
+match:
+  any:
+    - action: file.read
+      path:
+        regex_any:
+          - '(^|[\\/])(cookies\.sqlite|logins\.json|key4\.db)$'
+          - '[\\/](Google[\\/]Chrome|Chromium|BraveSoftware[\\/]Brave-Browser|Microsoft[\\/]Edge|Opera Software[\\/][^\\/]+|Vivaldi|google-chrome|chromium|microsoft-edge|brave-browser)[\\/].*[\\/](Login Data|Cookies|Web Data|Local State)$'
+    - action: command.executed
+      command:
+        regex: '\b(copy|Copy-Item|cp|cat|type|sqlite3|Get-Content|gc|robocopy|xcopy|Compress-Archive)\b[^|;&\n]*(Login Data|[\\/]Cookies(?=$|["''\s])|logins\.json|cookies\.sqlite|key4\.db|User Data[\\/]Local State)'
+
+emit:
+  reason: "Agent read or copied a browser credential/cookie store"
+
+tests:
+  - name: read_chrome_login_data
+    verdict: match
+    events:
+      - {action: file.read, path: 'C:\Users\me\AppData\Local\Google\Chrome\User Data\Default\Login Data'}
+  - name: read_edge_cookies
+    verdict: match
+    events:
+      - {action: file.read, path: 'C:\Users\me\AppData\Local\Microsoft\Edge\User Data\Default\Network\Cookies'}
+  - name: read_firefox_logins
+    verdict: match
+    events:
+      - {action: file.read, path: '/home/me/.mozilla/firefox/abc.default/logins.json'}
+  - name: copy_chrome_login_data_cmd
+    verdict: match
+    events:
+      - {action: command.executed, command: 'copy "%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data" C:\Temp\ld.db'}
+  - name: chrome_bookmarks_are_not_credentials
+    verdict: no_match
+    events:
+      - {action: file.read, path: 'C:\Users\me\AppData\Local\Google\Chrome\User Data\Default\Bookmarks'}
+  - name: cookie_policy_doc
+    verdict: no_match
+    events:
+      - {action: file.read, path: 'C:\site\docs\cookies-policy.md'}
+  - name: get_content_cookie_policy_doc
+    verdict: no_match
+    events:
+      - {action: command.executed, command: 'Get-Content .\docs\cookies-policy.md'}
