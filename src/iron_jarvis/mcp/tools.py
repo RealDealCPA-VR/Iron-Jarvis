@@ -187,11 +187,21 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
     args = [
         _SUPERSEDED_PACKAGES.get(str(a), str(a)) for a in (cfg.get("args") or [])
     ]
+    # NO transport floor for a registry pack (v1.291.0 review): its calls are
+    # bounded by the registry deadline — `registry.invoke(deadline_s=
+    # config.tool_call_timeout_s)`, 600 s by default and set in Settings —
+    # which aborts the in-flight call through `StdioTransport.abort`, and the
+    # connect probe is bounded by `_connect_with_timeout`. A floor here shorter
+    # than that deadline would kill a slow-but-healthy pack (a browser pack
+    # loading pages, a long repo search) and silently override the user's
+    # setting. A caller that passes no deadline keeps its unbounded wait, off
+    # the loop.
     return StdioTransport(
         resolve_launcher(str(cfg["command"])),
         args or None,
         env=merged_env,
         cwd=cfg.get("cwd"),
+        request_timeout=None,
     )
 
 

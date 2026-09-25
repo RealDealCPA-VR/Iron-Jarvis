@@ -671,6 +671,7 @@ async def test_escalated_comm_session_carries_project_and_spine(
 
     poller.chat_turn = escalating
     res = await poller._handle("tg", ch, _msg("build the report", update_id=2))
+    await poller.drain()  # v1.291.0: the session runs in a tracked task
 
     assert res["status"] == "chat_escalated"
     session = next(s for s in orch.list_sessions() if s.id == res["session_id"])
@@ -687,6 +688,7 @@ async def test_untagged_escalation_stays_project_free(platform):
         platform, ch, _fake_turn("go", escalate=True, escalate_reason="x")
     )
     res = await poller._handle("tg", ch, _msg("do it", update_id=1))
+    await poller.drain()
     assert res["status"] == "chat_escalated"
     session = next(s for s in orch.list_sessions() if s.id == res["session_id"])
     assert session.project_id is None

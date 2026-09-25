@@ -319,6 +319,8 @@ async def test_escalate_acks_then_delivers_session_summary(platform):
 
     poller.chat_turn = escalating
     res = await poller._handle("tg", ch, _msg("build the report", update_id=2))
+    # v1.291.0: the row is the ACK; the session runs in a tracked task.
+    await poller.drain()
 
     assert res["status"] == "chat_escalated" and res["session_id"]
     task = orch.list_sessions()[-1].task

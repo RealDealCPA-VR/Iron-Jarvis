@@ -3,7 +3,10 @@
 The notifier's channels only PUSH out. :class:`InboundPoller` adds the receive
 leg: it long-polls every channel whose inbound is *explicitly* enabled, and for
 each AUTHORIZED message spawns a normal supervised session via the orchestrator,
-awaits it, and replies the summary back over the same channel.
+acks at once, and replies the summary back over the same channel when the
+session lands (v1.291.0: the run lives in a tracked background task, so the
+phone keeps being READ while its own job works — a job parked on an ask can
+hear the phone's "approve", and "/status" / "/cancel" arrive mid-run).
 
 SECURITY (this drives the machine from a phone, so it is hardened by design):
 
@@ -34,12 +37,13 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 from sqlalchemy import Engine
+from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
-from ..core.models import AgentType
+from ..core.models import AgentType, Session
 from .base import Channel, ChannelAuthError, InboundMessage, split_message
 from .models import InboundOffsetRecord
 from .threads import ADDRESSEE_KEY
@@ -65,10 +69,23 @@ log = get_logger("comm.inbound")
 #: the desktop fan-out route, and the tests all speak the same words.
 NEW_THREAD_REPLY = "Fresh start — next message begins a new conversation."
 ESCALATE_ACK = "On it — this needs real work. I'll send the result here."
-RATE_LIMIT_REPLY = "Getting a lot of messages — pausing for a minute."
+#: v1.291.0 (io-03): the chat-OFF one-shot lane's ack. It is a plain job,
+#: not a chat turn that decided to escalate — "this needs real work" would
+#: read as a non-sequitur there.
+ONESHOT_ACK = "On it — I'll send the result here."
+RATE_LIMIT_REPLY = (
+    "Getting a lot of messages — pausing for a minute. Send that one again in a minute."
+)
 #: v1.231.0 (audit AE14): the honest side of at-most-once — what the chat
 #: hears when the daemon restarted while its last message was being handled.
 DROPPED_REPLY = "I was restarted while handling your last message — please resend it."
+#: v1.291.0 (io-03): a phone-started job now runs OUTSIDE the poll pass, so
+#: the inflight marker (dispatch only) no longer covers a restart mid-run.
+#: The boot reconcile settles the row; this is what the phone hears about it
+#: (``{task}`` = the first 80 characters of what was asked).
+INTERRUPTED_REPLY = (
+    "Your job was cut off by a restart: '{task}'. Send it again if you still want it."
+)
 
 #: Per-identity flood guard: more than this many handled chat turns inside the
 #: rolling window gets an honest "pausing" reply instead of a model call (a
@@ -171,6 +188,22 @@ class InboundPoller:
         #: matches a ``comm`` reflex rule (keyword) fires that rule instead of a
         #: free-form session — so "any message mentioning X → run workflow Y".
         self.reflex_router = reflex_router
+        #: v1.291.0 (io-03): the phone-started sessions still running, one
+        #: task each (:meth:`_spawn_delivery`). The poll pass never awaits a
+        #: session any more — it used to, so a job parked on an ask could not
+        #: hear the phone's own "approve" until its 300 s clock ran out. The
+        #: lifespan cancels these at shutdown (:meth:`cancel_background`).
+        self._session_tasks: set[asyncio.Task] = set()
+        #: One lock per (channel, sender): a message being handled and a
+        #: finished job delivering its summary to the SAME chat never
+        #: interleave (thread rows + chunked sends stay in order).
+        self._identity_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        #: True once :meth:`cancel_background` ran (the lifespan's shutdown):
+        #: a delivery task cancelled AFTER this re-arms the inflight marker so
+        #: the next boot tells the phone (see :meth:`_deliver_session`). A
+        #: desktop Cancel of the job cancels the same task, but with this
+        #: False — that one must NOT re-arm the marker.
+        self._shutting_down = False
 
     # -- discovery ---------------------------------------------------------
     def inbound_channels(self) -> list[tuple[str, Channel]]:
@@ -322,6 +355,206 @@ class InboundPoller:
             return False
         dq.append(now)
         return True
+
+    # -- background sessions (v1.291.0, io-03) ------------------------------
+    def _identity_lock(self, channel: str, sender_id: Any) -> asyncio.Lock:
+        """The per-(channel, sender) lock — see ``_identity_locks``."""
+        key = (channel, str(sender_id))
+        lock = self._identity_locks.get(key)
+        if lock is None:
+            lock = self._identity_locks[key] = asyncio.Lock()
+        return lock
+
+    def _spawn_delivery(self, coro: Any) -> asyncio.Task:
+        """Run ``coro`` (a :meth:`_deliver_session`) as a tracked task: held
+        strongly until done, a crash logged (never silently dropped), and
+        cancellable as a set at shutdown."""
+        task = asyncio.create_task(coro)
+        self._session_tasks.add(task)
+        task.add_done_callback(self._session_task_done)
+        return task
+
+    def _session_task_done(self, task: asyncio.Task) -> None:
+        self._session_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("phone-started session delivery failed", exc_info=exc)
+
+    def resume_background(self) -> None:
+        """The lifespan is (re)starting the poll: a shutdown flag left over from
+        a previous stop must not make a desktop Cancel re-arm the marker."""
+        self._shutting_down = False
+
+    def cancel_background(self) -> int:
+        """Cancel every still-running phone-started session (lifespan
+        shutdown). The cancel unwinds ``run_session`` to CANCELLED exactly as
+        cancelling the old inline await did. Returns how many were live.
+
+        Sets ``_shutting_down`` BEFORE cancelling: each live delivery task
+        then re-arms the inflight marker in its cancel handler, so the next
+        boot's ``_recover_inflight`` sends :data:`DROPPED_REPLY` — the phone
+        hears about a graceful restart (app update, ``ironjarvis stop``)
+        exactly as it did when the inline await held the marker through
+        the shutdown cancel."""
+        self._shutting_down = True
+        live = [t for t in self._session_tasks if not t.done()]
+        for task in live:
+            task.cancel()
+        return len(live)
+
+    async def drain(self) -> None:
+        """Wait for every tracked session to land (tests + graceful stops)."""
+        while self._session_tasks:
+            await asyncio.gather(*list(self._session_tasks), return_exceptions=True)
+
+    async def _deliver_session(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        session: Any,
+        *,
+        dyn_def: Any = None,
+        tid: str = "",
+        display: str = "",
+        chat_on: bool = False,
+    ) -> None:
+        """The half of a phone-started job that used to stall the poll: run
+        the session, then put its summary on the thread and send it to the
+        chat that asked. A crash becomes an honest "I hit a problem" reply
+        (the desktop route's ``_finish`` shape) instead of a silent phone;
+        the dynamic lane's ``_finalize_failed`` still settles the row first.
+        A cancel passes through — and when it is the SHUTDOWN's cancel
+        (``_shutting_down``), it first re-arms the at-most-once inflight
+        marker for this message: ``run_session`` settles the row CANCELLED
+        (no ``interrupted_at``, so the boot reconcile and
+        :meth:`notify_interrupted` have nothing to say), and the next boot's
+        ``_recover_inflight`` then sends :data:`DROPPED_REPLY` to this chat.
+        A desktop Cancel of the job is the same ``CancelledError`` with the
+        flag False: the user stopped it on purpose, nothing to re-arm."""
+        try:
+            if dyn_def is not None:
+                done = await self._run_dynamic_session(session, dyn_def)
+            else:
+                done = await self.orchestrator.run_session(session.id)
+            summary = (done.summary or "(no result)").strip()
+        except asyncio.CancelledError:
+            if self._shutting_down:
+                try:
+                    self._set_offset(name, self._get_offset(name), inflight=msg)
+                except Exception:  # noqa: BLE001 — a shutdown never raises
+                    log.exception(
+                        "inbound: could not re-arm the inflight marker for %s on %r",
+                        session.id, name,
+                    )
+            raise
+        except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
+            log.exception("phone-started session %s failed on %r", session.id, name)
+            summary = f"I hit a problem: {type(exc).__name__}: {exc}"
+        async with self._identity_lock(name, msg.sender_id):
+            if tid:
+                self._safe_append(
+                    tid, "assistant", summary,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                )
+            if chat_on:
+                await self.send_chunked(ch, summary, chat_id=msg.reply_to)
+            else:
+                # The one-shot lane's historical wire shape: prefixed + capped.
+                body = f"{self.reply_prefix}{summary}"[: self.max_reply_chars]
+                await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+
+    # -- restart mid-run (v1.291.0, io-03) ---------------------------------
+    def notify_interrupted(self, *, since: Any) -> int:
+        """Tell each phone whose job a restart cut off (boot, right after the
+        session reconcile).
+
+        Before v1.291.0 the inline await kept the inflight marker set for the
+        whole run, so ``_recover_inflight`` told the chat to resend. The
+        marker now covers dispatch only; ``reconcile_interrupted_sessions``
+        settles the row as FAILED + ``interrupted_at`` and rings the desktop
+        bell — nothing went back over the channel. This finds every
+        ``comm:<name>`` session THIS boot stamped (``interrupted_at >=
+        since``) and sends :data:`INTERRUPTED_REPLY` to the originating
+        private chat (the single allowed sender's id; else the channel's
+        configured chat — see :meth:`_deliver_interrupted_notice`) from a
+        tracked task (:meth:`_spawn_delivery`), so boot never waits
+        on the network and a shutdown cancels it like any delivery. The line
+        also lands on the sender's thread when the channel is chat-enabled
+        and has exactly one allowed sender. Never raises; returns how many
+        notices were queued.
+        """
+        try:
+            with session_scope(self.engine) as db:
+                rows = [
+                    (str(s.origin or "")[len("comm:"):], s.id, s.task or "")
+                    for s in db.exec(
+                        select(Session).where(
+                            Session.origin.startswith("comm:"),  # type: ignore[union-attr]
+                            Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
+                            Session.interrupted_at >= since,  # type: ignore[operator]
+                        )
+                    )
+                ]
+        except Exception:  # noqa: BLE001 — a boot step never raises
+            log.exception("inbound: could not list the restart-interrupted phone jobs")
+            return 0
+        queued = 0
+        for name, sid, task in rows:
+            ch = self.notifier.get(name) if name else None
+            if ch is None:
+                continue
+            self._spawn_delivery(self._deliver_interrupted_notice(name, ch, sid, task))
+            queued += 1
+        if queued:
+            log.warning(
+                "inbound: %d phone-started job(s) were cut off by the restart; "
+                "telling the phone(s)",
+                queued,
+            )
+        return queued
+
+    async def _deliver_interrupted_notice(
+        self, name: str, ch: Channel, session_id: str, task: str
+    ) -> None:
+        """One :data:`INTERRUPTED_REPLY` to the originating private chat when
+        it is knowable — exactly one allowed sender, whose private chat id IS
+        the sender id (the same fallback ``_set_offset`` uses) — else to the
+        channel's configured chat (no ``chat_id``); then onto that single
+        sender's thread when the channel is a chat surface. The explicit
+        ``chat_id`` matters on an inbound-only Telegram channel (allowed
+        senders, no ``chat_id`` configured): a bare send fails there with
+        "config needs `chat_id`" and the phone would stay silent. Guarded end
+        to end: a failed send is logged, never raised."""
+        body = f"{self.reply_prefix}{INTERRUPTED_REPLY.format(task=task[:80])}"
+        body = body[: self.max_reply_chars]
+        senders = ch.allowed_senders()
+        sender = next(iter(senders)) if len(senders) == 1 else ""
+        async with self._identity_lock(name, sender or "*"):
+            try:
+                if sender:
+                    res = await asyncio.to_thread(ch.send, body, chat_id=sender)
+                else:
+                    res = await asyncio.to_thread(ch.send, body)
+                if not (res or {}).get("ok"):
+                    log.warning(
+                        "inbound: the restart notice for %s did not reach %r: %s",
+                        session_id, name, (res or {}).get("detail"),
+                    )
+            except Exception:  # noqa: BLE001 — the thread line below still lands
+                log.exception("inbound: could not send the restart notice on %r", name)
+            if sender and self._chat_ready(ch):
+                try:
+                    tid = self.thread_store.resolve(name, sender, "").id
+                except Exception:  # noqa: BLE001 — no thread, no line; the phone heard
+                    log.warning("comm thread resolve failed on %r", name, exc_info=True)
+                    return
+                self._safe_append(
+                    tid, "assistant", INTERRUPTED_REPLY.format(task=task[:80]),
+                    channel=name, sender_id=sender,
+                )
 
     async def send_chunked(
         self, ch: Channel, reply: str, *, chat_id: Any, prefix: str | None = None
@@ -518,10 +751,24 @@ class InboundPoller:
     async def _handle(
         self, name: str, ch: Channel, msg: InboundMessage
     ) -> dict[str, Any]:
-        """Authorize, then (if allowed) run a supervised session + reply."""
+        """Authorize, then (if allowed) act on the message and reply.
+
+        Returns as soon as the message is DISPATCHED: a command/answer/chat
+        turn is answered inline; a job (one-shot or escalated) is acked
+        inline and runs in a tracked task (v1.291.0) whose summary lands
+        later — the row carries the ``session_id`` and the ack's ``sent``.
+        Serialized per (channel, sender) against that later delivery.
+        """
         # Loop protection: never act on a bot's message (incl. our own echoes).
         if msg.is_bot:
             return {"channel": name, "status": "ignored_bot"}
+        async with self._identity_lock(name, msg.sender_id):
+            return await self._dispatch(name, ch, msg)
+
+    async def _dispatch(
+        self, name: str, ch: Channel, msg: InboundMessage
+    ) -> dict[str, Any]:
+        """The body of :meth:`_handle`, under its identity lock."""
 
         # FAIL-CLOSED allowlist. An unauthorized sender spawns NOTHING.
         if not ch.is_authorized(msg.sender_id):
@@ -730,10 +977,26 @@ class InboundPoller:
         if chat_on:
             return await self._handle_chat(name, ch, msg, text, display)
 
+        # Per-identity flood guard (v1.291.0): now that a job no longer holds
+        # the poll, one sender could stack up overlapping sessions — the
+        # one-shot lane counts against the same budget the chat lane does.
+        if not self.rate_ok(name, msg.sender_id):
+            body = f"{self.reply_prefix}{RATE_LIMIT_REPLY}"[: self.max_reply_chars]
+            send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "rate_limited",
+                "sender": str(msg.sender_id),
+                "sent": bool(send_res.get("ok")),
+            }
+
         # Spawn a NORMAL supervised session (same orchestrator + permission
-        # engine as a local user) and await its result. Origin ``comm:<channel>``
-        # (v1.231.0, audit AE17): the runtime's ask allowlist reads it, so a
-        # session the phone started may ask back through the phone.
+        # engine as a local user), ack, and let it run in a tracked task — the
+        # summary follows when it lands (``_deliver_session``). Origin
+        # ``comm:<channel>`` (v1.231.0, audit AE17): the runtime's ask
+        # allowlist reads it, so a session the phone started may ask back
+        # through the phone — which only works because the poll keeps reading
+        # the phone while the job waits (v1.291.0, io-03).
         session = await self.orchestrator.create_session(
             text, self.agent_type, origin=f"comm:{name}"
         )
@@ -742,12 +1005,15 @@ class InboundPoller:
             {"channel": name, "sender": msg.sender_id, "task": text},
             session_id=session.id,
         )
-        session = await self.orchestrator.run_session(session.id)
-
-        reply = (session.summary or "(no result)").strip()
-        body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
         # Safe to reply to the originating chat: we only reach here for the
         # sender's own private chat (the non-private guard above refused groups).
+        body = f"{self.reply_prefix}{ONESHOT_ACK}"[: self.max_reply_chars]
+        # The task is spawned BEFORE the ack's network round-trip: a shutdown
+        # landing inside that send would otherwise leave an ACTIVE row with no
+        # task AND an armed dispatch marker, and the next boot would tell the
+        # phone twice. The summary cannot overtake the ack — the delivery
+        # waits on the identity lock this pass holds.
+        self._spawn_delivery(self._deliver_session(name, ch, msg, session))
         send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
         return {
             "channel": name,
@@ -764,10 +1030,10 @@ class InboundPoller:
         resolve → rate cap → append user → history → chat_turn → append reply
         → chunked send. ``HTTPException`` from the turn service (404 unknown
         skill / 400 / 502 provider) becomes an HONEST reply, never a crash of
-        the poll loop. ``escalate: true`` sends an ack, runs the normal
-        supervised session with a thread-tail recap, and delivers the summary
-        both to the phone and onto the thread (the desktop hears it via
-        chat.thread_updated).
+        the poll loop. ``escalate: true`` sends an ack and starts the normal
+        supervised session with a thread-tail recap in a tracked task that
+        delivers the summary both to the phone and onto the thread when it
+        lands (the desktop hears it via chat.thread_updated).
         """
         # ALWAYS re-resolve per message — it heals a dashboard-deleted thread.
         try:
@@ -893,7 +1159,7 @@ class InboundPoller:
                 tid, "assistant", ESCALATE_ACK,
                 channel=name, sender_id=msg.sender_id, display=display,
             ) or tid
-        await self.send_chunked(ch, ESCALATE_ACK, chat_id=msg.reply_to)
+        sent = await self.send_chunked(ch, ESCALATE_ACK, chat_id=msg.reply_to)
         _spawn_kwargs: dict[str, Any] = {}
         if esc_provider:
             _spawn_kwargs["provider"] = esc_provider
@@ -914,17 +1180,15 @@ class InboundPoller:
             {"channel": name, "sender": str(msg.sender_id), "task": text},
             session_id=session.id,
         )
-        if dyn_def is not None:
-            session = await self._run_dynamic_session(session, dyn_def)
-        else:
-            session = await self.orchestrator.run_session(session.id)
-        summary = (session.summary or "(no result)").strip()
-        if tid:
-            tid = self._safe_append(
-                tid, "assistant", summary,
-                channel=name, sender_id=msg.sender_id, display=display,
-            ) or tid
-        sent = await self.send_chunked(ch, summary, chat_id=msg.reply_to)
+        # v1.291.0 (io-03): the run — and the summary onto the thread + to the
+        # phone when it lands — moves into a tracked task so this pass (and
+        # the poll behind it) returns now and the phone keeps being read.
+        self._spawn_delivery(
+            self._deliver_session(
+                name, ch, msg, session,
+                dyn_def=dyn_def, tid=tid, display=display, chat_on=True,
+            )
+        )
         return {
             "channel": name,
             "status": "chat_escalated",

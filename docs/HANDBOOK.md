@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.290.0 (2026-09-14).*
+holds itself to. Current as of v1.291.0 (2026-09-14).*
 
 ---
 
@@ -1552,6 +1552,17 @@ agent-beacon project (MIT licence). One thing to know: anyone holding this
 install's access token — including a phone you connected with it — can read
 those Claude Code and Codex transcripts through Jarvis, just as they can read
 everything else Jarvis holds.
+**v1.291.0 (Wave 4, Packs, spreadsheets and the phone):** an Excel workbook
+with empty cells, blank separator rows or an empty column A now reads in a
+fraction of a second instead of minutes (or an error), everywhere a
+spreadsheet is read; a slow or stuck pack (Brave, GitHub, Gmail, Obsidian)
+no longer freezes chat, Build panes, the dashboard or the phone, a call the
+time limit stops is really stopped, accented names and emoji from packs
+arrive intact, and a pack whose helper program crashes comes back on the
+next call with an error that names the pack; a job you text from your phone
+no longer blocks the phone — "approve", /status and /cancel work while it
+runs, and if Jarvis restarts mid-job your phone is told; and in the
+installed app, Codex in a Build pane now really gets the Jarvis tools.
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

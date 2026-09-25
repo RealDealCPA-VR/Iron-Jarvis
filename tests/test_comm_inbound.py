@@ -19,6 +19,7 @@ from iron_jarvis.comm import (
     TelegramChannel,
     build_notifier,
 )
+from iron_jarvis.comm.inbound import ONESHOT_ACK
 from iron_jarvis.comm.models import InboundOffsetRecord
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.daemon.app import create_app
@@ -140,16 +141,20 @@ async def test_authorized_sender_spawns_supervised_session_and_replies(platform)
     assert poller.enabled() is True
 
     results = await poller.poll_once()
+    # v1.291.0 (io-03): the pass returns once the job is dispatched (the
+    # ack is sent inline); the summary lands from a tracked task.
+    await poller.drain()
 
     assert len(results) == 1 and results[0]["status"] == "handled"
     sessions = orch.list_sessions()
     assert len(sessions) == 1
     assert sessions[0].agent_type.value == "supervisor"
     assert sessions[0].task == "do the thing"
-    # Replied back to the sender's chat with the session summary.
-    assert len(fake.sent) == 1
-    assert fake.sent[0]["chat_id"] == 777
-    assert fake.sent[0]["text"]
+    # Replied back to the sender's chat: the ack, then the session summary.
+    assert len(fake.sent) == 2
+    assert [p["chat_id"] for p in fake.sent] == [777, 777]
+    assert ONESHOT_ACK in fake.sent[0]["text"]
+    assert fake.sent[1]["text"] and ONESHOT_ACK not in fake.sent[1]["text"]
 
 
 # --------------------------------------------------------------------------- #

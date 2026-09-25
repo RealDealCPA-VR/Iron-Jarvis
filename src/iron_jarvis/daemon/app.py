@@ -663,7 +663,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # would, and `refresh_opencode()` still re-resolves when the user saves
         # the setting.
         _rehydrate_step("warm_opencode", platform.providers.warm_opencode)
+        # v1.291.0 (io-03): stamped BEFORE the reconcile so the poller can
+        # tell the rows THIS boot marked from ones an older boot did.
+        from ..core.ids import utcnow as _utcnow
+
+        _boot_started_at = _utcnow()
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
+        # v1.291.0 (io-03): a phone-started job runs outside the poll pass
+        # now, so a restart mid-run no longer trips the inflight marker; the
+        # reconcile above settled its row, this tells the phone (a tracked
+        # task — boot never waits on the network).
+        _rehydrate_step(
+            "notify_interrupted_comm",
+            lambda: inbound_poller.notify_interrupted(since=_boot_started_at),
+        )
         # AFTER session reconciliation by contract: a goal stranded mid-iteration
         # reads its session's honest FAILED/interrupted verdict (v1.208.0).
         _rehydrate_step("rehydrate_goals", platform.goal_engine.rehydrate)
@@ -1243,6 +1256,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         _tick("inbound", False, exc)
                     await asyncio.sleep(interval)
 
+            inbound_poller.resume_background()  # v1.291.0: the flag is per lifespan
             inbound_task = asyncio.create_task(_inbound_loop())
 
         # Slack SOCKET MODE — two-way Slack with zero internet exposure: the
@@ -1321,6 +1335,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 slack_socket_task.cancel()
             if inbound_task is not None:
                 inbound_task.cancel()
+            # v1.291.0 (io-03): phone-started sessions run in the poller's own
+            # tracked tasks now (the poll pass no longer awaits them), so they
+            # are cancelled here like every other background run — a
+            # mid-run restart still lands on the interrupted-session reconcile.
+            try:
+                inbound_poller.cancel_background()
+                # Let the cancelled deliveries run their handlers NOW: the
+                # graceful-shutdown re-arm of the phone's inflight marker
+                # happens there, and it must not depend on how the loop
+                # drains cancelled tasks after this generator returns.
+                await asyncio.wait_for(inbound_poller.drain(), timeout=5.0)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             for task in bg_tasks.values():
                 task.cancel()
             if compact_task is not None:

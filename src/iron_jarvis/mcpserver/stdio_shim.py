@@ -35,6 +35,7 @@ cut and it is worse, because a pin cannot fail against a fallback.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -296,8 +297,42 @@ def main(
         return 2
     factory = shim_factory if shim_factory is not None else StdioShim
     shim = factory(url, token)
-    return shim.run(stdin if stdin is not None else sys.stdin,
-                    stdout if stdout is not None else sys.stdout)
+    return shim.run(stdin if stdin is not None else _utf8_stdin(),
+                    stdout if stdout is not None else _utf8_stdout())
+
+
+def _utf8_stdin() -> TextIO:
+    """``sys.stdin`` re-wrapped as UTF-8 (v1.291.0, io-05).
+
+    MCP stdio is UTF-8 by spec and a Rust/Node harness writes raw UTF-8, but
+    ``sys.stdin`` decodes with the LOCALE codec — cp1252 on Windows — so
+    "José Muñoz" arrived as mojibake and the five bytes cp1252 leaves undefined
+    (0x81 0x8D 0x8F 0x90 0x9D: Á, Í, Ï, Ð, Ý) raised straight out of the read
+    loop and killed the shim. ``errors="replace"`` keeps a harness that wrongly
+    writes cp1252 alive (U+FFFD instead of a dead pipe). ``newline="\\n"`` so
+    the reader splits on the protocol's own delimiter; a stray ``\\r`` is
+    stripped by ``handle_line``. Falls back to the stream itself where there is
+    no byte buffer (a text stream injected by an embedding harness).
+    """
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin
+    return io.TextIOWrapper(buffer, encoding="utf-8", errors="replace", newline="\n")
+
+
+def _utf8_stdout() -> TextIO:
+    """``sys.stdout`` re-wrapped as UTF-8, line-buffered (same finding).
+
+    ``newline="\\n"`` on purpose, never ``None``: the default would translate
+    the trailing ``\\n`` to CRLF on Windows and a harness that splits on
+    ``\\n`` would be handed a ``\\r`` at the end of every JSON line.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        return sys.stdout
+    return io.TextIOWrapper(
+        buffer, encoding="utf-8", errors="replace", newline="\n", line_buffering=True
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - process entry point

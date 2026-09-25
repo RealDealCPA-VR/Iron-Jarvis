@@ -557,6 +557,9 @@ async def test_a_comm_started_session_asks_back_and_the_bell_lists_it(rt, monkey
     assert mine is not None and mine.get("tool") == "shell", listed
 
     res = await handled
+    # v1.291.0 (io-03): _handle returns once the job is dispatched; the
+    # run itself is a tracked task, so wait for it to end before reading.
+    await poller.drain()
     row = _row(rt.platform.engine, res["session_id"])
     assert row.origin == "comm:tg" and row.outcome == OUTCOME_NEEDS_YOU
     assert ch.sent, "the phone still hears how it ended"

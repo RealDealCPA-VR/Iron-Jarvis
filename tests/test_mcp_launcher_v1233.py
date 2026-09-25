@@ -53,9 +53,10 @@ def test_the_stdio_transport_is_built_with_the_resolved_path(monkeypatch):
     seen = {}
 
     class _Stdio:
-        def __init__(self, command, args=None, *, env=None, cwd=None):
+        def __init__(self, command, args=None, *, env=None, cwd=None, request_timeout=...):
             seen["command"] = command
             seen["args"] = list(args or [])
+            seen["request_timeout"] = request_timeout
 
     monkeypatch.setattr(mcp_tools, "StdioTransport", _Stdio)
     monkeypatch.setattr(
@@ -68,6 +69,9 @@ def test_the_stdio_transport_is_built_with_the_resolved_path(monkeypatch):
     )
     assert seen["command"] == r"C:\nodejs\npx.cmd"
     assert seen["args"] == ["-y", "pkg"]
+    # v1.291.0: a registry pack carries NO transport floor — the registry
+    # deadline (config.tool_call_timeout_s) is its bound.
+    assert seen["request_timeout"] is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="the .cmd launcher shape is Windows-only")

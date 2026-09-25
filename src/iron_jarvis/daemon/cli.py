@@ -113,6 +113,33 @@ def repl_worker() -> None:
     _worker_main()
 
 
+@app.command("mcp-stdio", hidden=True)
+def mcp_stdio(
+    url: str = typer.Argument("", help="The daemon's /mcp URL (else IRONJARVIS_MCP_URL)."),
+) -> None:
+    """Run Jarvis's stdio MCP bridge on stdin/stdout (v1.291.0, internal).
+
+    NOT for humans — a Build-pane launch recipe writes ``sys.executable`` plus
+    this subcommand into the harness's MCP config, and the harness (Codex)
+    spawns it as a child. The recipe used to write ``-m
+    iron_jarvis.mcpserver.stdio_shim``, which is right for a Python
+    interpreter and wrong for the installed app: frozen, ``sys.executable`` is
+    ``ironjarvis.exe``, whose entry point is THIS Typer app, and Typer rejects
+    ``-m`` ("No such option") before any bridge exists. Same shape as
+    ``repl-worker`` above, for the same reason — every CLI subcommand is
+    reachable from the exe, so re-executing ourselves works identically frozen
+    and in development.
+
+    Hidden because it is a protocol endpoint: stdout CARRIES the JSON-RPC
+    wire, so nothing here may print to it (no banner, no console) and nothing
+    here reads stdin — the shim owns both streams. The shim's exit code is
+    relayed unchanged (2 = started with no token, said on stderr).
+    """
+    from ..mcpserver.stdio_shim import main as _shim_main
+
+    raise typer.Exit(code=_shim_main(["mcp-stdio", url] if url else ["mcp-stdio"]))
+
+
 @app.command()
 def init(path: str = typer.Argument(".", help="Project root to initialize.")) -> None:
     """Create .ironjarvis/ and a starter config for a project."""

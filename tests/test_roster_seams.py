@@ -661,6 +661,7 @@ async def test_comm_escalate_override_spawns_the_named_builtin(platform, monkeyp
     )
     poller, orch, ch = _poller(platform, _escalating_turn(escalate_agent="researcher"))
     res = await poller._handle("tg", ch, _msg("dig into this"))
+    await poller.drain()  # v1.291.0: the session runs in a tracked task
     assert res["status"] == "chat_escalated" and res["session_id"]
     spawned = next(s for s in orch.list_sessions() if s.id == res["session_id"])
     assert spawned.agent_type is AgentType.RESEARCHER      # the override took
@@ -674,6 +675,7 @@ async def test_comm_escalate_default_supervisor_when_agent_absent_or_invalid(
     for extra in ({}, {"escalate_agent": "custom:ghost"}, {"escalate_agent": None}):
         poller, orch, ch = _poller(platform, _escalating_turn(**extra))
         res = await poller._handle("tg", ch, _msg("build the report"))
+        await poller.drain()
         assert res["status"] == "chat_escalated"
         spawned = next(s for s in orch.list_sessions() if s.id == res["session_id"])
         assert spawned.agent_type is AgentType.SUPERVISOR  # default unchanged
@@ -692,6 +694,7 @@ async def test_comm_escalate_dynamic_target_runs_its_definition(
     monkeypatch.setattr(platform, "router", router)
     poller, orch, ch = _poller(platform, _escalating_turn(escalate_agent="custom:helper"))
     res = await poller._handle("tg", ch, _msg("do the custom thing"))
+    await poller.drain()  # v1.291.0: the session runs in a tracked task
     assert res["status"] == "chat_escalated"
     spawned = next(s for s in orch.list_sessions() if s.id == res["session_id"])
     assert spawned.status.value == "completed"

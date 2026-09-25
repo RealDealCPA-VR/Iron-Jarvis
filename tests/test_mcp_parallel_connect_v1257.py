@@ -190,7 +190,14 @@ def test_one_pack_takes_no_pool_at_all(monkeypatch):
     """
     import concurrent.futures
 
-    def _no_pools(*_a, **_kw):
+    real_pool = concurrent.futures.ThreadPoolExecutor
+
+    def _no_pools(*a, **kw):
+        # asyncio's default executor (thread_name_prefix "asyncio") is the
+        # hop `MCPClient` makes for a blocking transport since v1.291.0
+        # (io-02); it is not the connect fan-out this pin is about.
+        if kw.get("thread_name_prefix") == "asyncio":
+            return real_pool(*a, **kw)
         raise AssertionError("a single pack must not build a thread pool")
 
     monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", _no_pools)

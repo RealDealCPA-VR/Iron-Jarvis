@@ -1843,6 +1843,54 @@ does not need a bump, stop and bump it.
   `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
   `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
 
+- **Packs, spreadsheets and the phone** (v1.291.0, deep review wave 4).
+  (io-01) A read_only openpyxl sheet RE-PARSES ITS XML FROM ROW 1 on every
+  `iter_rows(min_row=r, max_row=r)`, so a per-row lookup is O(rows²) (1,000
+  rows with one blank column: 25 s). `_read_xlsx` walks the value and formula
+  passes in LOCKSTEP by POSITION (`enumerate` + `next(frows)`), opening the
+  formula pass lazily on the first `None` cell; never `.row`/`.coordinate` —
+  an unwritten blank arrives as `EmptyCell`, which has neither (that was a
+  crash, not just a slowdown). The pin is a RATIO (blank column vs none).
+  (io-02) `MCPClient._request` runs a synchronous transport OFF THE LOOP
+  (`asyncio.to_thread`) under a per-transport lock (ids and the single stdout
+  reader never interleave); `StdioTransport` reads on a reader thread + queue
+  with a deadline; on expiry or cancel `abort()` KILLS the child (a parked
+  readline must never keep owning the pipe) so the next call respawns. The
+  registry deadline (`config.tool_call_timeout_s`) is the ONE bound on a
+  pack call: a registry transport takes `request_timeout=None`; only
+  deadline-less callers (the LTM brain, driven through `asyncio.run`) get
+  `DEFAULT_REQUEST_TIMEOUT_S`. A transport floor shorter than the caller's
+  deadline is a bug. (io-05) The child is spawned with `encoding="utf-8",
+  errors="replace"` (MCP stdio is UTF-8 by spec; cp1252 raised on C3 8D) and
+  `stdio_shim` wraps `sys.stdin/stdout.buffer` in UTF-8 TextIOWrappers.
+  (io-06) `_ensure_started` respawns when `_proc.poll()` is not None; EOF /
+  OSError / BrokenPipe mark the process dead and raise an `MCPError` that
+  NAMES the pack and says it restarts on the next call — never auto-retry
+  (a tools/call may have had side effects). `close()` kills the process TREE
+  (kill-on-close Job on Windows — npx runs cmd.exe with node as a grandchild —
+  then the pipes, so a parked readline returns). (io-03) The phone poll
+  never awaits a session: `_handle` creates it, acks inline, and runs it in a
+  tracked task (`_spawn_delivery`; set + done-callback; cancelled at
+  lifespan shutdown) that sends the summary and `_safe_append`s it; the
+  inflight marker covers DISPATCH only. Two restart paths tell the phone: a
+  crash → boot reconcile stamps `interrupted_at` → `notify_interrupted(since=
+  boot)` (sent to the single allowed sender's chat when the channel has no
+  `chat_id`); a graceful shutdown → `cancel_background()` sets
+  `_shutting_down` and the cancelled delivery RE-ARMS the inflight marker so
+  the next boot's `_recover_inflight` sends `DROPPED_REPLY` — a desktop
+  Cancel does not re-arm. A pin that awaits `_handle` then reads the outcome
+  needs `await poller.drain()`. (io-04) The frozen exe's entry is the Typer
+  CLI, so `-m iron_jarvis.mcpserver.stdio_shim` died with "No such option":
+  hidden `ironjarvis mcp-stdio` (lazy import, nothing on stdout but the
+  protocol); `CodexRecipe.config_text` writes `["mcp-stdio"]` under
+  `sys.frozen`, else `["-m", module]`, and `_shim_available` agrees.
+  RELEASE CHECKLIST: after an installer builds, run
+  `"<install>\resources\daemon\ironjarvis.exe" mcp-stdio` with
+  IRONJARVIS_MCP_URL/TOKEN set and feed one `initialize` line — one JSON-RPC
+  line must come back (exit 0). Pins: `tests/test_xlsx_blank_cells_v1291.py`,
+  `test_mcp_stdio_transport_v1291.py` (+ `tests/fixtures/stdio_mcp_server_v1291.py`),
+  `test_phone_job_background_v1291.py`, `test_codex_frozen_shim_v1291.py`.
+
 - **Safety checks, other agents' history, and a read-only Memory door**
   (v1.290.0, from agent-beacon, MIT). THREE parts, one normalized EVENT dict
   (`action`, `session_id`, `source`, `ts`, `tool`, `command`, `path`, `url`,

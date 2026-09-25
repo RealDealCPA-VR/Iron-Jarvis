@@ -78,6 +78,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -773,6 +774,9 @@ class CodexRecipe:
     config_name = "config.toml"
     home_env = "CODEX_HOME"
     shim_module = "iron_jarvis.mcpserver.stdio_shim"
+    #: The hidden CLI subcommand that runs the same shim from the frozen exe
+    #: (``daemon/cli.py:mcp_stdio``) — see :meth:`_shim_launch`.
+    shim_command = "mcp-stdio"
 
     def detect(self) -> str:
         return _first_version_line(_probe(self.command, "--version"))
@@ -780,8 +784,47 @@ class CodexRecipe:
     def _help(self) -> str:
         return _probe(self.command, "--help")
 
+    @staticmethod
+    def _frozen() -> bool:
+        """Is this the packaged app (``sys.executable`` is ``ironjarvis.exe``)?"""
+        return bool(getattr(sys, "frozen", False))
+
+    def _shim_launch(self) -> list[str]:
+        """The argv AFTER ``sys.executable`` that starts Jarvis's stdio bridge.
+
+        Two shapes, because ``sys.executable`` is two different programs:
+
+        * dev:    ``["-m", "iron_jarvis.mcpserver.stdio_shim"]`` — a Python
+          interpreter, which knows ``-m``.
+        * frozen: ``["mcp-stdio"]`` — the packaged ``ironjarvis.exe``, whose
+          entry point is the Typer CLI. Typer rejects ``-m`` ("No such
+          option") before any bridge exists, so the installed app used to
+          write a config Codex could never start. Same indirection as
+          ``repl/session.py`` uses for ``repl-worker``, for the same reason.
+        """
+        if self._frozen():
+            return [self.shim_command]
+        return ["-m", self.shim_module]
+
     def _shim_available(self) -> bool:
-        """Is Jarvis's stdio shim importable in THIS build?"""
+        """Is Jarvis's stdio bridge REACHABLE the way :meth:`_shim_launch` starts it?
+
+        The question is not "is the module bundled" — a frozen build bundles it
+        and still could not run it. It is "does the launch argv this recipe
+        writes actually reach the shim": frozen, the hidden CLI subcommand must
+        be registered; in development, the module must be importable.
+        """
+        if self._frozen():
+            try:
+                from ..daemon.cli import app as _cli_app
+
+                return any(
+                    (info.name or info.callback.__name__.replace("_", "-"))
+                    == self.shim_command
+                    for info in _cli_app.registered_commands
+                )
+            except Exception:
+                return False
         import importlib.util
 
         try:
@@ -845,10 +888,8 @@ class CodexRecipe:
         shell inherits it. One copy of a credential is easier to reason about
         than two, and the copy in the environment dies with the process.
         """
-        import sys
-
         exe = json.dumps(sys.executable)
-        args = json.dumps(["-m", self.shim_module])
+        args = json.dumps(self._shim_launch())
         return (
             "# Written by Iron Jarvis for this Build pane. Safe to delete.\n"
             f"[mcp_servers.{json.dumps(SERVER_NAME)}]\n"

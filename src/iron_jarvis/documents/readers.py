@@ -587,9 +587,17 @@ def _read_xlsx(p: Path, *, sheet: str | int | None = None) -> str:
         parts: list[str] = []
         for ws in targets:
             parts.append(f"## {ws.title}")
-            fws = None
-            for row in ws.iter_rows():
-                cells: list[str] = []
+            # Formula-pass rows, walked in LOCKSTEP with the value pass once the
+            # sheet shows its first None cell. Both passes parse the same sheet
+            # XML (same dimensions, same EmptyCell padding for missing rows and
+            # cells), so position i in one is position i in the other. A
+            # per-row `iter_rows(min_row=r, max_row=r)` on a read_only sheet
+            # re-parses the XML from row 1 every call: an ordinary blank cell
+            # is None too, so a ledger with one empty column went O(rows^2).
+            # Positional indexing also sidesteps EmptyCell, which has no
+            # ``.row``/``.coordinate``.
+            frows = None
+            for idx, row in enumerate(ws.iter_rows()):
                 need_formula = False
                 rendered: list[str] = []
                 for cell in row:
@@ -597,20 +605,22 @@ def _read_xlsx(p: Path, *, sheet: str | int | None = None) -> str:
                         cell.value, getattr(cell, "number_format", None)
                     )
                     rendered.append(val)
-                    if val == "" and cell.value is None:
+                    if cell.value is None:
                         need_formula = True
-                    cells.append(cell)
-                if need_formula:
+                if need_formula and frows is None:
                     if formula_wb is None:
                         formula_wb = load_workbook(
                             filename=str(p), read_only=True, data_only=False
                         )
-                    if fws is None:
-                        fws = formula_wb[ws.title]
-                    # Zip the same row from the formula pass; show any "=..." text
-                    # where the value pass had nothing.
-                    frow = _row_at(fws, cells[0].row) if cells else None
-                    if frow is not None:
+                    # Open once per sheet, only when needed, and catch up to
+                    # this row so a sheet with no blanks never pays a 2nd parse.
+                    frows = formula_wb[ws.title].iter_rows()
+                    for _ in range(idx):
+                        next(frows, None)
+                if frows is not None:
+                    frow = next(frows, None)
+                    # Show any "=..." text where the value pass had nothing.
+                    if need_formula and frow is not None:
                         for i, fcell in enumerate(frow):
                             if i < len(rendered) and rendered[i] == "":
                                 fval = fcell.value
@@ -622,13 +632,6 @@ def _read_xlsx(p: Path, *, sheet: str | int | None = None) -> str:
         wb.close()
         if formula_wb is not None:
             formula_wb.close()
-
-
-def _row_at(ws, row_number: int):
-    """Return the cells of ``ws`` at 1-based ``row_number`` (read-only safe)."""
-    for row in ws.iter_rows(min_row=row_number, max_row=row_number):
-        return row
-    return None
 
 
 def _select_sheets(wb, sheet: str | int | None):
