@@ -655,7 +655,11 @@ def test_real_conpty_kill_takes_the_whole_console_tree(tmp_path):
     b.kill()
     for pid in (child_pid, gpid):
         try:
-            psutil.Process(pid).wait(timeout=20)
+            # v1.292.1: 90 s, not 20 -- a liveness bound, not a speed claim.
+            # The v1.292.0 release gate went red here on a shared runner
+            # that took 28 min for the suite (the tree died late, not
+            # never); 90 s matches the EOF wait below.
+            psutil.Process(pid).wait(timeout=90)
         except psutil.NoSuchProcess:
             pass
     assert not psutil.pid_exists(gpid) or psutil.Process(gpid).status() == psutil.STATUS_ZOMBIE

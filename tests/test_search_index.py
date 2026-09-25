@@ -1552,7 +1552,11 @@ def test_a_backfill_sized_write_cannot_stall_a_chat_save(engine, index):
     # cannot make the ratio absurdly strict; above that it scales with the box.
     # The pathology was ~80,000x, so 50x cannot pass while the inversion exists
     # and cannot fail because a CI runner is busy.
-    limit = max(200.0, base_p95 * 50.0)
+    # v1.292.1: floor raised 200 -> 500 ms. The v1.292.0 release gate saw
+    # contended p95 = 319 ms against limit 276 on a shared runner that took
+    # 31 min for the suite (alone p95 5.5 ms): scheduler noise, not the
+    # inversion, which was seconds. 500 ms still fails a real stall.
+    limit = max(500.0, base_p95 * 50.0)
     assert p95 < limit, (
         f"chat saves are stalling behind the backfill (limit {limit:.0f}ms): {detail}"
     )

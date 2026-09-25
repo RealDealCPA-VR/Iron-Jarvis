@@ -1873,7 +1873,11 @@ does not need a bump, stop and bump it.
   `clear_media`'s scope (`_MEDIA_DIRS`) is unchanged and pinned. Also:
   `projects/knowledge.list_knowledge` orders by `created_at DESC, rowid
   DESC` — the same-tick tie (v1.286.0 blackboard lesson) made the gate's
-  `test_add_list_remove` fail two runs in three here. Two tasks
+  `test_add_list_remove` fail two runs in three here. v1.292.1 (test-only):
+  the release gate went red twice on a slow shared runner (28-31 min suites)
+  on two timing tests -- the ConPTY kill wait is 90 s (liveness, matching the
+  EOF wait) and the search-index fairness floor is 500 ms (the pathology was
+  seconds). Two tasks
   edited `routes/comm.py` concurrently: targeted Edits only — a whole-file
   restore during a mutation check re-landed a line into the other task's
   region once. Pins: `tests/test_livedoc_schedule_v1292.py`,
