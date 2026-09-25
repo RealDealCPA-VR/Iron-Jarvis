@@ -1843,6 +1843,44 @@ does not need a bump, stop and bump it.
   `test_chat_inturn_budget_v1287.py`, `test_chat_error_detail_v1287.py`,
   `dashboard/__tests__/chat-steer-unread-v1287.test.tsx`.
 
+- **Background work you can trust** (v1.292.0, deep review wave 5).
+  (platform-01) A SYNC event-bus handler never sees a running loop in
+  production — `EventBus._dispatch` runs it via `to_thread` — so
+  `except RuntimeError: pass` around `get_running_loop().create_task(...)`
+  drops the work EVERY time, not just in unit tests (a scheduled living-doc
+  refresh said "done" and regenerated nothing). The shape is
+  `_publish_skill_proposal`'s: create the coroutine once; on RuntimeError hop
+  onto `_live_rearm["loop"]` with `run_coroutine_threadsafe`, else
+  `coro.close()` + WARN. Grep for that `pass` before adding a handler.
+  (platform-04) A background pump armed once at boot must be a LIVE re-arm:
+  `_live_rearm["slack"]` = `_arm_slack_socket` (one holder for the CURRENT
+  stop Event + task; sets the old stop, awaits the old task, re-probes
+  `enabled()`, starts a fresh pump whose token is read per run), called from
+  POST/DELETE `/comm/channels` when the type is slack via
+  `_rearm_slack_socket` (hops onto the loop with `call_soon_threadsafe`, as
+  the calendar re-arm does); shutdown sets whichever stop is current, and a
+  re-arm landing after the finally never starts a pump. (platform-06) An
+  outbound webhook with no event types is REFUSED (400, plain words) — an
+  empty list matched nothing while the page said "all"; `DELETE
+  /webhooks/{slug}` pops the in-memory inbound handler AND the outbound
+  `_secrets` cache entry but leaves the vault secret (`secret_name` may be
+  shared); the page has a two-press Remove. (platform-02) `create_backup`
+  excludes `<home>/trash` (resolved) next to the media dirs — `clear_media`
+  moves media there, and every later backup + mirror archived it.
+  (platform-08) `storage_report` lists workspaces, uploads, remote-inbox,
+  livedocs and documents (`clearable=False`) plus an "Everything else" row =
+  the whole walk minus the listed folders, so `total_bytes` is the disk;
+  `clear_media`'s scope (`_MEDIA_DIRS`) is unchanged and pinned. Also:
+  `projects/knowledge.list_knowledge` orders by `created_at DESC, rowid
+  DESC` — the same-tick tie (v1.286.0 blackboard lesson) made the gate's
+  `test_add_list_remove` fail two runs in three here. Two tasks
+  edited `routes/comm.py` concurrently: targeted Edits only — a whole-file
+  restore during a mutation check re-landed a line into the other task's
+  region once. Pins: `tests/test_livedoc_schedule_v1292.py`,
+  `test_slack_socket_rearm_v1292.py`, `test_webhooks_manage_v1292.py` (+
+  `dashboard/__tests__/webhooks-manage-v1292.test.tsx`),
+  `test_maintenance_storage_v1292.py`.
+
 - **Packs, spreadsheets and the phone** (v1.291.0, deep review wave 4).
   (io-01) A read_only openpyxl sheet RE-PARSES ITS XML FROM ROW 1 on every
   `iter_rows(min_row=r, max_row=r)`, so a per-row lookup is O(rows²) (1,000

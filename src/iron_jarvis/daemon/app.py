@@ -774,10 +774,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 except Exception:  # noqa: BLE001 — recorded on the doc row
                     log.exception("living-doc regeneration failed for %s", doc_id)
 
+            # Sync handlers run OFF the loop (bus._dispatch → to_thread), so
+            # get_running_loop() raises here in PRODUCTION, not only in unit
+            # tests: the old `except RuntimeError: pass` dropped EVERY
+            # scheduled / Run-now refresh while the schedule ledger said
+            # "done" (v1.292.0, platform-01). Hop onto the lifespan loop
+            # thread-safely — the _publish_skill_proposal pattern — and say
+            # so when there is no loop to hop to (never silent).
+            coro = _regen()
             try:
-                asyncio.get_running_loop().create_task(_regen())
-            except RuntimeError:  # no loop (unit tests) — skip silently
-                pass
+                asyncio.get_running_loop().create_task(coro)
+            except RuntimeError:
+                loop = _live_rearm.get("loop")
+                if loop is not None and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(coro, loop)
+                else:
+                    coro.close()
+                    log.warning(
+                        "living-doc regeneration for %s dropped: no daemon loop",
+                        doc_id,
+                    )
 
         platform.event_bus.add_handler(_on_livedoc_event)
 
@@ -1264,8 +1280,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # only when a slack channel opted in (inbound_enabled + allowlist +
         # app token), so default installs and tests create nothing. Disable
         # explicitly via IRONJARVIS_SLACK_SOCKET=off.
-        slack_socket_task = None
-        slack_socket_stop = None
+        # v1.292.0 (platform-04): the CURRENT pump lives in a mutable holder —
+        # ``_arm_slack_socket`` swaps it, and shutdown stops whichever is
+        # current — so a Slack channel added / re-tokened / removed on the
+        # Channels page re-arms live (``_live_rearm["slack"]``), like the
+        # inbound poller, autonomy, sentinels, calendar and fleet already do.
+        slack_socket: dict[str, Any] = {"task": None, "stop": None}
         if os.environ.get("IRONJARVIS_SLACK_SOCKET", "on").strip().lower() not in (
             "0", "false", "no", "off",
         ):
@@ -1280,27 +1300,67 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 # failed (with the reason) on every refused dial or drop.
                 on_tick=lambda ok, exc: _tick("slack_socket", ok, exc),
             )
-            try:  # v1.226.0: a secret read in here must never abort boot
-                _socket_enabled = bool(_socket.enabled())
-            except Exception:  # noqa: BLE001 — a probe never breaks boot
-                log.exception("slack socket mode: enabled() probe failed; not armed")
-                _socket_enabled = False
-            if _socket_enabled:
-                slack_socket_stop = asyncio.Event()
+
+            def _arm_slack_socket(*, settle: float = 0.0) -> None:
+                """(Re)start the Socket Mode pump from the CURRENT channel set.
+
+                Runs on the daemon loop: once here at boot, then from POST /
+                DELETE /comm/channels via ``_live_rearm["slack"]`` (hopped
+                onto the loop the way PUT /settings does). Every arm gets its
+                OWN stop Event + task: the previous pump is told to stop and
+                cancelled, the new one waits for it to finish before dialling
+                (never two pumps on one channel), and ``run()`` re-reads
+                ``candidates()`` — the token is read per run, never captured
+                once, so an edited app token takes effect without a restart.
+                A channel set with no candidate stops the old pump and arms
+                nothing (boot with none → no task). Never raises.
+                """
+                old_task, old_stop = slack_socket["task"], slack_socket["stop"]
+                slack_socket["task"] = slack_socket["stop"] = None
+                if old_stop is not None:
+                    old_stop.set()
+                if old_task is not None:
+                    old_task.cancel()
+                if _live_rearm.get("loop") is None:
+                    # Daemon going down (the finally cleared _live_rearm) — a
+                    # route re-arm landing here must not start a fresh pump,
+                    # whether or not one was running (review: a daemon that
+                    # booted with NO Slack channel had an empty holder, so the
+                    # old `old_task is not None and` guard let it dial after
+                    # the teardown). Boot arms only after "loop" is set.
+                    return
+                try:  # v1.226.0: a secret read in here must never abort boot
+                    _socket_enabled = bool(_socket.enabled())
+                except Exception:  # noqa: BLE001 — a probe never breaks boot
+                    log.exception("slack socket mode: enabled() probe failed; not armed")
+                    _socket_enabled = False
+                if not _socket_enabled:
+                    if old_task is not None:
+                        log.info("slack socket mode disarmed")
+                    return
+                stop = asyncio.Event()
 
                 async def _slack_socket_loop() -> None:
-                    await asyncio.sleep(15)  # let boot settle first
+                    if old_task is not None:
+                        await asyncio.wait({old_task})  # the old pump is gone first
+                    if settle:
+                        await asyncio.sleep(settle)  # let boot settle first
                     try:
                         # No arm-time _tick (v1.229.0): "armed and dialling
                         # out" is not "connected" — the pump ticks on_tick.
-                        await _socket.run(stop=slack_socket_stop)
+                        await _socket.run(stop=stop)
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001 — never kill the daemon
                         log.exception("slack socket mode loop failed")
                         _tick("slack_socket", False, exc)
 
-                slack_socket_task = asyncio.create_task(_slack_socket_loop())
+                slack_socket["stop"] = stop
+                slack_socket["task"] = asyncio.create_task(_slack_socket_loop())
+                log.info("slack socket mode (re)armed")
+
+            _arm_slack_socket(settle=15.0)
+            _live_rearm["slack"] = _arm_slack_socket
         # ONE line, once, when boot is genuinely done (v1.250.0, S-01):
         # everything above has run and the app is about to serve. Wrapped
         # because the boot's own summary must never become the thing that
@@ -1329,10 +1389,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await fleet_sampler.stop()  # cancel cleanly, no pending-task warnings
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
-            if slack_socket_stop is not None:
-                slack_socket_stop.set()
-            if slack_socket_task is not None:
-                slack_socket_task.cancel()
+            # Whichever pump is CURRENT (a live re-arm may have swapped it).
+            if slack_socket["stop"] is not None:
+                slack_socket["stop"].set()
+            if slack_socket["task"] is not None:
+                slack_socket["task"].cancel()
             if inbound_task is not None:
                 inbound_task.cancel()
             # v1.291.0 (io-03): phone-started sessions run in the poller's own

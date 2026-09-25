@@ -122,6 +122,22 @@ class InboundWebhooks:
                 db.commit()
         return slug
 
+    def unregister(self, slug: str) -> bool:
+        """Remove the inbound trigger ``slug``: its live handler, the in-memory
+        secret cache entry and the durable row, so a later POST to it answers
+        ``unknown_slug`` and a restart does not re-arm it. The vault secret is
+        left alone (``secret_name`` may be shared). Returns True when a row was
+        removed (v1.292.0, platform-06: a webhook can be deleted)."""
+        self._handlers.pop(slug, None)
+        self._secrets.pop(slug, None)
+        with session_scope(self.engine) as db:
+            row = db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first()
+            if row is None:
+                return False
+            db.delete(row)
+            db.commit()
+        return True
+
     def rehydrate(
         self, make_default_handler: Callable[[str], Handler]
     ) -> int:

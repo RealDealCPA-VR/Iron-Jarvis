@@ -9,7 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
-import { API_BASE, post, ApiError } from "@/lib/api";
+import { API_BASE, post, del, ApiError } from "@/lib/api";
 import type { Webhook } from "@/lib/types";
 import {
   Card,
@@ -21,6 +21,7 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -57,6 +58,23 @@ export default function WebhooksPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+
+  // v1.292.0 (platform-06): an outbound webhook with NO event types would
+  // match nothing (the server delivers only listed types) -- the form used to
+  // say "Leave blank for all events". Same sentence the daemon answers with.
+  const EMPTY_EVENTS_HINT =
+    "Pick at least one event type for an outbound webhook, for example session.completed. With none listed, nothing would ever be sent.";
+
+  async function remove(slugToRemove: string) {
+    setListError(null);
+    try {
+      await del(`/webhooks/${encodeURIComponent(slugToRemove)}`);
+      reload();
+    } catch (err) {
+      setListError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -65,13 +83,17 @@ export default function WebhooksPage() {
       setFormError("Outbound webhooks need a target URL.");
       return;
     }
-    setBusy(true);
-    setFormError(null);
-    setOk(null);
     const event_types = events
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    if (direction === "outbound" && event_types.length === 0) {
+      setFormError(EMPTY_EVENTS_HINT);
+      return;
+    }
+    setBusy(true);
+    setFormError(null);
+    setOk(null);
     try {
       await post("/webhooks", {
         slug: slug.trim(),
@@ -179,7 +201,9 @@ export default function WebhooksPage() {
                     className="field font-mono"
                   />
                   <div className="mt-1 text-[11px] text-zinc-600">
-                    Comma-separated. Leave blank for all events.
+                    {direction === "outbound"
+                      ? "Comma-separated. An outbound webhook only sends the event types listed here, so pick at least one."
+                      : "Comma-separated. Not needed for an inbound webhook."}
                   </div>
                 </div>
                 <div>
@@ -241,6 +265,7 @@ export default function WebhooksPage() {
 
       <Reveal>
         <Card title={`Registrations${webhooks.length ? ` · ${webhooks.length}` : ""}`} icon={<WebhookIcon size={15} />}>
+          {listError && <ErrorNote>{listError}</ErrorNote>}
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : webhooks.length === 0 ? (
@@ -257,6 +282,7 @@ export default function WebhooksPage() {
                     <th className="px-2 py-2.5 font-medium">Target / URL</th>
                     <th className="px-2 py-2.5 font-medium">Event types</th>
                     <th className="px-2 py-2.5 font-medium">Enabled</th>
+                    <th className="px-2 py-2.5 font-medium"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -292,7 +318,14 @@ export default function WebhooksPage() {
                         </td>
                         <td className="px-2 py-2.5">
                           {evs.length === 0 ? (
-                            <span className="text-zinc-600">all</span>
+                            // An outbound row with no types was saved by an
+                            // older build; it sends nothing -- say so, never "all".
+                            <span
+                              className={inbound ? "text-zinc-600" : "text-amber-300/80"}
+                              title={inbound ? undefined : "Remove it and add it again with at least one event type."}
+                            >
+                              {inbound ? "—" : "none — nothing is sent"}
+                            </span>
                           ) : (
                             <div className="flex flex-wrap gap-1">
                               {evs.map((ev) => (
@@ -308,6 +341,13 @@ export default function WebhooksPage() {
                         </td>
                         <td className="px-2 py-2.5">
                           <Dot on={!!w.enabled} />
+                        </td>
+                        <td className="px-2 py-2.5 text-right">
+                          <ConfirmButton
+                            label="Remove"
+                            onConfirm={() => remove(w.slug)}
+                            title={`Remove webhook ${w.slug}`}
+                          />
                         </td>
                       </tr>
                     );

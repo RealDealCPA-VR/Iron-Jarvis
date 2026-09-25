@@ -239,6 +239,21 @@ def register(app: FastAPI, d) -> None:
             ]
         }
 
+    def _rearm_slack_socket() -> None:
+        """v1.292.0 (platform-04): a Slack channel added, re-tokened or removed
+        here re-arms the Socket Mode pump NOW instead of at the next restart.
+        This sync route runs in a threadpool, so hop onto the daemon loop (the
+        calendar trigger's pattern). Guarded — the lifespan wires it — and a
+        re-arm hiccup never fails the write (the config is already persisted)."""
+        rearm = getattr(d, "_live_rearm", {}) or {}
+        loop = rearm.get("loop")
+        fn = rearm.get("slack")
+        if loop is not None and fn is not None:
+            try:
+                loop.call_soon_threadsafe(fn)
+            except Exception:  # noqa: BLE001 — a re-arm hiccup must not fail the write
+                pass
+
     @app.post("/comm/channels")
     def add_comm_channel(body: ChannelCreate) -> dict[str, Any]:
         """Add a comm channel (Slack/Discord/Telegram/email).
@@ -328,6 +343,10 @@ def register(app: FastAPI, d) -> None:
             secret_resolver=d.platform.secrets.get,
         )
         d.platform.notifier.add_channel(name, channel)
+        # Two-way Slack (Socket Mode) dials out from a background pump that
+        # used to be armed only at boot — connect (or re-token) it now.
+        if ctype == "slack":
+            _rearm_slack_socket()
         return {"name": name, "type": ctype, "added": True}
 
     @app.delete("/comm/channels/{name}")
@@ -347,6 +366,9 @@ def register(app: FastAPI, d) -> None:
                         d.platform.secrets.delete(val)
                     except Exception:  # noqa: BLE001
                         pass
+        # A removed two-way Slack channel stops its Socket Mode pump now.
+        if (cfg or {}).get("type") == "slack":
+            _rearm_slack_socket()
         return {"name": name, "removed": removed or cfg is not None}
 
     @app.post("/comm/threads/{thread_id}/send")
@@ -822,13 +844,20 @@ def register(app: FastAPI, d) -> None:
         if body.direction == "outbound":
             if not body.target_url:
                 raise HTTPException(status_code=400, detail="outbound needs target_url")
-            d.platform.outbound_webhooks.register(
-                body.slug,
-                body.target_url,
-                body.event_types,
-                secret=secret,
-                secret_name=body.secret_name or None,  # persist the real vault key
-            )
+            # v1.292.0 (platform-06): an outbound webhook with no event types
+            # would match nothing (on_event needs ``event.type in types``) while
+            # the page used to promise "all events" -- refuse it up front, in a
+            # sentence the person can act on, instead of saving a dead row.
+            try:
+                d.platform.outbound_webhooks.register(
+                    body.slug,
+                    body.target_url,
+                    body.event_types,
+                    secret=secret,
+                    secret_name=body.secret_name or None,  # persist the real vault key
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:  # inbound: publish the event AND fire any bound reflex rules.
             # v1.122.0 fix: the create-time handler used to only publish, so a
             # freshly created webhook silently skipped reflexes until the next
@@ -859,6 +888,28 @@ def register(app: FastAPI, d) -> None:
                 body.slug, _handler, secret=secret, secret_name=body.secret_name or None
             )
         return {"slug": body.slug, "direction": body.direction}
+
+    @app.delete("/webhooks/{slug}")
+    def delete_webhook(slug: str) -> dict[str, Any]:
+        """Remove a webhook registration (v1.292.0, platform-06).
+
+        Before this there was no way to take a webhook back out: the row, the
+        inbound in-memory handler and the outbound secret cache all stayed for
+        good. This drops all three; the vault secret named by ``secret_name`` is
+        left alone because another webhook may share it. Unknown slug -> 404.
+        """
+        from ...webhooks.models import WebhookRecord
+
+        with session_scope(d.platform.engine) as db:
+            row = db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first()
+            direction = row.direction if row is not None else None
+        if direction is None:
+            raise HTTPException(status_code=404, detail=f"no webhook named '{slug}'")
+        if direction == "outbound":
+            d.platform.outbound_webhooks.unregister(slug)
+        else:
+            d.platform.inbound_webhooks.unregister(slug)
+        return {"ok": True, "slug": slug, "direction": direction}
 
     @app.post("/webhooks/{slug}")
     async def inbound_webhook(slug: str, request: Request) -> Any:

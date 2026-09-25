@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.291.0 (2026-09-14).*
+holds itself to. Current as of v1.292.0 (2026-09-14).*
 
 ---
 
@@ -1563,6 +1563,18 @@ next call with an error that names the pack; a job you text from your phone
 no longer blocks the phone — "approve", /status and /cancel work while it
 runs, and if Jarvis restarts mid-job your phone is told; and in the
 installed app, Codex in a Build pane now really gets the Jarvis tools.
+**v1.292.0 (Wave 5, background work you can trust):** a living document set
+to refresh on a schedule (or with Run now) really regenerates instead of only
+saying "done"; a two-way Slack channel added, re-tokened or removed on the
+Channels page connects or stops at once, no restart; on the Webhooks page an
+outbound webhook must name at least one event (saving one with none is
+refused in plain words — it used to say "all" and send nothing), and any
+webhook can be removed with a two-press Remove button (its secret stays in the
+vault, since another webhook may share it); after "Clear generated media",
+backups and their mirror copies no longer swell with the cleared files; and
+Settings → Maintenance now counts session workspaces, uploads, files from
+remote agents, living documents, written documents and the browser profile,
+plus an "Everything else" line, so the total shown is what is really on disk.
 
 ## What changed in the audit waves (v1.227.0 → v1.232.0)
 

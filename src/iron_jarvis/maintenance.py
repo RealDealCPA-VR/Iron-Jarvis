@@ -68,9 +68,9 @@ def create_backup(
     ``VACUUM INTO`` snapshot (not the live ``.db``/``-wal``/``-shm``, which a
     concurrent checkpoint could leave internally inconsistent → a malformed restore).
     Excludes the Fernet keys unless ``include_keys``, ALWAYS excludes ``backups/``,
-    ``workspaces/``, and the regenerable media library (``artifacts/`` +
-    ``creative-thumbs/``), and writes the tar atomically (temp+os.replace). Returns
-    ``(out_path, count)``."""
+    ``workspaces/``, the regenerable media library (``artifacts/`` +
+    ``creative-thumbs/``) and the cleared media waiting in ``trash/``, and writes
+    the tar atomically (temp+os.replace). Returns ``(out_path, count)``."""
     home = Path(home)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +84,10 @@ def create_backup(
     # terminals.json) — hundreds of MB per snapshot. It's the user's own,
     # regeneratable/gallery data, so it stays out of the archive.
     media_dirs = ((home / "artifacts").resolve(), (home / "creative-thumbs").resolve())
+    # Media the user CLEARED (v1.256.0 moves it, never deletes it) is that same
+    # library waiting under trash/ — archiving it would put the 700 MB the press
+    # was meant to free into every nightly snapshot and its mirror instead.
+    trash_dir = (home / TRASH_DIRNAME).resolve()
     db_path = (home / _DB_NAME).resolve()
     snapshot = _consistent_db_snapshot(engine, home) if (engine is not None and db_path.exists()) else None
 
@@ -99,7 +103,7 @@ def create_backup(
                     continue  # never archive the backups themselves
                 if workspaces_dir in rp.parents:
                     continue  # skip disposable session scratch (unbounded growth)
-                if any(m in rp.parents for m in media_dirs):
+                if any(m in rp.parents for m in media_dirs) or trash_dir in rp.parents:
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():
                     continue  # the snapshot temp is added below, not as itself
@@ -573,7 +577,10 @@ def restore_backup_live(home: Path, archive: Path) -> int:
 # --------------------------------------------------------------------------- #
 #: The state folders the report accounts for, as (label, dirname) pairs. The
 #: labels are what the user reads on Settings -> Maintenance, so each says what
-#: the folder IS rather than what it happens to be called on disk.
+#: the folder IS rather than what it happens to be called on disk. Only the two
+#: ``_MEDIA_DIRS`` entries are ever clearable; the rest are here so the growth
+#: is SEEN (session workspaces, uploads and the remote inbox are the ones that
+#: pile up unbounded, and the card used to read 0 bytes with gigabytes in them).
 _REPORT_DIRS = (
     ("Generated media", "artifacts"),
     ("Creative thumbnails", "creative-thumbs"),
@@ -581,8 +588,17 @@ _REPORT_DIRS = (
     ("Undo history", "undo"),
     ("Scan text cache", "ocr"),
     ("Code workspaces", "codelab"),
+    ("Session workspaces", "workspaces"),
+    ("Your uploaded documents", "uploads"),
+    ("Files from remote agents", "remote-inbox"),
+    ("Living documents", "livedocs"),
+    ("Documents Jarvis wrote", "documents"),
+    ("Browser profile", "browser"),
     ("Cleared, awaiting deletion", TRASH_DIRNAME),
 )
+#: The ``dir`` of the catch-all row: the home itself, minus every listed folder
+#: and the database. It is what makes ``total_bytes`` equal the disk.
+_REPORT_REST_DIR = "."
 
 
 def _walk_dir(root: Path) -> "tuple[int, int, float]":
@@ -611,6 +627,35 @@ def _walk_dir(root: Path) -> "tuple[int, int, float]":
     return (files, total, newest)
 
 
+def _walk_rest(home: Path, skip: "set[str]") -> "tuple[int, int, float]":
+    """:func:`_walk_dir` over ``home`` with the listed top-level folders and the
+    database files left out — the 'Everything else' row. Whatever a future
+    feature stores under a folder nobody added to ``_REPORT_DIRS`` still lands
+    here, so the total keeps matching the disk instead of quietly understating."""
+    files = 0
+    total = 0
+    newest = 0.0
+    if not home.is_dir():
+        return (0, 0, 0.0)
+    db_names = {_DB_NAME, _DB_NAME + "-wal", _DB_NAME + "-shm"}
+    for dirpath, dirnames, filenames in os.walk(home):
+        at_top = Path(dirpath) == home
+        if at_top:
+            dirnames[:] = [dn for dn in dirnames if dn not in skip]
+        for fn in filenames:
+            if at_top and fn in db_names:
+                continue  # the Database row already has these
+            try:
+                st = (Path(dirpath) / fn).stat()
+            except OSError:
+                continue
+            files += 1
+            total += st.st_size
+            if st.st_mtime > newest:
+                newest = st.st_mtime
+    return (files, total, newest)
+
+
 def storage_report(home: Path) -> dict:
     """What Iron Jarvis is keeping under ``home``, by category (R-01).
 
@@ -622,7 +667,9 @@ def storage_report(home: Path) -> dict:
 
     Read-only and never raises. ``clearable`` marks the categories
     :func:`clear_media` will move — generated media and thumbnails only, never
-    backups, never undo history, never a code workspace.
+    backups, never undo history, never a code workspace. ``total_bytes`` is the
+    whole home: every listed folder, the database, and an 'Everything else'
+    row for whatever is not listed, so the total is what the disk would say.
     """
     home = Path(home)
     rows: list[dict] = []
@@ -657,6 +704,22 @@ def storage_report(home: Path) -> dict:
             "files": 1 if db_bytes else 0,
             "bytes": db_bytes,
             "newest": None,
+            "clearable": False,
+        }
+    )
+    rest_files, rest_total, rest_newest = _walk_rest(home, {d for _l, d in _REPORT_DIRS})
+    rows.append(
+        {
+            "label": "Everything else",
+            "dir": _REPORT_REST_DIR,
+            "path": str(home),
+            "files": rest_files,
+            "bytes": rest_total,
+            "newest": (
+                datetime.fromtimestamp(rest_newest, timezone.utc).isoformat()
+                if rest_newest
+                else None
+            ),
             "clearable": False,
         }
     )

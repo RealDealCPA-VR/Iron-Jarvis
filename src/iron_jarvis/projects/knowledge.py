@@ -24,6 +24,7 @@ import math
 import re
 from typing import Any
 
+from sqlalchemy import literal_column
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -113,7 +114,13 @@ def list_knowledge(platform, project_id: str) -> list[dict[str, Any]]:
             db.exec(
                 select(ProjectKnowledge)
                 .where(ProjectKnowledge.project_id == project_id)
-                .order_by(ProjectKnowledge.created_at.desc())  # type: ignore[attr-defined]
+                # v1.292.0: rowid breaks a created_at tie — two items added
+                # inside one 15.6 ms Windows clock tick listed in coin-flip
+                # order (the v1.286.0 blackboard lesson, proven on the gate).
+                .order_by(
+                    ProjectKnowledge.created_at.desc(),  # type: ignore[attr-defined]
+                    literal_column("rowid").desc(),
+                )
             )
         )
     return [
@@ -154,7 +161,13 @@ def ground(
             db.exec(
                 select(ProjectKnowledge)
                 .where(ProjectKnowledge.project_id == project_id)
-                .order_by(ProjectKnowledge.created_at.desc())  # type: ignore[attr-defined]
+                # v1.292.0: rowid breaks a created_at tie — two items added
+                # inside one 15.6 ms Windows clock tick listed in coin-flip
+                # order (the v1.286.0 blackboard lesson, proven on the gate).
+                .order_by(
+                    ProjectKnowledge.created_at.desc(),  # type: ignore[attr-defined]
+                    literal_column("rowid").desc(),
+                )
             )
         )
     if not rows:

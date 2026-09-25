@@ -31,6 +31,12 @@ from .security import canonical_bytes, sign
 from .validate import assert_safe_webhook_url
 
 HttpPost = Callable[[str, dict, dict], Any]
+#: the plain-language refusal for an outbound webhook with no event types
+#: (surfaced verbatim by ``POST /webhooks`` and the ``webhook_add`` tool).
+EMPTY_EVENT_TYPES = (
+    "Pick at least one event type for an outbound webhook, for example "
+    "session.completed. With none listed, nothing would ever be sent."
+)
 #: resolves a persisted ``secret_name`` (vault key) to its live secret value.
 SecretResolver = Callable[[str], Optional[str]]
 
@@ -72,8 +78,13 @@ class OutboundWebhooks:
 
         Raises ``ValueError`` (before persisting anything) if ``url`` is unsafe
         to deliver to -- e.g. a non-http(s) scheme or a host resolving to an
-        internal/loopback/metadata address while ``allow_internal`` is False.
+        internal/loopback/metadata address while ``allow_internal`` is False --
+        or if ``event_types`` is empty: ``on_event`` delivers only when the
+        event's type is IN the list, so an empty list would match nothing and
+        the webhook would silently receive no events (v1.292.0, platform-06).
         """
+        if not [t for t in event_types if str(t).strip()]:
+            raise ValueError(EMPTY_EVENT_TYPES)
         assert_safe_webhook_url(url, allow_internal=self.allow_internal)
         if secret:
             self._secrets[slug] = secret
@@ -113,6 +124,20 @@ class OutboundWebhooks:
                 _apply(db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first(), db)
                 db.commit()
         return slug
+
+    def unregister(self, slug: str) -> bool:
+        """Remove the outbound delivery ``slug``: its durable row and the
+        in-memory secret cache entry. The vault secret itself is left alone --
+        ``secret_name`` may be shared with another webhook. Returns True when a
+        row was removed (v1.292.0, platform-06: a webhook can be deleted)."""
+        self._secrets.pop(slug, None)
+        with session_scope(self.engine) as db:
+            row = db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first()
+            if row is None:
+                return False
+            db.delete(row)
+            db.commit()
+        return True
 
     def _resolve_secret(self, rec: WebhookRecord) -> str | None:
         """Return the live HMAC secret for ``rec`` (or ``None`` if unsigned).
