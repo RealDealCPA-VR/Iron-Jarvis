@@ -19,6 +19,10 @@
  *   drag picks it up — otherwise every mis-click becomes an accidental
  *   rearrangement.
  *
+ * v1.293.1: with ten tiles per screen instead of thirty there is room, so
+ * each tile is twice the size (112px plate, 44px glyph) and a screen is two
+ * rows of five until a very wide window can hold ten across.
+ *
  * SLIDES (v1.293.0). Thirty tiles on one screen was a wall; the desktop is now
  * three screens of ten — Office, Operations, System (lib/appTiles.ts says
  * which tile lives where and why) — with a tab strip naming each group by its
@@ -152,22 +156,22 @@ function Tile({
         // by reading the code: the guard below looked sufficient and was never
         // reached.
         draggable={false}
-        className="flex flex-col items-center gap-2 rounded-xl px-1 py-2 outline-none transition-transform duration-200 focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/tile:-translate-y-0.5"
+        className="flex flex-col items-center gap-3 rounded-2xl px-2 py-3 outline-none transition-transform duration-200 focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/tile:-translate-y-0.5"
       >
         <span
-          className={`relative flex h-14 w-14 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04] text-zinc-300 shadow-sm transition-all duration-200 group-hover/tile:border-accent/30 group-hover/tile:bg-accent/[0.08] group-hover/tile:text-accent-soft group-hover/tile:shadow-glow-sm ${
+          className={`relative flex h-28 w-28 items-center justify-center rounded-[1.75rem] border border-white/[0.08] bg-white/[0.04] text-zinc-300 shadow-sm transition-all duration-200 group-hover/tile:border-accent/30 group-hover/tile:bg-accent/[0.08] group-hover/tile:text-accent-soft group-hover/tile:shadow-glow-sm ${
             isDragging ? "border-accent/40 bg-accent/[0.12]" : ""
           } ${isDragging && armed ? "ring-2 ring-accent/60 shadow-glow-sm" : ""}`}
         >
-          <Icon size={22} />
+          <Icon size={44} strokeWidth={1.6} />
           {/* Opened-often marker. Deliberately a dot, not a number: the count
               is not information the user needs, only the fact that this is
               somewhere they live. */}
           {tile.opens >= 5 && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-accent/70 ring-2 ring-ink-950" />
+            <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-accent/70 ring-2 ring-ink-950" />
           )}
         </span>
-        <span className="max-w-[5.5rem] truncate text-center text-[11.5px] text-zinc-400 transition-colors group-hover/tile:text-zinc-200">
+        <span className="max-w-[11rem] truncate text-center text-[13.5px] text-zinc-400 transition-colors group-hover/tile:text-zinc-200">
           {tile.label}
         </span>
       </Link>
@@ -601,7 +605,7 @@ export function AppGrid() {
                 initial={dir === 0 ? false : { x: dir * 28, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 transition={{ duration: 0.18, ease: EASE }}
-                className="grid grid-cols-4 gap-x-2 gap-y-3 sm:grid-cols-5 lg:grid-cols-10"
+                className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-5 2xl:grid-cols-10"
               >
                 {(current?.tiles ?? []).map((t) => (
                   <Tile

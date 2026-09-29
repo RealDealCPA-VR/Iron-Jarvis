@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.293.0 (2026-09-14).*
+holds itself to. Current as of v1.293.1 (2026-09-14).*
 
 ---
 
@@ -1553,6 +1553,9 @@ hover for the description, drag to rearrange (a drag never changes
 screens), push a tile past the edge to open it in its own window, Reset to
 most-used — and an arrangement you saved before this version keeps its
 order.
+**v1.293.1:** with ten modules per screen there is room, so each Overview
+tile is twice the size, and a screen is two rows of five until a very wide
+window can show all ten across.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,
