@@ -18,11 +18,13 @@
  * drift the moment a page is added, and the hover detail would go stale.
  */
 
+import { Briefcase, Cog, Cpu, Layers, type LucideIcon } from "lucide-react";
 import { NAV, type NavEntry } from "./nav";
 
 const USE_KEY = "ironjarvis.overview.usage";
 const ORDER_KEY = "ironjarvis.overview.order";
 const DOOR_KEY = "ironjarvis.doors.usage";
+const SLIDE_KEY = "ironjarvis.overview.slide";
 
 /** Pages that are not "apps" — reached from chrome, not from the desktop. */
 const NOT_APPS = new Set<string>(["/", "/help", "/updates"]);
@@ -144,4 +146,183 @@ export function orderedTiles(
     return (catalogue.get(a.href) ?? 0) - (catalogue.get(b.href) ?? 0);
   });
   return [...pinned, ...rest];
+}
+
+/* ---------------------------------------------------------------------------
+ * Slides (v1.293.0): the desktop is three swipeable screens of ten, not one
+ * wall of thirty.
+ *
+ * The grouping is by what the tiles are FOR to the person using them, not by
+ * which nav section they live in (that split — Work / Automate / Knowledge —
+ * is the rail's, and it is what the hover card still names):
+ *
+ *   Office      — where the work happens: talk, build, create, and what
+ *                 Jarvis knows about you and your files.
+ *   Operations  — agents and automation working on your behalf.
+ *   System      — under the hood: what ran, what it cost, accounts, endpoints,
+ *                 settings.
+ *
+ * Three rules, each pinned by a test:
+ *
+ * 1. **Every tile has exactly one home, and no slide holds more than ten.**
+ *    Ten is the ask ("group them in 10 tiles"), and it is also one row of the
+ *    widest grid. A page added to the nav without a group here does not
+ *    vanish — it lands on a trailing "More" slide (the v1.151.1 lesson: an
+ *    unreachable page may as well not ship) — and the test fails until it is
+ *    placed, on purpose.
+ * 2. **The order INSIDE a slide is the order it always was.** `orderedTiles`
+ *    still decides (your arrangement first, then most-used, then the
+ *    catalogue); a slide is that list filtered to its own tiles. Nothing here
+ *    re-sorts anything.
+ * 3. **A rearrangement is still ONE saved list.** Dragging a tile inside a
+ *    slide rewrites the flat order with that slide's tiles in their new
+ *    sequence and every other slide's tile exactly where it was, so the
+ *    storage key, its shape and `orderedTiles` are untouched — an
+ *    arrangement saved before v1.293.0 renders the same tiles in the same
+ *    relative order, just across three screens.
+ * ------------------------------------------------------------------------- */
+
+/** The most tiles a slide is allowed to hold. */
+export const SLIDE_SIZE = 10;
+
+export interface TileGroupDef {
+  /** Stable id — the remembered slide is stored by key, not by index. */
+  key: string;
+  label: string;
+  /** One line under the grid: what this screen is for. */
+  hint: string;
+  icon: LucideIcon;
+  hrefs: readonly string[];
+}
+
+export const TILE_GROUPS: readonly TileGroupDef[] = [
+  {
+    key: "office",
+    label: "Office",
+    hint: "Where the work happens — talk, build, create, and what Jarvis knows about you and your files.",
+    icon: Briefcase,
+    hrefs: [
+      "/chat",
+      "/terminals",
+      "/projects",
+      "/creative",
+      "/documents",
+      "/filesearch",
+      "/memory",
+      "/you",
+      "/train",
+      "/templates",
+    ],
+  },
+  {
+    key: "operations",
+    label: "Operations",
+    hint: "Agents and automation working on your behalf — and the switches that keep them in check.",
+    icon: Cog,
+    hrefs: [
+      "/agents",
+      "/workflows",
+      "/schedules",
+      "/tools",
+      "/skills",
+      "/autonomy",
+      "/sentinels",
+      "/reflex",
+      "/webhooks",
+      "/computeruse",
+    ],
+  },
+  {
+    key: "system",
+    label: "System",
+    hint: "Under the hood — what ran, what it cost, your accounts and endpoints, and the settings.",
+    icon: Cpu,
+    hrefs: [
+      "/sessions",
+      "/activity",
+      "/artifacts",
+      "/usage",
+      "/connections",
+      "/fleet",
+      "/secrets",
+      "/channels",
+      "/settings",
+      "/self-dev",
+    ],
+  },
+];
+
+/** Where a tile no group has claimed lands, so a new page is never hidden. */
+export const UNGROUPED: TileGroupDef = {
+  key: "more",
+  label: "More",
+  hint: "Modules added since the groups were drawn.",
+  icon: Layers,
+  hrefs: [],
+};
+
+const GROUP_OF = new Map<string, TileGroupDef>();
+for (const g of TILE_GROUPS) for (const href of g.hrefs) GROUP_OF.set(href, g);
+
+/** The group a page belongs to, or the "More" fallback. */
+export function groupOf(href: string): TileGroupDef {
+  return GROUP_OF.get(href) ?? UNGROUPED;
+}
+
+export interface TileSlide {
+  group: TileGroupDef;
+  tiles: AppTile[];
+}
+
+/**
+ * The slides, in group order, each holding its tiles IN THE ORDER GIVEN.
+ * Pass `orderedTiles(...)` and every slide inherits the arrangement/usage
+ * order for free. A group with no tiles is left out; "More" appears only
+ * when something is unplaced.
+ */
+export function slides(tiles: AppTile[]): TileSlide[] {
+  const buckets = new Map<string, AppTile[]>();
+  for (const g of TILE_GROUPS) buckets.set(g.key, []);
+  buckets.set(UNGROUPED.key, []);
+  for (const t of tiles) buckets.get(groupOf(t.href).key)!.push(t);
+  const out: TileSlide[] = [];
+  for (const g of [...TILE_GROUPS, UNGROUPED]) {
+    const bucket = buckets.get(g.key)!;
+    if (bucket.length > 0) out.push({ group: g, tiles: bucket });
+  }
+  return out;
+}
+
+/**
+ * The FULL flat order after moving one tile within its slide.
+ *
+ * `flat` is every tile in display order; `slideIds` is one slide's tiles in
+ * their current order; `from`/`to` are indexes within the slide. The slide's
+ * tiles are re-sequenced INTO THE SLOTS THEY ALREADY OCCUPY in the flat
+ * list, so tiles on other slides never move. Out-of-range indexes return the
+ * flat list untouched.
+ */
+export function reorderWithinSlide(
+  flat: string[],
+  slideIds: string[],
+  from: number,
+  to: number,
+): string[] {
+  if (from < 0 || to < 0 || from >= slideIds.length || to >= slideIds.length) return flat;
+  const moved = slideIds.slice();
+  const [item] = moved.splice(from, 1);
+  moved.splice(to, 0, item);
+  const mine = new Set(slideIds);
+  let i = 0;
+  return flat.map((href) => (mine.has(href) ? moved[i++] : href));
+}
+
+/** The slide the desktop was left on (a group key), or null. Local only. */
+export function readSlide(): string | null {
+  const raw = readJson<unknown>(SLIDE_KEY, null);
+  return typeof raw === "string" ? raw : null;
+}
+
+export function writeSlide(key: string): void {
+  writeJson(SLIDE_KEY, key);
 }

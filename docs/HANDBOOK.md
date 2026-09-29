@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.292.1 (2026-09-14).*
+holds itself to. Current as of v1.293.0 (2026-09-14).*
 
 ---
 
@@ -1538,6 +1538,21 @@ instead of "(no final message)".
 it stops at the edge — and in the desktop app pushing a tile past the
 edge opens that module in its own window instead, with your arrangement
 left as it was.
+**v1.293.0:** the Overview's modules are three screens of ten instead of
+one wall of thirty: **Office** (Chat, Build, Projects, Creative, Documents,
+File Search, Memory, You, Train on me, Templates), **Operations** (Agents,
+Workflows, Schedules, Tools, Skills, Autonomy, Sentinels, Reflexes,
+Webhooks, Browser) and **System** (Sessions, Activity, Artifacts, Usage,
+Connections, Local fleet, Secrets, Notifications, Settings,
+Self-improvement). Change screens with the group tabs above the tiles
+(each has its own icon), the arrows at either side, a swipe across the
+background, a sideways trackpad/wheel gesture, or the arrow keys once the
+strip has focus; the desktop reopens on the screen you left. Everything
+else is as it was — most-used first within each screen until you drag,
+hover for the description, drag to rearrange (a drag never changes
+screens), push a tile past the edge to open it in its own window, Reset to
+most-used — and an arrangement you saved before this version keeps its
+order.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

@@ -19,6 +19,24 @@
  *   drag picks it up — otherwise every mis-click becomes an accidental
  *   rearrangement.
  *
+ * SLIDES (v1.293.0). Thirty tiles on one screen was a wall; the desktop is now
+ * three screens of ten — Office, Operations, System (lib/appTiles.ts says
+ * which tile lives where and why) — with a tab strip naming each group by its
+ * icon, chevrons at both sides, and a swipe. Two decisions matter here:
+ *
+ * * **Only the current slide is in the DOM.** Not a scrolling track: an
+ *   overflow container clips whatever is transformed outside it, and the
+ *   v1.289.0 gesture drags a tile to the WINDOW edge, well outside any track.
+ *   With one grid on screen at a time the clamp, the edge hint and the pop-out
+ *   behave exactly as before, and dnd-kit's sortable list is simply the ten
+ *   tiles you can see.
+ * * **A swipe is read from the background, never from a tile.** Pressing a
+ *   tile and moving is a rearrange (dnd-kit takes it at 6px, as ever); a
+ *   horizontal pull that started on empty space, a horizontal wheel/trackpad
+ *   gesture, the arrow keys on the focused strip, and the tabs/chevrons all
+ *   change slides. A tile drag that has started blocks the swipe for that
+ *   press, so releasing a dragged tile can never also flip the screen.
+ *
  * The catalogue is `lib/nav.ts`, so a page added there appears here with its
  * icon and hover text already correct — see lib/appTiles.ts.
  */
@@ -29,8 +47,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import Link from "next/link";
+import { m } from "framer-motion";
 import {
   DndContext,
   KeyboardSensor,
@@ -44,22 +66,33 @@ import {
 } from "@dnd-kit/core";
 import {
   SortableContext,
-  arrayMove,
   rectSortingStrategy,
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { RotateCcw, GripHorizontal } from "lucide-react";
+import { RotateCcw, GripHorizontal, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   clearOrder,
   orderedTiles,
   readOrder,
+  readSlide,
   readUsage,
+  reorderWithinSlide,
+  slides as toSlides,
   writeOrder,
+  writeSlide,
   type AppTile,
 } from "@/lib/appTiles";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { clampToWindow, offscreenEdge, type Edge, type Translate } from "@/lib/tileDrag";
+
+/** A horizontal pull shorter than this is a wobble, not a swipe. */
+const SWIPE_MIN_PX = 48;
+/** A horizontal wheel/trackpad gesture below this is scroll noise. */
+const WHEEL_MIN_PX = 24;
+/** One wheel gesture = one slide: a trackpad emits dozens of events per swipe. */
+const WHEEL_COOLDOWN_MS = 450;
+const EASE = [0.22, 1, 0.36, 1] as const;
 
 /** Where the hover card should sit, in viewport coordinates. */
 interface HoverAt {
@@ -197,10 +230,27 @@ export function AppGrid() {
   const [edge, setEdge] = useState<Edge | null>(null);
   const [activeHref, setActiveHref] = useState<string>("");
   const [popout, setPopout] = useState<PopoutBridge | null>(null);
+  // v1.293.0: which slide is on screen, and which way the last change went
+  // (0 = none yet, so the first paint does not slide in from anywhere).
+  const [slide, setSlide] = useState(0);
+  const [dir, setDir] = useState(0);
+
+  const tiles = useMemo(() => orderedTiles(usage, order), [usage, order]);
+  const flatIds = useMemo(() => tiles.map((t) => t.href), [tiles]);
+  const allSlides = useMemo(() => toSlides(tiles), [tiles]);
+  const current = allSlides[Math.min(slide, allSlides.length - 1)] ?? allSlides[0];
+  const ids = useMemo(() => (current ? current.tiles.map((t) => t.href) : []), [current]);
 
   useEffect(() => {
     setUsage(readUsage());
     setOrder(readOrder());
+    // The screen you left the desktop on is the one it reopens to. A key
+    // that no longer names a group (or was never written) is the first slide.
+    const saved = readSlide();
+    if (saved) {
+      const i = toSlides(orderedTiles()).findIndex((s) => s.group.key === saved);
+      if (i > 0) setSlide(i);
+    }
     setReady(true);
     setPopout(popoutBridge());
   }, []);
@@ -223,9 +273,6 @@ export function AppGrid() {
     return { ...transform, x: c.x, y: c.y };
   }, []);
   const modifiers = useMemo(() => [clampModifier], [clampModifier]);
-
-  const tiles = useMemo(() => orderedTiles(usage, order), [usage, order]);
-  const ids = useMemo(() => tiles.map((t) => t.href), [tiles]);
 
   // Survives the render that drag-end triggers.
   const suppressClick = useRef(false);
@@ -274,6 +321,122 @@ export function AppGrid() {
     useSensor(KeyboardSensor),
   );
 
+  // --- slides (v1.293.0) ----------------------------------------------------
+
+  const goTo = useCallback(
+    (index: number) => {
+      const max = allSlides.length - 1;
+      const next = Math.min(Math.max(index, 0), max);
+      if (next === slide) return;
+      setDir(next > slide ? 1 : -1);
+      setSlide(next);
+      // A change of screen ends any hover: the card would name a tile that is
+      // no longer there.
+      setHover(null);
+      const key = allSlides[next]?.group.key;
+      if (key) writeSlide(key);
+    },
+    [allSlides, slide],
+  );
+  const step = useCallback((delta: number) => goTo(slide + delta), [goTo, slide]);
+
+  // The swipe. Recorded on pointerdown anywhere in the strip (a tile included —
+  // the press is not the gesture, the release is), judged on the document's
+  // pointerup so a pull that leaves the strip still counts. A tile drag that
+  // STARTED during this press blocks it: dnd-kit picked the tile up at 6px,
+  // so the release is a drop, not a swipe. The block is set on drag start and
+  // cleared by the next press, because drag-end runs before this listener on
+  // the same pointerup and a "currently dragging" flag would already be false.
+  const swipeStart = useRef<{ x: number; y: number; id: number } | null>(null);
+  const swipeBlocked = useRef(false);
+  const onSlidePointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    swipeBlocked.current = false;
+    swipeStart.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  }, []);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  useEffect(() => {
+    const release = (e: PointerEvent) => {
+      const start = swipeStart.current;
+      if (!start || e.pointerId !== start.id) return;
+      swipeStart.current = null;
+      if (swipeBlocked.current) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      // Mostly horizontal, and far enough to be meant.
+      if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      stepRef.current(dx < 0 ? 1 : -1);
+    };
+    const cancel = () => {
+      swipeStart.current = null;
+    };
+    // On the DOCUMENT, like the click guard above: it is on the path of every
+    // release, wherever the pointer ends up, and it runs before dnd-kit's own
+    // drag-end (registered later, at activation) — which is why the block is
+    // read from a ref set at drag START and not from the dragging state.
+    document.addEventListener("pointerup", release);
+    document.addEventListener("pointercancel", cancel);
+    return () => {
+      document.removeEventListener("pointerup", release);
+      document.removeEventListener("pointercancel", cancel);
+    };
+  }, []);
+
+  // A horizontal wheel (a trackpad two-finger swipe, a tilt wheel) is the
+  // desktop's swipe. One gesture is one slide, hence the cooldown.
+  const lastWheel = useRef(0);
+  const onSlideWheel = useCallback(
+    (e: ReactWheelEvent<HTMLDivElement>) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || Math.abs(e.deltaX) < WHEEL_MIN_PX) return;
+      const now = Date.now();
+      if (now - lastWheel.current < WHEEL_COOLDOWN_MS) return;
+      lastWheel.current = now;
+      step(e.deltaX > 0 ? 1 : -1);
+    },
+    [step],
+  );
+
+  // Arrow keys change slides only when the STRIP ITSELF has focus. A focused
+  // tile keeps its keys: dnd-kit's KeyboardSensor moves a picked-up tile with
+  // the same arrows, and flipping the screen under it would unmount the tile
+  // mid-sort.
+  const onSlideKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        step(1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        step(-1);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        goTo(0);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        goTo(allSlides.length - 1);
+      }
+    },
+    [step, goTo, allSlides.length],
+  );
+
+  // The tab strip: arrows move between tabs (and screens) and carry focus.
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const onTabsKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const delta = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (!delta) return;
+      e.preventDefault();
+      const next = Math.min(Math.max(slide + delta, 0), allSlides.length - 1);
+      goTo(next);
+      tabRefs.current[next]?.focus();
+    },
+    [slide, goTo, allSlides.length],
+  );
+
+  // --- drag ------------------------------------------------------------------
+
   // PUSHING A TILE PAST THE EDGE IS A GESTURE (v1.289.0): the intent to put
   // the module somewhere else. Read on every move from the raw translate and
   // the tile's initial rectangle; more than half the tile beyond an edge arms
@@ -310,35 +473,78 @@ export function AppGrid() {
       const from = ids.indexOf(String(active.id));
       const to = ids.indexOf(String(over.id));
       if (from < 0 || to < 0) return;
-      const next = arrayMove(ids, from, to);
+      // Still ONE saved list (v1.293.0): this slide's tiles in their new
+      // sequence, every other slide's tile exactly where it was.
+      const next = reorderWithinSlide(flatIds, ids, from, to);
       setOrder(next);
       writeOrder(next);
     },
-    [ids, edge, popout],
+    [ids, flatIds, edge, popout],
   );
 
   const customised = order.length > 0;
   const activeTile = edge && dragging ? tiles.find((t) => t.href === activeHref) : null;
+  const atFirst = slide <= 0;
+  const atLast = slide >= allSlides.length - 1;
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.12em] text-zinc-500">
-          <GripHorizontal size={12} />
-          {customised ? "Your arrangement" : "Most used first"}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        {/* The groups, each by its icon. The current one is lit. */}
+        <div
+          role="tablist"
+          aria-label="Module groups"
+          onKeyDown={onTabsKeyDown}
+          className="flex items-center gap-0.5 rounded-full border border-white/[0.06] bg-white/[0.03] p-0.5"
+        >
+          {allSlides.map((s, i) => {
+            const GroupIcon = s.group.icon;
+            const selected = i === slide;
+            return (
+              <button
+                key={s.group.key}
+                ref={(el) => {
+                  tabRefs.current[i] = el;
+                }}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                tabIndex={selected ? 0 : -1}
+                data-testid={`tile-group-${s.group.key}`}
+                onClick={() => goTo(i)}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] transition-colors ${
+                  selected
+                    ? "bg-accent/[0.14] text-accent-soft"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <GroupIcon size={12} />
+                {s.group.label}
+                <span className={`text-[10px] ${selected ? "text-accent-soft/70" : "text-zinc-600"}`}>
+                  {s.tiles.length}
+                </span>
+              </button>
+            );
+          })}
         </div>
-        {customised && (
-          <button
-            type="button"
-            onClick={() => {
-              clearOrder();
-              setOrder([]);
-            }}
-            className="inline-flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-zinc-300"
-          >
-            <RotateCcw size={11} /> Reset to most-used
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.12em] text-zinc-500">
+            <GripHorizontal size={12} />
+            {customised ? "Your arrangement" : "Most used first"}
+          </div>
+          {customised && (
+            <button
+              type="button"
+              onClick={() => {
+                clearOrder();
+                setOrder([]);
+              }}
+              className="inline-flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-zinc-300"
+            >
+              <RotateCcw size={11} /> Reset to most-used
+            </button>
+          )}
+        </div>
       </div>
       <DndContext
         sensors={sensors}
@@ -346,6 +552,7 @@ export function AppGrid() {
         modifiers={modifiers}
         onDragStart={(e) => {
           suppressClick.current = true;
+          swipeBlocked.current = true;
           setDragging(true);
           setEdge(null);
           setActiveHref(String(e.active.id));
@@ -357,26 +564,90 @@ export function AppGrid() {
         }}
         onDragEnd={onDragEnd}
       >
-        <SortableContext items={ids} strategy={rectSortingStrategy}>
+        <div className="flex items-stretch gap-1">
+          <button
+            type="button"
+            aria-label="Previous group"
+            data-testid="slides-prev"
+            disabled={atFirst}
+            onClick={() => step(-1)}
+            className="flex w-6 shrink-0 items-center justify-center rounded-lg text-zinc-600 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:opacity-0"
+          >
+            <ChevronLeft size={16} />
+          </button>
           <div
             ref={gridRef}
-            className="grid grid-cols-4 gap-x-2 gap-y-3 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10"
+            role="region"
+            aria-roledescription="carousel"
+            aria-label={`Modules — ${current?.group.label ?? ""}`}
+            tabIndex={0}
+            data-testid="tile-slides"
+            data-slide={current?.group.key}
+            data-slide-index={slide}
+            data-slide-count={allSlides.length}
+            onPointerDown={onSlidePointerDown}
+            onWheel={onSlideWheel}
+            onKeyDown={onSlideKeyDown}
+            className="min-w-0 flex-1 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
             // Until localStorage is read the order is the catalogue's; fading
             // in avoids a visible re-sort on every load.
             style={{ opacity: ready ? 1 : 0, transition: "opacity 150ms" }}
           >
-            {tiles.map((t) => (
-              <Tile
-                key={t.href}
-                tile={t}
-                dragging={dragging}
-                armed={edge !== null}
-                onHover={setHover}
-              />
-            ))}
+            <SortableContext items={ids} strategy={rectSortingStrategy}>
+              {/* Keyed on the group: a change of slide mounts a fresh grid
+                  that slides in from the side it came from. */}
+              <m.div
+                key={current?.group.key ?? "none"}
+                initial={dir === 0 ? false : { x: dir * 28, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="grid grid-cols-4 gap-x-2 gap-y-3 sm:grid-cols-5 lg:grid-cols-10"
+              >
+                {(current?.tiles ?? []).map((t) => (
+                  <Tile
+                    key={t.href}
+                    tile={t}
+                    dragging={dragging}
+                    armed={edge !== null}
+                    onHover={setHover}
+                  />
+                ))}
+              </m.div>
+            </SortableContext>
           </div>
-        </SortableContext>
+          <button
+            type="button"
+            aria-label="Next group"
+            data-testid="slides-next"
+            disabled={atLast}
+            onClick={() => step(1)}
+            className="flex w-6 shrink-0 items-center justify-center rounded-lg text-zinc-600 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:opacity-0"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
       </DndContext>
+      {/* What this screen is for, and where you are. The dots are decoration:
+          the tabs above are the control. */}
+      <div className="mt-2 flex items-center justify-center gap-3">
+        <div className="flex items-center gap-1" aria-hidden="true">
+          {allSlides.map((s, i) => (
+            <span
+              key={s.group.key}
+              className={`h-1.5 rounded-full transition-all ${
+                i === slide ? "w-4 bg-accent/70" : "w-1.5 bg-zinc-700"
+              }`}
+            />
+          ))}
+        </div>
+        <div
+          data-testid="slide-hint"
+          aria-live="polite"
+          className="min-w-0 truncate text-[11px] text-zinc-500"
+        >
+          {current?.group.hint}
+        </div>
+      </div>
       {/* Suppressed while dragging: a card following the cursor during a
           rearrange is noise on top of the thing you are actually doing. */}
       <HoverCard at={dragging ? null : hover} />

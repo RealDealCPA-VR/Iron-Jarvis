@@ -806,7 +806,9 @@ export default function OverviewPage() {
       {/* THE DESKTOP (v1.151.0). Every module as an app icon, most-used first
           until you arrange them yourself. Directly under the title bar (which
           is untouched) because "where do I go" is the first question this page
-          is asked, and it used to be answered only by the collapsed rail. */}
+          is asked, and it used to be answered only by the collapsed rail.
+          Since v1.293.0 it is three swipeable screens of ten — Office,
+          Operations, System — see lib/appTiles.ts. */}
       <Reveal>
         <AppGrid />
       </Reveal>

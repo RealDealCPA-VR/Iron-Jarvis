@@ -2010,6 +2010,36 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/tile-offscreen-popout-v1289.test.tsx` (the gesture
   driven through the real grid with PointerSensor on jsdom).
 
+- **The Overview desktop is three screens of ten — Office, Operations,
+  System — and only the current screen is in the DOM** (v1.293.0).
+  `lib/appTiles.ts::TILE_GROUPS` places every tile (by href) in exactly one
+  group with an icon and a one-line hint; `slides(orderedTiles(...))`
+  partitions the flat order WITHOUT re-sorting (arrangement → most-used →
+  catalogue still decide inside a screen); an unplaced page lands on a
+  trailing "More" screen and the pin fails until it is placed; `SLIDE_SIZE`
+  (10) is asserted per group. A rearrangement is still ONE saved list:
+  `reorderWithinSlide(flat, slideIds, from, to)` re-sequences the screen's
+  tiles in the slots they already hold, so `ironjarvis.overview.order`, its
+  shape and `orderedTiles` are untouched and a pre-v1.293.0 arrangement
+  renders the same relative order. NOT a scrolling track: an overflow
+  container clips a tile transformed outside it, and the v1.289.0 gesture
+  drags to the WINDOW edge — so `AppGrid` renders one grid (keyed on the
+  group, `m.div` slides it in) inside one `SortableContext` of the ten
+  visible ids, and the clamp/edge-hint/pop-out code is byte-for-byte the
+  v1.289.0 code. Screens change by tab (`role="tab"`, `#tile-group-<key>`),
+  chevrons (`#slides-prev/next`), arrow keys ONLY when the strip itself is
+  the target (a focused tile keeps its keys for dnd-kit's keyboard sort),
+  horizontal wheel (one screen per gesture: `WHEEL_COOLDOWN_MS`) and a
+  pointer pull judged on the DOCUMENT's pointerup — a tile drag that
+  started sets `swipeBlocked` (read at release; the dragging STATE is
+  already false by then because dnd-kit's drag-end runs first) so a drop
+  never flips the screen. The screen is remembered by group KEY
+  (`ironjarvis.overview.slide`), never by index. Pin:
+  `dashboard/__tests__/overview-slides-v1293.test.tsx` (six mutations each
+  go red: block removed, slot-preserving reorder replaced, eleven on a
+  screen, wheel cooldown removed, strip keys stealing from a tile, slide
+  not remembered).
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by
