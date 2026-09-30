@@ -2039,6 +2039,18 @@ does not need a bump, stop and bump it.
   go red: block removed, slot-preserving reorder replaced, eleven on a
   screen, wheel cooldown removed, strip keys stealing from a tile, slide
   not remembered).
+  **SUPERSEDED IN v1.294.0 at the user's request ("no more need for
+  sliding"): the desktop is now THREE DOORS.** `AppGrid` renders three large
+  `GroupDoor` buttons (`#group-<key>`, icon + label + hint + count); a press
+  sets `openKey` and the other two are gone from the DOM while that group's
+  ten tiles render in place under a back control (`#group-back`) — Esc on
+  the grid (`#module-grid`) closes too, never mid-drag. The open group is
+  remembered by key in `ironjarvis.overview.group` (`readOpenGroup` /
+  `writeOpenGroup(null)` = closed); the slide key, the tab strip, chevrons,
+  swipe, wheel and arrow handlers are all gone. Helpers renamed:
+  `groupedTiles` (was `slides`), `reorderWithinGroup`, `GROUP_SIZE`,
+  `TileGroup`. Pin: `dashboard/__tests__/overview-groups-v1294.test.tsx`;
+  the v1.289.0 gesture pin opens Office first (`renderOpen`).
 
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by

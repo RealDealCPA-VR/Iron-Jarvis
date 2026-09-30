@@ -49,6 +49,12 @@ describe("tile drag geometry", () => {
 
 const open = vi.fn(async (path: string) => ({ ok: true, path }));
 
+/** v1.294.0: the desktop opens on three doors; the tiles are behind Office. */
+async function renderOpen() {
+  render(<AppGrid />);
+  fireEvent.click(await screen.findByTestId("group-office"));
+}
+
 function installBridge() {
   (window as unknown as { ironjarvis?: unknown }).ironjarvis = {
     isDesktop: true,
@@ -91,7 +97,14 @@ beforeEach(() => {
   stubGeometry();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // dnd-kit's PointerSensor puts a capture-phase click listener on the
+  // DOCUMENT when a drag activates and removes it 50 ms AFTER the drag ends —
+  // never, if the grid unmounts mid-drag. Since v1.294.0 every case here
+  // starts by pressing a door, so a lingering listener from the previous case
+  // would swallow that press. End the drag, then outlast the deferred removal.
+  fireEvent.pointerUp(document, { clientX: 140, clientY: 140, pointerId: 1 });
+  await new Promise((r) => setTimeout(r, 60));
   cleanup();
   vi.restoreAllMocks();
   delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
@@ -99,7 +112,7 @@ afterEach(() => {
 
 describe("the Overview grid", () => {
   it("clamps a tile dragged far past the right edge to the screen", async () => {
-    render(<AppGrid />);
+    await renderOpen();
     const tile = await screen.findByTestId("tile-chat");
     await pickUp(tile);
     fireEvent.pointerMove(document, { clientX: 5000, clientY: 140, pointerId: 1 });
@@ -111,7 +124,7 @@ describe("the Overview grid", () => {
 
   it("in the desktop app, releasing a tile past the edge pops the module out and keeps the arrangement", async () => {
     installBridge();
-    render(<AppGrid />);
+    await renderOpen();
     const tile = await screen.findByTestId("tile-chat");
     await pickUp(tile);
     expect(screen.queryByTestId("tile-edge-hint")).toBeNull();
@@ -134,7 +147,7 @@ describe("the Overview grid", () => {
 
   it("pulling the tile back inside disarms the drop", async () => {
     installBridge();
-    render(<AppGrid />);
+    await renderOpen();
     const tile = await screen.findByTestId("tile-chat");
     await pickUp(tile);
     fireEvent.pointerMove(document, { clientX: 5000, clientY: 140, pointerId: 1 });
@@ -147,7 +160,7 @@ describe("the Overview grid", () => {
   });
 
   it("in a browser there is no window to open: the tile stays put and nothing breaks", async () => {
-    render(<AppGrid />);
+    await renderOpen();
     const tile = await screen.findByTestId("tile-chat");
     await pickUp(tile);
     fireEvent.pointerMove(document, { clientX: 5000, clientY: 140, pointerId: 1 });

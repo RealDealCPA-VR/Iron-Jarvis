@@ -24,7 +24,7 @@ import { NAV, type NavEntry } from "./nav";
 const USE_KEY = "ironjarvis.overview.usage";
 const ORDER_KEY = "ironjarvis.overview.order";
 const DOOR_KEY = "ironjarvis.doors.usage";
-const SLIDE_KEY = "ironjarvis.overview.slide";
+const GROUP_KEY = "ironjarvis.overview.group";
 
 /** Pages that are not "apps" — reached from chrome, not from the desktop. */
 const NOT_APPS = new Set<string>(["/", "/help", "/updates"]);
@@ -149,8 +149,8 @@ export function orderedTiles(
 }
 
 /* ---------------------------------------------------------------------------
- * Slides (v1.293.0): the desktop is three swipeable screens of ten, not one
- * wall of thirty.
+ * Groups (v1.293.0 as swipeable screens; v1.294.0 as three large icons that
+ * open in place): the desktop is three groups of ten, not one wall of thirty.
  *
  * The grouping is by what the tiles are FOR to the person using them, not by
  * which nav section they live in (that split — Work / Automate / Knowledge —
@@ -164,32 +164,32 @@ export function orderedTiles(
  *
  * Three rules, each pinned by a test:
  *
- * 1. **Every tile has exactly one home, and no slide holds more than ten.**
+ * 1. **Every tile has exactly one home, and no group holds more than ten.**
  *    Ten is the ask ("group them in 10 tiles"), and it is also one row of the
  *    widest grid. A page added to the nav without a group here does not
- *    vanish — it lands on a trailing "More" slide (the v1.151.1 lesson: an
+ *    vanish — it lands in a trailing "More" group (the v1.151.1 lesson: an
  *    unreachable page may as well not ship) — and the test fails until it is
  *    placed, on purpose.
- * 2. **The order INSIDE a slide is the order it always was.** `orderedTiles`
+ * 2. **The order INSIDE a group is the order it always was.** `orderedTiles`
  *    still decides (your arrangement first, then most-used, then the
- *    catalogue); a slide is that list filtered to its own tiles. Nothing here
+ *    catalogue); a group is that list filtered to its own tiles. Nothing here
  *    re-sorts anything.
  * 3. **A rearrangement is still ONE saved list.** Dragging a tile inside a
- *    slide rewrites the flat order with that slide's tiles in their new
- *    sequence and every other slide's tile exactly where it was, so the
+ *    group rewrites the flat order with that group's tiles in their new
+ *    sequence and every other group's tile exactly where it was, so the
  *    storage key, its shape and `orderedTiles` are untouched — an
  *    arrangement saved before v1.293.0 renders the same tiles in the same
- *    relative order, just across three screens.
+ *    relative order, just behind three doors.
  * ------------------------------------------------------------------------- */
 
-/** The most tiles a slide is allowed to hold. */
-export const SLIDE_SIZE = 10;
+/** The most tiles a group is allowed to hold. */
+export const GROUP_SIZE = 10;
 
 export interface TileGroupDef {
-  /** Stable id — the remembered slide is stored by key, not by index. */
+  /** Stable id — the remembered open group is stored by key, never by index. */
   key: string;
   label: string;
-  /** One line under the grid: what this screen is for. */
+  /** One line under the icon: what this group is for. */
   hint: string;
   icon: LucideIcon;
   hrefs: readonly string[];
@@ -269,23 +269,23 @@ export function groupOf(href: string): TileGroupDef {
   return GROUP_OF.get(href) ?? UNGROUPED;
 }
 
-export interface TileSlide {
+export interface TileGroup {
   group: TileGroupDef;
   tiles: AppTile[];
 }
 
 /**
- * The slides, in group order, each holding its tiles IN THE ORDER GIVEN.
- * Pass `orderedTiles(...)` and every slide inherits the arrangement/usage
+ * The groups, in catalogue order, each holding its tiles IN THE ORDER GIVEN.
+ * Pass `orderedTiles(...)` and every group inherits the arrangement/usage
  * order for free. A group with no tiles is left out; "More" appears only
  * when something is unplaced.
  */
-export function slides(tiles: AppTile[]): TileSlide[] {
+export function groupedTiles(tiles: AppTile[]): TileGroup[] {
   const buckets = new Map<string, AppTile[]>();
   for (const g of TILE_GROUPS) buckets.set(g.key, []);
   buckets.set(UNGROUPED.key, []);
   for (const t of tiles) buckets.get(groupOf(t.href).key)!.push(t);
-  const out: TileSlide[] = [];
+  const out: TileGroup[] = [];
   for (const g of [...TILE_GROUPS, UNGROUPED]) {
     const bucket = buckets.get(g.key)!;
     if (bucket.length > 0) out.push({ group: g, tiles: bucket });
@@ -294,35 +294,45 @@ export function slides(tiles: AppTile[]): TileSlide[] {
 }
 
 /**
- * The FULL flat order after moving one tile within its slide.
+ * The FULL flat order after moving one tile within its group.
  *
- * `flat` is every tile in display order; `slideIds` is one slide's tiles in
- * their current order; `from`/`to` are indexes within the slide. The slide's
+ * `flat` is every tile in display order; `groupIds` is one group's tiles in
+ * their current order; `from`/`to` are indexes within the group. The group's
  * tiles are re-sequenced INTO THE SLOTS THEY ALREADY OCCUPY in the flat
- * list, so tiles on other slides never move. Out-of-range indexes return the
+ * list, so tiles in other groups never move. Out-of-range indexes return the
  * flat list untouched.
  */
-export function reorderWithinSlide(
+export function reorderWithinGroup(
   flat: string[],
-  slideIds: string[],
+  groupIds: string[],
   from: number,
   to: number,
 ): string[] {
-  if (from < 0 || to < 0 || from >= slideIds.length || to >= slideIds.length) return flat;
-  const moved = slideIds.slice();
+  if (from < 0 || to < 0 || from >= groupIds.length || to >= groupIds.length) return flat;
+  const moved = groupIds.slice();
   const [item] = moved.splice(from, 1);
   moved.splice(to, 0, item);
-  const mine = new Set(slideIds);
+  const mine = new Set(groupIds);
   let i = 0;
   return flat.map((href) => (mine.has(href) ? moved[i++] : href));
 }
 
-/** The slide the desktop was left on (a group key), or null. Local only. */
-export function readSlide(): string | null {
-  const raw = readJson<unknown>(SLIDE_KEY, null);
+/** The group the desktop was left open on (a key), or null = closed. Local only. */
+export function readOpenGroup(): string | null {
+  const raw = readJson<unknown>(GROUP_KEY, null);
   return typeof raw === "string" ? raw : null;
 }
 
-export function writeSlide(key: string): void {
-  writeJson(SLIDE_KEY, key);
+/** Remember the open group; `null` remembers "closed" (the three icons). */
+export function writeOpenGroup(key: string | null): void {
+  if (key === null) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem(GROUP_KEY);
+    } catch {
+      /* nothing to clear */
+    }
+    return;
+  }
+  writeJson(GROUP_KEY, key);
 }

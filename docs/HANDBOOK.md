@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.293.1 (2026-09-14).*
+holds itself to. Current as of v1.294.0 (2026-09-14).*
 
 ---
 
@@ -1556,6 +1556,15 @@ order.
 **v1.293.1:** with ten modules per screen there is room, so each Overview
 tile is twice the size, and a screen is two rows of five until a very wide
 window can show all ten across.
+**v1.294.0:** no more swiping. The Overview opens on three large icons —
+**Office**, **Operations**, **System** — each saying what it holds and how
+many modules are behind it. Press one and the other two step aside while
+that group's ten modules appear in place; the back control at the top left
+(or Esc) brings the three icons back. Inside a group everything is as it
+was: most-used first until you drag, hover for the description, drag to
+rearrange, push a tile past the edge to open it in its own window, Reset to
+most-used. The Overview reopens the way you left it, on a group or on the
+three icons.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,
