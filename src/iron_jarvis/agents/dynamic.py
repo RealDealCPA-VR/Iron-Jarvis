@@ -14,6 +14,7 @@ own system prompt and tool allowlist through the ``AgentDefinition``.
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import select
@@ -26,6 +27,10 @@ from .types import AgentDefinition, get_agent_definition
 
 if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
     from sqlalchemy import Engine
+
+    from .files import AgentFiles
+
+log = logging.getLogger("iron_jarvis.agents.dynamic")
 
 
 #: A curated catalog of provider/model options a dynamic agent may select.
@@ -152,17 +157,50 @@ def _json_names(raw: str) -> list[str]:
 class DynamicAgentRegistry:
     """Persisted, in-memory registry of dynamically defined agents."""
 
-    def __init__(self, engine: "Engine") -> None:
+    def __init__(self, engine: "Engine", *, files: "AgentFiles | None" = None) -> None:
         self.engine = engine
         self._records: dict[str, DynamicAgentRecord] = {}
+        #: THE FOLDER (v1.297.0): ``<home>/agents/<slug>/`` per agent, kept in
+        #: step with the row — AGENTS.md mirrors ``system_prompt`` on every
+        #: prompt change, ``remove`` moves the folder to the trash. ``None``
+        #: (a bare registry in tests / the CLI) keeps no folders at all.
+        self.files = files
+
+    # --- the folder (v1.297.0) ---------------------------------------------
+
+    def _mirror_instructions(self, name: str, prompt: str, reason: str) -> None:
+        """Write AGENTS.md for ``name`` when a folder store is attached.
+        Never raises — a disk hiccup must not fail the DB write it mirrors."""
+        if self.files is None:
+            return
+        try:
+            self.files.write_instructions(name, prompt or "", reason=reason)
+        except Exception:  # noqa: BLE001 — the row is the truth; the file is a copy
+            log.warning("agent folder: could not write AGENTS.md for %r", name, exc_info=True)
 
     # --- persistence ------------------------------------------------------
 
     def load(self) -> "DynamicAgentRegistry":
-        """Read every persisted dynamic agent into memory (called on startup)."""
+        """Read every persisted dynamic agent into memory (called on startup).
+
+        v1.297.0: every record whose folder has NO ``AGENTS.md`` yet gets one
+        (a one-time backfill for agents hired before the folder existed; no
+        revision, reason ``backfill``). An existing file is left alone — the
+        DB is the mirror the runtime reads, and a load must not clobber a
+        file the user may have been editing.
+        """
         with session_scope(self.engine) as db:
             rows = list(db.exec(select(DynamicAgentRecord)))
         self._records = {r.name: _with_defaults(r) for r in rows}
+        if self.files is not None:
+            for record in self._records.values():
+                try:
+                    if self.files.read_instructions(record.name) is None:
+                        self._mirror_instructions(
+                            record.name, record.system_prompt or "", "backfill"
+                        )
+                except Exception:  # noqa: BLE001 — never let a folder stop the boot
+                    log.warning("agent folder: backfill failed for %r", record.name, exc_info=True)
         return self
 
     def register(
@@ -182,8 +220,14 @@ class DynamicAgentRegistry:
         reports_to: str | Any = _KEEP,
         skills: list[str] | None | Any = _KEEP,
         deny_tools: list[str] | None | Any = _KEEP,
+        prompt_reason: str = "edit",
     ) -> DynamicAgentRecord:
         """Create or update a dynamic agent (upsert by unique ``name``).
+
+        THE FOLDER (v1.297.0): when a folder store is attached, AGENTS.md is
+        written to mirror ``system_prompt`` after the row lands — a CHANGED
+        prompt keeps the previous text as a revision tagged ``prompt_reason``
+        ("edit" unless the caller says why, e.g. "restore <id>").
 
         ``provider``/``model`` optionally pin the agent to a specific LLM (see
         :func:`available_models`); empty strings mean "use the platform default".
@@ -233,6 +277,7 @@ class DynamicAgentRegistry:
             db.commit()
             db.refresh(record)  # reload all columns so the detached copy is usable
         self._records[name] = _with_defaults(record)
+        self._mirror_instructions(name, system_prompt, prompt_reason)
         return record
 
     @staticmethod
@@ -347,7 +392,11 @@ class DynamicAgentRegistry:
         return sorted(self._records.values(), key=lambda r: r.name)
 
     def remove(self, name: str) -> bool:
-        """Delete a dynamic agent by name; True if a row was removed."""
+        """Delete a dynamic agent by name; True if a row was removed.
+
+        v1.297.0: its folder is MOVED to ``<home>/trash/`` (never deleted —
+        the v1.256.0 rule), after the row is gone and only when one exists.
+        """
         with session_scope(self.engine) as db:
             row = db.exec(
                 select(DynamicAgentRecord).where(DynamicAgentRecord.name == name)
@@ -358,6 +407,11 @@ class DynamicAgentRegistry:
             db.delete(row)
             db.commit()
         self._records.pop(name, None)
+        if self.files is not None:
+            try:
+                self.files.remove(name)
+            except Exception:  # noqa: BLE001 — the row is gone; a stuck folder is a warning
+                log.warning("agent folder: could not move %r to the trash", name, exc_info=True)
         return True
 
     def definition(self, name: str) -> AgentDefinition | None:

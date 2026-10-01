@@ -32,6 +32,7 @@ import json
 import math
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -56,6 +57,13 @@ log = get_logger("skill_learning")
 
 #: The daemon-supplied model call: ``async (system, prompt) -> reply text``.
 Complete = Callable[[str, str], Awaitable[str]]
+
+#: ONE worker thread for inject counting (v1.297.0). ``record_injected`` is
+#: called from ``SkillRegistry.inject`` inside async code, and a SQLite write
+#: there would park the loop; one FIFO thread keeps the counts in call order
+#: and makes ``flush_injected`` (a barrier no-op) exact. Module-level: the
+#: engine is built per platform, the thread is per process.
+_INJECT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="skill-inject")
 
 #: A session at or below this score counts as low (parity with the
 #: ImprovementEngine's ``_LOW_SCORE``) and sends its skills to the refine lane.
@@ -118,6 +126,17 @@ def _signature(task: str) -> str:
     """Normalized create-lane dedup key for a task."""
     normalized = re.sub(r"[^a-z0-9]+", " ", (task or "").lower()).strip()
     return f"create::{normalized[:200]}"
+
+
+def _first_source_session(source_session_ids: str) -> str:
+    """The first session id in a proposal's JSON list, or "" (v1.297.0)."""
+    try:
+        ids = json.loads(source_session_ids or "[]")
+    except (TypeError, ValueError):
+        return ""
+    if isinstance(ids, list) and ids:
+        return str(ids[0] or "").strip()
+    return ""
 
 
 def _compose_skill_md(name: str, description: str, body: str) -> str:
@@ -273,6 +292,51 @@ class SkillLearningEngine:
             return
         for name in names:
             self._maybe_refine_candidate(sid, task, name)
+
+    def record_injected(self, names: list[str], session_id: str = "") -> None:
+        """Count an INJECTION (v1.297.0): ``SkillRegistry.inject`` put these
+        skills into a prompt. Bumps ``inject_count`` + ``last_injected_at``
+        only — never ``use_count``/``score_sum``/``last_used_at``, which mean
+        "the agent chose to load it" and feed the refine lane.
+
+        ``inject`` runs at prompt-build time with no session in hand, so the
+        registry seam calls this with ``session_id=""``; the argument exists
+        for callers that do know. No ``SkillUseRecord`` row is written (an
+        injection is not a use). Never raises — a counting failure must not
+        break a prompt build.
+        """
+        wanted = [str(n).strip() for n in (names or []) if str(n).strip()]
+        if not wanted:
+            return
+        now = utcnow()
+        # OFF THE LOOP (v1.153.1): ``inject`` runs inside async code
+        # (agents/runtime.py), so the SQLite write is handed to the one-thread
+        # executor and this returns at once. Fire-and-forget; the worker logs
+        # its own failure. ``flush_injected()`` waits for the queue (tests).
+        try:
+            _INJECT_EXECUTOR.submit(self._record_injected_now, wanted, now)
+        except RuntimeError:  # interpreter shutdown — the executor is closed
+            pass
+
+    def _record_injected_now(self, wanted: list[str], now) -> None:
+        """The worker half of :meth:`record_injected` (runs on the executor)."""
+        try:
+            with self._lock, session_scope(self.engine) as db:
+                for name in wanted:
+                    s = db.get(SkillStatRecord, name) or SkillStatRecord(skill_name=name)
+                    s.inject_count += 1
+                    s.last_injected_at = now
+                    db.add(s)
+                db.commit()
+        except Exception:  # noqa: BLE001 — telemetry, never the prompt's problem
+            log.exception("skill inject count failed for %s", wanted)
+
+    @staticmethod
+    def flush_injected(timeout: float | None = 30.0) -> None:
+        """Wait until every inject count queued so far has landed (tests, or
+        anyone about to READ the stats right after an inject). The executor
+        is one FIFO thread, so a no-op submitted now runs after them all."""
+        _INJECT_EXECUTOR.submit(lambda: None).result(timeout=timeout)
 
     def _maybe_refine_candidate(self, sid: str, task: str, name: str) -> None:
         registry = self._registry()
@@ -702,6 +766,7 @@ class SkillLearningEngine:
             stored_body = row.body_md
             prop_name = row.skill_name
             prop_desc = row.description
+            source_ids = row.source_session_ids
 
         body = (body_md or "").strip() or stored_body
         name, description, instructions = self._split_body(body, prop_name, prop_desc)
@@ -715,7 +780,19 @@ class SkillLearningEngine:
             name = prop_name  # overwrite the same slug — the update path
         else:  # create, or a refine whose target vanished -> create semantics
             name = self._unclobbered_name(name, skills_root)
-        save_skill(skills_root, name, description, instructions)
+        # Provenance (v1.297.0): a file this approval CREATES is "proposal"-
+        # made, remembering the first session it was distilled from. A refine
+        # that overwrites an existing user-root file keeps that file's own
+        # provenance (``save_skill`` carries the frontmatter over when nothing
+        # is passed): a refined skill the user wrote is still the user's, and
+        # must not become a sweep candidate because the engine touched it.
+        provenance: dict[str, Any] = {}
+        if not (skills_root / slugify(name) / SKILL_FILE).is_file():
+            provenance = {
+                "created_by": "proposal",
+                "created_session": _first_source_session(source_ids),
+            }
+        save_skill(skills_root, name, description, instructions, **provenance)
 
         if registry is not None:
             try:
@@ -843,6 +920,8 @@ class SkillLearningEngine:
                     "avg_score": round(s.score_sum / n, 4) if n else None,
                     "success_rate": round(s.success_count / n, 4) if n else None,
                     "last_used_at": s.last_used_at,
+                    "inject_count": int(getattr(s, "inject_count", 0) or 0),
+                    "last_injected_at": getattr(s, "last_injected_at", None),
                 }
             )
         views.sort(key=lambda v: (-v["use_count"], v["skill_name"]))

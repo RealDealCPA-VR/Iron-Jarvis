@@ -32,6 +32,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { diffLines, type DiffLine } from "@/lib/diff";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import { FilePickerModal } from "@/components/FilePickerModal";
 
@@ -125,11 +126,12 @@ export function appLabelFor(path: string): string {
 // the panel still counts as "last previewed"; a page reload forgets, by design
 // — this is a courtesy view, not a version store.
 
-/** One line of the diff view. `same` lines are kept for reading context. */
-export interface DiffLine {
-  kind: "same" | "added" | "removed";
-  text: string;
-}
+// `DiffLine` / `diffLines` moved to `@/lib/diff` in v1.297.0 so the agents
+// room (instructions history, coach proposals) can draw the same two colours
+// without importing this panel. Re-exported: callers and tests that reached
+// them here keep working.
+export type { DiffLine } from "@/lib/diff";
+export { diffLines } from "@/lib/diff";
 
 /** Serialize a preview payload into comparable lines: text/markdown split on
  *  newlines, sheets one TAB-joined line per row (cell edits then read as a
@@ -140,54 +142,6 @@ export function snapshotLines(d: PreviewData): string[] | null {
   if (d.kind === "text" || d.kind === "markdown")
     return (d.content ?? "").split("\n");
   return null;
-}
-
-/** Classic LCS line diff: unchanged lines interleaved with removed (prev-only)
- *  and added (next-only) lines, in document order. Previews are capped
- *  server-side (80 rows / 20k chars), so the quadratic table stays tiny; past
- *  the guard it degrades to remove-all/add-all — coarser, never wrong. */
-export function diffLines(prev: string[], next: string[]): DiffLine[] {
-  const MAX = 1500;
-  if (prev.length > MAX || next.length > MAX) {
-    return [
-      ...prev.map((text) => ({ kind: "removed" as const, text })),
-      ...next.map((text) => ({ kind: "added" as const, text })),
-    ];
-  }
-  const m = prev.length;
-  const n = next.length;
-  // lcs[i][j] = LCS length of prev[i:] vs next[j:]
-  const lcs: Uint32Array[] = Array.from(
-    { length: m + 1 },
-    () => new Uint32Array(n + 1),
-  );
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      lcs[i][j] =
-        prev[i] === next[j]
-          ? lcs[i + 1][j + 1] + 1
-          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-    }
-  }
-  const out: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < m && j < n) {
-    if (prev[i] === next[j]) {
-      out.push({ kind: "same", text: prev[i] });
-      i++;
-      j++;
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      out.push({ kind: "removed", text: prev[i] });
-      i++;
-    } else {
-      out.push({ kind: "added", text: next[j] });
-      j++;
-    }
-  }
-  while (i < m) out.push({ kind: "removed", text: prev[i++] });
-  while (j < n) out.push({ kind: "added", text: next[j++] });
-  return out;
 }
 
 /** Last-viewed payloads, keyed by path (+ sheet name for workbooks — switching

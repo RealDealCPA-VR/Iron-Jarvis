@@ -30,6 +30,8 @@ if TYPE_CHECKING:  # annotation only — the namespace is optional at runtime an
     # is imported lazily inside build_platform so a platform that cannot start
     # it still boots (see the ReplRegistry block below).
     from .repl.session import ReplRegistry
+    from .coach import CoachEngine
+    from .skills.curator import SkillCurator
 from .core.fs_policy import register_protected_root
 from .core.logging import get_logger
 from .providers.manager import ProviderManager
@@ -61,6 +63,8 @@ from .agents.agent_tools import agent_management_tools
 from .assignments import AssignWorkTool, AssignmentStore
 from .assignments import models as _asg_models  # noqa: F401  (registers AssignmentRecord)
 from .agents.dynamic import DynamicAgentRegistry
+from .agents.files import AgentFiles
+from .agents.notebook_tool import NotebookTool
 from .blackboard import BlackboardStore, blackboard_tools
 from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
 from .worklist import WORKLIST_TOOL_NAMES, WorklistStore, worklist_tools
@@ -204,6 +208,13 @@ class Platform:
     #: Skill learning (v1.135.0): finished sessions feed a suggest-only loop
     #: that distils repeatable procedures into reviewable draft skills.
     skill_learning: "SkillLearningEngine | None" = None
+    #: The reflection coach (v1.297.0): reads a CUSTOM agent's recent runs off
+    #: the ledger and proposes the smallest instruction edit (real model only;
+    #: suggest-only -- nothing is written until a person accepts).
+    coach: "CoachEngine | None" = None
+    #: Skill curator (v1.297.0): provenance + lifecycle for agent-made skills
+    #: (usage counted, stale ones archived — never deleted —, pinned exempt).
+    skill_curator: "SkillCurator | None" = None
     #: The SHARED embedder (real Ollama when reachable, offline mock otherwise;
     #: persistent-cached). Built once and injected into filesearch/ltm — kept on
     #: the platform so later consumers (memory graph, runtime-added LTM sources)
@@ -1638,9 +1649,22 @@ def build_platform(
     platform.scheduler = Scheduler(engine, _run_scheduled)
 
     # Dynamic agents (agents that add agents): load persisted + expose tools.
-    platform.agents_registry = DynamicAgentRegistry(engine).load()
+    # THE FOLDER (v1.297.0): every custom agent keeps `<home>/agents/<slug>/`
+    # (AGENTS.md = its instructions, mirrored from the row; NOTES.md = its
+    # notebook; revisions/). `load()` backfills a missing AGENTS.md once.
+    platform.agents_registry = DynamicAgentRegistry(
+        engine, files=AgentFiles(config.home)
+    ).load()
     for tool in agent_management_tools(platform, platform.agents_registry):
         platform.registry.register(tool)
+    # `notebook` (v1.297.0): a named agent's own NOTES.md. "allow" — its own
+    # private file, bounded and confined, strictly weaker than the write_file
+    # the same run holds; seeded in BOTH copies like `assign_work` below so an
+    # older config.toml cannot leave it fail-closed. The runtime arms it for a
+    # `custom:<slug>` run; no builtin roster carries it.
+    platform.registry.register(NotebookTool(platform))
+    platform.permissions._base.setdefault("notebook", "allow")
+    platform.config.permissions.setdefault("notebook", "allow")
 
     # Assignments (v1.296.0): give an agent a job and the job waits for it.
     # The store validates assignees through THIS registry (a custom agent
@@ -1768,5 +1792,24 @@ def build_platform(
     # above. ``on_proposal`` stays None here — publishing the minted-proposal
     # event is daemon wiring (the daemon owns the event-loop scheduling).
     platform.skill_learning = SkillLearningEngine(platform)
+
+    # The reflection coach (v1.297.0): a platform service over the ledger +
+    # the registry; its table is a late model (core.db._LATE_MODEL_MODULES).
+    from .coach import CoachEngine
+
+    platform.coach = CoachEngine(platform)
+    # The inject seam (v1.297.0): every skill ``inject`` puts into a prompt is
+    # counted on its stat row (``inject_count``), separate from ``use_count``.
+    skills.on_inject = platform.skill_learning.record_injected
+
+    # SkillCurator (v1.297.0): agent-made skills get a lifecycle — usage
+    # counted, stale ones ARCHIVED (moved under skills/.archive, never
+    # deleted), pinned ones exempt, the user's own never touched by the
+    # sweep. The periodic loop is daemon wiring (lifespan ``bg_tasks``).
+    from .skills.curator import SkillCurator
+
+    platform.skill_curator = SkillCurator(
+        config.home, skills, platform.skill_learning, config=config
+    )
 
     return platform

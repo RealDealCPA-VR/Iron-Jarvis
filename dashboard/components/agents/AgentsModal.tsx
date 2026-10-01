@@ -50,6 +50,8 @@ import { Modal } from "@/components/Modal";
 import { timeAgo } from "@/lib/format";
 import AgentFace, { type FaceOverride } from "./AgentFace";
 import { AgentInbox } from "./AgentInbox";
+import { AgentFiles } from "./AgentFiles";
+import { AgentCoach } from "./AgentCoach";
 import { AgentPortrait } from "./AgentPortrait";
 import {
   FacePicker,
@@ -526,6 +528,14 @@ function AgentDetail({
           a remote has no queue on this daemon. Renders nothing on a daemon
           without the route. */}
       {entry.kind !== "remote" && <AgentInbox name={entry.name} />}
+
+      {/* THE FOLDER + THE COACH (v1.297.0): a custom agent's instructions
+          file (with revisions) and private notebook, then the reflection
+          coach's report and pending proposals. Keyed by the BARE slug — the
+          daemon's folder and coach routes take it without the "custom:"
+          prefix. Both render nothing on a daemon without the routes. */}
+      {entry.kind === "dynamic" && <AgentFiles name={bare} />}
+      {entry.kind === "dynamic" && <AgentCoach name={bare} />}
     </div>
   );
 }

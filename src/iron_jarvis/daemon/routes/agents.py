@@ -7,7 +7,6 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 from collections import deque
 import os
@@ -18,6 +17,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
 
 from ..app import _session_view
 from ..schemas import (
@@ -46,6 +46,10 @@ from ...agents.remote import RemoteAgentRegistry
 # The employee ledger (v1.295.0): what a custom agent spent this month against
 # its allowance, and the one sentence a paused/exhausted agent answers with.
 from ...agents.allowance import allowance_state, month_spend, refusal_for
+
+# THE FOLDER (v1.297.0): the one slug rule, lifted out of this module so the
+# agent's folder, portrait and face key cannot disagree.
+from ...agents.files import agent_slug
 from ...core.events import EventType
 from ...core.models import AgentType
 from ...core.logging import get_logger
@@ -68,6 +72,36 @@ AUTO_PAUSE_PREFIX = "monthly allowance used up"
 # one (the `_open_native` pattern from routes/documents, and how the
 # event-loop-offload test proves the file IO left the loop).
 from ...agents import faces
+
+
+class AgentFilesInstructions(BaseModel):
+    """``PUT /agents/{name}/files/instructions`` — the new AGENTS.md text and
+    an optional one-line reason kept on the revision of the previous text."""
+
+    text: str
+    reason: str = ""
+
+
+class AgentFilesNotes(BaseModel):
+    """``PUT /agents/{name}/files/notes`` — the whole notebook, replaced."""
+
+    text: str
+
+
+def _open_folder(path: str) -> None:
+    """Show *path* in the OS file manager (Explorer / Finder / xdg-open).
+    Module-level so tests monkeypatch it instead of really opening a window —
+    the ``routes/documents._open_native`` pattern."""
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 — explicit, user-initiated open
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
 
 # --- agent identity: portraits + roster activity (v1.171.0) -----------------
 # Storage is BY NAME under <home>/avatars/<slug>.png — the file's existence IS
@@ -94,42 +128,17 @@ _AVATAR_PROMPT = (
     "no text, no watermark."
 )
 
-_AVATAR_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
-
-#: DOS device names: opening ``<dir>/nul.png`` opens the DEVICE, not a file —
-#: Windows matches the segment before the FIRST dot, case-insensitively.
-_WINDOWS_RESERVED = frozenset(
-    {"con", "prn", "aux", "nul"}
-    | {f"com{i}" for i in "123456789"}
-    | {f"lpt{i}" for i in "123456789"}
-)
-
-
 def _avatar_slug(name: str) -> str:
     """One path-safe filename segment that never EATS the identity (v1.153.2).
 
-    A clean LOWERCASE name passes through verbatim. Any name the sanitizer had
-    to touch gets a short digest of the ORIGINAL appended, so ``a/b`` and
-    ``a_b`` can never collide on one file — lossy sanitization without the
-    digest would silently merge two agents' portraits.
-
-    CASE-FOLDING IS LOSSY TOO: the shipping filesystems (NTFS, APFS) are
-    case-insensitive, so ``Analyst`` and ``analyst`` as distinct slugs would
-    still resolve to ONE file. The stored segment is therefore lowercase, and
-    a name the fold changed is treated exactly like any other sanitizer touch.
-    Windows reserved device names (nul, con, com1…) get the digest PREFIXED —
-    the device match keys on the segment before the first dot, so an appended
-    digest would not break ``nul.txt``.
+    v1.297.0: the rule LIVES in ``agents/files.agent_slug`` now — the agent's
+    folder, portrait and face key are built from that ONE sanitizer, so the
+    three can never disagree. This name is kept for the portrait/face paths
+    below and the tests that import it. See ``agent_slug`` for the contract
+    (clean lowercase passes verbatim; any touched or case-folded name carries
+    a digest of the original; Windows device names get it prefixed).
     """
-    raw = str(name or "").strip()
-    slug = _AVATAR_UNSAFE.sub("_", raw).strip("._")
-    lowered = slug.lower()
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
-    if lowered.split(".", 1)[0] in _WINDOWS_RESERVED:
-        return f"{digest}-{lowered}"
-    if not lowered or lowered != raw:
-        return f"{lowered or 'agent'}-{digest}"
-    return lowered
+    return agent_slug(name)
 
 
 #: Non-whitespace C0/C1 controls (ESC/BEL/NUL survive a whitespace collapse)
@@ -345,8 +354,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/skills")
     def skills() -> dict[str, Any]:
+        # v1.297.0 (the curator): `created_by` ("user" | "agent" | "proposal")
+        # and `pinned` ride every row, additive — a Skill from before the
+        # provenance fields reads as a user-authored, unpinned skill.
         items = [
-            {"name": s.name, "description": s.description, "source": s.source}
+            {
+                "name": s.name,
+                "description": s.description,
+                "source": s.source,
+                "created_by": str(getattr(s, "created_by", "") or "user"),
+                "pinned": bool(getattr(s, "pinned", False)),
+            }
             for s in d.platform.skills.list()
         ]
         # A per-source tally so the dashboard can show "12 Claude · 8 Codex · …".
@@ -365,6 +383,8 @@ def register(app: FastAPI, d) -> None:
             "description": sk.description,
             "instructions": sk.instructions,
             "source": sk.source,
+            "created_by": str(getattr(sk, "created_by", "") or "user"),
+            "pinned": bool(getattr(sk, "pinned", False)),
         }
 
     @app.post("/skills/rescan")
@@ -1544,6 +1564,121 @@ def register(app: FastAPI, d) -> None:
             "phoned": phoned,
             "phone_rate_limited": phone_rate_limited,
         }
+
+    # --- The folder (v1.297.0) ----------------------------------------------
+    # `<home>/agents/<slug>/`: AGENTS.md (the instructions — the SAME text as
+    # the row's system_prompt; an edit here goes THROUGH the registry so the
+    # DB mirror and the revision both land), NOTES.md (the notebook) and
+    # revisions/. Every disk read is in a sync `def` (threadpool). After the
+    # /agents/remote/* block, BEFORE the /agents/{name} catch-alls.
+
+    def _agent_files():
+        files = getattr(d.platform.agents_registry, "files", None)
+        if files is None:
+            raise HTTPException(status_code=503, detail="agent folders are not available")
+        return files
+
+    def _folder_record(name: str):
+        """The custom agent's record, or the right 404: a builtin type has no
+        folder of its own, an unknown name has nothing."""
+        rec = d.platform.agents_registry.get(name)
+        if rec is not None:
+            return rec
+        try:
+            AgentType(name)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="unknown agent") from None
+        raise HTTPException(
+            status_code=404, detail="only your own agents have a folder"
+        )
+
+    def _files_view(rec) -> dict[str, Any]:
+        files = _agent_files()
+        instructions = files.read_instructions(rec.name)
+        if instructions is None:
+            # A folder that has not been written yet still SHOWS the row's
+            # text — the DB is the truth; the file is the copy.
+            instructions = rec.system_prompt or ""
+        return {
+            "name": rec.name,
+            "instructions": instructions,
+            "notes": files.read_notes(rec.name),
+            "revisions": files.list_revisions(rec.name),
+            "folder": str(files.folder(rec.name)),
+        }
+
+    @app.get("/agents/{name}/files")
+    def agent_files(name: str) -> dict[str, Any]:
+        """``{name, instructions, notes, revisions: [{id, at, reason, bytes}],
+        folder}`` for a custom agent; 404 for a builtin or an unknown name."""
+        return _files_view(_folder_record(name))
+
+    @app.put("/agents/{name}/files/instructions")
+    def put_agent_instructions(name: str, body: AgentFilesInstructions) -> dict[str, Any]:
+        """The same effect as ``PATCH {system_prompt}``, THROUGH the registry:
+        the row changes, AGENTS.md follows, and the previous text is kept as
+        a revision tagged ``reason``. Answers the files view."""
+        rec = _folder_record(name)
+        _agent_files()
+        reason = " ".join(str(body.reason or "").split()) or "edit"
+        updated = d.platform.agents_registry.register(
+            rec.name,
+            body.text,
+            _json_list(rec.tools_json),
+            base_type=rec.base_type,
+            description=rec.description,
+            provider=rec.provider,
+            model=rec.model,
+            prompt_reason=reason,
+        )
+        return _files_view(updated)
+
+    @app.put("/agents/{name}/files/notes")
+    def put_agent_notes(name: str, body: AgentFilesNotes) -> dict[str, Any]:
+        rec = _folder_record(name)
+        _agent_files().write_notes(rec.name, body.text)
+        return _files_view(rec)
+
+    @app.get("/agents/{name}/files/revisions/{revision_id}")
+    def agent_files_revision(name: str, revision_id: str) -> dict[str, Any]:
+        rec = _folder_record(name)
+        found = _agent_files().read_revision(rec.name, revision_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="unknown revision")
+        return found
+
+    @app.post("/agents/{name}/files/revisions/{revision_id}/restore")
+    def restore_agent_files_revision(name: str, revision_id: str) -> dict[str, Any]:
+        """Put a revision's text back — through the registry, so the row and
+        the file agree and the text being replaced is kept as a revision."""
+        rec = _folder_record(name)
+        found = _agent_files().read_revision(rec.name, revision_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="unknown revision")
+        updated = d.platform.agents_registry.register(
+            rec.name,
+            found["text"],
+            _json_list(rec.tools_json),
+            base_type=rec.base_type,
+            description=rec.description,
+            provider=rec.provider,
+            model=rec.model,
+            prompt_reason=f"restore {found['id']}",
+        )
+        return _files_view(updated)
+
+    @app.post("/agents/{name}/files/open")
+    def open_agent_folder(name: str) -> dict[str, Any]:
+        """Show the folder in the OS file manager (it is created if missing,
+        so the user never lands on a 'path not found')."""
+        rec = _folder_record(name)
+        folder = _agent_files().folder(rec.name)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            _open_folder(str(folder))
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"could not open the folder: {exc}") from exc
+        return {"opened": str(folder)}
 
     # --- The inbox (v1.296.0) -----------------------------------------------
     # What is waiting for ONE agent: its assignment queue and health. After

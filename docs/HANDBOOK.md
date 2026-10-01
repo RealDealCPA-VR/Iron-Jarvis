@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.296.0 (2026-09-14).*
+holds itself to. Current as of v1.297.0 (2026-09-14).*
 
 ---
 
@@ -1605,6 +1605,29 @@ running one. After an update or a crash the queue picks itself back up
 resumed. Every agent now also shows real **health**: when it last ran and how
 it ended, its last error, what is queued, running or blocked — and "idle"
 means exactly that.
+**v1.297.0 — an agent keeps a folder, learns from a coach, and its skills
+are curated.** Every agent of yours now has a **folder** under the app's
+home (`agents/<name>/`): its instructions as a file with a **history** (every
+edit keeps the previous version; View shows the difference, Restore puts it
+back), and a private **notebook** the agent can write to during its runs
+(the `notebook` tool) and you can read or edit — trimmed to 4,000 characters
+when it is injected into the agent's runs. Open the folder from the agent's
+detail in the Agents dialog. The **coach** reads an agent's last ten runs
+straight off the ledger (outcomes, failed tools, denials, unanswered asks,
+step budgets, your thumbs-down), groups what went wrong into eight named
+kinds (verifier-miss, avoidable-rework, tool-misuse, late-escalation,
+scope-creep, instruction-miss, stale-context, human-correction) and, on
+"Ask the coach", proposes the **smallest** change to that agent's
+instructions — shown as a diff with Accept / Decline. Nothing changes until
+you accept; a declined idea is not raised again for two weeks; the coach
+never coaches itself, never drops a line that says "never" or "always", and
+with no real model connected it says so instead of inventing a change. The
+**curator** keeps the skills your agents wrote tidy: skills show who made
+them (you, an agent, a proposal), a pin keeps one forever, and a daily sweep
+**archives** agent-made skills nobody has used in a month (never deleted —
+the whole skills folder is backed up first, archived skills sit in
+`skills/.archive/` and Restore brings one back). The Skills page has the
+curator panel with a dry run that only lists what it would do.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

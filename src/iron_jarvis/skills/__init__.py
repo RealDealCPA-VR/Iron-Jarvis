@@ -8,6 +8,7 @@ that the orchestrator can search and inject into an agent's system prompt.
 
 from __future__ import annotations
 
+from .curator import SkillCurator
 from .framework import SkillRegistry, builtin_dir, external_skill_roots
 from .learning import SkillLearningEngine
 from .learning_models import (
@@ -31,6 +32,7 @@ __all__ = [
     "SkillLoadTool",
     "skill_tools",
     "SkillLearningEngine",
+    "SkillCurator",
     "SkillCandidateRecord",
     "SkillProposalRecord",
     "SkillStatRecord",

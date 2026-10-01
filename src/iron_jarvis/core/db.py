@@ -224,6 +224,7 @@ _LATE_MODEL_MODULES = (
     "..goals.models",         # GoalContractRecord — goal contracts (v1.208.0)
     "..browser.models",       # BrowserPairing — the paired browser (v1.235.0)
     "..assignments.models",   # AssignmentRecord — a job that waits for its agent (v1.296.0)
+    "..coach.models",         # CoachProposalRecord — the reflection coach's queue (v1.297.0)
 )
 
 

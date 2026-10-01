@@ -524,6 +524,8 @@ table {
 :root[data-theme="mark8"] .border-amber-400\/30 { border-color: rgb(180 83 9 / 0.55); }
 :root[data-theme="mark1"] .border-amber-400\/40,
 :root[data-theme="mark8"] .border-amber-400\/40 { border-color: rgb(180 83 9 / 0.65); }
+:root[data-theme="mark1"] .border-amber-400\/50,
+:root[data-theme="mark8"] .border-amber-400\/50 { border-color: rgb(180 83 9 / 0.7); }
 :root[data-theme="mark1"] .border-amber-500\/20,
 :root[data-theme="mark8"] .border-amber-500\/20 { border-color: rgb(180 83 9 / 0.45); }
 :root[data-theme="mark1"] .border-amber-500\/25,

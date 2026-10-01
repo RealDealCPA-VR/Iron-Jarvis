@@ -106,14 +106,29 @@ class SkillCreateTool(Tool):
         self._config = config
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        from .loader import save_skill
+        from .loader import SKILL_FILE, save_skill, slugify
 
+        skills_root = self._config.home / "skills"
+        name = str(args.get("name", ""))
+        # Provenance (v1.297.0): a skill the LOOP CREATES is "agent"-made and
+        # remembers the session — the curator's sweep only ever considers
+        # agent/proposal skills, never the user's own. ONLY on a new file: an
+        # overwrite of an existing slug keeps that file's provenance (the same
+        # rule `learning.approve` follows), or an agent rewriting the user's
+        # own skill would turn it into a sweep candidate.
+        provenance: dict[str, Any] = {}
+        if not (skills_root / slugify(name) / SKILL_FILE).is_file():
+            provenance = {
+                "created_by": "agent",
+                "created_session": str(getattr(ctx, "session_id", "") or ""),
+            }
         try:
             path = save_skill(
-                self._config.home / "skills",
-                str(args.get("name", "")),
+                skills_root,
+                name,
                 str(args.get("description", "")),
                 str(args.get("instructions", "")),
+                **provenance,
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))

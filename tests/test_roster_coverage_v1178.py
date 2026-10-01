@@ -211,6 +211,12 @@ _OFF_ROSTER_OPEN = {
     # worker type has no business queueing work for its peers unasked; a
     # custom agent opts in by naming it in its tool list.
     "assign_work",
+    # v1.297.0: `notebook` is a custom agent's OWN NOTES.md. It is on no
+    # builtin roster on purpose — the runtime arms it at the seam for every
+    # `custom:<slug>` run after `arm_for_task` (a builtin has no folder, so
+    # the tool would only ever refuse it). Reachability is pinned by
+    # tests/test_agent_files_v1297.py::test_runtime_injects_the_notebook_and_arms_the_tool_for_a_custom_run_only.
+    "notebook",
     # Plausibly withheld on purpose (cost, consent, secrets) — NOT verified here,
     # which is why they sit under OPEN rather than BY_DESIGN:
     "repl", "run_code", "secret_set", "secret_list",

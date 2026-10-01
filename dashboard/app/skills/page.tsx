@@ -1,11 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu } from "lucide-react";
+import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { post, ApiError } from "@/lib/api";
-import type { Skill, SkillDetail, SkillLearningOverview } from "@/lib/types";
+import type { Skill, SkillCuratorView, SkillDetail, SkillLearningOverview } from "@/lib/types";
 import { SuggestedSkills } from "@/components/skills/SuggestedSkills";
+import { SkillCurator } from "@/components/skills/SkillCurator";
 
 /** Response of POST /skills/{name}/apply — a one-shot "use it right now" run. */
 interface SkillApplyResult {
@@ -49,14 +50,34 @@ const SOURCE_META: Record<string, { label: string; cls: string }> = {
   custom: { label: "Custom", cls: "border-sky-500/30 bg-sky-500/10 text-sky-300" },
 };
 
-function SourceBadge({ source }: { source?: string }) {
+// v1.297.0 (skill curator): WHO wrote it, next to WHERE it lives. An
+// agent-made skill and one landed from a learning-loop proposal are the ones
+// the curator sweeps, so they are told apart at a glance. "user" gets no
+// second badge — the source badge already says Yours.
+const PROVENANCE_META: Record<string, { label: string; cls: string }> = {
+  agent: { label: "Agent-made", cls: "border-amber-500/30 bg-amber-500/10 text-amber-300" },
+  proposal: { label: "From a proposal", cls: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300" },
+};
+
+function SourceBadge({ source, createdBy }: { source?: string; createdBy?: string }) {
   const meta = SOURCE_META[source ?? "user"] ?? SOURCE_META.user;
+  const prov = createdBy ? PROVENANCE_META[createdBy] : undefined;
   return (
-    <span
-      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
-    >
-      {meta.label}
-    </span>
+    <>
+      <span
+        className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+      >
+        {meta.label}
+      </span>
+      {prov && (
+        <span
+          data-testid="skill-provenance"
+          className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${prov.cls}`}
+        >
+          {prov.label}
+        </span>
+      )}
+    </>
   );
 }
 import {
@@ -85,6 +106,52 @@ export default function SkillsPage() {
   // page renders exactly as before.
   const learning = useApi<SkillLearningOverview>("/skills/learning");
   const statByName = new Map((learning.data?.stats ?? []).map((st) => [st.skill_name, st]));
+
+  // The skill curator (v1.297.0): candidates for the archive, the archive,
+  // sweep settings. A daemon without it (404) hides the panel AND the per-card
+  // pin/archive actions — the routes they POST to do not exist there.
+  const curator = useApi<SkillCuratorView>("/skills/curator");
+  const curated = curator.data != null;
+  const [cardBusy, setCardBusy] = useState<string | null>(null);
+  const [archiveArmed, setArchiveArmed] = useState<string | null>(null);
+  const [cardError, setCardError] = useState<string | null>(null);
+
+  async function togglePin(s: Skill) {
+    const key = `pin:${s.name}`;
+    if (cardBusy) return;
+    setCardBusy(key);
+    setCardError(null);
+    try {
+      await post(`/skills/curator/${encodeURIComponent(s.name)}/${s.pinned ? "unpin" : "pin"}`);
+      reload();
+      curator.reload();
+    } catch (err) {
+      setCardError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setCardBusy(null);
+    }
+  }
+
+  async function archiveSkill(s: Skill) {
+    if (cardBusy) return;
+    if (archiveArmed !== s.name) {
+      setArchiveArmed(s.name);
+      return;
+    }
+    setCardBusy(`archive:${s.name}`);
+    setArchiveArmed(null);
+    setCardError(null);
+    try {
+      await post(`/skills/curator/${encodeURIComponent(s.name)}/archive`);
+      if (selected === s.name) setSelected(null);
+      reload();
+      curator.reload();
+    } catch (err) {
+      setCardError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setCardBusy(null);
+    }
+  }
 
   // --- "Use this skill" bubble state -----------------------------------------
   // Cleared whenever a different skill is selected; the ref lets an in-flight
@@ -237,6 +304,18 @@ export default function SkillsPage() {
         </Reveal>
       )}
 
+      {/* The curator (v1.297.0) — one collapsed line above everything; absent
+          on daemons without it. */}
+      {curator.data && (
+        <Reveal>
+          <SkillCurator
+            view={curator.data}
+            onRefresh={curator.reload}
+            onSkillsChanged={reload}
+          />
+        </Reveal>
+      )}
+
       {/* Suggested skills — full-width review strip above the lists so drafts
           awaiting a decision are seen before the catalog. Absent entirely on
           daemons without the learning loop. */}
@@ -363,6 +442,11 @@ export default function SkillsPage() {
                   })}
                 </div>
               )}
+              {cardError && (
+                <div className="mb-2">
+                  <ErrorNote>{cardError}</ErrorNote>
+                </div>
+              )}
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : skills.length === 0 ? (
@@ -376,19 +460,21 @@ export default function SkillsPage() {
                       stat?.success_rate == null
                         ? null
                         : Math.round(stat.success_rate <= 1 ? stat.success_rate * 100 : stat.success_rate);
+                    const pinned = s.pinned === true;
+                    const armed = archiveArmed === s.name;
                     return (
-                      <li key={s.name}>
+                      <li key={s.name} className="flex items-stretch gap-1">
                         <button
                           onClick={() => selectSkill(s.name)}
-                          className={`w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors ${
+                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-left text-sm transition-colors ${
                             selected === s.name
                               ? "border-accent/30 bg-accent/[0.08] text-accent-soft"
                               : "border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]"
                           }`}
                         >
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
-                            <SourceBadge source={s.source} />
+                            <SourceBadge source={s.source} createdBy={s.created_by} />
                           </div>
                           <div className="truncate text-xs text-zinc-500">{s.description}</div>
                           {stat && stat.use_count > 0 && (
@@ -398,6 +484,43 @@ export default function SkillsPage() {
                             </div>
                           )}
                         </button>
+                        {/* Pin + Archive (v1.297.0) — siblings of the select
+                            button, never nested in it. Only with a curator. */}
+                        {curated && (
+                          <div className="flex shrink-0 flex-col items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              data-testid={`skill-pin-${s.name}`}
+                              aria-pressed={pinned}
+                              aria-label={pinned ? `Unpin ${s.name}` : `Pin ${s.name}`}
+                              title={pinned ? "Pinned — never swept into the archive" : "Pin — keep it out of the sweep"}
+                              onClick={() => void togglePin(s)}
+                              disabled={cardBusy !== null}
+                              className={`rounded-md border p-1 transition-colors disabled:opacity-50 ${
+                                pinned
+                                  ? "border-accent/40 bg-accent/10 text-accent-soft"
+                                  : "border-transparent text-zinc-600 hover:border-white/10 hover:text-zinc-300"
+                              }`}
+                            >
+                              <Pin size={12} fill={pinned ? "currentColor" : "none"} aria-hidden />
+                            </button>
+                            <button
+                              type="button"
+                              data-testid={`skill-archive-${s.name}`}
+                              aria-label={armed ? `Archive ${s.name}?` : `Archive ${s.name}`}
+                              title={armed ? "Click again to archive" : "Archive — restorable from the curator"}
+                              onClick={() => void archiveSkill(s)}
+                              disabled={cardBusy !== null}
+                              className={`rounded-md border p-1 text-[10px] transition-colors disabled:opacity-50 ${
+                                armed
+                                  ? "border-rose-500/50 bg-rose-500/15 text-rose-200"
+                                  : "border-transparent text-zinc-600 hover:border-white/10 hover:text-rose-300"
+                              }`}
+                            >
+                              {armed ? "Sure?" : <Archive size={12} aria-hidden />}
+                            </button>
+                          </div>
+                        )}
                       </li>
                     );
                   })}

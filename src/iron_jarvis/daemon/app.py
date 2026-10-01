@@ -1056,6 +1056,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
             log.info("assignment dispatcher armed")
 
+        # The skill curator (v1.297.0): agent-made skills that nobody used
+        # are ARCHIVED (never deleted) on a daily sweep, first run an hour
+        # after boot. Same discipline as the dispatcher: a named bg task,
+        # `_tick("skill_curator", …)` per pass, its own stop Event set
+        # before the cancel lands. `config.curator_enabled` gates the loop
+        # only — a manual sweep from the Skills page still works when off.
+        _curator_stop = asyncio.Event()
+        if getattr(platform, "skill_curator", None) is not None and getattr(
+            platform.config, "curator_enabled", True
+        ):
+            bg_tasks["skill_curator"] = asyncio.create_task(
+                platform.skill_curator.run_forever(
+                    _curator_stop, lambda ok, exc: _tick("skill_curator", ok, exc)
+                )
+            )
+            log.info("skill curator armed (first sweep in 1 h)")
+
         # BUILD PANES KEEP RECENT HISTORY THROUGH A CRASH (v1.245.0). The
         # terminal snapshot was written only on create/kill/rename and at a
         # clean shutdown, and the 2026-09-09 Patch-Tuesday kill skipped every
@@ -1446,6 +1463,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
             _dispatcher_stop.set()
+            _curator_stop.set()
             for task in bg_tasks.values():
                 task.cancel()
             if compact_task is not None:
@@ -2714,6 +2732,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # skill_learning BEFORE agents: agents.py's GET /skills/{name} catch-all
     # would otherwise swallow the literal /skills/learning path.
     _routes.skill_learning.register(app, d)
+    # Skill curator (v1.297.0) — BEFORE agents: agents.py's `GET /skills/{name}`
+    # catch-all would otherwise swallow `/skills/curator`.
+    from .routes import skills_curator as _curator_routes
+
+    _curator_routes.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
     _routes.triggers.register(app, d)
@@ -2734,6 +2757,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import assignments as _assignments_routes
 
     _assignments_routes.register(app, d)
+    # The reflection coach (v1.297.0): reads an agent's runs, proposes the
+    # smallest instruction change behind an accept/decline diff.
+    from .routes import coach as _coach_routes
+
+    _coach_routes.register(app, d)
     # Worklist (v1.174.0): the durable per-item checkpoints a chunked
     # job reports progress through — without this the store exists and
     # no surface can read it.

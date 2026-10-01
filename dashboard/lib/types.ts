@@ -163,6 +163,11 @@ export interface Skill {
   description: string;
   /** Where the skill came from: builtin | user | claude | codex | custom. */
   source?: string;
+  /** v1.297.0 (skill curator): who wrote it — the user, an agent mid-run, or
+   *  an accepted learning-loop proposal. Absent on an older daemon. */
+  created_by?: "user" | "agent" | "proposal";
+  /** v1.297.0: a pinned skill is never swept into the archive. */
+  pinned?: boolean;
 }
 
 export interface SkillDetail extends Skill {
@@ -1076,4 +1081,142 @@ export interface AgentInboxView {
     recent: Assignment[];
   };
   health: AgentHealth | null;
+}
+
+/* ---- An agent's folder (v1.297.0) ----------------------------------------- */
+/** One saved revision of the instructions file (GET /agents/{name}/files). */
+export interface AgentFileRevision {
+  id: string;
+  at: string;
+  reason: string;
+  bytes: number;
+}
+
+/** GET /agents/{name}/files — the instructions file, the private notebook,
+ *  the revision list and where the folder lives on disk. */
+export interface AgentFilesView {
+  name: string;
+  instructions: string;
+  notes: string;
+  revisions: AgentFileRevision[];
+  folder: string;
+}
+
+/** GET /agents/{name}/files/revisions/{id} — one revision's full text. */
+export interface AgentFileRevisionText {
+  id: string;
+  at: string;
+  reason: string;
+  text: string;
+}
+
+/* ---- The reflection coach (v1.297.0) -------------------------------------- */
+/** One recent run as the coach scored it. */
+export interface CoachRun {
+  session_id: string;
+  outcome: string;
+  score: number;
+  tools_failed: Record<string, number>;
+  denials: number;
+  unanswered_asks: number;
+  steps: number;
+  max_steps: number;
+  down_feedback: number;
+  duration_s: number;
+  summary: string;
+}
+
+/** A recurring problem across runs, with the lines that show it. */
+export interface CoachCluster {
+  category: string;
+  count: number;
+  weight: number;
+  evidence: Array<{ session_id: string; quote: string }>;
+}
+
+export interface CoachReport {
+  agent: string;
+  runs: CoachRun[];
+  clusters: CoachCluster[];
+  /** The daemon's fixed taxonomy: category → one-line definition (what the
+   *  cluster chip's tooltip says; the UI never invents a definition). */
+  categories?: Record<string, string>;
+}
+
+export type CoachProposalStatus = "pending" | "accepted" | "declined" | "stale";
+
+/** A proposed change to an agent's instructions: before → after, and why. */
+export interface CoachProposal {
+  id: string;
+  agent: string;
+  kind: string;
+  target: string;
+  before: string;
+  after: string;
+  rationale: string;
+  evidence: unknown[];
+  signature: string;
+  status: CoachProposalStatus;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** GET /agents/{name}/coach. */
+export interface AgentCoachView {
+  report: CoachReport;
+  proposals: CoachProposal[];
+  last_reason: string;
+}
+
+/** POST /agents/{name}/coach — a proposal, or the sentence saying why not. */
+export interface CoachAskResult {
+  proposal: CoachProposal | null;
+  reason: string;
+}
+
+/* ---- The skill curator (v1.297.0) ----------------------------------------- */
+/** The curator's status fields. `GET /skills/curator` carries them FLAT on
+ *  the view (the daemon's `SkillCurator.overview()` is `status()` with the
+ *  two count fields replaced by the lists) — there is no nested `status`
+ *  object on the wire. */
+export interface SkillCuratorStatus {
+  enabled: boolean;
+  last_sweep_at: string | null;
+  last_result: string | Record<string, unknown> | null;
+  settings: Record<string, unknown>;
+  archive_dir?: string;
+}
+
+/** A skill the next sweep would archive, and the reason it qualifies. */
+export interface SkillCuratorCandidate {
+  name: string;
+  created_by: string;
+  use_count: number;
+  inject_count: number;
+  last_used_at: string | null;
+  age_days: number;
+  idle_days: number;
+  reason: string;
+}
+
+export interface SkillCuratorArchived {
+  name: string;
+  archived_at: string;
+  description: string;
+}
+
+/** GET /skills/curator — the status fields, flat, plus the two lists. */
+export interface SkillCuratorView extends SkillCuratorStatus {
+  candidates: SkillCuratorCandidate[];
+  archived: SkillCuratorArchived[];
+}
+
+/** POST /skills/curator/run {dry_run}. */
+export interface SkillCuratorRunResult {
+  dry_run?: boolean;
+  archived: string[];
+  /** What a dry run WOULD archive (a real run echoes its candidates here). */
+  would_archive?: string[];
+  kept: string[];
+  backup: string | null;
 }

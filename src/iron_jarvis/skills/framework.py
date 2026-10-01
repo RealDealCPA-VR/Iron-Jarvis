@@ -11,8 +11,22 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Callable
 
 from .loader import SKILL_FILE, Skill, load_skill
+
+#: Where the curator (v1.297.0) PARKS a skill it took out of service:
+#: ``<home>/skills/.archive/<name>/``. Archived skills are not loaded, not
+#: injected and not searchable — the folder is skipped by every discovery
+#: path — but nothing in it is ever deleted (a destructive bulk action moves,
+#: v1.256.0), and ``SkillCurator.restore`` moves one back.
+ARCHIVE_DIRNAME = ".archive"
+
+
+def is_archived_path(path: Path) -> bool:
+    """True when ``path`` (a SKILL.md or a skill dir) sits under an
+    ``.archive`` folder anywhere in its parents."""
+    return ARCHIVE_DIRNAME in Path(path).parts
 
 
 def builtin_dir() -> Path:
@@ -113,6 +127,12 @@ class SkillRegistry:
 
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {}
+        #: The use-counting seam (v1.297.0): called with the list of skill
+        #: names ``inject`` actually appended to a prompt. The learning engine
+        #: binds ``record_injected`` here (platform.py); None = nobody counts.
+        #: Errors in the callback are swallowed — counting must never break
+        #: a prompt build.
+        self.on_inject: "Callable[[list[str]], None] | None" = None
 
     # Allow both ``SkillRegistry.builtin_dir()`` and ``framework.builtin_dir()``.
     builtin_dir = staticmethod(builtin_dir)
@@ -121,14 +141,18 @@ class SkillRegistry:
         """Load every ``<dir>/<name>/SKILL.md`` (one level) found under each ``dir``.
 
         Last-wins on name collision. Missing directories are skipped so callers
-        can pass an as-yet-uncreated ``config.home/'skills'`` safely. Returns
-        self for chaining.
+        can pass an as-yet-uncreated ``config.home/'skills'`` safely. A dot
+        folder (``.archive`` above all — the curator's parking lot, which
+        holds ``<name>/SKILL.md`` bundles one level deeper and so would be
+        invisible here anyway) is never entered. Returns self for chaining.
         """
         for d in dirs:
             base = Path(d)
             if not base.is_dir():
                 continue
             for child in sorted(base.iterdir()):
+                if child.name.startswith("."):
+                    continue  # .archive (and any other dot folder) is not a skill
                 if child.is_dir() and (child / SKILL_FILE).is_file():
                     try:
                         skill = load_skill(child, source=source)
@@ -167,6 +191,10 @@ class SkillRegistry:
                 continue
             if skips:
                 files = [f for f in files if not _under_any(f, skips)]
+            # An archived skill (``.archive/<name>/SKILL.md``, v1.297.0) is out
+            # of service wherever it sits — rglob would otherwise walk straight
+            # into the curator's parking lot under an extra path.
+            files = [f for f in files if not is_archived_path(f)]
             for md in files[:max_files]:
                 try:
                     skill = load_skill(md.parent, source=source)
@@ -223,13 +251,27 @@ class SkillRegistry:
         return [skill for _, skill in scored[:k]]
 
     def inject(self, system_prompt: str, skill_names: list[str]) -> str:
-        """Append a ``# Skills`` section with each named skill's instructions."""
+        """Append a ``# Skills`` section with each named skill's instructions.
+
+        Every name that actually lands in the prompt is reported to
+        ``on_inject`` (v1.297.0) so the curator can tell "injected into runs"
+        from "never touched"; an unknown name is not an injection and is not
+        counted. This is NOT a use: ``use_count`` stays "the agent chose to
+        load it" (``skill_load``), and the inject tally is its own column.
+        """
         blocks: list[str] = []
+        injected: list[str] = []
         for name in skill_names:
             skill = self._skills.get(name)
             if skill is None:
                 continue
             blocks.append(f"## {skill.name}\n{skill.instructions}")
+            injected.append(skill.name)
         if not blocks:
             return system_prompt
+        if self.on_inject is not None:
+            try:
+                self.on_inject(injected)
+            except Exception:  # noqa: BLE001 — counting must never break a prompt
+                pass
         return system_prompt + "\n\n# Skills\n" + "\n\n".join(blocks)

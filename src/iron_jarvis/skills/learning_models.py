@@ -92,3 +92,8 @@ class SkillStatRecord(SQLModel, table=True):
     score_sum: float = 0.0  # sum of session scores while this skill was loaded
     success_count: int = 0
     last_used_at: datetime | None = None
+    #: Times ``SkillRegistry.inject`` put this skill into a prompt (v1.297.0,
+    #: additive — the reconciler adds the columns on an existing DB). NOT a
+    #: use: ``use_count`` stays "the agent chose to load it".
+    inject_count: int = 0
+    last_injected_at: datetime | None = None

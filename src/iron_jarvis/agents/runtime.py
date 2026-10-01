@@ -1116,6 +1116,41 @@ class AgentRuntime:
         finally:
             reset_run_budget(token)
 
+    def _notebook_slug(self, session: Session) -> str:
+        """The custom agent's name when THIS run has a folder to read — a
+        ``custom:<slug>`` session and a registry carrying a folder store —
+        else ``""``. Pure (no I/O): safe on the loop."""
+        try:
+            name = str(getattr(session, "agent_name", "") or "").strip()
+            if not name.lower().startswith("custom:"):
+                return ""
+            registry = getattr(self.p, "agents_registry", None)
+            if registry is None or getattr(registry, "files", None) is None:
+                return ""
+            return name.split(":", 1)[1].strip()
+        except Exception:  # noqa: BLE001 — no folder is never an error
+            return ""
+
+    def _notebook_block(self, slug: str) -> str:
+        """``AgentFiles.notebook_block`` for ``slug`` (≤ NOTEBOOK_INJECT_CHARS
+        plus its heading), or ``""``. Never raises; runs OFF the loop."""
+        try:
+            from .files import NOTEBOOK_INJECT_CHARS
+
+            files = getattr(getattr(self.p, "agents_registry", None), "files", None)
+            if files is None:
+                return ""
+            block = str(files.notebook_block(slug) or "")
+            # The body is already trimmed; this is the belt for the braces.
+            return block[: NOTEBOOK_INJECT_CHARS + 200]
+        except Exception:  # noqa: BLE001 — an unreadable notebook must not stop a run
+            import logging
+
+            logging.getLogger("iron_jarvis.agents.runtime").debug(
+                "notebook block read failed for %r", slug, exc_info=True
+            )
+            return ""
+
     def _run_budget_usd(self, session: Session) -> float:
         """What is left of a custom agent's monthly dollar allowance, or 0.0.
         Never raises — a broken ledger must not stop a run."""
@@ -1210,7 +1245,7 @@ class AgentRuntime:
         # the worker thread and read only after `to_thread` returns — no race.
         env_provider, env_model, env_profile = resolve_run_envelope(self.p, session)
         adaptations: list[str] = []
-        tool_specs = self.p.registry.specs(
+        armed_names = list(
             await asyncio.to_thread(
                 arm_for_task,
                 self.p,
@@ -1220,6 +1255,15 @@ class AgentRuntime:
                 adaptations=adaptations,
             )
         )
+        # THE FOLDER (v1.297.0): a custom agent's notebook tool rides every
+        # one of its runs — it is the agent's own file, so it is armed here
+        # (after the capability cap, which must not drop it) rather than put
+        # on a roster the user edits. Only for a `custom:<slug>` session with
+        # a folder store attached; builtins and bare registries see nothing.
+        notebook_slug = self._notebook_slug(session)
+        if notebook_slug and "notebook" not in armed_names and self.p.registry.get("notebook") is not None:
+            armed_names.append("notebook")
+        tool_specs = self.p.registry.specs(armed_names)
 
         system_prompt = agent_def.system_prompt
         # Auto-inject any configured default skills (§23) into the prompt.
@@ -1239,6 +1283,14 @@ class AgentRuntime:
                 system_prompt = self.p.skills.inject(system_prompt, own_skills)
             except Exception:  # noqa: BLE001 — a skill must never break a run
                 pass
+        # THE NOTEBOOK (v1.297.0): a custom agent's own NOTES.md, head+tail
+        # trimmed to NOTEBOOK_INJECT_CHARS by `AgentFiles.notebook_block`.
+        # A small file read, but a read: off the loop like the budget read.
+        # Lands BEFORE the planner runs so its cost is counted (v1.152.0).
+        if notebook_slug:
+            notebook = await asyncio.to_thread(self._notebook_block, notebook_slug)
+            if notebook:
+                system_prompt += "\n\n" + notebook
         reports_to = " ".join(str(getattr(agent_def, "reports_to", "") or "").split())
         if reports_to:
             system_prompt += (

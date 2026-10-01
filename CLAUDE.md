@@ -2158,6 +2158,66 @@ does not need a bump, stop and bump it.
   `tests/test_assignments_v1296.py`, `tests/test_assignments_routes_v1296.py`,
   `dashboard/__tests__/agent-inbox-v1296.test.tsx`.
 
+- **An agent keeps a FOLDER, learns from a COACH, and its skills are
+  CURATED** (v1.297.0, /goal wave 3). FOLDER: `agents/files.py`
+  `AgentFiles(home)` over `<home>/agents/<slug>/` (slug = `agent_slug`, the
+  avatar rule; every path confined): `AGENTS.md` mirrors
+  `DynamicAgentRecord.system_prompt` (the DB stays what the runtime reads;
+  the registry's `register(..., prompt_reason=)` writes the file and a
+  `revisions/<stamp>-<reason>.md` of the PREVIOUS text, ≤ 50, restore leaves
+  a revision too; `load()` backfills a missing file once), `NOTES.md` is the
+  agent's notebook (≤ 16 KiB; injected after its own skills, head+tail
+  trimmed to 4,000 chars; the `notebook` tool — allow tier, ARMED AT THE RUNTIME SEAM for every
+  custom run after `arm_for_task` (NOT on the roster/`effective_tools`:
+  test_carried_defects_v1185 pins the tool count), refuses a builtin —
+  appends `- [date] text`);
+  `remove()` moves the folder to `<home>/trash/` (never deletes). Routes
+  `GET/PUT /agents/{name}/files[/instructions|/notes]`, revisions view +
+  restore, `/files/open`. COACH: `coach/` — `signals.run_signals` reads ONLY
+  the ledger (session_result, ToolInvocation, tool.denied events,
+  OutcomeRecord, FeedbackRecord; model transcripts are not persisted —
+  only results/summaries), `taxonomy.clusters` is deterministic (8 fixed
+  categories, ≥ 2 evidence tuples except tool-misuse/human-correction),
+  `CoachEngine.propose` makes ONE router call and mints
+  `CoachProposalRecord` (before/after/rationale/evidence/signature) only
+  when: custom agent, ≥ 3 runs, a cluster, a REAL provider (honest-mock
+  guard copied from skill distill — under pytest it mints nothing), no
+  pending/declined-within-14-days signature, and the revision passes
+  `validate_revision` (non-empty, differs, growth ≤ max(1.2×, +160 chars),
+  every never/always line kept). `accept` goes through the registry with
+  `prompt_reason="coach"` (a revision lands) and is `stale` + 409 when the
+  instructions changed since `before`. The coach is a platform service: it
+  never runs as the agent and there is no self-coaching. Routes
+  `routes/coach.py` (`GET/POST /agents/{name}/coach`, `/coach/proposals`
+  accept/decline); event `coach.proposal`. CURATOR: SKILL.md frontmatter
+  keeps extra keys (`created_by` user|agent|proposal, `created_session`,
+  `pinned`, `archived_at`; unknown keys round-trip); `skill_create` stamps
+  agent + session, a proposal approval stamps proposal ONLY when it creates
+  a file (a refined user skill keeps its provenance); `inject()` reports
+  names to `on_inject` → `record_injected` → `SkillStatRecord.inject_count`
+  (separate from `use_count` = the agent chose to load it; written through a
+  single-thread executor, never on the loop); discovery skips
+  `<home>/skills/.archive/`; `SkillCurator.candidates` = user-root skills
+  made by agent/proposal, unpinned, age ≥ 14 d, never used+injected or idle
+  ≥ 30 d — the USER's own skills are never candidates; `sweep` tars
+  `<home>/skills` to `backups/skills-<stamp>.tar.gz` first, then MOVES to
+  `.archive/` (stamping `archived_at`), never deletes; curator rewrites
+  restore the SKILL.md mtime so a pin does not make a skill young; loop
+  `bg_tasks["skill_curator"]` (first sweep 1 h after boot, daily,
+  `_tick("skill_curator")`, `_curator_stop`), gated by
+  `config.curator_enabled` for the LOOP only. Routes
+  `routes/skills_curator.py` registered BEFORE `agents.register` (its
+  `GET /skills/{name}` catch-all would swallow `/skills/curator`); `GET
+  /skills` rows carry `created_by`/`pinned`. Dashboard: `AgentFiles` +
+  `AgentCoach` under the inbox in AgentDetail (custom agents only),
+  `lib/diff.ts` (`diffLines` lifted from DocPreview, which re-exports it),
+  Skills page provenance badge + pin + two-press Archive + the
+  `SkillCurator` panel (dry run CHECKED by default), bell maps
+  `coach.proposal`. Pins: `tests/test_agent_files_v1297.py`,
+  `tests/test_coach_v1297.py`, `tests/test_skill_curator_v1297.py`,
+  `dashboard/__tests__/agent-files-coach-v1297.test.tsx`,
+  `dashboard/__tests__/skill-curator-v1297.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

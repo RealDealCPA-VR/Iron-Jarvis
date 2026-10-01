@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Bell,
   GitBranch,
+  GraduationCap,
   MonitorCog,
   Inbox,
   ArrowRight,
@@ -204,6 +205,22 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: AlertTriangle,
       title: `Failed: ${title}`,
       body: `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
+    };
+  }
+  if (e.type === "coach.proposal") {
+    // v1.297.0: the reflection coach wrote a proposal for an agent's
+    // instructions. Payload: {id, agent, categories, rationale}. The body is
+    // the rationale, cut at 140 characters — the card in the agents room
+    // has the whole of it, with the diff.
+    const agent = typeof p.agent === "string" && p.agent ? p.agent : "an agent";
+    const rationale = typeof p.rationale === "string" ? p.rationale.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/agents",
+      icon: GraduationCap,
+      title: `The coach has a suggestion for ${agent}`,
+      body: rationale.length > 140 ? `${rationale.slice(0, 139)}…` : rationale,
     };
   }
   if (e.type === "assignment.requeued") {

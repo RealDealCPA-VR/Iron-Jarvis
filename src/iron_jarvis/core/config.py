@@ -121,6 +121,13 @@ def default_permissions() -> dict[str, str]:
         # allowance — the same tier as spawn_agent; headless runs reach it
         # through SAFE_HEADLESS_TOOLS, never through "allow".
         "assign_work": "ask",
+        # v1.297.0: a named agent's OWN notebook (NOTES.md in its folder) —
+        # bounded, confined to `<home>/agents/<slug>/`, and strictly weaker
+        # than the write_file the same run already holds. Declared "allow"
+        # for the fail-closed reason above: an absent key resolves to "ask",
+        # which a headless run DENIES, and a note the agent cannot take is
+        # exactly the forgetting the notebook exists to end.
+        "notebook": "allow",
         # Departments: the shared blackboard. Posting/reading notes and messaging
         # a sibling are low-risk, local, and user-visible — allowed.
         "blackboard_post": "allow",
