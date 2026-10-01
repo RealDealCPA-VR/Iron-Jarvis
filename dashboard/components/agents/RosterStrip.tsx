@@ -83,8 +83,8 @@ import { type ReactElement, useState } from "react";
 import { Briefcase, ChevronDown, MessageCircle, PauseCircle, WifiOff } from "lucide-react";
 import { API_BASE, ijToken } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { allowanceSummary, timeAgo } from "@/lib/format";
-import type { AgentAllowance } from "@/lib/types";
+import { allowanceSummary, formatTokens, timeAgo } from "@/lib/format";
+import type { AgentAllowance, AgentHealth } from "@/lib/types";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
 import AgentFace, { type FaceOverride } from "@/components/agents/AgentFace";
@@ -140,6 +140,45 @@ export interface RosterEntry {
   pause_reason?: string;
   allowance?: AgentAllowance | null;
   reports_to?: string;
+  /** v1.296.0 additive: recent-work health (last run, queued/blocked counts)
+   *  for builtin and custom agents; null/absent = nothing to say. */
+  health?: AgentHealth | null;
+}
+
+/* ------------------------------------------------------- health caption --- */
+
+/**
+ * The one-line health reading under the stats (v1.296.0): "last ran 3h ago ·
+ * 2 queued · 1 blocked", or "never ran" when there is a health record but no
+ * run yet. Null when the daemon sent no health at all (older daemon), so
+ * nothing renders. Counts go through `formatTokens` like every number on
+ * the Agents page — "2", "1.2k" — never a raw "1200".
+ */
+export function healthCaption(h: AgentHealth | null | undefined): string | null {
+  if (!h) return null;
+  const parts: string[] = [];
+  if (h.last_run_at) {
+    const outcome =
+      typeof h.last_outcome === "string" && h.last_outcome
+        ? ` — ${h.last_outcome.replace(/_/g, " ")}`
+        : "";
+    parts.push(`last ran ${timeAgo(h.last_run_at)}${outcome}`);
+  } else {
+    parts.push("never ran");
+  }
+  if (h.running > 0) parts.push(`${formatTokens(h.running)} running`);
+  if (h.queued > 0) parts.push(`${formatTokens(h.queued)} queued`);
+  if (h.blocked > 0) parts.push(`${formatTokens(h.blocked)} blocked`);
+  return parts.join(" · ");
+}
+
+/** Is this agent explicitly FREE right now (v1.296.0)? Only the daemon's own
+ *  word "idle", on a healthy, unpaused agent. `livenessOf` keeps reporting
+ *  null for idle (no claim of being taken); this is the separate, calmer
+ *  claim the queue can now make, drawn as a zinc pill. */
+export function isIdle(e: RosterEntry): boolean {
+  if (!e.healthy || e.paused) return false;
+  return String(e.activity ?? "").trim().toLowerCase() === "idle";
 }
 
 /* ------------------------------------------------------- allowance meter --- */
@@ -316,11 +355,13 @@ export function LivePill({
   bare,
   testId,
 }: {
-  state: Liveness;
+  /** "idle" (v1.296.0) is the calm zinc form — see `isIdle`. */
+  state: Liveness | "idle";
   bare: string;
   testId: string;
 }): ReactElement {
   const busy = state === "busy";
+  const idle = state === "idle";
   return (
     <span
       data-testid={testId}
@@ -328,19 +369,27 @@ export function LivePill({
       title={
         busy
           ? `${bare} is running a session right now`
-          : `${bare} has a session waiting for a free slot`
+          : idle
+            ? `${bare} is free — a queued job runs as soon as it is given one`
+            : `${bare} has a session waiting for a free slot`
       }
       className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1 py-px text-[9.5px] font-medium ${
         busy
           ? "border-amber-400/25 bg-amber-400/10 text-amber-200"
-          : "border-sky-400/20 bg-sky-400/[0.07] text-sky-200/90"
+          : idle
+            ? "border-zinc-500/25 bg-zinc-500/10 text-zinc-400"
+            : "border-sky-400/20 bg-sky-400/[0.07] text-sky-200/90"
       }`}
     >
       <span
         aria-hidden
         data-testid={`${testId}-dot`}
         className={`h-1.5 w-1.5 rounded-full ${
-          busy ? "bg-amber-300 motion-safe:animate-pulse" : "bg-sky-300/80"
+          busy
+            ? "bg-amber-300 motion-safe:animate-pulse"
+            : idle
+              ? "bg-zinc-500"
+              : "bg-sky-300/80"
         }`}
       />
       {state}
@@ -712,6 +761,12 @@ export function RosterStrip({
                           testId={`roster-activity-${bare}`}
                         />
                       )}
+                      {/* FREE RIGHT NOW (v1.296.0): the daemon's own "idle",
+                          as a calm zinc pill under its own testid — the
+                          liveness testid still means "taken" only. */}
+                      {!live && isIdle(e) && (
+                        <LivePill state="idle" bare={bare} testId={`roster-idle-${bare}`} />
+                      )}
                       {/* A DAY OFF (v1.295.0) takes the liveness pill's seat:
                           the daemon reports a paused agent as unhealthy, so
                           `livenessOf` already yields nothing for it, and the
@@ -785,6 +840,16 @@ export function RosterStrip({
                           testId={`roster-allowance-${bare}`}
                           compact
                         />
+                        {/* Recent-work health (v1.296.0): one line, only
+                            when the daemon sent a health record. */}
+                        {healthCaption(e.health) && (
+                          <p
+                            data-testid={`roster-health-${bare}`}
+                            className="mt-0.5 text-[10px] tabular-nums text-zinc-500"
+                          >
+                            {healthCaption(e.health)}
+                          </p>
+                        )}
                         {e.last_message ? (
                           <p
                             data-testid="roster-preview"
@@ -971,6 +1036,9 @@ export function RosterStrip({
                     testId={`roster-activity-${shown}`}
                   />
                 )}
+                {!selectedLive && isIdle(selected) && (
+                  <LivePill state="idle" bare={shown} testId={`roster-idle-${shown}`} />
+                )}
                 {selected.paused && (
                   <PausedPill
                     reason={selected.pause_reason}
@@ -998,6 +1066,14 @@ export function RosterStrip({
                 testId={`roster-allowance-${shown}`}
                 compact
               />
+              {healthCaption(selected.health) && (
+                <p
+                  data-testid={`roster-health-${shown}`}
+                  className="mt-0.5 text-[10.5px] tabular-nums text-zinc-500"
+                >
+                  {healthCaption(selected.health)}
+                </p>
+              )}
               {/* Messenger-style preview (v1.171.0): the agent's REAL last
                   round-table line + when, from the daemon's join — falls back
                   to the static description exactly as before when this agent

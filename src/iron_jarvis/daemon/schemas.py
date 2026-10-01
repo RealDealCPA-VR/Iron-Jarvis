@@ -667,11 +667,117 @@ class ProjectTaskBody(BaseModel):
     # was posted through THIS surface, so a budget that only POST /sessions
     # could set would never have reached it. None = config.max_agent_steps.
     max_steps: int | None = None
+    # v1.296.0: name WHO does it and the task becomes an ASSIGNMENT — a
+    # durable job queued for that agent, run by the dispatcher when the
+    # agent is free — instead of a session started right now. Empty keeps
+    # today's behaviour byte-for-byte. A builtin type or an existing custom
+    # agent's name (bare or ``custom:<name>``); anything else is a 422.
+    assignee: str = ""
 
     @field_validator("max_steps", mode="before")
     @classmethod
     def _v_max_steps(cls, v: Any) -> int | None:
         return _clean_max_steps(v)
+
+
+#: The ONLY keys an assignment's payload may carry (v1.296.0). They are the
+#: session-creation knobs the dispatcher forwards verbatim; anything else is a
+#: typo or a smuggled setting, and is refused by name rather than ignored.
+ASSIGNMENT_PAYLOAD_KEYS = ("allow_tools", "workspace_root", "max_steps", "provider", "model")
+ASSIGNMENT_PRIORITY_MIN = -10
+ASSIGNMENT_PRIORITY_MAX = 10
+
+
+class AssignmentCreate(BaseModel):
+    """Give an agent a job and let the job wait for it (v1.296.0).
+
+    ``assignee`` is a builtin agent type or an existing custom agent's name;
+    ``task`` is the plain-text ask. ``priority`` orders a queue (-10..10,
+    higher first; outside is a 422, never clamped — a job posted at 99 that
+    quietly runs at 10 was ordered by a number nobody set).
+    ``idempotency_key`` lets a caller re-post the same job safely: the store
+    coalesces it onto the queued row. ``payload`` carries only the session
+    knobs in ``ASSIGNMENT_PAYLOAD_KEYS``."""
+
+    assignee: str
+    task: str
+    project_id: str = ""
+    reason: str = ""
+    priority: int = 0
+    idempotency_key: str = ""
+    payload: dict[str, Any] = {}
+
+    @field_validator("assignee")
+    @classmethod
+    def _v_assignee(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("assignee is required — a builtin agent type or a custom agent's name")
+        return v
+
+    @field_validator("task")
+    @classmethod
+    def _v_task(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("task is required — say what the agent should do")
+        return v
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _v_priority(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                f"priority must be a whole number between {ASSIGNMENT_PRIORITY_MIN} "
+                f"and {ASSIGNMENT_PRIORITY_MAX}"
+            )
+        if v < ASSIGNMENT_PRIORITY_MIN or v > ASSIGNMENT_PRIORITY_MAX:
+            raise ValueError(
+                f"priority must be between {ASSIGNMENT_PRIORITY_MIN} and "
+                f"{ASSIGNMENT_PRIORITY_MAX} (higher runs first); got {v}"
+            )
+        return v
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _v_payload(cls, v: Any) -> dict[str, Any]:
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError(
+                "payload must be an object with only "
+                + ", ".join(ASSIGNMENT_PAYLOAD_KEYS)
+            )
+        stray = [k for k in v if k not in ASSIGNMENT_PAYLOAD_KEYS]
+        if stray:
+            raise ValueError(
+                f"payload does not accept {', '.join(repr(k) for k in stray)} — "
+                f"only {', '.join(ASSIGNMENT_PAYLOAD_KEYS)}"
+            )
+        out: dict[str, Any] = {}
+        if "allow_tools" in v:
+            tools = v["allow_tools"]
+            if tools is None:
+                tools = []
+            if not isinstance(tools, list) or not all(isinstance(t, str) for t in tools):
+                raise ValueError("payload.allow_tools must be a list of tool names")
+            out["allow_tools"] = [t.strip() for t in tools if t.strip()]
+        if "workspace_root" in v:
+            root = v["workspace_root"]
+            if root is not None and not isinstance(root, str):
+                raise ValueError("payload.workspace_root must be a folder path")
+            out["workspace_root"] = (root or "").strip()
+        if "max_steps" in v:
+            out["max_steps"] = _clean_max_steps(v["max_steps"])
+        for key in ("provider", "model"):
+            if key in v:
+                val = v[key]
+                if val is not None and not isinstance(val, str):
+                    raise ValueError(f"payload.{key} must be a name")
+                out[key] = (val or "").strip()
+        return out
 
 
 class ToolPlanBody(BaseModel):

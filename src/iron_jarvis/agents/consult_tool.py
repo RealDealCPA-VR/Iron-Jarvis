@@ -278,7 +278,7 @@ class ConsultTool(Tool):
             if paused:
                 return _Consultation(error=paused)
             try:
-                names = [e.name for e in build_roster(self.platform) if e.healthy]
+                names = [e.name for e in build_roster(self.platform, with_health=False) if e.healthy]
             except Exception:  # noqa: BLE001
                 names = []
             listed = ", ".join(names) if names else "(nobody is reachable right now)"

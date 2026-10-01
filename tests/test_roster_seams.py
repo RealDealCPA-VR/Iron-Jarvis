@@ -825,6 +825,9 @@ def test_get_agents_roster_serializes_entries(tmp_path, monkeypatch):
             # v1.295.0 (additive): the job card — a day off and the monthly
             # allowance. Declared deliberately, per above.
             "paused", "pause_reason", "allowance", "reports_to",
+            # v1.296.0 (additive): the health card behind "idle" — last run,
+            # last outcome, what waits. Declared deliberately, per above.
+            "health",
         }
     # A duck-typed entry with no `activity` still SERIALIZES (as "unknown")
     # rather than vanishing: the loop's `except: continue` would otherwise turn

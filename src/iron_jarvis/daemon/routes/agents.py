@@ -779,6 +779,10 @@ def register(app: FastAPI, d) -> None:
                         "pause_reason": str(getattr(e, "pause_reason", "") or ""),
                         "allowance": getattr(e, "allowance", None),
                         "reports_to": str(getattr(e, "reports_to", "") or ""),
+                        # v1.296.0 additive: the assignment-driven health
+                        # dict (last run, last outcome, queued/running/
+                        # blocked counts) — None when the entry has none.
+                        "health": getattr(e, "health", None),
                     }
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not drop the rest
@@ -1540,6 +1544,42 @@ def register(app: FastAPI, d) -> None:
             "phoned": phoned,
             "phone_rate_limited": phone_rate_limited,
         }
+
+    # --- The inbox (v1.296.0) -----------------------------------------------
+    # What is waiting for ONE agent: its assignment queue and health. After
+    # the /agents/remote/* block (same reason as the portraits below) and
+    # BEFORE the /agents/{name} catch-alls, or PATCH/DELETE would swallow it.
+
+    @app.get("/agents/{name}/inbox")
+    def agent_inbox(name: str) -> dict[str, Any]:
+        """``{assignee, inbox: {queued, claimed, running, blocked, recent},
+        health}`` for a builtin type or a custom agent (bare name or
+        ``custom:<name>``); 404 for a name nobody answers to."""
+        from .assignments import resolve_assignee
+
+        try:
+            assignee = resolve_assignee(d, name)
+        except HTTPException as exc:
+            raise HTTPException(status_code=404, detail=str(exc.detail))
+        store = getattr(d.platform, "assignments", None)
+        if store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="assignments are not available on this daemon — restart it",
+            )
+        raw = store.inbox(assignee) or {}
+        inbox = {
+            key: [store.as_dict(r) for r in (raw.get(key) or [])]
+            for key in ("queued", "claimed", "running", "blocked", "recent")
+        }
+        try:
+            from ...assignments.health import agent_health
+
+            health = agent_health(d.platform.engine, store, assignee)
+        except Exception:  # noqa: BLE001 — the inbox is the job; health is a bonus
+            log.debug("agent_health failed for %s", assignee, exc_info=True)
+            health = None
+        return {"assignee": assignee, "inbox": inbox, "health": health}
 
     # --- Agent portraits (v1.171.0) -----------------------------------------
     # Registered AFTER the /agents/remote/* block on purpose: /agents/remote/…

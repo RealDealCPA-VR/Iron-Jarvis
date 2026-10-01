@@ -117,6 +117,10 @@ def default_permissions() -> dict[str, str]:
         "list_agents": "allow",
         "create_agent": "ask",
         "spawn_agent": "ask",
+        # v1.296.0: queueing a job for an agent spends a whole session of its
+        # allowance — the same tier as spawn_agent; headless runs reach it
+        # through SAFE_HEADLESS_TOOLS, never through "allow".
+        "assign_work": "ask",
         # Departments: the shared blackboard. Posting/reading notes and messaging
         # a sibling are low-risk, local, and user-visible — allowed.
         "blackboard_post": "allow",

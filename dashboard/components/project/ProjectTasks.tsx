@@ -20,8 +20,15 @@ import {
   X,
 } from "lucide-react";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
-import type { SessionDetail, SessionView } from "@/lib/types";
-import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
+import { useApi, usePolledApi } from "@/lib/useApi";
+import type { AgentsResponse, Assignment, SessionDetail, SessionView } from "@/lib/types";
+import { Card, Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
+import {
+  AssignmentRow,
+  bareAssignee,
+  canBeAssignee,
+  queuedSentence,
+} from "@/components/agents/AgentInbox";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { plainText } from "@/components/Markdown";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
@@ -45,6 +52,40 @@ interface ProjectTaskStart extends SessionView {
   output: string;
   target_path?: string | null;
 }
+
+/** v1.296.0: the same POST with an `assignee` answers 202 with the QUEUED
+ *  assignment instead of a session — the job waits for that agent. */
+interface ProjectTaskQueued {
+  assignment: Assignment;
+  queued: true;
+}
+
+function isQueued(r: ProjectTaskStart | ProjectTaskQueued): r is ProjectTaskQueued {
+  return Boolean(r) && (r as ProjectTaskQueued).queued === true;
+}
+
+/** "Assign to" choices (v1.296.0): "" = you, run now (today's behaviour);
+ *  every builtin by name; every custom agent as "custom:<name>" — the roster
+ *  names the queue is keyed by. Pure so a test can pin the wire names. */
+export function assigneeOptions(
+  agents: AgentsResponse | null | undefined,
+): Array<{ value: string; label: string }> {
+  const out: Array<{ value: string; label: string }> = [];
+  for (const b of agents?.builtin ?? []) {
+    // A coordinator (supervisor, planner) is refused by the daemon as an
+    // assignee — see `canBeAssignee`; guide and the rest are offered.
+    if (typeof b === "string" && b && canBeAssignee(b)) out.push({ value: b, label: b });
+  }
+  for (const d of agents?.dynamic ?? []) {
+    if (d && typeof d.name === "string" && d.name) {
+      out.push({ value: `custom:${d.name}`, label: `${d.name} — yours` });
+    }
+  }
+  return out;
+}
+
+/** How many of the project's assignments the compact list shows. */
+const MAX_ASSIGNMENTS = 10;
 
 /** One permissioned tool the task is likely to need (POST …/task/plan). */
 interface PlanTool {
@@ -114,6 +155,24 @@ export function ProjectTasks({
   );
 
   const [cancelling, setCancelling] = useState(false);
+
+  /* v1.296.0 — ASSIGN TO. "" = you, run now (the whole flow above, exactly
+     as before); a roster name queues the job for that agent instead. */
+  const [assignee, setAssignee] = useState("");
+  const [queuedNote, setQueuedNote] = useState<string | null>(null);
+  const { data: agentsData } = useApi<AgentsResponse>("/agents");
+  const assignees = assigneeOptions(agentsData);
+  // The chosen assignee must still exist in the list the user can see; a
+  // custom agent deleted since is not quietly posted anyway.
+  const effectiveAssignee = assignees.some((o) => o.value === assignee) ? assignee : "";
+  // This project's queue — the same rows the agents' inboxes show. An older
+  // daemon 404s and the list stays absent.
+  const asg = usePolledApi<{ assignments: Assignment[] }>(
+    `/assignments?project_id=${encodeURIComponent(projectId)}`,
+    10000,
+  );
+  const assignments =
+    asg.error?.status === 404 ? [] : (asg.data?.assignments ?? []).slice(0, MAX_ASSIGNMENTS);
 
   /* Two-tap tool permission — planning → bundled grant → run. */
   const [planning, setPlanning] = useState(false);
@@ -247,6 +306,7 @@ export function ProjectTasks({
     if (!text) return;
     setTaskStarting(true);
     setTaskError(null);
+    setQueuedNote(null);
     try {
       const body: Record<string, unknown> = {
         text,
@@ -254,7 +314,21 @@ export function ProjectTasks({
         allow_tools: allowTools,
       };
       if (taskOutput !== "chat" && taskFilename.trim()) body.filename = taskFilename.trim();
-      const started = await post<ProjectTaskStart>(`${base}/task`, body);
+      // v1.296.0: ONLY with an assignee — without one the body is byte-for-
+      // byte what it was, so an older daemon never sees a key it would 422 on.
+      if (effectiveAssignee) body.assignee = effectiveAssignee;
+      const started = await post<ProjectTaskStart | ProjectTaskQueued>(`${base}/task`, body);
+      if (isQueued(started)) {
+        // 202: the job waits for the agent. No strip — there is no session
+        // yet; the assignments list below shows it in line.
+        setQueuedNote(queuedSentence(started.assignment?.assignee || effectiveAssignee));
+        setTaskText("");
+        setTaskFilename("");
+        setPendingPlan(null);
+        setCheckedKeys({});
+        asg.reload();
+        return;
+      }
       setTaskRun(started); // replaces any previous strip
       try {
         // Persist so the live run survives a tab-switch/reload (rehydrated on mount).
@@ -373,17 +447,42 @@ export function ProjectTasks({
               className="field w-44 min-w-0 font-mono text-sm"
             />
           )}
+          {/* ASSIGN TO (v1.296.0). Absent on a daemon that lists no agents
+              — the select then holds only "You" and reads as today. */}
+          <select
+            aria-label="Assign to"
+            data-testid="project-task-assignee"
+            value={effectiveAssignee}
+            onChange={(e) => setAssignee(e.target.value)}
+            className="field w-40 min-w-0 text-sm"
+            title="Run it now yourself, or queue it for an agent — it runs when that agent is free"
+          >
+            <option value="">You — run now</option>
+            {assignees.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={() => void onRun()}
             disabled={taskStarting || planning || pendingPlan !== null || !taskText.trim()}
-            title="Start an agent session on this task"
+            title={
+              effectiveAssignee
+                ? `Queue this for ${bareAssignee(effectiveAssignee)} — it runs when ${bareAssignee(effectiveAssignee)} is free`
+                : "Start an agent session on this task"
+            }
             className="btn-accent shrink-0"
           >
             {taskStarting ? (
-              <LoaderInline label="Starting…" />
+              <LoaderInline label={effectiveAssignee ? "Queueing…" : "Starting…"} />
             ) : planning ? (
               <LoaderInline label="Checking…" />
+            ) : effectiveAssignee ? (
+              <>
+                <Send size={13} /> Queue for {bareAssignee(effectiveAssignee)}
+              </>
             ) : (
               <>
                 <Send size={13} /> Run
@@ -391,6 +490,12 @@ export function ProjectTasks({
             )}
           </button>
         </div>
+
+        {queuedNote && (
+          <SuccessNote>
+            <span data-testid="project-task-queued">{queuedNote}</span>
+          </SuccessNote>
+        )}
 
         {!hasRoot && (
           <p className="text-[11px] text-zinc-600">
@@ -616,6 +721,23 @@ export function ProjectTasks({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* THE PROJECT'S QUEUE (v1.296.0): what is waiting for, running on, or
+            recently done by an agent for this project — the same rows the
+            agents' inboxes draw. Absent on an older daemon (404) and when
+            there is nothing in line. */}
+        {assignments.length > 0 && (
+          <div data-testid="project-assignments" className="border-t hairline pt-2.5">
+            <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              Assignments
+            </div>
+            <ul className="space-y-0.5">
+              {assignments.map((a) => (
+                <AssignmentRow key={a.id} assignment={a} onChanged={asg.reload} showAssignee />
+              ))}
+            </ul>
           </div>
         )}
 

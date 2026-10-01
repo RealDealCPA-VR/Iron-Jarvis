@@ -2099,6 +2099,65 @@ does not need a bump, stop and bump it.
   `tests/test_agent_employee_routes_v1295.py`,
   `dashboard/__tests__/agent-employee-v1295.test.tsx`.
 
+- **An ASSIGNMENT is a durable job queued for a named agent; the dispatcher
+  runs it when the agent is free** (v1.296.0, /goal wave 2). There is NO
+  task entity in this app — the project Board is Session rows — so
+  `src/iron_jarvis/assignments/` is the one queue: `AssignmentRecord`
+  (assignee roster name, task/title, priority, status
+  queued|claimed|running|done|failed|blocked|cancelled as plain str, source
+  user|agent:<sid>|project|api|retry:<id>, reason, payload {allow_tools,
+  workspace_root, max_steps, provider, model}, idempotency_key +
+  coalesced_count, attempts/failure_count, blocked_reason, held_reason,
+  depth ≤ 2, claim_token, session_id). `store.resolve_assignee` refuses
+  unknown, blank, remote:*, supervisor and ANY definition carrying
+  `delegate` (planner, custom coordinators) — the dashboard filters
+  {supervisor, planner}; keep the rule keyed on `delegate`, do not widen.
+  `claim_next` is a compare-and-swap (UPDATE … WHERE status='queued' AND
+  id=<pick>, token read back; ≤5 re-picks). `finish` blocks at 3 failures
+  (retry of a failed row CARRIES the count; failed is terminal, nothing
+  auto-retries). The dispatcher (`AssignmentDispatcher`, daemon lifespan
+  `bg_tasks["dispatcher"]`, `_tick("dispatcher")`, 5 s + `wake()`) holds
+  with a plain sentence when `allowance.refusal_for` says so, when the agent
+  already has a claimed/running assignment (one at a time), or when the
+  global governor is full; it starts via `create_session(origin=
+  "assignment:<id>", agent_name=…, approval_mode/max_steps from the record)`
+  + `spawn_managed(run_session(definition=))`. "assignment" is in
+  ASKING_ORIGINS (a card can ask) and NOT in ATTENDED_ORIGINS (unattended
+  clock). `Orchestrator._post_run_assignment` settles the row on every
+  terminal path (run_session, _finalize_failed, _finalize_cancelled — a
+  CANCELLED session ends the row `cancelled` with NO strike, in either
+  ordering with the route's own cancel; the reviewer found both doers had
+  pinned `failed`+1) and publishes assignment.finished; `tick()` is
+  serialized by an asyncio.Lock (two overlapping ticks double-started one
+  agent); `build_roster(platform, with_health=False)` for every PROMPT-side
+  caller (roster_block, delegable_names, resolve_target, consult) — the
+  health fold is four SQLite reads per entry and belongs off the loop (the
+  roster route, the inbox); boot runs `requeue_lost_at_boot` AFTER the
+  interrupted-session reconcile — an interrupted assignment goes back to
+  queued with held_reason "restarted after an update or crash" and NO
+  strike, one assignment.requeued per boot. Events: assignment.created /
+  started / finished / blocked / requeued. The store publishes from worker
+  threads by hopping to its bound loop (`bind_loop`); `flush_events()` is
+  for tests/routes. `assign_work` tool: ask tier, SAFE_HEADLESS like
+  delegate, depth = caller's +1, NOT on any builtin roster (supervisor and
+  planner already delegate) — custom agents opt in by name. Roster:
+  `RosterEntry.health` (`assignments.health.agent_health`: last_run_at /
+  last_outcome / last_error / last_wake_at / queued / running / blocked) and
+  `activity` now says "idle" only when liveness is readable and nothing is
+  queued or running (`_liveness_readable`). Routes: `routes/assignments.py`
+  (POST 201/200-coalesced, GET list/get, cancel — a RUNNING one cancels the
+  session first —, unblock, retry 201; 409 by STATUS, decided in the route;
+  503 without the store), `GET /agents/{name}/inbox` (roster or bare name),
+  `POST /projects/{id}/task` with `assignee` → 202 {assignment, queued}.
+  Dashboard: `AgentInbox` (in `AgentsModal` AgentDetail; 404 = older daemon
+  → renders nothing), `AssignmentRow` shared with `ProjectTasks`, JobPostCard
+  "Queue it" (not for Team/remote/coordinators) + `onOpenAgent` wired on
+  app/agents/page.tsx (the modal gate is `agentsOpen && hasRoster` now, not
+  `&& room`), RosterStrip health caption + idle pill, bell maps blocked /
+  failed / requeued (success is quiet). Pins:
+  `tests/test_assignments_v1296.py`, `tests/test_assignments_routes_v1296.py`,
+  `dashboard/__tests__/agent-inbox-v1296.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

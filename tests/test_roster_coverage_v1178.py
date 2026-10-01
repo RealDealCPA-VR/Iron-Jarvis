@@ -205,6 +205,12 @@ _OFF_ROSTER_OPEN = {
     # Web: researcher has browse/web_extract/web_search, not these:
     "web_fetch", "web_look",
     "delegate_remote", "sentinel_add",
+    # v1.296.0: assign_work hands a job to another agent's queue. The two
+    # builtins that coordinate (supervisor, planner) already delegate — a
+    # second hand-out door on a coordinator is the fork-bomb shape — and a
+    # worker type has no business queueing work for its peers unasked; a
+    # custom agent opts in by naming it in its tool list.
+    "assign_work",
     # Plausibly withheld on purpose (cost, consent, secrets) — NOT verified here,
     # which is why they sit under OPEN rather than BY_DESIGN:
     "repl", "run_code", "secret_set", "secret_list",

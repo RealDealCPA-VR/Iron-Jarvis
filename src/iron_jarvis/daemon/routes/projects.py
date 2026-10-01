@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from typing import Any
@@ -596,6 +597,14 @@ def register(app: FastAPI, d) -> None:
                 status_code=400,
                 detail=f"output must be one of: {', '.join(PROJECT_TASK_OUTPUTS)}",
             )
+        # v1.296.0: a named assignee turns the task into an ASSIGNMENT (below)
+        # — validated NOW, before any project work, the way the schedule-add
+        # route checks ``agent_type`` (a builtin or an existing custom name).
+        assignee = ""
+        if (body.assignee or "").strip():
+            from .assignments import resolve_assignee
+
+            assignee = resolve_assignee(d, body.assignee)
         with session_scope(d.platform.engine) as db:
             project = db.get(Project, project_id)
         if project is None:
@@ -682,6 +691,54 @@ def register(app: FastAPI, d) -> None:
         # global default, i.e. the prior behavior).
         provider = (project.default_provider or "").strip() or None
         model = (project.default_model or "").strip() or None
+        if assignee:
+            # The job WAITS for the named agent (v1.296.0): no session row is
+            # made here — the dispatcher creates one from this row when the
+            # agent is free, with the same folder, grant and budget this door
+            # would have handed create_session.
+            store = getattr(d.platform, "assignments", None)
+            if store is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="assignments are not available on this daemon — restart it",
+                )
+            payload: dict[str, Any] = {
+                "allow_tools": list(body.allow_tools or []),
+                "workspace_root": str(root) if in_folder else "",
+                "max_steps": body.max_steps,
+            }
+            if provider:
+                payload["provider"] = provider
+            if model:
+                payload["model"] = model
+            try:
+                record, _created = await _asyncio.to_thread(
+                    store.create,
+                    assignee,
+                    "\n".join(lines),
+                    project_id=project.id,
+                    source="project",
+                    reason="project task",
+                    payload=payload,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            wake = getattr(getattr(d.platform, "assignment_dispatcher", None), "wake", None)
+            if callable(wake):
+                try:
+                    maybe = wake()
+                    if _asyncio.iscoroutine(maybe):
+                        await maybe
+                except Exception:  # noqa: BLE001 — the dispatcher polls anyway
+                    log.debug("assignment dispatcher wake failed", exc_info=True)
+            out: dict[str, Any] = {
+                "assignment": store.as_dict(record),
+                "queued": True,
+                "output": output,
+            }
+            if target_path:
+                out["target_path"] = target_path
+            return JSONResponse(status_code=202, content=out)
         try:
             session = await d.orchestrator.create_session(
                 "\n".join(lines),

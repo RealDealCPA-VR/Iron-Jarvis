@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   Bell,
   GitBranch,
   MonitorCog,
@@ -10,7 +11,9 @@ import {
   ArrowRight,
   MessageSquare,
   CalendarClock,
+  OctagonAlert,
   PauseCircle,
+  RotateCcw,
   ShieldAlert,
   Wallet,
   Workflow,
@@ -164,6 +167,59 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: Wallet,
       title: `${name} has used ${pct}% of its monthly allowance`,
       body,
+    };
+  }
+  if (e.type === "assignment.blocked") {
+    // v1.296.0: a queued job hit something only the user can settle.
+    // Payload: {id, assignee, title, blocked_reason}.
+    const title = typeof p.title === "string" && p.title ? p.title : "a job";
+    const assignee = typeof p.assignee === "string" && p.assignee ? p.assignee : "an agent";
+    const why = typeof p.blocked_reason === "string" ? p.blocked_reason : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/agents",
+      icon: OctagonAlert,
+      title: `Blocked: ${title}`,
+      body: `${assignee} — ${why}`,
+    };
+  }
+  if (e.type === "assignment.finished") {
+    // v1.296.0: a queued job ended. Success is QUIET (the inbox and the
+    // session list already say so); only a failure rings the bell.
+    // Payload: {id, assignee, title, ok, session_id, error}.
+    if (p.ok !== false) return null;
+    const title = typeof p.title === "string" && p.title ? p.title : "a job";
+    const assignee = typeof p.assignee === "string" && p.assignee ? p.assignee : "an agent";
+    const sid =
+      typeof p.session_id === "string" && p.session_id
+        ? p.session_id
+        : typeof e.session_id === "string"
+          ? e.session_id
+          : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: sid ? `/sessions/${encodeURIComponent(sid)}` : "/agents",
+      icon: AlertTriangle,
+      title: `Failed: ${title}`,
+      body: `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
+    };
+  }
+  if (e.type === "assignment.requeued") {
+    // v1.296.0: the daemon restarted with jobs mid-flight and put them back
+    // in line. Payload: {count, ids}.
+    // (Named `picked`, not `count`: interrupted-jobs-v1249 pins the first
+    // count-declaration in this file as the interrupted-jobs badge count.)
+    const picked =
+      typeof p.count === "number" ? p.count : Array.isArray(p.ids) ? p.ids.length : 0;
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/agents",
+      icon: RotateCcw,
+      title: `${picked} assignment${picked === 1 ? "" : "s"} picked back up after a restart`,
+      body: "",
     };
   }
   if (e.type === "computeruse.run_finished") {

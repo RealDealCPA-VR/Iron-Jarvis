@@ -120,7 +120,10 @@ def test_the_exemption_names_exactly_the_sub_agent_tools(tmp_path):
         name for name in p.registry.names()
         if getattr(p.registry.get(name), "deadline_exempt", False)
     }
-    assert exempt == set(SAFE_HEADLESS_TOOLS) == {"delegate", "spawn_agent"}
+    assert exempt == {"delegate", "spawn_agent"}
+    # v1.296.0: assign_work is headless-safe (it only queues a row) but runs
+    # no sub-agent, so it is NOT exempt from the deadline.
+    assert set(SAFE_HEADLESS_TOOLS) == exempt | {"assign_work"}
 
 
 def test_a_real_parent_cancel_still_cancels_the_child_as_the_user(tmp_path):

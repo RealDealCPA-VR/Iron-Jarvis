@@ -215,11 +215,16 @@ describe("RosterStrip — a busy teammate reads as busy at a glance", () => {
     expect(within(rail).queryByTestId("roster-activity-builder")).toBeNull();
   });
 
-  it("says nothing about an idle agent — absence is not a claim of free", () => {
+  it("an idle agent gets the calm idle pill (v1.296.0), never the liveness pill — and no invented 'available'", () => {
+    // v1.193.0 drew NOTHING for "idle" because the daemon only reported who
+    // was TAKEN. Since v1.296.0 the queue lets the daemon assert "idle" as
+    // its own word, and the rail draws it as a zinc pill under its OWN
+    // testid; the liveness testid still means "taken" only.
     render(<RosterStrip entries={RAIL} onSelect={() => {}} />);
     const rail = screen.getByTestId("roster-rail");
     expect(within(rail).queryByTestId("roster-activity-builder")).toBeNull();
-    expect(within(rail).queryByText(/idle|unknown|free|available/i)).toBeNull();
+    expect(within(rail).getByTestId("roster-idle-builder").textContent).toContain("idle");
+    expect(within(rail).queryByText(/unknown|available/i)).toBeNull();
   });
 
   it("marks the selected agent in the standalone (no-rail) composition too", () => {

@@ -210,6 +210,11 @@ class RosterEntry:
     pause_reason: str = ""
     allowance: dict | None = None
     reports_to: str = ""
+    #: The health card (v1.296.0, ``assignments.health.agent_health``):
+    #: {last_run_at, last_outcome, last_error, last_wake_at, queued, running,
+    #: blocked}. None when the lookup failed or no store exists — and then
+    #: ``activity`` stays "unknown" rather than claiming "idle".
+    health: dict | None = None
 
     def line(self) -> str:
         """One honest line, e.g. ``researcher — digger (87% over 23 runs)``.
@@ -260,6 +265,7 @@ class RosterEntry:
             "pause_reason": self.pause_reason,
             "allowance": self.allowance,
             "reports_to": self.reports_to,
+            "health": self.health,
             "line": self.line(),
         }
 
@@ -775,16 +781,81 @@ def _remote_entries(
 # --- the pinned API ---------------------------------------------------------
 
 
-def build_roster(platform) -> list[RosterEntry]:
+_IDLE = "idle"
+
+
+def _health_for(platform, name: str) -> dict | None:
+    """``agent_health`` for one roster name, or None when it cannot be read
+    (no store on this platform, or the read raised). Never raises."""
+    store = getattr(platform, "assignments", None)
+    engine = getattr(platform, "engine", None)
+    if store is None or engine is None:
+        return None
+    try:
+        from ..assignments.health import agent_health
+
+        health = agent_health(engine, store, name)
+        return health if isinstance(health, dict) else None
+    except Exception:  # noqa: BLE001 — a health miss is "unknown", never a raise
+        return None
+
+
+def _liveness_readable(platform) -> bool:
+    """True when the orchestrator's in-memory state could actually be read.
+    ``_live_session_ids`` returns ``([], [])`` for "nothing running" AND for
+    "no orchestrator" / "poisoned" alike; "idle" may only be claimed in the
+    first case, so this tells them apart. Never raises."""
+    orch = getattr(platform, "orchestrator", None)
+    if orch is None:
+        return False
+    try:
+        list(getattr(orch, "_running", {}) or {})
+        list(getattr(orch, "_governed", ()) or ())
+        list(getattr(orch, "_queued", ()) or ())
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def _with_health(platform, entries: list[RosterEntry]) -> list[RosterEntry]:
+    """Fold the health card into each builtin/dynamic entry and derive
+    ``"idle"`` (v1.296.0): an agent the liveness map does not show as
+    busy/queued AND whose queue holds nothing queued/running is idle.
+    "unknown" is kept when the health lookup failed OR the liveness map was
+    unreadable (no orchestrator, a poisoned one) — absence of a marker was
+    never a claim that anyone is free; a read-back one is."""
+    readable = _liveness_readable(platform)
+    for entry in entries:
+        if entry.kind == "remote":
+            continue
+        health = _health_for(platform, entry.name)
+        entry.health = health
+        if entry.activity in (_BUSY, _QUEUED) or health is None or not readable:
+            continue
+        try:
+            waiting = int(health.get("queued") or 0) + int(health.get("running") or 0)
+        except (TypeError, ValueError):
+            continue
+        if waiting == 0:
+            entry.activity = _IDLE
+    return entries
+
+
+def build_roster(platform, *, with_health: bool = True) -> list[RosterEntry]:
     """Compose every known agent into roster entries. NEVER raises; worst
-    case (all sources broken) is the builtin list, or ``[]``."""
+    case (all sources broken) is the builtin list, or ``[]``.
+
+    ``with_health=False`` (reviewer, v1.296.0) skips the per-entry health
+    fold (four SQLite reads per agent): the prompt block and the delegation
+    resolvers run ON the loop and never print "idle" — only the roster
+    route and the inbox need the card."""
     try:
         stats = _stats_by_name(platform)
         activity = _activity_by_name(platform)
         entries = _builtin_entries(stats, activity)
         entries.extend(_dynamic_entries(platform, stats, activity))
         entries.extend(_remote_entries(platform, stats, activity))
-        return entries
+        return _with_health(platform, entries) if with_health else entries
     except Exception:  # noqa: BLE001 — the roster must never take a caller down
         return []
 
@@ -813,7 +884,7 @@ def roster_block(platform, *, limit: int = 14) -> str:
     yet) and says so in its suffix — ``builder — … (busy, 87% over 23 runs)``
     — so a supervisor can choose someone else or wait instead of delegating
     blind into a saturated queue."""
-    entries = build_roster(platform)
+    entries = build_roster(platform, with_health=False)
     main = [e for e in entries if e.delegable and e.healthy][: max(0, limit)]
     offline = [e.name for e in entries if e.kind == "remote" and not e.healthy]
     if not main and not offline:
@@ -827,7 +898,7 @@ def roster_block(platform, *, limit: int = 14) -> str:
 
 def delegable_names(platform) -> list[str]:
     """Names a delegation can actually target right now (healthy + delegable)."""
-    return [e.name for e in build_roster(platform) if e.delegable and e.healthy]
+    return [e.name for e in build_roster(platform, with_health=False) if e.delegable and e.healthy]
 
 
 def _norm(name: str) -> str:
@@ -859,7 +930,7 @@ def resolve_target(
     query = _norm(name)
     if not query:
         return None
-    entries = build_roster(platform)
+    entries = build_roster(platform, with_health=False)
     found: RosterEntry | None = None
     for entry in entries:  # exact (prefixed or builtin) name first
         if _norm(entry.name) == query:

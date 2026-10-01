@@ -669,6 +669,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _boot_started_at = _utcnow()
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
+        # Assignments (v1.296.0): AFTER the session reconcile by contract —
+        # every claimed/running row's session was just settled FAILED on a
+        # fresh process, so each goes back to `queued` (held reason "restarted
+        # after an update or crash") and ONE assignment.requeued goes out.
+        # The dispatcher loop itself is armed with the other loops below.
+        assignment_dispatcher = None
+        if platform.assignments is not None and getattr(
+            platform.config, "assignments_enabled", True
+        ):
+            from ..assignments import AssignmentDispatcher
+
+            assignment_dispatcher = AssignmentDispatcher(platform, tick=_tick)
+            platform.assignment_dispatcher = assignment_dispatcher
+            _t = time.perf_counter()
+            try:
+                await assignment_dispatcher.requeue_lost_at_boot(set(orchestrator._running))
+                _tick("requeue_assignments", True)
+            except Exception as exc:  # noqa: BLE001 — never block boot, but SAY so
+                _tick("requeue_assignments", False, exc)
+                log.exception("boot rehydration step requeue_assignments failed")
+            finally:
+                _boot_step("requeue_assignments", _t)
         # v1.291.0 (io-03): a phone-started job runs outside the poll pass
         # now, so a restart mid-run no longer trips the inflight marker; the
         # reconcile above settled its row, this tells the phone (a tracked
@@ -1019,6 +1041,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.info("autonomy loop disarmed")
 
         _arm_autonomy()
+
+        # The assignment dispatcher (v1.296.0): a job queued for an agent
+        # starts when that agent is free. Wired exactly like the autonomy
+        # pulse — a named bg task, `_tick("dispatcher", …)` per pass (so
+        # `loop_health["dispatcher"]` shows on /diagnostics), cancelled with
+        # the others at shutdown; `_dispatcher_stop` ends the loop cleanly
+        # before the cancel lands. Guarded by `config.assignments_enabled`
+        # (default True; absent on this config = on).
+        _dispatcher_stop = asyncio.Event()
+        if assignment_dispatcher is not None:
+            bg_tasks["dispatcher"] = asyncio.create_task(
+                assignment_dispatcher.run_forever(_dispatcher_stop)
+            )
+            log.info("assignment dispatcher armed")
 
         # BUILD PANES KEEP RECENT HISTORY THROUGH A CRASH (v1.245.0). The
         # terminal snapshot was written only on create/kill/rename and at a
@@ -1409,6 +1445,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.wait_for(inbound_poller.drain(), timeout=5.0)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
+            _dispatcher_stop.set()
             for task in bg_tasks.values():
                 task.cancel()
             if compact_task is not None:
@@ -2693,6 +2730,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import detections as _detections_routes
 
     _detections_routes.register(app, d)
+    # Assignments (v1.296.0): give an agent a job and the job waits for it.
+    from .routes import assignments as _assignments_routes
+
+    _assignments_routes.register(app, d)
     # Worklist (v1.174.0): the durable per-item checkpoints a chunked
     # job reports progress through — without this the store exists and
     # no surface can read it.

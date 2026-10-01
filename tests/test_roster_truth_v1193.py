@@ -239,7 +239,9 @@ def test_busy_agent_is_marked_in_the_roster_block(platform):
 
     entries = _by_name(build_roster(platform))
     assert entries["builder"].activity == "busy"
-    assert entries["researcher"].activity == "unknown"  # nothing claims it is free
+    # v1.296.0: with a readable orchestrator and an empty assignment queue the
+    # roster now SAYS "idle" (health read back), where it used to say nothing.
+    assert entries["researcher"].activity == "idle"
     assert entries["builder"].as_dict()["activity"] == "busy"
 
     block = roster_block(platform)
@@ -266,6 +268,7 @@ def test_queued_is_marked_and_a_running_run_wins_the_key(platform):
 
 def test_liveness_degrades_to_unknown_and_never_raises(platform):
     # No orchestrator attached (a bare platform, and every pure-fake test):
+    # the liveness map is unreadable, so nothing may claim "idle" (v1.296.0).
     assert all(e.activity == "unknown" for e in build_roster(platform))
     assert "(busy" not in roster_block(platform)
 
@@ -283,7 +286,10 @@ def test_liveness_degrades_to_unknown_and_never_raises(platform):
     # A live id we cannot resolve to a name is simply unknown, not a crash.
     platform.orchestrator = Orchestrator(platform)
     platform.orchestrator._running["session_that_does_not_exist"] = object()
-    assert all(e.activity == "unknown" for e in build_roster(platform))
+    # v1.296.0: the id names nobody busy; the orchestrator IS readable and the
+    # queue is empty, so every entry is honestly "idle" — never "busy".
+    assert all(e.activity in ("unknown", "idle") for e in build_roster(platform))
+    assert not any(e.activity == "busy" for e in build_roster(platform))
 
 
 def test_busy_suffix_never_truncates_and_the_line_stays_clamped(platform):
@@ -525,13 +531,14 @@ async def test_a_running_custom_agents_id_resolves_to_ITSELF_not_its_base_type(
         )
     ).ok
 
-    assert seen["before"] == "unknown", (
+    assert seen["before"] in ("unknown", "idle"), (
         "a delegated child enters no orchestrator lane — if this ever reports "
         "busy, the blind spot documented in roster.py has been closed and that "
         "docstring must be rewritten"
     )
     assert seen["custom"] == "busy"
-    assert seen["builder"] == "unknown", "builder was never the one working"
+    # v1.296.0: "idle" (nothing running, nothing queued) — never "busy".
+    assert seen["builder"] == "idle", "builder was never the one working"
     busy_lines = [ln for ln in seen["block"].splitlines() if "(busy" in ln]
     assert busy_lines and all(ln.startswith("- custom:tax-reader") for ln in busy_lines)
 

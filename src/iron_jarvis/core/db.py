@@ -111,6 +111,10 @@ _HOT_INDEXES = (
     # TX-01 audit timeline queries order/filter tool invocations by time over a
     # table that was previously unbounded + unindexed on created_at.
     ("ix_toolinvocation_created_at", "toolinvocation", "created_at"),
+    # v1.296.0: the dispatcher reads "queued for <agent>" every tick and the
+    # project Board asks "what waits in this project".
+    ("ix_assignment_assignee_status", "assignment", "assignee, status"),
+    ("ix_assignment_project_status", "assignment", "project_id, status"),
 )
 
 
@@ -219,6 +223,7 @@ _LATE_MODEL_MODULES = (
     "..capability.models",    # CapabilityProposalRecord — the agent's asks
     "..goals.models",         # GoalContractRecord — goal contracts (v1.208.0)
     "..browser.models",       # BrowserPairing — the paired browser (v1.235.0)
+    "..assignments.models",   # AssignmentRecord — a job that waits for its agent (v1.296.0)
 )
 
 

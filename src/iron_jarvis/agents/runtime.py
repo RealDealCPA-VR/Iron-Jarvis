@@ -143,9 +143,13 @@ def _no_final_text_result(run_messages: list[LLMMessage]) -> str:
 #: (v1.231.0, audit AE17) deliver through the v1.200.0 bell + phone fan-out.
 #: Anything else — None, "", an origin no door stamps — is unattributed and
 #: takes the instant headless denial (see ``_pause_for_approval``).
+#: ``assignment`` joined in v1.296.0: an assignment run may ASK — its card
+#: reaches the bell like a job's — but it is UNATTENDED work (nobody is
+#: watching the queue drain), so it is NOT in ATTENDED_ORIGINS and keeps
+#: SESSION_APPROVAL_TIMEOUT_S.
 ASKING_ORIGINS = (
     "chat", "job", "project", "user", "goal",
-    "schedule", "workflow", "reflex", "comm", "autonomy",
+    "schedule", "workflow", "reflex", "comm", "autonomy", "assignment",
 )
 
 #: What the model reads when an ask-tier pause ran out of clock (v1.227.0,

@@ -58,6 +58,8 @@ from .agents import dynamic_models as _dyn_models  # noqa: F401
 from .agents import remote as _remote_models  # noqa: F401  (registers RemoteAgentRecord)
 from .agents.remote import register_remote_agent_tool
 from .agents.agent_tools import agent_management_tools
+from .assignments import AssignWorkTool, AssignmentStore
+from .assignments import models as _asg_models  # noqa: F401  (registers AssignmentRecord)
 from .agents.dynamic import DynamicAgentRegistry
 from .blackboard import BlackboardStore, blackboard_tools
 from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
@@ -242,6 +244,11 @@ class Platform:
     #: Optional so bare-platform unit tests still construct; the dispatcher
     #: raises an honest error when a task schedule fires without it.
     orchestrator: "object | None" = None
+    #: Assignments (v1.296.0): the queue a job waits in for its agent, and
+    #: the dispatcher loop the daemon lifespan runs over it (None on a bare
+    #: platform — the routes and the tool then say so instead of running).
+    assignments: "AssignmentStore | None" = None
+    assignment_dispatcher: "object | None" = None
     #: Goal CONTRACTS (v1.208.0, ``goals/``) — the engine that runs ONE honest
     #: iteration of a standing goal (hard budget gate, verifier, breaker).
     #: Built in ``build_platform`` (it only needs the platform); the daemon
@@ -1634,6 +1641,23 @@ def build_platform(
     platform.agents_registry = DynamicAgentRegistry(engine).load()
     for tool in agent_management_tools(platform, platform.agents_registry):
         platform.registry.register(tool)
+
+    # Assignments (v1.296.0): give an agent a job and the job waits for it.
+    # The store validates assignees through THIS registry (a custom agent
+    # must exist; a coordinator is refused) and publishes created/blocked on
+    # the shared bus. `assign_work` sits on the SAME tier as `spawn_agent`
+    # (`core/config.py` seeds that one "ask"): queueing a run spends a whole
+    # session of someone's allowance, so it defaults to ask, never allow —
+    # seeded in BOTH copies like `consult` above so an older config.toml
+    # cannot leave it fail-closed-invisible. On NO builtin roster: the
+    # supervisor and planner already delegate (a second hand-out door on a
+    # coordinator is the fork-bomb shape); a custom agent opts in by name.
+    platform.assignments = AssignmentStore(
+        engine, agents_registry=platform.agents_registry, event_bus=event_bus
+    )
+    platform.registry.register(AssignWorkTool(platform))
+    platform.permissions._base.setdefault("assign_work", "ask")
+    platform.config.permissions.setdefault("assign_work", "ask")
 
     # Remote agents (agents the user runs ELSEWHERE — a Hermes on another box,
     # an OpenAI-compatible endpoint): expose the delegate_remote tool so an

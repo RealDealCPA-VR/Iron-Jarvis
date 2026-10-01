@@ -49,6 +49,19 @@ class EventType:
     # session_id: they are about the AGENT, not one run.
     AGENT_PAUSED = "agent.paused"
     AGENT_ALLOWANCE_WARNING = "agent.allowance_warning"
+    # v1.296.0 (assignments): a job given to an agent waits for it.
+    # created {id, assignee, title, source, reason, project_id} (the store);
+    # started {id, assignee, session_id, title} (the dispatcher, tagged with
+    # the session); finished {id, assignee, title, ok, session_id, error}
+    # (the orchestrator's post-run hook, every finalize path); blocked {id,
+    # assignee, title, blocked_reason} (the 3-strike breaker in the store);
+    # requeued {count, ids} — ONE per boot when claimed/running rows had no
+    # live session behind them.
+    ASSIGNMENT_CREATED = "assignment.created"
+    ASSIGNMENT_STARTED = "assignment.started"
+    ASSIGNMENT_FINISHED = "assignment.finished"
+    ASSIGNMENT_BLOCKED = "assignment.blocked"
+    ASSIGNMENT_REQUEUED = "assignment.requeued"
     # {tool, ok, mode, invocation_id, reversibility, risk_class} — risk_class
     # joined in v1.237.0 with the acting browser tools, so an audit can tell a
     # read from something that changed a page without re-deriving it from the

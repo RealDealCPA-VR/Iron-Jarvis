@@ -81,6 +81,7 @@ import {
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
 import {
   RosterStrip,
+  bareName,
   rosterAvatarSrc,
   type RosterEntry,
 } from "@/components/agents/RosterStrip";
@@ -460,6 +461,20 @@ export default function AgentsPage() {
     }
   }
 
+  /**
+   * The job card's "open its inbox" (v1.296.0): the queued note names a
+   * roster WIRE name ("builder" / "custom:x"); open the room on that agent
+   * — the same pick the room's own rows make — so the inbox the job just
+   * joined is the panel that opens. Unknown name → nothing (the roster
+   * moved under the click).
+   */
+  function openAgentInbox(wire: string) {
+    const entry = rosterEntries.find((e) => e.name === wire);
+    if (!entry) return;
+    selectAgent(entry.kind, bareName(entry.name), entry.delegable && entry.healthy);
+    setAgentsOpen(true);
+  }
+
   /** The older-daemon gear: reveal the setup card, and fold it again. */
   function toggleSetup() {
     const next = !setupOpen;
@@ -568,8 +583,11 @@ export default function AgentsPage() {
           }
         />
       )}
-      {/* The agents room. */}
-      {agentsOpen && room && (
+      {/* The agents room. Gated on the ROSTER, not on `room` (v1.296.0): a
+          daemon with a roster but no thread routes still has agents to show
+          and inboxes to open — only Talk needs the thread routes, and the
+          modal already renders no Talk button when `onTalk` is absent. */}
+      {agentsOpen && hasRoster && (
         <AgentsModal
           roster={rosterEntries}
           dynamic={dynamic}
@@ -577,7 +595,7 @@ export default function AgentsPage() {
           models={models}
           selected={picked}
           onSelect={selectAgent}
-          onTalk={talkWith}
+          onTalk={threadsMissing ? undefined : talkWith}
           onAssign={assignWork}
           onAgentsChanged={agentsChanged}
           onRemotesChanged={reloadRemotes}
@@ -740,7 +758,11 @@ export default function AgentsPage() {
               Give-work button and nowhere for the work to go. */}
           <Reveal>
             <div ref={jobRef}>
-              <JobPostCard roster={rosterEntries} assign={assign} />
+              <JobPostCard
+                roster={rosterEntries}
+                assign={assign}
+                onOpenAgent={openAgentInbox}
+              />
             </div>
           </Reveal>
 

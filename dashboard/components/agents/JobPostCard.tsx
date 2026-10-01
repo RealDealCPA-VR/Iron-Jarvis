@@ -9,10 +9,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Briefcase, Send } from "lucide-react";
+import { ArrowUpRight, Briefcase, Inbox, Send } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
-import type { Project, SessionView } from "@/lib/types";
+import type { Assignment, Project, SessionView } from "@/lib/types";
+import { canBeAssignee, queuedSentence } from "@/components/agents/AgentInbox";
 import {
   Badge,
   Card,
@@ -173,6 +174,35 @@ export function jobRequest(
   };
 }
 
+/**
+ * "Queue it" (v1.296.0) → the POST /assignments body, pure so a test can pin
+ * every field: the same target (a roster name — never the Team sentinel,
+ * which is a supervisor session and not an assignee), task and project as
+ * Post, with the typed step budget riding as `payload.max_steps` (the queue
+ * hands it to the session when the job runs — unlike the spawn route, every
+ * assignee reads it). Blank/invalid steps add NO payload key, like Post.
+ */
+export function queueRequest(
+  target: string,
+  task: string,
+  projectId: string,
+  maxSteps = "",
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { assignee: target, task };
+  if (projectId) body.project_id = projectId;
+  const steps = jobMaxSteps(maxSteps);
+  if (steps !== null) body.payload = { max_steps: steps };
+  return body;
+}
+
+/** Can this target take a QUEUED job? A specific builtin or custom agent
+ *  can; the Team default is a session shape, a remote has no queue on this
+ *  daemon, and a coordinator builtin (supervisor, planner — see
+ *  `canBeAssignee`) is refused by the daemon as an assignee. */
+export function canQueue(target: string): boolean {
+  return target !== TEAM_TARGET && !target.startsWith("remote:") && canBeAssignee(target);
+}
+
 /** The card's own dispatches out of GET /sessions: origin "job:*", newest
  *  first (sorted here — the list must not depend on server ordering). */
 export function jobSessions(sessions: SessionView[]): SessionView[] {
@@ -192,9 +222,13 @@ export function jobSessions(sessions: SessionView[]): SessionView[] {
 export function JobPostCard({
   roster = [],
   assign = null,
+  onOpenAgent,
 }: {
   roster?: RosterEntry[];
   assign?: JobAssign | null;
+  /** v1.296.0: open the agents room on this roster name (the queued note's
+   *  link). Optional — without it the note is a sentence and nothing more. */
+  onOpenAgent?: (name: string) => void;
 } = {}) {
   const [task, setTask] = useState("");
   const [target, setTarget] = useState(readLastTarget);
@@ -206,6 +240,8 @@ export function JobPostCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [posted, setPosted] = useState<SessionView | null>(null);
+  /** v1.296.0: the assignee the last "Queue it" went to (null = none). */
+  const [queuedFor, setQueuedFor] = useState<string | null>(null);
   // The budget the DISPATCH actually carried (null = none was sent, so the run
   // takes the configured default). Read off the request body this card built,
   // not off the form: after a post the box is cleared, and the form is anyway
@@ -286,6 +322,7 @@ export function JobPostCard({
     setError(null);
     setPosted(null);
     setPostedSteps(null);
+    setQueuedFor(null);
     try {
       const req = jobRequest(effectiveTarget, t, projectId, maxSteps);
       const session = await post<SessionView>(req.path, req.body);
@@ -300,6 +337,31 @@ export function JobPostCard({
       // not lost: the note below states what the dispatch carried.
       setMaxSteps("");
       reloadJobs();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** "Queue it" (v1.296.0): the same job, but it waits for the agent instead
+   *  of starting now — POST /assignments, then the sentence that says so. */
+  async function queueIt() {
+    const t = task.trim();
+    if (!t || busy || stepsInvalid || targetPaused || !canQueue(effectiveTarget)) return;
+    setBusy(true);
+    setError(null);
+    setPosted(null);
+    setPostedSteps(null);
+    setQueuedFor(null);
+    try {
+      await post<{ assignment: Assignment; created: boolean }>(
+        "/assignments",
+        queueRequest(effectiveTarget, t, projectId, maxSteps),
+      );
+      setQueuedFor(effectiveTarget);
+      setTask("");
+      setMaxSteps("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -438,7 +500,22 @@ export function JobPostCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-end gap-2">
+          {/* QUEUE IT (v1.296.0) — only for a specific agent: the Team is a
+              session shape, not an assignee. The job waits its turn instead
+              of starting this second. */}
+          {canQueue(effectiveTarget) && (
+            <button
+              type="button"
+              data-testid="job-queue"
+              onClick={() => void queueIt()}
+              disabled={busy || !task.trim() || stepsInvalid || targetPaused}
+              title={`Queue it for ${bareTargetName(effectiveTarget)} — it runs when ${bareTargetName(effectiveTarget)} is free`}
+              className="btn-ghost"
+            >
+              <Inbox size={14} /> Queue it
+            </button>
+          )}
           <button
             type="submit"
             disabled={busy || !task.trim() || stepsInvalid || targetPaused}
@@ -454,6 +531,23 @@ export function JobPostCard({
           </button>
         </div>
 
+        {queuedFor && (
+          <SuccessNote>
+            <span data-testid="job-queued-note">{queuedSentence(queuedFor)}</span>
+            {onOpenAgent && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  onClick={() => onOpenAgent(queuedFor)}
+                  className="font-medium text-emerald-100 underline underline-offset-2"
+                >
+                  open its inbox
+                </button>
+              </>
+            )}
+          </SuccessNote>
+        )}
         {posted?.id && (
           <SuccessNote>
             Job posted —{" "}

@@ -853,6 +853,7 @@ class Orchestrator:
             # cancellable handle release only when run_session truly ends.
             self._post_run_learning(session)
             await self._post_run_allowance(session)
+            await self._post_run_assignment(session)
 
             # Phase 7: if this ran on a git worktree, build a review — never
             # auto-merge.
@@ -1026,6 +1027,59 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             log.exception("allowance tail failed for session %s", session.id)
 
+    async def _post_run_assignment(self, session: Session) -> None:
+        """The ASSIGNMENT tail of a run (v1.296.0): a session whose origin is
+        ``assignment:<id>`` settles its assignment — ``done`` on COMPLETED,
+        ``failed`` (the 3-strike breaker counts it) on FAILED, ``cancelled``
+        (no strike) on CANCELLED — and
+        publishes ``assignment.finished``. Called at EVERY finalize site
+        (the solo success path, ``_finalize_failed``, ``_finalize_cancelled``)
+        so no outcome leaves a job stuck in ``running``; the dispatcher's
+        sweep is the backstop for a row this hook never saw (a reconcile).
+        Guarded like the learning steps — never raises, logged; a run that is
+        not an assignment returns at once. The store write leaves the loop.
+        """
+        try:
+            origin = str(getattr(session, "origin", "") or "")
+            if not origin.startswith("assignment:"):
+                return
+            store = getattr(self.p, "assignments", None)
+            if store is None:
+                return
+            assignment_id = origin[len("assignment:"):]
+            ok = session.status is SessionStatus.COMPLETED
+            error = ""
+            if session.status is SessionStatus.CANCELLED:
+                # A stop is not a failure (reviewer, v1.296.0): the row ends
+                # ``cancelled`` (Retry stays offered) and the breaker does not
+                # count it — whichever of the cancel route's flip and this
+                # hook lands first, the row reads the same.
+                row = await asyncio.to_thread(store.cancel, assignment_id)
+            else:
+                if not ok:
+                    error = _prose(session.summary) or str(session.status.value)
+                row = await asyncio.to_thread(store.finish, assignment_id, ok, error)
+            if row is None:
+                return
+            await self.p.event_bus.publish(
+                EventType.ASSIGNMENT_FINISHED,
+                {
+                    "id": assignment_id,
+                    "assignee": row.assignee,
+                    "title": row.title,
+                    "ok": ok,
+                    "session_id": session.id,
+                    "error": row.last_error or error,
+                    "status": row.status,
+                },
+                session_id=session.id,
+            )
+            disp = getattr(self.p, "assignment_dispatcher", None)
+            if disp is not None:
+                disp.wake()  # the agent is free — its next job starts now
+        except Exception:  # noqa: BLE001
+            log.exception("assignment tail failed for session %s", session.id)
+
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
@@ -1092,6 +1146,7 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
             log.exception("failed to publish failure event for %s", session.id)
+        await self._post_run_assignment(session)
         # FX-01: release any live SSE reader with a terminal frame -- a crash can
         # abort the run before its sink emits ``done``, otherwise leaving the
         # browser stream hanging. Sync + non-blocking; a no-op with no subscriber.
@@ -1164,6 +1219,7 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
             log.exception("failed to publish cancel event for %s", session.id)
+        await self._post_run_assignment(session)
         # FX-01: terminal frame so a cancel doesn't leave SSE readers hanging.
         hub = getattr(self.p, "streams", None)
         if hub is not None:

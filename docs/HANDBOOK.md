@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.295.0 (2026-09-14).*
+holds itself to. Current as of v1.296.0 (2026-09-14).*
 
 ---
 
@@ -1586,6 +1586,25 @@ brings it back on its own. The phone, the round table and a teammate's
 history. When a run is served by the Claude CLI, the agent's remaining dollar
 allowance is also handed to the CLI as its own hard budget for that run. Re-
 creating an agent with a name that exists is refused — edit its row instead.
+**v1.296.0 — give an agent a job, and the job waits for it.** An
+**assignment** is work queued for a named agent (a builtin like builder, or
+one of yours): it sits in that agent's **inbox** until the agent is free, not
+paused and within its allowance, then runs as a normal session you can watch
+on the Sessions page and the project Board. Queue one from the Agents page
+("Queue it" on the Give-work card, or the Assign box inside an agent's
+detail), from a project's Tasks tab ("Assign to" — the project folder rides
+along), or let an agent hand work to a teammate with the new `assign_work`
+tool (a manager delegating down the chart; two levels deep at most, twenty
+waiting per agent). An agent works one assignment at a time, highest priority
+first, oldest first. The inbox says why something is **held** (paused, out
+of allowance, busy, every slot taken) in plain words. A run that fails is a
+strike; three strikes in a row **block** the assignment with the last error
+on it — the bell tells you, and Unblock or Retry puts it back. Cancel stops a
+running one. After an update or a crash the queue picks itself back up
+(nothing is lost or counted as a failure), and the bell says how many
+resumed. Every agent now also shows real **health**: when it last ran and how
+it ended, its last error, what is queued, running or blocked — and "idle"
+means exactly that.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

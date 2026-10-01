@@ -994,3 +994,86 @@ export interface HistorySessionDetail {
   /** Present when the detections engine could not run over this session. */
   findings_error?: string;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  v1.296.0 — Assignments: give an agent a job and the job waits for it      */
+/* -------------------------------------------------------------------------- */
+
+export type AssignmentStatus =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "done"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
+/** What the assignment hands the session when it runs (all optional). */
+export interface AssignmentPayload {
+  allow_tools?: string[];
+  workspace_root?: string;
+  max_steps?: number;
+  provider?: string;
+  model?: string;
+}
+
+/**
+ * One queued job (GET /assignments, GET /agents/{name}/inbox). The assignee
+ * is a ROSTER name ("builder" | "custom:<slug>"); every timestamp is an ISO
+ * string or null. `held_reason` is set while the queue is holding a queued
+ * row back (the agent is paused, its allowance is spent…); `blocked_reason`
+ * explains a "blocked" row, which waits for an Unblock.
+ */
+export interface Assignment {
+  id: string;
+  project_id: string | null;
+  assignee: string;
+  task: string;
+  title: string;
+  priority: number;
+  status: AssignmentStatus;
+  /** "user" | "agent:<session>" | "project" | "api" | "retry:<id>" */
+  source: string;
+  reason: string;
+  payload: AssignmentPayload;
+  idempotency_key: string | null;
+  coalesced_count: number;
+  attempts: number;
+  failure_count: number;
+  blocked_reason: string | null;
+  held_reason: string | null;
+  depth: number;
+  session_id: string | null;
+  last_error: string | null;
+  created_at: string | null;
+  claimed_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string | null;
+}
+
+/** An agent's recent-work health (roster rows + the inbox); null = none. */
+export interface AgentHealth {
+  last_run_at: string | null;
+  /** The daemon's outcome word for the last run ("completed", "needs_you",
+   *  "failed", …) or null when it never ran. */
+  last_outcome: string | null;
+  last_error: string | null;
+  last_wake_at: string | null;
+  queued: number;
+  running: number;
+  blocked: number;
+}
+
+/** GET /agents/{name}/inbox. */
+export interface AgentInboxView {
+  assignee: string;
+  inbox: {
+    queued: Assignment[];
+    claimed: Assignment[];
+    running: Assignment[];
+    blocked: Assignment[];
+    recent: Assignment[];
+  };
+  health: AgentHealth | null;
+}

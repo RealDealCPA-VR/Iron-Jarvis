@@ -40,7 +40,11 @@ AskResolver = Callable[[str, dict], bool]
 # subagent in an isolated workspace — it never touches the host — so a Supervisor
 # can decompose work without a prompt. Genuinely dangerous tools (e.g. ``shell``)
 # are deliberately excluded and stay fail-closed.
-SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent"})
+# ``assign_work`` joined in v1.296.0: it QUEUES a job for another agent (a
+# row, no run, no host touch) — an unattended schedule/goal run may hand
+# work out exactly as it may delegate, so it must not park on an ask nobody
+# is there to answer. It is NOT deadline-exempt: nothing runs inside it.
+SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent", "assign_work"})
 
 # Host-touching capabilities that an agent-definition ``permission_override`` may
 # keep or LOWER (to ask/deny) but must NEVER RAISE to ``allow``. See the module

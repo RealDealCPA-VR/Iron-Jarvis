@@ -49,6 +49,7 @@ import { Empty } from "@/components/ui";
 import { Modal } from "@/components/Modal";
 import { timeAgo } from "@/lib/format";
 import AgentFace, { type FaceOverride } from "./AgentFace";
+import { AgentInbox } from "./AgentInbox";
 import { AgentPortrait } from "./AgentPortrait";
 import {
   FacePicker,
@@ -519,6 +520,12 @@ function AgentDetail({
           <span className="text-zinc-400">New &amp; manage</span>.
         </p>
       )}
+
+      {/* THE INBOX (v1.296.0): what this agent is doing, what waits for it,
+          and a composer to add to the queue. Builtin and custom agents only —
+          a remote has no queue on this daemon. Renders nothing on a daemon
+          without the route. */}
+      {entry.kind !== "remote" && <AgentInbox name={entry.name} />}
     </div>
   );
 }

@@ -129,12 +129,13 @@ def test_a_headless_run_can_reach_them(platform):
         decision = engine.authorize(name, {})
         assert decision.allowed, f"{name} is not allowed outright"
         # ...and it never had to fall through to the resolver, which would have
-        # said no: only delegate/spawn_agent are auto-approved headless.
+        # said no: only delegate/spawn_agent/assign_work are auto-approved
+        # headless (assign_work queues a row — v1.296.0).
         assert not resolver(name, {}), (
             f"{name} is in SAFE_HEADLESS_TOOLS - if that is intended, this "
             "test's reasoning needs updating"
         )
-    assert SAFE_HEADLESS_TOOLS == frozenset({"delegate", "spawn_agent"})
+    assert SAFE_HEADLESS_TOOLS == frozenset({"delegate", "spawn_agent", "assign_work"})
 
 
 def test_the_dangerous_tools_did_not_get_swept_up(platform):
