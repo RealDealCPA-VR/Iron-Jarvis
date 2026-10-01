@@ -29,4 +29,32 @@ class DynamicAgentRecord(SQLModel, table=True):
     description: str = ""
     provider: str = ""  # preferred LLM provider (e.g. "anthropic"); "" = platform default
     model: str = ""  # preferred model id (e.g. "claude-opus-4-8"); "" = platform default
+    # --- the job card (v1.295.0): a custom agent is an EMPLOYEE -------------
+    # Every column below is ADDITIVE with a default: ``core.db._reconcile_
+    # additive_columns`` ALTER-TABLEs them onto a DB created before this wave,
+    # and a row written then reads these defaults. Pinned in
+    # ``tests/test_agent_allowance_v1295.py``.
+    #: "" | "approve_for_me" | "always_ask" — the posture its runs take when
+    #: the door states none. "yolo" never lands here (``create_session``
+    #: normalises every posture through ``inherited_approval_mode``).
+    approval_mode: str = ""
+    #: Per-run step budget; None = the config default.
+    max_steps: int | None = None
+    #: Monthly allowance (per CALENDAR month). 0 = unlimited.
+    allowance_tokens: int = 0
+    allowance_usd: float = 0.0
+    #: "YYYY-MM" once the 80% warning went out for that month (one per month).
+    allowance_warned_month: str = ""
+    #: "" = not paused. Set by the allowance auto-pause or by the user (a day
+    #: off); every door refuses with this reason while it is set.
+    paused_reason: str = ""
+    paused_at: datetime | None = None
+    #: A roster name ("builder" | "custom:<slug>") or "" = reports to the user.
+    reports_to: str = ""
+    #: JSON list[str] of skill names injected into its runs (in addition to
+    #: ``config.default_skills``).
+    skills_json: str = "[]"
+    #: JSON list[str] of tools this agent may NEVER use (a "deny" override;
+    #: the deny floor in ``tools/permissions.py`` means it can only narrow).
+    deny_tools_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)

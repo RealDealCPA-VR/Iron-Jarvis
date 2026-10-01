@@ -177,12 +177,17 @@ def test_the_agent_lane_arms_off_the_event_loop():
     tree = ast.parse(
         (_REPO / "src/iron_jarvis/agents/runtime.py").read_text(encoding="utf-8")
     )
-    run = next(
+    # v1.295.0: ``run`` became a thin wrapper that arms the per-run dollar
+    # budget around ``_run_body`` (the loop itself). The arming call lives in
+    # the body now; the rule is about the agent lane's run PATH, so both are
+    # walked — a bare call in either is still a parked loop.
+    lane = [
         n for n in ast.walk(tree)
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "run"
-    )
+        if isinstance(n, ast.AsyncFunctionDef) and n.name in ("run", "_run_body")
+    ]
+    assert lane, "AgentRuntime.run (and its body) must exist"
     calls = [
-        ast.unparse(n) for n in ast.walk(run)
+        ast.unparse(n) for fn in lane for n in ast.walk(fn)
         if isinstance(n, ast.Call) and "arm_for_task" in ast.unparse(n)
     ]
     assert calls, "Runner.run must still arm per task"

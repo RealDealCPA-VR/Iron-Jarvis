@@ -272,8 +272,17 @@ class SpawnAgentTool(Tool):
         # Prefer a dynamic agent of this name; otherwise treat the name as a
         # built-in AgentType.
         definition = self.registry.definition(agent_name)
+        record = self.registry.get(agent_name) if definition is not None else None
         if definition is not None:
             base_type = definition.type
+            # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused or exhausted
+            # custom agent is refused HERE, before any session row exists, in
+            # the words the user set — never a silent run as its base type.
+            from . import allowance
+
+            reason = allowance.refusal_for(record, self.platform.engine)
+            if reason:
+                return ToolResult(ok=False, output="", error=reason)
         else:
             try:
                 base_type = AgentType(agent_name)
@@ -341,6 +350,12 @@ class SpawnAgentTool(Tool):
         # …and the GRANTS (v1.288.0), through the same predicate `delegate`
         # uses: what the user pre-approved on the parent, never its origin.
         allow_tools, approval_mode = inherited_grants(parent)
+        # The job card's posture and step budget apply when the caller states
+        # none (v1.295.0); ``create_session`` normalises the posture.
+        max_steps = None
+        if record is not None:
+            approval_mode = approval_mode or (record.approval_mode or "")
+            max_steps = record.max_steps or None
 
         # BOUNDED FAN-OUT (v1.193.0), the same cap `delegate` takes — spawn is
         # the other door onto the identical hazard. Deliberately NOT
@@ -359,6 +374,7 @@ class SpawnAgentTool(Tool):
                 workspace_root=workspace_root,
                 allow_tools=allow_tools,
                 approval_mode=approval_mode,
+                max_steps=max_steps,
                 # Credit the run to the teammate that actually ran (v1.193.0) —
                 # the same stamp `delegate` makes, so attribution survives a
                 # dropped or renamed event instead of falling back to the base
@@ -449,6 +465,11 @@ class SpawnAgentTool(Tool):
                 else SessionStatus.FAILED
             )
             child_session.provider, child_session.model = run.provider, run.model
+            # The child's spend lands on ITS row (v1.295.0): the allowance
+            # ledger sums Session tokens by roster name, exactly as the solo
+            # run_session path stamps them.
+            child_session.input_tokens = run.input_tokens
+            child_session.output_tokens = run.output_tokens
             child_session.summary = run.result
             child_session.finished_at = utcnow()
             orch._save(child_session)
@@ -460,6 +481,7 @@ class SpawnAgentTool(Tool):
                 orch._post_run_learning(child_session)
             except Exception:  # noqa: BLE001
                 pass
+            await orch._post_run_allowance(child_session)
 
             ok = run.state is AgentState.COMPLETED
             await publish_delegation_completed(

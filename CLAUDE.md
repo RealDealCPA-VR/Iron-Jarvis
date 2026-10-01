@@ -2052,6 +2052,53 @@ does not need a bump, stop and bump it.
   `TileGroup`. Pin: `dashboard/__tests__/overview-groups-v1294.test.tsx`;
   the v1.289.0 gesture pin opens Office first (`renderOpen`).
 
+- **A custom agent is an EMPLOYEE: a job card, a monthly allowance, a day
+  off** (v1.295.0, /goal wave 1 of the agents borrow list). `DynamicAgentRecord`
+  gained additive columns (approval_mode, max_steps, allowance_tokens,
+  allowance_usd, allowance_warned_month, paused_reason/paused_at, reports_to,
+  skills_json, deny_tools_json); pre-wave rows hold NULL on disk and ONLY the
+  registry normalises them (`dynamic._with_defaults`) — read the table through
+  `agents_registry`, never raw. `register()` keeps its positional contract;
+  the new kwargs default to `_KEEP` (omitted = stored value kept), so PATCH
+  one field never clobbers the rest; an explicit `max_steps=None` clears.
+  `agents/allowance.py` is the ledger: `month_spend` sums `Session` rows
+  credited `custom:<slug>` (the spawn/delegate tools now STAMP child tokens
+  onto the child row — before this wave they carried 0) and prices them with
+  `eval.pricing.cost_for`; `allowance_state` → ok / warning (≥80%) /
+  exhausted (≥100%) / unlimited, pct over the SET bounds only;
+  `refusal_for(record, engine)` is ONE plain sentence or ""; `after_run` is
+  ASYNC (it awaits the bus) and is awaited by `Orchestrator._post_run_allowance`
+  right after every `_post_run_learning` call — it pauses once
+  (`agent.paused`) and warns once per month (`agent.allowance_warning`,
+  dedupe stored on the row). EVERY DOOR REFUSES HONESTLY, never a silent
+  builder: `POST /agents/{name}/spawn` 409 (refusal_for via to_thread), the
+  `spawn_agent` and `delegate` tools (incl. the bare-slug fallback, which used
+  to fall through `AgentType()` into a builder run), and the schedule fire
+  (RuntimeError, like its supervisor refusal), the PHONE escalation
+  (`comm/inbound._escalate_plan` replies the sentence — it used to fall to
+  the supervisor silently, and `_run_dynamic_session` now stamps tokens and
+  awaits the allowance tail), the round-table seat and `consult` (both answer
+  the pause sentence, no model call). A PATCH that raises the allowance of an
+  agent AUTO-paused for it resumes it and clears the warned month; a user
+  pause never auto-resumes. The record's approval_mode and
+  max_steps ride every door when the caller gave none. `deny_tools` →
+  `AgentDefinition.permission_overrides={t: "deny"}` (deny-floor: narrows
+  only); `skills` are injected like `default_skills`; `reports_to` adds one
+  manager sentence. `providers/budget.py` holds a ContextVar the runtime arms
+  with the agent's remaining dollars for the run, and ONLY `ClaudeCliAdapter`
+  reads it (`--max-budget-usd`, ≥ 0.05, the CLI's floor). Roster entries
+  carry paused/pause_reason/allowance/reports_to and a paused agent is
+  `healthy=False`. Routes: `POST /agents` 409s on an existing name (the
+  `create_agent` TOOL still upserts — a model-driven door, by design);
+  `POST /agents/{name}/pause|resume`; every employee 422 is one sentence.
+  Dashboard: `SetupCard` "Employee details" + "Job card", `NameChips`
+  (skills/deny), `AllowanceMeter` (`data-status` = the daemon's word),
+  `PausedPill`; `lib/format.ts::formatTokens/allowanceSummary` are shared by
+  the rail AND the bell (the bell must not import RosterStrip → framer).
+  Pins: `tests/test_agent_allowance_v1295.py`,
+  `tests/test_agent_employee_routes_v1295.py`,
+  `dashboard/__tests__/agent-employee-v1295.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

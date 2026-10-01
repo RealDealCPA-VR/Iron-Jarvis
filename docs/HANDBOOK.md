@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.294.0 (2026-09-14).*
+holds itself to. Current as of v1.295.0 (2026-09-14).*
 
 ---
 
@@ -1565,6 +1565,27 @@ was: most-used first until you drag, hover for the description, drag to
 rearrange, push a tile past the edge to open it in its own window, Reset to
 most-used. The Overview reopens the way you left it, on a group or on the
 three icons.
+**v1.295.0 — your agents are employees now.** Every custom agent on the
+Agents page has a **job card** and a **monthly allowance**. The job card
+(open the row, or the "Employee details" disclosure when you create one)
+holds: the base type it inherits (builder, researcher, planner, reviewer…),
+its preferred model, its **approval posture** (ask me as usual, approve for
+me, always ask), a **step budget** per run, who it **reports to** (you, a
+builtin, or another of your agents — it is told so, and says plainly when it
+is blocked or done), **skills** it always carries, and tools it may **never**
+use. The allowance is tokens and/or dollars per calendar month (blank =
+unlimited): a thin bar on the row shows what it has spent this month; at 80%
+the bell warns you once; when the allowance is used up the agent is
+**paused** with the reason on its row, the bell says so, and every door
+refuses in plain words — the Run button, a schedule, a teammate delegating to
+it, the Give-work card — rather than silently running it as a plain builder.
+**Pause** any agent yourself with a reason (a day off); **Resume** brings it
+back, and raising the allowance of an agent that was paused for running out
+brings it back on its own. The phone, the round table and a teammate's
+`consult` all answer with the same sentence for a paused agent. Nothing else changes: a paused agent keeps its memory, its face and its
+history. When a run is served by the Claude CLI, the agent's remaining dollar
+allowance is also handed to the CLI as its own hard budget for that run. Re-
+creating an agent with a name that exists is refused — edit its row instead.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

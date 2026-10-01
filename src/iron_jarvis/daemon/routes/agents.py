@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from ..app import _session_view
 from ..schemas import (
+    AGENT_APPROVAL_MODES,
     AgentCreate,
     AgentPatch,
     CustomToolCreate,
@@ -28,6 +29,7 @@ from ..schemas import (
     McpServerPatch,
     McpSettingsPatch,
     McpSuggestBody,
+    PauseBody,
     RemoteAgentCreate,
     RemoteAgentPatch,
     RemoteAgentRun,
@@ -40,10 +42,26 @@ from ..schemas import (
 
 # Importing this registers the RemoteAgentRecord table on the shared metadata.
 from ...agents.remote import RemoteAgentRegistry
+
+# The employee ledger (v1.295.0): what a custom agent spent this month against
+# its allowance, and the one sentence a paused/exhausted agent answers with.
+from ...agents.allowance import allowance_state, month_spend, refusal_for
 from ...core.events import EventType
+from ...core.models import AgentType
 from ...core.logging import get_logger
 
 log = get_logger("daemon.routes.agents")
+
+#: A day off with no stated reason still has one on the record (v1.295.0):
+#: this is what every refused spawn says back until the agent is resumed.
+PAUSE_DEFAULT_REASON = "paused by the user"
+
+#: How the allowance AUTO-pause words its reason — the literal
+#: ``agents.allowance.after_run`` writes (``f"monthly allowance used up (…)"``).
+#: A user's own pause never starts like this, which is how the PATCH below
+#: tells "lift it because the allowance was raised" from "the user said no".
+#: Pinned against that source line in tests/test_agent_employee_routes_v1295.py.
+AUTO_PAUSE_PREFIX = "monthly allowance used up"
 
 # Face overrides (v1.180.0). Imported as a MODULE, never as loose names: the
 # route looks every helper up on `faces` at call time so a test can monkeypatch
@@ -451,45 +469,209 @@ def register(app: FastAPI, d) -> None:
             key = None
         return key or os.environ.get("PIXIO_API_KEY") or None
 
-    @app.get("/agents")
-    def list_agents() -> dict[str, Any]:
+    def _json_list(text: Any) -> list[Any]:
         import json as _json
 
+        try:
+            value = _json.loads(text or "[]")
+        except (TypeError, ValueError):
+            return []
+        return list(value) if isinstance(value, list) else []
+
+    def _dynamic_row(r) -> dict[str, Any]:
+        """ONE row shape for a custom agent — ``GET /agents`` and the
+        pause/resume doors all answer with it (v1.295.0), so the Agents page
+        never has to re-fetch the list to learn what it just changed.
+
+        Every pre-v1.295.0 key is kept verbatim; the employee fields are
+        additive. ``allowance`` is one ledger read per agent, guarded: a
+        broken ledger costs that field (null), never the list.
+        """
+        paused_reason = str(getattr(r, "paused_reason", "") or "")
+        paused_at = getattr(r, "paused_at", None)
+        paused = None
+        if paused_reason:
+            paused = {
+                "reason": paused_reason,
+                "at": paused_at.isoformat() if paused_at is not None else None,
+            }
+        try:
+            allowance = allowance_state(
+                r, month_spend(d.platform.engine, f"custom:{r.name}")
+            )
+        except Exception:  # noqa: BLE001 — the allowance is a bonus, the row is the job
+            allowance = None
+        return {
+            "name": r.name,
+            "description": r.description,
+            "provider": r.provider,
+            "model": r.model,
+            # Editable fields so the Agents page can PATCH them without a
+            # separate detail fetch.
+            "system_prompt": r.system_prompt,
+            # `tools` stays the STORED list — the Agents page PATCHes
+            # this field back, so echoing an inherited roster here would
+            # freeze the inheritance into an explicit allowlist on the
+            # first save the user makes for an unrelated reason.
+            "tools": _json_list(r.tools_json),
+            # ...and `effective_tools` is what the agent ACTUALLY holds
+            # (v1.178.0): an empty stored list inherits the base type's
+            # roster, so a card rendering only `tools` would tell the
+            # user "no tools" about an agent that works. Read-only,
+            # additive, and never PATCHed back.
+            "effective_tools": _effective_tools(r.name),
+            # v1.171.0 additive: the portrait URL when one is stored
+            # (None otherwise) — the Setup card's avatar row reads it.
+            "avatar": _avatar_url(r.name),
+            # v1.180.0 additive, exactly the same contract: the chosen
+            # face when one is stored, null when the face derives from
+            # the name. A client older than this field, or a daemon
+            # older than it, both land on the derived face.
+            "face": _face_override(r.name),
+            # --- the job card (v1.295.0) ---------------------------------
+            "base_type": str(getattr(r, "base_type", "") or "builder"),
+            "approval_mode": str(getattr(r, "approval_mode", "") or ""),
+            "max_steps": getattr(r, "max_steps", None),
+            "reports_to": str(getattr(r, "reports_to", "") or ""),
+            "skills": _json_list(getattr(r, "skills_json", "[]")),
+            "deny_tools": _json_list(getattr(r, "deny_tools_json", "[]")),
+            # The day off: {reason, at} while paused, null otherwise.
+            "paused": paused,
+            # The monthly allowance against this month's ledger, or null.
+            "allowance": allowance,
+        }
+
+    def _employee_fields(body: Any, *, name: str, creating: bool) -> dict[str, Any]:
+        """Validate a hire/edit body's employee fields and return ONLY the
+        provided ones as ``register()`` kwargs (v1.295.0).
+
+        Plain-words 422s, never silent coercion: a value the registry or the
+        runtime would quietly reshape ("yolo" → approve_for_me, an unknown
+        base type → builder) is refused HERE with the reason, because the job
+        card the user wrote and the one on file must say the same thing. On a
+        PATCH ``None`` means "keep" and is simply not passed; on a create every
+        field is present (its default when unstated) and all are passed.
+        """
+
+        def refuse(sentence: str) -> None:
+            raise HTTPException(status_code=422, detail=sentence)
+
+        builtins = ", ".join(t.value for t in AgentType if t is not AgentType.SUPERVISOR)
+        out: dict[str, Any] = {}
+
+        base_type = getattr(body, "base_type", None)
+        if base_type is not None:
+            base = str(base_type).strip()
+            try:
+                AgentType(base)
+            except ValueError:
+                refuse(
+                    f"base_type '{base_type}' is not a builtin agent type — "
+                    f"pick one of: {builtins}"
+                )
+            if base == AgentType.SUPERVISOR.value:
+                refuse(
+                    "base_type 'supervisor' is refused: the builtin supervisor "
+                    "would run and silently discard this agent's custom system "
+                    f"prompt — pick one of: {builtins}"
+                )
+            out["base_type"] = base
+
+        mode = getattr(body, "approval_mode", None)
+        if mode is not None:
+            posture = str(mode).strip()
+            if posture == "yolo":
+                refuse(
+                    "approval_mode 'yolo' is refused for an agent: a chat's "
+                    "auto-approve is consented to one turn at a time with you "
+                    "watching, and a background run of many tool calls is a "
+                    "different blast radius — use 'approve_for_me' or "
+                    "'always_ask', or leave it blank for the default"
+                )
+            if posture not in AGENT_APPROVAL_MODES:
+                refuse(
+                    f"approval_mode '{mode}' is not one of: approve_for_me, "
+                    "always_ask (or blank for the default)"
+                )
+            out["approval_mode"] = posture
+
+        # Bounds already enforced by the schema's own validator (the session
+        # door's `_clean_max_steps`); None on a create = the configured default.
+        # On a PATCH, None = keep, and `clear_max_steps` passes None EXPLICITLY
+        # (the registry only keeps an OMITTED kwarg) to go back to the default.
+        steps = getattr(body, "max_steps", None)
+        if getattr(body, "clear_max_steps", False):
+            if steps is not None:
+                refuse(
+                    f"clear_max_steps and max_steps={steps} say opposite things "
+                    "— send one or the other"
+                )
+            out["max_steps"] = None
+        elif creating or steps is not None:
+            out["max_steps"] = steps
+
+        for field, unit in (("allowance_tokens", "tokens"), ("allowance_usd", "dollars")):
+            amount = getattr(body, field, None)
+            if amount is None:
+                continue
+            if isinstance(amount, bool) or amount < 0:
+                refuse(
+                    f"{field} must be 0 (unlimited) or a positive number of "
+                    f"{unit} for the month, not {amount!r}"
+                )
+            out[field] = amount
+
+        manager = getattr(body, "reports_to", None)
+        if manager is not None:
+            target = str(manager).strip()
+            if target in (name, f"custom:{name}"):
+                refuse(
+                    "reports_to cannot be the agent itself — an agent is not its "
+                    "own manager; leave it blank to report to you"
+                )
+            if target.startswith("custom:"):
+                bare = target[len("custom:"):]
+                if not bare or d.platform.agents_registry.get(bare) is None:
+                    refuse(
+                        f"reports_to '{target}' names a custom agent that does "
+                        "not exist — create it first, or leave reports_to blank "
+                        "to report to you"
+                    )
+            elif target:
+                try:
+                    AgentType(target)
+                except ValueError:
+                    refuse(
+                        f"reports_to '{target}' is neither a builtin agent "
+                        f"({builtins}, supervisor) nor 'custom:<name>' of an "
+                        "existing custom agent; leave it blank to report to you"
+                    )
+            out["reports_to"] = target
+
+        for field in ("skills", "deny_tools"):
+            items = getattr(body, field, None)
+            if items is None:
+                continue
+            cleaned: list[str] = []
+            for index, raw in enumerate(items, start=1):
+                text = str(raw).strip()
+                if not text:
+                    refuse(
+                        f"{field} must be a list of names — entry {index} is "
+                        "blank"
+                    )
+                if text not in cleaned:
+                    cleaned.append(text)
+            out[field] = cleaned
+        return out
+
+    @app.get("/agents")
+    def list_agents() -> dict[str, Any]:
         from ...agents.types import _DEFINITIONS
 
         return {
             "builtin": [t.value for t in _DEFINITIONS],
-            "dynamic": [
-                {
-                    "name": r.name,
-                    "description": r.description,
-                    "provider": r.provider,
-                    "model": r.model,
-                    # Editable fields so the Agents page can PATCH them without a
-                    # separate detail fetch.
-                    "system_prompt": r.system_prompt,
-                    # `tools` stays the STORED list — the Agents page PATCHes
-                    # this field back, so echoing an inherited roster here would
-                    # freeze the inheritance into an explicit allowlist on the
-                    # first save the user makes for an unrelated reason.
-                    "tools": _json.loads(r.tools_json or "[]"),
-                    # ...and `effective_tools` is what the agent ACTUALLY holds
-                    # (v1.178.0): an empty stored list inherits the base type's
-                    # roster, so a card rendering only `tools` would tell the
-                    # user "no tools" about an agent that works. Read-only,
-                    # additive, and never PATCHed back.
-                    "effective_tools": _effective_tools(r.name),
-                    # v1.171.0 additive: the portrait URL when one is stored
-                    # (None otherwise) — the Setup card's avatar row reads it.
-                    "avatar": _avatar_url(r.name),
-                    # v1.180.0 additive, exactly the same contract: the chosen
-                    # face when one is stored, null when the face derives from
-                    # the name. A client older than this field, or a daemon
-                    # older than it, both land on the derived face.
-                    "face": _face_override(r.name),
-                }
-                for r in d.platform.agents_registry.list()
-            ],
+            "dynamic": [_dynamic_row(r) for r in d.platform.agents_registry.list()],
         }
 
     @app.post("/agents")
@@ -497,6 +679,19 @@ def register(app: FastAPI, d) -> None:
         name = (body.name or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
+        # A hire is a CREATE (v1.295.0). The registry upserts by name, so a
+        # second POST used to overwrite the whole job card (allowance, manager,
+        # skills, pause) with whatever the new body carried — a re-create that
+        # cost an employee its terms. Editing is the PATCH on its row.
+        if d.platform.agents_registry.get(name) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{name} already exists — edit it on its row (PATCH) "
+                    "instead of re-creating it"
+                ),
+            )
+        fields = _employee_fields(body, name=name, creating=True)
         rec = d.platform.agents_registry.register(
             name,
             body.system_prompt,
@@ -504,8 +699,14 @@ def register(app: FastAPI, d) -> None:
             description=body.description,
             provider=body.provider,
             model=body.model,
+            **fields,
         )
-        return {"name": rec.name, "provider": rec.provider, "model": rec.model}
+        return {
+            "name": rec.name,
+            "provider": rec.provider,
+            "model": rec.model,
+            "base_type": rec.base_type,
+        }
 
     @app.get("/agents/roster")
     def agents_roster() -> dict[str, Any]:
@@ -570,6 +771,14 @@ def register(app: FastAPI, d) -> None:
                         # entry ("custom:remy") and a thread seat ("dynamic:remy")
                         # resolve to the same stored face.
                         "face": _face_override(bare),
+                        # v1.295.0 additive: the day off and the allowance.
+                        # getattr with defaults, same reason as `activity`
+                        # above — an older or duck-typed entry missing one of
+                        # these must not drop from the rail.
+                        "paused": bool(getattr(e, "paused", False)),
+                        "pause_reason": str(getattr(e, "pause_reason", "") or ""),
+                        "allowance": getattr(e, "allowance", None),
+                        "reports_to": str(getattr(e, "reports_to", "") or ""),
                     }
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not drop the rest
@@ -1569,6 +1778,27 @@ def register(app: FastAPI, d) -> None:
         )
         return {"name": name, "removed": removed, "face": None}
 
+    # --- A day off (v1.295.0) — AFTER the remote block (so "/agents/remote/…"
+    # keeps its priority), BEFORE the {name} edit/delete catch-alls below. ---
+
+    @app.post("/agents/{name}/pause")
+    def pause_agent(name: str, body: PauseBody) -> dict[str, Any]:
+        """Give a custom agent a day off: every spawn answers 409 with the
+        reason until ``/resume``. Answers with the same row ``GET /agents``
+        shows, so the page can render the change without a second fetch."""
+        reason = (body.reason or "").strip() or PAUSE_DEFAULT_REASON
+        rec = d.platform.agents_registry.set_paused(name, reason)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="unknown agent")
+        return _dynamic_row(rec)
+
+    @app.post("/agents/{name}/resume")
+    def resume_agent(name: str) -> dict[str, Any]:
+        rec = d.platform.agents_registry.resume(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="unknown agent")
+        return _dynamic_row(rec)
+
     # --- Dynamic-agent edit / delete (catch-all {name} — keep AFTER remote) ---
 
     @app.patch("/agents/{name}")
@@ -1576,22 +1806,46 @@ def register(app: FastAPI, d) -> None:
         rec = d.platform.agents_registry.get(name)
         if rec is None:
             raise HTTPException(status_code=404, detail="unknown agent")
-        import json as _json
-
-        try:
-            tools = _json.loads(rec.tools_json or "[]")
-        except (TypeError, ValueError):
-            tools = []
+        # PARTIAL on purpose (v1.295.0): the identity columns (`register`'s
+        # positional parameters, always written) travel body-or-record, and
+        # the job-card kwargs are passed ONLY when the body carries them (the
+        # registry keeps an omitted one). The old route re-passed
+        # `rec.provider`/`rec.model`/`rec.base_type` unconditionally, so a
+        # PATCH that changed the model was silently a no-op.
+        fields = _employee_fields(body, name=rec.name, creating=False)
         updated = d.platform.agents_registry.register(
             name,
             body.system_prompt if body.system_prompt is not None else rec.system_prompt,
-            [str(t) for t in body.tools] if body.tools is not None else tools,
-            base_type=rec.base_type,
+            [str(t) for t in body.tools] if body.tools is not None else _json_list(rec.tools_json),
+            base_type=fields.pop("base_type", rec.base_type),
             description=body.description if body.description is not None else rec.description,
-            provider=rec.provider,
-            model=rec.model,
+            provider=body.provider if body.provider is not None else rec.provider,
+            model=body.model if body.model is not None else rec.model,
+            **fields,
         )
-        return {"name": updated.name, "description": updated.description}
+        # Raising the allowance LIFTS an allowance auto-pause (reviewer
+        # finding): the refusal says "raise it on the Agents page", so the
+        # raise must be enough on its own. Only when THIS body changed a bound,
+        # only for the AUTO reason (a user's day off is never lifted here),
+        # and only if the month's ledger is no longer exhausted against the
+        # new bound; the 80% warning dedupe is reset so the new bound warns
+        # afresh.
+        allowance_changed = (
+            updated.allowance_tokens != rec.allowance_tokens
+            or updated.allowance_usd != rec.allowance_usd
+        )
+        auto_paused = str(getattr(updated, "paused_reason", "") or "").startswith(
+            AUTO_PAUSE_PREFIX
+        )
+        if allowance_changed and auto_paused:
+            state = allowance_state(
+                updated, month_spend(d.platform.engine, f"custom:{updated.name}")
+            )
+            if state.get("status") != "exhausted":
+                resumed = d.platform.agents_registry.resume(name)
+                cleared = d.platform.agents_registry.set_warned_month(name, "")
+                updated = cleared or resumed or updated
+        return _dynamic_row(updated)
 
     @app.delete("/agents/{name}")
     def delete_agent(name: str) -> dict[str, Any]:
@@ -2222,6 +2476,13 @@ def register(app: FastAPI, d) -> None:
                     "agent_type 'supervisor' to use the builtin."
                 ),
             )
+        # A day off or a spent allowance refuses the run HERE, before a session
+        # row exists (v1.295.0): `refusal_for` reads the month's ledger, so it
+        # leaves the loop like every other DB read on this route.
+        if rec is not None:
+            reason = await asyncio.to_thread(refusal_for, rec, d.platform.engine)
+            if reason:
+                raise HTTPException(status_code=409, detail=reason)
         # Parity with POST /sessions (v1.166.0): an explicit body.provider/model
         # wins; the dynamic record's pinned pair is the fallback.
         provider = body.provider or (rec.provider if (rec and rec.provider) else None)
@@ -2254,8 +2515,12 @@ def register(app: FastAPI, d) -> None:
             workspace_root=workspace_root,
             origin=body.origin,
             agent_name=agent_name,
-            # The chat posture rides a custom-agent escalation too (v1.232.0).
-            approval_mode=body.approval_mode,
+            # The chat posture rides a custom-agent escalation too (v1.232.0);
+            # when the spawn states none, the job card's posture applies
+            # (v1.295.0), and so does its per-run step budget.
+            approval_mode=body.approval_mode
+            or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
+            max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and

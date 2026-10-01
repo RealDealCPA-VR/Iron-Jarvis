@@ -852,6 +852,7 @@ class Orchestrator:
             # slowness raced the v1.166.1 CI fix), so the governed slot and the
             # cancellable handle release only when run_session truly ends.
             self._post_run_learning(session)
+            await self._post_run_allowance(session)
 
             # Phase 7: if this ran on a git worktree, build a review — never
             # auto-merge.
@@ -998,6 +999,32 @@ class Orchestrator:
                 index.sync_session(session)
         except Exception:  # noqa: BLE001
             log.exception("history-search sync failed for session %s", session.id)
+
+    async def _post_run_allowance(self, session: Session) -> None:
+        """The allowance tail of a CUSTOM agent's run (v1.295.0, the job card).
+
+        Sits beside ``_post_run_learning`` at every site that calls it (solo
+        ``run_session``, ``delegate``, ``spawn_agent``) and is AWAITED rather
+        than folded into that sync helper: the step publishes ``agent.paused``
+        / ``agent.allowance_warning`` through the async bus, and a
+        fire-and-forget task would be cancelled by the scheduler thread's
+        ``asyncio.run`` teardown before the ledger row landed. Guarded like the
+        learning steps — never raises, logged. A builtin's run returns at once.
+        """
+        try:
+            name = str(getattr(session, "agent_name", "") or "").strip()
+            if not name.lower().startswith("custom:"):
+                return
+            registry = getattr(self.p, "agents_registry", None)
+            if registry is None:
+                return
+            from . import allowance
+
+            await allowance.after_run(
+                registry, self.p.engine, self.p.event_bus, name
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("allowance tail failed for session %s", session.id)
 
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC

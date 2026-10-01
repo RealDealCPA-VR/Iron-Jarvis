@@ -1410,6 +1410,8 @@ def build_platform(
             definition = None
             provider = payload.get("provider") or None
             model = payload.get("model") or None
+            fire_max_steps = None
+            fire_approval = None
             if agent_name:
                 registry = getattr(platform, "agents_registry", None)
                 definition = (
@@ -1431,10 +1433,22 @@ def build_platform(
                     # provider/model wins; the record's pinned pair is the
                     # fallback.
                     rec = registry.get(agent_name)
+                    # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused or
+                    # exhausted agent fails the fire HONESTLY — recorded on
+                    # the row and delivered — exactly like the supervisor
+                    # refusal above, never a silent builder run.
+                    from .agents import allowance as _allowance
+
+                    _reason = _allowance.refusal_for(rec, platform.engine)
+                    if _reason:
+                        raise RuntimeError(_reason)
                     provider = provider or (
                         rec.provider if (rec and rec.provider) else None
                     )
                     model = model or (rec.model if (rec and rec.model) else None)
+                    # The job card's posture and step budget (v1.295.0).
+                    fire_max_steps = (rec.max_steps or None) if rec else None
+                    fire_approval = (rec.approval_mode or None) if rec else None
                 else:
                     try:
                         agent_type = _AgentType(agent_name)
@@ -1456,6 +1470,10 @@ def build_platform(
                 model=model,
                 project_id=payload.get("project_id") or None,
                 origin=f"schedule:{task.name}",
+                # A custom agent's job card (v1.295.0): None for a builtin or
+                # an unset card, so the absent-agent path is byte-identical.
+                max_steps=fire_max_steps,
+                approval_mode=fire_approval,
             )
             fired["session_id"] = session.id
             try:

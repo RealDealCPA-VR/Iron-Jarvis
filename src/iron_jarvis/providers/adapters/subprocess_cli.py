@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
+from ..budget import run_budget
 from ..cli_auth import cli_failure_message, note_cli_failure
 
 #: Hard wall-clock cap per CLI call — a wedged CLI must never hang a turn. A
@@ -427,6 +428,11 @@ def _flatten_for_claude(
     return "\n\n".join(parts)
 
 
+#: The smallest ``--max-budget-usd`` the Claude CLI accepts (it refuses
+#: lower values); a remaining allowance under this arms no flag.
+MIN_BUDGET_USD = 0.05
+
+
 class ClaudeCliAdapter(LLMAdapter):
     """Claude via the inherited `claude` CLI, as a single-step completer that
     supports tool calls, per-call model selection, and token accounting."""
@@ -472,6 +478,15 @@ class ClaudeCliAdapter(LLMAdapter):
             # v1.263.0: the CLI's own effort flag ("Effort level for the current
             # session") — the same low/medium/high vocabulary the composer offers.
             argv += ["--effort", reasoning]
+        # v1.295.0 (the job card): a custom agent's run carries what is LEFT of
+        # its monthly dollar allowance in a contextvar (``providers.budget``),
+        # and this CLI can cap ONE invocation with --max-budget-usd. Only when
+        # armed, and only at or above the CLI's own floor (it refuses lower
+        # values); the door already refused an exhausted agent, so 0 here means
+        # "no ceiling", never "spend nothing". Codex has no such flag.
+        budget = run_budget()
+        if budget >= MIN_BUDGET_USD:
+            argv += ["--max-budget-usd", f"{budget:.2f}"]
         if tools:
             argv += ["--json-schema", json.dumps(_STEP_SCHEMA)]
         return argv

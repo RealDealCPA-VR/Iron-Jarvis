@@ -785,6 +785,43 @@ export interface BrowserTestResult {
 }
 
 /* ---- Agents -------------------------------------------------------------- */
+
+/** How a custom agent asks before acting (v1.295.0). "" = the daemon's usual
+ *  approval flow; the other two are the employee's standing instruction. */
+export type AgentApprovalMode = "" | "approve_for_me" | "always_ask";
+
+/**
+ * A custom agent's MONTHLY ALLOWANCE and how much of it is spent (v1.295.0).
+ * Served on GET /agents rows and GET /agents/roster rows as `allowance`, or
+ * null when the daemon has nothing to say. A bound of 0 means "no bound" on
+ * that axis; `status` is "unlimited" when NEITHER axis is bounded, and the UI
+ * then shows nothing — a meter with no ceiling is not information.
+ */
+export interface AgentAllowance {
+  /** The month this reading is for, "YYYY-MM". */
+  month: string;
+  /** Token bound for the month; 0 = unbounded. */
+  tokens: number;
+  /** Dollar bound for the month; 0 = unbounded. */
+  usd: number;
+  spent_tokens: number;
+  spent_usd: number;
+  /** Runs counted against this month. */
+  runs: number;
+  /** Percent of the tighter bound used, or null when unbounded. */
+  pct: number | null;
+  left_tokens: number | null;
+  left_usd: number | null;
+  status: "unlimited" | "ok" | "warning" | "exhausted";
+}
+
+/** Why and when a custom agent was paused (v1.295.0); null = working. */
+export interface AgentPause {
+  reason: string;
+  /** ISO time the pause was set. */
+  at: string;
+}
+
 export interface DynamicAgent {
   name: string;
   description: string;
@@ -793,6 +830,24 @@ export interface DynamicAgent {
   /** The agent's own base type ("builder", "planner", …) — what it inherits. */
   base_type?: string;
   system_prompt?: string;
+  /* ---- v1.295.0 employee fields. EVERY ONE IS OPTIONAL: a daemon older
+     than v1.295.0 omits them all, and the Agents page then renders exactly
+     the card it rendered before — no badge, no meter, no pause control. ---- */
+  /** Standing approval posture; absent/"" = ask as usual. */
+  approval_mode?: AgentApprovalMode;
+  /** Per-run step budget, or null for the configured default. */
+  max_steps?: number | null;
+  /** Who this agent reports to: "" = the user, a builtin name ("builder"),
+   *  or "custom:<name>" for another custom agent. */
+  reports_to?: string;
+  /** Skill names granted to this agent. */
+  skills?: string[];
+  /** Tools this agent must NOT use, applied after the allowlist resolves. */
+  deny_tools?: string[];
+  /** Set while the agent is on a day off; null/absent = working. */
+  paused?: AgentPause | null;
+  /** This month's allowance reading, or null when the daemon reports none. */
+  allowance?: AgentAllowance | null;
   /**
    * The STORED allowlist, exactly as saved. Empty means "not specified", NOT
    * "no tools" — the daemon resolves an empty list to the base type's roster

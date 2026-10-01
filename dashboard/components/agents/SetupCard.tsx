@@ -15,9 +15,12 @@ import {
 import {
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Cpu,
   Globe,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Save,
   Settings2,
@@ -26,7 +29,8 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, patch, post, put } from "@/lib/api";
-import type { DynamicAgent, ModelOption } from "@/lib/types";
+import type { AgentApprovalMode, DynamicAgent, ModelOption } from "@/lib/types";
+import { AllowanceMeter } from "./RosterStrip";
 import {
   Badge,
   ConfirmButton,
@@ -438,16 +442,411 @@ const OPENAI_KINDS: string[] = ["openai-chat", "openai-responses"];
 
 const modelKey = (m: ModelOption) => `${m.provider}|${m.model}`;
 
+/* ------------------------------------------------------- employee details --- */
+/*
+ * v1.295.0 — A CUSTOM AGENT IS AN EMPLOYEE: a job card (base type, approval
+ * posture, who it reports to, what it may not touch), a monthly allowance,
+ * a step budget, and a day off (pause/resume). The daemon serves every one
+ * of these as an OPTIONAL field on GET /agents and takes them by the same
+ * names on POST/PATCH; a daemon older than v1.295.0 omits them all, and the
+ * card then looks exactly as it did before — nothing here invents a value.
+ */
+
+/** The base types offered when the daemon's own list is not at hand (an
+ *  older daemon, or a card rendered before /agents answered). The daemon's
+ *  list is preferred whenever it is non-empty; "supervisor" is never a base
+ *  type for an employee — it is the one that hands work out. */
+export const BASE_TYPE_FALLBACK: readonly string[] = [
+  "builder",
+  "planner",
+  "researcher",
+  "reviewer",
+  "memory",
+  "automation",
+  "maintainer",
+  "guide",
+];
+
+/** The base types an employee can be built on: the daemon's builtins minus
+ *  the supervisor, else the fallback. */
+export function baseTypeChoices(builtin: readonly string[]): string[] {
+  const own = builtin.filter((b) => b && b !== "supervisor");
+  return own.length > 0 ? own : [...BASE_TYPE_FALLBACK];
+}
+
+/** Every employee field as the FORM holds it: strings, so "" is a real
+ *  value ("unlimited", "the default", "the user") and a number input that
+ *  coerces blank to 0 cannot post a budget nobody typed. */
+export interface EmployeeDraft {
+  baseType: string;
+  approval: AgentApprovalMode;
+  allowanceTokens: string;
+  allowanceUsd: string;
+  maxSteps: string;
+  reportsTo: string;
+}
+
+export const EMPTY_DRAFT: EmployeeDraft = {
+  baseType: "",
+  approval: "",
+  allowanceTokens: "",
+  allowanceUsd: "",
+  maxSteps: "",
+  reportsTo: "",
+};
+
+/** The draft an edit opens on — the truth as STORED, so an untouched save
+ *  can be told from a change by comparing against it. */
+export function draftFromAgent(agent: DynamicAgent): EmployeeDraft {
+  const a = agent.allowance ?? null;
+  return {
+    baseType: agent.base_type ?? "",
+    approval: agent.approval_mode ?? "",
+    allowanceTokens: a && a.tokens > 0 ? String(a.tokens) : "",
+    allowanceUsd: a && a.usd > 0 ? String(a.usd) : "",
+    maxSteps: typeof agent.max_steps === "number" ? String(agent.max_steps) : "",
+    reportsTo: agent.reports_to ?? "",
+  };
+}
+
+/** A typed allowance → the wire number. Blank, zero, or anything that is
+ *  not a non-negative number is 0, the daemon's "unlimited". */
+export function allowanceValue(raw: string): number {
+  const n = Number((raw ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** A typed step budget → a whole positive number, or null for "the default".
+ *  Blank sends NO key on create (the daemon's default is not 0) and `null`
+ *  on an edit that clears it. */
+export function stepsValue(raw: string): number | null {
+  const text = (raw ?? "").trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** The POST body's employee fields. `max_steps` is OMITTED when blank;
+ *  `skills` is always sent (an empty list when none). */
+export function createEmployeeFields(
+  draft: EmployeeDraft,
+  defaultBase: string,
+  skills: readonly string[] = [],
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    base_type: draft.baseType || defaultBase,
+    skills: [...skills],
+    approval_mode: draft.approval,
+    allowance_tokens: allowanceValue(draft.allowanceTokens),
+    allowance_usd: allowanceValue(draft.allowanceUsd),
+    reports_to: draft.reportsTo,
+  };
+  const steps = stepsValue(draft.maxSteps);
+  if (steps !== null) body.max_steps = steps;
+  return body;
+}
+
+/** The PATCH body's employee fields — ONLY what differs from the draft the
+ *  edit opened on. The same discipline as `toolsDirty`: a save made to fix
+ *  a typo in the description must not re-send an allowance the daemon
+ *  already holds, and must never send one the daemon never reported. */
+export function patchEmployeeFields(
+  initial: EmployeeDraft,
+  draft: EmployeeDraft,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (draft.baseType !== initial.baseType && draft.baseType) body.base_type = draft.baseType;
+  if (draft.approval !== initial.approval) body.approval_mode = draft.approval;
+  if (draft.allowanceTokens.trim() !== initial.allowanceTokens.trim()) {
+    body.allowance_tokens = allowanceValue(draft.allowanceTokens);
+  }
+  if (draft.allowanceUsd.trim() !== initial.allowanceUsd.trim()) {
+    body.allowance_usd = allowanceValue(draft.allowanceUsd);
+  }
+  if (draft.maxSteps.trim() !== initial.maxSteps.trim()) {
+    // The route cannot clear a budget with null (null = keep) and refuses 0:
+    // a BLANKED box sends `clear_max_steps: true` and no `max_steps`; a typed
+    // whole number sends `max_steps`; anything else (a number input lets
+    // through "e", "-") sends neither, rather than guessing a budget.
+    const steps = stepsValue(draft.maxSteps);
+    if (draft.maxSteps.trim() === "") body.clear_max_steps = true;
+    else if (steps !== null) body.max_steps = steps;
+  }
+  if (draft.reportsTo !== initial.reportsTo) body.reports_to = draft.reportsTo;
+  return body;
+}
+
+/** "builder" → "builder", "custom:skeptic" → "skeptic", "" → "". */
+function reportsToLabel(value: string): string {
+  return value.startsWith("custom:") ? value.slice("custom:".length) : value;
+}
+
+const APPROVAL_OPTIONS: { value: AgentApprovalMode; label: string }[] = [
+  { value: "", label: "Ask me as usual" },
+  { value: "approve_for_me", label: "Approve for me" },
+  { value: "always_ask", label: "Always ask me" },
+];
+
+/**
+ * The employee fields, shared by the create form and the row editor so the
+ * two cannot drift. `scope` suffixes every accessible name ("Base type for
+ * skeptic") — the create form and every open row sit on one page.
+ * `unknownBase` adds an "as stored" option when the daemon did not report a
+ * base type, so an untouched select keeps saying nothing.
+ */
+function EmployeeFields({
+  draft,
+  onChange,
+  baseTypes,
+  reportsTo,
+  scope = "",
+  unknownBase = false,
+}: {
+  draft: EmployeeDraft;
+  onChange: (next: EmployeeDraft) => void;
+  baseTypes: readonly string[];
+  /** Everyone this agent could report to: the user first, then builtins,
+   *  then the OTHER custom agents as "custom:<name>". */
+  reportsTo: { value: string; label: string }[];
+  scope?: string;
+  unknownBase?: boolean;
+}) {
+  const label = (text: string) => (scope ? `${text} for ${scope}` : text);
+  const set = (patchDraft: Partial<EmployeeDraft>) => onChange({ ...draft, ...patchDraft });
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            Base type
+          </span>
+          <select
+            value={draft.baseType}
+            onChange={(e) => set({ baseType: e.target.value })}
+            aria-label={label("Base type")}
+            className="field text-xs"
+          >
+            {unknownBase && <option value="">as stored</option>}
+            {baseTypes.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            Approvals
+          </span>
+          <select
+            value={draft.approval}
+            onChange={(e) => set({ approval: e.target.value as AgentApprovalMode })}
+            aria-label={label("Approval posture")}
+            className="field text-xs"
+          >
+            {APPROVAL_OPTIONS.map((o) => (
+              <option key={o.value || "usual"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <label className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            Tokens / month
+          </span>
+          <input
+            type="number"
+            min={0}
+            inputMode="numeric"
+            value={draft.allowanceTokens}
+            onChange={(e) => set({ allowanceTokens: e.target.value })}
+            placeholder="unlimited"
+            aria-label={label("Monthly token allowance")}
+            className="field text-xs"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            $ / month
+          </span>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            inputMode="decimal"
+            value={draft.allowanceUsd}
+            onChange={(e) => set({ allowanceUsd: e.target.value })}
+            placeholder="unlimited"
+            aria-label={label("Monthly dollar allowance")}
+            className="field text-xs"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            Steps / run
+          </span>
+          <input
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={draft.maxSteps}
+            onChange={(e) => set({ maxSteps: e.target.value })}
+            placeholder="default"
+            aria-label={label("Step budget")}
+            className="field text-xs"
+          />
+        </label>
+      </div>
+      <label className="block">
+        <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          Reports to
+        </span>
+        <select
+          value={draft.reportsTo}
+          onChange={(e) => set({ reportsTo: e.target.value })}
+          aria-label={label("Reports to")}
+          className="field text-xs"
+        >
+          {reportsTo.map((o) => (
+            <option key={o.value || "you"} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+/** Who an employee can report to: the user, every builtin, then the OTHER
+ *  custom agents by name (never itself — a loop reports to nobody). */
+function reportsToChoices(
+  builtin: readonly string[],
+  siblings: readonly string[],
+  self: string,
+): { value: string; label: string }[] {
+  return [
+    { value: "", label: "You" },
+    ...builtin.filter(Boolean).map((b) => ({ value: b, label: b })),
+    ...siblings
+      .filter((s) => s && s !== self)
+      .map((s) => ({ value: `custom:${s}`, label: s })),
+  ];
+}
+
+/** The two name lists on the job card and their words. A deny is the
+ *  OPPOSITE edge of the tools picker — it holds whatever the allowlist
+ *  resolves to; a skill is something the agent always carries into a run. */
+const CHIP_KINDS = {
+  deny: {
+    label: "Never uses",
+    placeholder: "tool name, then Enter — e.g. shell",
+    add: (scope: string) => `Deny a tool for ${scope}`,
+    remove: (t: string, scope: string) => `Stop denying ${t} for ${scope}`,
+    chip: "border-rose-500/25 bg-rose-500/10 text-rose-200",
+    x: "text-rose-300/80 hover:text-rose-100",
+  },
+  skills: {
+    label: "Skills it always carries",
+    placeholder: "skill name, then Enter",
+    add: (scope: string) => `Add a skill for ${scope}`,
+    remove: (t: string, scope: string) => `Remove skill ${t} for ${scope}`,
+    chip: "border-accent/30 bg-accent/[0.08] text-accent-soft",
+    x: "text-accent-soft/80 hover:text-accent-soft",
+  },
+} as const;
+
+/**
+ * A list of names as chips (v1.295.0): type one, Enter adds it, × takes it
+ * off. Each list is its own control and PATCHes its own field, only when
+ * touched — the same discipline as the tools picker.
+ */
+function NameChips({
+  kind,
+  scope,
+  testId,
+  value,
+  onChange,
+}: {
+  kind: keyof typeof CHIP_KINDS;
+  /** The agent's name, for the accessible names ("the new agent" on create). */
+  scope: string;
+  testId: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const words = CHIP_KINDS[kind];
+  const [text, setText] = useState("");
+  function add() {
+    const t = text.trim();
+    if (!t) return;
+    if (!value.includes(t)) onChange([...value, t]);
+    setText("");
+  }
+  return (
+    <div data-testid={testId} className="space-y-1">
+      <span className="block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        {words.label}
+      </span>
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {value.map((t) => (
+            <span
+              key={t}
+              className={`inline-flex items-center gap-1 rounded border px-1 py-px font-mono text-[10px] ${words.chip}`}
+            >
+              {t}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((v) => v !== t))}
+                aria-label={words.remove(t, scope)}
+                className={`grid h-3 w-3 place-items-center rounded ${words.x}`}
+              >
+                <X size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          }
+        }}
+        placeholder={words.placeholder}
+        aria-label={words.add(scope)}
+        className="field text-xs"
+      />
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------ your agents --- */
 
 function DynamicRow({
   agent,
   face,
   facesSupported,
+  builtin,
+  siblings,
+  models,
   onChanged,
   onFaceChanged,
 }: {
   agent: DynamicAgentFull;
+  /** The daemon's builtin names (base types + report-to targets). */
+  builtin: string[];
+  /** Every custom agent's name — the report-to list minus this one. */
+  siblings: string[];
+  /** The model catalog, for the row's own model select (v1.295.0). */
+  models: ModelOption[];
   /** The stored face override, or null to derive from the name (v1.180.0). */
   face: FaceOverride | null;
   /** False on a daemon with no face routes — the picker is hidden rather than
@@ -462,6 +861,24 @@ function DynamicRow({
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // --- employee details (v1.295.0) ---------------------------------------
+  // `draft` is what the form shows; `initial` is what the edit OPENED on, so
+  // save can send only the fields that differ (see patchEmployeeFields).
+  const [draft, setDraft] = useState<EmployeeDraft>(EMPTY_DRAFT);
+  const initialDraft = useRef<EmployeeDraft>(EMPTY_DRAFT);
+  // "provider|model", or "" for the default — PATCHed only when it changed.
+  const [modelPick, setModelPick] = useState("");
+  const initialModelPick = useRef("");
+  // The deny list, with the same touched-or-not discipline as the picker.
+  const [deny, setDeny] = useState<string[]>([]);
+  const [denyDirty, setDenyDirty] = useState(false);
+  const [skills, setSkills] = useState<string[]>([]);
+  const [skillsDirty, setSkillsDirty] = useState(false);
+  // The day off: Pause opens a one-line reason box; Resume needs no words.
+  const [pausing, setPausing] = useState(false);
+  const [pauseReason, setPauseReason] = useState("");
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const storedModelPick = agent.model ? `${agent.provider ?? ""}|${agent.model}` : "";
   // --- tools (v1.178.0) --------------------------------------------------
   // `mode` is what the user has CHOSEN in this editing session; `toolsDirty`
   // is whether they touched the control at all. Both matter: an untouched
@@ -567,17 +984,64 @@ function DynamicRow({
     setChosen([...storedTools]);
     setToolsDirty(false);
     setToolFilter("");
+    // Employee details open on the truth as stored, and UNTOUCHED (v1.295.0).
+    const opened = draftFromAgent(agent);
+    initialDraft.current = opened;
+    setDraft(opened);
+    initialModelPick.current = storedModelPick;
+    setModelPick(storedModelPick);
+    setDeny([...(agent.deny_tools ?? [])]);
+    setDenyDirty(false);
+    setSkills([...(agent.skills ?? [])]);
+    setSkillsDirty(false);
     setEditing(true);
     if (storedTools.length > 0) void loadCatalog();
+  }
+
+  /** Pause: POST the typed reason (empty is allowed — a day off needs no
+   *  excuse), then refetch so the badge comes from the daemon's row. The
+   *  box closes LAST, after the request landed. */
+  async function pause() {
+    setPauseBusy(true);
+    setError(null);
+    try {
+      await post(`/agents/${encodeURIComponent(agent.name)}/pause`, {
+        reason: pauseReason.trim(),
+      });
+      onChanged();
+      setPausing(false);
+      setPauseReason("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setPauseBusy(false);
+    }
+  }
+
+  async function resume() {
+    setPauseBusy(true);
+    setError(null);
+    try {
+      await post(`/agents/${encodeURIComponent(agent.name)}/resume`, {});
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setPauseBusy(false);
+    }
   }
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
-      // An empty prompt keeps the current one (PATCH only changes sent fields).
+      // An empty prompt keeps the current one (PATCH only changes sent fields),
+      // and so does an UNCHANGED one (v1.295.0): a save that only picked a
+      // model must not re-send the persona it did not touch.
       const body: Record<string, unknown> = {};
-      if (prompt.trim()) body.system_prompt = prompt.trim();
+      if (prompt.trim() && prompt.trim() !== (agent.system_prompt ?? "").trim()) {
+        body.system_prompt = prompt.trim();
+      }
       if (description.trim() !== (agent.description ?? "").trim()) {
         body.description = description.trim();
       }
@@ -590,6 +1054,17 @@ function DynamicRow({
       // effective roster here instead would look identical in the UI and
       // silently pin the agent to today's tool list forever.
       if (toolsDirty) body.tools = toolMode === "explicit" ? [...chosen] : [];
+      // EMPLOYEE DETAILS (v1.295.0): the same rule, field by field — only
+      // what differs from the draft the edit opened on is sent, and the
+      // model goes as the provider+model PAIR only when the pick changed.
+      Object.assign(body, patchEmployeeFields(initialDraft.current, draft));
+      if (modelPick !== initialModelPick.current) {
+        const [provider, modelName] = modelPick ? modelPick.split("|") : ["", ""];
+        body.provider = provider;
+        body.model = modelName;
+      }
+      if (denyDirty) body.deny_tools = [...deny];
+      if (skillsDirty) body.skills = [...skills];
       await patch(`/agents/${encodeURIComponent(agent.name)}`, body);
       setEditing(false);
       onChanged();
@@ -629,6 +1104,35 @@ function DynamicRow({
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* THE DAY OFF (v1.295.0). Pause opens a one-line reason; Resume is
+              one press. Both refetch the list so the badge is the daemon's. */}
+          {agent.paused ? (
+            <button
+              type="button"
+              data-testid={`agent-resume-${agent.name}`}
+              onClick={resume}
+              disabled={pauseBusy}
+              title={`Resume "${agent.name}"`}
+              className="grid h-6 w-6 place-items-center rounded-md text-amber-300 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
+            >
+              <Play size={12} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid={`agent-pause-${agent.name}`}
+              onClick={() => {
+                setError(null);
+                setPausing((v) => !v);
+              }}
+              disabled={pauseBusy}
+              aria-expanded={pausing}
+              title={`Give "${agent.name}" a day off`}
+              className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
+            >
+              <Pause size={12} />
+            </button>
+          )}
           {!editing && (
             <button
               type="button"
@@ -644,6 +1148,75 @@ function DynamicRow({
       </div>
       {agent.description && !editing && (
         <p className="mt-0.5 truncate pl-7 text-[11px] text-zinc-500">{agent.description}</p>
+      )}
+
+      {/* THE EMPLOYEE FACTS (v1.295.0), always visible: on a day off (and
+          why), who it reports to, and how much of the month is spent. Each
+          renders ONLY when the daemon said so — an older daemon shows none. */}
+      {(agent.paused || agent.reports_to) && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 pl-7">
+          {agent.paused && (
+            <span
+              data-testid={`agent-paused-${agent.name}`}
+              className="inline-flex items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/10 px-1.5 py-px text-[10px] font-medium text-amber-200"
+            >
+              <Pause size={9} aria-hidden />
+              Paused{agent.paused.reason ? ` — ${agent.paused.reason}` : ""}
+            </span>
+          )}
+          {agent.reports_to && (
+            <span
+              data-testid={`agent-reports-to-${agent.name}`}
+              className="text-[10px] text-zinc-500"
+            >
+              Reports to {reportsToLabel(agent.reports_to)}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="pl-7">
+        <AllowanceMeter
+          allowance={agent.allowance}
+          bare={agent.name}
+          testId={`agent-allowance-${agent.name}`}
+        />
+      </div>
+      {pausing && !agent.paused && (
+        <div className="mt-1.5 flex items-center gap-1.5 pl-7">
+          <input
+            value={pauseReason}
+            onChange={(e) => setPauseReason(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void pause();
+              }
+            }}
+            data-testid={`agent-pause-reason-${agent.name}`}
+            placeholder="reason (optional) — e.g. budget review"
+            aria-label={`Why ${agent.name} is paused`}
+            className="field min-w-0 flex-1 text-xs"
+          />
+          <button
+            type="button"
+            data-testid={`agent-pause-confirm-${agent.name}`}
+            onClick={pause}
+            disabled={pauseBusy}
+            className="btn-accent px-2.5 py-1 text-[11px]"
+          >
+            {pauseBusy ? <LoaderInline label="Pausing…" /> : "Pause"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPausing(false);
+              setPauseReason("");
+            }}
+            className="btn-ghost px-2 py-1 text-[11px]"
+          >
+            Cancel
+          </button>
+        </div>
       )}
 
       {/* WHAT THIS AGENT ACTUALLY HOLDS (v1.178.0), always visible — the row
@@ -709,6 +1282,75 @@ function DynamicRow({
             aria-label={`Description for ${agent.name}`}
             className="field text-xs"
           />
+
+          {/* THE JOB CARD (v1.295.0): model, base type, approvals, allowance,
+              step budget, who it reports to, and the deny list. The model is
+              the row's own select now — it was create-only before, and an
+              agent whose preferred model was retired had to be deleted and
+              remade to change it. */}
+          <div
+            data-testid={`employee-editor-${agent.name}`}
+            className="space-y-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+          >
+            <div className="flex items-center gap-2">
+              <Cpu size={12} className="shrink-0 text-accent-soft" aria-hidden />
+              <span className="text-[11px] font-medium text-zinc-300">Job card</span>
+            </div>
+            <label className="block">
+              <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+                Model
+              </span>
+              <select
+                value={modelPick}
+                onChange={(e) => setModelPick(e.target.value)}
+                aria-label={`Preferred model for ${agent.name}`}
+                className="field text-xs"
+              >
+                <option value="">Default model</option>
+                {/* The stored pick stays selectable even when the catalog no
+                    longer lists it — a select that cannot show the truth
+                    would silently read "Default model" about a pinned agent. */}
+                {storedModelPick && !models.some((m) => modelKey(m) === storedModelPick) && (
+                  <option value={storedModelPick}>
+                    {agent.provider ? `${agent.provider} · ${agent.model}` : agent.model}
+                  </option>
+                )}
+                {models.map((m) => (
+                  <option key={modelKey(m)} value={modelKey(m)}>
+                    {m.provider} · {m.model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <EmployeeFields
+              draft={draft}
+              onChange={setDraft}
+              baseTypes={baseTypeChoices(builtin)}
+              reportsTo={reportsToChoices(builtin, siblings, agent.name)}
+              scope={agent.name}
+              unknownBase={!initialDraft.current.baseType}
+            />
+            <NameChips
+              kind="skills"
+              scope={agent.name}
+              testId={`skills-${agent.name}`}
+              value={skills}
+              onChange={(next) => {
+                setSkills(next);
+                setSkillsDirty(true);
+              }}
+            />
+            <NameChips
+              kind="deny"
+              scope={agent.name}
+              testId={`deny-tools-${agent.name}`}
+              value={deny}
+              onChange={(next) => {
+                setDeny(next);
+                setDenyDirty(true);
+              }}
+            />
+          </div>
 
           {/* THE TOOLS PICKER. Two states, one decision: inherit the base
               type's roster (the default, stored as an empty list) or pin an
@@ -849,6 +1491,7 @@ function DynamicRow({
 export function YourAgentsSection({
   dynamic,
   models,
+  builtin = [],
   faces,
   facesSupported,
   onChanged,
@@ -856,6 +1499,9 @@ export function YourAgentsSection({
 }: {
   dynamic: DynamicAgentFull[];
   models: ModelOption[];
+  /** The daemon's builtin names (v1.295.0) — base types and report-to
+   *  targets. Empty → the fallback list of base types. */
+  builtin?: string[];
   /** Loaded override map, or null while it is still loading. A LOADED map is
    *  authoritative (see FaceMap); until it lands, the row's own `face` field
    *  from GET /agents is used so a face never flickers to derived. */
@@ -871,6 +1517,15 @@ export function YourAgentsSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  // Employee details (v1.295.0), behind a collapsed disclosure: the four
+  // fields above are still the whole form for someone who wants an agent in
+  // ten seconds; the job card is there for someone hiring an employee.
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [draft, setDraft] = useState<EmployeeDraft>(EMPTY_DRAFT);
+  const [skills, setSkills] = useState<string[]>([]);
+  const baseTypes = baseTypeChoices(builtin);
+  const defaultBase = baseTypes.includes("builder") ? "builder" : baseTypes[0];
+  const siblingNames = dynamic.map((a) => a.name);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -892,6 +1547,12 @@ export function YourAgentsSection({
         description: description.trim(),
         provider,
         model: modelName,
+        // The job card (v1.295.0). Sent whether or not the disclosure was
+        // opened: the defaults ARE the employee's terms (builder, ask as
+        // usual, unlimited, the default step budget, reports to you), and a
+        // blank allowance goes as 0 — the daemon's "unlimited" — while a
+        // blank step budget sends no key at all (its default is not 0).
+        ...createEmployeeFields(draft, defaultBase, skills),
       });
       setOk(
         `"${name.trim()}" is ready — it inherits its base type's tools; open it to narrow them.`,
@@ -900,6 +1561,8 @@ export function YourAgentsSection({
       setPrompt("");
       setDescription("");
       setModel("");
+      setDraft(EMPTY_DRAFT);
+      setSkills([]);
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -927,6 +1590,9 @@ export function YourAgentsSection({
               agent={a}
               face={faceFor(faces, a.name, a.face)}
               facesSupported={facesSupported}
+              builtin={builtin}
+              siblings={siblingNames}
+              models={models}
               onChanged={onChanged}
               onFaceChanged={onFaceChanged}
             />
@@ -991,6 +1657,47 @@ export function YourAgentsSection({
           aria-label="Description"
           className="field text-xs"
         />
+
+        {/* EMPLOYEE DETAILS (v1.295.0), collapsed: the job card for a new
+            hire. Closed, the form is exactly the four-field form it was. */}
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02]">
+          <button
+            type="button"
+            data-testid="employee-details-toggle"
+            onClick={() => setDetailsOpen((v) => !v)}
+            aria-expanded={detailsOpen}
+            className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-zinc-400 transition-colors hover:text-accent-soft"
+          >
+            {detailsOpen ? (
+              <ChevronDown size={12} className="shrink-0" aria-hidden />
+            ) : (
+              <ChevronRight size={12} className="shrink-0" aria-hidden />
+            )}
+            Employee details
+            <span className="ml-auto text-[10px] font-normal text-zinc-600">
+              base type · approvals · allowance · reports to
+            </span>
+          </button>
+          {detailsOpen && (
+            <div data-testid="employee-details" className="border-t hairline px-2.5 pb-2.5 pt-2">
+              <EmployeeFields
+                draft={{ ...draft, baseType: draft.baseType || defaultBase }}
+                onChange={setDraft}
+                baseTypes={baseTypes}
+                reportsTo={reportsToChoices(builtin, siblingNames, name.trim())}
+              />
+              <div className="mt-2">
+                <NameChips
+                  kind="skills"
+                  scope={name.trim() || "the new agent"}
+                  testId="skills-new"
+                  value={skills}
+                  onChange={setSkills}
+                />
+              </div>
+            </div>
+          )}
+        </div>
         <button
           type="submit"
           disabled={busy || !name.trim() || !prompt.trim()}
@@ -1772,6 +2479,7 @@ export function SetupCard({
             <YourAgentsSection
               dynamic={dynamic}
               models={models}
+              builtin={builtin}
               faces={faces}
               facesSupported={facesSupported}
               onChanged={onAgentsChanged}

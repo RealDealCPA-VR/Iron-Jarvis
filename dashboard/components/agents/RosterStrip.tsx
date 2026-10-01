@@ -80,10 +80,11 @@
 //     Nothing here filtered by kind (checked — statsText never did), and the
 //     dict fallback stays kind-blind on purpose so it cannot start to.
 import { type ReactElement, useState } from "react";
-import { Briefcase, ChevronDown, MessageCircle, WifiOff } from "lucide-react";
+import { Briefcase, ChevronDown, MessageCircle, PauseCircle, WifiOff } from "lucide-react";
 import { API_BASE, ijToken } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { timeAgo } from "@/lib/format";
+import { allowanceSummary, timeAgo } from "@/lib/format";
+import type { AgentAllowance } from "@/lib/types";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
 import AgentFace, { type FaceOverride } from "@/components/agents/AgentFace";
@@ -131,6 +132,114 @@ export interface RosterEntry {
    *  reports who is TAKEN and never asserts that anyone is free — it cannot see
    *  delegate/spawn_agent children at all. */
   activity?: string | null;
+  /** v1.295.0 additive, all optional (an older daemon sends none). The
+   *  employee facts: on a day off (`healthy` is false while paused, so the
+   *  liveness pill already yields to this one), why, this month's allowance
+   *  reading, and who it reports to ("" = the user). */
+  paused?: boolean;
+  pause_reason?: string;
+  allowance?: AgentAllowance | null;
+  reports_to?: string;
+}
+
+/* ------------------------------------------------------- allowance meter --- */
+
+/** Is there a meter to draw at all? Null, absent and "unlimited" all mean no:
+ *  a bar with no ceiling would be filled to nothing and say nothing. */
+export function allowanceShown(a: AgentAllowance | null | undefined): a is AgentAllowance {
+  return Boolean(a) && a!.status !== "unlimited";
+}
+
+/** Bar fill per status — zinc while fine, amber as a warning, rose when the
+ *  month is spent. Keyed by the DAEMON's status word, never re-derived from
+ *  pct here, so the two surfaces cannot disagree about a threshold. */
+const ALLOWANCE_FILL: Record<AgentAllowance["status"], string> = {
+  unlimited: "bg-zinc-500",
+  ok: "bg-zinc-500",
+  warning: "bg-amber-400",
+  exhausted: "bg-rose-500",
+};
+
+/**
+ * The allowance meter (v1.295.0): a thin bar filled to `pct`, plus the
+ * reading in words unless `compact` (the rail's 1px mini-bar, where the text
+ * rides in the title instead). Renders NOTHING for an unlimited allowance —
+ * see `allowanceShown`. `data-status` carries the daemon's word so a test
+ * can pin the colour without parsing a class list.
+ */
+export function AllowanceMeter({
+  allowance,
+  bare,
+  testId,
+  compact = false,
+}: {
+  allowance: AgentAllowance | null | undefined;
+  /** The agent's shown name, for the progressbar's accessible name. */
+  bare: string;
+  testId: string;
+  compact?: boolean;
+}): ReactElement | null {
+  if (!allowanceShown(allowance)) return null;
+  const pct = Math.max(0, Math.min(100, typeof allowance.pct === "number" ? allowance.pct : 0));
+  const text = allowanceSummary(allowance);
+  return (
+    <div
+      data-testid={testId}
+      data-status={allowance.status}
+      title={compact ? text : undefined}
+      className={compact ? "mt-1" : "mt-1 space-y-0.5"}
+    >
+      <div
+        className={`w-full overflow-hidden rounded bg-white/[0.06] ${compact ? "h-px" : "h-1"}`}
+        role="progressbar"
+        aria-label={`Monthly allowance for ${bare}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+      >
+        <div
+          className={`h-full rounded ${ALLOWANCE_FILL[allowance.status] ?? ALLOWANCE_FILL.ok}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {!compact && (
+        <p
+          className={`text-[10px] tabular-nums ${
+            allowance.status === "exhausted"
+              ? "text-rose-300"
+              : allowance.status === "warning"
+                ? "text-amber-300/90"
+                : "text-zinc-500"
+          }`}
+        >
+          {text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The day-off marker (v1.295.0), amber like "busy" — it answers the same
+ *  question ("can I hand this one work right now?") with the opposite answer.
+ *  The reason rides in the title; the rail has no room for a sentence. */
+export function PausedPill({
+  reason,
+  bare,
+  testId,
+}: {
+  reason?: string;
+  bare: string;
+  testId: string;
+}): ReactElement {
+  return (
+    <span
+      data-testid={testId}
+      title={reason ? `${bare} is paused — ${reason}` : `${bare} is paused`}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/10 px-1 py-px text-[9.5px] font-medium text-amber-200"
+    >
+      <PauseCircle size={9} aria-hidden /> paused
+    </span>
+  );
 }
 
 /** <img> can't send the Authorization header — the token rides as ?token=,
@@ -603,6 +712,17 @@ export function RosterStrip({
                           testId={`roster-activity-${bare}`}
                         />
                       )}
+                      {/* A DAY OFF (v1.295.0) takes the liveness pill's seat:
+                          the daemon reports a paused agent as unhealthy, so
+                          `livenessOf` already yields nothing for it, and the
+                          two never render together. */}
+                      {e.paused && (
+                        <PausedPill
+                          reason={e.pause_reason}
+                          bare={bare}
+                          testId={`roster-paused-${bare}`}
+                        />
+                      )}
                       {/* Offline BEFORE provenance, and in words: an unreachable
                           agent is the more urgent fact, and a rose icon on its
                           own reaches nobody using a screen reader. */}
@@ -656,6 +776,15 @@ export function RosterStrip({
                             {statsText(e)}
                           </span>
                         </div>
+                        {/* The month's allowance, 1px tall (v1.295.0) — the
+                            reading rides in the title, the colour says the
+                            status. Nothing for an unlimited one. */}
+                        <AllowanceMeter
+                          allowance={e.allowance}
+                          bare={bare}
+                          testId={`roster-allowance-${bare}`}
+                          compact
+                        />
                         {e.last_message ? (
                           <p
                             data-testid="roster-preview"
@@ -748,6 +877,7 @@ export function RosterStrip({
                 <option key={e.name} value={e.name}>
                   {bareName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
                   {e.kind === "remote" && !e.healthy ? " (offline)" : ""}
+                  {e.paused ? " (paused)" : ""}
                   {!e.delegable ? " (chat-only)" : ""}
                 </option>
               ))}
@@ -841,6 +971,13 @@ export function RosterStrip({
                     testId={`roster-activity-${shown}`}
                   />
                 )}
+                {selected.paused && (
+                  <PausedPill
+                    reason={selected.pause_reason}
+                    bare={shown}
+                    testId={`roster-paused-${shown}`}
+                  />
+                )}
                 {offline && (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
                     <WifiOff size={10} /> offline
@@ -855,6 +992,12 @@ export function RosterStrip({
                   {statsText(selected)}
                 </span>
               </div>
+              <AllowanceMeter
+                allowance={selected.allowance}
+                bare={shown}
+                testId={`roster-allowance-${shown}`}
+                compact
+              />
               {/* Messenger-style preview (v1.171.0): the agent's REAL last
                   round-table line + when, from the daemon's join — falls back
                   to the static description exactly as before when this agent

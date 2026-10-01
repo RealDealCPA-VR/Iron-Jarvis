@@ -1153,6 +1153,26 @@ class InboundPoller:
         # re-validated through the roster here; None keeps the default
         # byte-for-byte (see ``_escalate_plan``).
         task = self.recap_task(history, text)
+        # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused custom agent is
+        # ``healthy=False`` on the roster, so ``_escalate_plan`` would resolve
+        # nobody and run the SUPERVISOR silently; an exhausted one would run.
+        # Refuse in the agent's own words BEFORE anything is created, and tell
+        # the phone — the ledger read runs off the loop.
+        refusal = await asyncio.to_thread(self._escalate_refusal, result)
+        if refusal:
+            if tid:
+                tid = self._safe_append(
+                    tid, "assistant", refusal,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                ) or tid
+            sent = await self.send_chunked(ch, refusal, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "chat_refused",
+                "thread_id": tid,
+                "reason": refusal,
+                "sent": sent,
+            }
         agent_type, dyn_def, esc_provider, esc_model = self._escalate_plan(result)
         if tid:
             tid = self._safe_append(
@@ -1165,6 +1185,18 @@ class InboundPoller:
             _spawn_kwargs["provider"] = esc_provider
         if esc_model:
             _spawn_kwargs["model"] = esc_model
+        if dyn_def is not None:
+            # WHO ran (v1.193.0 / v1.295.0): the phone is a door that KNOWS the
+            # roster name, so it stamps it — the allowance ledger sums Session
+            # rows by this name, and un-stamped rows credit the base type.
+            try:
+                from ..agents.roster import canonical_roster_name
+
+                _spawn_kwargs["agent_name"] = canonical_roster_name(
+                    self.platform, str((result or {}).get("escalate_agent") or "")
+                )
+            except Exception:  # noqa: BLE001 — attribution is a bonus, never a block
+                pass
         # The escalated session inherits the thread's project tag (the same
         # kwarg the dashboard passes when escalating desktop chat), so the
         # run gets the project's brief/knowledge/recent-activity spine.
@@ -1371,6 +1403,32 @@ class InboundPoller:
                 return default
         return default
 
+    def _escalate_refusal(self, result: dict[str, Any]) -> str:
+        """The allowance door for a phone escalation (v1.295.0): ``""`` when
+        the named agent (``custom:<slug>`` or a bare slug that IS a custom
+        record) may take work, else ``agents.allowance.refusal_for``'s one
+        sentence. Synchronous (a ledger read) — the caller hops to a thread.
+        Never raises: a broken read refuses nothing, the normal path decides."""
+        try:
+            name = str((result or {}).get("escalate_agent") or "").strip()
+            if not name or self.platform is None:
+                return ""
+            low = name.lower()
+            if low.startswith("remote:"):
+                return ""
+            slug = (name.split(":", 1)[1] if low.startswith("custom:") else name).strip()
+            registry = getattr(self.platform, "agents_registry", None)
+            if registry is None or not slug:
+                return ""
+            rec = registry.get(slug)
+            if rec is None:
+                return ""
+            from ..agents import allowance
+
+            return allowance.refusal_for(rec, self.platform.engine)
+        except Exception:  # noqa: BLE001 — the door must never break the phone
+            return ""
+
     async def _run_dynamic_session(self, session: Any, definition: Any) -> Any:
         """Run an escalated session on a DYNAMIC agent's stored definition —
         the same runtime path POST /agents/{name}/spawn uses (``run_session``
@@ -1393,8 +1451,18 @@ class InboundPoller:
             else SessionStatus.FAILED
         )
         session.summary = run.result
+        # The run's spend lands on ITS row (v1.295.0), exactly as spawn_agent
+        # and run_session stamp it — the allowance ledger sums Session tokens.
+        session.input_tokens = run.input_tokens
+        session.output_tokens = run.output_tokens
         session.finished_at = utcnow()
         self.orchestrator._save(session)
+        # The allowance tail (v1.295.0): an exhausted custom agent is paused
+        # here, so the next phone escalation is refused instead of run.
+        try:
+            await self.orchestrator._post_run_allowance(session)
+        except Exception:  # noqa: BLE001 — the tail never breaks a delivery
+            log.exception("allowance tail failed for phone session %s", session.id)
         return session
 
     # -- pending prompts (v1.137.0) ----------------------------------------

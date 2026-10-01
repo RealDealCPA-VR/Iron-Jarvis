@@ -41,6 +41,14 @@ class EventType:
     AGENT_STARTED = "agent.started"
     AGENT_STATE_CHANGED = "agent.state_changed"
     AGENT_COMPLETED = "agent.completed"
+    # v1.295.0 (the job card): a custom agent's monthly allowance. Both carry
+    # {name, spent_tokens, spent_usd, allowance_tokens, allowance_usd, month};
+    # PAUSED adds {reason}, the WARNING adds {pct} and goes out ONCE per month
+    # (``DynamicAgentRecord.allowance_warned_month``). Published by
+    # ``agents.allowance.after_run`` from the post-run hook. Not tagged with a
+    # session_id: they are about the AGENT, not one run.
+    AGENT_PAUSED = "agent.paused"
+    AGENT_ALLOWANCE_WARNING = "agent.allowance_warning"
     # {tool, ok, mode, invocation_id, reversibility, risk_class} — risk_class
     # joined in v1.237.0 with the acting browser tools, so an audit can tell a
     # read from something that changed a page without re-deriving it from the

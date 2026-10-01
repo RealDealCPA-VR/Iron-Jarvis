@@ -203,6 +203,13 @@ class RosterEntry:
     #: Liveness (v1.193.0): "busy" | "queued" | "idle" | "unknown". Additive
     #: with a default so every existing construction keeps working.
     activity: str = _UNKNOWN
+    #: The job card (v1.295.0), dynamic agents only — additive with defaults.
+    #: A paused agent is ``healthy=False`` and says why; ``allowance`` is the
+    #: ``agents.allowance.allowance_state`` dict (None for builtins/remotes).
+    paused: bool = False
+    pause_reason: str = ""
+    allowance: dict | None = None
+    reports_to: str = ""
 
     def line(self) -> str:
         """One honest line, e.g. ``researcher — digger (87% over 23 runs)``.
@@ -217,6 +224,9 @@ class RosterEntry:
         return f"{_one_line(head)} {self._suffix()}"
 
     def _suffix(self) -> str:
+        if self.paused:
+            reason = _one_line(self.pause_reason)
+            return f"(paused: {reason})" if reason else "(paused)"
         if not self.healthy:
             return "(offline)"
         # Liveness leads, the track record follows, inside ONE pair of parens —
@@ -246,6 +256,10 @@ class RosterEntry:
             "healthy": self.healthy,
             "stats": self.stats,
             "activity": self.activity,
+            "paused": self.paused,
+            "pause_reason": self.pause_reason,
+            "allowance": self.allowance,
+            "reports_to": self.reports_to,
             "line": self.line(),
         }
 
@@ -657,6 +671,23 @@ def _dynamic_entries(
                 isinstance(tools, list) and "delegate" in tools
             ) or base.casefold() == "supervisor"
             entry_name = f"custom:{name}"
+            # THE JOB CARD (v1.295.0): a paused agent (its day off, or the
+            # allowance auto-pause) is not healthy — `roster_block` leaves it
+            # out (its trailing "offline:" note names remotes only) and
+            # `resolve_target` refuses it, so no coordinator hands it work;
+            # the doors say WHY through `allowance.refusal_for`. The
+            # allowance is one ledger read per custom agent, inside this
+            # per-record try so one failure never drops the roster.
+            pause_reason = _one_line(getattr(record, "paused_reason", ""))
+            allowance_state: dict | None = None
+            try:
+                from . import allowance as _allowance
+
+                allowance_state = _allowance.state_for(
+                    record, getattr(platform, "engine", None)
+                )
+            except Exception:  # noqa: BLE001 — no figure beats no roster
+                allowance_state = None
             entries.append(
                 RosterEntry(
                     name=entry_name,
@@ -665,7 +696,11 @@ def _dynamic_entries(
                     # Verified spawn path — see the module docstring
                     # (SpawnAgentTool / POST /agents/{name}/spawn).
                     delegable=not coordinator,
-                    healthy=True,
+                    healthy=not pause_reason,
+                    paused=bool(pause_reason),
+                    pause_reason=pause_reason,
+                    allowance=allowance_state,
+                    reports_to=_one_line(getattr(record, "reports_to", "")),
                     # v1.193.0: a teammate the USER created can finally earn a
                     # track record — outcomes are keyed by THIS name now, not by
                     # the base type it happens to execute as. Still None until

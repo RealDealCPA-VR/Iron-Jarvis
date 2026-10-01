@@ -184,6 +184,12 @@ class AgentDefinition:
     system_prompt: str
     tools: list[str]
     permission_overrides: dict[str, str] = field(default_factory=dict)
+    #: v1.295.0 (the job card): skills injected into this agent's runs beside
+    #: ``config.default_skills``, and the roster name it reports to ("" = the
+    #: user). Defaults, so every existing construction keeps working; only
+    #: ``DynamicAgentRegistry.definition`` fills them today.
+    skills: list[str] = field(default_factory=list)
+    reports_to: str = ""
 
 
 _DEFINITIONS: dict[AgentType, AgentDefinition] = {

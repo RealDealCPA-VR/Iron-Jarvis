@@ -1278,13 +1278,54 @@ class LTMSourceBody(BaseModel):
     token: str = ""  # a NEW bearer/API token to store in the vault (write-only, http_rag)
 
 
+#: The approval postures a custom agent may be HIRED with (v1.295.0). The
+#: same two the session door accepts plus "" (= the platform default). ``yolo``
+#: is refused at the route with a sentence, never mapped: see
+#: ``runtime.inherited_approval_mode`` for why a background run never inherits
+#: a chat's auto-approve.
+AGENT_APPROVAL_MODES = ("", "approve_for_me", "always_ask")
+
+
 class AgentCreate(BaseModel):
+    """Hire a custom agent (v1.295.0: an employee has a job card, a monthly
+    allowance and a day off).
+
+    Every employee field below is validated AT THE ROUTE (``routes/agents.py``,
+    ``_employee_fields``) with a plain-words 422 — ``reports_to`` needs the
+    registry (the manager must exist) and the rest keep the same wording
+    beside it. The one exception is ``max_steps``, which reuses the session
+    door's own ``_clean_max_steps`` so the bounds can never drift from
+    ``POST /sessions``.
+    """
+
     name: str
     system_prompt: str
     tools: list[str] = []
     description: str = ""
     provider: str = ""
     model: str = ""
+    # The builtin whose lifecycle/roster this agent borrows; never "supervisor"
+    # (the builtin supervisor would run and discard the custom prompt).
+    base_type: str = "builder"
+    # "" | "approve_for_me" | "always_ask" — the posture every spawn starts in
+    # unless the spawn body states one.
+    approval_mode: str = ""
+    # Per-run step budget, same bounds as SessionCreate; None = configured default.
+    max_steps: int | None = None
+    # Monthly allowance (calendar month): 0 = unlimited.
+    allowance_tokens: int = 0
+    allowance_usd: float = 0.0
+    # Who this agent reports to: "" = the user, a builtin type name, or
+    # "custom:<name>" of an EXISTING custom agent (never itself).
+    reports_to: str = ""
+    # The job card: skill names it is hired for, and tools it must never hold.
+    skills: list[str] = []
+    deny_tools: list[str] = []
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _validate_max_steps(cls, v: Any) -> int | None:
+        return _clean_max_steps(v)
 
 
 class CustomToolCreate(BaseModel):
@@ -1444,8 +1485,46 @@ class RemoteInboundEnable(BaseModel):
 
 
 class AgentPatch(BaseModel):
-    """Edit a dynamic agent in place (only the provided fields change)."""
+    """Edit a dynamic agent in place (only the provided fields change).
+
+    ``None`` means "keep what is stored" for EVERY field — the route passes
+    only the provided ones to ``DynamicAgentRegistry.register`` (v1.295.0),
+    which keeps an omitted kwarg's existing value. Before this, the route
+    re-passed the record's own ``provider``/``model``/``base_type``, so those
+    three could not be edited at all without delete-and-recreate.
+    """
 
     system_prompt: str | None = None
     tools: list[str] | None = None
     description: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    base_type: str | None = None
+    # Employee fields (v1.295.0) — same validation as AgentCreate, at the route.
+    approval_mode: str | None = None
+    max_steps: int | None = None
+    allowance_tokens: int | None = None
+    allowance_usd: float | None = None
+    reports_to: str | None = None
+    skills: list[str] | None = None
+    deny_tools: list[str] | None = None
+    # ``max_steps: null`` means KEEP on a PATCH, so clearing a stored budget
+    # (back to the configured default) needs its own explicit flag — the same
+    # reason RemoteAgentPatch has ``clear_token``. Sent together with a
+    # ``max_steps`` value it is a 422: the two say opposite things.
+    clear_max_steps: bool = False
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _validate_max_steps(cls, v: Any) -> int | None:
+        return _clean_max_steps(v)
+
+
+class PauseBody(BaseModel):
+    """Give a custom agent a day off (v1.295.0, ``POST /agents/{name}/pause``).
+
+    ``reason`` is what every refused spawn will say back; blank gets the
+    route's default wording so a paused agent is never paused "for no reason".
+    """
+
+    reason: str = ""

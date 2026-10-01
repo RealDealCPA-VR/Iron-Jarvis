@@ -10,7 +10,9 @@ import {
   ArrowRight,
   MessageSquare,
   CalendarClock,
+  PauseCircle,
   ShieldAlert,
+  Wallet,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -19,7 +21,7 @@ import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
-import { shortId, clockTime } from "@/lib/format";
+import { shortId, clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
@@ -122,6 +124,46 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: CalendarClock,
       title: `Scheduled job ran: ${name}`,
       body: "",
+    };
+  }
+  if (e.type === "agent.paused") {
+    // v1.295.0: a custom agent was put on a day off — by hand, or by the
+    // daemon when its monthly allowance ran out. Payload: {name, reason,
+    // spent_tokens, spent_usd, allowance_tokens, allowance_usd, month}.
+    const name = typeof p.name === "string" && p.name ? p.name : "an agent";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/agents",
+      icon: PauseCircle,
+      title: `Agent paused: ${name}`,
+      body: typeof p.reason === "string" ? p.reason : "",
+    };
+  }
+  if (e.type === "agent.allowance_warning") {
+    // v1.295.0: a custom agent crossed the warning line of its monthly
+    // allowance. Payload: {name, pct, spent_tokens, spent_usd,
+    // allowance_tokens, allowance_usd, month}. The body names the bound
+    // that is actually set — a zero bound is "no bound", never "0 tokens".
+    const name = typeof p.name === "string" && p.name ? p.name : "An agent";
+    const pct = typeof p.pct === "number" && Number.isFinite(p.pct) ? Math.round(p.pct) : 0;
+    const tokBound = typeof p.allowance_tokens === "number" ? p.allowance_tokens : 0;
+    const usdBound = typeof p.allowance_usd === "number" ? p.allowance_usd : 0;
+    const spentTok = typeof p.spent_tokens === "number" ? p.spent_tokens : 0;
+    const spentUsd = typeof p.spent_usd === "number" ? p.spent_usd : 0;
+    const body =
+      tokBound > 0
+        ? `${formatTokens(spentTok)} of ${formatTokens(tokBound)} tokens`
+        : usdBound > 0
+          ? `$${spentUsd.toFixed(2)} of $${usdBound}`
+          : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/agents",
+      icon: Wallet,
+      title: `${name} has used ${pct}% of its monthly allowance`,
+      body,
     };
   }
   if (e.type === "computeruse.run_finished") {

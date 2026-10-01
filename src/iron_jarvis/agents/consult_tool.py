@@ -271,6 +271,12 @@ class ConsultTool(Tool):
         except Exception:  # noqa: BLE001 — roster trouble must refuse, not crash
             entry = None
         if entry is None:
+            # THE DAY OFF (v1.295.0): a paused custom agent is ``healthy=False``
+            # on the roster, so it resolves to nobody — say WHY, in the same
+            # sentence every other door uses, before the generic line.
+            paused = self._paused_sentence(wanted)
+            if paused:
+                return _Consultation(error=paused)
             try:
                 names = [e.name for e in build_roster(self.platform) if e.healthy]
             except Exception:  # noqa: BLE001
@@ -332,6 +338,27 @@ class ConsultTool(Tool):
             model=model,
             asker=asker,
         )
+
+    def _paused_sentence(self, wanted: str) -> str:
+        """``"<name> is paused: <reason>"`` when ``wanted`` (``custom:<slug>``
+        or a bare slug) names a paused custom record, else ``""``. Never raises."""
+        try:
+            text = " ".join(str(wanted or "").split())
+            low = text.lower()
+            if low.startswith("remote:"):
+                return ""
+            slug = (text.split(":", 1)[1] if low.startswith("custom:") else text).strip()
+            registry = getattr(self.platform, "agents_registry", None)
+            if registry is None or not slug:
+                return ""
+            rec = registry.get(slug)
+            if rec is None:
+                return ""
+            from .allowance import paused_sentence
+
+            return paused_sentence(rec)
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _caller_session(self, ctx: ToolContext):
         """The caller's ``Session`` row, DETACHED, or ``None``. Never raises."""

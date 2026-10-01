@@ -214,6 +214,26 @@ class DelegateTool(Tool):
             entry = None
 
         _low = raw_type.lower()
+        if entry is None and not _low.startswith("remote:"):
+            # THE DAY OFF / THE ALLOWANCE (v1.295.0): a paused agent is
+            # ``healthy=False`` on the roster, so ``resolve_target`` answers
+            # None for it — and a BARE slug ("scout") would then fall through
+            # the ``AgentType(...)`` fallback below into a silent BUILDER run,
+            # the exact degradation this wave forbids. Say WHY, in the user's
+            # own words, before either generic path can hide the reason.
+            try:
+                from . import allowance
+
+                _registry = getattr(self.platform, "agents_registry", None)
+                _slug = (
+                    raw_type.split(":", 1)[1] if _low.startswith("custom:") else raw_type
+                ).strip()
+                _rec = _registry.get(_slug) if (_registry is not None and _slug) else None
+                _reason = allowance.refusal_for(_rec, self.platform.engine)
+            except Exception:  # noqa: BLE001 — fall through to the generic refusal
+                _reason = ""
+            if _reason:
+                return ToolResult(ok=False, output="", error=_reason)
         if entry is None and (_low.startswith("custom:") or _low.startswith("remote:")):
             # An explicitly prefixed roster target that does not resolve is
             # unknown, offline, or not spawnable — refuse HONESTLY instead of
@@ -248,6 +268,7 @@ class DelegateTool(Tool):
         # the builder default).
         definition = None
         dyn_provider = dyn_model = None
+        rec = None
         if entry is not None and entry.kind == "dynamic":
             slug = entry.name.split(":", 1)[-1]
             registry = getattr(self.platform, "agents_registry", None)
@@ -260,6 +281,13 @@ class DelegateTool(Tool):
                     "right now — delegate to a builtin specialist instead",
                 )
             rec = registry.get(slug)
+            # THE DAY OFF / THE ALLOWANCE (v1.295.0): refused here, before a
+            # session exists, in plain words — never a silent builder run.
+            from . import allowance
+
+            reason = allowance.refusal_for(rec, self.platform.engine)
+            if reason:
+                return ToolResult(ok=False, output="", error=reason)
             dyn_provider = (rec.provider or None) if rec is not None else None
             dyn_model = (rec.model or None) if rec is not None else None
             agent_type = definition.type
@@ -331,6 +359,12 @@ class DelegateTool(Tool):
         # parent's job, so a Team worker can use the shell the user already
         # allowed. Never the origin — see ``inherited_grants``.
         allow_tools, approval_mode = inherited_grants(parent)
+        # The job card's posture and step budget apply when the caller states
+        # none (v1.295.0); ``create_session`` normalises the posture.
+        max_steps = None
+        if rec is not None:
+            approval_mode = approval_mode or (rec.approval_mode or "")
+            max_steps = rec.max_steps or None
         target_name = entry.name if entry is not None else agent_type.value
 
         # BOUNDED FAN-OUT (v1.193.0). A coordinator emitting 8 delegate calls in
@@ -352,6 +386,7 @@ class DelegateTool(Tool):
                 workspace_root=workspace_root,
                 allow_tools=allow_tools,
                 approval_mode=approval_mode,
+                max_steps=max_steps,
                 # Credit the run to the teammate that actually ran (v1.193.0).
                 # The event below carries the same name, but stamping the row
                 # makes attribution survive a dropped or renamed event instead
@@ -444,6 +479,11 @@ class DelegateTool(Tool):
                 else SessionStatus.FAILED
             )
             child_session.provider, child_session.model = run.provider, run.model
+            # The child's spend lands on ITS row (v1.295.0): the allowance
+            # ledger sums Session tokens by roster name, exactly as the solo
+            # run_session path stamps them.
+            child_session.input_tokens = run.input_tokens
+            child_session.output_tokens = run.output_tokens
             child_session.summary = run.result
             child_session.finished_at = utcnow()
             orch._save(child_session)
@@ -455,6 +495,7 @@ class DelegateTool(Tool):
                 orch._post_run_learning(child_session)
             except Exception:  # noqa: BLE001
                 pass
+            await orch._post_run_allowance(child_session)
 
             ok = run.state is AgentState.COMPLETED
             await publish_delegation_completed(

@@ -1094,6 +1094,50 @@ class AgentRuntime:
         agent_def: AgentDefinition,
         parent_id: str | None = None,
     ) -> AgentRun:
+        """Run the perceive→act loop for ``session`` under ``agent_def``.
+
+        v1.295.0 (the job card): a ``custom:<slug>`` run whose record carries a
+        dollar allowance arms ``providers.budget`` with what is LEFT this month
+        for the duration of the run (``finally`` resets it), so the Claude CLI
+        caps the ONE invocation that could overshoot the month. ``0`` when
+        nothing is left — the door already refused an exhausted agent, and a
+        zero arms no flag. Builtins and unmetered agents arm nothing.
+        """
+        from ..providers.budget import reset_run_budget, set_run_budget
+
+        # Off the loop: the figure is a ledger read (one agent's month).
+        token = set_run_budget(await asyncio.to_thread(self._run_budget_usd, session))
+        try:
+            return await self._run_body(session, agent_def, parent_id)
+        finally:
+            reset_run_budget(token)
+
+    def _run_budget_usd(self, session: Session) -> float:
+        """What is left of a custom agent's monthly dollar allowance, or 0.0.
+        Never raises — a broken ledger must not stop a run."""
+        try:
+            name = str(getattr(session, "agent_name", "") or "").strip()
+            if not name.lower().startswith("custom:"):
+                return 0.0
+            registry = getattr(self.p, "agents_registry", None)
+            if registry is None:
+                return 0.0
+            record = registry.get(name.split(":", 1)[1].strip())
+            if record is None or float(getattr(record, "allowance_usd", 0.0) or 0.0) <= 0:
+                return 0.0
+            from . import allowance
+
+            state = allowance.state_for(record, self.p.engine)
+            return float(state.get("left_usd") or 0.0)
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    async def _run_body(
+        self,
+        session: Session,
+        agent_def: AgentDefinition,
+        parent_id: str | None = None,
+    ) -> AgentRun:
         run = AgentRun(
             session_id=session.id,
             parent_id=parent_id,
@@ -1181,6 +1225,22 @@ class AgentRuntime:
                 system_prompt = self.p.skills.inject(system_prompt, default_skills)
             except Exception:
                 pass
+        # THE JOB CARD (v1.295.0): a custom agent's own skills ride its
+        # definition and are injected the same way, after the defaults; its
+        # manager is named in one sentence beside the identity material so the
+        # run knows who reads its result. Both guarded, both bounded.
+        own_skills = list(getattr(agent_def, "skills", None) or [])
+        if own_skills:
+            try:
+                system_prompt = self.p.skills.inject(system_prompt, own_skills)
+            except Exception:  # noqa: BLE001 — a skill must never break a run
+                pass
+        reports_to = " ".join(str(getattr(agent_def, "reports_to", "") or "").split())
+        if reports_to:
+            system_prompt += (
+                f"\n\nYour manager is {reports_to}. When you are blocked or finished, "
+                f"say so plainly — {reports_to} and the user read your result."
+            )
         # Self-correction: fold accumulated lessons + user preferences into the
         # system prompt so every run is a little smarter than the last.
         learning = getattr(self.p, "learning", None)

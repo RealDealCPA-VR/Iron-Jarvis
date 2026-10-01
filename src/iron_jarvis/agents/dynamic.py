@@ -14,11 +14,12 @@ own system prompt and tool allowlist through the ``AgentDefinition``.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import select
 
 from ..core.db import session_scope
+from ..core.ids import utcnow
 from ..core.models import AgentType
 from .dynamic_models import DynamicAgentRecord
 from .types import AgentDefinition, get_agent_definition
@@ -87,6 +88,67 @@ def identity_anchor(name: str) -> str:
     return f"You are {name}, a persistent named agent on this machine."
 
 
+#: "Keep what the row has" for the job-card kwargs of :meth:`register` — an
+#: OMITTED kwarg must not clobber a stored value, so the routes can PATCH one
+#: field (``allowance_usd``) without re-sending the rest. ``None`` cannot be
+#: the sentinel: ``max_steps=None`` is a real value ("the config default").
+_KEEP: Any = object()
+
+#: The postures a record may store. ``yolo`` is deliberately absent — it is
+#: consent to one watched turn, never a standing posture for a background
+#: employee (``runtime.inherited_approval_mode`` lands it as approve_for_me).
+_APPROVAL_MODES = ("", "approve_for_me", "always_ask")
+
+
+def _names(raw: Any) -> list[str]:
+    """A clean, de-duplicated list of names from a list-ish value. Never raises."""
+    out: list[str] = []
+    try:
+        for item in list(raw or []):
+            text = " ".join(str(item or "").split())
+            if text and text not in out:
+                out.append(text)
+    except Exception:  # noqa: BLE001 — a bad list is an empty list
+        return []
+    return out
+
+
+#: The job-card columns and the value an UNSET one reads as. A row written
+#: before v1.295.0 gets these columns from ``_reconcile_additive_columns`` as
+#: NULL (``ALTER TABLE ADD COLUMN`` carries no default), so every registry
+#: door normalises the detached copy — readers see the model's defaults, never
+#: ``None`` for a string or a count. The DB row is left as it is.
+_JOB_CARD_DEFAULTS: dict[str, Any] = {
+    "approval_mode": "",
+    "allowance_tokens": 0,
+    "allowance_usd": 0.0,
+    "allowance_warned_month": "",
+    "paused_reason": "",
+    "reports_to": "",
+    "skills_json": "[]",
+    "deny_tools_json": "[]",
+}
+
+
+def _with_defaults(record: DynamicAgentRecord) -> DynamicAgentRecord:
+    for column, default in _JOB_CARD_DEFAULTS.items():
+        if getattr(record, column, None) is None:
+            try:
+                setattr(record, column, default)
+            except Exception:  # noqa: BLE001 — a frozen double keeps its None
+                pass
+    return record
+
+
+def _json_names(raw: str) -> list[str]:
+    """Decode a stored JSON list of names; garbage reads as ``[]``."""
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return _names(data) if isinstance(data, list) else []
+
+
 class DynamicAgentRegistry:
     """Persisted, in-memory registry of dynamically defined agents."""
 
@@ -100,7 +162,7 @@ class DynamicAgentRegistry:
         """Read every persisted dynamic agent into memory (called on startup)."""
         with session_scope(self.engine) as db:
             rows = list(db.exec(select(DynamicAgentRecord)))
-        self._records = {r.name: r for r in rows}
+        self._records = {r.name: _with_defaults(r) for r in rows}
         return self
 
     def register(
@@ -112,11 +174,27 @@ class DynamicAgentRegistry:
         description: str = "",
         provider: str = "",
         model: str = "",
+        *,
+        approval_mode: str | Any = _KEEP,
+        max_steps: int | None | Any = _KEEP,
+        allowance_tokens: int | Any = _KEEP,
+        allowance_usd: float | Any = _KEEP,
+        reports_to: str | Any = _KEEP,
+        skills: list[str] | None | Any = _KEEP,
+        deny_tools: list[str] | None | Any = _KEEP,
     ) -> DynamicAgentRecord:
         """Create or update a dynamic agent (upsert by unique ``name``).
 
         ``provider``/``model`` optionally pin the agent to a specific LLM (see
         :func:`available_models`); empty strings mean "use the platform default".
+
+        THE JOB CARD (v1.295.0) rides the keyword-only arguments. Every one of
+        them defaults to *keep*: on an UPDATE an omitted kwarg leaves the stored
+        value alone (so a route can PATCH ``allowance_usd`` without clobbering
+        ``skills``), and on a CREATE the column default applies. ``skills`` /
+        ``deny_tools`` take lists (stored as JSON). ``approval_mode`` outside
+        ``_APPROVAL_MODES`` is stored as ``""`` — never ``yolo``. Pausing is
+        NOT a register concern: see :meth:`set_paused` / :meth:`resume`.
         """
         tools_json = json.dumps(list(tools or []))
         with session_scope(self.engine) as db:
@@ -141,11 +219,114 @@ class DynamicAgentRegistry:
                     provider=provider,
                     model=model,
                 )
+            self._apply_job_card(
+                record,
+                approval_mode=approval_mode,
+                max_steps=max_steps,
+                allowance_tokens=allowance_tokens,
+                allowance_usd=allowance_usd,
+                reports_to=reports_to,
+                skills=skills,
+                deny_tools=deny_tools,
+            )
             db.add(record)
             db.commit()
             db.refresh(record)  # reload all columns so the detached copy is usable
-        self._records[name] = record
+        self._records[name] = _with_defaults(record)
         return record
+
+    @staticmethod
+    def _apply_job_card(
+        record: DynamicAgentRecord,
+        *,
+        approval_mode: Any,
+        max_steps: Any,
+        allowance_tokens: Any,
+        allowance_usd: Any,
+        reports_to: Any,
+        skills: Any,
+        deny_tools: Any,
+    ) -> None:
+        """Write the job-card kwargs that were GIVEN onto ``record``; ``_KEEP``
+        leaves a column untouched. Each value is coerced defensively — a bad
+        number keeps the stored value rather than raising mid-upsert."""
+        if approval_mode is not _KEEP:
+            mode = " ".join(str(approval_mode or "").split()).lower()
+            record.approval_mode = mode if mode in _APPROVAL_MODES else ""
+        if max_steps is not _KEEP:
+            try:
+                steps = None if max_steps in (None, "", 0) else int(max_steps)
+            except (TypeError, ValueError):
+                steps = record.max_steps
+            record.max_steps = steps if (steps is None or steps > 0) else None
+        if allowance_tokens is not _KEEP:
+            try:
+                record.allowance_tokens = max(0, int(allowance_tokens or 0))
+            except (TypeError, ValueError):
+                pass
+        if allowance_usd is not _KEEP:
+            try:
+                record.allowance_usd = max(0.0, float(allowance_usd or 0.0))
+            except (TypeError, ValueError):
+                pass
+        if reports_to is not _KEEP:
+            record.reports_to = " ".join(str(reports_to or "").split())
+        if skills is not _KEEP:
+            record.skills_json = json.dumps(_names(skills))
+        if deny_tools is not _KEEP:
+            record.deny_tools_json = json.dumps(_names(deny_tools))
+
+    # --- the day off (v1.295.0) -------------------------------------------
+
+    def _update(self, name: str, mutate) -> DynamicAgentRecord | None:
+        """Apply ``mutate(row)`` to the persisted row and refresh the cache.
+        ``None`` when no such agent exists."""
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(DynamicAgentRecord).where(DynamicAgentRecord.name == name)
+            ).first()
+            if row is None:
+                self._records.pop(name, None)
+                return None
+            mutate(row)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+        self._records[name] = _with_defaults(row)
+        return row
+
+    def set_paused(self, name: str, reason: str) -> DynamicAgentRecord | None:
+        """Pause ``name`` with a plain-words ``reason`` (the auto-pause or the
+        user's day off). Every door then refuses with that reason. ``None`` for
+        an unknown agent."""
+        text = " ".join(str(reason or "").split()) or "paused"
+
+        def mutate(row: DynamicAgentRecord) -> None:
+            row.paused_reason = text
+            row.paused_at = utcnow()
+
+        return self._update(name, mutate)
+
+    def resume(self, name: str) -> DynamicAgentRecord | None:
+        """Clear the pause. The allowance itself is untouched: a resumed agent
+        that is still over its allowance is refused by the allowance door, not
+        by this flag. ``None`` for an unknown agent."""
+
+        def mutate(row: DynamicAgentRecord) -> None:
+            row.paused_reason = ""
+            row.paused_at = None
+
+        return self._update(name, mutate)
+
+    def set_warned_month(self, name: str, month: str) -> DynamicAgentRecord | None:
+        """Record that the 80% warning for ``month`` ("YYYY-MM") went out, so
+        it is published once per month and not once per run."""
+        text = " ".join(str(month or "").split())
+
+        def mutate(row: DynamicAgentRecord) -> None:
+            row.allowance_warned_month = text
+
+        return self._update(name, mutate)
 
     # --- lookups ----------------------------------------------------------
 
@@ -159,7 +340,7 @@ class DynamicAgentRegistry:
                 select(DynamicAgentRecord).where(DynamicAgentRecord.name == name)
             ).first()
         if record is not None:
-            self._records[name] = record
+            self._records[name] = _with_defaults(record)
         return record
 
     def list(self) -> list[DynamicAgentRecord]:
@@ -210,8 +391,17 @@ class DynamicAgentRegistry:
         prompt = identity_anchor(record.name)
         if stored.strip():
             prompt = f"{prompt}\n\n{stored}"
+        # THE JOB CARD (v1.295.0): the deny list becomes a "deny" override —
+        # ``PermissionEngine.mode_for`` lets an override lower a tool, never
+        # raise one past the deny floor, so this can only NARROW what the base
+        # policy allows. Skills and the manager ride the definition to the
+        # runtime (``AgentRuntime.run`` injects them beside default_skills).
+        deny = _json_names(getattr(record, "deny_tools_json", "") or "[]")
         return AgentDefinition(
             type=base_type,
             system_prompt=prompt,
             tools=list(tools),
+            permission_overrides={t: "deny" for t in deny},
+            skills=_json_names(getattr(record, "skills_json", "") or "[]"),
+            reports_to=" ".join(str(getattr(record, "reports_to", "") or "").split()),
         )

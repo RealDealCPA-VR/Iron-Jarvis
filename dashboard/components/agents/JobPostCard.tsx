@@ -233,6 +233,8 @@ export function JobPostCard({
 
   // Only agents that can actually take a spawned session. Offline remotes
   // stay listed but disabled — hiding them would look like they don't exist.
+  // A PAUSED agent (v1.295.0, a day off) is the same shape: listed, disabled,
+  // and the reason is said below the box when it is the one selected.
   const candidates = roster.filter((e) => e.delegable);
 
   // RosterStrip's "Give work" → preselect that agent.
@@ -263,10 +265,23 @@ export function JobPostCard({
   const stepsInvalid =
     stepsSupported && stepsText !== "" && jobMaxSteps(stepsText) === null;
 
+  // The selected target's day off (v1.295.0). Reachable even though the
+  // option is disabled: a Give-work click or the remembered last target can
+  // name an agent that was paused since. The job does not go — posting to an
+  // agent on leave would be refused by the daemon, and a refusal after the
+  // click is a worse answer than a sentence before it.
+  const selectedEntry = candidates.find((c) => c.name === effectiveTarget);
+  const targetPaused = Boolean(selectedEntry?.paused);
+  const pausedNote = targetPaused
+    ? `${bareTargetName(effectiveTarget)} is paused${
+        selectedEntry?.pause_reason ? ` — ${selectedEntry.pause_reason}` : ""
+      }. Pick someone else, or resume it under Set up agents.`
+    : "";
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const t = task.trim();
-    if (!t || stepsInvalid) return;
+    if (!t || stepsInvalid || targetPaused) return;
     setBusy(true);
     setError(null);
     setPosted(null);
@@ -328,20 +343,37 @@ export function JobPostCard({
                 rememberLastTarget(e.target.value);
               }}
               className="field"
+              title={pausedNote || undefined}
+              aria-describedby={targetPaused ? "job-target-paused" : undefined}
             >
               <option value={TEAM_TARGET}>
                 Team — supervisor plans & delegates
               </option>
               {candidates.map((e) => {
                 const offline = e.kind === "remote" && !e.healthy;
+                const paused = Boolean(e.paused);
                 return (
-                  <option key={e.name} value={e.name} disabled={offline}>
+                  <option
+                    key={e.name}
+                    value={e.name}
+                    disabled={offline || paused}
+                  >
                     {bareTargetName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
                     {offline ? " (offline)" : ""}
+                    {paused ? " — paused" : ""}
                   </option>
                 );
               })}
             </select>
+            {targetPaused && (
+              <div
+                id="job-target-paused"
+                data-testid="job-target-paused"
+                className="mt-1 text-[11px] text-amber-300"
+              >
+                {pausedNote}
+              </div>
+            )}
           </div>
           <div>
             <label
@@ -409,7 +441,7 @@ export function JobPostCard({
         <div className="flex items-center justify-end">
           <button
             type="submit"
-            disabled={busy || !task.trim() || stepsInvalid}
+            disabled={busy || !task.trim() || stepsInvalid || targetPaused}
             className="btn-accent"
           >
             {busy ? (

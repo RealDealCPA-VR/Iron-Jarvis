@@ -1,3 +1,5 @@
+import type { AgentAllowance } from "./types";
+
 export function shortId(id: string | null | undefined): string {
   if (!id) return "—";
   return id.length > 14 ? id.slice(0, 14) + "…" : id;
@@ -74,3 +76,46 @@ export function describeEngineExit(code: number | null): string {
   return `The engine exited with an error (code ${code}).`;
 }
 
+/* ---- v1.295.0: an employee's monthly allowance, in words ---------------- */
+
+/** "12.4k", "50k", "1.2M" — tokens read at a glance in a 15rem rail. Whole
+ *  numbers under a thousand stay as they are. */
+export function formatTokens(n: number): string {
+  const v = Number.isFinite(n) ? Math.max(0, n) : 0;
+  if (v >= 1_000_000) return `${trimZero((v / 1_000_000).toFixed(1))}M`;
+  if (v >= 1_000) return `${trimZero((v / 1_000).toFixed(1))}k`;
+  return String(Math.round(v));
+}
+
+function trimZero(s: string): string {
+  return s.endsWith(".0") ? s.slice(0, -2) : s;
+}
+
+function usdText(n: number): string {
+  // "$10" for a round bound, "$1.20" for a spend — bounds are typed by a
+  // person, spends are summed by a machine.
+  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
+}
+
+/** The one-line reading: "Spent 12.4k of 50k tokens this month · 24%", with
+ *  " · $1.20 of $10" when a dollar bound is also set, or the dollar form alone
+ *  when ONLY dollars are bounded. */
+export function allowanceSummary(a: AgentAllowance): string {
+  const parts: string[] = [];
+  const tokenBound = a.tokens > 0;
+  const usdBound = a.usd > 0;
+  if (tokenBound) {
+    parts.push(
+      `Spent ${formatTokens(a.spent_tokens)} of ${formatTokens(a.tokens)} tokens this month`,
+    );
+    if (usdBound) parts.push(`$${a.spent_usd.toFixed(2)} of ${usdText(a.usd)}`);
+  } else if (usdBound) {
+    parts.push(`Spent $${a.spent_usd.toFixed(2)} of ${usdText(a.usd)} this month`);
+  } else {
+    parts.push(`Spent ${formatTokens(a.spent_tokens)} tokens this month`);
+  }
+  if (typeof a.pct === "number" && Number.isFinite(a.pct)) {
+    parts.push(`${Math.round(a.pct)}%`);
+  }
+  return parts.join(" · ");
+}

@@ -1100,6 +1100,13 @@ class AgentThreads:
             row = registry.get(p["name"])
             if row is None:
                 raise RuntimeError(f"dynamic agent {p['name']!r} no longer exists")
+            # THE DAY OFF (v1.295.0): a paused custom agent's seat answers
+            # with the pause sentence as its line — no model call, no spend.
+            from .allowance import paused_sentence
+
+            paused = paused_sentence(row)
+            if paused:
+                return paused
             # The COMPOSED definition, not the raw row — the identity anchor is
             # applied at composition time (v1.193.0). The pinned provider/model
             # (which the definition does not carry) come from the ONE resolver
