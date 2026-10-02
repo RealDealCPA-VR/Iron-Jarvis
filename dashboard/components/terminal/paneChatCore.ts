@@ -42,6 +42,10 @@ export interface PaneMsg {
   route?: TurnRoute;
   /** The capability envelope bent this turn (v1.202.0). */
   adapted?: TurnAdapted;
+  /** v1.298.0: trust posture of the turn — set only when LOW. */
+  trust?: string;
+  trustReason?: string;
+  trustNote?: string;
   /** SERVER-derived doors into surfaces this turn touched (v1.199.0). */
   doors?: Door[];
   /** Reply cut off mid-stream (error with a streamed partial) — marked so a

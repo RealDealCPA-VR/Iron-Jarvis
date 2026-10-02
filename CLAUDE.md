@@ -2218,6 +2218,74 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/agent-files-coach-v1297.test.tsx`,
   `dashboard/__tests__/skill-curator-v1297.test.tsx`.
 
+- **A run has a TRUST posture, and every injected context is SCANNED**
+  (v1.298.0, /goal wave 4a). TRUST: `core/trust.py` — TRUST_FULL/TRUST_LOW,
+  `LOW_TRUST_DENY` (22 real tool names: create_agent, remember_preference,
+  skill_create, assign_work, schedule_create, workflow_create, memory_write,
+  ltm_append, notebook, memory_propose, capability_propose, pane_send,
+  pane_spawn — plus the wave-4a review's tool_create, tool_delete, secret_set,
+  webhook_add, sentinel_add, goal_add, worklist_add, workflow_run: a dynamic
+  tool, a secret, a trigger, queued work, and a workflow whose steps start
+  sessions the engine does not stamp low — and delegate_remote: a low run
+  must not hand flagged content to another machine), `low_trust_overrides(base)`
+  (deny wins, never widens),
+  `taint_reason`, `effective_trust`. `Session.trust/trust_reason/tainted_at`
+  (additive); `create_session(..., trust=, trust_reason=)` normalises;
+  `inherited_trust(parent)` rides delegate, spawn_agent, assign_work (an
+  assignment inherits ONLY when its source is `agent:<sid>` and that parent
+  is low; user/retry rows are full), rerun and continue inherit the row.
+  DOORS that start low: comm one-shot, comm chat lane and comm escalation
+  (`config.comm_trust`, default "low"; `_chat_turn_kwargs` inspects the
+  injected chat_turn's signature because 12 test fakes are 3-positional).
+  Both chat lanes take `trust=`/`trust_reason=` (lock-step): under low they
+  DROP the memory writers from the armed/auto/ask-armed sets with one ledger
+  note, merge the denies into the overrides, and add ONE prompt sentence
+  (`LOW_TRUST_PROMPT`) only when low from the door. TAINT: at the existing
+  injection fence (runtime :2489, chat_turn, routes/chat) a flagged tool
+  result lowers the run mid-run — `_lower_trust` writes the row off-loop,
+  publishes `trust.lowered` {session_id, tool, category, reason} ONCE, and
+  from then on the overrides carry the denies; nothing is appended to the
+  prompt (cache) — the refusal (`deny_label="low trust"`) is the model's
+  signal. `shell` under low trust gets `args["_isolate"]=True` (set AFTER the
+  model's args so it cannot unset it; ledgered) and `sandbox/shell_tool.py`
+  REFUSES a native fallback ("low trust needs the sandbox; Docker is not
+  reachable", confinement "refused") instead of the advisory warning.
+  BOTH chat lanes set `_isolate` too (`_low_trust_args`) — the reviewer
+  found only the runtime did, while the Build pane and `body.tools` arm
+  `shell` in the lanes. The chat lanes publish `trust.lowered` /
+  `context.blocked` with session_id "chat" (no row): the bell links those
+  to `/chat`, never `/sessions/chat`. A desktop reply INTO a phone thread
+  (`POST /comm/threads/{id}/send`) stays FULL trust on purpose: the user
+  typed the trigger. `blackboard_post`/`message_agent` stay allowed (the
+  inbox is the run's own department, whose children inherit low).
+  Receipts: `session_result` + `_session_view` (app.py AND
+  routes/sessions._session_row) carry trust/trust_reason/tainted_at; the
+  chat done frame / POST carries trust, trust_reason, trust_note. SCAN:
+  `core/promptguard.py` — `scan_context(text, source=, cap=20_000)` (cap
+  head 2/3 + tail 1/3 with a marker FIRST, then blank-line paragraphs, >1,500
+  chars split on sentence/line, a flagged piece refined to the offending
+  unit, replaced by `[BLOCKED: <category> — removed from <source>]`,
+  consecutive placeholders collapse, fence markers defanged like the steward,
+  excerpts masked with `detections.redact.mask`, a flagged SOURCE LABEL is
+  withheld so the placeholder never re-plants the sentence), `guard(...)`,
+  `publish_blocked` (`context.blocked` {session_id, source, count,
+  categories} once per (session, source) per process; on a loop →
+  create_task, off it → asyncio.run like the detections bell;
+  `flush_published()` for tests), `guarded_project_text(project, …)`.
+  Applied at: `projects/knowledge.ground` (name AND text), `AgentFiles.
+  notebook_block`, `skills.framework.inject` + `guarded_instructions` (also
+  the user-invoked `/skill` playbook, both lanes) — ONLY external-root or
+  agent/proposal-made skills, never builtin or the user's own (their words),
+  `documents/attachment_rag.rag_block` + `_prepare_attachments` (both lanes,
+  off-loop), `memory/fabric.ground`, `learning.apply_to_prompt` (a flagged
+  lesson is DROPPED, not placeholder'd), runtime `_project_context` via
+  `guarded_project_text` + every seam's `event_bus=/session_id=`. The seams
+  SCAN without a bus and PUBLISH only with one. Dashboard: `TrustChip`
+  (SessionCard + session page + banner), TurnReceipt quiet lines (trust,
+  trust note, blocked rows), bell maps `trust.lowered` and `context.blocked`.
+  Pins: `tests/test_trust_posture_v1298.py`, `tests/test_promptguard_v1298.py`,
+  `dashboard/__tests__/trust-posture-v1298.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

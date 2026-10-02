@@ -311,6 +311,12 @@ interface ChatMessage {
   steer?: boolean;
   /** v1.282.0: the preference sentences this turn kept (the receipt says them). */
   remembered?: string[];
+  /** v1.298.0: the turn's trust posture ("low" when it ran under low trust),
+   *  the daemon's reason and its note — the receipt's quiet line. Absent on
+   *  full-trust turns and on messages from before the field existed. */
+  trust?: string;
+  trustReason?: string;
+  trustNote?: string;
   /** Set when a chat turn handed itself to the full agent (v1.108.0): the
    *  reason, shown in place of the reply while the agent works. There are no
    *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
@@ -434,6 +440,10 @@ interface ChatResponse {
   denied_tools?: string[];
   /** v1.282.0: the preference sentences this turn kept. */
   remembered?: string[];
+  /** v1.298.0: trust posture of the turn (optional on the wire). */
+  trust?: string;
+  trust_reason?: string;
+  trust_note?: string;
   images?: string[];
   skill?: string;
   tools_used?: string[];
@@ -2106,6 +2116,9 @@ const MessageRow = memo(function MessageRow({
             toolsUsed={m.toolsUsed}
             deniedTools={m.deniedTools}
             remembered={m.remembered}
+            trust={m.trust}
+            trustReason={m.trustReason}
+            trustNote={m.trustNote}
             documents={m.documents}
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
@@ -5482,6 +5495,9 @@ export default function ChatPage() {
           tools_used,
           deniedTools,
           remembered,
+          trust,
+          trustReason,
+          trustNote,
           route,
           provider: servedBy,
           documents: madeDocs,
@@ -5541,6 +5557,15 @@ export default function ChatPage() {
           ...(adapted ? { adapted } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
           ...(remembered?.length ? { remembered } : {}),
+          // Trust (v1.298.0): only a LOW posture lands on the message — a
+          // "full" would be noise on every reply, and absent is today's look.
+          ...(trust === "low"
+            ? {
+                trust,
+                ...(trustReason ? { trustReason } : {}),
+                ...(trustNote ? { trustNote } : {}),
+              }
+            : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
           ...(doors ? { doors } : {}),
@@ -5678,6 +5703,18 @@ export default function ChatPage() {
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.remembered?.length ? { remembered: res.remembered } : {}),
+        // Trust (v1.298.0) — the POST lane's copy of the stream lane's rule.
+        ...(res.trust === "low"
+            ? {
+                trust: res.trust,
+                ...(typeof res.trust_reason === "string" && res.trust_reason
+                  ? { trustReason: res.trust_reason }
+                  : {}),
+                ...(typeof res.trust_note === "string" && res.trust_note
+                  ? { trustNote: res.trust_note }
+                  : {}),
+              }
+            : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
         ...(doorsPost ? { doors: doorsPost } : {}),

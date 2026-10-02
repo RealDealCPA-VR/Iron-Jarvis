@@ -368,6 +368,10 @@ class Config(BaseModel):
     # and its brief + recent activity inject into tagged agent calls.
     active_project_id: str | None = None
     comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
+    #: TRUST posture of a run started from an inbound channel message
+    #: (v1.298.0): "low" (default — it may read and answer, not change memory,
+    #: agents, skills or schedules; ``core/trust.py``) or "full".
+    comm_trust: str = "low"
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
@@ -605,6 +609,15 @@ class Config(BaseModel):
         # global ceiling. validate_assignment=True applies this on PUT /settings too.
         if v not in ("suggest", "act_low", "act_all"):
             raise ValueError("autonomy_level must be suggest | act_low | act_all")
+        return v
+
+    @field_validator("comm_trust")
+    @classmethod
+    def _valid_comm_trust(cls, v: str) -> str:
+        # A typo ("lo", "Full ") must not quietly read as one posture at the
+        # door and another on the row. validate_assignment applies on PUT too.
+        if v not in ("low", "full"):
+            raise ValueError("comm_trust must be low | full")
         return v
 
     @field_validator("browser_access")

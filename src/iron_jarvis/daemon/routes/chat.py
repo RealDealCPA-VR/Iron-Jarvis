@@ -43,12 +43,24 @@ from ..doors import collect_doors, door_for
 # comm inbound poller) run the SAME engine. The helpers are imported BACK
 # here because POST /chat/stream deliberately keeps its own inline copy of
 # the loop (SSE stays out of this arc) and the thread routes share the caps.
+from ...core.trust import (
+    LOW_TRUST_DENY,
+    LOW_TRUST_PROMPT,
+    TRUST_LOW,
+    kept_away,
+    low_trust_overrides,
+    normalize_trust,
+)
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
+    _low_trust_args,
+    _low_trust_invoke_kwargs,
+    _taint_chat_turn,
+    _trust_receipt,
     _DOC_WRITING_TOOLS,
     _ESCALATE_SPEC,
     _ESCALATE_TOOL,
@@ -1596,6 +1608,8 @@ async def stream_chat_turn(
     platform, personas: dict, body, *, should_stop=None, steer_source=None,
     tool_ceiling: "frozenset[str] | None" = None,
     arm_family: "frozenset[str] | None" = None,
+    trust: str = "full",
+    trust_reason: str = "",
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -1707,13 +1721,13 @@ async def stream_chat_turn(
         return await chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=None, tool_ceiling=tool_ceiling,
-            arm_family=arm_family,
+            arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         )
     try:
         inner = await chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
-            arm_family=arm_family,
+            arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         )
     except BaseException:
         # Prep can raise (400/404) before there is any generator to release
@@ -1739,6 +1753,8 @@ async def chat_stream(
     platform, personas: dict, body, *, should_stop=None, steer_source=None,
     handle=None, tool_ceiling: "frozenset[str] | None" = None,
     arm_family: "frozenset[str] | None" = None,
+    trust: str = "full",
+    trust_reason: str = "",
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -1888,11 +1904,26 @@ async def chat_stream(
             resolved_proj = None
     if resolved_proj is not None:
         block = f"\n\n# Project: {resolved_proj.name}"
-        instructions = (resolved_proj.instructions or "").strip()
+        # v1.298.0: the instructions and brief are SCANNED for prompt
+        # injection at the source (core/promptguard.guarded_project_text —
+        # a flagged paragraph becomes "[BLOCKED: …]"; one context.blocked
+        # per (session, source)). Same helper for the stream mirror and the
+        # agent runtime. The clips below are unchanged.
+        from ...core.promptguard import guarded_project_text
+
+        # Off the loop (a CPU-bound scan), clipped to the consumer's 2,000
+        # BEFORE scanning (PERF, wave-4a review). Lock-step with chat_turn.
+        instructions, _brief = await asyncio.to_thread(
+            guarded_project_text,
+            resolved_proj,
+            event_bus=getattr(d.platform, "event_bus", None),
+            session_id="chat",
+            cap=2000,
+        )
         if instructions:
             block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
-        if resolved_proj.brief:
-            block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
+        if _brief:
+            block += f"\n\nAbout this project: {_brief[:1500]}"
         # PROJECT PARITY (v1.141.0): root line + recent-activity recap,
         # the agents/runtime.py _project_context formats. MIRROR NOTE
         # (lock-step): same block in chat_turn.run_chat_turn — edit both
@@ -1904,7 +1935,9 @@ async def chat_stream(
             from ...projects.knowledge import ground
 
             # v1.226.0: embed round-trip off the loop (mirror of chat_turn).
-            knowledge = await asyncio.to_thread(ground, d.platform, pid, recall_query)
+            knowledge = await asyncio.to_thread(
+                ground, d.platform, pid, recall_query, session_id="chat"
+            )
             if knowledge:
                 block += f"\n\nProject knowledge (reference):\n{knowledge}"
         except Exception:  # noqa: BLE001 — retrieval must never break a turn
@@ -1941,7 +1974,14 @@ async def chat_stream(
     learning = getattr(d.platform, "learning", None)
     if learning is not None:
         try:
-            system = learning.apply_to_prompt(system)
+            # Off the loop: each lesson is scanned (promptguard, v1.298.0).
+            # Lock-step with chat_turn.
+            system = await asyncio.to_thread(
+                learning.apply_to_prompt,
+                system,
+                event_bus=getattr(d.platform, "event_bus", None),
+                session_id="chat",
+            )
         except Exception:  # noqa: BLE001 — never block a chat turn
             pass
 
@@ -2037,9 +2077,22 @@ async def chat_stream(
         sk = d.platform.skills.get(body.skill.strip())
         if sk is None:
             raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+        # v1.298.0: an external-root or agent/proposal-made skill is SCANNED
+        # (skills/framework.guarded_instructions — the inject rule); the
+        # user's own and builtin skills ride verbatim. MIRROR NOTE (lock-step).
+        from ...skills.framework import guarded_instructions
+
+        # Off the loop, clipped to the playbook's 8,000 BEFORE the scan
+        # (PERF, wave-4a review). Lock-step with chat_turn.
+        _playbook = await asyncio.to_thread(
+            guarded_instructions,
+            sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
+            cap=8000,
+        )
         system += (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
-            "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
+            "FOLLOW this playbook for this request.\n"
+            + _playbook[:8000]
         )
 
     # CAPABILITY ROSTER (v1.139.0): who could take escalated work — after
@@ -2145,6 +2198,21 @@ async def chat_stream(
     # MIRROR NOTE (lock-step): chat_turn.run_chat_turn carries the same
     # computation — edit both or neither.
     envelope_adapted: "dict[str, Any] | None" = None
+    # TRUST (v1.298.0) — ONE mutable record for the whole turn; the loop in
+    # ``gen()`` below closes over it and mutates it (a taint), so it is a
+    # dict, never three locals. ``trust`` (``"low"``) comes from an
+    # unattended door — the comm poller passes it for a phone turn.
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn carries the same record.
+    _trust_state: dict[str, Any] = {
+        "low": normalize_trust(trust) == TRUST_LOW,
+        "tainted": False,
+        "reason": (
+            (" ".join(str(trust_reason or "").split()) or "started in low trust")
+            if normalize_trust(trust) == TRUST_LOW
+            else ""
+        ),
+        "kept": [],
+    }
     if text_only_pick:
         armed, auto_armed, ask_armed = [], [], []
         tool_specs = []
@@ -2272,6 +2340,17 @@ async def chat_stream(
         # that only filtered `armed` would leave both reachable — and
         # `escalate_to_agent` is the one name that makes a ceiling pointless,
         # because the agent session it starts brings its own full tool set.
+        # LOW TRUST (v1.298.0): the kept-away tools leave EVERY list that
+        # reaches the model — armed, auto_armed and the ask tier — after the
+        # ceiling and before specs/grants, so the model is never shown a
+        # tool it must not be talked into. Recorded once for the receipt.
+        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn — edit both or
+        # neither.
+        if _trust_state["low"]:
+            _trust_state["kept"] = kept_away([*armed, *ask_armed])
+            armed = [t for t in armed if t not in LOW_TRUST_DENY]
+            auto_armed = [t for t in auto_armed if t not in LOW_TRUST_DENY]
+            ask_armed = [t for t in ask_armed if t not in LOW_TRUST_DENY]
         _exit_specs = [
             spec
             for spec in (_ESCALATE_SPEC, _WORKFLOW_DRAFT_SPEC)
@@ -2465,7 +2544,14 @@ async def chat_stream(
         _tool = d.platform.registry.get(_name)
         if _tool is not None:
             overrides[_tool.perm_key()] = "allow"
-    armed_grant = set(overrides.keys())
+    # LOW TRUST (v1.298.0): overrides NARROWED in place (deny wins) and the
+    # one prompt sentence — lock-step with chat_turn. In place, because the
+    # loop in ``gen()`` closes over this dict and a taint narrows it later.
+    if _trust_state["low"]:
+        overrides.update(low_trust_overrides(overrides))
+        system += "\n\n" + LOW_TRUST_PROMPT
+    # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
+    armed_grant = {k for k, v in overrides.items() if v == "allow"}
     # (provider_choice/model_choice were resolved above the attachments.)
 
     # ------------------------------------------------------------------ #
@@ -2808,6 +2894,16 @@ async def chat_stream(
                                                name=tc.name, content=str(content)[:12000]))
                         continue
                     _deny_reason = ""
+                    _deny_label = ""
+                    # LOW TRUST (v1.298.0): a kept-away call (armed BEFORE
+                    # a mid-turn taint, or an ask-tier name) is refused
+                    # through the registry's deny path with the sentence
+                    # that names the cause — and never CARDS. MIRROR NOTE
+                    # (lock-step): chat_turn passes the same kwargs.
+                    _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
+                    if _low_kw:
+                        _deny_reason = _low_kw["deny_reason"]
+                        _deny_label = _low_kw["deny_label"]
                     _grant_extra: set[str] = set()
                     _perm_name = _t.perm_key() if _t is not None else tc.name
                     _mode = d.platform.permissions.mode_for(_perm_name, overrides)
@@ -3000,7 +3096,11 @@ async def chat_stream(
                         # with every existing caller (and every test
                         # double) of this five-argument invoke.
                         result = await d.platform.registry.invoke(
-                            tc.name, tc.arguments, ctx, d.platform.permissions,
+                            tc.name,
+                            # ``shell`` isolates under low trust (v1.298.0)
+                            # — lock-step with chat_turn.
+                            _low_trust_args(_trust_state, tc.name, tc.arguments),
+                            ctx, d.platform.permissions,
                             overrides,
                             session_allow=(armed_grant | _grant_extra),
                             allowed_names=_turn_tools,
@@ -3009,6 +3109,14 @@ async def chat_stream(
                             **(
                                 {"deny_reason": _deny_reason}
                                 if _deny_reason
+                                else {}
+                            ),
+                            # v1.298.0: the low-trust refusal names itself
+                            # on the ledger; a human refusal keeps the
+                            # registry's default label (nothing passed).
+                            **(
+                                {"deny_label": _deny_label}
+                                if _deny_reason and _deny_label
                                 else {}
                             ),
                         )
@@ -3105,6 +3213,14 @@ async def chat_stream(
                             )
 
                             _inj = detect_injection(str(content))
+                            if _inj["flagged"]:
+                                # TAINT (v1.298.0): the rest of this turn is
+                                # low — lock-step with chat_turn (the helper
+                                # narrows ``overrides`` in place and publishes
+                                # ``trust.lowered`` once).
+                                await _taint_chat_turn(
+                                    d, _trust_state, overrides, tc.name, _inj
+                                )
                             content = wrap_untrusted(
                                 f"[content withheld — suspected {_inj['category']}: "
                                 f"{_inj['reason']}]"
@@ -3298,6 +3414,10 @@ async def chat_stream(
             # chat_turn.py carries the identical key — edit both or
             # neither.
             "adapted": envelope_adapted,
+            # TRUST (v1.298.0): trust / trust_reason / trust_note — ALWAYS
+            # PRESENT. MIRROR NOTE (lock-step): chat_turn's response dict
+            # carries the identical keys — edit both or neither.
+            **_trust_receipt(_trust_state),
             "denied_tools": denied_tools,
             "auto_armed": auto_armed,
             "documents": made_docs,

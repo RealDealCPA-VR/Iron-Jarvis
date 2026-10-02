@@ -359,14 +359,29 @@ class AgentFiles:
             current += "\n"
         return self.write_notes(name, current + addition + "\n")
 
-    def notebook_block(self, name: str) -> str:
+    def notebook_block(
+        self, name: str, *, event_bus=None, session_id: "str | None" = None
+    ) -> str:
         """The system-prompt block for a run: ``""`` when the notebook is empty,
         else a ``# Your notebook`` section with the notes head+tail trimmed to
-        :data:`NOTEBOOK_INJECT_CHARS` characters."""
+        :data:`NOTEBOOK_INJECT_CHARS` characters.
+
+        v1.298.0: the notes are SCANNED for prompt injection first
+        (``core/promptguard``) — an agent writes its own notebook, and a tool
+        result it copied in verbatim is exactly how an attack would persist
+        across runs. A flagged paragraph becomes ``[BLOCKED: …]``; the rest of
+        the notebook still loads. ``event_bus``/``session_id`` (optional) let
+        the caller have the one ``context.blocked`` event published."""
+        from ..core.promptguard import guard
+
         notes = self.read_notes(name).strip()
         if not notes:
             return ""
         body = trim_head_tail(notes, NOTEBOOK_INJECT_CHARS)
+        body = guard(
+            body, source=f"notebook of {name}", event_bus=event_bus,
+            session_id=session_id, cap=None,  # trim_head_tail already bounded it
+        )
         return (
             "# Your notebook\n"
             "Your own notes from earlier runs (NOTES.md in your folder; the "

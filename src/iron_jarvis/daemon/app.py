@@ -190,6 +190,19 @@ def _session_view(session, d=None) -> dict[str, Any]:
         "id": session.id,
         "outcome": getattr(session, "outcome", None) or None,
         "waiting_on": waiting_on,
+        # v1.298.0: the TRUST posture, on every row every route serves
+        # (routes/sessions._session_row used to add these alone).
+        "trust": "low" if str(getattr(session, "trust", "") or "").lower() == "low" else "full",
+        "trust_reason": (
+            str(getattr(session, "trust_reason", "") or "")
+            if str(getattr(session, "trust", "") or "").lower() == "low"
+            else ""
+        ),
+        "tainted_at": (
+            getattr(session, "tainted_at", None).isoformat()
+            if getattr(session, "tainted_at", None) is not None
+            else None
+        ),
         "project_id": getattr(session, "project_id", None),
         "task": session.task,
         # Where the session came from (v1.119.0): "schedule:<name>" for

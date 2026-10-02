@@ -13,6 +13,7 @@ import os
 from collections import OrderedDict
 from typing import Any
 
+from ..core.trust import LOW_TRUST_SHELL_REFUSAL
 from ..tools.base import Tool, ToolContext, ToolResult
 from .base import Sandbox, SandboxResult
 from .manager import SandboxManager
@@ -151,7 +152,14 @@ class SandboxedShellTool(Tool):
         # prefer Docker; SandboxManager.get() falls back to native only when the
         # daemon is unreachable (F11).
         isolating = _is_isolating(policy)
-        if isolating and prefer != "docker":
+        # LOW TRUST (v1.298.0): the caller — the agent runtime, for a run
+        # whose effective trust is low — sets ``args["_isolate"] = True``
+        # after the model's own arguments (the model cannot unset it). It
+        # makes isolation MANDATORY: Docker is preferred as under an
+        # isolating policy, and a native fallback is REFUSED below instead of
+        # advised about. The key is ledgered with the call like any argument.
+        must_isolate = bool(args.get("_isolate")) if isinstance(args, dict) else False
+        if (isolating or must_isolate) and prefer != "docker":
             prefer = "docker"
         manager = SandboxManager(policy, prefer=prefer)
 
@@ -168,15 +176,27 @@ class SandboxedShellTool(Tool):
         # copy of this logic lived in the SHADOWED tools/builtins.ShellTool —
         # platform.py registers THIS class under the same name, so the offload
         # has to be here.
-        def _select_and_run() -> tuple[Sandbox, SandboxResult]:
+        def _select_and_run() -> tuple[Sandbox, SandboxResult | None]:
             # Resolve the concrete runtime once so we can tell whether
             # confinement actually held (and warn the operator when it didn't).
             sandbox = manager.get()
+            # Low trust + no Docker: NOTHING runs. The refusal is decided in
+            # the same hop, before any process exists (v1.298.0).
+            if must_isolate and isinstance(sandbox, NativeSandbox):
+                return sandbox, None
             return sandbox, sandbox.run(
                 args["command"], cwd=ctx.workspace, timeout=policy.timeout_s
             )
 
         sandbox, result = await asyncio.to_thread(_select_and_run)
+        if result is None:
+            logger.warning("shell refused under low trust: %s", LOW_TRUST_SHELL_REFUSAL)
+            return ToolResult(
+                ok=False,
+                output="",
+                data={"confinement": "refused", "low_trust": True},
+                error=LOW_TRUST_SHELL_REFUSAL,
+            )
         native_fallback = isinstance(sandbox, NativeSandbox)
         ok = result.returncode == 0 and not result.timed_out
         if result.timed_out:

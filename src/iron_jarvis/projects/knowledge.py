@@ -146,16 +146,44 @@ def remove_knowledge(platform, project_id: str, knowledge_id: str) -> bool:
     return True
 
 
+def _guard_name(platform, rec: ProjectKnowledge, session_id: str | None) -> str:
+    """The item's heading, scanned (a name is 200 chars of somebody's text)."""
+    from ..core.promptguard import guard
+
+    return guard(
+        rec.name, source=f"project knowledge: {rec.name}",
+        event_bus=getattr(platform, "event_bus", None), session_id=session_id,
+    ).replace("\n", " ")
+
+
+def _guard_text(platform, rec: ProjectKnowledge, session_id: str | None) -> str:
+    """The item's text with every flagged paragraph replaced (promptguard)."""
+    from ..core.promptguard import guard
+
+    return guard(
+        rec.text, source=f"project knowledge: {rec.name}",
+        event_bus=getattr(platform, "event_bus", None), session_id=session_id,
+    )
+
+
 def ground(
     platform,
     project_id: str,
     query: str = "",
     *,
     char_budget: int = DEFAULT_GROUND_CHARS,
+    session_id: str | None = None,
 ) -> str:
     """The knowledge text to inject for this project. Small base → include it
     ALL; large base → the query-relevant items (cosine) up to ``char_budget``,
-    falling back to newest-first when there's no usable query/embedder."""
+    falling back to newest-first when there's no usable query/embedder.
+
+    v1.298.0: every item is SCANNED for prompt injection before it rides the
+    prompt (``core/promptguard``): a flagged paragraph becomes a
+    ``[BLOCKED: …]`` placeholder and the rest of the item still loads. One
+    ``context.blocked`` event per (session, item) goes to ``platform.event_bus``
+    when ``session_id`` is given (the chat lanes pass theirs; an agent run may).
+    """
     with session_scope(platform.engine) as db:
         rows = list(
             db.exec(
@@ -227,7 +255,10 @@ def ground(
             if used >= char_budget:
                 break
 
-    blocks = [f"## {r.name}\n{r.text}" for r in chosen]
+    blocks = [
+        f"## {_guard_name(platform, r, session_id)}\n{_guard_text(platform, r, session_id)}"
+        for r in chosen
+    ]
     body = "\n\n".join(blocks)
     if len(body) > char_budget + 500:  # hard clamp (a single huge item)
         body = body[:char_budget].rstrip() + "\n…(truncated)"

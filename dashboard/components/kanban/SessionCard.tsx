@@ -22,6 +22,7 @@ import type { LaneId } from "@/lib/kanban";
 import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
 import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
+import TrustChip from "@/components/TrustChip";
 import { outcomeLabel, waitingLabel } from "@/components/sessions/SessionStatusBadge";
 import { Badge } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
@@ -167,6 +168,13 @@ export function CardInner({
         {/* Provenance (v1.168.0): who dispatched this session. Renders nothing
             for the (historically most common) untagged user-started case. */}
         <OriginChip origin={session.origin} />
+        {/* Trust posture (v1.298.0): a run that started unattended or read
+            flagged content says so beside its origin. Nothing on full trust. */}
+        <TrustChip
+          trust={session.trust}
+          reason={session.trust_reason}
+          taintedAt={session.tainted_at}
+        />
         {waiting && (
           <span data-testid="session-waiting-chip" className="contents">
             <Badge value={waiting} tone="amber" keepCase />

@@ -70,9 +70,22 @@ export interface SessionView {
   /** The ask this run is PAUSED on right now (v1.227.0), or null. Answered
    *  through the same `POST /chat/approvals/{approval_id}` route chat uses. */
   waiting_on?: SessionWaitingOn | null;
+  /** v1.298.0 — trust posture. "low" when the run started from an unattended
+   *  inbound message, or read content flagged as injection mid-run; under
+   *  low trust the run cannot change memory, settings, agents or skills.
+   *  Absent/null on rows from before the column existed = today's look. */
+  trust?: SessionTrust | null;
+  /** Why the run is in low trust ("started from an inbound email message",
+   *  "read content flagged as injection from web_fetch"). */
+  trust_reason?: string | null;
+  /** When trust was LOWERED mid-run (ISO), or null when it started low. */
+  tainted_at?: string | null;
   created_at: string;
   finished_at: string | null;
 }
+
+/** `Session.trust` (v1.298.0) — see the field's doc above. */
+export type SessionTrust = "full" | "low";
 
 /** `Session.outcome` — additive, set at finalize (see SessionStatusBadge). */
 export type SessionOutcome = "completed" | "completed_with_failures" | "needs_you";

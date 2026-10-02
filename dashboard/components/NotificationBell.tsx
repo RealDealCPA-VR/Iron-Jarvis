@@ -16,6 +16,7 @@ import {
   PauseCircle,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
   Wallet,
   Workflow,
   type LucideIcon,
@@ -99,6 +100,50 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: ShieldAlert,
       title: `Safety check: ${title}`,
       body: typeof p.reason === "string" ? p.reason : "",
+    };
+  }
+  if (e.type === "trust.lowered") {
+    // v1.298.0: a run dropped to low trust mid-way — it read content flagged
+    // as injection. Payload: {session_id, tool, category, reason}. Links to
+    // the run, where the banner says what it can no longer change.
+    const sid =
+      typeof p.session_id === "string" && p.session_id
+        ? p.session_id
+        : typeof e.session_id === "string"
+          ? e.session_id
+          : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      // A chat turn has no session row: its taint says session_id "chat".
+      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      icon: ShieldAlert,
+      title: sid === "chat" ? "A chat turn dropped to low trust" : "A run dropped to low trust",
+      body: typeof p.reason === "string" ? p.reason : "",
+    };
+  }
+  if (e.type === "context.blocked") {
+    // v1.298.0: the daemon kept suspicious passages OUT of a run's context.
+    // Payload: {session_id, source, count, categories}. The system did its
+    // job (ShieldCheck, not Alert); the body names what it caught.
+    const sid =
+      typeof p.session_id === "string" && p.session_id
+        ? p.session_id
+        : typeof e.session_id === "string"
+          ? e.session_id
+          : "";
+    const n = typeof p.count === "number" && Number.isFinite(p.count) ? p.count : 0;
+    const source = typeof p.source === "string" && p.source ? p.source : "the context";
+    const cats = Array.isArray(p.categories)
+      ? (p.categories as unknown[]).filter((c): c is string => typeof c === "string" && !!c)
+      : [];
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: sid === "chat" ? "/chat" : sid ? `/sessions/${encodeURIComponent(sid)}` : "/activity",
+      icon: ShieldCheck,
+      title: `Blocked ${n} suspicious passage${n === 1 ? "" : "s"} from ${source}`,
+      body: cats.join(", "),
     };
   }
   if (e.type === "comm.received") {

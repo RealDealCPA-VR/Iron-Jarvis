@@ -18,6 +18,15 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
+from ..core.trust import (
+    LOW_TRUST_DENY,
+    LOW_TRUST_PROMPT,
+    TRUST_LOW,
+    effective_trust,
+    low_trust_overrides,
+    low_trust_refusal,
+    taint_reason,
+)
 from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
@@ -860,6 +869,104 @@ class AgentRuntime:
         #: user answered from the list the escalation carried, and under
         #: ``always_ask`` only the former skips a pause. Reset per run.
         self._run_grants: dict[str, set[str]] = {}
+        #: session id -> True once THIS run's own reading lowered its trust
+        #: (v1.298.0): the fence's ``detect_injection`` flag. Reset per run;
+        #: the row (``Session.trust``/``tainted_at``) is the durable record
+        #: and the ``trust.lowered`` event is published once per session.
+        self._tainted: dict[str, bool] = {}
+
+    # ------------------------------------------------------------------ #
+    # TRUST (v1.298.0) — the posture a call runs under, and how it lowers
+    # ------------------------------------------------------------------ #
+
+    def _low_trust_keys(self) -> frozenset[str]:
+        """``LOW_TRUST_DENY`` plus each listed tool's permission KEY — the
+        engine authorises on ``perm_key()``, so a grouped tool's key must be
+        denied beside its name."""
+        keys = set(LOW_TRUST_DENY)
+        for name in LOW_TRUST_DENY:
+            tool = self.p.registry.get(name)
+            if tool is not None:
+                keys.add(tool.perm_key())
+        return frozenset(keys)
+
+    def _effective_trust(self, session: Session) -> str:
+        return effective_trust(
+            getattr(session, "trust", ""), bool(self._tainted.get(session.id))
+        )
+
+    def _trust_overrides(self, session: Session, agent_def: AgentDefinition) -> dict[str, str]:
+        """The permission overrides a call is authorised with: the
+        definition's own, NARROWED by ``low_trust_overrides`` when the run's
+        effective trust is low. Deny wins; nothing is ever widened."""
+        base = agent_def.permission_overrides
+        if self._effective_trust(session) != TRUST_LOW:
+            return base
+        return low_trust_overrides(base, self._low_trust_keys())
+
+    def _low_trust_refusal_for(self, session: Session, name: str) -> str:
+        """The sentence a kept-away call is refused with under low trust, or
+        ``""`` when the call is not kept away (or the run is full)."""
+        if self._effective_trust(session) != TRUST_LOW:
+            return ""
+        tool = self.p.registry.get(name)
+        perm = tool.perm_key() if tool is not None else name
+        if name in LOW_TRUST_DENY or perm in LOW_TRUST_DENY:
+            return low_trust_refusal(name, bool(self._tainted.get(session.id)))
+        return ""
+
+    def _persist_trust(self, session_id: str, reason: str, at) -> bool:
+        """Write the lowered posture onto the row (blocking — callers hop off
+        the loop), the way ``_persist_grant`` writes a grant. Returns True
+        when the row was written."""
+        with session_scope(self.p.engine) as db:
+            row = db.get(Session, session_id)
+            if row is None:
+                return False
+            row.trust = TRUST_LOW
+            row.trust_reason = reason
+            if getattr(row, "tainted_at", None) is None:
+                row.tainted_at = at
+            db.add(row)
+            db.commit()
+            return True
+
+    async def _lower_trust(self, session: Session, tool_name: str, inj: dict) -> None:
+        """TAINT (v1.298.0): a tool result tripped ``detect_injection``, so
+        from this call on the run is LOW — the kept-away tools are refused at
+        invoke, ``shell`` must isolate. ONCE per session: the row is written
+        off the loop (``_persist_trust``) and the OBJECT in hand updated too
+        (the finalizers ``merge`` it — a stale column would undo the row
+        write, the v1.232.0 grant lesson), and ``trust.lowered`` is
+        published exactly once. Nothing is appended to the prompt: the
+        refusal text is the model's signal (prompt caching)."""
+        if self._tainted.get(session.id):
+            return
+        self._tainted[session.id] = True
+        category = str(inj.get("category") or "")
+        reason = taint_reason(tool_name, category)
+        at = utcnow()
+        session.trust = TRUST_LOW
+        session.trust_reason = reason
+        if getattr(session, "tainted_at", None) is None:
+            session.tainted_at = at
+        try:
+            await asyncio.to_thread(self._persist_trust, session.id, reason, at)
+        except Exception:  # noqa: BLE001 — never fail the run over the record
+            pass
+        try:
+            await self.p.event_bus.publish(
+                EventType.TRUST_LOWERED,
+                {
+                    "session_id": session.id,
+                    "tool": tool_name,
+                    "category": category,
+                    "reason": reason,
+                },
+                session_id=session.id,
+            )
+        except Exception:  # noqa: BLE001 — the bus must never end a run
+            pass
 
     async def _maybe_compact(
         self,
@@ -1021,13 +1128,24 @@ class AgentRuntime:
             "\n\n# Project context",
             f"You are working within the user's project: {project.name}",
         ]
-        if getattr(project, "instructions", "").strip():
+        # v1.298.0: the instructions and brief are SCANNED for prompt
+        # injection at the source (core/promptguard.guarded_project_text —
+        # a flagged paragraph becomes "[BLOCKED: …]"; one context.blocked
+        # per (session, source)). The same helper both chat lanes call.
+        from ..core.promptguard import guarded_project_text
+
+        # ``cap=2000`` = the clips below, applied BEFORE the scan (PERF: a
+        # 20k text is a 2k scan). This method already runs off the loop.
+        _instructions, _brief = guarded_project_text(
+            project, event_bus=self.p.event_bus, session_id=session.id, cap=2000
+        )
+        if _instructions:
             lines.append(
                 "Project instructions (follow these):\n"
-                + project.instructions.strip()[:2000]
+                + _instructions[:2000]
             )
-        if project.brief.strip():
-            lines.append(f"Project brief: {project.brief.strip()[:2000]}")
+        if _brief:
+            lines.append(f"Project brief: {_brief[:2000]}")
         if project.root.strip():
             lines.append(f"Project folder: {project.root.strip()}")
         # Project KNOWLEDGE — the whole base when small, else the parts relevant
@@ -1035,7 +1153,9 @@ class AgentRuntime:
         try:
             from ..projects.knowledge import ground as _ground
 
-            know = _ground(self.p, session.project_id, session.task)
+            # v1.298.0: ``session_id`` lets the knowledge seam scan its
+            # entries and tag the context.blocked event with this run.
+            know = _ground(self.p, session.project_id, session.task, session_id=session.id)
             if know.strip():
                 lines.append("Project knowledge (reference material):\n" + know)
         except Exception:  # noqa: BLE001 — grounding must never break a run
@@ -1131,16 +1251,22 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001 — no folder is never an error
             return ""
 
-    def _notebook_block(self, slug: str) -> str:
+    def _notebook_block(self, slug: str, session_id: str | None = None) -> str:
         """``AgentFiles.notebook_block`` for ``slug`` (≤ NOTEBOOK_INJECT_CHARS
-        plus its heading), or ``""``. Never raises; runs OFF the loop."""
+        plus its heading), or ``""``. Never raises; runs OFF the loop.
+        ``session_id`` (v1.298.0) tags the seam's ``context.blocked``."""
         try:
             from .files import NOTEBOOK_INJECT_CHARS
 
             files = getattr(getattr(self.p, "agents_registry", None), "files", None)
             if files is None:
                 return ""
-            block = str(files.notebook_block(slug) or "")
+            block = str(
+                files.notebook_block(
+                    slug, event_bus=self.p.event_bus, session_id=session_id
+                )
+                or ""
+            )
             # The body is already trimmed; this is the belt for the braces.
             return block[: NOTEBOOK_INJECT_CHARS + 200]
         except Exception:  # noqa: BLE001 — an unreadable notebook must not stop a run
@@ -1190,6 +1316,9 @@ class AgentRuntime:
         # continuation is a NEW session id, so this only clears a rerun of
         # the same id after a crash.
         self._run_grants.pop(session.id, None)
+        # …and no taint (v1.298.0): the row's ``trust`` is what this run
+        # starts from; a lowering is this run's own doing.
+        self._tainted.pop(session.id, None)
         # FX-01 side-channel: resolve the ephemeral per-run stream sink (token
         # deltas + live tool frames -> SSE). A no-op when no browser is subscribed,
         # and absent entirely when the platform exposes no stream hub.
@@ -1270,7 +1399,13 @@ class AgentRuntime:
         default_skills = getattr(self.p.config, "default_skills", None)
         if default_skills:
             try:
-                system_prompt = self.p.skills.inject(system_prompt, default_skills)
+                # v1.298.0: the seam scans a skill's instructions (promptguard)
+                # — a CPU-bound regex pass, so OFF THE LOOP (the v1.153.1 rule).
+                system_prompt = await asyncio.to_thread(
+                    self.p.skills.inject,
+                    system_prompt, default_skills,
+                    event_bus=self.p.event_bus, session_id=session.id,
+                )
             except Exception:
                 pass
         # THE JOB CARD (v1.295.0): a custom agent's own skills ride its
@@ -1280,7 +1415,11 @@ class AgentRuntime:
         own_skills = list(getattr(agent_def, "skills", None) or [])
         if own_skills:
             try:
-                system_prompt = self.p.skills.inject(system_prompt, own_skills)
+                system_prompt = await asyncio.to_thread(  # off the loop (scan)
+                    self.p.skills.inject,
+                    system_prompt, own_skills,
+                    event_bus=self.p.event_bus, session_id=session.id,
+                )
             except Exception:  # noqa: BLE001 — a skill must never break a run
                 pass
         # THE NOTEBOOK (v1.297.0): a custom agent's own NOTES.md, head+tail
@@ -1288,7 +1427,9 @@ class AgentRuntime:
         # A small file read, but a read: off the loop like the budget read.
         # Lands BEFORE the planner runs so its cost is counted (v1.152.0).
         if notebook_slug:
-            notebook = await asyncio.to_thread(self._notebook_block, notebook_slug)
+            notebook = await asyncio.to_thread(
+                self._notebook_block, notebook_slug, session.id
+            )
             if notebook:
                 system_prompt += "\n\n" + notebook
         reports_to = " ".join(str(getattr(agent_def, "reports_to", "") or "").split())
@@ -1297,12 +1438,23 @@ class AgentRuntime:
                 f"\n\nYour manager is {reports_to}. When you are blocked or finished, "
                 f"say so plainly — {reports_to} and the user read your result."
             )
+        # LOW TRUST FROM THE DOOR (v1.298.0): ONE sentence, and only when the
+        # row says low at the start. A run lowered MID-run appends nothing —
+        # the refusal on its next kept-away call is its signal, and a prompt
+        # that changes between steps defeats prompt caching.
+        if self._effective_trust(session) == TRUST_LOW:
+            system_prompt += "\n\n" + LOW_TRUST_PROMPT
         # Self-correction: fold accumulated lessons + user preferences into the
         # system prompt so every run is a little smarter than the last.
         learning = getattr(self.p, "learning", None)
         if learning is not None:
             try:
-                system_prompt = learning.apply_to_prompt(system_prompt)
+                # v1.298.0: the seam scans each lesson (promptguard) — off
+                # the loop, like the two skill injections above.
+                system_prompt = await asyncio.to_thread(
+                    learning.apply_to_prompt,
+                    system_prompt, event_bus=self.p.event_bus, session_id=session.id,
+                )
             except Exception:  # never block a run on the learning layer
                 pass
         # THE IDENTITY SPINE (v1.144.0) — the fix for "it communicates
@@ -1440,8 +1592,10 @@ class AgentRuntime:
             try:
                 # v1.226.0: the v1.173.0 chat-lane offload never reached this
                 # lane — fabric.ground does DB + remote (RAG/MCP) reads.
+                # v1.298.0: the fabric scans each recalled entry (promptguard).
                 grounding = await asyncio.to_thread(
-                    fabric.ground, session.task, project_id=session.project_id
+                    fabric.ground, session.task, project_id=session.project_id,
+                    event_bus=self.p.event_bus, session_id=session.id,
                 )
                 if grounding:
                     system_prompt += grounding
@@ -1615,7 +1769,10 @@ class AgentRuntime:
             return ""
         tool = self.p.registry.get(tc.name)
         perm = tool.perm_key() if tool is not None else tc.name
-        mode = self.p.permissions.mode_for(perm, agent_def.permission_overrides)
+        # The overrides are NARROWED under low trust (v1.298.0): a kept-away
+        # tool resolves to deny here, so it never cards — ``invoke`` refuses
+        # it with the low-trust sentence instead.
+        mode = self.p.permissions.mode_for(perm, self._trust_overrides(session, agent_def))
         if mode is not PermissionMode.ASK:
             # allow runs; a hard deny is refused by ``invoke`` — a session
             # grant never lifts it, in any posture.
@@ -2198,6 +2355,27 @@ class AgentRuntime:
                 # below IS one — that is exactly what happened.
                 deny_label = "refused"
                 grant_extra: set[str] = set()
+                # LOW TRUST (v1.298.0): a kept-away tool — armed or not — is
+                # refused through the registry's ledgered deny path with the
+                # sentence that names the cause, BEFORE any pause: a card for
+                # a call that cannot run would make the user's Allow a lie.
+                # Read per call, so a taint landed by an earlier round of
+                # this run applies to every later call.
+                _low_reason = self._low_trust_refusal_for(session, tc.name)
+                if not deny_reason and _low_reason:
+                    deny_reason = _low_reason
+                    deny_label = "low trust"
+                # …and ``shell`` under low trust must ISOLATE: the sandbox
+                # tool reads ``_isolate`` (sandbox/shell_tool.py) and refuses
+                # the native fallback instead of advising about it. Set after
+                # the model's args, so the model cannot unset it.
+                _args = tc.arguments
+                if (
+                    tc.name == "shell"
+                    and isinstance(_args, dict)
+                    and self._effective_trust(session) == TRUST_LOW
+                ):
+                    _args = {**_args, "_isolate": True}
                 # An UNARMED name never asks the user (v1.227.0): carding a
                 # tool the run may not call, then refusing it, would make the
                 # user's Allow a lie. The registry refuses it as "not armed".
@@ -2239,10 +2417,12 @@ class AgentRuntime:
                         )
                 return await self.p.registry.invoke(
                     tc.name,
-                    tc.arguments,
+                    _args,
                     ctx,
                     self.p.permissions,
-                    agent_def.permission_overrides,
+                    # Narrowed under low trust (v1.298.0); the definition's
+                    # own overrides otherwise — byte-identical to before.
+                    self._trust_overrides(session, agent_def),
                     session_allow=(
                         (session_allow | grant_extra)
                         if grant_extra
@@ -2309,6 +2489,11 @@ class AgentRuntime:
                         )
 
                         inj = detect_injection(content)
+                        if inj["flagged"]:
+                            # TAINT (v1.298.0): the run READ something that
+                            # tried to instruct it; from here on it is low —
+                            # kept-away tools refused, shell isolated. Once.
+                            await self._lower_trust(session, tc.name, inj)
                         content = wrap_untrusted(
                             f"[content withheld — suspected {inj['category']}: {inj['reason']}]"
                             if inj["flagged"]

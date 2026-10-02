@@ -412,13 +412,19 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # a successful remember_preference call kept this turn ([str], always
     # present). Same key in the SSE done frame; the semantics are pinned by
     # tests/test_remembered_receipt_v1282.py.
+    # v1.298.0 (trust): three more — "trust" ("full" | "low"), "trust_reason"
+    # (one sentence or ""), "trust_note" ("low trust: <n> tools kept away" |
+    # null) — the posture the turn ran under, always present. Same keys in
+    # the SSE done frame; semantics pinned by tests/test_trust_posture_v1298.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
         "route", "doors", "adapted", "remembered",
+        "trust", "trust_reason", "trust_note",
     }
     assert body["remembered"] == []
+    assert body["trust"] == "full" and body["trust_reason"] == "" and body["trust_note"] is None
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"
     assert body["attached"] == 0 and body["images"] == 0

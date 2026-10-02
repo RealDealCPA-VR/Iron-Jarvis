@@ -15,6 +15,7 @@ import {
   Download,
   Radio,
   History,
+  ShieldAlert,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -48,6 +49,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { TeamTree } from "@/components/sessions/TeamTree";
 import { SessionFiles } from "@/components/sessions/SessionFiles";
 import OriginChip from "@/components/sessions/OriginChip";
+import TrustChip from "@/components/TrustChip";
 import ConfinementChip from "@/components/sessions/ConfinementChip";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
@@ -314,6 +316,25 @@ export default function SessionDetailPage({
         </Reveal>
       ) : session ? (
         <>
+          {/* Trust posture (v1.298.0): ONE line under the header when the run
+              is in low trust — the daemon's reason, and what that means. A
+              full-trust (or untagged) run shows nothing here. */}
+          {session.trust === "low" && (
+            <Reveal>
+              <div
+                data-testid="trust-banner"
+                role="status"
+                className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3.5 py-2.5 text-[13px] text-amber-200"
+              >
+                <ShieldAlert size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>
+                  This run is in low trust
+                  {session.trust_reason?.trim() ? ` — ${session.trust_reason.trim()}` : ""}.
+                  It cannot change memory, settings, agents or skills.
+                </span>
+              </div>
+            </Reveal>
+          )}
           <Reveal>
             <Card
               title="Summary"
@@ -343,6 +364,11 @@ export default function SessionDetailPage({
                       scheduled/automated session says so where the user reads
                       its outcome. Renders nothing when origin is absent. */}
                   <OriginChip origin={session.origin} />
+                  <TrustChip
+                    trust={session.trust}
+                    reason={session.trust_reason}
+                    taintedAt={session.tainted_at}
+                  />
                   {session.provider === "mock" && <MockChip />}
                   {/* v1.232.0 (audit T5): ONE chip per session when any shell
                       call ran on the native runtime with the policy

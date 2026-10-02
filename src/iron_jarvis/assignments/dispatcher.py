@@ -343,6 +343,18 @@ class AssignmentDispatcher:
             task = row.task
             if row.reason:
                 task = f"{task}\n\nWhy this was assigned: {row.reason}"
+            # TRUST (v1.298.0): the assignment row carries nothing new. A job
+            # an AGENT queued (``source == "agent:<session id>"``) inherits
+            # that parent's posture when the parent is low — trust flows
+            # down, never up; a user-queued or retried row is full.
+            _trust, _trust_reason = None, ""
+            _src = str(getattr(row, "source", "") or "")
+            if _src.startswith("agent:"):
+                from ..agents.orchestrator import inherited_trust
+
+                # Off the loop, like every other store/DB read in this file.
+                _parent = await asyncio.to_thread(orch.get_session, _src[len("agent:"):])
+                _trust, _trust_reason = inherited_trust(_parent)
             session = await orch.create_session(
                 task,
                 agent_type,
@@ -355,6 +367,8 @@ class AssignmentDispatcher:
                 max_steps=max_steps,
                 agent_name=assignee,
                 approval_mode=str(getattr(record, "approval_mode", "") or "") or None,
+                trust=_trust,
+                trust_reason=_trust_reason,
             )
         except Exception as exc:  # noqa: BLE001 — a job that cannot start FAILS, honestly
             log.warning("assignment %s could not start: %s", row.id, exc)

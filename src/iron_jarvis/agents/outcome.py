@@ -185,6 +185,11 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
         # clock answered — see ``derive_outcome``.
         "outcome": None,
         "unanswered_asks": 0,
+        # v1.298.0: the TRUST posture the run ended under and why — so the
+        # card/SSE frame can show a chip. "full" / "" for every row from
+        # before the columns existed (additive, never absent).
+        "trust": "full",
+        "trust_reason": "",
     }
     try:
         with session_scope(engine) as db:
@@ -193,6 +198,12 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
                 return out
             out["found"] = True
             out["status"] = getattr(session.status, "value", str(session.status))
+            out["trust"] = (
+                "low" if str(getattr(session, "trust", "") or "").lower() == "low" else "full"
+            )
+            out["trust_reason"] = (
+                str(getattr(session, "trust_reason", "") or "") if out["trust"] == "low" else ""
+            )
             out["task"] = (session.task or "")[:400]
             out["summary"] = (session.summary or "")[:2000]
             workspace = session.workspace_path or ""

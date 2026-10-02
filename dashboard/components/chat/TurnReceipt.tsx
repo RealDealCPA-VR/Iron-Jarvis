@@ -48,6 +48,8 @@ import {
   Gauge,
   Loader2,
   Route as RouteIcon,
+  ShieldAlert,
+  ShieldCheck,
   Undo2,
   Wrench,
 } from "lucide-react";
@@ -61,6 +63,35 @@ import {
 export interface TurnAdapted {
   model?: string;
   changes?: string[];
+}
+
+/** One "context.blocked" notice folded into the receipt (v1.298.0): the
+ *  daemon kept `count` passages flagged as injection out of the context,
+ *  from `source` (a tool or channel). */
+export interface TurnBlocked {
+  source?: string;
+  count?: number;
+}
+
+/** The blocked rows worth saying: a positive count, with its source (or
+ *  "context" when the daemon named none). Crosses a JSON boundary, so the
+ *  shape is checked at runtime — a row with no count says nothing. */
+export function blockedRows(
+  blocked: TurnBlocked[] | null | undefined,
+): { source: string; count: number }[] {
+  if (!Array.isArray(blocked)) return [];
+  const out: { source: string; count: number }[] = [];
+  for (const b of blocked) {
+    if (!b || typeof b !== "object") continue;
+    const n =
+      typeof b.count === "number" && Number.isFinite(b.count) && b.count > 0
+        ? Math.floor(b.count)
+        : 0;
+    if (n === 0) continue;
+    const source = typeof b.source === "string" ? b.source.trim() : "";
+    out.push({ source: source || "context", count: n });
+  }
+  return out;
 }
 
 /**
@@ -138,6 +169,18 @@ export interface TurnReceiptProps {
   remembered?: string[];
   /** ABSOLUTE paths of files this turn created or edited. */
   documents?: string[];
+  /** v1.298.0: the turn's trust posture from the done frame — "low" when the
+   *  turn ran under low trust (it could not change memory, settings, agents
+   *  or skills). OPTIONAL on the wire; absent renders nothing. */
+  trust?: string | null;
+  /** v1.298.0: the daemon's reason for low trust, said on the quiet line. */
+  trustReason?: string | null;
+  /** v1.298.0: the daemon's one-line note ("low trust: 4 tools kept away"),
+   *  shown beside the reason when present. */
+  trustNote?: string | null;
+  /** v1.298.0: suspicious passages the daemon kept OUT of the context this
+   *  turn, per source. Absent/empty renders nothing. */
+  blocked?: TurnBlocked[] | null;
   usage?: { input_tokens?: number; output_tokens?: number } | null;
   /** 0..1 context pressure, when known. */
   contextPct?: number | null;
@@ -264,6 +307,10 @@ export function TurnReceipt({
   deniedTools = [],
   remembered = [],
   documents = [],
+  trust,
+  trustReason,
+  trustNote,
+  blocked,
   usage,
   contextPct,
   onOpenDocument,
@@ -309,7 +356,20 @@ export function TurnReceipt({
   // carrying a WARNING always renders — the warning is the whole point; an
   // adaptation note alone also renders (a bent turn must never be silent).
   const kept = names(remembered);
-  if (!rt && !tools.length && !denied.length && !docs.length && !adaptedText && !kept.length) {
+  // v1.298.0: the trust posture and the context the daemon kept out. Both
+  // OPTIONAL on the wire this wave — absent fields add nothing to the line.
+  const lowTrust = trust === "low";
+  const blockedOut = blockedRows(blocked);
+  if (
+    !rt &&
+    !tools.length &&
+    !denied.length &&
+    !docs.length &&
+    !adaptedText &&
+    !kept.length &&
+    !lowTrust &&
+    !blockedOut.length
+  ) {
     return null;
   }
 
@@ -378,6 +438,40 @@ export function TurnReceipt({
     parts.push(
       <span key="remembered" data-testid="turn-remembered" className="text-accent-soft">
         Remembered: {kept.join("; ")}
+      </span>,
+    );
+  }
+  if (lowTrust) {
+    // v1.298.0: a turn that ran under low trust says so on the line — amber,
+    // because it is a restriction the user did not choose; the reason is the
+    // daemon's own words when it gave them.
+    const why = (trustReason ?? "").trim();
+    // The note often opens with the same two words ("low trust: 4 tools
+    // kept away") — said once, not twice.
+    const note = (trustNote ?? "").trim().replace(/^low trust:?\s*/i, "");
+    const head = why ? `low trust: ${why}` : "low trust";
+    parts.push(
+      <span
+        key="trust"
+        data-testid="turn-trust"
+        className="inline-flex items-center gap-1 text-amber-300"
+      >
+        <ShieldAlert size={10} className="shrink-0" />
+        {note ? `${head} — ${note}` : head}
+      </span>,
+    );
+  }
+  for (const b of blockedOut) {
+    // v1.298.0: passages the daemon kept out of the context. Quiet zinc with
+    // a check — the system did its job; this is disclosure, not a warning.
+    parts.push(
+      <span
+        key={`blocked-${b.source}`}
+        data-testid="turn-context-blocked"
+        className="inline-flex items-center gap-1 text-zinc-500"
+      >
+        <ShieldCheck size={10} className="shrink-0" />
+        {b.count} blocked from {b.source}
       </span>,
     );
   }

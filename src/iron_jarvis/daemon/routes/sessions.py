@@ -125,6 +125,12 @@ def _session_row(d, session) -> dict[str, Any]:
     * ``waiting_on`` — ``{approval_id, tool}`` while the run is paused on an
       ask, else None — so the kanban and the session page can show a paused
       run as waiting for the user instead of as ordinary running work.
+
+    v1.298.0: ``trust`` (``"full"`` | ``"low"``), ``trust_reason`` (one
+    sentence or ``""``) and ``tainted_at`` (ISO or None) — the session's
+    TRUST posture — ride ``_session_view`` itself (``app.py``), so EVERY
+    route that serves a row carries them; nothing is added here (one
+    renderer, so the pin on this route covers them all).
     """
     return _session_view(session, d)
 

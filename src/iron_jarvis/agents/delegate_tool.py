@@ -190,6 +190,7 @@ class DelegateTool(Tool):
             child_fanout_key,
             child_slot,
             inherited_grants,
+            inherited_trust,
             inherited_workspace_root,
         )
         from .runtime import AgentRuntime
@@ -359,6 +360,7 @@ class DelegateTool(Tool):
         # parent's job, so a Team worker can use the shell the user already
         # allowed. Never the origin — see ``inherited_grants``.
         allow_tools, approval_mode = inherited_grants(parent)
+        _trust, _trust_reason = inherited_trust(parent)
         # The job card's posture and step budget apply when the caller states
         # none (v1.295.0); ``create_session`` normalises the posture.
         max_steps = None
@@ -392,6 +394,10 @@ class DelegateTool(Tool):
                 # makes attribution survive a dropped or renamed event instead
                 # of silently falling back to the base type.
                 agent_name=target_name,
+                # …and the TRUST posture (v1.298.0): a low parent's child is
+                # low — trust only flows down (``inherited_trust``).
+                trust=_trust,
+                trust_reason=_trust_reason,
             )
             await publish_delegation_started(
                 self.platform,

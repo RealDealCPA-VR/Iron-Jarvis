@@ -423,7 +423,15 @@ def rag_block(name: str, text: str, query: str, embedder, *,
     "recovered via OCR (3 of 9 pages transcribed)". It rides its own line right
     under the header so a retrieval answer can never be mistaken for a reading
     of a document nobody could actually read. Omitted = the pre-v1.174.0 block,
-    character for character."""
+    character for character.
+
+    v1.298.0: ``text`` is SCANNED for prompt injection before it is chunked
+    (``core/promptguard``, source "attachment <name>") — a flagged paragraph is
+    a ``[BLOCKED: …]`` placeholder in the index, never a retrievable excerpt.
+    No cap here: ``MAX_CHUNKS`` already bounds what is indexed."""
+    from ..core.promptguard import guard
+
+    text = guard(text, source=f"attachment {name}", cap=None)
     chunks = chunk_text(text)
     capped = len(text) > 0 and (len(chunks) >= MAX_CHUNKS)
     top = retrieve(embedder, chunks, query, k=k)

@@ -796,6 +796,14 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         ...(res.adapted ? { adapted: res.adapted } : {}),
         ...(res.tools_used?.length ? { toolsUsed: res.tools_used } : {}),
         ...(res.deniedTools?.length ? { deniedTools: res.deniedTools } : {}),
+        // Trust (v1.298.0): the chat page's rule — only a LOW posture lands.
+        ...(res.trust === "low"
+          ? {
+              trust: res.trust,
+              ...(res.trustReason ? { trustReason: res.trustReason } : {}),
+              ...(res.trustNote ? { trustNote: res.trustNote } : {}),
+            }
+          : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(res.doors?.length ? { doors: res.doors } : {}),
       };
@@ -1078,6 +1086,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 adapted={m.adapted}
                 toolsUsed={m.toolsUsed}
                 deniedTools={m.deniedTools}
+                trust={m.trust}
+                trustReason={m.trustReason}
+                trustNote={m.trustNote}
                 documents={m.documents}
               />
               <DoorsStrip doors={m.doors} />

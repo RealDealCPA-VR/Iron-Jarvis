@@ -997,8 +997,12 @@ class InboundPoller:
         # allowlist reads it, so a session the phone started may ask back
         # through the phone — which only works because the poll keeps reading
         # the phone while the job waits (v1.291.0, io-03).
+        # LOW TRUST (v1.298.0): a run the phone started may read and answer,
+        # not change what the next run reads (``_comm_trust``).
+        _trust, _trust_reason = self._comm_trust(name)
         session = await self.orchestrator.create_session(
-            text, self.agent_type, origin=f"comm:{name}"
+            text, self.agent_type, origin=f"comm:{name}",
+            trust=_trust, trust_reason=_trust_reason,
         )
         await self._publish(
             EventType.COMM_RECEIVED,
@@ -1110,7 +1114,11 @@ class InboundPoller:
         project_id = str(getattr(thread, "project_id", "") or "")
         body = ChatBody(messages=history, auto_tools=True, project_id=project_id)
         try:
-            result = await self.chat_turn(self.platform, self.personas, body)
+            # LOW TRUST (v1.298.0): the lane drops its auto-armed memory
+            # writers for a turn the phone started (``_chat_turn_kwargs``).
+            result = await self.chat_turn(
+                self.platform, self.personas, body, **self._chat_turn_kwargs(name)
+            )
         except HTTPException as exc:
             reply = f"I hit a problem: {exc.detail}"
             if tid:
@@ -1200,11 +1208,16 @@ class InboundPoller:
         # The escalated session inherits the thread's project tag (the same
         # kwarg the dashboard passes when escalating desktop chat), so the
         # run gets the project's brief/knowledge/recent-activity spine.
+        # LOW TRUST (v1.298.0): the escalated run is still a run the phone
+        # started — same posture as the one-shot door (``_comm_trust``).
+        _trust, _trust_reason = self._comm_trust(name)
         session = await self.orchestrator.create_session(
             task,
             agent_type,
             project_id=project_id or None,
             origin=f"comm:{name}",  # v1.231.0 (AE17): may ask back via the phone
+            trust=_trust,
+            trust_reason=_trust_reason,
             **_spawn_kwargs,
         )
         await self._publish(
@@ -1755,6 +1768,43 @@ class InboundPoller:
             outbound_suffix=self._pending_reminder(name, msg.sender_id),
             prompt_id=prompt.id, approval_id=prompt.ref_id,
         )
+
+    def _comm_trust(self, channel: str) -> tuple[str | None, str]:
+        """The TRUST posture a session started from an inbound message gets
+        (v1.298.0): ``("low", "started from an inbound <channel> message")``
+        unless ``config.comm_trust`` (read via getattr; default ``"low"``)
+        says ``"full"``. A phone message is an unattended door — nobody
+        watched what the sender pasted — so what it starts may read and
+        answer but not change memory, agents, skills or schedules."""
+        # ``Config.comm_trust`` is a validated field ("low" | "full"); the
+        # getattr default only covers a platform double with no config.
+        cfg = getattr(self.platform, "config", None)
+        setting = str(getattr(cfg, "comm_trust", "low") or "low").strip().lower()
+        if setting == "full":
+            return None, ""
+        return "low", f"started from an inbound {channel} message"
+
+    def _chat_turn_kwargs(self, channel: str) -> dict[str, Any]:
+        """``{"trust": "low", "trust_reason": "started from an inbound
+        <channel> message"}`` for the injected chat turn when the comm door
+        is low — and ``{}`` when the injected callable cannot take it (a test
+        fake with three positional parameters and no ``**kw``), so an older
+        double keeps working while the real lanes get the posture."""
+        trust, reason = self._comm_trust(channel)
+        if trust is None:
+            return {}
+        fn = self.chat_turn
+        try:
+            import inspect
+
+            params = inspect.signature(fn).parameters.values()
+        except (TypeError, ValueError):
+            return {}
+        takes = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD or p.name == "trust"
+            for p in params
+        )
+        return {"trust": trust, "trust_reason": reason} if takes else {}
 
     async def _publish(self, etype: str, payload: dict[str, Any], **kw: Any) -> None:
         if self.event_bus is None:

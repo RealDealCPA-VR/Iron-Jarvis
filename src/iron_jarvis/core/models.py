@@ -184,6 +184,22 @@ class Session(SQLModel, table=True):
     #: dismisses it. The bell and the Overview offer Continue while it is set.
     #: Additive nullable column (auto-reconciled on boot, like ``outcome``).
     interrupted_at: datetime | None = None
+    #: TRUST POSTURE (v1.298.0): ``"full"`` | ``"low"``. A run started from an
+    #: inbound channel message, the child of a low-trust run, or a run whose
+    #: own reading tripped the injection scanner is LOW: the tools that write
+    #: durable state the next run reads (``core.trust.LOW_TRUST_DENY``) are
+    #: kept away and ``shell`` must run in the isolating sandbox. Normalised
+    #: at ``create_session`` (``""`` reads as full); continue/rerun and the
+    #: three child doors inherit it. Additive column (auto-reconciled).
+    trust: str = "full"
+    #: One sentence saying WHY the run is low (``"started from an inbound
+    #: telegram message"``, ``"read content flagged as … from web_fetch"``);
+    #: ``""`` when full. Additive column (auto-reconciled).
+    trust_reason: str = ""
+    #: Set the FIRST time this run's own reading lowered it mid-run (the
+    #: fence's ``detect_injection`` flag); None for a run that was low from
+    #: its door or never lowered. Additive nullable column (auto-reconciled).
+    tainted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

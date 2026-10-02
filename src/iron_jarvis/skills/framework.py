@@ -122,6 +122,49 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+#: Skill sources that are the user's own words (or ours) and are NOT scanned.
+TRUSTED_SKILL_SOURCES = frozenset({"builtin", "user"})
+#: ``created_by`` values that mean somebody other than the user wrote the file.
+SCANNED_CREATED_BY = frozenset({"agent", "proposal"})
+
+
+def scans_skill(skill: Skill) -> bool:
+    """True when ``skill``'s instructions must go through the injection scan
+    before they ride a prompt (v1.298.0): an external root (claude / codex /
+    plugins / custom) or a file an agent or a proposal wrote."""
+    source = str(getattr(skill, "source", "") or "").strip().lower()
+    created_by = str(getattr(skill, "created_by", "") or "").strip().lower()
+    return source not in TRUSTED_SKILL_SOURCES or created_by in SCANNED_CREATED_BY
+
+
+def guarded_instructions(
+    skill: Skill,
+    *,
+    event_bus=None,
+    session_id: "str | None" = None,
+    cap: "int | None" = None,
+) -> str:
+    """``skill.instructions`` as a prompt may carry them (v1.298.0): scanned
+    through ``core/promptguard`` when :func:`scans_skill` says so, verbatim
+    otherwise. ``inject`` and the user-invoked "/skill" playbook in BOTH chat
+    lanes call this — one rule, one place. ``cap`` (wave-4a review, PERF) is
+    the caller's own HEAD clip (the playbook's ``[:8000]``), applied before
+    the scan so the scan never reads what the prompt will not carry."""
+    text = skill.instructions
+    if cap and cap > 0:
+        text = text[:cap]
+    if not scans_skill(skill):
+        return text
+    from ..core.promptguard import guard
+
+    return guard(
+        text,
+        source=f"skill {skill.name} ({skill.source})",
+        event_bus=event_bus,
+        session_id=session_id,
+    )
+
+
 class SkillRegistry:
     """In-memory registry of discovered skills (§23)."""
 
@@ -250,7 +293,14 @@ class SkillRegistry:
         scored.sort(key=lambda pair: (-pair[0], pair[1].name))
         return [skill for _, skill in scored[:k]]
 
-    def inject(self, system_prompt: str, skill_names: list[str]) -> str:
+    def inject(
+        self,
+        system_prompt: str,
+        skill_names: list[str],
+        *,
+        event_bus=None,
+        session_id: "str | None" = None,
+    ) -> str:
         """Append a ``# Skills`` section with each named skill's instructions.
 
         Every name that actually lands in the prompt is reported to
@@ -258,6 +308,15 @@ class SkillRegistry:
         from "never touched"; an unknown name is not an injection and is not
         counted. This is NOT a use: ``use_count`` stays "the agent chose to
         load it" (``skill_load``), and the inject tally is its own column.
+
+        v1.298.0: a skill that did NOT come from the user is SCANNED for prompt
+        injection before it rides the prompt (``core/promptguard``) — one
+        pulled in from ``~/.claude`` / ``~/.codex`` / a plugin / an extra
+        search path (``source`` not builtin/user), or one an agent or a
+        learning proposal wrote (``created_by`` agent/proposal). The user's
+        OWN skills and the bundled builtins are injected verbatim: they are
+        the user's words, and "ignore the above" in a playbook the user wrote
+        is an instruction, not an attack. See :func:`scans_skill`.
         """
         blocks: list[str] = []
         injected: list[str] = []
@@ -265,7 +324,10 @@ class SkillRegistry:
             skill = self._skills.get(name)
             if skill is None:
                 continue
-            blocks.append(f"## {skill.name}\n{skill.instructions}")
+            instructions = guarded_instructions(
+                skill, event_bus=event_bus, session_id=session_id
+            )
+            blocks.append(f"## {skill.name}\n{instructions}")
             injected.append(skill.name)
         if not blocks:
             return system_prompt

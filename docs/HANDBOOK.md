@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.297.0 (2026-09-14).*
+holds itself to. Current as of v1.298.0 (2026-09-14).*
 
 ---
 
@@ -1628,6 +1628,25 @@ them (you, an agent, a proposal), a pin keeps one forever, and a daily sweep
 the whole skills folder is backed up first, archived skills sit in
 `skills/.archive/` and Restore brings one back). The Skills page has the
 curator panel with a dry run that only lists what it would do.
+**v1.298.0 — trust, scoped.** A run now has a trust posture. It drops to
+**low trust** in two cases: it started from an inbound message on the phone,
+Slack or email (unattended work from outside the app; `comm_trust` in
+settings turns this off), or, mid-run, it read something that looked like an
+instruction smuggled into content — a web page, a document, a tool result.
+In low trust the run keeps working, but it cannot change your memory,
+preferences, settings, agents or skills, cannot queue work for teammates, and
+a shell command must run in the sandbox (no sandbox reachable = refused in
+plain words). The reason is on the session card and the session page as a
+"low trust" chip and a banner, the bell says when a run dropped, and the
+chat receipt carries a quiet line ("low trust: 4 tools kept away").
+Teammates it delegates to inherit the posture. And every piece of context
+that is injected into a prompt — project knowledge and instructions, an
+agent's notebook, skills from outside the app or written by agents, uploaded
+documents, retrieved memory, lessons — is now scanned first: a passage that
+reads like an injection is replaced with `[BLOCKED: … — removed from <source>]`
+while the rest loads unchanged (very long files are trimmed in the middle),
+and the bell says how many passages were blocked and where. Your own
+instructions and your own skills are never scanned: they are your words.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

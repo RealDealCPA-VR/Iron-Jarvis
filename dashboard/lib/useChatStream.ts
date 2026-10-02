@@ -84,6 +84,12 @@ export type SSEEvent =
       denied_tools?: string[];
       /** v1.282.0: the preference sentences this turn kept. */
       remembered?: string[];
+      /** v1.298.0: the turn's trust posture ("full" | "low"), the daemon's
+       *  reason, and its one-line note ("low trust: 4 tools kept away").
+       *  All optional on the wire; absent on older daemons. */
+      trust?: string;
+      trust_reason?: string;
+      trust_note?: string;
       /** SERVER-derived doors into the surfaces this turn touched (v1.199.0)
        *  — executed-ok tools only, files excluded (the ArtifactsRail owns
        *  files). The client renders, never derives. */
@@ -137,6 +143,10 @@ export interface ChatStreamResult {
   deniedTools?: string[];
   /** v1.282.0: the preference sentences this turn kept (remember_preference). */
   remembered?: string[];
+  /** v1.298.0: trust posture of the turn — see the done-frame fields. */
+  trust?: string;
+  trustReason?: string;
+  trustNote?: string;
   /** Server-side route disclosure (v1.165.0) — see the done-frame field. */
   route?: {
         requested?: string;
@@ -311,6 +321,14 @@ export function sseEventFrom(
         ev.remembered = (data.remembered as unknown[]).filter(
           (x): x is string => typeof x === "string" && x.length > 0,
         );
+      // Trust (v1.298.0): the posture, its reason and its note — strings
+      // only, each absent when the daemon sent none (whitelist, like
+      // remembered: an un-listed field dies here silently).
+      if (typeof data.trust === "string" && data.trust) ev.trust = data.trust;
+      if (typeof data.trust_reason === "string" && data.trust_reason)
+        ev.trust_reason = data.trust_reason;
+      if (typeof data.trust_note === "string" && data.trust_note)
+        ev.trust_note = data.trust_note;
       // Doors (v1.199.0): pass through verbatim — this decoder WHITELISTS
       // fields, so an un-listed field silently vanishes from exactly the lane
       // users watch (the denied_tools lesson, learned twice already).
@@ -902,6 +920,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 tools_used: ev.tools_used,
                 deniedTools: ev.denied_tools,
                 remembered: ev.remembered,
+                trust: ev.trust,
+                trustReason: ev.trust_reason,
+                trustNote: ev.trust_note,
                 doors: ev.doors,
                 adapted: ev.adapted,
                 route: ev.route,

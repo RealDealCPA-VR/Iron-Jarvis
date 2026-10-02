@@ -40,6 +40,9 @@ interface FieldDef {
   hint?: string;
   placeholder?: string;
   options?: string[];
+  /** v1.298.0: plain words for an option's value in the <select>; the VALUE
+   *  stays the daemon's token. An option without a label shows its value. */
+  optionLabels?: Record<string, string>;
   /** Marks settings that only fully apply after a daemon restart. */
   restart?: boolean;
 }
@@ -243,6 +246,25 @@ const FIELDS: FieldDef[] = [
     hint: "How long one tool call inside an agent run may take before it is stopped and recorded as failed; the run then continues. 0 = no deadline.",
   },
   {
+    // v1.298.0: the trust posture of a run nobody is watching. "low" (the
+    // default) keeps an inbound-started run away from memory, settings,
+    // agents and skills; the session wears a "low trust" chip either way
+    // when it read flagged content mid-run.
+    key: "comm_trust",
+    label: "Runs started from inbound messages (phone, Slack, email)",
+    type: "select",
+    section: "automation",
+    options: ["low", "full"],
+    optionLabels: {
+      low: "Low trust (default) — cannot change memory, settings, agents or skills",
+      full: "Full trust",
+    },
+    hint:
+      "A message that arrives while you are away starts a run on its own. Under low trust that run can read and " +
+      "answer but cannot change your memory, settings, agents or skills — the session page says so. Full trust " +
+      "lets it do everything a run you started can.",
+  },
+  {
     key: "autonomy_enabled",
     label: "Autonomy (the pulse)",
     type: "boolean",
@@ -410,7 +432,7 @@ function FieldRow({
       >
         {allOpts.map((opt) => (
           <option key={opt} value={opt}>
-            {opt}
+            {def.optionLabels?.[opt] ?? opt}
           </option>
         ))}
       </select>

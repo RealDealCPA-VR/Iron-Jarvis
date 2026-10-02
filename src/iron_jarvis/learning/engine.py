@@ -183,18 +183,47 @@ class LearningEngine:
             return list(db.exec(query))
 
     def apply_to_prompt(
-        self, system_prompt: str, *, scope: str | None = "user", limit: int = 8
+        self,
+        system_prompt: str,
+        *,
+        scope: str | None = "user",
+        limit: int = 8,
+        event_bus=None,
+        session_id: "str | None" = None,
     ) -> str:
         """Append the top lessons to ``system_prompt`` — the self-correction step.
 
         Returns the prompt unchanged when there is nothing learned yet.
+
+        v1.298.0: each lesson line is SCANNED for prompt injection
+        (``core/promptguard``, source "lessons") and a flagged lesson is
+        DROPPED, not placeholder'd — a ``- [BLOCKED: …]`` bullet under "what
+        I've learned" would read as a lesson. A lesson is model-distilled
+        from a session's text, which is how an attack would get here.
         """
+        from ..core.promptguard import publish_blocked, scan_context
+
         items = self.lessons(
             scope=scope, limit=limit, exclude_sources=_PROMPT_EXCLUDED_SOURCES
         )
         if not items:
             return system_prompt
-        bullets = "\n".join(f"- {lesson.text}" for lesson in items)
+        kept: list[str] = []
+        dropped = None
+        for lesson in items:
+            result = scan_context(lesson.text, source="lessons")
+            if result.blocked:
+                if dropped is None:
+                    dropped = result
+                else:
+                    dropped.blocked.extend(result.blocked)
+                continue
+            kept.append(result.text)
+        if dropped is not None:
+            publish_blocked(event_bus, session_id, dropped)
+        if not kept:
+            return system_prompt
+        bullets = "\n".join(f"- {text}" for text in kept)
         return f"{system_prompt}{_LESSONS_HEADING}{bullets}"
 
     def counts_by_source(self, scope: str | None = "user") -> dict[str, int]:

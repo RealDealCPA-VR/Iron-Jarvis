@@ -25,6 +25,7 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
+from ..core.trust import TRUST_LOW as _TRUST_LOW, normalize_trust as _normalize_trust
 from ..core.models import (
     SESSION_MAX_STEPS_MAX,
     SESSION_MAX_STEPS_MIN,
@@ -132,6 +133,22 @@ def inherited_workspace_root(config, parent: Session | None) -> str | None:
     if not path or not is_direct_workspace(config, path):
         return None
     return str(path)
+
+
+def inherited_trust(parent: Session | None) -> tuple[str | None, str]:
+    """The TRUST posture a child (delegate / spawn_agent / an agent-queued
+    assignment) inherits from its parent: ``(trust, trust_reason)``
+    (v1.298.0). A low parent hands down ``("low", <its reason>)``; a full or
+    unknown parent hands down ``(None, "")`` so ``create_session`` applies
+    its default. Trust only ever flows DOWN: a child never starts higher
+    than the run that asked for it, because the ask itself came from a run
+    that may be acting on flagged content."""
+    from ..core.trust import TRUST_LOW, normalize_trust
+
+    if parent is None or normalize_trust(getattr(parent, "trust", "")) != TRUST_LOW:
+        return None, ""
+    reason = " ".join(str(getattr(parent, "trust_reason", "") or "").split())
+    return TRUST_LOW, reason or "inherited from a low-trust parent run"
 
 
 def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
@@ -576,8 +593,16 @@ class Orchestrator:
         max_steps: int | None = None,
         agent_name: str | None = None,
         approval_mode: str | None = None,
+        trust: str | None = None,
+        trust_reason: str = "",
     ) -> Session:
         """Create (never start) a session row.
+
+        ``trust`` / ``trust_reason`` (v1.298.0): the posture the DOOR states —
+        ``"low"`` for a run started from an inbound message or by a low
+        parent, anything else (None, "", "full") normalises to full HERE, at
+        the one door every session passes (``core.trust.normalize_trust``).
+        The reason is kept only when the row is low.
 
         ``approval_mode`` (v1.232.0, audit A7) is the chat posture the
         escalation carried — normalised through ``inherited_approval_mode``
@@ -658,6 +683,13 @@ class Orchestrator:
             # The folder note (see ``_project_folder``) rides ``summary`` until
             # the run finishes; the finalizers keep it under the result.
             summary=note,
+            # THE TRUST POSTURE (v1.298.0), normalised at this one door.
+            trust=_normalize_trust(trust),
+            trust_reason=(
+                " ".join(str(trust_reason or "").split())
+                if _normalize_trust(trust) == _TRUST_LOW
+                else ""
+            ),
         )
         if direct_root is not None:
             direct_root.mkdir(parents=True, exist_ok=True)
@@ -1330,6 +1362,10 @@ class Orchestrator:
             # …and the POSTURE (v1.232.0, A7) — the same inputs, the same
             # rule about which calls pause.
             approval_mode=getattr(prev, "approval_mode", "") or None,
+            # …and the TRUST posture (v1.298.0): a rerun of a low-trust
+            # session is the same inputs from the same door.
+            trust=getattr(prev, "trust", "") or None,
+            trust_reason=getattr(prev, "trust_reason", "") or "",
         )
 
     def _rerun_direct_root(self, prev: Session) -> str | None:
@@ -1420,6 +1456,15 @@ class Orchestrator:
             # after the first — turning an honest instant denial into a silent
             # 300s pause that ends in timeout-deny.
             origin=getattr(prev, "origin", None),
+            # …and the TRUST posture (v1.298.0) — a follow-up turn on a run
+            # that started from the phone, or read flagged content, is the
+            # same run as far as what it may change.
+            trust=_normalize_trust(getattr(prev, "trust", "")),
+            trust_reason=(
+                " ".join(str(getattr(prev, "trust_reason", "") or "").split())
+                if _normalize_trust(getattr(prev, "trust", "")) == _TRUST_LOW
+                else ""
+            ),
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the

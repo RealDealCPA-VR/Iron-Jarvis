@@ -221,6 +221,17 @@ class EventType:
     #: severity, reason, count, evidence without tool output). At most once
     #: per (rule_id, session_id) per process. Tagged with the session's id.
     DETECTION_FINDING = "detection.finding"
+    #: TRUST (v1.298.0): a run's posture was LOWERED mid-run because content
+    #: it read tripped the injection scanner (the untrusted-content fence in
+    #: ``agents/runtime`` / both chat lanes). {session_id, tool, category,
+    #: reason}; at most ONCE per session. Persisted on the row too
+    #: (``Session.trust`` / ``trust_reason`` / ``tainted_at``).
+    TRUST_LOWERED = "trust.lowered"
+    #: A context seam (project knowledge, an agent's folder, a skill, an
+    #: attachment, the memory fabric, a lesson) WITHHELD a block the prompt
+    #: guard flagged before it reached a prompt (v1.298.0, ``core/promptguard``).
+    #: {session_id, source, count, categories}; the block is not in the payload.
+    CONTEXT_BLOCKED = "context.blocked"
 
 
 @dataclass

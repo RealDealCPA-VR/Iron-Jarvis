@@ -261,6 +261,7 @@ class SpawnAgentTool(Tool):
             child_fanout_key,
             child_slot,
             inherited_grants,
+            inherited_trust,
             inherited_workspace_root,
         )
         from .runtime import AgentRuntime
@@ -350,6 +351,7 @@ class SpawnAgentTool(Tool):
         # …and the GRANTS (v1.288.0), through the same predicate `delegate`
         # uses: what the user pre-approved on the parent, never its origin.
         allow_tools, approval_mode = inherited_grants(parent)
+        _trust, _trust_reason = inherited_trust(parent)
         # The job card's posture and step budget apply when the caller states
         # none (v1.295.0); ``create_session`` normalises the posture.
         max_steps = None
@@ -384,6 +386,10 @@ class SpawnAgentTool(Tool):
                 # one teammate's history across two keys — the exact defect
                 # canonical_roster_name exists to prevent.
                 agent_name=canonical_roster_name(self.platform, agent_name),
+                # …and the TRUST posture (v1.298.0): a low parent's child is
+                # low — trust only flows down (``inherited_trust``).
+                trust=_trust,
+                trust_reason=_trust_reason,
             )
             await publish_delegation_started(
                 self.platform,
