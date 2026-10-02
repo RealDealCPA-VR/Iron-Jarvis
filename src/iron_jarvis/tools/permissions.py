@@ -28,9 +28,12 @@ remains a hard floor that neither an override nor a session grant can lift.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from ..core.models import PermissionMode
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..core.grants import GrantStore
 
 # A resolver answers an interactive "ask": True = allow this call, False = deny.
 AskResolver = Callable[[str, dict], bool]
@@ -142,6 +145,9 @@ class PermissionDecision:
     allowed: bool
     mode: PermissionMode
     reason: str
+    #: v1.299.0: the standing grant (``core/grants.py``) that lifted an ASK,
+    #: when one did — the registry records it on the ``ToolInvocation`` row.
+    grant_id: str = ""
 
 
 class PermissionEngine:
@@ -203,7 +209,30 @@ class PermissionEngine:
         args: dict,
         agent_overrides: dict[str, str] | None = None,
         session_allow: "Iterable[str] | None" = None,
+        *,
+        grants: "GrantStore | None" = None,
+        scopes: "list[tuple[str, str]] | None" = None,
+        call_name: str = "",
+        quarantined: bool = False,
     ) -> PermissionDecision:
+        """Decide one call. ``grants``/``scopes`` (v1.299.0): the standing
+        grant store and the scopes THIS call runs under (``[("goal", id),
+        ("agent", name), ("project", id), ("chat", "chat")]``); consulted
+        ONLY for an ASK that nothing above lifted — a deny (base, override,
+        low trust) is decided before the store is read, so a grant can never
+        lift one. ``call_name`` is the tool NAME the call was made by when it
+        differs from ``tool_name`` (the permission key); a grant stores the
+        name, the match accepts either.
+
+        ``quarantined`` (v1.299.0, the pack-tool quarantine): every MCP tool
+        shares the permission key ``mcp_call``, so a per-run name grant on
+        ``mcp_call`` — or a standing grant — would lift a tool the user never
+        knowingly installed before the platform's quarantine resolver was
+        ever consulted. A quarantined tool is lifted by NEITHER of those: it
+        stays an ASK (a card where the origin can ask, the resolver's refusal
+        headless) until ``POST /mcp/servers/{s}/tools/{t}/trust`` — and the
+        ONE lift it keeps is the user's answer to a card about THIS tool
+        (``call_name`` in ``session_allow``; review fix, see below)."""
         mode = self.mode_for(tool_name, agent_overrides)
         if mode is PermissionMode.ALLOW:
             return PermissionDecision(True, mode, "allowed by policy")
@@ -217,8 +246,41 @@ class PermissionEngine:
         # for one task — the deny-floor blocks agent definitions from raising it,
         # but an explicit interactive session grant on an ``ask`` floor tool still
         # lifts it here (a base ``deny`` above is never lifted).
+        if quarantined:
+            # QUARANTINE (v1.299.0): the SHARED key (``mcp_call`` — a sibling's
+            # "for this run", the pack's switch) lifts nothing, and no standing
+            # grant does. The ONE lift kept is the user's own answer to THIS
+            # tool's card: both lanes hand the registry ``{<tool name>,
+            # "mcp_call"}`` for once/conversation, and the tool's NAME is a
+            # string only a card about this tool (or the user naming it at the
+            # door) can add. Without it a card's Allow ran nothing (review fix).
+            own = call_name if call_name and call_name != tool_name else ""
+            if own and session_allow is not None and own in session_allow:
+                return PermissionDecision(True, mode, "granted for this task")
+            session_allow = None
+            grants = None
         if session_allow is not None and tool_name in session_allow:
             return PermissionDecision(True, mode, "granted for this task")
+        # STANDING GRANT (v1.299.0): the user answered "always" to THIS call
+        # (exact arguments) in one of these scopes, or the goals ladder
+        # granted the tool for a goal. Read AFTER the deny check above (a
+        # deny is never lifted) and after the name grant (which already said
+        # yes). The store refuses an any-args grant on a floor tool at match
+        # time, so ``shell`` lifts only for the exact command.
+        if grants is not None and scopes:
+            try:
+                hit = grants.match(
+                    scopes,
+                    call_name or tool_name,
+                    args,
+                    aliases=((tool_name,) if call_name and call_name != tool_name else ()),
+                )
+            except Exception:  # noqa: BLE001 — a store fault must never widen OR crash a call
+                hit = None
+            if hit is not None:
+                return PermissionDecision(
+                    True, mode, f"standing grant {hit.id}", grant_id=str(hit.id)
+                )
         if self._ask_resolver is None:
             return PermissionDecision(
                 False, mode, "requires approval; no resolver in headless mode"

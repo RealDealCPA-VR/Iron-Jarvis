@@ -291,6 +291,77 @@ class Scheduler:
             self._schedule_job(record)
         return record
 
+    def update_task(
+        self,
+        name: str,
+        *,
+        cron: str | None = None,
+        run_at: datetime | str | None = None,
+        interval_seconds: int | None = None,
+        kind: str | None = None,
+        payload: dict | None = None,
+        enabled: bool | None = None,
+    ) -> ScheduledTaskRecord:
+        """PARTIAL update of a persisted task (v1.299.0, ``PATCH /schedules``).
+
+        ``None`` leaves a field alone. A trigger field that IS given replaces
+        the trigger: exactly one of ``cron`` / ``run_at`` / ``interval_seconds``
+        may be set, validated exactly as :meth:`add_task` validates it, and the
+        row's other trigger fields are cleared. ``payload`` REPLACES the stored
+        payload (the route merges before calling). The live job is RE-ARMED
+        when the scheduler is running — ``_schedule_job`` registers with
+        ``replace_existing=True``, so the old trigger never fires again — or
+        unscheduled when the row ends up disabled; ``next_run`` is recomputed
+        either way. Raises ``ValueError`` when the task is absent or a value is
+        bad, and writes NOTHING in that case.
+        """
+        provided = [cron is not None, run_at is not None, interval_seconds is not None]
+        if sum(provided) > 1:
+            raise ValueError("set only one of cron, run_at, interval_seconds")
+        if kind is not None and kind not in KINDS:
+            raise ValueError(f"unknown task kind {kind!r}; expected one of {KINDS}")
+        # Validate the new trigger BEFORE touching the row.
+        new_trigger: tuple[str, str, datetime | None, int | None] | None = None
+        if cron is not None:
+            _cron_trigger(cron, self.scheduler.timezone)
+            new_trigger = ("cron", cron, None, None)
+        elif run_at is not None:
+            new_trigger = ("date", "", _parse_datetime(run_at), None)
+        elif interval_seconds is not None:
+            interval = int(interval_seconds)
+            if interval <= 0:
+                raise ValueError("interval_seconds must be a positive integer")
+            new_trigger = ("interval", "", None, interval)
+
+        with session_scope(self.engine) as db:
+            rec = self._fetch(db, name)
+            if rec is None:
+                raise ValueError(f"no scheduled task named {name!r}")
+            if new_trigger is not None:
+                rec.trigger_type, rec.cron, rec.run_at, rec.interval_seconds = new_trigger
+                # A re-armed one-time task may fire again: the claim reads
+                # ``last_run IS NULL`` (``_claim_once``), so a date task that
+                # already fired would otherwise never fire at its new time.
+                if rec.trigger_type == "date":
+                    rec.last_run = None
+            if kind is not None:
+                rec.kind = kind
+            if payload is not None:
+                rec.payload_json = json.dumps(payload, default=str)
+            if enabled is not None:
+                rec.enabled = bool(enabled)
+            rec.next_run = self._next_run_for_record(rec) if rec.enabled else None
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+
+        if self.scheduler.running:
+            if rec.enabled:
+                self._schedule_job(rec)  # replace_existing=True — the re-arm
+            else:
+                self._unschedule_job(name)
+        return rec
+
     def remove(self, name: str) -> bool:
         """Delete a task (and unschedule its live job). Returns False if absent."""
         with session_scope(self.engine) as db:

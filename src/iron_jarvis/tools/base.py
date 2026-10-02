@@ -149,6 +149,16 @@ class Tool(ABC):
     #: reaches it through the parent). ``ToolRegistry.invoke`` reads this — the
     #: one place — so every lane (agent runtime, both chat lanes) obeys it.
     deadline_exempt: bool = False
+    #: PACK-TOOL QUARANTINE (v1.299.0). True for an external (MCP) tool that
+    #: can write or destroy and APPEARED LATER than the pack it belongs to —
+    #: or changed shape — so the user never knowingly installed it. A
+    #: quarantined tool asks regardless of its pack's auto-approve until the
+    #: user trusts it (``POST /mcp/servers/{s}/tools/{t}/trust``). Set only by
+    #: ``mcp/tools.apply_quarantine`` from the persisted pack manifest; every
+    #: built-in keeps the default. Read by the platform's MCP auto-approve
+    #: resolver wrapper (never LOWERS a verdict — it can only turn an automatic
+    #: yes back into a question) and advertised in ``spec()`` only when set.
+    quarantined: bool = False
 
     def perm_key(self) -> str:
         return self.permission_key or self.name
@@ -175,11 +185,18 @@ class Tool(ABC):
 
     def spec(self) -> dict[str, Any]:
         """Schema advertised to the model (§19 inputSchema)."""
-        return {
+        spec = {
             "name": self.name,
             "description": self.description,
             "input_schema": self.input_schema,
         }
+        # Additive and ONLY when set (v1.299.0): every provider adapter picks
+        # name/description/input_schema by key, so an extra key never reaches
+        # a strict API, and a spec without the key reads byte-identically to
+        # before for the tools that never quarantine (all built-ins).
+        if getattr(self, "quarantined", False):
+            spec["quarantined"] = True
+        return spec
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return a copy of ``args`` safe to PERSIST/return — the tool-invocation

@@ -14,9 +14,10 @@ from typing import Any
 
 from .. import app as _app
 from ..app import _ws_token_ok
-from ..schemas import DesktopIncidentBody, ScheduleAdd, UpdateBody
+from ..schemas import DesktopIncidentBody, ScheduleAdd, SchedulePatch, UpdateBody
 from ... import __version__
 from ...core.db import session_scope
+from ...scheduling import knobs as _knobs
 
 
 def _browser_health(d) -> dict[str, Any]:
@@ -428,15 +429,22 @@ def register(app: FastAPI, d) -> None:
             # coerced — a stringified value could phantom-match a real agent.
             agent = payload.get("agent_type") if isinstance(payload, dict) else None
             row["agent_type"] = agent if isinstance(agent, str) else ""
+            # v1.299.0 (additive, same guard pattern): the five KNOBS —
+            # skills / workspace_root / context_from / script (command,
+            # timeout, cwd — never any output) / skip_memory.
+            row.update(_knobs.decode_knobs(payload))
             rows.append(row)
         return {"schedules": rows}
 
-    @app.post("/schedules")
-    def add_schedule(body: ScheduleAdd) -> dict[str, Any]:
-        # Fail at ADD time, not at 3am fire time: a task schedule needs its
-        # prompt, and a typo'd destination would silently deliver to nobody.
-        payload = body.payload or {}
-        if body.kind == "task" and not str(payload.get("task") or "").strip():
+    def _check_schedule_payload(name: str, kind: str, payload: dict) -> None:
+        """The add-time rules, shared by POST and PATCH (v1.299.0) so an edit
+        can never land a payload the add would have refused. Fail NOW, not at
+        3am fire time: a task schedule needs its prompt, a typo'd destination
+        would silently deliver to nobody, an unknown agent would silently run
+        as builder, and a knob the fire cannot honour is refused by name.
+        BLOCKING when ``workspace_root`` is set (the folder probe writes a
+        file) — the callers hop it off the loop."""
+        if kind == "task" and not str(payload.get("task") or "").strip():
             raise HTTPException(
                 status_code=400, detail="a task schedule needs 'task' text in payload"
             )
@@ -444,7 +452,7 @@ def register(app: FastAPI, d) -> None:
         # validated NOW, not at 3am fire time. The name must be a builtin
         # agent type or an existing dynamic agent's exact name (the same keys
         # the fire resolves against). A non-string is refused, never coerced.
-        raw_agent = payload.get("agent_type") if body.kind == "task" else None
+        raw_agent = payload.get("agent_type") if kind == "task" else None
         if raw_agent not in (None, ""):
             from ...core.models import AgentType
 
@@ -472,8 +480,29 @@ def register(app: FastAPI, d) -> None:
                     detail=f"unknown destination(s): {', '.join(unknown)} — "
                     f"add them on the Notifications page first",
                 )
+        # v1.299.0: the knobs, ONE rule set (scheduling/knobs.validate_knobs)
+        # for POST, PATCH and the agent-made tool. A route is the user.
         try:
-            rec = d.platform.scheduler.add_task(
+            _knobs.validate_knobs(
+                payload,
+                name=name,
+                kind=kind,
+                scheduler=d.platform.scheduler,
+                skills=getattr(d.platform, "skills", None),
+                from_user=True,
+            )
+        except _knobs.KnobError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+    @app.post("/schedules")
+    async def add_schedule(body: ScheduleAdd) -> dict[str, Any]:
+        payload = body.payload or {}
+        # Off the loop (v1.299.0): the knob check may probe a folder and
+        # add_task writes SQLite — this is the daemon's ONE event loop.
+        await asyncio.to_thread(_check_schedule_payload, body.name, body.kind, payload)
+        try:
+            rec = await asyncio.to_thread(
+                d.platform.scheduler.add_task,
                 body.name,
                 body.cron,
                 run_at=body.run_at,
@@ -484,6 +513,49 @@ def register(app: FastAPI, d) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return rec.model_dump()
+
+    @app.patch("/schedules/{name}")
+    async def patch_schedule(name: str, body: SchedulePatch) -> dict[str, Any]:
+        """PARTIAL edit (v1.299.0). ``payload_set`` merges keys over the stored
+        payload and ``payload_unset`` removes keys; the MERGED payload is
+        re-validated with exactly the add-time rules, so an edit can never
+        land what an add would refuse. A trigger field given re-arms the live
+        job (``Scheduler.update_task`` → ``_schedule_job`` with
+        ``replace_existing``); ``kind``/``enabled`` None = leave alone."""
+        rec = d.platform.scheduler.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"no scheduled task named {name!r}")
+        triggers = [
+            body.cron is not None,
+            body.run_at is not None,
+            body.interval_seconds is not None,
+        ]
+        if sum(triggers) > 1:
+            raise HTTPException(
+                status_code=400, detail="set only one of cron, run_at, interval_seconds"
+            )
+        kind = body.kind if body.kind is not None else rec.kind
+        merged = _knobs.merge_payload(
+            rec.decoded_payload(), body.payload_set, body.payload_unset
+        )
+        await asyncio.to_thread(_check_schedule_payload, name, kind, merged)
+        try:
+            rec = await asyncio.to_thread(
+                lambda: d.platform.scheduler.update_task(
+                    name,
+                    cron=body.cron,
+                    run_at=body.run_at,
+                    interval_seconds=body.interval_seconds,
+                    kind=body.kind,
+                    payload=merged,
+                    enabled=body.enabled,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        row = rec.model_dump()
+        row.update(_knobs.decode_knobs(rec.decoded_payload()))
+        return row
 
     @app.delete("/schedules/{name}")
     def remove_schedule(name: str) -> dict[str, Any]:

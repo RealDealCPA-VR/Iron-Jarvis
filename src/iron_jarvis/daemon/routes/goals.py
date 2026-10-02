@@ -78,24 +78,18 @@ _OFFER_MIN_ASKS = 3
 
 #: ``approval.resolved`` decisions that count as an approval ("once" grants the
 #: call, "conversation" the rest of the run — both are the user saying yes).
-_APPROVED_DECISIONS = frozenset({"once", "conversation"})
+#: "always" (v1.299.0) joined: it is "once" plus a standing grant — a yes.
+_APPROVED_DECISIONS = frozenset({"once", "conversation", "always"})
 
 _ZERO_ASK = {"asked": 0, "approved": 0, "denied": 0, "timed_out": 0}
 
 
-def ask_stats_for(engine, goal_id: str) -> dict[str, dict[str, int]]:
-    """Per-TOOL approval receipts across THIS goal's sessions.
-
-    ``{tool: {asked, approved, denied, timed_out}}`` — computed from the
-    ``approval.requested`` / ``approval.resolved`` EventRecords of every
-    session whose ``origin`` is this goal's stamp (both columns indexed; the
-    scan is capped at :data:`_ASK_EVENT_CAP` newest-first). Mirrors the
-    ``GET /chat/approvals/pending`` hygiene: payloads are parsed defensively
-    (a corrupt row is skipped, never a 500) and the args they carry are NEVER
-    copied out — this function returns counts and nothing else. Loads never
-    raise (the GoalStore contract): a broken query answers ``{}``, which
-    honestly offers nothing.
-    """
+def _ask_rows(engine, goal_id: str) -> list[tuple[str, dict]]:
+    """The parsed ``approval.requested`` / ``approval.resolved`` payloads of
+    every session whose ``origin`` is this goal's stamp, newest first,
+    capped at :data:`_ASK_EVENT_CAP` (both columns indexed). ONE query for
+    both aggregations below; a corrupt row is skipped, a broken query
+    answers ``[]`` (loads never raise — the GoalStore contract)."""
     from sqlmodel import select
 
     from ...core.db import session_scope
@@ -124,16 +118,23 @@ def ask_stats_for(engine, goal_id: str) -> dict[str, dict[str, int]]:
             )
     except Exception:  # noqa: BLE001 — receipts must never take a goal view down
         log.exception("ask-stats query failed for %s", goal_id)
-        return {}
-
-    stats: dict[str, dict[str, int]] = {}
+        return []
+    out: list[tuple[str, dict]] = []
     for etype, payload_json in rows:
         try:
             payload = json.loads(payload_json or "{}")
         except (TypeError, ValueError):
             continue  # a corrupt row is not this listing's problem
-        if not isinstance(payload, dict):
-            continue
+        if isinstance(payload, dict):
+            out.append((str(etype), payload))
+    return out
+
+
+def _stats_from_rows(rows: list[tuple[str, dict]]) -> dict[str, dict[str, int]]:
+    from ...core.events import EventType
+
+    stats: dict[str, dict[str, int]] = {}
+    for etype, payload in rows:
         tool = payload.get("tool")
         if not isinstance(tool, str) or not tool:
             continue
@@ -153,8 +154,155 @@ def ask_stats_for(engine, goal_id: str) -> dict[str, dict[str, int]]:
     return stats
 
 
-def grant_offers(record: GoalContractRecord, stats: dict[str, dict[str, int]]) -> list[str]:
-    """The trust ladder's OFFER, computed server-side so every surface agrees.
+def ask_stats_for(engine, goal_id: str) -> dict[str, dict[str, int]]:
+    """Per-TOOL approval receipts across THIS goal's sessions.
+
+    ``{tool: {asked, approved, denied, timed_out}}`` — computed from the
+    ``approval.requested`` / ``approval.resolved`` EventRecords of every
+    session whose ``origin`` is this goal's stamp (see :func:`_ask_rows`).
+    Mirrors the ``GET /chat/approvals/pending`` hygiene: the args the
+    payloads carry are NEVER copied out — this function returns counts and
+    nothing else. Loads never raise: a broken query answers ``{}``, which
+    honestly offers nothing.
+    """
+    return _stats_from_rows(_ask_rows(engine, goal_id))
+
+
+def _hash_stats_from_rows(rows: list[tuple[str, dict]]) -> dict[str, dict[str, dict]]:
+    from ...core.events import EventType
+    from ...core.grants import grant_label
+
+    def _bucket(tool: str, h: str) -> dict:
+        return out.setdefault(tool, {}).setdefault(h, {**_ZERO_ASK, "label": ""})
+
+    out: dict[str, dict[str, dict]] = {}
+    hash_of: dict[str, str] = {}  # approval_id -> args_hash (the join key)
+    # Requests first: they carry the hash (v1.299.0) and the REDACTED args
+    # the card showed — the label an exact offer is shown with.
+    for etype, payload in rows:
+        if etype != EventType.APPROVAL_REQUESTED:
+            continue
+        tool = payload.get("tool")
+        if not isinstance(tool, str) or not tool:
+            continue
+        h = str(payload.get("args_hash") or "")
+        aid = str(payload.get("approval_id") or "")
+        if aid:
+            hash_of[aid] = h
+        bucket = _bucket(tool, h)
+        bucket["asked"] += 1
+        if h and not bucket["label"]:
+            bucket["label"] = grant_label(tool, payload.get("args"))
+    for etype, payload in rows:
+        if etype != EventType.APPROVAL_RESOLVED:
+            continue
+        tool = payload.get("tool")
+        if not isinstance(tool, str) or not tool:
+            continue
+        # A resolution finds its request by approval id; one that cannot (a
+        # pre-v1.299 row, a corrupt request) lands under "" — unknown hash —
+        # which can never support an EXACT offer.
+        h = hash_of.get(str(payload.get("approval_id") or ""), "")
+        bucket = _bucket(tool, h)
+        decision = str(payload.get("decision") or "")
+        if decision in _APPROVED_DECISIONS:
+            bucket["approved"] += 1
+        elif decision == "deny":
+            bucket["denied"] += 1
+        elif decision == "timeout":
+            bucket["timed_out"] += 1
+    return out
+
+
+def ask_hash_stats_for(engine, goal_id: str) -> dict[str, dict[str, dict]]:
+    """Per (TOOL, ARGS_HASH) receipts (v1.299.0): ``{tool: {args_hash:
+    {asked, approved, denied, timed_out, label}}}``. The hash rides the
+    ``approval.requested`` payload (the runtime writes it; a hash of the real
+    arguments is not a secret); a resolution joins its request by
+    ``approval_id``. ``label`` is the REDACTED display the card showed —
+    the one string an exact offer is rendered with; the args themselves are
+    never copied out. ``""`` is the unknown-hash bucket (older rows)."""
+    return _hash_stats_from_rows(_ask_rows(engine, goal_id))
+
+
+def _live_store_grants(grants, goal_id: str) -> tuple[set[tuple[str, str]], set[str]]:
+    """``(exact pairs, any-args tools)`` live in the store for this goal."""
+    exact: set[tuple[str, str]] = set()
+    any_args: set[str] = set()
+    if grants is None:
+        return exact, any_args
+    try:
+        rows = grants.list("goal", goal_id)
+    except Exception:  # noqa: BLE001 — a store fault offers as if nothing were granted
+        return exact, any_args
+    for rec in rows:
+        if rec.args_hash:
+            exact.add((rec.tool, rec.args_hash))
+        else:
+            any_args.add(rec.tool)
+    return exact, any_args
+
+
+def _streak(s: dict) -> bool:
+    """The ladder's threshold: all N asks approved, N >= 3, no deny, no
+    timeout."""
+    return (
+        int(s.get("asked", 0)) >= _OFFER_MIN_ASKS
+        and int(s.get("approved", 0)) == int(s.get("asked", 0))
+        and int(s.get("denied", 0)) == 0
+        and int(s.get("timed_out", 0)) == 0
+    )
+
+
+def exact_offers(
+    record: GoalContractRecord,
+    hash_stats: dict[str, dict[str, dict]],
+    grants=None,
+) -> list[dict]:
+    """The EXACT offers (v1.299.0): ``[{tool, args_hash, label, count}]`` —
+    one per tool whose asks ALL carry the SAME non-empty hash and pass the
+    streak rule. "The same command three times" earns "always allow THIS
+    command", not "always allow shell": a floor tool qualifies here (an exact
+    grant is not an any-args bypass — the store refuses those on the floor).
+    Mixed hashes, or any ask with no hash, fall through to the per-tool rule
+    (:func:`grant_offers`). Suppressed when a live goal-scoped store grant
+    already covers it (exact for that hash, or any-args for that tool)."""
+    live_exact, live_any = _live_store_grants(grants, record.id)
+    offers: list[dict] = []
+    for tool in sorted(hash_stats):
+        per = hash_stats[tool]
+        hashes = [h for h in per if h]
+        if len(hashes) != 1 or int(per.get("", {}).get("asked", 0)) > 0:
+            continue  # several commands, or asks whose hash is unknown
+        if int(per.get("", {}).get("approved", 0)) + int(per.get("", {}).get("denied", 0)) + int(
+            per.get("", {}).get("timed_out", 0)
+        ) > 0:
+            continue  # a resolution that could not find its request
+        h = hashes[0]
+        s = per[h]
+        if not _streak(s):
+            continue
+        if (tool, h) in live_exact or tool in live_any:
+            continue
+        offers.append(
+            {
+                "tool": tool,
+                "args_hash": h,
+                "label": str(s.get("label") or tool),
+                "count": int(s.get("asked", 0)),
+            }
+        )
+    return offers
+
+
+def grant_offers(
+    record: GoalContractRecord,
+    stats: dict[str, dict[str, int]],
+    hash_stats: "dict[str, dict[str, dict]] | None" = None,
+    grants=None,
+) -> list[str]:
+    """The trust ladder's PER-TOOL offer, computed server-side so every
+    surface agrees.
 
     The rationale, spelled out: "you approved all N asks (N >= 3) for this
     tool, zero denies, zero timeouts — so the app OFFERS the standing grant;
@@ -162,26 +310,29 @@ def grant_offers(record: GoalContractRecord, stats: dict[str, dict[str, int]]) -
 
     * one deny or one timed-out/unanswered ask (``approved != asked``) means
       the receipts do not support the offer;
-    * a tool already in ``allowed_grants`` has nothing left to offer;
+    * a tool already in ``allowed_grants`` — or (v1.299.0) covered by a live
+      any-args store grant — has nothing left to offer;
     * a DENY-FLOOR tool is NEVER offered at any count — a perfect approval
       streak on ``shell`` is still not consent to a standing headless bypass
       (the floor is refused at write AND spawn time, so offering it would be
-      offering a guaranteed 400).
+      offering a guaranteed 400);
+    * (v1.299.0) a tool whose receipts support an EXACT offer
+      (:func:`exact_offers`) is offered THAT, not this — the same three
+      commands earn "always this command", never "always this tool".
     """
     from ...tools.permissions import DENY_FLOOR_TOOLS
 
     granted = set(record.decoded_grants())
+    exact_tools = {o["tool"] for o in exact_offers(record, hash_stats or {}, grants)}
+    _, live_any = _live_store_grants(grants, record.id)
     offers: list[str] = []
     for tool in sorted(stats):
         s = stats[tool]
         if tool in granted or tool in DENY_FLOOR_TOOLS:
             continue
-        if (
-            int(s.get("asked", 0)) >= _OFFER_MIN_ASKS
-            and int(s.get("approved", 0)) == int(s.get("asked", 0))
-            and int(s.get("denied", 0)) == 0
-            and int(s.get("timed_out", 0)) == 0
-        ):
+        if tool in exact_tools or tool in live_any:
+            continue
+        if _streak(s):
             offers.append(tool)
     return offers
 
@@ -208,9 +359,21 @@ def register(app: FastAPI, d) -> None:
         offer list, so the list, the detail and every verb response agree);
         the raw ``ask_stats`` ride only the detail route — the counts back the
         offer, the offer is what the surfaces render."""
-        stats = ask_stats_for(d.platform.engine, record.id)
+        rows = _ask_rows(d.platform.engine, record.id)
+        stats = _stats_from_rows(rows)
+        hash_stats = _hash_stats_from_rows(rows)
+        store = getattr(d.platform, "grants", None)
         view = goal_view(record)
-        view["grant_offers"] = grant_offers(record, stats)
+        view["grant_offers"] = grant_offers(record, stats, hash_stats, store)
+        # v1.299.0: exact offers ("always allow THIS command") and the live
+        # standing grants this goal holds, so the card can show and revoke
+        # them. Labels are the REDACTED display; args never ride here.
+        view["grant_offers_exact"] = exact_offers(record, hash_stats, store)
+        view["standing_grants"] = (
+            [store.as_dict(g) for g in store.list("goal", record.id)]
+            if store is not None
+            else []
+        )
         if include_stats:
             view["ask_stats"] = stats
         return view
@@ -258,41 +421,114 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/goals/{goal_id}/grants")
     def patch_goal_grants(goal_id: str, body: GoalGrantsPatch) -> dict[str, Any]:
-        """Accept a trust-ladder offer (or grant manually): EXTEND
-        ``allowed_grants`` through the store's own write-time rule —
-        ``grants_violation`` is the one function ``GoalStore.create`` and the
-        engine's spawn-time re-check already call, so a deny-floor tool 400s
-        here with the exact same sentence. The new grant takes effect on the
-        NEXT iteration with no further wiring: ``run_iteration`` re-reads the
-        row and ``_iterate`` passes ``decoded_grants()`` to
-        ``orchestrator.create_session(allow_tools=...)``."""
+        """Accept a trust-ladder offer (or grant manually).
+
+        ``add`` (per-tool): EXTEND ``allowed_grants`` through the store's own
+        write-time rule — ``grants_violation`` is the one function
+        ``GoalStore.create`` and the engine's spawn-time re-check already
+        call, so a deny-floor tool 400s here with the exact same sentence —
+        AND (v1.299.0) mint a goal-scoped any-args standing grant beside it
+        (the compat JSON keeps riding ``create_session(allow_tools=)``; the
+        store row is what the Grants list shows and revokes).
+
+        ``add_exact`` (v1.299.0): ``[{tool, args_hash, label?}]`` — EXACT
+        standing grants, store-only (``allowed_grants`` cannot express one).
+        A floor tool is allowed here: an exact command is not an any-args
+        bypass. ``expires_days`` (default 30; ``null`` = never, which only the
+        goal scope may say) applies to every row this call mints."""
         record = _record_or_404(goal_id)
         add = [str(t).strip() for t in (body.add or []) if str(t).strip()]
-        if not add:
+        exact = [e for e in (body.add_exact or []) if isinstance(e, dict)]
+        if not add and not exact:
             raise HTTPException(
                 status_code=400,
-                detail="nothing to grant — pass add: [\"tool\", ...]",
+                detail=(
+                    "nothing to grant — pass add: [\"tool\", ...] and/or "
+                    "add_exact: [{tool, args_hash}, ...]"
+                ),
             )
-        merged = list(record.decoded_grants())
-        for tool in add:
-            if tool not in merged:
-                merged.append(tool)  # idempotent: re-granting is not an error
-        problem = grants_violation(merged)
-        if problem:
-            raise HTTPException(status_code=400, detail=problem)
+        expires_days = body.expires_days
+        if expires_days is not None and int(expires_days) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="expires_days must be positive, or null for never",
+            )
+        store = getattr(d.platform, "grants", None)
+        if exact and store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="standing grants are not available on this daemon — restart it",
+            )
         from ...core.db import session_scope
+        from ...core.grants import grant_label
         from ...core.ids import utcnow
 
+        minted: list = []
+        if add:
+            merged = list(record.decoded_grants())
+            for tool in add:
+                if tool not in merged:
+                    merged.append(tool)  # idempotent: re-granting is not an error
+            problem = grants_violation(merged)
+            if problem:
+                raise HTTPException(status_code=400, detail=problem)
+            with session_scope(d.platform.engine) as db:
+                row = db.get(GoalContractRecord, goal_id)
+                if row is None:  # deleted between the read and the write
+                    raise HTTPException(status_code=404, detail="goal not found")
+                row.allowed_grants_json = json.dumps(merged)
+                row.updated_at = utcnow()
+                db.add(row)
+                db.commit()
+            if store is not None:
+                for tool in add:
+                    try:
+                        minted.append(
+                            store.create(
+                                "goal", goal_id, tool, "",
+                                f"{tool} (any arguments)", expires_days,
+                            )
+                        )
+                    except ValueError as exc:
+                        # The floor was checked above; anything else here is
+                        # a malformed request, said verbatim.
+                        raise HTTPException(status_code=400, detail=str(exc))
+        for entry in exact:
+            tool = str(entry.get("tool") or "").strip()
+            h = str(entry.get("args_hash") or "").strip().lower()
+            label = str(entry.get("label") or "").strip()
+            if not tool or not h:
+                raise HTTPException(
+                    status_code=400, detail="an exact grant needs tool and args_hash"
+                )
+            if d.platform.registry.get(tool) is None:
+                # A grant names a REGISTERED tool (the ladder's offers come from
+                # the runtime's own call names); a typo would sit in the list
+                # forever and lift nothing (review fix).
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown tool {tool!r} — an exact grant names a registered tool",
+                )
+            try:
+                minted.append(
+                    store.create(
+                        "goal", goal_id, tool, h,
+                        label or grant_label(tool, {"args_hash": h[:12]}),
+                        expires_days,
+                    )
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
         with session_scope(d.platform.engine) as db:
             row = db.get(GoalContractRecord, goal_id)
-            if row is None:  # deleted between the read and the write
+            if row is None:
                 raise HTTPException(status_code=404, detail="goal not found")
-            row.allowed_grants_json = json.dumps(merged)
-            row.updated_at = utcnow()
-            db.add(row)
-            db.commit()
             db.refresh(row)
-        return {"goal": _payload(row)}
+            db.expunge(row)
+        return {
+            "goal": _payload(row),
+            "granted": [store.as_dict(g) for g in minted] if store is not None else [],
+        }
 
     @app.post("/goals")
     async def create_goal_contract(body: GoalContractCreate) -> dict[str, Any]:
@@ -360,4 +596,18 @@ def register(app: FastAPI, d) -> None:
     def delete_goal_contract(goal_id: str) -> dict[str, Any]:
         if not _engine().store.remove(goal_id):
             raise HTTPException(status_code=404, detail="goal not found")
-        return {"deleted": goal_id}
+        # v1.299.0 (review fix): a goal's standing grants die with the goal —
+        # a goal-scoped row has no other reader, and a "never expires" grant
+        # (goal scope only) would otherwise outlive the thing it was for.
+        revoked: list[str] = []
+        store = getattr(d.platform, "grants", None)
+        if store is not None:
+            try:
+                for rec in store.list("goal", goal_id):
+                    store.revoke(rec.id)
+                    revoked.append(rec.id)
+            except Exception:  # noqa: BLE001 — the goal is gone; say what was not revoked
+                log.exception("standing grants of %s not revoked", goal_id)
+        # Additive ONLY when something was revoked: the pre-v1.299 shape
+        # `{"deleted": id}` stays byte-identical for every other goal.
+        return {"deleted": goal_id, **({"revoked_grants": revoked} if revoked else {})}

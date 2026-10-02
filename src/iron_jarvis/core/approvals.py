@@ -74,7 +74,12 @@ if TYPE_CHECKING:  # pragma: no cover
 #: as that tab stays open — the chat lane records it on
 #: ``BrowserRuntime.tab_grants`` (browser/grants.py) and then treats the call as
 #: "once". A lane that knows no tabs (the agent runtime) reads it as "once".
-DECISIONS = ("once", "conversation", "deny", "tab")
+#: "always" (v1.299.0) is "once" for THIS call PLUS a ``StandingGrantRecord``
+#: (``core/grants.py``) for the EXACT arguments in the strongest scope the
+#: asker knows (``grants.pick_scope``: agent > project > goal/chat), 30 days
+#: — so the next identical call, in a new session of that scope, needs no
+#: card. A lane with no store or no scope reads it as "once".
+DECISIONS = ("once", "conversation", "deny", "tab", "always")
 
 #: How long a turn will hold for an answer before denying honestly. Long
 #: enough to read what the tool wants and decide; short enough that a stream

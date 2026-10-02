@@ -51,6 +51,9 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
+from ..core.grants import args_hash as _grant_hash
+from ..core.grants import grant_label as _grant_label
+from ..core.grants import pick_scope as _pick_scope
 from ..core.trust import (
     LOW_TRUST_DENY,
     LOW_TRUST_PROMPT,
@@ -1259,6 +1262,90 @@ def _low_trust_args(state: dict[str, Any], name: str, args: Any) -> Any:
     if not (state.get("low") or state.get("tainted")):
         return args
     return {**args, "_isolate": True}
+
+
+# --------------------------------------------------------------------------- #
+# STANDING GRANTS (v1.299.0) — the helpers BOTH chat lanes call, lock-step.
+# --------------------------------------------------------------------------- #
+
+
+def chat_grant_scopes(project_id: Any) -> list[tuple[str, str]]:
+    """The scopes a chat turn's calls run under: ``("chat", "chat")`` always,
+    plus ``("project", id)`` when the turn is grounded in a RESOLVED project.
+    ``core.grants.pick_scope`` ranks project above chat, so an "always" on a
+    grounded turn is remembered for the project, not for every chat."""
+    scopes: list[tuple[str, str]] = [("chat", "chat")]
+    pid = str(project_id or "").strip()
+    if pid:
+        scopes.append(("project", pid))
+    return scopes
+
+
+def _grant_store(platform: Any) -> Any:
+    return getattr(platform, "grants", None)
+
+
+def _grant_invoke_kwargs(platform: Any, scopes: list[tuple[str, str]]) -> dict[str, Any]:
+    """``{grants, scopes}`` for ``registry.invoke`` — only when the platform
+    has a store, so older invoke doubles keep their exact keyword set."""
+    store = _grant_store(platform)
+    if store is None or not scopes:
+        return {}
+    return {"grants": store, "scopes": list(scopes)}
+
+
+def _grant_covers(platform: Any, scopes: list[tuple[str, str]], name: str, args: Any) -> bool:
+    """Does a live standing grant cover ``name(args)`` in ``scopes``? The
+    stream lane's card predicate; the registry re-checks the SAME store at
+    invoke (``_grant_invoke_kwargs``) — the predicate alone grants nothing."""
+    store = _grant_store(platform)
+    if store is None or not scopes:
+        return False
+    tool = platform.registry.get(name)
+    aliases = (tool.perm_key(),) if tool is not None else ()
+    try:
+        return store.match(scopes, name, args, aliases=aliases, touch=False) is not None
+    except Exception:  # noqa: BLE001 — a store fault never skips a card
+        return False
+
+
+def _can_always(platform: Any, scopes: list[tuple[str, str]], state: dict[str, Any], name: str) -> bool:
+    """May the card offer "Always"? A store to write, a scope to write in,
+    and not a kept-away tool on a low-trust turn (that call never cards,
+    but the rule is stated where the payload is built)."""
+    if _grant_store(platform) is None or _pick_scope(scopes) is None:
+        return False
+    if (state.get("low") or state.get("tainted")) and name in LOW_TRUST_DENY:
+        return False
+    if _quarantined(platform, name):
+        return False  # a standing grant could not lift it anyway (review fix)
+    return True
+
+
+def _quarantined(platform: Any, name: str) -> bool:
+    """Is ``name`` a pack tool that appeared since the user last trusted its
+    pack (``Tool.quarantined``, mcp/manifest)? The card carries it so the
+    user is told "new in this pack" before they answer."""
+    try:
+        tool = platform.registry.get(name)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(getattr(tool, "quarantined", False))
+
+
+def _mint_always(
+    platform: Any, scopes: list[tuple[str, str]], name: str, args: Any, safe_args: Any
+) -> Any:
+    """The "always" answer's second half (blocking — hop off the loop): ONE
+    exact standing grant for ``name(args)`` in the strongest scope, labelled
+    with the REDACTED arguments, 30 days. ``None`` without a store/scope."""
+    store = _grant_store(platform)
+    scope = _pick_scope(scopes)
+    if store is None or scope is None or _quarantined(platform, name):
+        return None  # a quarantined pack tool is never remembered (review fix)
+    return store.create(
+        scope[0], scope[1], name, _grant_hash(name, args), _grant_label(name, safe_args)
+    )
 
 
 async def _taint_chat_turn(
@@ -4215,6 +4302,17 @@ async def run_chat_turn(
                             allowed_names=set(armed),
                             deadline_s=chat_tool_deadline(d.platform),
                             **_low_kw,
+                            # STANDING GRANTS (v1.299.0) — lock-step with the
+                            # stream lane: the store + this turn's scopes ride
+                            # into the registry's gate (only when a store
+                            # exists). This lane never CARDS — every armed tool
+                            # is its own grant — so it has no "always" to
+                            # answer; the kwargs keep the ledger's grant id
+                            # honest for a call a standing grant lifted.
+                            **_grant_invoke_kwargs(
+                                d.platform,
+                                chat_grant_scopes(pid if resolved_proj is not None else None),
+                            ),
                         )
                     if result.ok:
                         content = result.output

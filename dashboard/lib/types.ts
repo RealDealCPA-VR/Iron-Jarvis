@@ -94,6 +94,14 @@ export type SessionOutcome = "completed" | "completed_with_failures" | "needs_yo
 export interface SessionWaitingOn {
   approval_id: string;
   tool: string;
+  /** v1.247.0: calls one answer covers (a batched ask). */
+  count?: number;
+  /** v1.299.0: the daemon offers "always" — allow this call AND keep
+   *  allowing exactly these arguments in this run's scope for 30 days.
+   *  Absent/false = the three answers of today. */
+  can_always?: boolean;
+  /** v1.299.0: sha256 over tool + canonical args (never the redacted display). */
+  args_hash?: string;
 }
 
 export interface AgentRun {
@@ -499,7 +507,69 @@ export interface Schedule {
   last_status?: string;
   last_detail?: string;
   last_session_id?: string;
+  // v1.299.0 schedule knobs — payload keys the GET rows now surface. Every
+  // one optional: a row from an older daemon has none of them.
+  /** Skills the fire's agent always carries (validated server-side). */
+  skills?: string[];
+  /** The folder the agent runs in; a rules file (AGENTS.md / .ironjarvis.md)
+   *  in it loads into the run. */
+  workspace_root?: string;
+  /** Another schedule whose last result is handed to this one. */
+  context_from?: string;
+  /** A command run BEFORE the agent, through the shell tool's confinement. */
+  script?: ScheduleScript | null;
+  /** Skip the lessons/memory/fabric injection for this fire. */
+  skip_memory?: boolean;
   [k: string]: unknown;
+}
+
+/** `Schedule.script` — the pre-run command (v1.299.0). */
+export interface ScheduleScript {
+  command: string;
+  /** Seconds; the daemon caps it at 120. */
+  timeout_s?: number;
+  cwd?: string;
+}
+
+/* ---- Standing grants (v1.299.0) ------------------------------------------ */
+export type GrantScopeKind = "goal" | "agent" | "project" | "chat";
+
+/** One row of GET /grants — an "always" answer, or a goal-ladder grant. */
+export interface StandingGrant {
+  id: string;
+  scope_kind: GrantScopeKind;
+  scope_id: string;
+  tool: string;
+  /** "" = any arguments (goal-ladder per-tool grants only). */
+  args_hash: string;
+  /** Redacted one-line description of the arguments. */
+  label: string;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  uses: number;
+  last_used_at: string | null;
+}
+
+/** A goal's EXACT grant offer (v1.299.0) — `grant_offers_exact` on the goal
+ *  row, beside the per-tool names in `grant_offers`. Sent to
+ *  PATCH /goals/{id}/grants as `add_exact: [{tool, args_hash, label}]`. */
+export interface GrantOffer {
+  tool: string;
+  args_hash: string;
+  label?: string;
+  /** The receipts behind the offer (every ask approved). */
+  asked?: number;
+  approved?: number;
+}
+
+/** One tool of an MCP pack as GET /mcp/servers lists it (v1.299.0). */
+export interface McpToolRow {
+  name: string;
+  write_like?: boolean;
+  /** Appeared (or changed shape) AFTER the pack was first trusted — asks
+   *  until POST /mcp/servers/{name}/tools/{tool}/trust clears it. */
+  quarantined?: boolean;
 }
 
 /* ---- Long-term memory ---------------------------------------------------- */

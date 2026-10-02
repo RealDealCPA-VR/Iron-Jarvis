@@ -386,6 +386,8 @@ class ToolRegistry:
         deny_label: str = "permission denied",
         allowed_names: "set[str] | None" = None,
         deadline_s: float | None = None,
+        grants: "Any | None" = None,
+        scopes: "list[tuple[str, str]] | None" = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
@@ -468,9 +470,36 @@ class ToolRegistry:
         if deny_reason:
             decision = PermissionDecision(False, PermissionMode.ASK, deny_reason)
         else:
-            decision = perms.authorize(
-                tool.perm_key(), args, agent_overrides, session_allow=session_allow
-            )
+            # STANDING GRANTS (v1.299.0): the store and this call's scopes
+            # ride into the engine ONLY when a lane passed both — the
+            # four-argument call stays byte-identical for every older caller
+            # and every engine double. The engine reads them after its deny
+            # check; a hit lifts an ASK and names the grant.
+            _extra: dict[str, Any] = {}
+            if grants is not None and scopes:
+                _extra.update(grants=grants, scopes=scopes, call_name=name)
+            _held = bool(getattr(tool, "quarantined", False))
+            if _held:
+                # QUARANTINE (v1.299.0): a pack tool the user never knowingly
+                # installed is lifted by no blanket grant, name or standing —
+                # only by a card answered about THIS tool (``call_name``).
+                _extra.update(quarantined=True, call_name=name)
+            try:
+                decision = perms.authorize(
+                    tool.perm_key(), args, agent_overrides, session_allow=session_allow,
+                    **_extra,
+                )
+            finally:
+                if _held:
+                    # ``perm_key()`` above recorded this tool as the mcp_call
+                    # question in flight (mcp/tools._ASKING_ABOUT); the
+                    # platform's wrapper clears it when consulted, but a lift
+                    # or a raise never reaches the wrapper and would leave it
+                    # for the next bare question in this task (review fix).
+                    from ..mcp.tools import take_asking_about
+
+                    take_asking_about()
+        grant_id = str(getattr(decision, "grant_id", "") or "")
         reversibility = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
         rev_value = reversibility.value if isinstance(reversibility, Reversibility) else str(reversibility)
         # v1.237.0 (D12/D24): the declared risk class rides every verdict event
@@ -560,6 +589,7 @@ class ToolRegistry:
                         self._record,
                         ctx, name, args, decision.mode, ok=True,
                         output=cached.output, reversibility=rev_value,
+                        grant_id=grant_id,
                     )
                     await ctx.event_bus.publish(
                         EventType.TOOL_EXECUTED,
@@ -734,6 +764,7 @@ class ToolRegistry:
                 # run's result card and the preview rail all see them.
                 created_paths=result.created_paths if result.ok else None,
                 risk=risk,
+                grant_id=grant_id,
             )
         )
         self._interrupt_jobs.add(job)
@@ -788,6 +819,7 @@ class ToolRegistry:
         undo: dict[str, Any] | None,
         created_paths: Any,
         risk: str | None,
+        grant_id: str = "",
     ) -> None:
         """The terminal row + ``tool.executed`` for a call that FINISHED.
 
@@ -808,13 +840,16 @@ class ToolRegistry:
             confinement=confinement,
             undo=undo,
             created_paths=created_paths,
+            grant_id=grant_id,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
             {"tool": name, "ok": ok, "mode": mode.value,
              "invocation_id": inv_id, "reversibility": reversibility,
              "risk_class": risk,
-             **({"confinement": confinement} if confinement else {})},
+             **({"confinement": confinement} if confinement else {}),
+             # v1.299.0: a call a standing grant allowed says so on the wire too.
+             **({"grant_id": grant_id} if grant_id else {})},
             session_id=ctx.session_id,
         )
 
@@ -1222,6 +1257,7 @@ class ToolRegistry:
         undo: "dict[str, Any] | None" = None,
         created_paths: "list[str] | None" = None,
         confinement: str | None = None,
+        grant_id: str = "",
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
@@ -1267,6 +1303,7 @@ class ToolRegistry:
             output=output[:4000],
             reversibility=reversibility,
             confinement=confinement,
+            grant_id=str(grant_id or ""),
         )
         with session_scope(ctx.engine) as db:
             db.add(record)

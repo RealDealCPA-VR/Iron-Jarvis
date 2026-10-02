@@ -1171,12 +1171,36 @@ class IntegrationEnableBody(BaseModel):
 
 
 class ScheduleAdd(BaseModel):
+    """``POST /schedules``. ``payload`` is a free dict; a ``task`` kind reads
+    ``task``, ``agent_type``, ``provider``, ``model``, ``project_id``,
+    ``notify*`` and (v1.299.0) the five KNOBS validated by
+    ``scheduling/knobs.validate_knobs``: ``skills`` (names in the registry),
+    ``workspace_root`` (a usable folder), ``context_from`` (another schedule's
+    name), ``script`` (``{command, timeout_s ≤ 120, cwd: workspace|home}``,
+    user-made schedules only) and ``skip_memory`` (bool)."""
+
     name: str
     cron: str | None = None
     run_at: str | None = None
     interval_seconds: int | None = None
     kind: str = "workflow"
     payload: dict = {}
+
+
+class SchedulePatch(BaseModel):
+    """``PATCH /schedules/{name}`` (v1.299.0): every ``ScheduleAdd`` field
+    optional (``None`` = leave alone; a trigger field given REPLACES the
+    trigger), plus ``payload_set`` (keys merged over the stored payload) and
+    ``payload_unset`` (keys removed — wins over ``payload_set`` for the same
+    key). The MERGED payload is re-validated with the add-time rules."""
+
+    cron: str | None = None
+    run_at: str | None = None
+    interval_seconds: int | None = None
+    kind: str | None = None
+    enabled: bool | None = None
+    payload_set: dict = {}
+    payload_unset: list[str] = []
 
 
 class SentinelAdd(BaseModel):
@@ -1533,6 +1557,13 @@ class GoalGrantsPatch(BaseModel):
     verbatim) — this model stays a thin wire shape."""
 
     add: list[str] = Field(default_factory=list)
+    #: v1.299.0: EXACT grants — ``[{tool, args_hash, label?}]`` — live only
+    #: in the standing-grant store (``core/grants.py``), scope ``goal``;
+    #: the per-tool ``add`` list ALSO lands a store row (``args_hash == ""``)
+    #: beside the compat ``allowed_grants`` append.
+    add_exact: list[dict[str, Any]] = Field(default_factory=list)
+    #: Days until the minted rows expire; ``null`` = never (goal scope only).
+    expires_days: int | None = 30
 
 
 class KillBody(BaseModel):

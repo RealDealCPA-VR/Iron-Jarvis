@@ -61,6 +61,7 @@ import {
 } from "@/components/tools/FilterBar";
 import { EnableDialog, type EnablePlan } from "@/components/tools/EnableDialog";
 import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
+import type { McpToolRow } from "@/lib/types";
 import {
   RICHER_PACK,
   VERIFY_PACK_ID,
@@ -210,6 +211,19 @@ interface McpServer {
    *  name. Never a guess. */
   fix?: string | null;
   last_attempt_at?: string | null;
+  /** v1.299.0: tools that APPEARED (or changed shape) after the pack was
+   *  first trusted and are write-like — they ask until trusted, whatever the
+   *  pack's or the global auto-approve says. Absent on an older daemon. */
+  quarantined?: string[];
+  /** v1.299.0: the per-tool view (name, write_like, quarantined). */
+  tools?: McpToolRow[];
+}
+
+/** The quarantined tool names of a pack — from `quarantined` when the daemon
+ *  sends it, else derived from the per-tool rows; [] on an older daemon. */
+function quarantinedOf(s: McpServer): string[] {
+  if (Array.isArray(s.quarantined)) return s.quarantined.filter((n) => typeof n === "string");
+  return (s.tools ?? []).filter((t) => t && t.quarantined === true).map((t) => t.name);
 }
 
 /** Response of POST /mcp/servers/{name}/reload — the Retry for a pack that did not start. */
@@ -836,6 +850,26 @@ export default function ToolsPage() {
     } catch (err) {
       setMcpError(err instanceof ApiError ? err.message : String(err));
       return false;
+    } finally {
+      setMcpBusy(null);
+    }
+  }
+
+  /** POST /mcp/servers/{name}/tools/{tool}/trust (v1.299.0) — a write-like
+   *  tool that appeared after the pack was first trusted asks until the user
+   *  trusts it by name. One press, one tool; the list re-reads. */
+  async function trustTool(serverName: string, tool: string) {
+    setMcpBusy(`trust:${serverName}:${tool}`);
+    setMcpError(null);
+    setMcpOk(null);
+    try {
+      await post(
+        `/mcp/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(tool)}/trust`,
+      );
+      setMcpOk(`"${tool}" from ${serverName} is trusted — it follows the pack's permission now.`);
+      reloadServers();
+    } catch (err) {
+      setMcpError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setMcpBusy(null);
     }
@@ -1566,11 +1600,17 @@ export default function ToolsPage() {
                 name: sv.name,
                 autoApprove: Boolean(sv.auto_approve),
                 tools: sv.tools_loaded ?? 0,
+                quarantined: quarantinedOf(sv),
               }))}
               globalOn={mcpData?.auto_approve_global ?? false}
               busyKey={
-                autoApproveBusy ? "global" : mcpBusy && mcpBusy.startsWith("auto:") ? mcpBusy : null
+                autoApproveBusy
+                  ? "global"
+                  : mcpBusy && (mcpBusy.startsWith("auto:") || mcpBusy.startsWith("trust:"))
+                    ? mcpBusy
+                    : null
               }
+              onTrustTool={(server, tool) => void trustTool(server, tool)}
               onToggleServer={(name, next) => {
                 const sv = servers.find((x) => x.name === name);
                 if (sv) void toggleAutoApprove({ ...sv, auto_approve: !next });
@@ -2007,14 +2047,25 @@ export default function ToolsPage() {
                     {/* loaded tool names, as chips */}
                     {names.length > 0 && (
                       <div className="mt-2.5 flex flex-wrap gap-1">
-                        {names.map((n) => (
-                          <span
-                            key={n}
-                            className="rounded-md border border-white/[0.06] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
-                          >
-                            {n}
-                          </span>
-                        ))}
+                        {names.map((n) => {
+                          // v1.299.0: a quarantined tool wears amber here too;
+                          // the Trust button lives in the Permissions panel.
+                          const held = quarantinedOf(s).includes(n);
+                          return (
+                            <span
+                              key={n}
+                              data-quarantined={held ? "1" : undefined}
+                              title={held ? "New since last load — asks until you trust it" : undefined}
+                              className={`rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${
+                                held
+                                  ? "border-amber-400/30 bg-amber-400/[0.08] text-amber-200"
+                                  : "border-white/[0.06] bg-white/[0.03] text-zinc-300"
+                              }`}
+                            >
+                              {n}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
 

@@ -43,6 +43,32 @@ class ScheduleCreateTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
+        from . import knobs as _knobs
+
+        payload = args.get("payload")
+        kind = args.get("kind", "workflow")
+        # THE SCRIPT KNOB IS THE USER'S (v1.299.0): a pre-run command runs on
+        # the host with the shell tool's confinement, so a schedule an AGENT
+        # makes may never carry one — refused by name, before anything else,
+        # even though this tool's kinds (workflow/event) could not fire it.
+        if isinstance(payload, dict) and payload.get("script") not in (None, {}):
+            return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
+        try:
+            # The same knob rules the routes apply (``from_user=False``); the
+            # folder probe inside is blocking, so off the loop.
+            await asyncio.to_thread(
+                _knobs.validate_knobs,
+                payload,
+                name=str(args.get("name") or ""),
+                kind=str(kind),
+                scheduler=self.platform.scheduler,
+                skills=getattr(self.platform, "skills", None),
+                from_user=False,
+            )
+        except _knobs.KnobError as exc:
+            return ToolResult(ok=False, error=exc.detail)
         try:
             rec = self.platform.scheduler.add_task(
                 args.get("name") or "",

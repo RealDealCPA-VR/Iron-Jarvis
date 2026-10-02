@@ -21,6 +21,7 @@ from . import (  # noqa: F401
     fleet,
     fsbrowse,
     goals,
+    grants,
     guide,
     helpdocs,
     knowledge,

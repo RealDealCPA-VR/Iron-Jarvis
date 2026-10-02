@@ -30,6 +30,14 @@
 // WAITING, NOT EXPIRING (v1.247.0): `timeoutS === 0` means the daemon waits
 // until the user answers — so the card says so and shows no countdown. A
 // positive value (an unattended door) is named once, never ticked.
+//
+// ALWAYS, EXACTLY THIS (v1.299.0): when the ask carries `can_always`, a fourth
+// answer runs this call AND writes a standing grant keyed on the EXACT
+// arguments (`args_hash`) in the run's scope — goal, agent, project or chat —
+// for 30 days. "Always allow shell" would be a blank cheque; "always allow
+// `git status` here" is a decision. The button exists ONLY when the daemon
+// offered it: an older daemon never sent the field and sees today's card.
+// The grant is visible and revocable on the Autonomy page (StandingGrants).
 
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
@@ -87,14 +95,17 @@ export function ApprovalCard({
   // Which button is in flight; the card disables itself after one click. The
   // resolved frame (or stream end) unmounts it — a second decision has no
   // write path.
-  const [sent, setSent] = useState<"" | "once" | "conversation" | "deny" | "tab">("");
+  const [sent, setSent] = useState<"" | "once" | "conversation" | "deny" | "tab" | "always">("");
   const [error, setError] = useState<string | null>(null);
   // v1.266.0: a browser action can be allowed FOR ITS TAB — this call, and every
   // later page action in the same tab until it closes. Offered only where it
   // means something: a shell command has no tab.
   const browserAction = approval.tool.startsWith("browser_");
+  // v1.299.0: offered by the daemon, never inferred here — a batch has no
+  // single argument set to key a grant on, and the daemon says so by omission.
+  const canAlways = approval.canAlways === true;
 
-  async function decide(decision: "once" | "conversation" | "deny" | "tab") {
+  async function decide(decision: "once" | "conversation" | "deny" | "tab" | "always") {
     if (sent) return;
     setSent(decision);
     setError(null);
@@ -192,6 +203,14 @@ export function ApprovalCard({
         </p>
       )}
 
+      {canAlways && (
+        <p data-testid="approval-always-note" className="text-[11px] leading-relaxed text-zinc-400">
+          “Always allow exactly this” runs it now and keeps allowing {approval.tool} with
+          exactly these arguments here for 30 days — different arguments still ask. Revoke
+          it any time on the Autonomy page.
+        </p>
+      )}
+
       {error && <p className="text-[11px] text-rose-300">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -232,6 +251,18 @@ export function ApprovalCard({
             "Allow for this conversation"
           )}
         </button>
+        {canAlways && (
+          <button
+            type="button"
+            data-testid="approval-always"
+            onClick={() => void decide("always")}
+            disabled={!!sent}
+            title={`Allow ${approval.tool} with exactly these arguments here for 30 days`}
+            className="btn-ghost text-xs"
+          >
+            {sent === "always" ? <LoaderInline label="Allowing…" /> : "Always allow exactly this"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void decide("deny")}

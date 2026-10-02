@@ -13,11 +13,14 @@ import {
   Workflow,
   Radio,
   ArrowUpRight,
+  Pencil,
+  X,
 } from "lucide-react";
-import { post, del, get, ApiError } from "@/lib/api";
+import { post, del, get, patch, ApiError } from "@/lib/api";
 import { CRON_TO_LABEL, REPEAT_PRESETS } from "@/lib/schedules";
 import { usePolledApi, useApi } from "@/lib/useApi";
-import type { Schedule } from "@/lib/types";
+import type { Schedule, ScheduleScript } from "@/lib/types";
+import { Modal } from "@/components/Modal";
 import {
   Card,
   Badge,
@@ -143,6 +146,151 @@ function whatLabel(s: Schedule): string {
   return `Event: ${p.type ?? "schedule.fired"}`;
 }
 
+/* ---- v1.299.0 knobs: skills, folder, chain, pre-run script, skip-memory --- */
+
+/** The knob keys the daemon surfaces on GET rows (and accepts in a payload). */
+const KNOB_KEYS = ["skills", "workspace_root", "context_from", "script", "skip_memory"] as const;
+
+/** Does THIS daemon know the knobs? GET rows carry them (every one present,
+ *  possibly empty) once it does. With no rows there is nothing to read, so the
+ *  controls show — an older daemon simply ignores unknown payload keys. */
+function knobsSupported(rows: Schedule[]): boolean {
+  if (rows.length === 0) return true;
+  return rows.some((s) => KNOB_KEYS.some((k) => k in s));
+}
+
+/** One schedule's knob values — the row's own fields first, the payload blob
+ *  for a daemon that stores them but does not surface them. */
+interface ScheduleKnobs {
+  task: string;
+  skills: string[];
+  workspace_root: string;
+  context_from: string;
+  script: ScheduleScript | null;
+  skip_memory: boolean;
+}
+
+function knobsOf(s: Schedule): ScheduleKnobs {
+  let p: Record<string, unknown> = {};
+  try {
+    p = JSON.parse(s.payload_json || "{}") as Record<string, unknown>;
+  } catch {
+    /* unparseable payload — the row's own fields are all we have */
+  }
+  const pick = <T,>(key: (typeof KNOB_KEYS)[number], ok: (v: unknown) => v is T): T | undefined => {
+    if (ok(s[key])) return s[key];
+    if (ok(p[key])) return p[key];
+    return undefined;
+  };
+  const isStrList = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === "string");
+  const isStr = (v: unknown): v is string => typeof v === "string";
+  const isBool = (v: unknown): v is boolean => typeof v === "boolean";
+  const isScript = (v: unknown): v is ScheduleScript =>
+    !!v && typeof v === "object" && typeof (v as ScheduleScript).command === "string";
+  return {
+    task: typeof p.task === "string" ? p.task : "",
+    skills: pick("skills", isStrList) ?? [],
+    workspace_root: pick("workspace_root", isStr) ?? "",
+    context_from: pick("context_from", isStr) ?? "",
+    script: pick("script", isScript) ?? null,
+    skip_memory: pick("skip_memory", isBool) ?? false,
+  };
+}
+
+/** The pre-run script object the payload carries — only the keys that are set. */
+function scriptOf(command: string, timeout: string, cwd: string): ScheduleScript | null {
+  const cmd = command.trim();
+  if (!cmd) return null;
+  const out: ScheduleScript = { command: cmd };
+  const t = Number(timeout);
+  if (timeout.trim() && Number.isFinite(t) && t > 0) out.timeout_s = Math.round(t);
+  if (cwd.trim()) out.cwd = cwd.trim();
+  return out;
+}
+
+/** Add the knobs to a CREATE payload — only the ones the user set, so a form
+ *  with none touched posts exactly the body an older dashboard posted. */
+function applyKnobs(
+  payload: Record<string, unknown>,
+  k: {
+    skills: string[];
+    workspaceRoot: string;
+    contextFrom: string;
+    scriptCommand: string;
+    scriptTimeout: string;
+    scriptCwd: string;
+    skipMemory: boolean;
+  },
+) {
+  if (k.skills.length > 0) payload.skills = k.skills;
+  if (k.workspaceRoot.trim()) payload.workspace_root = k.workspaceRoot.trim();
+  if (k.contextFrom) payload.context_from = k.contextFrom;
+  const script = scriptOf(k.scriptCommand, k.scriptTimeout, k.scriptCwd);
+  if (script) payload.script = script;
+  if (k.skipMemory) payload.skip_memory = true;
+}
+
+/** The PATCH body for an edit (v1.299.0): `payload_set` carries every knob
+ *  that changed to a value, `payload_unset` every knob cleared; name and
+ *  trigger ride top-level. Empty = nothing to send (pinned through the UI). */
+function editBody(
+  before: Schedule,
+  after: {
+    name: string;
+    cron: string;
+    runAt: string;
+    intervalSeconds: string;
+    task: string;
+    skills: string[];
+    workspaceRoot: string;
+    contextFrom: string;
+    scriptCommand: string;
+    scriptTimeout: string;
+    scriptCwd: string;
+    skipMemory: boolean;
+  },
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  // The name is the row's key: PATCH /schedules/{name} has no `name` field
+  // (SchedulePatch), so a rename is not something this editor can send.
+  const cron = after.cron.trim();
+  if (cron && cron !== (before.cron ?? "")) body.cron = cron;
+  if (after.runAt) {
+    const d = new Date(after.runAt);
+    if (!Number.isNaN(d.getTime()) && d.toISOString() !== before.run_at) body.run_at = d.toISOString();
+  }
+  if (after.intervalSeconds.trim()) {
+    const n = Number(after.intervalSeconds);
+    if (Number.isFinite(n) && n > 0 && n !== before.interval_seconds) body.interval_seconds = Math.round(n);
+  }
+  const was = knobsOf(before);
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  const task = after.task.trim();
+  if (before.kind === "task" && task && task !== was.task) set.task = task;
+  if (after.skills.length > 0) {
+    if (JSON.stringify(after.skills) !== JSON.stringify(was.skills)) set.skills = after.skills;
+  } else if (was.skills.length > 0) unset.push("skills");
+  const root = after.workspaceRoot.trim();
+  if (root) {
+    if (root !== was.workspace_root) set.workspace_root = root;
+  } else if (was.workspace_root) unset.push("workspace_root");
+  if (after.contextFrom) {
+    if (after.contextFrom !== was.context_from) set.context_from = after.contextFrom;
+  } else if (was.context_from) unset.push("context_from");
+  const script = scriptOf(after.scriptCommand, after.scriptTimeout, after.scriptCwd);
+  if (script) {
+    if (JSON.stringify(script) !== JSON.stringify(was.script)) set.script = script;
+  } else if (was.script) unset.push("script");
+  if (after.skipMemory) {
+    if (!was.skip_memory) set.skip_memory = true;
+  } else if (was.skip_memory) unset.push("skip_memory");
+  if (Object.keys(set).length > 0) body.payload_set = set;
+  if (unset.length > 0) body.payload_unset = unset;
+  return body;
+}
+
 export default function SchedulesPage() {
   const { data, error, loading, reload } = usePolledApi<{ schedules: Schedule[] }>(
     "/schedules",
@@ -191,6 +339,17 @@ export default function SchedulesPage() {
   const [repeat, setRepeat] = useState<string>("0 9 * * *");
   const [advancedCron, setAdvancedCron] = useState("");
   const [runAt, setRunAt] = useState(""); // datetime-local value
+  // v1.299.0 knobs (task kind): what the run carries beyond its words.
+  const [skills, setSkills] = useState<string[]>([]);
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [contextFrom, setContextFrom] = useState("");
+  const [scriptCommand, setScriptCommand] = useState("");
+  const [scriptTimeout, setScriptTimeout] = useState("");
+  const [scriptCwd, setScriptCwd] = useState("");
+  const [skipMemory, setSkipMemory] = useState(false);
+  // The row being edited (v1.299.0) — PATCH /schedules/{name}.
+  const [editing, setEditing] = useState<Schedule | null>(null);
+  const knobs = knobsSupported(schedules);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -251,6 +410,17 @@ export default function SchedulesPage() {
       if (projectId) payload.project_id = projectId;
       if (dest === "none") payload.notify = false;
       else if (dest !== "all") payload.notify_channels = [dest];
+      // v1.299.0: only the knobs the user set — an untouched form posts
+      // exactly the body it always did.
+      applyKnobs(payload, {
+        skills,
+        workspaceRoot,
+        contextFrom,
+        scriptCommand,
+        scriptTimeout,
+        scriptCwd,
+        skipMemory,
+      });
     } else if (kind === "workflow") {
       payload = { workflow: workflowName };
       if (dest === "none") payload.notify = false;
@@ -285,6 +455,13 @@ export default function SchedulesPage() {
       setKind("task");
       setWorkflowName("");
       setEventType("");
+      setSkills([]);
+      setWorkspaceRoot("");
+      setContextFrom("");
+      setScriptCommand("");
+      setScriptTimeout("");
+      setScriptCwd("");
+      setSkipMemory(false);
       reload();
     } catch (err) {
       // The daemon's 400 detail is already specific (bad cron, duplicate name,
@@ -457,6 +634,34 @@ export default function SchedulesPage() {
                         The agent runs with that project&apos;s context and files.
                       </div>
                     </div>
+                    {/* v1.299.0 knobs — folded; most schedules need none. Hidden
+                        on a daemon whose rows do not carry them. */}
+                    {knobs && (
+                      <details data-testid="schedule-knobs" className="rounded-lg border border-white/[0.06] px-3 py-2">
+                        <summary className="cursor-pointer text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          More: skills, folder, chain, pre-run script, memory
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          <SkillChips value={skills} onChange={setSkills} scope="this schedule" testId="schedule-skills" />
+                          <KnobFields
+                            others={schedules.map((s) => s.name)}
+                            self={name.trim()}
+                            workspaceRoot={workspaceRoot}
+                            setWorkspaceRoot={setWorkspaceRoot}
+                            contextFrom={contextFrom}
+                            setContextFrom={setContextFrom}
+                            scriptCommand={scriptCommand}
+                            setScriptCommand={setScriptCommand}
+                            scriptTimeout={scriptTimeout}
+                            setScriptTimeout={setScriptTimeout}
+                            scriptCwd={scriptCwd}
+                            setScriptCwd={setScriptCwd}
+                            skipMemory={skipMemory}
+                            setSkipMemory={setSkipMemory}
+                          />
+                        </div>
+                      </details>
+                    )}
                   </>
                 )}
 
@@ -713,6 +918,18 @@ export default function SchedulesPage() {
                           </td>
                           <td className="px-2 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {knobs && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditing(s)}
+                                  title={`Edit schedule "${s.name}"`}
+                                  aria-label={`Edit schedule ${s.name}`}
+                                  data-testid={`schedule-edit-${s.name}`}
+                                  className="rounded-lg border border-white/10 p-1.5 text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              )}
                               <button
                                 onClick={() => runNow(s.name)}
                                 disabled={acting === `run:${s.name}`}
@@ -742,6 +959,405 @@ export default function SchedulesPage() {
           </div>
         </div>
       </Reveal>
+      {editing && (
+        <ScheduleEditor
+          schedule={editing}
+          others={schedules.map((s) => s.name)}
+          onClose={() => setEditing(null)}
+          onSaved={(msg) => {
+            setEditing(null);
+            setOk(msg);
+            setFormError(null);
+            reload();
+          }}
+        />
+      )}
     </PageShell>
+  );
+}
+
+/* ---- v1.299.0: the knob controls, shared by Add and Edit ------------------ */
+
+/** Skills as chips — a local copy of SetupCard's NameChips (not exported
+ *  there): type one, Enter adds it, × takes it off. */
+function SkillChips({
+  value,
+  onChange,
+  scope,
+  testId,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  scope: string;
+  testId: string;
+}) {
+  const [text, setText] = useState("");
+  function add() {
+    const t = text.trim();
+    if (!t) return;
+    if (!value.includes(t)) onChange([...value, t]);
+    setText("");
+  }
+  return (
+    <div data-testid={testId} className="space-y-1">
+      <span className="block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        Skills it carries
+      </span>
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {value.map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center gap-1 rounded border border-accent/30 bg-accent/[0.08] px-1 py-px font-mono text-[10px] text-accent-soft"
+            >
+              {t}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((v) => v !== t))}
+                aria-label={`Remove skill ${t} for ${scope}`}
+                className="grid h-3 w-3 place-items-center rounded text-accent-soft/80 hover:text-accent-soft"
+              >
+                <X size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add();
+          }
+        }}
+        placeholder="skill name, then Enter"
+        aria-label={`Add a skill for ${scope}`}
+        className="field text-xs"
+      />
+    </div>
+  );
+}
+
+function KnobFields({
+  others,
+  self,
+  workspaceRoot,
+  setWorkspaceRoot,
+  contextFrom,
+  setContextFrom,
+  scriptCommand,
+  setScriptCommand,
+  scriptTimeout,
+  setScriptTimeout,
+  scriptCwd,
+  setScriptCwd,
+  skipMemory,
+  setSkipMemory,
+}: {
+  others: string[];
+  self: string;
+  workspaceRoot: string;
+  setWorkspaceRoot: (v: string) => void;
+  contextFrom: string;
+  setContextFrom: (v: string) => void;
+  scriptCommand: string;
+  setScriptCommand: (v: string) => void;
+  scriptTimeout: string;
+  setScriptTimeout: (v: string) => void;
+  scriptCwd: string;
+  setScriptCwd: (v: string) => void;
+  skipMemory: boolean;
+  setSkipMemory: (v: boolean) => void;
+}) {
+  // A schedule cannot chain to itself (the daemon 422s); a stored pick that
+  // names a deleted schedule still renders so it can be cleared.
+  const choices = Array.from(new Set([...others.filter((n) => n && n !== self), contextFrom].filter(Boolean)));
+  return (
+    <>
+      <div>
+        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          Folder
+        </label>
+        <input
+          value={workspaceRoot}
+          onChange={(e) => setWorkspaceRoot(e.target.value)}
+          placeholder="C:\\Users\\you\\Documents\\reports"
+          aria-label="Folder"
+          className="field font-mono text-xs"
+        />
+        <div className="mt-1 text-[11px] text-zinc-600">
+          The agent runs in that folder; a rules file AGENTS.md or .ironjarvis.md in that
+          folder loads.
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          Use the result of
+        </label>
+        <select
+          aria-label="Use the result of"
+          value={contextFrom}
+          onChange={(e) => setContextFrom(e.target.value)}
+          className="field text-xs"
+        >
+          <option value="">Nothing — start fresh</option>
+          {choices.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+        <div className="mt-1 text-[11px] text-zinc-600">
+          That schedule&apos;s last result is handed to this run.
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          Pre-run script
+        </label>
+        <input
+          value={scriptCommand}
+          onChange={(e) => setScriptCommand(e.target.value)}
+          placeholder="git pull"
+          aria-label="Pre-run command"
+          className="field font-mono text-xs"
+        />
+        <div className="mt-1.5 grid grid-cols-2 gap-2">
+          <input
+            type="number"
+            min={1}
+            max={120}
+            value={scriptTimeout}
+            onChange={(e) => setScriptTimeout(e.target.value)}
+            placeholder="timeout s (≤ 120)"
+            aria-label="Pre-run timeout (seconds)"
+            className="field text-xs"
+          />
+          {/* The daemon accepts exactly two places (scheduling/knobs.SCRIPT_CWDS):
+              the run's workspace or the app home — never a free path. */}
+          <select
+            value={scriptCwd}
+            onChange={(e) => setScriptCwd(e.target.value)}
+            aria-label="Pre-run folder"
+            className="field text-xs"
+          >
+            <option value="">Run in the job's folder (workspace)</option>
+            <option value="workspace">workspace</option>
+            <option value="home">Iron Jarvis home</option>
+          </select>
+        </div>
+        <div className="mt-1 text-[11px] text-zinc-600">
+          Runs before the agent, under the shell tool&apos;s confinement; its output is
+          handed to the run.
+        </div>
+      </div>
+      <label className="flex items-center gap-2 text-xs text-zinc-300">
+        <input
+          type="checkbox"
+          checked={skipMemory}
+          onChange={(e) => setSkipMemory(e.target.checked)}
+          aria-label="Skip memory"
+          className="accent-current"
+        />
+        Skip memory — no lessons or memory are injected into this run
+      </label>
+    </>
+  );
+}
+
+/** Edit one schedule (v1.299.0): name, trigger, task text and the knobs, sent
+ *  as ONE PATCH /schedules/{name} — top-level name/cron/run_at/interval_seconds,
+ *  `payload_set` for knobs set, `payload_unset` for knobs cleared. Only what
+ *  changed is sent; nothing changed = nothing sent. */
+function ScheduleEditor({
+  schedule,
+  others,
+  onClose,
+  onSaved,
+}: {
+  schedule: Schedule;
+  others: string[];
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+}) {
+  const was = knobsOf(schedule);
+  const tt = (schedule.trigger_type ?? "").toLowerCase();
+  const isOnce = tt === "date" || (!schedule.cron && !!schedule.run_at);
+  const isInterval = tt === "interval" || (!schedule.cron && !!schedule.interval_seconds);
+  const name = schedule.name;
+  const [cron, setCron] = useState(schedule.cron ?? "");
+  const [runAt, setRunAt] = useState("");
+  const [intervalSeconds, setIntervalSeconds] = useState(
+    schedule.interval_seconds ? String(schedule.interval_seconds) : "",
+  );
+  const [task, setTask] = useState(was.task);
+  const [skills, setSkills] = useState<string[]>(was.skills);
+  const [workspaceRoot, setWorkspaceRoot] = useState(was.workspace_root);
+  const [contextFrom, setContextFrom] = useState(was.context_from);
+  const [scriptCommand, setScriptCommand] = useState(was.script?.command ?? "");
+  const [scriptTimeout, setScriptTimeout] = useState(
+    was.script?.timeout_s ? String(was.script.timeout_s) : "",
+  );
+  const [scriptCwd, setScriptCwd] = useState(was.script?.cwd ?? "");
+  const [skipMemory, setSkipMemory] = useState(was.skip_memory);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const body = editBody(schedule, {
+      name,
+      cron: isOnce || isInterval ? "" : cron,
+      runAt: isOnce ? runAt : "",
+      intervalSeconds: isInterval ? intervalSeconds : "",
+      task,
+      skills,
+      workspaceRoot,
+      contextFrom,
+      scriptCommand,
+      scriptTimeout,
+      scriptCwd,
+      skipMemory,
+    });
+    if (Object.keys(body).length === 0) {
+      onClose();
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await patch(`/schedules/${encodeURIComponent(schedule.name)}`, body);
+      onSaved(`Schedule "${schedule.name}" updated.`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setError("This daemon cannot edit schedules yet — update Iron Jarvis, or delete and re-add it.");
+      } else {
+        setError(err instanceof ApiError ? err.message : String(err));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      label={`Edit schedule ${schedule.name}`}
+      onClose={onClose}
+      busy={saving}
+      className="w-full max-w-lg"
+      testId="schedule-editor"
+    >
+      <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-3">
+        <Pencil size={14} className="text-accent-soft" aria-hidden />
+        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-100">
+          Edit “{schedule.name}”
+        </h2>
+      </header>
+      <form onSubmit={save} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        <div>
+          <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            Name
+          </label>
+          <input
+            value={name}
+            readOnly
+            aria-label="Schedule name"
+            title="The name is the schedule's key — delete and re-add to rename it"
+            className="field text-sm opacity-70"
+          />
+        </div>
+        {isOnce ? (
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+              Run at
+            </label>
+            <input
+              type="datetime-local"
+              value={runAt}
+              onChange={(e) => setRunAt(e.target.value)}
+              aria-label="Run at"
+              className="field text-sm"
+            />
+            <div className="mt-1 text-[11px] text-zinc-600">
+              Currently {schedule.run_at ? new Date(schedule.run_at).toLocaleString() : "—"}; leave
+              empty to keep it.
+            </div>
+          </div>
+        ) : isInterval ? (
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+              Every (seconds)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={intervalSeconds}
+              onChange={(e) => setIntervalSeconds(e.target.value)}
+              aria-label="Interval seconds"
+              className="field text-sm"
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+              Cron expression
+            </label>
+            <input
+              value={cron}
+              onChange={(e) => setCron(e.target.value)}
+              aria-label="Cron expression"
+              className="field font-mono text-sm"
+            />
+            <div className="mt-1 font-mono text-[11px] text-zinc-600">
+              min hour day month weekday{CRON_TO_LABEL.get(cron.trim()) ? ` · ${CRON_TO_LABEL.get(cron.trim())}` : ""}
+            </div>
+          </div>
+        )}
+        {schedule.kind === "task" && (
+          <>
+            <div>
+              <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+                The task
+              </label>
+              <textarea
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+                rows={3}
+                aria-label="Task text"
+                className="field resize-y text-sm leading-relaxed"
+              />
+            </div>
+            <SkillChips value={skills} onChange={setSkills} scope={schedule.name} testId="edit-skills" />
+            <KnobFields
+              others={others}
+              self={schedule.name}
+              workspaceRoot={workspaceRoot}
+              setWorkspaceRoot={setWorkspaceRoot}
+              contextFrom={contextFrom}
+              setContextFrom={setContextFrom}
+              scriptCommand={scriptCommand}
+              setScriptCommand={setScriptCommand}
+              scriptTimeout={scriptTimeout}
+              setScriptTimeout={setScriptTimeout}
+              scriptCwd={scriptCwd}
+              setScriptCwd={setScriptCwd}
+              skipMemory={skipMemory}
+              setSkipMemory={setSkipMemory}
+            />
+          </>
+        )}
+        {error && <ErrorNote>{error}</ErrorNote>}
+        <footer className="flex items-center justify-end gap-2 border-t hairline pt-3">
+          <button type="button" onClick={onClose} disabled={saving} className="btn-ghost py-1.5 text-xs">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving} data-testid="schedule-editor-save" className="btn-accent py-1.5 text-xs">
+            {saving ? <LoaderInline label="Saving…" /> : "Save changes"}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   );
 }

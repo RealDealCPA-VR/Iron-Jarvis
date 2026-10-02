@@ -34,6 +34,7 @@ from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
+from ...core.grants import args_hash as _grant_hash
 from ...core.turns import CHAT_INFLIGHT, TURNS
 from ...providers.reasoning import normalize_level
 from ..doors import collect_doors, door_for
@@ -59,6 +60,12 @@ from ..chat_turn import (
     repeated_call_refusal,
     _low_trust_args,
     _low_trust_invoke_kwargs,
+    chat_grant_scopes,
+    _grant_invoke_kwargs,
+    _grant_covers,
+    _can_always,
+    _quarantined,
+    _mint_always,
     _taint_chat_turn,
     _trust_receipt,
     _DOC_WRITING_TOOLS,
@@ -2375,6 +2382,12 @@ async def chat_stream(
     # that begins full would make strict mode a no-op on exactly the
     # common case.
     card_grants: set[str] = set()
+    # STANDING GRANTS (v1.299.0): the scopes this turn's calls run under —
+    # chat, plus the RESOLVED project when grounded. Read by the card
+    # predicates (a covered call never cards), minted into by an "always"
+    # answer, and passed to the registry so its own gate makes the one real
+    # decision. MIRROR NOTE (lock-step): chat_turn passes the same scopes.
+    _grant_scopes = chat_grant_scopes(pid if resolved_proj is not None else None)
     ctx = None
     if armed or ask_armed:
         from ...tools.base import ToolContext
@@ -2840,6 +2853,8 @@ async def chat_stream(
                         )
                     if _asks and _tab_covered(_c):
                         return ""
+                    if _asks and _grant_covers(d.platform, _grant_scopes, _c.name, _c.arguments):
+                        return ""  # v1.299.0: a standing grant covers it
                     return _cp if _asks else ""
 
                 _round_asks: dict[str, list] = {}
@@ -2964,6 +2979,17 @@ async def chat_stream(
                         _needs_card = False
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
+                    if _needs_card and _grant_covers(
+                        d.platform, _grant_scopes, tc.name, tc.arguments
+                    ):
+                        # A STANDING GRANT COVERS IT (v1.299.0): no card. The
+                        # grant is deliberately NOT copied into `_grant_extra`
+                        # — the registry's own `authorize` consults the same
+                        # store with the same scopes (`grants=`/`scopes=` on
+                        # the invoke below) and records the grant id on the
+                        # ledger row, which a name in `session_allow` could
+                        # not. The predicate and the gate read one store.
+                        _needs_card = False
                     if _needs_card:
                         if _perm_name in _round_answers:
                             # ONE CARD FOR THE BATCH (v1.247.0): this call's
@@ -2978,6 +3004,17 @@ async def chat_stream(
                             _frame = {
                                 "id": "", "call_id": tc.id,
                                 "tool": tc.name, "args": safe_args,
+                                # v1.299.0: the exact call's identity (a hash
+                                # of the REAL arguments — not a secret) and
+                                # whether the card may offer "Always".
+                                "args_hash": _grant_hash(tc.name, tc.arguments),
+                                # Review fix: a quarantined pack tool is
+                                # never offered "Always" and the card says
+                                # it is new in its pack.
+                                "quarantined": _quarantined(d.platform, tc.name),
+                                "can_always": _can_always(
+                                    d.platform, _grant_scopes, _trust_state, tc.name
+                                ),
                                 # 0 = no expiry (v1.247.0): the turn waits
                                 # for the person it asked.
                                 "timeout_s": (
@@ -3062,6 +3099,26 @@ async def chat_stream(
                             # The tab is granted (above); THIS call is "once".
                             _round_answers[_perm_name] = "once"
                             _decision = "once"
+                        if _decision == "always":
+                            # ALWAYS (v1.299.0): this call runs as "once" AND
+                            # the EXACT call is remembered as a standing grant
+                            # in the turn's strongest scope (project > chat),
+                            # 30 days, labelled with the redacted args. Minted
+                            # OFF the loop; a batch sibling replaying this
+                            # answer mints its own exact row. No store = "once".
+                            # MIRROR NOTE (lock-step): the agent runtime's
+                            # `_pause_for_approval` does the same.
+                            _store = getattr(d.platform, "grants", None)
+                            if _store is not None:
+                                try:
+                                    _store.bind_loop(asyncio.get_running_loop())
+                                    await asyncio.to_thread(
+                                        _mint_always, d.platform, _grant_scopes,
+                                        tc.name, tc.arguments, safe_args,
+                                    )
+                                except Exception:  # noqa: BLE001 — never fail the call over the record
+                                    pass
+                            _decision = "once"
                         if _decision == "once":
                             _grant_extra = {tc.name, _perm_name}
                         elif _decision == "conversation":
@@ -3106,6 +3163,11 @@ async def chat_stream(
                             allowed_names=_turn_tools,
                             # v1.246.0 — lock-step with chat_turn.
                             deadline_s=chat_tool_deadline(d.platform),
+                            # STANDING GRANTS (v1.299.0) — lock-step with
+                            # chat_turn: the store + scopes, only when a
+                            # store exists, so the registry's gate lifts a
+                            # covered ask and records the grant id.
+                            **_grant_invoke_kwargs(d.platform, _grant_scopes),
                             **(
                                 {"deny_reason": _deny_reason}
                                 if _deny_reason

@@ -7,6 +7,7 @@ import {
   Bell,
   GitBranch,
   GraduationCap,
+  KeyRound,
   MonitorCog,
   Inbox,
   ArrowRight,
@@ -252,6 +253,25 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       body: `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
     };
   }
+  if (e.type === "grant.revoked") {
+    // v1.299.0: a standing grant ("always allow exactly this") was revoked.
+    // Payload: {id, scope_kind, scope_id, tool, label, expires_at}. Creation
+    // is NOT notified — the user just pressed the button that made it.
+    const label =
+      typeof p.label === "string" && p.label
+        ? p.label
+        : typeof p.tool === "string" && p.tool
+          ? p.tool
+          : "a grant";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/autonomy",
+      icon: KeyRound,
+      title: `Standing grant revoked: ${label}`,
+      body: typeof p.tool === "string" && p.tool && p.tool !== label ? p.tool : "",
+    };
+  }
   if (e.type === "coach.proposal") {
     // v1.297.0: the reflection coach wrote a proposal for an agent's
     // instructions. Payload: {id, agent, categories, rationale}. The body is
@@ -459,6 +479,9 @@ interface PendingAgentApproval {
   count: number;
   /** Seconds the run waits; 0/absent = until answered (v1.247.0). */
   timeoutS?: number;
+  /** v1.299.0: the daemon offers "always" — this call AND exactly these
+   *  arguments in the run's scope for 30 days. Absent = not offered. */
+  canAlways?: boolean;
 }
 
 /** Parse one /chat/approvals/pending row (null = not a usable row). */
@@ -474,6 +497,7 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     requestedAt: typeof r.requested_at === "string" ? r.requested_at : "",
     count: typeof r.count === "number" && r.count > 1 ? r.count : 1,
     ...(typeof r.timeout_s === "number" ? { timeoutS: r.timeout_s } : {}),
+    ...(r.can_always === true ? { canAlways: true } : {}),
   };
 }
 
@@ -486,7 +510,7 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
  *  404 means it was answered elsewhere or timed out (the pause window is
  *  bounded) — the row leaves without a retry; any other failure keeps the
  *  row answerable. */
-type AgentAnswer = "once" | "conversation" | "deny";
+type AgentAnswer = "once" | "conversation" | "deny" | "always";
 
 function AgentApprovalRow({
   ask,
@@ -556,6 +580,20 @@ function AgentApprovalRow({
             >
               {busy === "conversation" ? "Allowing…" : "Allow for this run"}
             </button>
+            {ask.canAlways && (
+              // v1.299.0: a standing grant on the EXACT arguments — offered
+              // only when the daemon said it can key one (never for a batch).
+              <button
+                type="button"
+                data-testid="bell-approval-always"
+                onClick={() => void answer("always")}
+                disabled={busy !== null}
+                title={`Allow ${ask.tool} with exactly these arguments in this run's scope for 30 days — revocable on the Autonomy page`}
+                className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200 disabled:opacity-50"
+              >
+                {busy === "always" ? "Allowing…" : "Always allow exactly this"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => void answer("deny")}

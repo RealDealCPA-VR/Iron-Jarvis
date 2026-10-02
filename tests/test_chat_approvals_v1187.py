@@ -410,6 +410,8 @@ def test_the_approvals_route_validates_and_404s_the_expired(tmp_path):
     r = client.post("/chat/approvals/apr_nope", json={"decision": "once"})
     assert r.status_code == 404
     # A decision outside the vocabulary is the caller's bug, said plainly.
-    r = client.post("/chat/approvals/apr_nope", json={"decision": "always"})
+    # ("always" JOINED the vocabulary in v1.299.0 — the sample is now a word
+    # no lane will ever learn.)
+    r = client.post("/chat/approvals/apr_nope", json={"decision": "forever"})
     assert r.status_code == 400
     assert "once" in r.json()["detail"]

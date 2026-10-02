@@ -232,6 +232,12 @@ class EventType:
     #: guard flagged before it reached a prompt (v1.298.0, ``core/promptguard``).
     #: {session_id, source, count, categories}; the block is not in the payload.
     CONTEXT_BLOCKED = "context.blocked"
+    #: STANDING GRANTS (v1.299.0, ``core/grants.py``): an approval remembered
+    #: by ARGUMENTS was minted (an "always" card answer, or the goals ladder's
+    #: PATCH) / revoked (``POST /grants/{id}/revoke``). {id, scope_kind,
+    #: scope_id, tool, label, expires_at} — the label is the REDACTED line.
+    GRANT_CREATED = "grant.created"
+    GRANT_REVOKED = "grant.revoked"
 
 
 @dataclass

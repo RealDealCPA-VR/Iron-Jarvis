@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.298.0 (2026-09-14).*
+holds itself to. Current as of v1.299.0 (2026-09-14).*
 
 ---
 
@@ -1647,6 +1647,28 @@ reads like an injection is replaced with `[BLOCKED: … — removed from <source
 while the rest loads unchanged (very long files are trimmed in the middle),
 and the bell says how many passages were blocked and where. Your own
 instructions and your own skills are never scanned: they are your words.
+**v1.299.0 — grants that mean exactly what you approved, packs that
+cannot slip in a new power, and schedules that know more.** Approval cards
+now offer **Always allow exactly this**: it allows the call and keeps
+allowing it only with these exact arguments, in this scope (this agent, this
+project, this goal or chat), for thirty days — a different argument still
+asks. The goals trust ladder offers the same exactness when three approved
+asks were identical, and a per-tool grant otherwise; never for a shell
+command without an exact argument. A grant you give an agent while watching
+it also covers that agent's scheduled and goal runs for the month; a run in
+low trust still cannot use it. Every standing grant is listed on the
+Autonomy page with its scope, uses and expiry, and can be revoked. When an
+MCP pack (a connected tool server) later gains a tool that can write or
+destroy, that tool is **quarantined**: it asks until you press Trust on the
+Tools page, even if the pack is set to auto-approve — answering its card
+runs it that once, nothing blanket does, and the card says it is new; tools that only read
+are never quarantined, and the pack you installed knowingly is trusted as it
+was on that day. Schedules gained the knobs a real routine needs: **skills**
+for the job, a **working folder** (and a rules file there, AGENTS.md or
+.ironjarvis.md, is loaded — scanned like everything else), **use the result
+of** another schedule, a **pre-run script** whose output lands in the prompt
+(only you can set one, never an agent), and **skip memory** for a job that
+should not inherit your lessons and notes. Schedules can be edited in place.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

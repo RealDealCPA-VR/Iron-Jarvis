@@ -279,6 +279,16 @@ async def child_slot(config, key: str) -> AsyncIterator[None]:
             _child_slots.pop(slot_key, None)
 
 
+def _stored_options(session: Session) -> dict:
+    """The run options a session was created with (v1.299.0), as a dict —
+    ``{}`` for a legacy row or junk in the column. Shared by ``rerun_session``
+    and ``continue_session`` so neither can disagree about what the user
+    asked for."""
+    from ..scheduling.knobs import session_options
+
+    return session_options(session)
+
+
 def _stored_allow_tools(session: Session) -> list[str]:
     """The up-front tool grant a session was created with, as a clean list.
 
@@ -595,8 +605,17 @@ class Orchestrator:
         approval_mode: str | None = None,
         trust: str | None = None,
         trust_reason: str = "",
+        options: dict | None = None,
     ) -> Session:
         """Create (never start) a session row.
+
+        ``options`` (v1.299.0): the RUN OPTIONS a door states, stored as the
+        row's ``options_json`` and read by the runtime through
+        ``scheduling/knobs.session_options`` — ``skip_memory`` (no lessons /
+        memory index / fabric injection) and ``folder_rules`` (load the
+        workspace's AGENTS.md / .ironjarvis.md). None = ``{}`` = today's
+        behaviour. Rerun and continue inherit it: the options are part of the
+        session's INPUTS, like the grant and the step budget.
 
         ``trust`` / ``trust_reason`` (v1.298.0): the posture the DOOR states —
         ``"low"`` for a run started from an inbound message or by a low
@@ -689,6 +708,12 @@ class Orchestrator:
                 " ".join(str(trust_reason or "").split())
                 if _normalize_trust(trust) == _TRUST_LOW
                 else ""
+            ),
+            # THE RUN OPTIONS (v1.299.0) — see the docstring. A non-dict is
+            # refused into "{}", never stored as something the reader cannot
+            # decode.
+            options_json=_json.dumps(
+                dict(options) if isinstance(options, dict) else {}, default=str
             ),
         )
         if direct_root is not None:
@@ -1366,6 +1391,10 @@ class Orchestrator:
             # session is the same inputs from the same door.
             trust=getattr(prev, "trust", "") or None,
             trust_reason=getattr(prev, "trust_reason", "") or "",
+            # …and the RUN OPTIONS (v1.299.0): skip_memory / folder_rules are
+            # inputs too — a rerun that re-grew the memory blocks or dropped
+            # the folder's rules would not be the same run.
+            options=_stored_options(prev) or None,
         )
 
     def _rerun_direct_root(self, prev: Session) -> str | None:
@@ -1465,6 +1494,8 @@ class Orchestrator:
                 if _normalize_trust(getattr(prev, "trust", "")) == _TRUST_LOW
                 else ""
             ),
+            # …and the RUN OPTIONS (v1.299.0), the same inputs as a rerun's.
+            options_json=_json.dumps(_stored_options(prev), default=str),
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the

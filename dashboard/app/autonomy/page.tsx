@@ -38,6 +38,8 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { GrantRow, StandingGrants } from "@/components/StandingGrants";
+import type { GrantOffer, StandingGrant } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import {
   useLiveGoals,
@@ -419,6 +421,12 @@ export default function AutonomyPage() {
           controls per state. Live-refreshed on goal.* events. */}
       <Reveal>
         <GoalsSection />
+      </Reveal>
+
+      {/* Standing grants (v1.299.0) — every "Always allow exactly this",
+          revocable. Renders nothing on a daemon without /grants. */}
+      <Reveal>
+        <StandingGrants />
       </Reveal>
 
       {/* Status tiles */}
@@ -849,6 +857,26 @@ type GoalVerbResult = {
   reason?: string;
 };
 
+/** A grant offer as this section renders it: a per-tool name from
+ *  `grant_offers` (v1.209.0, `args_hash` "") or an EXACT row from
+ *  `grant_offers_exact` (v1.299.0). The two never mix on the wire. */
+type Offer = { tool: string; args_hash: string; label?: string; approved?: number };
+
+function offersOf(g: GoalRecord): Offer[] {
+  const bare = (g.grant_offers ?? [])
+    .filter((t): t is string => typeof t === "string" && !!t)
+    .map((tool) => ({ tool, args_hash: "" }));
+  const exact = (g.grant_offers_exact ?? [])
+    .filter((o): o is GrantOffer => !!o && typeof o === "object" && typeof o.tool === "string" && !!o.args_hash)
+    .map((o) => ({ tool: o.tool, args_hash: o.args_hash, label: o.label, approved: o.approved }));
+  return [...bare, ...exact];
+}
+
+/** The dismiss/busy key — the hash keeps two exact offers for one tool apart. */
+function offerKey(goalId: string, offer: Offer): string {
+  return offer.args_hash ? `${goalId}:${offer.tool}:${offer.args_hash}` : `${goalId}:${offer.tool}`;
+}
+
 function GoalsSection() {
   const goals = useLiveGoals();
   const [busy, setBusy] = useState<string | null>(null);
@@ -889,17 +917,18 @@ function GoalsSection() {
   // detail for every goal the server made an offer on.
   useEffect(() => {
     for (const g of goals.data?.goals ?? []) {
-      if ((g.grant_offers ?? []).length > 0) void loadAskStats(g.id);
+      if (offersOf(g).length > 0) void loadAskStats(g.id);
     }
   }, [goals.data, loadAskStats]);
 
   useEffect(() => {
     const map: Record<string, boolean> = {};
     for (const g of goals.data?.goals ?? []) {
-      for (const tool of g.grant_offers ?? []) {
+      for (const offer of offersOf(g)) {
+        const key = offerKey(g.id, offer);
         try {
-          if (localStorage.getItem(`${OFFER_DISMISS_PREFIX}${g.id}:${tool}`) === "1") {
-            map[`${g.id}:${tool}`] = true;
+          if (localStorage.getItem(`${OFFER_DISMISS_PREFIX}${key}`) === "1") {
+            map[key] = true;
           }
         } catch {
           /* localStorage unavailable — offers simply reappear */
@@ -909,28 +938,62 @@ function GoalsSection() {
     setDismissed((prev) => ({ ...map, ...prev }));
   }, [goals.data]);
 
-  function dismissOffer(goalId: string, tool: string) {
+  function dismissOffer(goalId: string, offer: Offer) {
+    const key = offerKey(goalId, offer);
     try {
-      localStorage.setItem(`${OFFER_DISMISS_PREFIX}${goalId}:${tool}`, "1");
+      localStorage.setItem(`${OFFER_DISMISS_PREFIX}${key}`, "1");
     } catch {
       /* ignore */
     }
-    setDismissed((prev) => ({ ...prev, [`${goalId}:${tool}`]: true }));
+    setDismissed((prev) => ({ ...prev, [key]: true }));
   }
 
   /** Allow = the ONE user-consented write; the server computed the offer,
-   *  the user says yes here, nothing is ever granted automatically. */
-  async function allowGrant(g: GoalRecord, tool: string) {
-    setBusy(`${g.id}:grant:${tool}`);
+   *  the user says yes here, nothing is ever granted automatically.
+   *  v1.299.0: an EXACT offer goes as `add_exact: [{tool, args_hash, label}]`
+   *  — the hash the daemon computed, never widened to the tool's name — and
+   *  a per-tool offer keeps today's `add: [tool]`. */
+  async function allowGrant(g: GoalRecord, offer: Offer) {
+    const tool = offer.tool;
+    setBusy(`${g.id}:grant:${offerKey(g.id, offer)}`);
     setOk(null);
     setWarn(null);
     setError(null);
     try {
+      const body = offer.args_hash
+        ? {
+            add_exact: [
+              { tool, args_hash: offer.args_hash, ...(offer.label ? { label: offer.label } : {}) },
+            ],
+          }
+        : { add: [tool] };
       await api(`/goals/${encodeURIComponent(g.id)}/grants`, {
         method: "PATCH",
-        body: JSON.stringify({ add: [tool] }),
+        body: JSON.stringify(body),
       });
-      setOk(`"${tool}" is now always allowed on "${g.name}".`);
+      setOk(
+        offer.args_hash
+          ? `"${tool}" with exactly those arguments is now always allowed on "${g.name}".`
+          : `"${tool}" is now always allowed on "${g.name}".`,
+      );
+      goals.reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Revoke one of a goal's standing grants — the same POST the Autonomy
+   *  card uses; the goal list re-reads (grant.revoked also refreshes it). */
+  async function revokeGrant(g: GoalRecord, grant: StandingGrant) {
+    setBusy(`${g.id}:revoke:${grant.id}`);
+    setOk(null);
+    setWarn(null);
+    setError(null);
+    try {
+      await post(`/grants/${encodeURIComponent(grant.id)}/revoke`);
+      setOk(`Revoked "${grant.tool}" on "${g.name}" — it asks again from the next call.`);
       goals.reload();
     } catch (err) {
       setError(errText(err));
@@ -1008,8 +1071,9 @@ function GoalsSection() {
             // Never derived from ask_stats client-side: the server already
             // excluded deny-floor tools and existing grants, and a second
             // copy of that rule here is how one of them rots.
-            const offers = (g.grant_offers ?? []).filter(
-              (t) => !dismissed[`${g.id}:${t}`],
+            const offers = offersOf(g).filter((o) => !dismissed[offerKey(g.id, o)]);
+            const standing = (g.standing_grants ?? []).filter(
+              (s) => s && typeof s.id === "string" && !s.revoked_at,
             );
             // Receipts live on the DETAIL route only; undefined means the
             // lazy GET /goals/{id} has not answered (yet).
@@ -1089,42 +1153,68 @@ function GoalsSection() {
                           </span>
                         </div>
                       )}
-                    {offers.map((tool) => {
-                      // Real N from the detail's receipts; "every ask" only
+                    {offers.map((offer) => {
+                      const tool = offer.tool;
+                      const exact = !!offer.args_hash;
+                      // Real N: an exact offer carries its own receipts; a
+                      // per-tool one reads the detail's — "every ask" only
                       // while the detail is loading or failed.
-                      const approved = stats?.[tool]?.approved;
+                      const approved = offer.approved ?? stats?.[tool]?.approved;
                       return (
                         // The receipts wording is the point: the offer names
                         // what already happened, and NOTHING is granted
-                        // without the click.
+                        // without the click. An EXACT offer (v1.299.0) names
+                        // the arguments too and grants only those.
                         <div
-                          key={tool}
-                          data-testid={`grant-offer-${g.id}-${tool}`}
+                          key={offerKey(g.id, offer)}
+                          data-testid={
+                            exact
+                              ? `grant-offer-${g.id}-${tool}-${offer.args_hash.slice(0, 8)}`
+                              : `grant-offer-${g.id}-${tool}`
+                          }
+                          data-exact={exact ? "1" : undefined}
                           className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-accent/20 bg-accent/[0.05] px-3 py-2 text-xs text-zinc-300"
                         >
                           <span>
                             You approved{" "}
                             {approved != null ? `all ${approved} asks` : "every ask"} for{" "}
-                            <span className="font-mono text-zinc-100">{tool}</span> on
-                            this goal — always allow it here?
+                            <span className="font-mono text-zinc-100">{tool}</span>
+                            {exact ? (
+                              <>
+                                {" "}
+                                with exactly{" "}
+                                <span className="font-mono text-zinc-100">
+                                  {offer.label || "these arguments"}
+                                </span>{" "}
+                                on this goal — always allow exactly this here?
+                              </>
+                            ) : (
+                              <> on this goal — always allow it here?</>
+                            )}
                           </span>
                           <span className="flex shrink-0 items-center gap-1.5">
                             <button
                               type="button"
                               disabled={busy !== null}
-                              onClick={() => allowGrant(g, tool)}
-                              title={`Grant "${tool}" on "${g.name}" from now on`}
+                              onClick={() => allowGrant(g, offer)}
+                              title={
+                                exact
+                                  ? `Grant "${tool}" with exactly these arguments on "${g.name}" for 30 days`
+                                  : `Grant "${tool}" on "${g.name}" from now on`
+                              }
                               className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
                             >
-                              {busy === `${g.id}:grant:${tool}` ? (
+                              {busy === `${g.id}:grant:${offerKey(g.id, offer)}` ? (
                                 <LoaderInline label="Allowing…" />
+                              ) : exact ? (
+                                "Allow exactly this"
                               ) : (
                                 "Allow"
                               )}
                             </button>
                             <button
                               type="button"
-                              onClick={() => dismissOffer(g.id, tool)}
+                              onClick={() => dismissOffer(g.id, offer)}
                               title="Keep asking each time (hides this offer here)"
                               className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                             >
@@ -1134,6 +1224,25 @@ function GoalsSection() {
                         </div>
                       );
                     })}
+                    {standing.length > 0 && (
+                      // v1.299.0: what this goal may already do without
+                      // asking — each row revocable here, two presses.
+                      <ul
+                        data-testid={`goal-grants-${g.id}`}
+                        className="mt-2 space-y-1.5"
+                        aria-label={`Standing grants on ${g.name}`}
+                      >
+                        {standing.map((sg) => (
+                          <GrantRow
+                            key={sg.id}
+                            grant={sg}
+                            showScope={false}
+                            busy={busy === `${g.id}:revoke:${sg.id}`}
+                            onRevoke={(row) => revokeGrant(g, row)}
+                          />
+                        ))}
+                      </ul>
+                    )}
                     <div className="mt-2">
                       <button
                         type="button"

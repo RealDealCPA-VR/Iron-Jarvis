@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Callable
 
 from ..core.logging import get_logger
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from .client import FakeTransport, HttpTransport, MCPClient, StdioTransport
 
 log = get_logger("mcp")
@@ -46,6 +48,87 @@ def _content_to_text(content: Any) -> str:
     return "\n".join(parts)
 
 
+# --------------------------------------------------------------------------- #
+# MCP tool annotations -> risk (v1.299.0).
+# --------------------------------------------------------------------------- #
+# The MCP spec lets a server annotate each tool with hints: ``readOnlyHint``,
+# ``destructiveHint``, ``idempotentHint``, ``openWorldHint``. ``from_spec`` used
+# to drop them on the floor, so every remote tool — ``list_issues`` and
+# ``delete_repository`` alike — carried the fail-safe EXTERNAL_COMMIT/IRREVERSIBLE
+# and nothing in the product could tell a read from a wipe. THE MAPPING:
+#
+#   readOnlyHint: true                       -> RiskClass.READ, Reversibility.READONLY
+#   destructiveHint: false (not read-only)   -> RiskClass.PAGE_ACTION, IRREVERSIBLE
+#   destructiveHint: true, or NO annotations -> RiskClass.EXTERNAL_COMMIT, IRREVERSIBLE
+#
+# ``PAGE_ACTION`` for an additive write ("creates or appends, does not delete"):
+# it still acts, so it is write-like and quarantinable, but it is honestly not a
+# deletion. Reversibility stays IRREVERSIBLE for every write: the effect lands on
+# a remote system we hold no inverse for, so the undo journal must never offer a
+# fake "undone". ``idempotentHint`` / ``openWorldHint`` are KEPT on the tool
+# (``mcp_annotations``) for display and never move the class — an idempotent
+# delete is still a delete, and "open world" says nothing about writing.
+#
+# A HINT IS A HINT (the server wrote it, and a server can lie): the mapping can
+# raise nothing above the floor and lowers only what the server itself declared
+# read-only; ``mcp_call`` stays on the deny floor for every one of them.
+def annotations_of(spec: dict[str, Any]) -> dict[str, Any]:
+    ann = spec.get("annotations") if isinstance(spec, dict) else None
+    return dict(ann) if isinstance(ann, dict) else {}
+
+
+def is_write_like(spec: dict[str, Any]) -> bool:
+    """True unless the server declared the tool ``readOnlyHint: true``.
+
+    Deliberately NOT ``destructiveHint``: a tool that creates, sends or edits
+    is not destructive and still acts on the world — quarantine is about
+    acting without review, not only about deleting.
+    """
+    return annotations_of(spec).get("readOnlyHint") is not True
+
+
+def risk_for(spec: dict[str, Any]) -> tuple[RiskClass, Reversibility]:
+    """The (risk_class, reversibility) a tool spec's annotations declare."""
+    ann = annotations_of(spec)
+    if ann.get("readOnlyHint") is True:
+        return RiskClass.READ, Reversibility.READONLY
+    if ann and ann.get("destructiveHint") is False:
+        return RiskClass.PAGE_ACTION, Reversibility.IRREVERSIBLE
+    return RiskClass.EXTERNAL_COMMIT, Reversibility.IRREVERSIBLE
+
+
+#: THE TOOL AN ``mcp_call`` QUESTION IS ABOUT (v1.299.0). Every MCP tool shares
+#: the one ``mcp_call`` permission key, so the ask-resolver is handed the string
+#: "mcp_call" and the model's arguments — never the tool's name — and could not
+#: tell a quarantined ``delete_repo`` from a trusted ``list_issues``.
+#: ``ToolRegistry.invoke`` reads ``tool.perm_key()`` IMMEDIATELY before it calls
+#: ``perms.authorize`` in the same frame, and ``perm_key`` is a method of the
+#: tool, so the tool records ITSELF here on the way past; the platform's
+#: auto-approve wrapper takes it (``take_asking_about`` reads AND clears, so a
+#: later question in the same context never answers about a stale tool). A
+#: ContextVar: tasks copy their context, so two concurrent agent steps cannot
+#: see each other's tool, and ``asyncio.to_thread`` carries it across.
+_ASKING_ABOUT: "ContextVar[MCPRemoteTool | None]" = ContextVar(
+    "iron_jarvis_mcp_asking_about", default=None
+)
+
+
+def take_asking_about() -> "MCPRemoteTool | None":
+    """The MCP tool whose ``perm_key`` was read last in this context, then
+    forget it. ``None`` when the question is not about an MCP tool."""
+    tool = _ASKING_ABOUT.get()
+    if tool is not None:
+        _ASKING_ABOUT.set(None)
+    return tool
+
+
+def quarantined_in_flight() -> bool:
+    """True when the ``mcp_call`` question being answered RIGHT NOW is about a
+    quarantined tool — the one read the platform's resolver wrapper makes."""
+    tool = take_asking_about()
+    return bool(tool is not None and getattr(tool, "quarantined", False))
+
+
 class MCPRemoteTool(Tool):
     """A native ``Tool`` that proxies to one remote MCP tool via an ``MCPClient``."""
 
@@ -69,6 +152,7 @@ class MCPRemoteTool(Tool):
         remote_name: str,
         description: str = "",
         input_schema: dict[str, Any] | None = None,
+        annotations: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
         self.server_name = server_name
@@ -78,6 +162,12 @@ class MCPRemoteTool(Tool):
             f"Remote MCP tool '{remote_name}' from server '{server_name}'."
         )
         self.input_schema = input_schema or {"type": "object", "properties": {}}
+        # v1.299.0: the server's hints, mapped once (see the module note above).
+        self.mcp_annotations: dict[str, Any] = dict(annotations or {})
+        spec = {"annotations": self.mcp_annotations}
+        self.risk_class, self.reversibility = risk_for(spec)
+        self.write_like: bool = is_write_like(spec)
+        self.quarantined = False
 
     @classmethod
     def from_spec(
@@ -89,7 +179,24 @@ class MCPRemoteTool(Tool):
             spec.get("name", "tool"),
             spec.get("description", ""),
             spec.get("inputSchema") or spec.get("input_schema"),
+            annotations_of(spec),
         )
+
+    def perm_key(self) -> str:
+        # Records WHICH tool the coming ``mcp_call`` question is about (see
+        # ``_ASKING_ABOUT``). The key itself is unchanged: every MCP tool stays
+        # on the shared, deny-floor ``mcp_call``.
+        _ASKING_ABOUT.set(self)
+        return self.permission_key
+
+    def manifest_spec(self) -> dict[str, Any]:
+        """This tool as the pack manifest compares it (see ``mcp/manifest.py``)."""
+        return {
+            "name": self.remote_name,
+            "write_like": self.write_like,
+            "risk": self.risk_class.value,
+            "inputSchema": self.input_schema,
+        }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
@@ -404,6 +511,7 @@ def _record_load(
     error: str | None,
     tools_loaded: int,
     cfg: dict[str, Any] | None = None,
+    quarantined: "list[str] | None" = None,
 ) -> None:
     from datetime import datetime, timezone
 
@@ -417,6 +525,9 @@ def _record_load(
         "fix": verdict["fix"],
         "tools_loaded": tools_loaded,
         "at": datetime.now(timezone.utc).isoformat(),
+        # v1.299.0: the write-like tools that appeared or changed since the
+        # user last looked, held back until trusted (additive; [] = none).
+        "quarantined": sorted(quarantined or []),
     }
 
 
@@ -432,11 +543,84 @@ def load_statuses() -> dict[str, dict[str, Any]]:
     return {k: dict(v) for k, v in _LOAD_STATUS.items()}
 
 
+# --------------------------------------------------------------------------- #
+# Pack-tool quarantine (v1.299.0).
+# --------------------------------------------------------------------------- #
+def apply_quarantine(server: str, tools: "list[Tool]", home: "str | Path") -> list[str]:
+    """Diff a pack's freshly listed tools against its saved manifest, flag the
+    write-like NEW/CHANGED ones ``quarantined``, and record the manifest.
+
+    Returns the quarantined remote names (sorted). IDEMPOTENT: a second pass
+    over the same list diffs against the manifest it just wrote, finds nothing
+    new, and re-derives the same flags from the saved ``trusted`` column — so
+    boot (which applies this after registration) and a live add/reload (which
+    apply it before) agree. Trust the user already granted is KEPT; only a tool
+    that is new or changed loses it. A read-only tool is never flagged.
+    """
+    from .manifest import PackManifest
+
+    remote = [t for t in tools if isinstance(t, MCPRemoteTool)]
+    if not remote:
+        return []
+    pm = PackManifest(home)
+    pm.record(server, [t.manifest_spec() for t in remote])
+    held = pm.quarantined(server)
+    for t in remote:
+        t.quarantined = t.remote_name in held
+    return sorted(held)
+
+
+def quarantine_registered(registry: Any, home: "str | Path") -> dict[str, list[str]]:
+    """Apply the quarantine to every MCP tool ALREADY in ``registry``, per pack.
+
+    The boot loader registers a pack's tools before the platform knows where
+    its home is for this seam, so the platform runs this once after assembly
+    (next to the auto-approve resolver it feeds). Returns ``{server: [held]}``
+    and folds the names onto each pack's load record.
+    """
+    by_server: dict[str, list[Tool]] = {}
+    for name in registry.mcp_names():
+        tool = registry.get(name)
+        if isinstance(tool, MCPRemoteTool):
+            by_server.setdefault(tool.server_name, []).append(tool)
+    out: dict[str, list[str]] = {}
+    for server, tools in by_server.items():
+        try:
+            held = apply_quarantine(server, tools, home)
+        except Exception as exc:  # noqa: BLE001 — a manifest hiccup never breaks boot
+            log.warning("pack manifest for %r not applied: %s", server, exc)
+            continue
+        out[server] = held
+        rec = _LOAD_STATUS.get(server)
+        if rec is not None:
+            rec["quarantined"] = list(held)
+    return out
+
+
+def clear_quarantine(home: "str | Path", registry: Any, server: str, tool: str) -> bool:
+    """The user trusts ``tool`` of ``server``: persist it in the manifest AND
+    lift the live Tool's flag. False when neither the manifest nor the registry
+    knows the tool (the route answers 404)."""
+    from .manifest import PackManifest
+
+    persisted = PackManifest(home).trust(server, tool)
+    live = registry.get(f"mcp__{server}__{tool}") if registry is not None else None
+    if live is not None and isinstance(live, MCPRemoteTool):
+        live.quarantined = False
+    if not persisted and live is None:
+        return False
+    rec = _LOAD_STATUS.get(server)
+    if rec is not None and isinstance(rec.get("quarantined"), list):
+        rec["quarantined"] = [n for n in rec["quarantined"] if n != tool]
+    return True
+
+
 def _load_one_server(
     cfg: dict[str, Any],
     secret_resolver: SecretResolver | None,
     timeout: float,
     record: bool,
+    home: "str | Path | None" = None,
 ) -> list[Tool]:
     """Connect ONE pack, list its tools, and wrap them.
 
@@ -462,8 +646,17 @@ def _load_one_server(
         if not isinstance(spec, dict) or not spec.get("name"):
             continue
         tools.append(MCPRemoteTool.from_spec(client, name, spec))
+    held: list[str] = []
     if record:
-        _record_load(name, error=None, tools_loaded=len(tools), cfg=cfg)
+        # The manifest follows the load record's rule exactly: a probe
+        # (``record=False``) registers nothing and so must not pre-trust (or
+        # pre-flag) anything either. No ``home`` = no manifest = no quarantine.
+        if home is not None:
+            try:
+                held = apply_quarantine(name, tools, home)
+            except Exception as exc:  # noqa: BLE001 — never fail a load over bookkeeping
+                log.warning("pack manifest for %r not applied: %s", name, exc)
+        _record_load(name, error=None, tools_loaded=len(tools), cfg=cfg, quarantined=held)
     return tools
 
 
@@ -472,6 +665,7 @@ def mcp_tools(
     secret_resolver: SecretResolver | None = None,
     *,
     record: bool = True,
+    home: "str | Path | None" = None,
 ) -> list[Tool]:
     """Build the wrapped MCP tools for every configured server.
 
@@ -488,6 +682,11 @@ def mcp_tools(
       registry still holds none of its tools — and every truth surface (Tools
       row, ``/diagnostics``, the doctor) would go quiet over a pack agents
       cannot use. Only a load that hands its tools to the registry records.
+    * ``home`` (v1.299.0) is the state home whose ``mcp/manifests`` remember
+      each pack's last tool list; given, a write-like tool that is NEW or
+      CHANGED since is returned ``quarantined=True`` (see ``apply_quarantine``).
+      ``None`` keeps the pre-v1.299.0 behaviour (the platform applies the
+      quarantine after registration via ``quarantine_registered``).
     """
     if not server_configs:
         return []
@@ -504,7 +703,7 @@ def mcp_tools(
     # sequence it always did — a pack finishing first does not jump the queue.
     if len(server_configs) == 1:
         # The common case. No pool, no extra thread, the identical path as before.
-        return _load_one_server(server_configs[0], secret_resolver, timeout, record)
+        return _load_one_server(server_configs[0], secret_resolver, timeout, record, home)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -515,7 +714,7 @@ def mcp_tools(
     ) as pool:
         batches = list(
             pool.map(
-                lambda cfg: _load_one_server(cfg, secret_resolver, timeout, record),
+                lambda cfg: _load_one_server(cfg, secret_resolver, timeout, record, home),
                 server_configs,
             )
         )
@@ -528,6 +727,14 @@ __all__ = [
     "mcp_tools",
     "load_status",
     "load_statuses",
+    "annotations_of",
+    "is_write_like",
+    "risk_for",
+    "apply_quarantine",
+    "quarantine_registered",
+    "clear_quarantine",
+    "take_asking_about",
+    "quarantined_in_flight",
     "FakeTransport",
     "MCPClient",
     "StdioTransport",

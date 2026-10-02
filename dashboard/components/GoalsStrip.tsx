@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import type { GrantOffer, StandingGrant } from "@/lib/types";
 import Link from "next/link";
 import { useApi, type ApiState } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
@@ -100,6 +101,11 @@ export interface GoalRecord {
    *  deny-floor tools, never already-granted). The UI renders ONLY these —
    *  it must never derive an offer from ask_stats on its own. */
   grant_offers?: string[] | null;
+  /** v1.299.0: EXACT offers — the three approved asks shared one argument
+   *  set. Granted via `add_exact`, never widened to the tool. */
+  grant_offers_exact?: GrantOffer[] | null;
+  /** v1.299.0: the goal's live standing grants (GET /goals/{id} and the list). */
+  standing_grants?: StandingGrant[] | null;
 }
 
 /* -------------------------------------------------------------------------- */

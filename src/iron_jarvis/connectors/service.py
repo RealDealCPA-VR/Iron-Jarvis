@@ -254,7 +254,12 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
 
     loaded = 0
     try:
-        for tool in mcp_tools([cfg], secret_resolver=platform.secrets.get):
+        # `home=` (v1.299.0): a reconnect diffs the pack against its manifest, so
+        # a write-like tool that arrived since is registered quarantined NOW,
+        # not at the next boot. The two probes below stay record=False.
+        for tool in mcp_tools(
+            [cfg], secret_resolver=platform.secrets.get, home=platform.config.home
+        ):
             platform.registry.register(tool, mcp=True)
             loaded += 1
     except Exception:  # noqa: BLE001 — persisted config still loads on restart

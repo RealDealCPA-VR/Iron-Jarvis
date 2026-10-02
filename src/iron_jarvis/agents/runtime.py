@@ -18,6 +18,9 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
+from ..core.grants import args_hash as _grant_hash
+from ..core.grants import grant_label as _grant_label
+from ..core.grants import pick_scope as _pick_scope
 from ..core.trust import (
     LOW_TRUST_DENY,
     LOW_TRUST_PROMPT,
@@ -915,6 +918,92 @@ class AgentRuntime:
             return low_trust_refusal(name, bool(self._tainted.get(session.id)))
         return ""
 
+    # ------------------------------------------------------------------ #
+    # STANDING GRANTS (v1.299.0) — approvals remembered by ARGUMENTS
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def grant_scopes(session) -> list[tuple[str, str]]:
+        """The scopes a standing grant may cover THIS run under, read from
+        the row: ``("goal", id)`` when the origin is a goal's stamp,
+        ``("agent", roster name)`` when the session names one, ``("project",
+        id)`` when grounded. ``core.grants.pick_scope`` ranks them (agent >
+        project > goal) when an "always" answer must choose ONE to mint in.
+        An unattributed run (none of the three) has no scope: a grant never
+        covers it and its card carries ``can_always: false``."""
+        scopes: list[tuple[str, str]] = []
+        origin = str(getattr(session, "origin", "") or "")
+        if origin.startswith("goal:") and origin[len("goal:"):]:
+            scopes.append(("goal", origin[len("goal:"):]))
+        agent = str(getattr(session, "agent_name", "") or "")
+        if agent:
+            scopes.append(("agent", agent))
+        pid = str(getattr(session, "project_id", "") or "")
+        if pid:
+            scopes.append(("project", pid))
+        return scopes
+
+    def _grant_covers(self, session: Session, tc) -> bool:
+        """Does a live standing grant cover ``tc`` for this run? Consulted by
+        ``_pause_needed`` so a covered call raises NO card; the registry's own
+        ``authorize`` consults the SAME store with the same scopes at invoke
+        (``_grant_invoke_kwargs``), which is what makes the call actually RUN
+        — the card check alone grants nothing ("arming is granting")."""
+        store = getattr(self.p, "grants", None)
+        if store is None:
+            return False
+        scopes = self.grant_scopes(session)
+        if not scopes:
+            return False
+        tool = self.p.registry.get(tc.name)
+        aliases = (tool.perm_key(),) if tool is not None else ()
+        try:
+            return (
+                store.match(scopes, tc.name, tc.arguments, aliases=aliases, touch=False)
+                is not None
+            )
+        except Exception:  # noqa: BLE001 — a store fault never skips a card
+            return False
+
+    def _grant_invoke_kwargs(self, session: Session) -> dict:
+        """``{grants, scopes}`` for ``registry.invoke`` — only when the
+        platform has a store AND the run has a scope, so every older invoke
+        double keeps its exact keyword set."""
+        store = getattr(self.p, "grants", None)
+        if store is None:
+            return {}
+        scopes = self.grant_scopes(session)
+        if not scopes:
+            return {}
+        return {"grants": store, "scopes": scopes}
+
+    def _mint_always(self, session: Session, calls: list) -> list:
+        """The "always" answer's second half (blocking — callers hop off the
+        loop): one EXACT standing grant per call of the batch, in the
+        strongest scope the run has, labelled with the REDACTED arguments,
+        30 days. Nothing minted without a store or a scope."""
+        store = getattr(self.p, "grants", None)
+        scope = _pick_scope(self.grant_scopes(session))
+        if store is None or scope is None:
+            return []
+        made: list = []
+        for c in calls:
+            tool = self.p.registry.get(c.name)
+            if getattr(tool, "quarantined", False):
+                continue  # review fix: a quarantined pack tool is never remembered
+            safe = tool.redact_args(c.arguments) if tool is not None else c.arguments
+            try:
+                made.append(
+                    store.create(
+                        scope[0], scope[1], c.name,
+                        _grant_hash(c.name, c.arguments),
+                        _grant_label(c.name, safe),
+                    )
+                )
+            except Exception:  # noqa: BLE001 — a refused mint still ran the call as "once"
+                pass
+        return made
+
     def _persist_trust(self, session_id: str, reason: str, at) -> bool:
         """Write the lowered posture onto the row (blocking — callers hop off
         the loop), the way ``_persist_grant`` writes a grant. Returns True
@@ -1395,6 +1484,16 @@ class AgentRuntime:
         tool_specs = self.p.registry.specs(armed_names)
 
         system_prompt = agent_def.system_prompt
+        # THE RUN OPTIONS (v1.299.0, the schedule knobs): ``skip_memory`` gates
+        # the three MEMORY injections below (lessons, the memory index, the
+        # fabric grounding) — profile, voice, skills and the project spine
+        # still inject; ``folder_rules`` tells this run to read its folder's
+        # rules file (and ONLY a run that asked — see the block after the
+        # project context). Decoded once; a legacy row reads as no options.
+        from ..scheduling.knobs import session_options as _session_options
+
+        _run_options = _session_options(session)
+        skip_memory = _run_options.get("skip_memory") is True
         # Auto-inject any configured default skills (§23) into the prompt.
         default_skills = getattr(self.p.config, "default_skills", None)
         if default_skills:
@@ -1447,7 +1546,7 @@ class AgentRuntime:
         # Self-correction: fold accumulated lessons + user preferences into the
         # system prompt so every run is a little smarter than the last.
         learning = getattr(self.p, "learning", None)
-        if learning is not None:
+        if learning is not None and not skip_memory:  # skip_memory: v1.299.0
             try:
                 # v1.298.0: the seam scans each lesson (promptguard) — off
                 # the loop, like the two skill injections above.
@@ -1485,7 +1584,11 @@ class AgentRuntime:
         try:
             from ..memory.index_block import memory_index_block
 
-            _mem_index = memory_index_block(self.p, project_id=session.project_id)
+            # skip_memory (v1.299.0): the index is a memory injection too.
+            _mem_index = (
+                "" if skip_memory
+                else memory_index_block(self.p, project_id=session.project_id)
+            )
             if _mem_index:
                 system_prompt += "\n\n" + _mem_index
         except Exception:  # noqa: BLE001 — awareness must never break a run
@@ -1531,6 +1634,27 @@ class AgentRuntime:
                 # v1.226.0: DB reads + a knowledge embed round-trip — off the loop.
                 system_prompt += await asyncio.to_thread(self._project_context, session)
             except Exception:  # noqa: BLE001 — the spine must never break a run
+                pass
+        # FOLDER RULES (v1.299.0, the schedule's ``workspace_root`` knob): the
+        # working folder's AGENTS.md / .ironjarvis.md (first found) rides the
+        # prompt right after the project context, SCANNED (promptguard, source
+        # "folder rules <file>" — a poisoned line becomes the placeholder and a
+        # context.blocked lands). Read ONLY when the row's options say so: a
+        # session that did not ask never has its folder read. A file read, so
+        # off the loop; bounded by the scan's cap; never breaks a run.
+        if _run_options.get("folder_rules") is True:
+            try:
+                from ..scheduling.knobs import folder_rules_block
+
+                _rules = await asyncio.to_thread(
+                    folder_rules_block,
+                    session.workspace_path,
+                    event_bus=self.p.event_bus,
+                    session_id=session.id,
+                )
+                if _rules:
+                    system_prompt += "\n\n" + _rules
+            except Exception:  # noqa: BLE001 — the rules must never break a run
                 pass
         # THE GUIDE'S BASE KNOWLEDGE (v1.224.0): a Guide session starts knowing
         # what the app is and how this install is set up (guide/corpus
@@ -1588,7 +1712,7 @@ class AgentRuntime:
         # sessions) so the run starts already grounded in what the user knows —
         # no explicit `recall` call needed. Bounded, best-effort, never blocks.
         fabric = getattr(self.p, "fabric", None)
-        if fabric is not None:
+        if fabric is not None and not skip_memory:  # skip_memory: v1.299.0
             try:
                 # v1.226.0: the v1.173.0 chat-lane offload never reached this
                 # lane — fabric.ground does DB + remote (RAG/MCP) reads.
@@ -1792,6 +1916,13 @@ class AgentRuntime:
             granted = session_allow
         if perm in granted or tc.name in granted:
             return ""
+        # STANDING GRANT (v1.299.0): the user already said "always" to THIS
+        # call (exact arguments) in this goal / for this agent / in this
+        # project, or the goals ladder granted the tool — no card. Read LAST:
+        # a deny resolved above never reached here, so a grant lifts only an
+        # ASK, and the registry re-checks the same store at invoke.
+        if self._grant_covers(session, tc):
+            return ""
         return perm
 
     async def _pause_for_approval(
@@ -1881,12 +2012,28 @@ class AgentRuntime:
             )
         else:
             approval_id, fut = approvals.request(tc.name, safe, session_id=session.id)
+        _grant_scopes = self.grant_scopes(session)
         requested = {
             "approval_id": approval_id,
             "tool": tc.name,
             "args": safe,
             # 0 = no expiry: nothing runs until the person answers.
             "timeout_s": (max(1, int(timeout)) if timeout else 0),
+            # v1.299.0: the EXACT call's identity (a hash of the REAL
+            # arguments, never the redacted display — a hash is not a
+            # secret), so the goals ladder can tell "the same command three
+            # times" from "three different commands"; and whether the card
+            # may offer "Always": a store to write and a scope to write in.
+            "args_hash": _grant_hash(tc.name, tc.arguments),
+            # QUARANTINE (v1.299.0 review): a pack tool that appeared since
+            # the user last trusted the pack is never offered "Always" — a
+            # standing grant could not lift it anyway — and the card says why.
+            "quarantined": bool(getattr(tool, "quarantined", False)),
+            "can_always": bool(
+                getattr(self.p, "grants", None) is not None
+                and _pick_scope(_grant_scopes) is not None
+                and not getattr(tool, "quarantined", False)
+            ),
         }
         if count > 1:
             requested["count"] = count
@@ -1961,6 +2108,23 @@ class AgentRuntime:
             # each wakes, pops itself, publishes its own `approval.resolved`.
             self._release_siblings(approvals, session.id, perm)
             return "", set()
+        if decision == "always":
+            # ALWAYS (v1.299.0): this call runs as "once", AND the EXACT call
+            # — every call of the batch, each with its own argument hash — is
+            # remembered as a standing grant in the run's strongest scope
+            # (agent > project > goal; ``core.grants.pick_scope``), 30 days.
+            # Minted OFF the loop (a row write); the store's event hops back
+            # to this loop (``bind_loop``). A mint that fails, or a run with
+            # no store / no scope, still ran the call: "always" degrades to
+            # "once", never to a refusal.
+            store = getattr(self.p, "grants", None)
+            if store is not None:
+                try:
+                    store.bind_loop(asyncio.get_running_loop())
+                    await asyncio.to_thread(self._mint_always, session, calls)
+                except Exception:  # noqa: BLE001 — never fail the call over the record
+                    pass
+            return "", {*names, perm}
         if decision in ("once", "tab"):
             # "tab" is the chat lane's per-tab grant (v1.266.0); a run has no
             # tab to remember it for, so here it is this one call.
@@ -2434,6 +2598,10 @@ class AgentRuntime:
                     # THE DEADLINE (v1.228.0, RT6): a wedged tool becomes a
                     # recorded failed result and the run goes on; 0 = none.
                     deadline_s=_tool_deadline(self.p.config),
+                    # STANDING GRANTS (v1.299.0): the store + this run's
+                    # scopes, so the registry's own gate lifts a covered
+                    # ask and records the grant id. Only when both exist.
+                    **self._grant_invoke_kwargs(session),
                 )
 
             # FX-01: announce each tool call BEFORE the fan-out, with args redacted

@@ -289,6 +289,8 @@ class Platform:
     #: ``POST /chat/approvals/{id}`` answers a pause wherever it happened.
     #: Optional for bare-platform tests; build_platform always attaches one.
     approvals: "object | None" = None
+    #: Standing grants store (v1.299.0): exact-argument grants per scope.
+    grants: "object | None" = None
 
 
 
@@ -1048,7 +1050,11 @@ def build_platform(
     # from the agent loop AND so they survive a restart identically to how they
     # were live-loaded when first added (previously boot-loaded MCP tools were
     # registered plain — invisible to every agent's tool loadout).
-    for tool in mcp_tools(getattr(config, "mcp_servers", None), secret_resolver=secrets.get):
+    # `home=` (v1.299.0): the pack manifest diff applies AT registration; the
+    # post-assembly `quarantine_registered` pass below stays as the backstop.
+    for tool in mcp_tools(
+        getattr(config, "mcp_servers", None), secret_resolver=secrets.get, home=config.home
+    ):
         registry.register(tool, mcp=True)
 
     # Self-correcting learning loop: feedback + reflections become lessons that
@@ -1111,11 +1117,32 @@ def build_platform(
         (s or {}).get("auto_approve")
         for s in (getattr(config, "mcp_servers", None) or [])
     )
+    # PACK-TOOL QUARANTINE (v1.299.0). The boot loader above registered each
+    # pack's tools; now diff them against the pack's saved manifest
+    # (<home>/mcp/manifests) so a write-like tool that APPEARED or CHANGED since
+    # the user last looked is flagged `quarantined`. Applied here, once, next to
+    # the resolver that consults the flag — the one seam both must agree at.
+    from .mcp.tools import quarantine_registered as _mcp_quarantine_registered
+    from .mcp.tools import quarantined_in_flight as _mcp_quarantined_in_flight
+
+    _mcp_quarantine_registered(registry, config.home)
     if ask_resolver is not None and _mcp_auto:
         _base_ask = ask_resolver
 
         def ask_resolver(name: str, args: dict, _b=_base_ask) -> bool:  # type: ignore[misc]
-            return True if name == "mcp_call" else _b(name, args)
+            if name == "mcp_call":
+                # A QUARANTINED tool is never auto-approved (v1.299.0): the
+                # pack's trust covered the tools the user saw when they
+                # connected it, not one that arrived in a later update. The
+                # answer is False, not a pass to the base resolver, so it
+                # reads as ASK in an asking origin (a card) and as a denial
+                # headless — exactly what an untrusted pack gets today. The
+                # tool is identified through `MCPRemoteTool.perm_key`, read
+                # by `invoke` immediately before this question (see
+                # mcp/tools._ASKING_ABOUT); a question about `mcp_call` with
+                # no MCP tool in flight keeps the blanket grant.
+                return not _mcp_quarantined_in_flight()
+            return _b(name, args)
 
         # Carry the wrapped resolver's `interactive` marker across (v1.154.2).
         # Without this, turning MCP auto-approve on silently replaced the
@@ -1169,6 +1196,9 @@ def build_platform(
     from .core.approvals import ChatApprovals as _Approvals
 
     platform.approvals = _Approvals()
+    from .core.grants import GrantStore as _GrantStore
+
+    platform.grants = _GrantStore(platform.engine, platform.event_bus)
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))
@@ -1481,19 +1511,88 @@ def build_platform(
                             "— it may have been deleted; re-create it or "
                             "re-add the schedule with another agent"
                         )
+            # THE SCHEDULE KNOBS (v1.299.0, scheduling/knobs.py): decoded the
+            # way GET /schedules shows them (garbage = absent, never coerced).
+            from .scheduling import knobs as _knobs
+
+            knob = _knobs.decode_knobs(payload)
+            knob_notes: list[str] = []
+            if knob["skills"]:
+                # Per-job skills ride a COPY of the definition — the builtin
+                # singletons and a dynamic agent's composed definition are
+                # shared by every run, so appending in place would leak one
+                # schedule's skills into every later run of that agent.
+                from .agents.types import get_agent_definition as _get_def
+                from .agents.types import with_skills as _with_skills
+
+                definition = _with_skills(
+                    definition if definition is not None else _get_def(agent_type),
+                    knob["skills"],
+                )
+            fire_options: dict = {}
+            if knob["skip_memory"]:
+                fire_options["skip_memory"] = True
+            if knob["workspace_root"]:
+                # Only a run that ASKED for a folder has its rules file read.
+                fire_options["folder_rules"] = True
             session = await platform.orchestrator.create_session(
                 prompt,
                 agent_type,
                 provider=provider,
                 model=model,
                 project_id=payload.get("project_id") or None,
+                # The working folder (v1.299.0) — validated at add/patch time
+                # with the spawn route's predicate; None keeps today's path.
+                workspace_root=knob["workspace_root"] or None,
                 origin=f"schedule:{task.name}",
                 # A custom agent's job card (v1.295.0): None for a builtin or
                 # an unset card, so the absent-agent path is byte-identical.
                 max_steps=fire_max_steps,
                 approval_mode=fire_approval,
+                options=fire_options or None,
             )
             fired["session_id"] = session.id
+            # THE PROMPT EXTRAS (v1.299.0): an earlier job's result and the
+            # pre-run script's output. Both are appended to the row's task
+            # AFTER the row exists — the script runs with the session's own
+            # workspace as cwd — and both are blocking reads/runs, so each
+            # hops off the loop. A missing earlier result or a failing script
+            # is a NOTE (in the prompt and on the row), never a failed fire.
+            extras: list[str] = []
+            if knob["context_from"]:
+                block, note = await asyncio.to_thread(
+                    _knobs.earlier_result,
+                    platform.scheduler,
+                    platform.orchestrator,
+                    knob["context_from"],
+                    event_bus=platform.event_bus,
+                    session_id=session.id,
+                )
+                extras.append(block)
+                if note:
+                    knob_notes.append(note)
+            script = _knobs.decode_script(payload.get("script"))
+            if script is not None:
+                block, note = await asyncio.to_thread(
+                    _knobs.run_pre_run_script,
+                    script,
+                    workspace=session.workspace_path,
+                    home=platform.config.home,
+                    config=platform.config,
+                    trust=getattr(session, "trust", ""),
+                    event_bus=platform.event_bus,
+                    session_id=session.id,
+                )
+                extras.append(block)
+                if note:
+                    knob_notes.append(note)
+            if extras:
+                await asyncio.to_thread(
+                    _knobs.set_session_task,
+                    platform.engine,
+                    session.id,
+                    prompt + "\n\n" + "\n\n".join(extras),
+                )
             try:
                 # The definition kwarg is passed ONLY when a dynamic agent
                 # resolved one: the absent-agent path stays call-signature
@@ -1522,7 +1621,12 @@ def build_platform(
                 raise RuntimeError(
                     f"session ended {status}: {(done.summary or 'no summary')[:200]}"
                 )
-            return summary or "session completed"
+            detail = summary or "session completed"
+            if knob_notes:
+                # The row says what the knobs could not do (v1.299.0): "no
+                # earlier result from X yet", "the pre-run script exited 2".
+                detail = "; ".join(knob_notes) + " — " + detail
+            return detail
         if task.kind == "workflow":
             result = _run_scheduled_workflow(payload)
             if inspect.isawaitable(result):

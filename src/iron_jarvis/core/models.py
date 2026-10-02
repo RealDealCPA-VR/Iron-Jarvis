@@ -200,6 +200,14 @@ class Session(SQLModel, table=True):
     #: fence's ``detect_injection`` flag); None for a run that was low from
     #: its door or never lowered. Additive nullable column (auto-reconciled).
     tainted_at: datetime | None = None
+    #: RUN OPTIONS the door stated (v1.299.0), a JSON object: ``skip_memory``
+    #: (the runtime injects no lessons / memory index / fabric grounding) and
+    #: ``folder_rules`` (the runtime loads the workspace's AGENTS.md /
+    #: .ironjarvis.md as "# Folder rules"). Written by ``create_session``'s
+    #: ``options``; continue/rerun inherit it. ``"{}"`` = no options, which is
+    #: exactly the pre-v1.299.0 behaviour. Decoded by
+    #: ``scheduling/knobs.session_options``. Additive column (auto-reconciled).
+    options_json: str = "{}"
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
@@ -246,6 +254,11 @@ class ToolInvocation(SQLModel, table=True):
     #: to report. Additive nullable; the session page reads it off the
     #: transcript for the "Shell ran unconfined" chip.
     confinement: str | None = None
+    #: v1.299.0: the STANDING GRANT (``core/grants.py``) that lifted this
+    #: call's ask, when one did — so the Activity page can say "allowed by a
+    #: standing grant" and link the row. "" for every other verdict. The
+    #: ``verdict`` stays ALLOW; this names WHY. Additive.
+    grant_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 

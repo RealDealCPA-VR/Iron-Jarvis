@@ -401,3 +401,29 @@ def get_agent_definition(agent_type: AgentType) -> AgentDefinition:
         return _DEFINITIONS[agent_type]
     # Fall back to a generic builder-like definition.
     return _DEFINITIONS[AgentType.BUILDER]
+
+
+def with_skills(definition: AgentDefinition, names: list[str]) -> AgentDefinition:
+    """A COPY of ``definition`` with ``names`` appended to its skills
+    (v1.299.0, the schedule's ``skills`` knob).
+
+    Never mutates the argument: the builtin definitions in ``_DEFINITIONS``
+    are module-level singletons shared by every run, and a dynamic agent's
+    definition is composed from its record — appending in place to either
+    would make one schedule's skills ride every later run of that agent.
+    Lists are copied too (``dataclasses.replace`` would alias them). Order is
+    kept, duplicates and blanks dropped; an empty ``names`` still copies.
+    """
+    seen: list[str] = [s for s in (definition.skills or []) if s]
+    for raw in names or []:
+        skill_name = str(raw or "").strip()
+        if skill_name and skill_name not in seen:
+            seen.append(skill_name)
+    return AgentDefinition(
+        type=definition.type,
+        system_prompt=definition.system_prompt,
+        tools=list(definition.tools or []),
+        permission_overrides=dict(definition.permission_overrides or {}),
+        skills=seen,
+        reports_to=definition.reports_to,
+    )

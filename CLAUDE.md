@@ -2286,6 +2286,69 @@ does not need a bump, stop and bump it.
   Pins: `tests/test_trust_posture_v1298.py`, `tests/test_promptguard_v1298.py`,
   `dashboard/__tests__/trust-posture-v1298.test.tsx`.
 
+- **A standing grant is keyed on the EXACT arguments; a pack's new write
+  tool is QUARANTINED; a schedule carries its own skills, folder, chain,
+  pre-run script and skip-memory** (v1.299.0, /goal wave 4b). GRANTS:
+  `core/grants.py` — `args_hash(tool, args)` (sha256 over tool + canonical
+  JSON of the REAL args, never the redacted display), `StandingGrantRecord`
+  (scope goal|agent|project|chat, scope_id, tool, args_hash — "" = any args,
+  created ONLY by the goals ladder's per-tool offer, never by a card —
+  label (redacted), expires_at default 30 d, revoked_at, uses),
+  `GrantStore.match(scopes, tool, args)`. `permissions.authorize(...,
+  grants=, scopes=)` lifts an ASK on a match AFTER the deny check (a deny
+  is never lifted; a low-trust deny is a deny; `shell` only with an exact
+  hash); the registry records `ToolInvocation.grant_id`. Scopes per run:
+  goal (origin goal:<id>), agent (agent_name), project; the chat lanes add
+  ("chat","chat"). An agent-scoped grant minted from an attended run
+  covers that agent's UNATTENDED runs too (30 d; low trust still denies) —
+  intended. `DELETE /goals/{id}` revokes the goal's live grants. Decision "always" (core/approvals.DECISIONS) = once +
+  a grant on the strongest scope, in the runtime lane AND both chat lanes
+  (lock-step); cards carry `can_always` + `args_hash`;
+  `approval.requested` carries `args_hash` so the goals ladder
+  (`ask_hash_stats_for` per (tool, args_hash); `ask_stats_for` keeps its
+  shape) offers EXACT grants (`grant_offers_exact`, a new view field — the
+  string `grant_offers` is unchanged) when the approved asks share one hash;
+  `PATCH /goals/{id}/grants` takes `add` (names → compat JSON + a goal
+  any-args row) and `add_exact` [{tool, args_hash, label}] + `expires_days`
+  (null = never, goal scope only); the view lists `standing_grants`. The
+  POST chat lane never cards (every armed tool is its own grant), so only the
+  stream lane and the runtime answer "always". `platform.grants` is attached
+  in platform.py and `bind_loop`ed in the lifespan so a sync route's revoke
+  still publishes. Routes
+  `routes/grants.py` (list, revoke); events grant.created/revoked.
+  QUARANTINE: `mcp/manifest.py` persists `<home>/mcp/manifests/<server>.json`
+  per pack; `from_spec` reads MCP annotations (readOnlyHint → READ); the
+  FIRST load trusts everything (the user installed it knowingly); a tool that
+  APPEARS LATER or changes shape and is write-like registers
+  `Tool.quarantined=True` — the platform's MCP auto-approve wrapper answers
+  ASK for it regardless of pack/global auto_approve, and `authorize(
+  quarantined=True)` is lifted by NO blanket grant (the shared `mcp_call`
+  key in session_allow, a standing grant) but IS lifted by the tool's OWN
+  name in session_allow — i.e. a card answered about that tool runs it (the
+  reviewer found the first cut discarded the user's Allow); `perm_key()`
+  arms a ContextVar the wrapper reads and `registry.invoke` clears it in a
+  `finally`; the ask carries `quarantined: true` and `can_always` is false
+  for it; read-only newcomers are
+  never quarantined; an upgrade's first boot writes every pack's manifest
+  and trusts what is there; `record=False` probes never touch the manifest; `POST
+  /mcp/servers/{name}/tools/{tool}/trust` clears it. SCHEDULES: payload keys
+  `skills` (validated; `with_skills` COPIES the definition — never mutate the
+  shared builtin), `workspace_root` (usable_workspace_root; a folder rules
+  file AGENTS.md/.ironjarvis.md injects through promptguard cap 8,000, only
+  when the fire set `options.folder_rules`), `context_from` (another
+  schedule's last session summary ≤ 4,000, scanned; self-reference 422),
+  `script` {command, timeout_s ≤ 120, cwd} run pre-run through the shell
+  tool's confinement, output head+tail 8,000 scanned — REFUSED from the
+  agent-made `schedule_create` tool, `skip_memory` (Session.options_json →
+  the runtime skips lessons/memory index/fabric INJECTION only);
+  `PATCH /schedules/{name}` (payload_set/payload_unset, re-validates,
+  re-arms); GET rows carry the knobs. Dashboard: "Always allow exactly
+  this" on cards (only with can_always), `StandingGrants` on Autonomy,
+  quarantine badge + Trust on Tools, schedule knobs + Edit on Schedules,
+  bell maps grant.revoked only. Pins: `tests/test_standing_grants_v1299.py`,
+  `tests/test_mcp_quarantine_v1299.py`, `tests/test_schedule_knobs_v1299.py`,
+  `dashboard/__tests__/{standing-grants,mcp-quarantine,schedule-knobs}-v1299.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

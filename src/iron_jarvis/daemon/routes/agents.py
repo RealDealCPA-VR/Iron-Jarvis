@@ -2315,6 +2315,18 @@ def register(app: FastAPI, d) -> None:
         for s in list(getattr(d.platform.config, "mcp_servers", None) or []):
             name = s.get("name") or ""
             loaded = d.platform.registry.mcp_names(name) if name else []
+            # v1.299.0: the per-tool view, read off the LIVE Tool objects so the
+            # row and the resolver cannot disagree about what is held back.
+            tool_rows = []
+            for full in loaded:
+                live = d.platform.registry.get(full)
+                tool_rows.append(
+                    {
+                        "name": full.split("__", 2)[-1],
+                        "write_like": bool(getattr(live, "write_like", True)),
+                        "quarantined": bool(getattr(live, "quarantined", False)),
+                    }
+                )
             # v1.229.0 (audit U4): WHY a server holds 0 tools. The load record
             # keeps the skip reason (e.g. "FileNotFoundError: npx not found")
             # that used to live only in a daemon.log warning; `null` means it
@@ -2330,6 +2342,11 @@ def register(app: FastAPI, d) -> None:
                     "env": dict(s.get("env") or {}),
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
+                    # v1.299.0 (additive): write-like tools that APPEARED or
+                    # CHANGED since the pack was first trusted; they ask until
+                    # `POST /mcp/servers/{name}/tools/{tool}/trust`.
+                    "tools": tool_rows,
+                    "quarantined": [t["name"] for t in tool_rows if t["quarantined"]],
                     "last_error": status.get("last_error") if status else None,
                     # v1.256.0 (R-02): the same raw text, plus what it MEANS and
                     # what to do. Classified once on the load record so this row
@@ -2442,7 +2459,12 @@ def register(app: FastAPI, d) -> None:
             d.platform.registry.unregister(tool_name)
         loaded = 0
         try:
-            for tool in _mcp_tools([cfg], secret_resolver=d.platform.secrets.get):
+            # `home` (v1.299.0): the reload RE-DIFFS the pack against its
+            # manifest, so a tool that arrived in an update is held back here
+            # exactly as it would be at the next boot.
+            for tool in _mcp_tools(
+                [cfg], secret_resolver=d.platform.secrets.get, home=d.platform.config.home
+            ):
                 d.platform.registry.register(tool, mcp=True)
                 loaded += 1
         except Exception as exc:  # noqa: BLE001 — report, never crash
@@ -2451,7 +2473,30 @@ def register(app: FastAPI, d) -> None:
         last_error = status.get("last_error")
         if loaded == 0 and not last_error:
             last_error = "connected but the server advertised no tools"
+        # The response shape is pinned byte-for-byte by v1.229.0's tests; what
+        # the reload held back is read off the row (`GET /mcp/servers`).
         return {"ok": loaded > 0, "tools_loaded": loaded, "last_error": last_error}
+
+    @app.post("/mcp/servers/{name}/tools/{tool}/trust")
+    def trust_mcp_tool(name: str, tool: str) -> dict[str, Any]:
+        """The user trusts ONE quarantined tool by name (v1.299.0).
+
+        A write-like tool that appeared (or changed shape) after its pack was
+        connected asks regardless of the pack's auto-approve. This clears that:
+        the manifest marks it trusted (so the next boot/reload keeps it) and the
+        live Tool's flag drops, so the pack's permission applies to it from the
+        next call. Per TOOL on purpose — trusting the pack again wholesale is
+        what the quarantine exists to stop. 404 when the pack or the tool is
+        unknown to both the manifest and the registry.
+        """
+        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+        if not any(s.get("name") == name for s in servers):
+            raise HTTPException(status_code=404, detail="no such server")
+        from ...mcp.tools import clear_quarantine as _clear_quarantine
+
+        if not _clear_quarantine(d.platform.config.home, d.platform.registry, name, tool):
+            raise HTTPException(status_code=404, detail="no such tool")
+        return {"ok": True, "server": name, "tool": tool}
 
     @app.post("/mcp/servers")
     def add_mcp_server(body: McpServerBody) -> dict[str, Any]:
@@ -2485,7 +2530,11 @@ def register(app: FastAPI, d) -> None:
         try:
             from ...mcp.tools import mcp_tools as _mcp_tools
 
-            for tool in _mcp_tools([cfg], secret_resolver=d.platform.secrets.get):
+            # `home` (v1.299.0): this FIRST load writes the pack's manifest —
+            # everything it advertises now is what the user is connecting.
+            for tool in _mcp_tools(
+                [cfg], secret_resolver=d.platform.secrets.get, home=d.platform.config.home
+            ):
                 d.platform.registry.register(tool, mcp=True)
                 loaded += 1
         except Exception:  # noqa: BLE001 — persisted config still loads on restart

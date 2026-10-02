@@ -41,6 +41,10 @@ export interface PermissionRow {
   autoApprove: boolean;
   /** Tool count, for "what it exposes". */
   tools: number;
+  /** v1.299.0: write-like tools that appeared AFTER the pack was first
+   *  trusted. They ask until trusted by name, whatever the switches say.
+   *  Absent/[] = nothing held (and on an older daemon, always). */
+  quarantined?: string[];
 }
 
 export function PermissionsPanel({
@@ -49,6 +53,7 @@ export function PermissionsPanel({
   busyKey,
   onToggleServer,
   onSetGlobal,
+  onTrustTool,
 }: {
   rows: PermissionRow[];
   /** The GLOBAL flag, on its own — never mixed with the per-server ones. */
@@ -56,6 +61,8 @@ export function PermissionsPanel({
   busyKey: string | null;
   onToggleServer: (name: string, next: boolean) => void;
   onSetGlobal: (next: boolean) => void;
+  /** v1.299.0: POST /mcp/servers/{name}/tools/{tool}/trust. */
+  onTrustTool?: (name: string, tool: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const covered = rows.filter((r) => r.autoApprove).length;
@@ -97,6 +104,7 @@ export function PermissionsPanel({
           {rows.map((r) => {
             const on = globalOn || r.autoApprove;
             const forced = globalOn && !r.autoApprove;
+            const held = r.quarantined ?? [];
             return (
               <li
                 key={r.name}
@@ -105,6 +113,15 @@ export function PermissionsPanel({
                 <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-zinc-200">
                   {r.name}
                 </span>
+                {held.length > 0 && (
+                  <span
+                    data-testid={`perm-quarantine-${r.name}`}
+                    className="shrink-0 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10.5px] font-medium text-amber-200"
+                    title="New since last load — asks until you trust it"
+                  >
+                    {held.length} new — asks until trusted
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
                   {r.tools} tool{r.tools === 1 ? "" : "s"}
                 </span>
@@ -134,6 +151,37 @@ export function PermissionsPanel({
                     "Asks first"
                   )}
                 </button>
+                {/* THE QUARANTINE (v1.299.0). A pack the user trusted can grow
+                    a new write tool on its next load — a pack update, or a
+                    server that lists tools by its mood. The daemon holds such
+                    a tool at ASK regardless of the switches above until the
+                    user names it here. Read-only newcomers are never held. */}
+                {held.length > 0 && (
+                  <div className="flex w-full flex-wrap items-center gap-1.5 pl-0.5 pt-1">
+                    <ShieldAlert size={12} className="shrink-0 text-amber-300" aria-hidden />
+                    <span className="text-[11px] text-amber-200/90">
+                      New since last load — asks until you trust it:
+                    </span>
+                    {held.map((tool) => (
+                      <span
+                        key={tool}
+                        className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 font-mono text-[11px] text-amber-100"
+                      >
+                        {tool}
+                        <button
+                          type="button"
+                          data-testid={`perm-trust-${r.name}-${tool}`}
+                          onClick={() => onTrustTool?.(r.name, tool)}
+                          disabled={!onTrustTool || busyKey === `trust:${r.name}:${tool}`}
+                          title={`Trust ${tool} from ${r.name} — it follows the pack's permission from now on`}
+                          className="rounded border border-amber-400/40 px-1 font-sans text-[10.5px] font-medium text-amber-100 transition-colors hover:bg-amber-400/20 disabled:opacity-50"
+                        >
+                          {busyKey === `trust:${r.name}:${tool}` ? "…" : "Trust"}
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </li>
             );
           })}

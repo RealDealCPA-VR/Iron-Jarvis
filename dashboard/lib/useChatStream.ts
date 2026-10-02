@@ -51,6 +51,10 @@ export type SSEEvent =
        *  to three of their (redacted) argument sets. Absent = one call. */
       count?: number;
       examples?: Record<string, unknown>[];
+      /** v1.299.0: the daemon offers "always" (this call AND exactly these
+       *  arguments in this scope for 30 days); `args_hash` names the set. */
+      can_always?: boolean;
+      args_hash?: string;
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -673,6 +677,9 @@ export interface PendingApproval {
   /** A batched ask (v1.247.0): calls covered, and up to three examples. */
   count?: number;
   examples?: Record<string, unknown>[];
+  /** v1.299.0: "Always allow exactly this" is offered only when true. */
+  canAlways?: boolean;
+  argsHash?: string;
 }
 
 /**
@@ -900,6 +907,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 timeoutS: ev.timeout_s,
                 count: ev.count,
                 examples: ev.examples,
+                canAlways: ev.can_always === true,
+                argsHash: ev.args_hash,
               });
               break;
             case "approval_resolved":

@@ -174,6 +174,17 @@ def _agent_type(name: str) -> AgentType:
         return AgentType.BUILDER
 
 
+def _session_options(session) -> dict[str, Any]:
+    """``Session.options_json`` decoded, or ``{}`` — never raises."""
+    import json as _json
+
+    try:
+        raw = _json.loads(getattr(session, "options_json", "") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
 def _session_view(session, d=None) -> dict[str, Any]:
     """One session row. v1.227.0 (audit A4/A5): every row carries the job's
     ``outcome`` verdict; ``waiting_on`` (the ask a paused run is parked on) is
@@ -198,6 +209,9 @@ def _session_view(session, d=None) -> dict[str, Any]:
             if str(getattr(session, "trust", "") or "").lower() == "low"
             else ""
         ),
+        # v1.299.0: the per-session options a door set (skip_memory,
+        # folder_rules); {} when none. Decoded here so no caller parses JSON.
+        "options": _session_options(session),
         "tainted_at": (
             getattr(session, "tainted_at", None).isoformat()
             if getattr(session, "tainted_at", None) is not None
@@ -1062,6 +1076,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # the others at shutdown; `_dispatcher_stop` ends the loop cleanly
         # before the cancel lands. Guarded by `config.assignments_enabled`
         # (default True; absent on this config = on).
+        # Standing grants (v1.299.0): bind the store to THIS loop so a sync
+        # route's create/revoke still publishes grant.* (unbound = quiet bell).
+        _grants = getattr(platform, "grants", None)
+        if _grants is not None and hasattr(_grants, "bind_loop"):
+            try:
+                _grants.bind_loop(asyncio.get_running_loop())
+            except Exception:  # noqa: BLE001 — a quiet bell beats a dead boot
+                log.exception("grant store bind_loop failed")
+
         _dispatcher_stop = asyncio.Event()
         if assignment_dispatcher is not None:
             bg_tasks["dispatcher"] = asyncio.create_task(
@@ -2734,6 +2757,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.workflows.register(app, d)
     _routes.autonomy.register(app, d)
     _routes.goals.register(app, d)
+    # Standing grants (v1.299.0): exact-argument grants, listed + revoked here.
+    _routes.grants.register(app, d)
     _routes.settings.register(app, d)
     _routes.knowledge.register(app, d)
     _routes.codelab.register(app, d)

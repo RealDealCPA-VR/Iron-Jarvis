@@ -459,6 +459,10 @@ export default function SessionDetailPage({
                     tool: session.waiting_on.tool,
                     // v1.247.0: a batched ask's count rides the row.
                     count: (session.waiting_on as { count?: number }).count,
+                    // v1.299.0: the daemon's "always" offer rides the row too;
+                    // absent on an older daemon = the three answers of today.
+                    canAlways: session.waiting_on.can_always === true,
+                    argsHash: session.waiting_on.args_hash,
                   }}
                 />
               </div>
