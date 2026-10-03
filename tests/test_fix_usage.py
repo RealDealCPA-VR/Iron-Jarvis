@@ -135,6 +135,9 @@ def test_usage_summary_empty_returns_zeros(tmp_path):
         "output_tokens": 0,
         "cost_usd": 0.0,
         "runs": 0,
+        # v1.300.0 (additive): a subscription's list-price equivalent, kept
+        # apart from metered money.
+        "list_price_equivalent_usd": 0.0,
     }
     assert summary["by_day"] == []
     assert summary["by_model"] == []

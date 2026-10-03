@@ -792,7 +792,11 @@ def register(app: FastAPI, d) -> None:
             is_local = is_local_provider(provider)
             if not is_local:
                 cloud_tokens += in_tok + out_tok
-                cloud_cost_usd += float(row.get("cost_usd") or 0.0)
+                # v1.300.0: a subscription's list-price EQUIVALENT (the row
+                # carries `list_price_equivalent`) is not cloud SPEND — the
+                # tokens count, the dollars do not.
+                if not row.get("list_price_equivalent"):
+                    cloud_cost_usd += float(row.get("cost_usd") or 0.0)
                 continue
             local_tokens += in_tok + out_tok
             avoided = cost_for(comparison_provider, comparison_model, in_tok, out_tok)

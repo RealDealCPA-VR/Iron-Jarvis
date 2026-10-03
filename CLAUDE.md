@@ -2349,6 +2349,102 @@ does not need a bump, stop and bump it.
   `tests/test_mcp_quarantine_v1299.py`, `tests/test_schedule_knobs_v1299.py`,
   `dashboard/__tests__/{standing-grants,mcp-quarantine,schedule-knobs}-v1299.test.tsx`.
 
+- **claude-cli speaks the CLI's own protocol, behind a one-request relay**
+  (v1.300.0; design from NousResearch's MIT hermes-plugin-claude-subscription-
+  directsdk @ ef73726). `providers/adapters/claude_native/`: `frames.py`
+  (pure: history -> stream-json frames — every earlier user frame carries
+  `shouldQuery:false` and is acknowledged by a zero-turn `result` before the
+  next is sent; images ride the user frame; tool names -> `mcp__ij__<safe id>`,
+  reversible, <= 55 chars, hashed on collision; an assistant turn is replayed
+  from its `claude_cli_native` carrier ONLY when its text + calls still equal
+  the carrier's projection, else rebuilt with unique ids), `transport.py`
+  (argv, env, temp files, the relay, the reader thread, `assemble`),
+  `admission.py` (loopback relay: ANTHROPIC_BASE_URL points at a per-call
+  secret path; it forwards the FIRST `/v1/messages` and answers every later one
+  locally with `IRONJARVIS_MODEL_ADMISSION_CONSUMED` — the CLI's own retries
+  and side requests never reach the plan — and `pin_message_breakpoint` moves
+  the one message `cache_control` onto content the next request replays
+  unchanged), `inert_mcp.py` (lists the manifest, REFUSES every call; Iron
+  Jarvis executes tools). A tool batch is SUCCESS when the result is
+  `error_max_turns` with exit 1 (`--max-turns 1`). The env is
+  `claude_models.child_env` (strips every `ANTHROPIC_*`, Bedrock/Vertex/Foundry
+  switches and `CLAUDE_CODE_EXTRA_BODY`, logs the NAMES once — claude-cli means
+  "my subscription", so a stray API key is ignored, never obeyed and never a
+  refusal) plus the no-retry/no-compact/no-tool-search knobs. `--mcp-config`
+  is a FILE (JSON on argv does not survive a `.cmd` shim). Frozen, the inert
+  server is `ironjarvis.exe claude-inert-mcp <manifest>`, served by the
+  FAST PATH in `packaging/ironjarvis_entry.py` before the Typer import (the CLI
+  waits for this server on every call; the daemon CLI import is ~0.9 s) — keep
+  it identical to the hidden subcommand. Timeouts: the IDLE watchdog (180 s,
+  reset by every event) is the real bound; `_CLAUDE_TOTAL_TIMEOUT_S` (1 h) is
+  only a safety net — the old 240 s whole-call cap (`_TIMEOUT_S`, still Codex's)
+  cut off answers that were still streaming. CACHE, measured live: round 1 of a
+  tool loop is never reusable (the CLI appends date/e-mail reminders to the
+  turn it answers and drops them on replay); from round 2 the relay's pin reads
+  ~90% of the prompt from cache. MODELS: `providers/claude_models.py` reads the
+  live picker from the CLI's `initialize` control request (no model call),
+  caches it 10 min in process + on disk (`<home>/claude_models.json`), never
+  blocks a route (`catalog()` refreshes in the background) and never spawns
+  from routing (`_known()`); `native_model` keeps `[1m]` for 1M models, refuses
+  `[1m]` on a 200K one in a sentence, and maps subscription/default/"" to the
+  live default row when known (else no `--model`). `_context_window_source`
+  has a `catalog` rung for claude-cli (and an anthropic provider inheriting
+  it). The suite must never run the REAL handshake: a session fixture in
+  `tests/conftest.py` disables `_run_handshake` (a background refresh once
+  landed this PC's live catalog inside a later test). COST: usage
+  `input_tokens` is the TOTAL prompt incl. cache, the cache buckets are
+  optional keys, `cost_usd` is the CLI's own figure; `pricing.step_cost`
+  prefers it, `recorded_cost` reads a stored `cost_usd` before re-pricing
+  tokens; `Session.cost_usd`/`AgentRun.cost_usd` hold it, allowances, goals
+  and the digest bill it — but it is a LIST-PRICE EQUIVALENT under a
+  subscription: `is_list_price_equivalent` flags it, usage totals keep it in
+  `list_price_equivalent_usd` (never `cost_usd`), fleet keeps it out of cloud
+  spend, and the receipt says "list" only when flagged. The flag is
+  MODEL-aware: `is_list_price_equivalent(provider, model)` is False for a
+  model that draws pay-as-you-go usage credits (`draws_usage_credits`, read
+  through `claude_models._known()` — pricing must NEVER spawn the CLI), so
+  that money is billed everywhere; pass the model at every call site. The
+  `llm.completed` event carries `list_price_equivalent` and the Activity
+  timeline sums metered money only (list-price value on its own line); the
+  goal digest writes its own `spent.words` ("≈$x at list price (Claude
+  subscription)"). Upgrade day: an OLD subscription row with no stored cost is
+  $0 in `recorded_cost` (allowances, usage rollup and goals all read it) —
+  those runs were free under the rules then. claude-cli's table fallback
+  prices cache writes at the 1-HOUR rate (2×; the CLI writes `ttl: "1h"`).
+  ERRORS: no HTTP status, or a 200 cut off before any text, is
+  `ProviderError(transient=True)` in plain words (the CLI's own retries are
+  off and the relay refuses them, so the router must see it as transient);
+  a drop after text keeps the committed path; 429/5xx keep their status +
+  Retry-After; a 401 or an auth-shaped 403 is the sign-in remedy and tells
+  the probe, a model-access 403 is not — NEVER read the CLI's own
+  `authentication_failed` code for this: the real CLI stamps it on EVERY
+  upstream 403 (measured), so Anthropic's error type and words decide, and
+  the remedy quotes Anthropic, never the relay's refusal marker. SIGN-IN
+  RETRY: after a 401 (or a 403 typed `authentication_error`) the real CLI
+  refreshes its login and resends; the relay admits exactly THAT one retry
+  (`Admission._reauth_allowed` — a refusal spent nothing, so it cannot
+  duplicate work) and records a refusal as answered BEFORE relaying it, so a
+  fast retry cannot race the decision. Measured live: 401-then-OK answers. PROXY: the relay honours
+  HTTPS_PROXY/ALL_PROXY/NO_PROXY from the ENVIRONMENT only (CONNECT tunnel,
+  TLS still verified on the upstream name), and the CLI child's NO_PROXY
+  gains 127.0.0.1,localhost so its plain-HTTP call to the relay never goes
+  out through a corporate proxy. MODEL ROWS: a keyless anthropic lists the
+  live picker rows THEN the curated rows the picker does not cover (pinned
+  templates must keep resolving; a curated id FOLDED into the live row that
+  covers it, like `claude-haiku-4-5` under the dated row, rides that row's
+  `aliases`, which `templates.analyze_requirements` accepts); the goals strip
+  says "used", not "spent"; the dial's `familyVersion` reads both id
+  shapes and never a date or `[1m]`. Pins:
+  `tests/test_claude_native_v1300.py` (+ `fixtures/fake_claude_v1300.py`),
+  `test_claude_native_errors_v1300.py`, `test_claude_admission_v1300.py`,
+  `test_claude_models_v1300.py`, `test_claude_catalog_rows_v1300.py`,
+  `test_claude_context_window_v1300.py`, `test_subscription_cost_v1300.py`,
+  `test_subscription_cost_followups_v1300.py`,
+  `test_claude_native_followups_v1300.py`,
+  `dashboard/__tests__/{claude-native,model-dial,subscription-cost-followups}-v1300.test.tsx`. RELEASE CHECK: run
+  `"<install>\resources\daemon\ironjarvis.exe" claude-inert-mcp <manifest>`
+  and feed one `initialize` line — one JSON-RPC line must come back.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

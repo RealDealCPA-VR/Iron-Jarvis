@@ -698,9 +698,19 @@ def _msgs():
 
 
 def _claude(seen: list):
+    # v1.300.0: the claude-cli adapter reads the CLI's stream-json EVENTS
+    # (assistant / message_stop / result), not one ``--output-format json``
+    # object — the double speaks that protocol now. The pins are unchanged.
+    events = [
+        {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                          "content": [{"type": "text", "text": "answer"}]}},
+        {"type": "stream_event", "event": {"type": "message_stop"}},
+        {"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}},
+    ]
+
     def runner(argv, stdin=None):
         seen.append((list(argv), stdin))
-        return 0, json.dumps({"result": "answer", "usage": {}}), ""
+        return 0, "\n".join(json.dumps(e) for e in events), ""
 
     return sc.ClaudeCliAdapter(model="claude-opus-4-8", runner=runner, which=lambda b: "claude.exe")
 

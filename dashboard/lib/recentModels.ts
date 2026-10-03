@@ -44,8 +44,11 @@ export function rememberRecentModel(choice: string): string[] {
   return next;
 }
 
-/** Rows whose provider, model id or display name contain `query` (case-insensitive). */
-export function matchModels<T extends { provider: string; model: string; name?: string }>(
+/** Rows whose provider, model id, display name or picker label (v1.300.0,
+ *  "Opus 5.5") contain `query` (case-insensitive). */
+export function matchModels<
+  T extends { provider: string; model: string; name?: string; label?: string },
+>(
   rows: readonly T[],
   query: string,
   max: number,
@@ -54,7 +57,7 @@ export function matchModels<T extends { provider: string; model: string; name?: 
   if (!q) return [];
   const out: T[] = [];
   for (const m of rows) {
-    if (`${m.name ?? ""} ${m.provider} ${m.model}`.toLowerCase().includes(q)) {
+    if (`${m.label ?? ""} ${m.name ?? ""} ${m.provider} ${m.model}`.toLowerCase().includes(q)) {
       out.push(m);
       if (out.length >= max) break;
     }

@@ -251,9 +251,18 @@ def test_codex_cli_spells_the_level_as_a_config_override():
 def test_claude_cli_spells_the_level_as_effort():
     seen: list[list[str]] = []
 
+    # v1.300.0: the double speaks the CLI's stream-json events (the adapter
+    # no longer parses one ``--output-format json`` object). Pin unchanged.
+    events = [
+        {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                          "content": [{"type": "text", "text": "answer"}]}},
+        {"type": "stream_event", "event": {"type": "message_stop"}},
+        {"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}},
+    ]
+
     def runner(argv, stdin=None):
         seen.append(list(argv))
-        return 0, json.dumps({"result": "answer", "usage": {}}), ""
+        return 0, "\n".join(json.dumps(e) for e in events), ""
 
     a = ClaudeCliAdapter(model="claude-opus-4-8", runner=runner, which=lambda b: "claude.exe")
     asyncio.run(a.complete(system="s", messages=_msgs(), tools=[], reasoning="low"))

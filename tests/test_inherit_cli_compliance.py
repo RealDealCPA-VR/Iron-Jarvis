@@ -91,25 +91,46 @@ def test_inherit_is_opt_in_bare_manager_stays_hermetic():
 
 
 def test_model_arg_mapping():
-    assert _claude_model_arg("claude-opus-4-8") == "opus"
-    assert _claude_model_arg("claude-sonnet-5") == "sonnet"
-    assert _claude_model_arg("haiku") == "haiku"
-    assert _claude_model_arg("subscription") is None
+    # v1.300.0: a full id is NEVER collapsed to a bare family alias any more —
+    # `--model sonnet` lost the 1M route behind the relay. The exact value is
+    # the model catalog's answer (`claude_models.native_model`), `[1m]` kept.
+    from iron_jarvis.providers.claude_models import native_model
+
+    for model_id in ("claude-opus-4-8", "claude-sonnet-5", "haiku"):
+        assert _claude_model_arg(model_id) == native_model(model_id)
+    assert _claude_model_arg("claude-opus-4-8") == "claude-opus-4-8[1m]"
+    assert _claude_model_arg("claude-sonnet-5") != "sonnet"
+    assert _claude_model_arg("subscription") == native_model("subscription")
 
 
-# --- upgraded claude-cli adapter: single-step structured tool-calls -----------
+# --- the claude-cli adapter speaks the CLI natively (v1.300.0) --------------
+# The old adapter emulated ONE tool call per step with a `--json-schema`
+# "reply or tool_call" envelope and refused images. It now reads the CLI's
+# stream-json events: native `tool_use` blocks (named `mcp__ij__<tool>`) and
+# streamed text. These runner doubles emit that protocol.
 
-def test_claude_cli_adapter_returns_structured_tool_call():
+def _stream(blocks, *, stop="end_turn", usage=None, subtype="success", code=0):
+    usage = usage or {"input_tokens": 12, "output_tokens": 3}
+    lines = [
+        {"type": "assistant", "message": {"role": "assistant", "content": blocks,
+                                          "stop_reason": stop, "usage": usage}},
+        {"type": "stream_event", "event": {"type": "message_stop"}},
+        {"type": "result", "subtype": subtype, "is_error": subtype != "success",
+         "num_turns": 1, "usage": usage},
+    ]
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    if text:
+        lines.insert(0, {"type": "stream_event", "event": {
+            "type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}})
+    return code, "\n".join(json.dumps(x) for x in lines), ""
+
+
+def test_claude_cli_adapter_returns_native_tool_call():
     def runner(argv, stdin=None):
-        assert "--tools" in argv and "--json-schema" in argv
-        return 0, json.dumps({
-            "is_error": False,
-            "usage": {"input_tokens": 12, "output_tokens": 3},
-            "structured_output": {
-                "reply": None,
-                "tool_call": {"name": "read_file", "arguments": {"path": "a.txt"}},
-            },
-        }), ""
+        assert "--tools" in argv and "--json-schema" not in argv
+        assert "--input-format" in argv and argv[argv.index("--input-format") + 1] == "stream-json"
+        return _stream([{"type": "tool_use", "id": "toolu_1", "name": "mcp__ij__read_file",
+                         "input": {"path": "a.txt"}}], stop="tool_use", subtype="error_max_turns", code=1)
 
     a = make_claude_cli(model="claude-opus-4-8", runner=runner, which=lambda b: "claude")
     resp = asyncio.run(a.complete(
@@ -128,10 +149,7 @@ def test_claude_cli_adapter_returns_structured_tool_call():
 
 def test_claude_cli_adapter_returns_final_text():
     def runner(argv, stdin=None):
-        return 0, json.dumps({
-            "is_error": False,
-            "structured_output": {"reply": "all done", "tool_call": None},
-        }), ""
+        return _stream([{"type": "text", "text": "all done"}])
 
     a = make_claude_cli(runner=runner, which=lambda b: "claude")
     resp = asyncio.run(a.complete(
@@ -143,22 +161,35 @@ def test_claude_cli_adapter_returns_final_text():
 
 def test_claude_cli_adapter_raises_on_not_logged_in():
     def runner(argv, stdin=None):
-        return 0, json.dumps({"is_error": True, "result": "Not logged in · Please run /login"}), ""
+        return 0, json.dumps({"type": "result", "is_error": True,
+                              "result": "Not logged in · Please run /login"}), ""
 
     a = make_claude_cli(runner=runner, which=lambda b: "claude")
     with pytest.raises(RuntimeError, match="Not logged in"):
         asyncio.run(a.complete(system="", messages=[LLMMessage(role="user", content="hi")], tools=[]))
 
 
-def test_claude_cli_adapter_rejects_images_honestly():
-    a = make_claude_cli(runner=lambda *a, **k: (0, "{}", ""), which=lambda b: "claude")
-    with pytest.raises(RuntimeError, match="image"):
-        asyncio.run(a.complete(
-            system="",
-            messages=[LLMMessage(role="user", content="what is this",
-                                 images=[{"data_b64": "x", "media_type": "image/png"}])],
-            tools=[],
-        ))
+def test_claude_cli_adapter_sends_images_natively():
+    # v1.300.0: the inverse of the old pin ("image input isn't supported over
+    # the inherited CLI") — the image rides the user frame as a base64 block.
+    seen = {}
+
+    def runner(argv, stdin=None):
+        seen["stdin"] = stdin
+        return _stream([{"type": "text", "text": "a cat"}])
+
+    a = make_claude_cli(runner=runner, which=lambda b: "claude")
+    assert a.capabilities()["vision"] is True
+    resp = asyncio.run(a.complete(
+        system="",
+        messages=[LLMMessage(role="user", content="what is this",
+                             images=[{"data_b64": "eA==", "media_type": "image/png"}])],
+        tools=[],
+    ))
+    assert resp.text == "a cat"
+    frame = json.loads(seen["stdin"].splitlines()[-1])
+    assert frame["message"]["content"][1] == {
+        "type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "eA=="}}
 
 
 # --- migration: existing minted tokens are purged -----------------------------

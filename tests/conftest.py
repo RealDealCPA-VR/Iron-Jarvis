@@ -32,6 +32,34 @@ def _local_ocr_off_by_default():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_real_claude_model_discovery():
+    """v1.300.0: never run the REAL ``claude`` picker handshake from the suite.
+
+    ``GET /models`` (and anything else reading ``claude_models.catalog``) starts
+    ONE background handshake when the catalog is stale. On a dev box with a
+    signed-in ``claude`` on PATH that spawned the real CLI, and its answer (this
+    machine's live default, ``claude-opus-5-5[1m]``) landed in the module's
+    in-process cache whenever the thread finished — inside a LATER test on the
+    same xdist worker, which then read a catalog it never set up (seen once at
+    ``-n 8`` in ``test_claude_models_v1300``). With no CLI (CI) the same code
+    answered the pinned table, so the suite was host-dependent. Tests that
+    exercise discovery replace ``_run_handshake`` with their own fake via
+    monkeypatch, which overrides this default for their duration.
+    """
+    from iron_jarvis.providers import claude_models
+
+    def _disabled(timeout: float) -> str:
+        raise FileNotFoundError("real claude model discovery is disabled in the test suite")
+
+    original = claude_models._run_handshake
+    claude_models._run_handshake = _disabled
+    try:
+        yield
+    finally:
+        claude_models._run_handshake = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_cli_provider_home():
     """Point locally-installed-CLI-provider detection at an empty home for the
     whole test session.

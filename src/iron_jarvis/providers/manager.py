@@ -249,6 +249,28 @@ class ProviderManager:
             return make_claude_cli(model=model or "subscription")
         return make_codex_cli(model=model or "subscription")
 
+    def claude_catalog(self) -> dict:
+        """The Claude subscription's model catalog for the pickers (v1.300.0):
+        ``providers.claude_models.catalog()`` — the account's LIVE picker read
+        from the CLI's ``initialize`` handshake, cached in-process and at
+        ``<home>/claude_models.json``, or the pinned table with ``error`` set.
+
+        NEVER BLOCKS (``/models`` calls it on every picker load): it serves the
+        cache at once and refreshes behind it on a thread — and only when the
+        auth probe KNOWS the CLI is signed in (a logged-out handshake answers a
+        generic list that is not the account's; ``None`` = unknown waits for
+        the probe, which also keeps the offline suite from spawning the
+        developer's real ``claude`` — conftest stubs ``_cli_signed_in``)."""
+        from . import claude_models
+
+        if self._envelope_home is not None:
+            claude_models.set_home(self._envelope_home)
+        try:
+            signed_in = self._cli_signed_in("claude") is True
+        except Exception:  # noqa: BLE001 — unknown is "do not refresh", never a crash
+            signed_in = False
+        return claude_models.catalog(refresh=signed_in)
+
     def _opencode_allowed(self) -> list[str]:
         """The LOCAL models OpenCode may serve here (cached per manager).
 

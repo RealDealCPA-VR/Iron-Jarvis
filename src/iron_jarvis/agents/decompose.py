@@ -508,9 +508,11 @@ async def _one_shot(
     step_out = int(usage.get("output_tokens", 0) or 0)
     run.input_tokens += step_in
     run.output_tokens += step_out
-    try:
-        from ..eval.pricing import cost_for
+    # v1.300.0: the dollars ride with the tokens (run AND session).
+    from .runtime import add_step_cost, step_cost_flag
 
+    step_usd = add_step_cost(run, session, route.provider, route.model, usage)
+    try:
         payload = {
             "run_id": run.id,
             "step": run.steps,
@@ -518,7 +520,10 @@ async def _one_shot(
             "model": route.model,
             "input_tokens": step_in,
             "output_tokens": step_out,
-            "cost_usd": cost_for(route.provider, route.model, step_in, step_out),
+            "cost_usd": step_usd,
+            # A subscription's list-price value says so (lock-step with the
+            # loop rounds' event in runtime.py).
+            **step_cost_flag(route.provider, route.model),
             "task_class": task_class,
         }
         # Step-aware routing audit (v1.135.0): ADDITIVE payload key on the

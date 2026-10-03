@@ -8,21 +8,19 @@ refresh; Iron Jarvis never sees or stores the credential. There is no in-app
 account login: the app simply inherits the login you already performed in the
 provider's own CLI.
 
-The ``claude`` adapter is a full **single-step structured completer**: with the
-built-in tools disabled (``--tools ""``) and a JSON schema forcing either a text
-reply or ONE tool call, ``claude -p`` behaves exactly like the raw Messages-API
-adapter's ``complete()`` — it returns either final text or a ``tool_use``, and
-Iron Jarvis's own perceive→act loop, tool registry, and permission engine stay
-in charge (the app still executes every tool). So Claude-backed agent sessions,
-workflows, and armed chat work the same on the inherited login as on the API key
-— only slower (a fresh process per step, typically 3–15s) and without inline
-vision (needs an API key). The ``codex`` adapter stays text-only.
+The ``claude`` adapter (v1.300.0) speaks the CLI's NATIVE stream-json
+protocol (``claude_native/``): the conversation is replayed turn by turn, tools
+are real ``tool_use`` blocks offered through an inert MCP inventory (the app
+still executes every tool — Iron Jarvis's own perceive→act loop, tool registry
+and permission engine stay in charge), text streams as it is written, images
+ride the user turn, and usage carries the cache buckets and the CLI's own
+list-price cost. One fresh process per step, cancellable as a tree. The
+``codex`` adapter stays text-only.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import shutil
 
@@ -46,9 +44,9 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
+from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
 from ..budget import run_budget
 from ..cli_auth import cli_failure_message, note_cli_failure
 
@@ -354,97 +352,79 @@ def make_codex_cli(**kw: Any) -> SubprocessCliAdapter:
     )
 
 
-# --- Claude Code (`claude -p`) — FULL single-step structured completer -------
-
-#: Map an Iron Jarvis model id to a `claude --model` argument. Full ids
-#: (`claude-opus-4-8`) and bare aliases (`opus`/`sonnet`/`haiku`/`fable`) both
-#: work; unknown/placeholder values (the adapter's default "subscription") pass
-#: nothing so the CLI uses its own default. Family prefixes map to the alias so
-#: an id the CLI doesn't recognize verbatim still resolves.
-def _claude_model_arg(model: str | None) -> str | None:
-    m = (model or "").strip().lower()
-    if not m or m in ("subscription", "default", "auto"):
-        return None
-    for fam in ("opus", "sonnet", "haiku", "fable"):
-        if m == fam or m.startswith(f"claude-{fam}"):
-            return fam
-    if m.startswith("claude-"):
-        return model  # a full id we don't have an alias for — pass through
-    return None
-
-
-def _tool_catalog(tools: list[dict[str, Any]]) -> str:
-    """Render the available tools so the model can pick one to call."""
-    lines = ["[Available tools — call ONE by returning tool_call, or answer with reply]"]
-    for t in tools:
-        name = t.get("name", "")
-        desc = (t.get("description") or "").strip()
-        schema = t.get("input_schema") or {}
-        props = schema.get("properties") or {}
-        required = schema.get("required") or []
-        args = ", ".join(
-            f"{k}{'*' if k in required else ''}" for k in props
-        ) or "(no args)"
-        lines.append(f"- {name}({args}): {desc}")
-    return "\n".join(lines)
-
-
-def _flatten_for_claude(
-    system: str, messages: list[LLMMessage], tools: list[dict[str, Any]]
-) -> str:
-    """Build the single-step prompt: system + tool catalog + transcript +
-    the structured-output instruction. Assistant tool calls and tool results
-    are rendered inline so a multi-step loop (re-flattened each step) sees the
-    outcome of prior tool calls and continues correctly."""
-    parts: list[str] = []
-    if system.strip():
-        parts.append(f"[System instructions]\n{system.strip()}")
-    if tools:
-        parts.append(_tool_catalog(tools))
-    for m in messages:
-        if m.role == "tool":
-            parts.append(
-                f"[Tool result — {m.name or 'tool'}]\n{(m.content or '').strip()}"
-            )
-        elif m.role == "assistant" and m.tool_calls:
-            calls = "; ".join(
-                f"{tc.name}({json.dumps(tc.arguments, ensure_ascii=False)})"
-                for tc in m.tool_calls
-            )
-            if (m.content or "").strip():
-                parts.append(f"Assistant: {m.content.strip()}")
-            parts.append(f"[Assistant called tool(s): {calls}]")
-        else:
-            who = "User" if m.role == "user" else "Assistant"
-            if (m.content or "").strip():
-                parts.append(f"{who}: {m.content.strip()}")
-    if tools:
-        parts.append(
-            "Respond with JSON matching the required schema. To answer, set "
-            '"reply" to your text and "tool_call" to null. To use a tool, set '
-            '"reply" to null and "tool_call" to {"name": <tool name>, '
-            '"arguments": <object>} for exactly ONE tool.'
-        )
-    return "\n\n".join(parts)
-
+# --- Claude Code (`claude -p`) — the NATIVE stream-json client (v1.300.0) ----
+#
+# Rebuilt on the design of NousResearch's MIT-licensed claude-subscription-
+# directsdk plugin (commit ef73726). The old adapter flattened the whole
+# conversation into ONE prompt, emulated tools with a `--json-schema` "reply or
+# ONE tool_call" step and a text catalog, never streamed, refused images, sent
+# `--model` as a bare alias (dropping `[1m]`) and reported only input/output
+# tokens. Now (see `claude_native/`): history is REPLAYED frame by frame,
+# tools are NATIVE (an inert MCP inventory + the full schemas through
+# CLAUDE_CODE_EXTRA_BODY — parallel calls in one step), text STREAMS, images
+# ride the user frame, the model id keeps its `[1m]`, signed thinking is
+# carried for verbatim replay, usage carries the cache buckets and the CLI's
+# own list-price cost, and an admission relay holds every call to ONE upstream
+# request. What stayed: the cancellable tree-kill discipline (v1.287.0), the
+# sign-in mapping (v1.234.0), `--max-budget-usd` (v1.295.0) and `--effort`.
 
 #: The smallest ``--max-budget-usd`` the Claude CLI accepts (it refuses
 #: lower values); a remaining allowance under this arms no flag.
 MIN_BUDGET_USD = 0.05
 
+#: v1.300.0: the OUTER bound on one native claude call. The CLI streams, so
+#: the real watchdog is the transport's IDLE timeout (no output for 180 s —
+#: reset by every event, as the reference plugin does); this cap exists only so
+#: a call that keeps trickling can never run forever. The old 240 s whole-call
+#: cap (``_TIMEOUT_S``, still the Codex cap) cut off a long answer that was
+#: still streaming. Read at CALL time: tests shrink it.
+_CLAUDE_TOTAL_TIMEOUT_S = 3600.0
+
+#: The model ids that mean "the CLI's own default" (used only when the
+#: ``claude_models`` catalog is absent; it otherwise decides, and may name the
+#: live default row so the relay does not cap it at 200K).
+_PLACEHOLDER_MODELS = ("", "subscription", "default", "auto")
+
+#: The effort levels the CLI's ``--effort`` takes (our vocabulary is
+#: low/medium/high; anything else is accepted and ignored, never guessed).
+_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _claude_model_arg(model: str | None) -> str | None:
+    """The ``--model`` argument for an Iron Jarvis model id, or None (send no
+    ``--model``: the CLI's own default).
+
+    The mapping lives in ``providers/claude_models.native_model`` (the live
+    picker + pinned catalog: which ids have a 1M route, which alias means
+    what). It is imported lazily; ONLY when the module or the function is
+    absent does a full id pass through unchanged (and a placeholder id send
+    nothing). NEVER a bare family alias for a full id — collapsing
+    ``claude-sonnet-5`` to ``sonnet`` lost its 1M route. A refusal from the
+    catalog (``haiku[1m]``: a 200K model) is the user's error to see, so it is
+    raised in its own words, never swallowed into a pass-through.
+    """
+    m = (model or "").strip()
+    try:
+        from ..claude_models import native_model
+    except ImportError:  # the catalog module is not shipped: pass through
+        return None if m.lower() in _PLACEHOLDER_MODELS else m
+    try:
+        mapped = native_model(m)
+    except ValueError as exc:
+        raise RuntimeError(f"claude-cli: {exc}") from exc
+    return mapped.strip() if isinstance(mapped, str) and mapped.strip() else None
+
 
 class ClaudeCliAdapter(LLMAdapter):
-    """Claude via the inherited `claude` CLI, as a single-step completer that
-    supports tool calls, per-call model selection, and token accounting."""
+    """Claude via the inherited `claude` CLI, spoken natively over stream-json:
+    replayed history, native tool calls, streaming, images, token + cost
+    accounting. Iron Jarvis still executes every tool."""
 
     provider = "claude-cli"
 
     def capabilities(self) -> dict[str, Any]:
-        # Claude via the inherited CLI IS a single-step structured completer that
-        # emits tool_use, so it can drive the agent loop (tool_use True). Inline
-        # vision needs the raw Messages API, so vision stays off — the router
-        # prefers an API adapter when images are present.
-        return {"provider": self.provider, "model": self.model, "tool_use": True, "vision": False}
+        # Native tool_use (many per step) AND inline images on the user frame.
+        return {"provider": self.provider, "model": self.model, "tool_use": True, "vision": True}
 
     def __init__(
         self,
@@ -452,44 +432,69 @@ class ClaudeCliAdapter(LLMAdapter):
         model: str = "subscription",
         runner: Callable[..., tuple[int, str, str]] | None = None,
         which: Callable[[str], str | None] = _which_cli,
+        idle_timeout_s: float | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         self.model = model
-        self._runner = runner  # None = the real, cancel-killable `run_cli`
+        #: An injected ``runner(argv, stdin) -> (code, stdout, stderr)`` is a
+        #: TEST DOUBLE: every frame is handed over at once and its stdout is
+        #: replayed through the same acknowledgment/assembly code. None = the
+        #: real process (the only production path).
+        self._runner = runner
         self._which = which
+        self._idle_timeout_s = idle_timeout_s
+        #: Tests only: an explicit child environment, which (their rule) skips
+        #: the inherited-environment conflict guard. Production passes None.
+        self._env = env
 
-    def _argv(
-        self, exe: str, tools: list[dict[str, Any]], reasoning: str = ""
-    ) -> list[str]:
-        # NO positional prompt: `claude -p` reads it from STDIN. As a command-
-        # line arg, a big office prompt (extracted PDFs, project knowledge)
-        # blew Windows' 32,767-char CreateProcess limit — live-hit 2026-07-20:
-        # "claude-cli: CLI exited 1: The command line is too long."
-        argv = [
-            exe, "-p", "--output-format", "json",
-            "--no-session-persistence",
-            "--setting-sources", "",   # ignore user/project/local settings
-            "--strict-mcp-config",     # no ambient MCP servers
-            "--tools", "",             # disable the CLI's own tool set — WE run tools
-        ]
-        marg = _claude_model_arg(self.model)
-        if marg:
-            argv += ["--model", marg]
-        if reasoning:
-            # v1.263.0: the CLI's own effort flag ("Effort level for the current
-            # session") — the same low/medium/high vocabulary the composer offers.
-            argv += ["--effort", reasoning]
-        # v1.295.0 (the job card): a custom agent's run carries what is LEFT of
-        # its monthly dollar allowance in a contextvar (``providers.budget``),
-        # and this CLI can cap ONE invocation with --max-budget-usd. Only when
-        # armed, and only at or above the CLI's own floor (it refuses lower
-        # values); the door already refused an exhausted agent, so 0 here means
-        # "no ceiling", never "spend nothing". Codex has no such flag.
+    def _native_call(
+        self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]], reasoning: str
+    ):
+        from .claude_native import frames as native_frames
+        from .claude_native.transport import DEFAULT_IDLE_TIMEOUT_S, NativeCall
+
+        exe = self._which("claude")
+        if not exe:
+            raise RuntimeError("claude-cli: the 'claude' CLI is not installed/on PATH")
+        manifest, native_tools, names = native_frames.build_tools(tools or [])
+        prompt, frames = native_frames.history_frames(system, messages, names)
+        effort = reasoning if reasoning in _EFFORTS else ""
+        # v1.295.0 (the job card): what is LEFT of a custom agent's monthly
+        # dollar allowance caps ONE invocation — only when armed and at or
+        # above the CLI's floor; 0 means "no ceiling", never "spend nothing".
         budget = run_budget()
-        if budget >= MIN_BUDGET_USD:
-            argv += ["--max-budget-usd", f"{budget:.2f}"]
-        if tools:
-            argv += ["--json-schema", json.dumps(_STEP_SCHEMA)]
-        return argv
+        return NativeCall(
+            exe=exe,
+            model_arg=_claude_model_arg(self.model),
+            system=prompt,
+            frames=frames,
+            manifest=manifest,
+            body=native_frames.request_body(native_tools, effort=effort),
+            names=names,
+            effort=effort,
+            budget_usd=budget if budget >= MIN_BUDGET_USD else 0.0,
+            idle_timeout_s=self._idle_timeout_s or DEFAULT_IDLE_TIMEOUT_S,
+            # Read at CALL time: tests shrink the module cap.
+            total_timeout_s=_CLAUDE_TOTAL_TIMEOUT_S,
+            base_env=self._env,
+        )
+
+    async def _frames(
+        self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]], reasoning: str
+    ) -> AsyncIterator[dict[str, Any]]:
+        from .claude_native import transport
+
+        # Off the loop: frames copy every image's base64, and the model
+        # catalog may read its disk cache on first use.
+        call = await asyncio.to_thread(self._native_call, system, messages, tools, reasoning)
+        agen = transport.run(call, runner=self._runner)
+        try:
+            async for frame in agen:
+                yield frame
+        finally:
+            # Walking away from the stream (Stop, a closed tab, an error in the
+            # consumer) must kill the process — aclose() runs the teardown.
+            await agen.aclose()
 
     async def complete(
         self,
@@ -497,92 +502,43 @@ class ClaudeCliAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
-        # Guided-decoding knobs (v1.203.0): accepted-ignored (see
-        # SubprocessCliAdapter.complete — subscription CLI backend).
+        # Guided-decoding knobs (v1.203.0): accepted-ignored (subscription CLI).
         response_format: dict | None = None,
         tool_choice: str | dict | None = None,
         extra_body: dict | None = None,
         reasoning: str = "",
     ) -> LLMResponse:
-        exe = self._which("claude")
-        if not exe:
-            raise RuntimeError(
-                "claude-cli: the 'claude' CLI is not installed/on PATH"
-            )
-        # Inline vision needs the raw Messages API (base64 image blocks); the
-        # headless CLI path can't carry them. Fail honestly rather than silently
-        # drop the image and answer about nothing.
-        if any(getattr(m, "images", None) for m in messages):
-            raise RuntimeError(
-                "claude-cli: image input isn't supported over the inherited CLI — "
-                "connect an Anthropic API key for vision."
-            )
-        prompt = _flatten_for_claude(system, messages, tools)
-        argv = self._argv(exe, tools, reasoning)
+        final: LLMResponse | None = None
+        agen = self._frames(system, messages, tools, reasoning)
         try:
-            code, out, err = await _call(self._runner, argv, prompt)
-        except subprocess.TimeoutExpired as exc:
-            # Transient (typed): a wedged CLI should fail over, not hard-error.
-            raise ProviderError(
-                f"claude-cli: CLI timed out after {_TIMEOUT_S}s", transient=True
-            ) from exc
-        if code != 0:
-            # v1.234.0 (live report): newer Claude Code builds exit 1 when
-            # signed out AND print the result JSON to stdout. This branch used
-            # to fire before _parse ever saw the JSON, so the user got 400
-            # characters of it instead of "Not logged in". The message helper
-            # reads the JSON FIRST and maps a sign-in refusal to the remedy;
-            # the shared auth probe is told so availability turns honest now.
-            msg = cli_failure_message(self.provider, "claude", code, out, err)
-            note_cli_failure("claude", msg)
-            raise RuntimeError(msg)
-        return self._parse(out, bool(tools))
+            async for frame in agen:
+                if frame.get("type") == "final":
+                    final = frame["response"]
+        finally:
+            await agen.aclose()
+        if final is None:  # pragma: no cover — the transport always ends in final or raises
+            raise RuntimeError("claude-cli: the CLI ended without an answer")
+        return final
 
-    @staticmethod
-    def _parse(stdout: str, had_tools: bool) -> LLMResponse:
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
+        reasoning: str = "",
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Text deltas LIVE as the CLI streams them, then ``final`` — the same
+        LLMResponse :meth:`complete` returns for the same run."""
+        agen = self._frames(system, messages, tools, reasoning)
         try:
-            data = json.loads(stdout)
-        except Exception:  # noqa: BLE001 — non-JSON: treat the raw text as the answer
-            text = stdout.strip()
-            if not text:
-                raise RuntimeError("claude-cli: CLI returned no output")
-            return LLMResponse(text=text, tool_calls=[], usage={})
-        if not isinstance(data, dict):
-            return LLMResponse(text=str(data), tool_calls=[], usage={})
-        # A failed run (not logged in, api error, refusal) must RAISE so the
-        # router treats it as a provider failure and fails over — never return
-        # the error string as if it were the model's answer.
-        if data.get("is_error"):
-            msg = cli_failure_message("claude-cli", "claude", 0, stdout, "")
-            note_cli_failure("claude", msg)
-            raise RuntimeError(msg)
-        usage_src = data.get("usage") or {}
-        usage = {
-            "input_tokens": int(usage_src.get("input_tokens", 0) or 0),
-            "output_tokens": int(usage_src.get("output_tokens", 0) or 0),
-        }
-        struct = data.get("structured_output")
-        if had_tools and isinstance(struct, dict):
-            tc = struct.get("tool_call")
-            if isinstance(tc, dict) and tc.get("name"):
-                call = ToolCall(
-                    id="cli_0",
-                    name=str(tc.get("name")),
-                    arguments=dict(tc.get("arguments") or {}),
-                )
-                return LLMResponse(
-                    text="", tool_calls=[call], finish_reason="tool_use", usage=usage
-                )
-            reply = struct.get("reply")
-            return LLMResponse(text=str(reply or ""), tool_calls=[], usage=usage)
-        # No schema (tool-less step) or malformed structured output: the plain
-        # `result` string is the answer.
-        text = str(data.get("result") or "").strip()
-        if not text and had_tools and isinstance(struct, dict):
-            text = str(struct.get("reply") or "")
-        if not text:
-            raise RuntimeError("claude-cli: CLI returned no usable output")
-        return LLMResponse(text=text, tool_calls=[], usage=usage)
+            async for frame in agen:
+                yield frame
+        finally:
+            await agen.aclose()
 
 
 def make_claude_cli(**kw: Any) -> ClaudeCliAdapter:

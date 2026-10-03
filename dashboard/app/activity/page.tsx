@@ -69,9 +69,16 @@ export default function ActivityPage() {
             value={tokens.toLocaleString()}
             icon={<Coins size={15} />}
           />
+          {/* v1.300.0: METERED money only. A flat subscription's list-price
+              value is said apart, never summed as cost. */}
           <Stat
             label="Cost in this view"
             value={`$${(stats?.costUsd ?? 0).toFixed(stats && stats.costUsd < 1 ? 4 : 2)}`}
+            sub={
+              (stats?.listPriceUsd ?? 0) > 0
+                ? `+ ~$${(stats?.listPriceUsd ?? 0).toFixed((stats?.listPriceUsd ?? 0) < 1 ? 4 : 2)} list-price value (Claude subscription, not billed)`
+                : undefined
+            }
             icon={<CircleDollarSign size={15} />}
           />
         </div>

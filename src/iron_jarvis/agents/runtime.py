@@ -643,6 +643,52 @@ _TEAM_LIST_CAP = 10
 _TEAM_SENDERS_CAP = 4
 
 
+def add_step_cost(run, session, provider: str, model: str, usage) -> float:
+    """Add ONE completion's cost to the run AND the session in hand (v1.300.0).
+
+    ``eval.pricing.step_cost``: the adapter's own ``usage["cost_usd"]`` when it
+    reported one (the Claude CLI's ``total_cost_usd`` — a list-price
+    equivalent under a subscription), else the price table, cache-aware. The
+    SESSION gets the step too, not only the run: the orchestrator copies the
+    run's TOKENS onto the session only on success, while every finalizer
+    merges the session object it holds — so a failed or cancelled run's spend
+    still reaches ``Session.cost_usd``, which is what an agent's dollar
+    allowance (``allowance.month_spend``) reads. Never raises; returns the
+    step's cost. A test double without the column is left alone.
+
+    See :func:`step_cost_flag` for the ``llm.completed`` event's companion key.
+    """
+    from ..eval.pricing import step_cost
+
+    usd = step_cost(provider, model, usage)
+    for row in (run, session):
+        if row is None:
+            continue
+        try:
+            row.cost_usd = float(getattr(row, "cost_usd", 0.0) or 0.0) + usd
+        except Exception:  # noqa: BLE001 — accounting never breaks a run
+            pass
+    return usd
+
+
+def step_cost_flag(provider: str, model: str) -> dict:
+    """The ``llm.completed`` payload's ADDITIVE subscription key (v1.300.0
+    review): ``{"list_price_equivalent": True}`` when the step's ``cost_usd``
+    is a LIST-PRICE EQUIVALENT a flat subscription covers
+    (``eval.pricing.is_list_price_equivalent`` — model-aware, so a
+    usage-credits model is money), else ``{}`` — a metered step's payload is
+    byte-for-byte what it was. The Activity timeline reads the key and never
+    sums those dollars as cost. Never raises."""
+    try:
+        from ..eval.pricing import is_list_price_equivalent
+
+        if is_list_price_equivalent(provider, model):
+            return {"list_price_equivalent": True}
+    except Exception:  # noqa: BLE001 — telemetry never breaks a run
+        pass
+    return {}
+
+
 def _tool_deadline(config) -> float | None:
     """``config.tool_call_timeout_s`` as the registry's ``deadline_s``
     (v1.228.0, RT6): a positive number of seconds, else ``None`` (no
@@ -2409,6 +2455,13 @@ class AgentRuntime:
             step_out = int(usage.get("output_tokens", 0) or 0)
             run.input_tokens += step_in
             run.output_tokens += step_out
+            # COST (v1.300.0): the step's dollars ride the same accumulation
+            # — the adapter's own figure when it reported one (the Claude
+            # CLI's total_cost_usd), else the price table, cache-aware. Added
+            # to the SESSION object in hand too, so a failed or cancelled run
+            # (whose finalizers merge this object) still counts toward the
+            # agent's dollar allowance.
+            step_usd = add_step_cost(run, session, run.provider, run.model, usage)
             # Persist the step count BEFORE the tools run (v1.174.0). It used to
             # be saved only at the END of a step, so for the whole of step N the
             # stored record still said N-1 — and anything reading the ledger
@@ -2421,8 +2474,6 @@ class AgentRuntime:
             # individually replayable on the timeline (the per-run aggregate lives
             # on AgentRun). Best-effort — never let telemetry break a run.
             try:
-                from ..eval.pricing import cost_for
-
                 await self.p.event_bus.publish(
                     EventType.LLM_COMPLETED,
                     {
@@ -2432,9 +2483,10 @@ class AgentRuntime:
                         "model": run.model,
                         "input_tokens": step_in,
                         "output_tokens": step_out,
-                        "cost_usd": cost_for(
-                            run.provider, run.model, step_in, step_out
-                        ),
+                        # v1.300.0: the step's own cost (native or priced) —
+                        # flagged when it is a subscription's list-price value.
+                        "cost_usd": step_usd,
+                        **step_cost_flag(run.provider, run.model),
                         "task_class": agent_def.type.value,
                     },
                     session_id=session.id,

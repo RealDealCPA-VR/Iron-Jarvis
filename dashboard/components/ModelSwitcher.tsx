@@ -7,6 +7,7 @@ import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
+import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 
 /** Quality tiers, plainly labelled so users pick outcome over model IDs. */
 type Tier = "fast" | "balanced" | "best";
@@ -53,6 +54,94 @@ const TIERS: Record<string, Record<Tier, string>> = {
     best: "openrouter/auto",
   },
 };
+
+/** v1.300.0: the Claude providers whose dial is resolved from the LIVE
+ *  catalog by family — the account's picker names "claude-opus-5-5" today
+ *  and something newer tomorrow, so a hard-coded id goes stale ("n/a"). */
+const CLAUDE_DIAL_PROVIDERS = new Set(["anthropic", "claude-cli"]);
+const TIER_FAMILY: Record<Tier, string> = { fast: "haiku", balanced: "sonnet", best: "opus" };
+
+/**
+ * The version of `family` an id or label names, or `null` when the family
+ * word is absent (`[]` = named with no version — ranks below any version).
+ * Two shapes, because the API still lists Claude 3 era ids:
+ *   - `claude-<family>-<major>[-<minor>]` — "claude-opus-5-5", "Opus 5.5",
+ *     "claude-haiku-4-5-20251001" → [4, 5];
+ *   - `claude-<major>[-<minor>]-<family>` — "claude-3-7-sonnet-20250219" →
+ *     [3, 7], "Claude 3.5 Sonnet" → [3, 5].
+ * A version part is one or two digits followed by neither a digit nor a
+ * letter: an 8-digit DATE is never a version (it once made
+ * claude-3-haiku-20240307 outrank Haiku 4.5), nor is a context size — the
+ * "1" of `[1m]` or of a "Sonnet 1M" label.
+ */
+export function familyVersion(text: string, family: string): number[] | null {
+  const t = text.toLowerCase();
+  const fam = family.toLowerCase();
+  if (!new RegExp(`(?:^|[^a-z])${fam}(?![a-z])`).test(t)) return null;
+  const nums = (m: RegExpExecArray) =>
+    [m[1], m[2]].filter((x): x is string => x !== undefined).map(Number);
+  const after = new RegExp(
+    `(?:^|[^a-z])${fam}[-_ ]?([0-9]{1,2})(?![0-9a-z])(?:[-._ ]([0-9]{1,2})(?![0-9a-z]))?`,
+  ).exec(t);
+  if (after) return nums(after);
+  const before = new RegExp(
+    `(?:^|[^0-9])([0-9]{1,2})(?:[-._ ]([0-9]{1,2}))?[-_ ]${fam}(?![a-z])`,
+  ).exec(t);
+  if (before) return nums(before);
+  return [];
+}
+
+/** A label's version when it names one, else the id's ("Sonnet" says less
+ *  than "claude-sonnet-5-5"). */
+function bestVersion(fromLabel: number[] | null, fromId: number[] | null): number[] | null {
+  return fromLabel && fromLabel.length ? fromLabel : fromId ?? fromLabel;
+}
+
+function newerFirst(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (b[i] ?? -1) - (a[i] ?? -1);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * The quality dial's id per tier for `provider`. A Claude provider resolves
+ * each tier from its catalog rows by family (haiku/sonnet/opus), newest
+ * version first by the row's label, else its id; a family the catalog does
+ * not offer is greyed "n/a", and claude-cli with no family at all gets no
+ * dial. Everyone else: the static table.
+ */
+export function resolveTiers(
+  provider: string | undefined,
+  rows: readonly ModelOption[],
+): Record<Tier, string> | undefined {
+  if (!provider) return undefined;
+  const fallback = TIERS[provider];
+  if (!CLAUDE_DIAL_PROVIDERS.has(provider)) return fallback;
+  const own = rows.filter((r) => r.provider === provider);
+  const out = {} as Record<Tier, string>;
+  let found = 0;
+  for (const tier of TIER_ORDER) {
+    const fam = TIER_FAMILY[tier];
+    const ranked = own
+      .map((r) => ({
+        id: r.model,
+        v: bestVersion(familyVersion(r.label ?? "", fam), familyVersion(r.model, fam)),
+      }))
+      .filter((x): x is { id: string; v: number[] } => x.v !== null)
+      .sort((a, b) => newerFirst(a.v, b.v));
+    if (ranked.length) {
+      out[tier] = ranked[0].id;
+      found++;
+    } else {
+      // Not offered: the static id (anthropic) or the bare family — either
+      // way the dial greys it "n/a", never picks a model that is not there.
+      out[tier] = fallback ? fallback[tier] : `claude-${fam}`;
+    }
+  }
+  return found > 0 || fallback ? out : undefined;
+}
 
 /* ---- Auto (smart routing) ------------------------------------------------- */
 /** A connected/routing model, matching the daemon's `{provider, model}` shape. */
@@ -209,7 +298,8 @@ export function ModelSwitcher() {
 
   // Quality dial: the tier map + which of the current provider's models the
   // catalog actually offers (so an unavailable tier is greyed like the list).
-  const tiers = activeProvider ? TIERS[activeProvider] : undefined;
+  // v1.300.0: a Claude provider's tiers come from the live rows by family.
+  const tiers = useMemo(() => resolveTiers(activeProvider, models), [activeProvider, models]);
   const providerModels = useMemo(() => {
     const s = new Set<string>();
     for (const m of models) if (m.provider === activeProvider) s.add(m.model);
@@ -393,12 +483,17 @@ export function ModelSwitcher() {
         } ${active ? "bg-accent/[0.1]" : ""}`}
       >
         <span className="min-w-0">
-          <span
-            className={`block truncate font-mono text-[11px] ${
-              ok ? "text-zinc-200" : "text-zinc-500 line-through"
-            }`}
-          >
-            {m.model}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span
+              title={m.label ? m.model : undefined}
+              className={`block truncate font-mono text-[11px] ${
+                ok ? "text-zinc-200" : "text-zinc-500 line-through"
+              }`}
+            >
+              {/* v1.300.0: the picker's label ("Opus 5.5") over the raw id. */}
+              {modelText(m)}
+            </span>
+            <ModelRowChips m={m} />
           </span>
           <span className={`text-[10px] ${ok ? "text-zinc-500" : "text-amber-400/80"}`}>
             {/* Friendly endpoint label over a raw "fleet-x7f2" id. */}
@@ -469,7 +564,7 @@ export function ModelSwitcher() {
           </span>
         ) : (
           <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
-            {activeModel}
+            {activeEntry?.label ? modelText(activeEntry) : activeModel}
           </span>
         )}
         {selectedOffline && (

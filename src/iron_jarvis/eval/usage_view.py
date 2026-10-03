@@ -26,6 +26,7 @@ from typing import Any
 from ..providers.local import LOCAL_PREFIXES as LOCAL_PROVIDER_PREFIXES  # noqa: F401
 from ..providers.local import LOCAL_PROVIDERS  # noqa: F401
 from ..providers.local import is_local_provider as _is_local_name
+from .pricing import is_list_price_equivalent
 
 #: Hosted vendors. Used ONLY to disqualify an ``opencode/<id>`` or ``pi/<id>``
 #: row from being counted as local — see :func:`is_local_provider`.
@@ -120,6 +121,16 @@ def merged_usage(platform: Any, days: int = 30) -> dict[str, Any]:
     :func:`is_noise_row` drops the mock provider and zero-token rows — and
     ``model_count`` is its length. The unfiltered list stays in the JSON as
     ``by_model_raw`` so nothing is hidden, and ``totals`` are untouched.
+
+    v1.300.0: every ``by_model`` row a flat subscription served
+    (``pricing.is_list_price_equivalent(provider, model)`` — the Claude CLI,
+    unless that model draws pay-as-you-go usage credits) carries
+    ``list_price_equivalent: true``, so the page says "list-price equivalent
+    — included in your subscription" beside its dollars instead of calling it
+    spend. This merge OWNS the flag for every row it serves (a folded row
+    included), not only the rows ``usage_summary`` already marked. ``totals.cost_usd`` is METERED money only and
+    ``totals.list_price_equivalent_usd`` the subscription value (always
+    present, 0.0 when none).
     """
     out = platform.observability.usage_summary(days)
 
@@ -144,6 +155,13 @@ def merged_usage(platform: Any, days: int = 30) -> dict[str, Any]:
         _fold(out, pi)
 
     raw = list(out.get("by_model") or [])
+    for row in raw:
+        if isinstance(row, dict) and is_list_price_equivalent(
+            str(row.get("provider") or ""), str(row.get("model") or "")
+        ):
+            row["list_price_equivalent"] = True
+    if isinstance(out.get("totals"), dict):
+        out["totals"].setdefault("list_price_equivalent_usd", 0.0)
     out["by_model_raw"] = raw
     out["by_model"] = [r for r in raw if not is_noise_row(r)]
     out["model_count"] = len(out["by_model"])

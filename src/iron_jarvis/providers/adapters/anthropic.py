@@ -72,6 +72,24 @@ def _raw_blocks(content: Any) -> list[dict[str, Any]]:
     return out
 
 
+#: The ``raw_blocks`` entry the claude-cli adapter writes (v1.300.0,
+#: ``claude_native.CARRIER``). Spelled here, not imported, so this adapter
+#: never loads the CLI transport.
+_CLI_CARRIER = "claude_cli_native"
+
+
+def _own_blocks(m: LLMMessage) -> list[dict[str, Any]]:
+    """The raw blocks THIS adapter may replay: everything except the
+    claude-cli carrier (v1.300.0). A conversation that moves from claude-cli
+    to the API must never replay ``mcp__ij__``-named native blocks or their
+    signatures here; with only a carrier, the turn is rebuilt from text +
+    tool_calls like any other provider's."""
+    return [
+        b for b in (getattr(m, "raw_blocks", None) or [])
+        if not (isinstance(b, dict) and b.get("type") == _CLI_CARRIER)
+    ]
+
+
 class AnthropicAdapter(LLMAdapter):
     provider = "anthropic"
 
@@ -138,13 +156,13 @@ class AnthropicAdapter(LLMAdapter):
                         ],
                     }
                 )
-            elif m.role == "assistant" and getattr(m, "raw_blocks", None):
+            elif m.role == "assistant" and _own_blocks(m):
                 # v1.263.0: an assistant turn produced with extended thinking
                 # is replayed VERBATIM — thinking blocks (with signatures) ahead
                 # of the tool_use they preceded — or the API refuses the
                 # follow-up call of a tool loop. Written by this adapter only.
                 out.append(
-                    {"role": "assistant", "content": [dict(b) for b in m.raw_blocks]}
+                    {"role": "assistant", "content": [dict(b) for b in _own_blocks(m)]}
                 )
             elif m.role == "assistant" and m.tool_calls:
                 blocks: list[dict[str, Any]] = []

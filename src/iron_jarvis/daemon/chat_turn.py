@@ -51,6 +51,7 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
+from ..eval.pricing import UsageTally
 from ..core.grants import args_hash as _grant_hash
 from ..core.grants import grant_label as _grant_label
 from ..core.grants import pick_scope as _pick_scope
@@ -1039,6 +1040,7 @@ async def _enforce_language(
     messages,
     provider: str,
     model: str,
+    tally: UsageTally | None = None,
 ) -> tuple[str, str, int, int, int]:
     """Guard the reply's language. Returns
     ``(text, note, usage_in, usage_out, completions)``.
@@ -1102,6 +1104,10 @@ async def _enforce_language(
     usage = route.response.usage or {}
     u_in = int(usage.get("input_tokens", 0) or 0)
     u_out = int(usage.get("output_tokens", 0) or 0)
+    # v1.300.0: the whole usage (cache counts, the provider's own cost) into
+    # the turn's tally — the int return keeps its shape for the callers.
+    if tally is not None:
+        tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
     rewritten = (route.response.text or "").strip()
     if rewritten and detect_leak(rewritten, code, user_text) is None:
         return (rewritten, NOTE_CORRECTED.format(name=label(code)), u_in, u_out, 1)
@@ -1162,6 +1168,7 @@ async def _final_answer_after_tools(
     provider: str,
     model: str,
     instruction: str = "",
+    tally: UsageTally | None = None,
 ) -> tuple[str, int, int, int]:
     """Ask the SAME model once, WITHOUT tools, for the answer it never wrote.
     Returns ``(text, usage_in, usage_out, completions)`` — ``text`` is "" when
@@ -1195,6 +1202,8 @@ async def _final_answer_after_tools(
         log.warning("final-answer completion failed", exc_info=True)
         return ("", 0, 0, 0)
     usage = route.response.usage or {}
+    if tally is not None:  # v1.300.0 — see _enforce_language
+        tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
     return (
         (route.response.text or "").strip(),
         int(usage.get("input_tokens", 0) or 0),
@@ -2829,6 +2838,7 @@ def _context_window_source(d, provider: str, model: str) -> "tuple[int | None, s
     * ``"pin"`` — an explicit ``config.model_context_windows`` entry;
     * ``"measured"`` — the capability envelope's measured honest window
       (``ProviderManager.measured_context_window``);
+    * ``"catalog"`` — the Claude subscription's live model picker (v1.300.0);
     * ``"endpoint"`` — a fleet probe's advertised ``context_length``;
     * ``"default"`` — unknown; the value is ``None`` and callers fall back to
       their conservative fixed budgets.
@@ -2870,6 +2880,27 @@ def _context_window_source(d, provider: str, model: str) -> "tuple[int | None, s
         n = _measured(provider, model)
         if n:
             return int(n), "measured"
+    # v1.300.0: the Claude subscription's window comes from the account's
+    # LIVE picker (providers/claude_models — memory, disk or the pinned
+    # table; it never spawns the CLI here), for claude-cli and for a keyless
+    # provider served through it. "subscription" answers the CLI default's
+    # window once discovery has named it.
+    _served_by_cli = provider == "claude-cli"
+    if not _served_by_cli:
+        _inh = getattr(_providers, "inherited_from", None)
+        try:
+            _served_by_cli = callable(_inh) and _inh(provider) == "claude-cli"
+        except Exception:  # noqa: BLE001 — a broken manager just skips this rung
+            _served_by_cli = False
+    if _served_by_cli:
+        try:
+            from ..providers import claude_models as _claude_models
+
+            n = _claude_models.context_window(model)
+        except Exception:  # noqa: BLE001 — unknown window, conservative budgets
+            n = None
+        if n:
+            return int(n), "catalog"
     fleet = getattr(d.platform, "fleet", None)
     if fleet is not None and model:
         try:  # best-effort probe read — fleet node models may carry the window
@@ -3416,10 +3447,29 @@ def _thread_file_paths(body) -> "list[str]":
     return out[-_MAX_CARRIED_FILES:]
 
 
+def _usage_frame(tally: UsageTally, usage_in: int, usage_out: int) -> dict[str, Any]:
+    """The turn's ``usage`` object on the stream done frame AND the POST /chat
+    response (v1.300.0) — ONE builder, so the lanes cannot drift.
+
+    ``{input_tokens, output_tokens}`` always (the lane's own counters, exactly
+    the values the done frame carried before), plus — only when KNOWN —
+    ``cache_read_input_tokens`` / ``cache_creation_input_tokens`` (some
+    completion reported cache counts), ``cost_usd`` (a native figure or a
+    known price row) and ``list_price_equivalent: true`` (a subscription
+    served it: the dollars are a list-price equivalent, not a charge). The
+    receipt can then say "cached 97% · ~$0.03 list". MIRROR NOTE (lock-step):
+    both lanes call this — edit both or neither.
+    """
+    out = tally.as_dict()
+    out["input_tokens"] = int(usage_in)
+    out["output_tokens"] = int(usage_out)
+    return out
+
+
 def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
-    started_at=None,
+    started_at=None, cost_usd: float = 0.0,
 ) -> None:
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -3430,7 +3480,11 @@ def _persist_chat_usage(
 
     ``started_at`` (v1.246.0): when the turn began. The row used to be created
     at the END, so every chat turn recorded a duration of 0.0 s and a slow
-    turn was invisible in the one place a slow turn could be measured."""
+    turn was invisible in the one place a slow turn could be measured.
+
+    ``cost_usd`` (v1.300.0): the turn's summed ``step_cost`` (the lane's
+    ``UsageTally``) — the provider's own figure when it reported one, so a
+    Claude-subscription turn is no longer $0 on the Usage page."""
     try:
         from ..core.ids import utcnow as _now
         from ..core.models import AgentRun
@@ -3445,6 +3499,7 @@ def _persist_chat_usage(
                 steps=max(1, completions),
                 input_tokens=usage_in,
                 output_tokens=usage_out,
+                cost_usd=max(0.0, float(cost_usd or 0.0)),
                 finished_at=_now(),
                 **({"created_at": started_at} if started_at is not None else {}),
             )
@@ -4167,6 +4222,9 @@ async def run_chat_turn(
     # rounds so the Usage ledger reflects the WHOLE turn — a multi-round
     # armed-tool turn is several separately-billed completions, not one.
     usage_in = usage_out = completions = 0
+    # v1.300.0: the whole usage per completion (cache counts, the provider's
+    # own cost) — priced per step. Lock-step: the stream lane keeps one too.
+    _tally = UsageTally()
     stopped_note = ""  # honest note when the round budget cuts off tool calls
     escalate = False        # the turn asked for the full agent
     escalate_reason = ""
@@ -4205,6 +4263,7 @@ async def run_chat_turn(
             _u = route.response.usage or {}
             usage_in += int(_u.get("input_tokens", 0) or 0)
             usage_out += int(_u.get("output_tokens", 0) or 0)
+            _tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), _u)
             completions += 1
             calls = route.response.tool_calls or []
             # THE DRAFT, THREE WAYS (v1.225.0): the workflow_draft exit; an
@@ -4441,7 +4500,7 @@ async def run_chat_turn(
                 d, provider=route.provider, model=route.model,
                 state=AgentState.FAILED, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
-                started_at=turn_started,
+                started_at=turn_started, cost_usd=_tally.cost_usd,
             )
         raise HTTPException(status_code=502, detail=_error_detail(exc))
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
@@ -4471,6 +4530,7 @@ async def run_chat_turn(
             # v1.247.0 / v1.262.0: a turn cut at its last round is told so, in
             # the browser wording when it acted in a browser.
             **({"instruction": _out_of_rounds_instruction(armed)} if _cut_office else {}),
+            tally=_tally,
         )
         model_text = _f_text or model_text
         usage_in += _f_in
@@ -4484,6 +4544,7 @@ async def run_chat_turn(
         messages=_send,
         provider=provider_choice,
         model=model_choice,
+        tally=_tally,
     )
     usage_in += _l_in
     usage_out += _l_out
@@ -4495,7 +4556,7 @@ async def run_chat_turn(
         d, provider=route.provider, model=route.model,
         state=AgentState.COMPLETED, completions=completions,
         usage_in=usage_in, usage_out=usage_out,
-        started_at=turn_started,
+        started_at=turn_started, cost_usd=_tally.cost_usd,
     )
     # Reply honesty: if the model returned no final text but tools DID run
     # with output, synthesize a short summary from the last result rather
@@ -4624,6 +4685,11 @@ async def run_chat_turn(
         # applies exactly as before.
         "escalate_agent": escalate_agent,
         "workflow_draft": workflow_draft,
+        # USAGE (v1.300.0, additive — this lane carried none before): the
+        # turn's tokens plus, only when known, cache counts, cost_usd and
+        # list_price_equivalent. MIRROR NOTE (lock-step): the stream done-frame
+        # builds the identical object with the same `_usage_frame`.
+        "usage": _usage_frame(_tally, usage_in, usage_out),
         # v1.146.0 — what this turn cost against the model's window, so the
         # composer can show headroom BEFORE the next message overflows it.
         # v1.153.0 EXTENDS THE SAME KEY rather than adding a rival one: fill

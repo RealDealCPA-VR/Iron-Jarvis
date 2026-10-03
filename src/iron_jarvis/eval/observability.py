@@ -7,6 +7,7 @@ traces for replay/debugging and aggregate metrics for dashboards.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Engine, and_, func, or_
@@ -146,6 +147,23 @@ class Observability:
         empty or unreadable window yields zeroed totals and empty lists so the
         ``/usage`` endpoint and daemon stay up.
 
+        v1.300.0: a run's STORED ``cost_usd`` (its completions' own figures —
+        the Claude CLI reports one per call) is used when > 0; older rows are
+        priced through ``pricing.recorded_cost`` — metered rows from their
+        tokens as before, an old SUBSCRIPTION row (no stored cost) at 0, as it
+        was when it ran. A ``by_model`` row served by a flat subscription
+        (``pricing.is_list_price_equivalent(provider, model)`` — ``claude-cli``
+        unless the model draws usage credits) carries ``list_price_equivalent:
+        true`` (additive) — its dollars are what the work WOULD cost at list
+        price, included in the subscription. MONEY AND VALUE ARE KEPT APART:
+        ``totals.cost_usd`` and each ``by_day[].cost_usd`` are METERED money
+        only (what an API key is billed), while
+        ``totals.list_price_equivalent_usd`` / ``by_day[].list_price_equivalent_usd``
+        (additive) sum the flagged rows — so the Usage page never presents
+        subscription work as money spent. A ``by_model`` row keeps its own
+        ``cost_usd`` either way (the flag says which kind it is). An agent's
+        allowance meters the equivalent ON PURPOSE (``allowance.month_spend``).
+
         Returns a dict shaped::
 
             {
@@ -165,6 +183,7 @@ class Observability:
                 "output_tokens": 0,
                 "cost_usd": 0.0,
                 "runs": 0,
+                "list_price_equivalent_usd": 0.0,
             },
             "by_day": [],
             "by_model": [],
@@ -186,20 +205,39 @@ class Observability:
         except Exception:  # pragma: no cover - degrade rather than crash
             return empty
 
-        totals = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "runs": 0}
+        totals = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "runs": 0,
+            "list_price_equivalent_usd": 0.0,
+        }
         by_day: dict[str, dict] = {}
         by_model: dict[tuple[str, str], dict] = {}
+        # One catalog read per (provider, model), not per row.
+        flags: dict[tuple[str, str], bool] = {}
 
         for run in runs:
             provider = run.provider or ""
             model = run.model or ""
             in_tok = int(run.input_tokens or 0)
             out_tok = int(run.output_tokens or 0)
-            cost = pricing.cost_for(provider, model, in_tok, out_tok)
+            key = (provider, model)
+            if key not in flags:
+                flags[key] = pricing.is_list_price_equivalent(provider, model)
+            equivalent = flags[key]
+            # The ONE rule (stored figure, else tokens; an old subscription
+            # row with no stored cost is 0 — it was free when it ran).
+            cost = pricing.recorded_cost(
+                provider, model, in_tok, out_tok, getattr(run, "cost_usd", 0.0)
+            )
+            # Metered money vs a subscription's list-price equivalent: the
+            # aggregate keys keep them apart; the per-model row keeps both.
+            money_key = "list_price_equivalent_usd" if equivalent else "cost_usd"
 
             totals["input_tokens"] += in_tok
             totals["output_tokens"] += out_tok
-            totals["cost_usd"] += cost
+            totals[money_key] += cost
             totals["runs"] += 1
 
             ts = run.created_at
@@ -208,13 +246,18 @@ class Observability:
             )
             d = by_day.setdefault(
                 day,
-                {"day": day, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+                {
+                    "day": day,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                    "list_price_equivalent_usd": 0.0,
+                },
             )
             d["input_tokens"] += in_tok
             d["output_tokens"] += out_tok
-            d["cost_usd"] += cost
+            d[money_key] += cost
 
-            key = (provider, model)
             m = by_model.setdefault(
                 key,
                 {
@@ -230,10 +273,14 @@ class Observability:
             m["output_tokens"] += out_tok
             m["cost_usd"] += cost
             m["runs"] += 1
+            if equivalent:
+                m["list_price_equivalent"] = True
 
         totals["cost_usd"] = round(totals["cost_usd"], 6)
+        totals["list_price_equivalent_usd"] = round(totals["list_price_equivalent_usd"], 6)
         for d in by_day.values():
             d["cost_usd"] = round(d["cost_usd"], 6)
+            d["list_price_equivalent_usd"] = round(d["list_price_equivalent_usd"], 6)
         for m in by_model.values():
             m["cost_usd"] = round(m["cost_usd"], 6)
 
@@ -731,19 +778,35 @@ class AuditTimeline:
         kind = _classify_event(etype)
         in_tok = out_tok = 0
         cost = 0.0
+        list_usd: float | None = None
         if kind == _KIND_TOKEN:
             in_tok = int(payload.get("input_tokens") or 0)
             out_tok = int(payload.get("output_tokens") or 0)
+            provider = str(payload.get("provider") or "")
+            model = str(payload.get("model") or "")
             cost = payload.get("cost_usd")
             if cost is None:
-                cost = pricing.cost_for(
-                    payload.get("provider", ""),
-                    payload.get("model", ""),
-                    in_tok,
-                    out_tok,
-                )
-            cost = round(float(cost or 0.0), 6)
-        return {
+                # An event older than v1.300.0 recorded no cost. A metered one
+                # is priced from its tokens as before; a SUBSCRIPTION one stays
+                # $0 — it was free by the rules in force when it ran.
+                if pricing.is_list_price_equivalent(provider, model):
+                    cost = 0.0
+                else:
+                    cost = pricing.cost_for(provider, model, in_tok, out_tok)
+            try:
+                cost = round(float(cost or 0.0), 6)
+            except (TypeError, ValueError, OverflowError):
+                cost = 0.0
+            if not math.isfinite(cost):
+                cost = 0.0
+            # v1.300.0 review: a step a flat subscription covered carries
+            # ``list_price_equivalent: true`` (set by the runtime at write
+            # time). Its dollars are a list-price VALUE, never cost: they ride
+            # in ``list_price_equivalent_usd`` and the entry's ``cost_usd`` is
+            # 0, so the Activity page's "Cost in this view" never sums them.
+            if payload.get("list_price_equivalent") is True:
+                list_usd, cost = cost, 0.0
+        entry = {
             "id": eid,
             "ts": _iso(created),
             "_sort": (created, eid),
@@ -762,3 +825,7 @@ class AuditTimeline:
             "summary": _event_summary(etype, payload),
             "payload": payload,
         }
+        if list_usd is not None:
+            entry["list_price_equivalent"] = True
+            entry["list_price_equivalent_usd"] = list_usd
+        return entry

@@ -327,7 +327,7 @@ describe("Autonomy page — Goals section", () => {
     expect(capped.textContent).not.toContain("no budget set");
 
     const unlimited = screen.getByTestId("goal-card-g_unlimited");
-    expect(unlimited.textContent).toContain("$1.23 spent · unlimited — by your choice");
+    expect(unlimited.textContent).toContain("$1.23 used · unlimited — by your choice");
 
     const tokens = screen.getByTestId("goal-card-g_tokens");
     expect(tokens.textContent).toContain("1,200 of 1,000,000 tokens");

@@ -1468,6 +1468,13 @@ class InboundPoller:
         # and run_session stamp it — the allowance ledger sums Session tokens.
         session.input_tokens = run.input_tokens
         session.output_tokens = run.output_tokens
+        # v1.300.0: and its DOLLARS — the runtime already added each step to
+        # the session object it ran with; the run's figure covers a row
+        # loaded separately. The larger of the two, never a sum (no double count).
+        session.cost_usd = max(
+            float(getattr(session, "cost_usd", 0.0) or 0.0),
+            float(getattr(run, "cost_usd", 0.0) or 0.0),
+        )
         session.finished_at = utcnow()
         self.orchestrator._save(session)
         # The allowance tail (v1.295.0): an exhausted custom agent is paused

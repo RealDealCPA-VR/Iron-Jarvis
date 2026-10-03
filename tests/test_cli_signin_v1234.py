@@ -38,6 +38,11 @@ from iron_jarvis.providers.cli_auth import (
     parse_codex_status,
 )
 from iron_jarvis.providers.manager import ProviderManager
+from iron_jarvis.providers.adapters.base import LLMMessage
+
+#: v1.300.0: the claude-cli adapter sends the conversation as native frames,
+#: so a call needs at least one user turn (an empty one is refused up front).
+_HI = LLMMessage(role="user", content="hi")
 
 LIVE_JSON = json.dumps(
     {
@@ -77,7 +82,9 @@ async def test_exit_1_with_result_json_yields_the_sentence_not_the_dump(monkeypa
         runner=lambda argv, stdin=None: (1, LIVE_JSON, ""), which=lambda b: "/x/claude"
     )
     with pytest.raises(RuntimeError) as ei:
-        await a.complete(system="", messages=[], tools=[])
+        # v1.300.0: a user turn is required — the conversation is sent as
+        # native frames and an empty one is refused before the CLI runs.
+        await a.complete(system="", messages=[_HI], tools=[])
     msg = str(ei.value)
     assert SIGN_IN_FIX["claude"] in msg
     assert "Not logged in" in msg  # the CLI's own words survive, in parentheses
@@ -93,7 +100,7 @@ async def test_exit_0_is_error_json_maps_the_same_way():
         runner=lambda argv, stdin=None: (0, LIVE_JSON, ""), which=lambda b: "/x/claude"
     )
     with pytest.raises(RuntimeError, match="isn't signed in"):
-        await a.complete(system="", messages=[], tools=[])
+        await a.complete(system="", messages=[_HI], tools=[])
 
 
 @pytest.mark.asyncio

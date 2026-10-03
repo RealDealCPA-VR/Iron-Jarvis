@@ -21,6 +21,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { LIST_PRICE_TITLE } from "@/lib/types";
 
 /* -------------------------------------------------------------------------- */
 /*  Local types (GET /usage?days=N)                                            */
@@ -31,6 +32,9 @@ interface UsageTotals {
   output_tokens: number;
   cost_usd: number;
   runs: number;
+  /** v1.300.0: the subscription's list-price equivalent, kept OUT of
+   *  `cost_usd` (which is metered money only). Absent on older daemons. */
+  list_price_equivalent_usd?: number;
 }
 
 interface UsageByDay {
@@ -47,6 +51,9 @@ interface UsageByModel {
   output_tokens: number;
   cost_usd: number;
   runs: number;
+  /** v1.300.0: the row's cost is the LIST-PRICE EQUIVALENT of a
+   *  subscription's tokens (claude-cli) — not money spent. */
+  list_price_equivalent?: boolean;
 }
 
 interface UsageResponse {
@@ -336,7 +343,23 @@ export default function UsagePage() {
           <Stat
             label="Total cost"
             value={usd(totals?.cost_usd)}
-            sub={`Last ${days} days`}
+            sub={
+              <>
+                {`Last ${days} days`}
+                {typeof totals?.list_price_equivalent_usd === "number" &&
+                  Number.isFinite(totals.list_price_equivalent_usd) &&
+                  totals.list_price_equivalent_usd > 0 && (
+                    // v1.300.0: its own muted line — never added to the bill.
+                    <span
+                      data-testid="usage-total-list-price"
+                      title={LIST_PRICE_TITLE}
+                      className="block text-zinc-500"
+                    >
+                      ~{usd(totals.list_price_equivalent_usd)} list-price equivalent (subscription)
+                    </span>
+                  )}
+              </>
+            }
             icon={<Coins size={16} />}
             accent
           />
@@ -511,7 +534,19 @@ export default function UsagePage() {
                       </span>
                       <span className="shrink-0 text-right text-xs tabular-nums text-zinc-400">
                         {count(tokens)} tok
-                        {m.cost_usd > 0 && (
+                        {m.list_price_equivalent === true ? (
+                          // v1.300.0: a subscription row's cost is what the
+                          // same tokens would cost at list price — said as
+                          // such, never as "$0.00" and never as a bill.
+                          <span
+                            data-testid="usage-list-price"
+                            title={LIST_PRICE_TITLE}
+                            className="text-zinc-500"
+                          >
+                            {" "}
+                            · ~{usd(m.cost_usd)} list-price equivalent
+                          </span>
+                        ) : m.cost_usd > 0 && (
                           <span className="text-zinc-500">
                             {" "}
                             · {usd(m.cost_usd)}

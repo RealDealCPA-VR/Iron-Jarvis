@@ -133,7 +133,18 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"  # "stop" | "tool_use" | "max_tokens"
     #: token accounting for this completion (0/0 for the offline mock).
-    usage: dict[str, int] = field(
+    #: ALWAYS ``input_tokens`` + ``output_tokens``; ``input_tokens`` is the
+    #: TOTAL prompt, cached parts included. OPTIONAL keys (v1.300.0), set only
+    #: when the provider reported them:
+    #:   ``cache_read_input_tokens`` / ``cache_creation_input_tokens`` (int) —
+    #:     the PARTS of ``input_tokens`` served from / written to a prompt
+    #:     cache (an adapter reading the raw Messages API, where
+    #:     ``input_tokens`` excludes them, must ADD them in);
+    #:   ``cost_usd`` (float) — the provider's own figure for this call (the
+    #:     Claude CLI's ``total_cost_usd``: a list-price EQUIVALENT under a
+    #:     subscription). ``eval.pricing.step_cost`` prefers it over the price
+    #:     table. Readers use ``.get`` — never assume an optional key.
+    usage: dict[str, Any] = field(
         default_factory=lambda: {"input_tokens": 0, "output_tokens": 0}
     )
     #: v1.263.0: see ``LLMMessage.raw_blocks`` — set only by an adapter whose

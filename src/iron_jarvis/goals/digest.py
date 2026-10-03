@@ -19,9 +19,16 @@ record a model cannot edit:
   daemon died mid-run gets no completion event (rehydrate reconciles state,
   not history) — the breaker/state-change lines carry that story instead.
 * **spend** — summed from the goal's session ROWS in the window (``origin ==
-  "goal:<id>"``): recorded token counts × ``eval.pricing.cost_for`` — the
-  exact same recorded truth ``GoalEngine._settle_spend`` bills from, never the
-  cumulative ``spent_json`` (cumulative ≠ windowed) and never a transcript.
+  "goal:<id>"``) through ``eval.pricing.recorded_cost`` (the stored figure,
+  else the tokens priced) — the exact same recorded truth
+  ``GoalEngine._settle_spend`` bills from, never the cumulative
+  ``spent_json`` (cumulative ≠ windowed) and never a transcript. ``dollars``
+  is the whole figure (what a goal BUDGET counts — the user's decision). The
+  part a flat subscription covered (``pricing.is_list_price_equivalent``) is a
+  LIST-PRICE VALUE, not money spent: it is also reported apart as
+  ``list_price_dollars`` with ``list_price_equivalent: true``, and the
+  server-composed ``words`` say so ("≈$0.42 at list price (Claude
+  subscription)"); a metered goal's words stay "$1.50 spent".
 * **results** — per window session, the ledger's created/changed files
   (``agents/outcome.session_result``: ToolInvocation + UndoJournal) and the
   session row's recorded summary — the same sources the engine's deterministic
@@ -113,13 +120,31 @@ def _iso(value: Any) -> str:
         return str(value or "")
 
 
+#: The words a subscription's list-price value is said in (v1.300.0 review).
+LIST_PRICE_WORDS = "at list price (Claude subscription)"
+
+
+def _spent_words(metered: float, listed: float) -> str:
+    """``spent``'s line, composed here so the page adds nothing: metered money
+    is "$1.50 spent"; a subscription's share is "≈$0.42 at list price (Claude
+    subscription)" — a value of work the plan covered, never "spent"; both
+    together are joined with " · "."""
+    parts: list[str] = []
+    if metered > 0 or listed <= 0:
+        parts.append(f"${metered:.2f} spent")
+    if listed > 0:
+        parts.append(f"≈${listed:.2f} {LIST_PRICE_WORDS}")
+    return " · ".join(parts)
+
+
 def compose_digest(
     platform, hours: int = 24, *, now: datetime | None = None
 ) -> dict[str, Any]:
     """The window digest: ``{since, hours, goals: [...]}`` — see the module
     docstring for what each figure is derived from and why.
 
-    Each goal entry: ``{id, name, ran, spent: {tokens, dollars}, results:
+    Each goal entry: ``{id, name, ran, spent: {tokens, dollars, words,
+    [list_price_equivalent, list_price_dollars]}, results:
     [{session_id, files, summary}], asks_held: [{approval_id, tool, decision,
     at}], state_changes: [{to, reason, at}]}``. Goals quiet in the window are
     absent; no goals with activity → ``{"since": ..., "hours": ..., "goals":
@@ -188,6 +213,7 @@ def compose_digest(
                         "goal_id": (s.origin or "")[len(_GOAL_ORIGIN_PREFIX) :],
                         "input_tokens": int(s.input_tokens or 0),
                         "output_tokens": int(s.output_tokens or 0),
+                        "cost_usd": getattr(s, "cost_usd", 0.0),
                         "provider": s.provider or "",
                         "model": s.model or "",
                         "summary": (s.summary or "")[:_SUMMARY_CLIP],
@@ -261,15 +287,24 @@ def compose_digest(
 
         ran = sum(1 for etype, _p, _c in evs if etype == _ITERATION_COMPLETED)
         tokens = sum(s["input_tokens"] + s["output_tokens"] for s in sess)
-        dollars = round(
-            sum(
-                pricing.cost_for(
-                    s["provider"], s["model"], s["input_tokens"], s["output_tokens"]
-                )
-                for s in sess
-            ),
-            6,
-        )
+        # v1.300.0: the recorded cost first, the table for old metered rows;
+        # a subscription's share is a list-price VALUE, kept apart in words.
+        metered = listed = 0.0
+        for s in sess:
+            usd = pricing.recorded_cost(
+                s["provider"], s["model"], s["input_tokens"], s["output_tokens"],
+                s.get("cost_usd"),
+            )
+            if pricing.is_list_price_equivalent(s["provider"], s["model"]):
+                listed += usd
+            else:
+                metered += usd
+        dollars = round(metered + listed, 6)
+        spent: dict[str, Any] = {"tokens": tokens, "dollars": dollars}
+        if listed > 0:
+            spent["list_price_equivalent"] = True
+            spent["list_price_dollars"] = round(listed, 6)
+        spent["words"] = _spent_words(metered, listed)
 
         results: list[dict[str, Any]] = []
         for s in sess[:_MAX_RESULTS_PER_GOAL]:
@@ -312,7 +347,7 @@ def compose_digest(
                 "id": gid,
                 "name": goal.name,
                 "ran": ran,
-                "spent": {"tokens": tokens, "dollars": dollars},
+                "spent": spent,
                 "results": results,
                 "asks_held": asks,
                 "state_changes": state_changes,

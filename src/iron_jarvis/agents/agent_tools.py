@@ -476,6 +476,13 @@ class SpawnAgentTool(Tool):
             # run_session path stamps them.
             child_session.input_tokens = run.input_tokens
             child_session.output_tokens = run.output_tokens
+            # v1.300.0: and its DOLLARS — the runtime already added each step to
+            # the session object it ran with; the run's figure covers a row
+            # loaded separately. The larger of the two, never a sum (no double count).
+            child_session.cost_usd = max(
+                float(getattr(child_session, "cost_usd", 0.0) or 0.0),
+                float(getattr(run, "cost_usd", 0.0) or 0.0),
+            )
             child_session.summary = run.result
             child_session.finished_at = utcnow()
             orch._save(child_session)

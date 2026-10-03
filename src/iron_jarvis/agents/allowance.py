@@ -7,8 +7,11 @@ one place those are READ and judged:
 
 * :func:`month_spend` — what the agent has spent this month, summed from the
   ``Session`` rows stamped with its roster name (``custom:<slug>``, the
-  v1.193.0 attribution column) — tokens straight off the rows, dollars through
-  ``eval.pricing.cost_for`` (a subscription CLI prices at 0, honestly).
+  v1.193.0 attribution column) — tokens straight off the rows, dollars off
+  ``Session.cost_usd`` (v1.300.0: each completion's own figure, so Claude
+  subscription work counts at its list-price equivalent — it used to price at
+  $0 and a dollar allowance never saw it), falling back to
+  ``eval.pricing.cost_for`` over the tokens for rows older than the column.
 * :func:`allowance_state` — the pure judgement: ``unlimited`` / ``ok`` /
   ``warning`` (>= 80%) / ``exhausted`` (>= 100%), the HIGHER ratio of the
   bounds that are set.
@@ -85,6 +88,12 @@ def roster_name_for(record: Any) -> str:
 def month_spend(engine, roster_name: str, now: datetime | None = None) -> dict:
     """``{"tokens", "usd", "runs"}`` this calendar month for ``roster_name``.
 
+    Dollars: ``eval.pricing.recorded_cost`` — a row's stored ``cost_usd`` when
+    it is > 0 (v1.300.0 — the sum of its completions' ``step_cost``); a
+    METERED row with none (older than the column: NULL/0) is priced from its
+    tokens, as before; a SUBSCRIPTION row with none is 0 (it was free when it
+    ran — re-pricing it would trip the allowance on upgrade day).
+
     ONE query (by the indexed-by-usage ``agent_name`` column), the month
     filter applied in Python so a naive/aware mismatch in the stored stamp can
     never silently drop rows. Zeros on any error — never raises.
@@ -98,7 +107,7 @@ def month_spend(engine, roster_name: str, now: datetime | None = None) -> dict:
 
         from ..core.db import session_scope
         from ..core.models import Session
-        from ..eval.pricing import cost_for
+        from ..eval.pricing import recorded_cost
 
         start, end = _month_bounds(now)
         tokens = 0
@@ -117,11 +126,12 @@ def month_spend(engine, roster_name: str, now: datetime | None = None) -> dict:
                     in_tok = out_tok = 0
                 tokens += in_tok + out_tok
                 usd += float(
-                    cost_for(
+                    recorded_cost(
                         str(getattr(row, "provider", "") or ""),
                         str(getattr(row, "model", "") or ""),
                         in_tok,
                         out_tok,
+                        getattr(row, "cost_usd", 0.0),
                     )
                     or 0.0
                 )

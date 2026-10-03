@@ -563,8 +563,12 @@ class GoalEngine:
         self.store.add_spend(
             goal.id,
             tokens=in_tok + out_tok,
-            dollars=pricing.cost_for(
-                session.provider or "", session.model or "", in_tok, out_tok
+            # v1.300.0: the row's own recorded cost (a Claude-subscription
+            # iteration is charged the CLI's figure, cache-aware), else the
+            # table over its tokens for an older row.
+            dollars=pricing.recorded_cost(
+                session.provider or "", session.model or "", in_tok, out_tok,
+                getattr(session, "cost_usd", 0.0),
             ),
             wallclock_s=elapsed,
             iterations=1,

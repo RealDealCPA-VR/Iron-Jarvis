@@ -12,24 +12,38 @@ from iron_jarvis.providers.adapters.subprocess_cli import (
 
 
 @pytest.mark.asyncio
-async def test_claude_cli_adapter_flattens_and_parses_json():
+async def test_claude_cli_adapter_speaks_stream_json_off_argv():
+    # v1.300.0: the adapter no longer flattens one prompt or parses one JSON
+    # result — it writes stream-json FRAMES and reads stream-json EVENTS.
+    import json
+
     calls = {}
 
     def runner(argv, stdin=None):
         calls["argv"] = argv
         calls["stdin"] = stdin
-        return 0, '{"type":"result","result":"flat-rate answer"}', ""
+        events = [
+            {"type": "stream_event", "event": {"type": "content_block_delta",
+                                               "delta": {"type": "text_delta", "text": "flat-rate answer"}}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                              "content": [{"type": "text", "text": "flat-rate answer"}]}},
+            {"type": "stream_event", "event": {"type": "message_stop"}},
+            {"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}},
+        ]
+        return 0, "\n".join(json.dumps(e) for e in events), ""
 
     a = make_claude_cli(runner=runner, which=lambda b: f"/x/{b}")
     r = await a.complete(system="be brief", messages=[LLMMessage(role="user", content="hi")], tools=[])
     assert r.text == "flat-rate answer"
     assert calls["argv"][0] == "/x/claude" and "-p" in calls["argv"]
-    assert "--output-format" in calls["argv"]
-    # v1.68.0: the prompt rides STDIN, never argv — a big extracted-PDF prompt
-    # blew Windows' 32,767-char command line ("The command line is too long").
-    assert "be brief" in (calls["stdin"] or "")
+    assert calls["argv"][calls["argv"].index("--output-format") + 1] == "stream-json"
+    # v1.68.0: nothing large rides argv — a big extracted-PDF prompt blew
+    # Windows' 32,767-char command line. The conversation rides STDIN as
+    # frames; the system prompt rides a FILE (--system-prompt-file).
+    assert "hi" in (calls["stdin"] or "")
     assert all("be brief" not in a_ for a_ in calls["argv"])
-    # Tool-less step disables the CLI's own tools and asks for no schema.
+    assert "--system-prompt-file" in calls["argv"]
+    # The CLI's own tools stay off and no schema envelope is asked for.
     assert "--tools" in calls["argv"] and "--json-schema" not in calls["argv"]
 
 
@@ -53,8 +67,10 @@ async def test_codex_cli_adapter_and_errors():
     c = make_claude_cli(
         runner=lambda a_, stdin=None: (1, "", "login required"), which=lambda b_: "/x/claude"
     )
+    # v1.300.0: a non-empty user turn is required (the conversation is sent as
+    # native frames, and an empty one is refused before the CLI runs).
     with pytest.raises(RuntimeError, match="login required"):
-        await c.complete(system="", messages=[], tools=[])
+        await c.complete(system="", messages=[LLMMessage(role="user", content="q")], tools=[])
 
 
 def test_cli_providers_registered_and_in_models(tmp_path):

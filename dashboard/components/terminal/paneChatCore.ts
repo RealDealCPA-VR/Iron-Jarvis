@@ -18,7 +18,7 @@
 
 import type { TurnAdapted, TurnRoute } from "@/components/chat/TurnReceipt";
 import type { Door } from "@/components/chat/DoorsStrip";
-import type { ProviderHealth } from "@/lib/types";
+import type { ProviderHealth, TurnUsage } from "@/lib/types";
 
 // ------------------------------------------------------------------ messages
 
@@ -46,6 +46,8 @@ export interface PaneMsg {
   trust?: string;
   trustReason?: string;
   trustNote?: string;
+  /** v1.300.0: the turn's token accounting (the chat page's field). */
+  usage?: TurnUsage;
   /** SERVER-derived doors into surfaces this turn touched (v1.199.0). */
   doors?: Door[];
   /** Reply cut off mid-stream (error with a streamed partial) — marked so a

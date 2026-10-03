@@ -153,6 +153,9 @@ async def test_the_cap_is_a_bound_with_a_helper_holding_the_pipe(
     # 3 s, not 1: the fake CLI must have started (and named its PIDs) before
     # the cap fires, even on a loaded machine.
     monkeypatch.setattr(oc if kind == "opencode-cli" else sc, "_TIMEOUT_S", 3)
+    if kind == "claude-cli":
+        # v1.300.0: claude streams, so its outer cap is its own constant.
+        monkeypatch.setattr(sc, "_CLAUDE_TOTAL_TIMEOUT_S", 3)
     shim, pids = _fake_cli(tmp_path)
     t0 = time.monotonic()
     with pytest.raises(ProviderError) as info:

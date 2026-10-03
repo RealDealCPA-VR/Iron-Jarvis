@@ -132,7 +132,8 @@ import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import { useDaemon } from "@/lib/daemon";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
-import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
+import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
+import { turnUsageFrom } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { slashTokenAt, tokenAt, spliceToken } from "@/lib/slash";
 
@@ -197,6 +198,7 @@ import {
 } from "@/lib/composerStore";
 import { canRetryWithDefault } from "@/lib/providerFallback";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
+import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
@@ -317,6 +319,9 @@ interface ChatMessage {
   trust?: string;
   trustReason?: string;
   trustNote?: string;
+  /** v1.300.0: the turn's token accounting (cache reads, list-price cost) —
+   *  the receipt's quiet "cached N% · ~$x list" line. Absent → nothing. */
+  usage?: TurnUsage;
   /** Set when a chat turn handed itself to the full agent (v1.108.0): the
    *  reason, shown in place of the reply while the agent works. There are no
    *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
@@ -444,6 +449,8 @@ interface ChatResponse {
   trust?: string;
   trust_reason?: string;
   trust_note?: string;
+  /** v1.300.0: token accounting — decoded through turnUsageFrom (numbers only). */
+  usage?: unknown;
   images?: string[];
   skill?: string;
   tools_used?: string[];
@@ -2119,6 +2126,7 @@ const MessageRow = memo(function MessageRow({
             trust={m.trust}
             trustReason={m.trustReason}
             trustNote={m.trustNote}
+            usage={m.usage}
             documents={m.documents}
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
@@ -2868,6 +2876,14 @@ export default function ChatPage() {
     const { model } = splitChoice(choice);
     return model || choice.replace("::", " · ");
   }, [choice, defaultModelName]);
+  // v1.300.0: the trigger says the picker's label ("Opus 5.5") for a pick
+  // whose catalog row carries one; every other case is modelLabel verbatim.
+  const modelTriggerText = useMemo(() => {
+    if (!choice) return modelLabel;
+    const { provider, model } = splitChoice(choice);
+    const row = models.find((m) => m.provider === provider && m.model === model);
+    return row?.label ? modelText(row) : modelLabel;
+  }, [choice, models, modelLabel]);
   useEffect(() => {
     if (!modelMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -5498,6 +5514,7 @@ export default function ChatPage() {
           trust,
           trustReason,
           trustNote,
+          usage: turnUsage,
           route,
           provider: servedBy,
           documents: madeDocs,
@@ -5566,6 +5583,8 @@ export default function ChatPage() {
                 ...(trustNote ? { trustNote } : {}),
               }
             : {}),
+          // Usage (v1.300.0): already whitelisted by the done-frame decode.
+          ...(turnUsage ? { usage: turnUsage } : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
           ...(doors ? { doors } : {}),
@@ -5698,6 +5717,8 @@ export default function ChatPage() {
       // Adapted (v1.202.0) — the POST lane's copy of the stream lane's
       // adapted handling. MIRROR NOTE: keep in step with the stream path.
       const adaptedPost = adaptedFrom(res.adapted);
+      // Usage (v1.300.0) — the POST lane's copy of the stream lane's decode.
+      const usagePost = turnUsageFrom(res.usage);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
@@ -5715,6 +5736,7 @@ export default function ChatPage() {
                   : {}),
               }
             : {}),
+        ...(usagePost ? { usage: usagePost } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
         ...(doorsPost ? { doors: doorsPost } : {}),
@@ -8728,7 +8750,7 @@ export default function ChatPage() {
                     }
                     className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
                   >
-                    <span className="max-w-[14rem] truncate font-mono">{modelLabel}</span>
+                    <span className="max-w-[14rem] truncate font-mono">{modelTriggerText}</span>
                     <ChevronDown size={11} className="shrink-0" />
                   </button>
                   {modelMenuOpen && (
@@ -8773,7 +8795,10 @@ export default function ChatPage() {
                                   choice === v ? "text-accent-soft" : "text-zinc-300"
                                 }`}
                               >
-                                <span className="min-w-0 truncate">{m.model}</span>
+                                <span className="min-w-0 truncate" title={m.label ? m.model : undefined}>
+                                  {modelText(m)}
+                                </span>
+                                <ModelRowChips m={m} />
                                 <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
                                   {m.name || m.provider}
                                 </span>
@@ -8800,7 +8825,10 @@ export default function ChatPage() {
                                   choice === v ? "text-accent-soft" : "text-zinc-300"
                                 }`}
                               >
-                                <span className="min-w-0 truncate">{model}</span>
+                                <span className="min-w-0 truncate" title={row.label ? model : undefined}>
+                                  {modelText(row)}
+                                </span>
+                                <ModelRowChips m={row} />
                                 <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
                                   {row.name || row.provider}
                                 </span>
@@ -8876,7 +8904,15 @@ export default function ChatPage() {
                                           : "text-zinc-300"
                                       }`}
                                     >
-                                      <span className="min-w-0 truncate">{m.model}</span>
+                                      <span
+                                        className="min-w-0 truncate"
+                                        title={m.label ? m.model : undefined}
+                                      >
+                                        {modelText(m)}
+                                      </span>
+                                      <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
+                                        <ModelRowChips m={m} />
+                                      </span>
                                       {choice === v && (
                                         <Check size={11} className="ml-auto shrink-0" />
                                       )}

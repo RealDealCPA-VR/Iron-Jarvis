@@ -804,6 +804,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
               ...(res.trustNote ? { trustNote: res.trustNote } : {}),
             }
           : {}),
+        // Usage (v1.300.0): whitelisted by the done-frame decode.
+        ...(res.usage ? { usage: res.usage } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(res.doors?.length ? { doors: res.doors } : {}),
       };
@@ -1089,6 +1091,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 trust={m.trust}
                 trustReason={m.trustReason}
                 trustNote={m.trustNote}
+                usage={m.usage}
                 documents={m.documents}
               />
               <DoorsStrip doors={m.doors} />

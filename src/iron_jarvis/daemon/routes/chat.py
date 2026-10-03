@@ -36,6 +36,7 @@ from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.grants import args_hash as _grant_hash
 from ...core.turns import CHAT_INFLIGHT, TURNS
+from ...eval.pricing import UsageTally
 from ...providers.reasoning import normalize_level
 from ..doors import collect_doors, door_for
 
@@ -102,6 +103,7 @@ from ..chat_turn import (
     _reasoning_kw,
     _stays_in_chat,
     _persist_chat_usage,
+    _usage_frame,
     _wants_final_answer,
     chat_tool_deadline,
     _apply_compaction,
@@ -2572,6 +2574,9 @@ async def chat_stream(
     # ------------------------------------------------------------------ #
     async def gen():
         usage_in = usage_out = completions = 0
+        # v1.300.0: the whole usage per completion, priced per step.
+        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn keeps one too.
+        _tally = UsageTally()
         tools_used: list[str] = []          # ONLY tools that actually executed
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         denied_tools: list[str] = []        # armed tools refused this turn
@@ -2620,7 +2625,7 @@ async def chat_stream(
                 d, provider=route_provider, model=route_model,
                 state=state, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
-                started_at=turn_started,
+                started_at=turn_started, cost_usd=_tally.cost_usd,
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -2745,6 +2750,7 @@ async def chat_stream(
                 _u = final_resp.usage or {}
                 usage_in += int(_u.get("input_tokens", 0) or 0)
                 usage_out += int(_u.get("output_tokens", 0) or 0)
+                _tally.add(route_provider, route_model, _u)
                 completions += 1
                 calls = final_resp.tool_calls or []
                 # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
@@ -3352,6 +3358,7 @@ async def chat_stream(
                         {"instruction": _out_of_rounds_instruction({*armed, *ask_armed})}
                         if _cut_office else {}
                     ),
+                    tally=_tally,
                 )
                 reply_text = _f_text or reply_text
                 usage_in += _f_in
@@ -3365,6 +3372,7 @@ async def chat_stream(
                 messages=_send,
                 provider=provider_choice,
                 model=model_choice,
+                tally=_tally,
             )
         except BaseException:
             # The one remaining await between the last billed round and the
@@ -3489,7 +3497,10 @@ async def chat_stream(
             # (None = the caller's default builder), same as POST /chat.
             "escalate_agent": escalate_agent,
             "workflow_draft": workflow_draft,
-            "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
+            # USAGE (v1.300.0): tokens always; cache counts, cost_usd and
+            # list_price_equivalent only when known. MIRROR NOTE (lock-step):
+            # POST /chat builds the identical object with `_usage_frame`.
+            "usage": _usage_frame(_tally, usage_in, usage_out),
             # v1.146.0 + v1.153.0 — same shape POST /chat returns, so the
             # composer's headroom meter and the compaction offer behave
             # identically on both lanes.

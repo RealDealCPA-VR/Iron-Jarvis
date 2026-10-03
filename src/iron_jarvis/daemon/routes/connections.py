@@ -118,6 +118,19 @@ def selectable_models(d) -> list[dict[str, Any]]:
                 )
     except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
         pass
+    # THE CLAUDE SUBSCRIPTION'S OWN PICKER (v1.300.0): claude-cli lists the
+    # models the logged-in account offers (the CLI's `initialize` handshake,
+    # cached; the pinned table when it fails) after its "subscription" row
+    # (= the CLI's default, no --model). A keyless `anthropic` is SERVED by
+    # claude-cli (manager.inherited_from), so it lists the very same rows
+    # FIRST and keeps every curated id the catalog does not cover after them
+    # (claude-sonnet-4-6 still runs through the CLI, and templates pinned to it
+    # are checked against this list). Never blocks: claude_catalog() serves
+    # the cache and refreshes behind it.
+    try:
+        models = _with_claude_catalog(d, models)
+    except Exception:  # noqa: BLE001 — the picker never breaks on the catalog
+        pass
     # Honesty flag: which entries the user can ACTUALLY run right now
     # (provider connected/configured). Pickers show available ones first
     # and grey/hide the rest — no more dead options that silently fail.
@@ -174,6 +187,117 @@ def selectable_models(d) -> list[dict[str, Any]]:
         # the chat composer shows the control only where it does something.
         m["reasoning"] = list(reasoning_levels(prov, str(m.get("model") or "")))
     return models
+
+
+def _claude_rows(provider: str, cat: dict) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for r in cat.get("models") or []:
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        rows.append(
+            {
+                "provider": provider,
+                "model": r["id"],
+                "id": r["id"],
+                "label": r.get("label") or r["id"],
+                "description": r.get("description") or "",
+                "native": r.get("native"),
+                "context_window": r.get("context_window"),
+                "usage_credits": bool(r.get("usage_credits")),
+                "pinned": bool(r.get("pinned")),
+                "cli_default": bool(r.get("default")),
+            }
+        )
+    return rows
+
+
+def _claude_bare(model: Any) -> str:
+    """A Claude id lower-cased with any ``[1m]`` suffix stripped ("" = none)."""
+    from ...providers.claude_models import _strip_1m
+
+    return _strip_1m(str(model or "").strip()).lower()
+
+
+def _claude_block(
+    provider: str, cat: dict, curated: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The catalog rows FIRST (live picker order, their label/1M/credits),
+    then every curated row the catalog does not already cover — deduplicated
+    by canonical id, so a ``[1m]`` variant or a picker alias never doubles a
+    model. Dropping the curated rows instead (the first v1.300.0 cut) took
+    ``claude-sonnet-4-6`` & co. out of the list templates are checked against
+    (``analyze_requirements``), though those ids run live through claude-cli."""
+    from ...providers.claude_models import PINNED_ALIASES
+
+    block = _claude_rows(provider, cat)
+    by_id = {row["id"]: row for row in block}
+    #: key -> the row that answers for it (a catalog row, or a curated row kept)
+    owner: dict[str, dict[str, Any]] = {}
+    for r in cat.get("models") or []:
+        if isinstance(r, dict) and r.get("id") in by_id:
+            # its id, and the picker's own value ("sonnet", "…[1m]") RAW — the
+            # live picker, not the pinned alias table, decides what "sonnet" is.
+            for key in (_claude_bare(r.get("id")), _claude_bare(r.get("value"))):
+                if key:
+                    owner.setdefault(key, by_id[r["id"]])
+    for m in curated:
+        bare = _claude_bare(m.get("model"))
+        keys = [k for k in dict.fromkeys((bare, PINNED_ALIASES.get(bare, bare))) if k]
+        if not keys:
+            continue
+        cover = next((owner[k] for k in keys if k in owner), None)
+        if cover is not None:
+            # Folded into the row that covers it, but still ANSWERED for: a
+            # template pinned to the curated id (``claude-haiku-4-5``, covered by
+            # the dated catalog row) must not read "isn't connected"
+            # (``templates.analyze_requirements`` accepts ``aliases``).
+            name = str(m.get("model") or "")
+            if name and name != cover.get("model") and name not in cover.setdefault("aliases", []):
+                cover["aliases"].append(name)
+            continue
+        for k in keys:
+            owner[k] = m
+        block.append(m)
+    return block
+
+
+def _with_claude_catalog(d, models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    providers = d.platform.providers
+    catalog_fn = getattr(providers, "claude_catalog", None)
+    if not callable(catalog_fn):
+        return models
+    inherited = providers.inherited_from("anthropic") == "claude-cli"
+    if not (providers.available("claude-cli") or inherited):
+        return models  # nothing to serve them: keep today's rows untouched
+    cat = catalog_fn()
+    if not _claude_rows("claude-cli", cat):
+        return models
+    served = ["claude-cli"] + (["anthropic"] if inherited else [])
+    curated: dict[str, list[dict[str, Any]]] = {p: [] for p in served}
+    out: list[dict[str, Any]] = []
+    slot: dict[str, int] = {}  # where each provider's first curated row stood
+    for m in models:
+        prov = m.get("provider")
+        keep_in_place = prov == "claude-cli" and m.get("model") in ("subscription", "default")
+        if prov in curated and not keep_in_place:
+            curated[prov].append(m)
+            slot.setdefault(prov, len(out))
+            continue
+        out.append(m)
+    # claude-cli's block goes after its subscription row (the CLI's default);
+    # anthropic's where its curated rows stood (else at the end).
+    at = {
+        "claude-cli": next(
+            (i + 1 for i, m in enumerate(out) if m.get("provider") == "claude-cli"),
+            slot.get("claude-cli", len(out)),
+        )
+    }
+    if inherited:
+        at["anthropic"] = slot.get("anthropic", len(out))
+    # the LATER slot first, so the earlier index is still right afterwards
+    for prov in sorted(at, key=lambda p: at[p], reverse=True):
+        out[at[prov]:at[prov]] = _claude_block(prov, cat, curated[prov])
+    return out
 
 
 def register(app: FastAPI, d) -> None:

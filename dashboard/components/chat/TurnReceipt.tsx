@@ -53,6 +53,7 @@ import {
   Undo2,
   Wrench,
 } from "lucide-react";
+import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 
 /** The capability envelope's adaptation disclosure (v1.202.0): the daemon
  *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
@@ -181,7 +182,10 @@ export interface TurnReceiptProps {
   /** v1.298.0: suspicious passages the daemon kept OUT of the context this
    *  turn, per source. Absent/empty renders nothing. */
   blocked?: TurnBlocked[] | null;
-  usage?: { input_tokens?: number; output_tokens?: number } | null;
+  /** Token accounting for the turn. v1.300.0: with cache reads it adds
+   *  "cached N%" to the collapsed line, and with `cost_usd` (the LIST-PRICE
+   *  EQUIVALENT of a subscription turn) "~$x.xx list". Absent → nothing. */
+  usage?: TurnUsage | null;
   /** 0..1 context pressure, when known. */
   contextPct?: number | null;
   /** Wired by the coordinator to the DocPreview rail. Receives the FULL path. */
@@ -284,6 +288,44 @@ export function routeWarning(route: TurnRoute | null | undefined): string | null
   return null;
 }
 
+/**
+ * The quiet usage words for the collapsed line (v1.300.0), or nulls when the
+ * turn carried nothing worth saying. Cache share = cache reads ÷ the turn's
+ * TOTAL prompt, rounded, never over 100, said only when something WAS read
+ * from cache. Two conventions reach here: the claude-cli adapter reports
+ * `input_tokens` as the total (cache included); the raw Anthropic API
+ * reports only the UNcached part. So `input_tokens` is the total when it
+ * already covers cache read + creation, else the parts are summed.
+ * COST, only from `cost_usd` (never inferred): a SUBSCRIPTION turn
+ * (`list_price_equivalent: true`) says "~$x list" — "list" and the
+ * subscription title belong to it alone; a metered turn says "~$x"; a turn
+ * that cost nothing and is not a subscription turn (mock, local: 0.0) says
+ * nothing at all. A cost that would round to $0.00 says "<$0.01".
+ */
+export function usageWords(usage: TurnUsage | null | undefined): {
+  cache: string | null;
+  cost: string | null;
+  list: boolean;
+} {
+  const read = fin(usage?.cache_read_input_tokens);
+  const input = fin(usage?.input_tokens);
+  const cost = fin(usage?.cost_usd);
+  const made = fin(usage?.cache_creation_input_tokens) ?? 0;
+  let cache: string | null = null;
+  if (read != null && read > 0) {
+    const inp = input ?? 0;
+    const total = inp >= read + made ? inp : inp + read + made;
+    cache = `cached ${Math.min(100, Math.round((read / total) * 100))}%`;
+  }
+  const list = usage?.list_price_equivalent === true;
+  let costText: string | null = null;
+  if (cost != null && (list || cost > 0)) {
+    const amount = cost > 0 && cost < 0.005 ? "<$0.01" : `~$${cost.toFixed(2)}`;
+    costText = list ? `${amount} list` : amount;
+  }
+  return { cache, cost: costText, list };
+}
+
 function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
@@ -360,7 +402,11 @@ export function TurnReceipt({
   // OPTIONAL on the wire this wave — absent fields add nothing to the line.
   const lowTrust = trust === "low";
   const blockedOut = blockedRows(blocked);
+  // v1.300.0: the turn's cache share and list-price cost — quiet, optional.
+  const used = usageWords(usage);
   if (
+    !used.cache &&
+    !used.cost &&
     !rt &&
     !tools.length &&
     !denied.length &&
@@ -458,6 +504,25 @@ export function TurnReceipt({
       >
         <ShieldAlert size={10} className="shrink-0" />
         {note ? `${head} — ${note}` : head}
+      </span>,
+    );
+  }
+  if (used.cache || used.cost) {
+    // v1.300.0: one quiet zinc part. A subscription turn's cost is a
+    // LIST-PRICE EQUIVALENT (the subscription paid for it), so it carries
+    // "list" and says so in full on hover; a metered cost is just money.
+    parts.push(
+      <span key="usage" data-testid="turn-usage" className="text-zinc-500">
+        {used.cache}
+        {used.cache && used.cost ? " · " : null}
+        {used.cost && (
+          <span
+            data-testid="turn-usage-cost"
+            title={used.list ? LIST_PRICE_TITLE : undefined}
+          >
+            {used.cost}
+          </span>
+        )}
       </span>,
     );
   }

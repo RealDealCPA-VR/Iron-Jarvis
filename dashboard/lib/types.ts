@@ -619,6 +619,75 @@ export interface ModelOption {
    *  it here ("claude-cli" / "codex-cli") — flat-rate, so pickers label it
    *  "included", never "metered". Null/absent otherwise. */
   inherited_from?: string | null;
+  /* --- v1.300.0: the Claude subscription's live picker (claude-cli, and a
+   *  keyless "anthropic" served by it). All optional — absent is today's look. */
+  /** Human name from the account's picker ("Opus 5.5") — menus show it in
+   *  place of the raw id, and the filter matches it too. */
+  label?: string;
+  /** One-line description from the picker. */
+  description?: string;
+  /** Context window in tokens, when the picker states it (null = unknown). */
+  context_window?: number | null;
+  /** The model draws from pay-as-you-go usage credits on this plan. */
+  usage_credits?: boolean;
+  /** The CLI's own `--model` value for this row. */
+  native?: string;
+  /** The account pinned this model in its picker. */
+  pinned?: boolean;
+}
+
+/* ---- Turn usage (v1.300.0) ----------------------------------------------- */
+/** Token accounting for one chat turn — the stream's done frame and the POST
+ *  /chat response may both carry it. `cost_usd` on a subscription turn is the
+ *  LIST-PRICE EQUIVALENT (what the same tokens would cost on the metered API),
+ *  never money spent. */
+export interface TurnUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cost_usd?: number;
+  /** True only when the Claude SUBSCRIPTION served the turn: `cost_usd` is
+   *  then a list-price equivalent, not money. Metered turns omit it; mock
+   *  and local turns carry `cost_usd: 0`. */
+  list_price_equivalent?: boolean;
+}
+
+/** The one explanation of a subscription cost figure (v1.300.0) — the turn
+ *  receipt's "~$x list" and the Usage page's claude-cli row both carry it. */
+export const LIST_PRICE_TITLE =
+  "list-price equivalent — included in your Claude subscription";
+
+const TURN_USAGE_KEYS = [
+  "input_tokens",
+  "output_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+  "cost_usd",
+] as const;
+
+/** Decode a wire `usage` object: ONLY the listed keys, ONLY finite
+ *  non-negative numbers, plus `list_price_equivalent` as a BOOLEAN only.
+ *  Anything else (a string, NaN, a negative, an
+ *  unknown key) is dropped; nothing left → undefined. Crosses a JSON
+ *  boundary, so the type alone is not a guarantee. */
+export function turnUsageFrom(raw: unknown): TurnUsage | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const src = raw as Record<string, unknown>;
+  const out: TurnUsage = {};
+  let any = false;
+  for (const k of TURN_USAGE_KEYS) {
+    const v = src[k];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
+      out[k] = v;
+      any = true;
+    }
+  }
+  if (typeof src.list_price_equivalent === "boolean") {
+    out.list_price_equivalent = src.list_price_equivalent;
+    any = true;
+  }
+  return any ? out : undefined;
 }
 
 /* ---- Projects (context spine) -------------------------------------------- */

@@ -444,8 +444,11 @@ def analyze_requirements(
     # 1) Pinned provider/model must still be connected — the most common way a
     #    template silently rots (saved against an endpoint that moved/expired).
     if provider and model:
+        # v1.300.0: a live Claude row also answers for the curated ids it
+        # covers (``aliases`` — e.g. ``claude-haiku-4-5`` under the dated row).
         ok = any(
-            m.get("provider") == provider and m.get("model") == model
+            m.get("provider") == provider
+            and (m.get("model") == model or model in (m.get("aliases") or ()))
             for m in selectable_models
         )
         reqs.append({

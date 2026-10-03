@@ -730,7 +730,9 @@ interface DigestGoal {
   id: string;
   name: string;
   ran?: number;
-  spent?: { tokens?: number; dollars?: number; wallclock_s?: number } | null;
+  /** `words` (v1.300.0) is the server's own line: "$1.50 spent", or
+   *  "≈$0.42 at list price (Claude subscription)" for subscription work. */
+  spent?: { tokens?: number; dollars?: number; wallclock_s?: number; words?: string } | null;
   results?: DigestResult[] | null;
   asks_held?: DigestAskHeld[] | null;
   state_changes?: DigestStateChange[] | null;
@@ -797,7 +799,9 @@ function GoalsDigest() {
                     <span className="font-medium text-zinc-200">{row.name}</span>
                     <span className="text-zinc-500">ran {row.ran ?? 0}×</span>
                     <span className="text-zinc-500">
-                      {goalDollars(row.spent?.dollars)} spent
+                      {typeof row.spent?.words === "string" && row.spent.words
+                        ? row.spent.words
+                        : `${goalDollars(row.spent?.dollars)} spent`}
                     </span>
                     {Array.isArray(row.asks_held) && row.asks_held.length > 0 && (
                       // Not just a count: WHICH tools waited and how each ask

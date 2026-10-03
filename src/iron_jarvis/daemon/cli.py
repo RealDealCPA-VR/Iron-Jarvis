@@ -140,6 +140,28 @@ def mcp_stdio(
     raise typer.Exit(code=_shim_main(["mcp-stdio", url] if url else ["mcp-stdio"]))
 
 
+@app.command("claude-inert-mcp", hidden=True)
+def claude_inert_mcp(
+    manifest: str = typer.Argument(..., help="This request's tool manifest (JSON)."),
+) -> None:
+    """Serve one Claude-CLI request's INERT tool inventory (v1.300.0, internal).
+
+    NOT for humans — the claude-cli adapter writes ``sys.executable`` plus
+    this subcommand into the CLI's ``--mcp-config``, and the Claude CLI spawns
+    it as a child. Frozen, ``sys.executable`` is ``ironjarvis.exe`` and its
+    entry is this Typer app, so ``-m <module>`` would die with "No such
+    option" — the ``mcp-stdio`` precedent above. From source the adapter uses
+    ``python -m ...claude_native.inert_mcp`` instead.
+
+    Hidden because it is a protocol endpoint: stdout CARRIES the JSON-RPC
+    wire, so nothing here may print to it. It lists the manifest's tools and
+    refuses every call — Iron Jarvis executes tools, never the CLI.
+    """
+    from ..providers.adapters.claude_native.inert_mcp import main as _inert_main
+
+    raise typer.Exit(code=_inert_main([manifest]))
+
+
 @app.command()
 def init(path: str = typer.Argument(".", help="Project root to initialize.")) -> None:
     """Create .ironjarvis/ and a starter config for a project."""

@@ -32,7 +32,32 @@ export interface FeedStats {
   undoable: number;
   inputTokens: number;
   outputTokens: number;
+  /** METERED dollars only — what an API key is billed. */
   costUsd: number;
+  /** v1.300.0: a flat subscription's LIST-PRICE VALUE in this view (never
+   *  cost — the work was included in the plan). */
+  listPriceUsd: number;
+}
+
+/** An entry's dollars, split (v1.300.0 review). The ledger flags a step a
+ *  flat subscription covered (`list_price_equivalent: true`) and carries its
+ *  value in `list_price_equivalent_usd` with `cost_usd` 0 — so a flagged
+ *  entry is NEVER cost, even if a server sent its value in `cost_usd`. An
+ *  unflagged (metered or older) entry is cost as before. */
+export function entryMoney(e: AuditEntry): { cost: number; listPrice: number } {
+  const x = e as AuditEntry & {
+    list_price_equivalent?: unknown;
+    list_price_equivalent_usd?: unknown;
+  };
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+  if (x.list_price_equivalent === true) {
+    return { cost: 0, listPrice: num(x.list_price_equivalent_usd) || num(x.cost_usd) };
+  }
+  return { cost: num(x.cost_usd), listPrice: 0 };
+}
+
+function dollars(v: number): string {
+  return `$${v < 0.01 ? v.toFixed(4) : v.toFixed(3)}`;
 }
 
 /** The coarse timeline lanes (kinds) the read-model emits, plus "all". */
@@ -267,11 +292,14 @@ export function TimeTravelFeed({
     let inTok = 0;
     let outTok = 0;
     let cost = 0;
+    let listPrice = 0;
     let undoable = 0;
     for (const e of entries) {
       inTok += e.input_tokens || 0;
       outTok += e.output_tokens || 0;
-      cost += e.cost_usd || 0;
+      const money = entryMoney(e);
+      cost += money.cost;
+      listPrice += money.listPrice;
       if (e.undoable) undoable += 1;
     }
     onStats({
@@ -281,6 +309,7 @@ export function TimeTravelFeed({
       inputTokens: inTok,
       outputTokens: outTok,
       costUsd: cost,
+      listPriceUsd: listPrice,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, total]);
@@ -443,7 +472,7 @@ function TimelineRow({
   const nodeTone = deny ? "red" : meta.tone;
   const inTok = e.input_tokens || 0;
   const outTok = e.output_tokens || 0;
-  const cost = e.cost_usd || 0;
+  const { cost, listPrice } = entryMoney(e);
   // Explicit flag from the ledger — NOT inferred from reversible/undoable, since a
   // reversible action whose capture produced no inverse is not-undoable yet never
   // reversed.
@@ -504,7 +533,16 @@ function TimelineRow({
           )}
           {cost > 0 && (
             <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-400">
-              ${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}
+              {dollars(cost)}
+            </span>
+          )}
+          {listPrice > 0 && (
+            <span
+              data-testid="list-price-chip"
+              title="List-price value — included in your Claude subscription, not billed"
+              className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-500"
+            >
+              ~{dollars(listPrice)} list
             </span>
           )}
           {showSession && e.session_id && (

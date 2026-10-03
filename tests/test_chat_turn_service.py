@@ -416,12 +416,16 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # (one sentence or ""), "trust_note" ("low trust: <n> tools kept away" |
     # null) — the posture the turn ran under, always present. Same keys in
     # the SSE done frame; semantics pinned by tests/test_trust_posture_v1298.py.
+    # v1.300.0 (subscription cost): one more — "usage" ({input_tokens,
+    # output_tokens} always; cache counts / cost_usd / list_price_equivalent
+    # only when known), built by the SAME `_usage_frame` the SSE done frame
+    # uses. Semantics pinned by tests/test_subscription_cost_v1300.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
         "route", "doors", "adapted", "remembered",
-        "trust", "trust_reason", "trust_note",
+        "trust", "trust_reason", "trust_note", "usage",
     }
     assert body["remembered"] == []
     assert body["trust"] == "full" and body["trust_reason"] == "" and body["trust_note"] is None

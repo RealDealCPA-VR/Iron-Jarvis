@@ -21,7 +21,7 @@
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
-import type { WorkflowDraft } from "@/lib/types";
+import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
 
 // ------------------------------------------------------------------ wire types
 
@@ -116,7 +116,9 @@ export type SSEEvent =
        *  the key on EVERY turn (null when nothing bent — the common case);
        *  the decoder keeps only the bent shape, so absent ≡ null here. */
       adapted?: { model?: string; changes: string[] } | null;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      /** Token accounting (v1.300.0 adds the cache fields + `cost_usd`, the
+       *  list-price equivalent on a subscription turn). Numbers only. */
+      usage?: TurnUsage;
       /** Context-window accounting for this turn (v1.146.0). */
       context?: ContextUsage | null;
       /** v1.287.0: steer notes the turn accepted but never READ (it ended
@@ -166,8 +168,9 @@ export interface ChatStreamResult {
   /** The envelope's adaptation disclosure (v1.202.0) — see the done-frame
    *  field. Absent/null = nothing bent. */
   adapted?: { model?: string; changes: string[] } | null;
-  /** Token usage for the turn (was decoded and dropped, like denied_tools). */
-  usage?: { input_tokens?: number; output_tokens?: number };
+  /** Token usage for the turn (was decoded and dropped, like denied_tools).
+   *  v1.300.0: cache reads/creation + `cost_usd` (list-price equivalent). */
+  usage?: TurnUsage;
   provider?: string;
   model?: string;
   /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
@@ -363,8 +366,11 @@ export function sseEventFrom(
         typeof (data.workflow_run as { run_id?: unknown }).run_id === "string"
       )
         ev.workflow_run = data.workflow_run as { run_id: string; name: string };
-      if (data.usage && typeof data.usage === "object")
-        ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
+      // Usage (v1.300.0): WHITELISTED to the five known keys, finite
+      // non-negative numbers only — a junk value must never reach the
+      // receipt as "NaN%" or a fabricated cost.
+      const usage = turnUsageFrom(data.usage);
+      if (usage) ev.usage = usage;
       if (data.context && typeof data.context === "object")
         ev.context = data.context as ContextUsage;
       // v1.287.0: whitelisted like every field here, or the notes vanish

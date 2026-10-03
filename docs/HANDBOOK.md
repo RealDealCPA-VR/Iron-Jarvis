@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.299.0 (2026-09-14).*
+holds itself to. Current as of v1.300.0 (2026-10-02).*
 
 ---
 
@@ -1669,6 +1669,31 @@ for the job, a **working folder** (and a rules file there, AGENTS.md or
 of** another schedule, a **pre-run script** whose output lands in the prompt
 (only you can set one, never an agent), and **skip memory** for a job that
 should not inherit your lessons and notes. Schedules can be edited in place.
+**v1.300.0 — your Claude subscription, done properly.** When a chat or an
+agent runs on **Claude (your subscription)**, Iron Jarvis now talks to the
+logged-in Claude app the way a real client does instead of pasting the whole
+conversation into one prompt: earlier turns are replayed as real turns, the
+answer streams in word by word, tools are real tool calls (several at once
+when the model wants them), pictures you attach are seen, and a follow-up
+reuses the conversation the model already read, so it is faster and lighter
+on your plan's limits. Stop really stops it. The model list for Claude now
+comes from the Claude app itself, so a new model appears the day your
+subscription gets it, with its long-context (1M) badge and a "uses credits"
+note where that applies; picking **subscription** means the model your Claude
+app uses by default. Subscription runs are now counted: the receipt and the
+Usage page show what the same work would have cost at Anthropic's list price
+(marked "list" — you are not billed it), and an agent's monthly dollar
+allowance and a goal's budget count them, where before a subscription run
+counted as free; runs from before this update stay free. A model your plan
+pays for with usage credits is real money and is shown as spent, not "list".
+Token counts now include the part of a prompt read from cache, so they read
+higher on long tool work than before. If a connection drops before an answer
+arrives, the error says so in plain words and can be retried; an expired
+sign-in shows the sign-in steps. An HTTPS proxy set in your environment is
+used. A keyless Anthropic connection keeps its older models in the list after
+the live ones, and the quality dial always picks the newest of each family.
+The design follows Nous Research's open-source Claude subscription plugin
+for Hermes (MIT licence).
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

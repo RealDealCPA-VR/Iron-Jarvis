@@ -170,7 +170,8 @@ export function tripReason(g: GoalRecord): string | null {
 }
 
 /**
- * Spent vs budget, rendered honestly: a dollar cap reads "$0.41 of $2.00",
+ * Spent vs budget, rendered honestly (v1.300.0: "used", not "spent" —
+ * a goal on the Claude subscription counts list-price VALUE, not money paid): a dollar cap reads "$0.41 of $2.00",
  * an unlimited budget SAYS it is unlimited and whose choice that was, and a
  * goal with no budget at all does not pretend to have one.
  */
@@ -178,7 +179,7 @@ export function spentVsBudget(g: GoalRecord): string {
   const sp = g.spent ?? {};
   const b = g.budget ?? null;
   if (b?.unlimited) {
-    return `${goalDollars(sp.dollars)} spent · unlimited — by your choice`;
+    return `${goalDollars(sp.dollars)} used · unlimited — by your choice`;
   }
   // Every SET bound renders as its own fraction (the store allows any mix of
   // the three; an absent bound gates nothing and is not shown).
@@ -195,7 +196,7 @@ export function spentVsBudget(g: GoalRecord): string {
   if (parts.length) return parts.join(" · ");
   // The store refuses budgetless creation, so this is only ever a degenerate
   // or hand-edited row — say what we know, claim nothing.
-  return `${goalDollars(sp.dollars)} spent — no budget set`;
+  return `${goalDollars(sp.dollars)} used — no budget set`;
 }
 
 /** The strip's mini-fraction: "$0.41/$2.00", or "$0.41/∞" for unlimited.
@@ -213,7 +214,7 @@ export function spentMini(g: GoalRecord): string {
   if (b && b.max_wallclock_s != null) {
     return `${goalHours(sp.wallclock_s)}/${goalHours(b.max_wallclock_s)}`;
   }
-  return `${goalDollars(sp.dollars)} spent`;
+  return `${goalDollars(sp.dollars)} used`;
 }
 
 const DAY_NAMES = [

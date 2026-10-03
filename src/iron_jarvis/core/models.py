@@ -153,6 +153,17 @@ class Session(SQLModel, table=True):
     summary: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    #: USD this session's completions cost (v1.300.0): the sum of
+    #: ``eval.pricing.step_cost`` per completion — the adapter's own
+    #: ``usage["cost_usd"]`` when it reported one, else the price table
+    #: (cache-aware). Under a subscription (``claude-cli``) it is a LIST-PRICE
+    #: EQUIVALENT, not a charge. The runtime adds every step to the session
+    #: object it holds (so failed and cancelled runs count too) and the
+    #: child-stamping doors copy the run's figure. ``agents.allowance.
+    #: month_spend`` reads it (falling back to the table over tokens for rows
+    #: older than the column, which read NULL/0). Additive column
+    #: (auto-reconciled).
+    cost_usd: float = 0.0
     #: TX-01 provenance — WHO or WHAT initiated this session, so the audit
     #: timeline can answer "did I start this, or did it start itself?": user_chat
     #: | user_task | autonomy | schedule | comm | reflex | workflow | self_dev |
@@ -224,6 +235,12 @@ class AgentRun(SQLModel, table=True):
     result: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    #: USD this run's completions cost (v1.300.0) — ``eval.pricing.step_cost``
+    #: summed per step (agent runs) or per turn (chat's ``session_id="chat"``
+    #: rows). The usage rollup reads it when > 0 and prices the tokens
+    #: otherwise (rows older than the column). Additive column
+    #: (auto-reconciled).
+    cost_usd: float = 0.0
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
