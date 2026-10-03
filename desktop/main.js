@@ -88,6 +88,26 @@ const BROWSER_ADDON_DIR = IS_PACKAGED
   ? path.join(RES_DIR, "browser-addon")
   : path.join(REPO_ROOT, "extensions", "chrome");
 
+// v1.301.0: the Iron-Proxy account switcher ships INSIDE the app as one
+// bundled ES module (desktop/vendor/iron-proxy, produced by
+// scripts/vendor_iron_proxy.py from the RealDealCPA-VR/Iron-Proxy repo). The
+// DAEMON starts it, only when the user turns it on in Connections, with
+// Electron's own Node (ELECTRON_RUN_AS_NODE) — so we tell the daemon both
+// paths, and only when the bundle really exists (a build that skipped it falls
+// through to the daemon's own "not bundled" status instead of a broken path).
+const IRON_PROXY_BUNDLE = IS_PACKAGED
+  ? path.join(RES_DIR, "iron-proxy", "iron-proxy.mjs")
+  : path.join(REPO_ROOT, "desktop", "vendor", "iron-proxy", "iron-proxy.mjs");
+
+/** The daemon's env for running the bundled Iron-Proxy, or {} when absent. */
+function ironProxyEnv() {
+  if (!fs.existsSync(IRON_PROXY_BUNDLE)) return {};
+  return {
+    IRONJARVIS_IRON_PROXY_NODE: process.execPath,
+    IRONJARVIS_IRON_PROXY_BUNDLE: IRON_PROXY_BUNDLE,
+  };
+}
+
 // The dashboard's API base (NEXT_PUBLIC_IJ_API) is baked at build time to
 // 127.0.0.1:8787, so the bundled daemon MUST listen on 8787.
 const DAEMON_PORT = parseInt(process.env.IJ_DAEMON_PORT || "8787", 10);
@@ -3231,7 +3251,7 @@ async function startup() {
       fs.existsSync(path.join(voskModelDir, "am"))
         ? { IRONJARVIS_VOSK_MODEL: voskModelDir }
         : {};
-    const resourceEnv = { ...voskEnv, ...addonEnv };
+    const resourceEnv = { ...voskEnv, ...addonEnv, ...ironProxyEnv() };
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
     startService("daemon", () =>
       spawnChild(
@@ -3291,7 +3311,7 @@ async function startup() {
         "uv",
         ["run", "ironjarvis", "serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", REPO_ROOT],
         REPO_ROOT,
-        { IRONJARVIS_TOKEN: authToken }
+        { IRONJARVIS_TOKEN: authToken, ...ironProxyEnv() }
       )
     );
     // 2) Next.js dashboard. `next start` honours the PORT env var.

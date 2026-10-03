@@ -97,6 +97,23 @@ def proxy_for(target: Any) -> tuple[str, int, dict[str, str]] | None:
 #: Block types that must never carry the message breakpoint.
 UNCACHEABLE = ("thinking", "redacted_thinking")
 
+#: Response headers kept for the answered attempt (v1.301.0, Iron-Proxy accounts):
+#: exactly the names Iron-Proxy's limit detector reads to know when a parked account
+#: is free again. An ALLOW-list by design — Authorization, cookies and every other
+#: header never leave the relay's handler, and these are kept in memory, never logged.
+EXPOSED_HEADERS = ("retry-after",)
+EXPOSED_HEADER_PREFIXES = ("anthropic-ratelimit-",)
+
+
+def exposed_headers(pairs: Any) -> dict[str, str]:
+    """``{lower-case name: value}`` for the allow-listed response headers only."""
+    out: dict[str, str] = {}
+    for key, value in pairs or ():
+        name = str(key).strip().lower()
+        if name in EXPOSED_HEADERS or name.startswith(EXPOSED_HEADER_PREFIXES):
+            out[name] = str(value)[:200]
+    return out
+
 #: The sentinel message a locally refused (non-first) attempt receives — the single
 #: source for it. The error SHAPE is the original's verbatim (invalid_request_error,
 #: HTTP 400); only the text is ours (upstream used HERMES_MODEL_ADMISSION_CONSUMED).
@@ -267,6 +284,8 @@ class Admission:
         #: a drop, a timeout, DNS, TLS, a refused proxy) — False for a local error.
         self.failure_network: bool | None = None
         self.retry_after: str | None = None
+        #: The answered attempt's allow-listed response headers (:func:`exposed_headers`).
+        self.headers: dict[str, str] = {}
         #: True once the admitted request's whole answer has been relayed back.
         self.answered = False
         #: True once the ONE sign-in retry (see :meth:`_reauth_allowed`) was admitted.
@@ -332,16 +351,48 @@ class Admission:
         self.server.server_close()
 
 
+#: The most a REFUSED request's body is read before the refusal (a wrong route
+#: or a browser Origin is answered without trusting its Content-Length).
+_REFUSED_BODY_CAP = 1 << 20
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args: Any) -> None:
         pass  # Native authorization and the per-call route must never enter logs.
+
+    def _read_body(self, cap: int | None = None) -> tuple[bytes, BaseException | None]:
+        """The request body (``Content-Length`` bytes), read BEFORE any reply.
+
+        Windows resets a connection that is closed with unread bytes in its
+        receive buffer (WinError 10053/10054 on the client) — a local refusal
+        sent without reading the body raced the client's read of it. Over
+        ``cap`` the body is left unread (a refusal's peer is not trusted)."""
+        try:
+            length = int(self.headers["Content-Length"])
+            if length < 0 or (cap is not None and length > cap):
+                return b"", None
+            return self.rfile.read(length), None
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return b"", exc
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib hook name
         gate: Admission = self.server.admission  # type: ignore[attr-defined]
         path = urlsplit(self.path)
         if path.path != gate.prefix + "/v1/messages" or self.headers.get("Origin"):
+            try:
+                self.connection.settimeout(gate.timeout)
+            except OSError:
+                pass
+            self._read_body(_REFUSED_BODY_CAP)
             self.send_error(404)
             return
+        # Read the body BEFORE deciding (and before gate.lock): a refusal must
+        # never reply over unread bytes, and the admitted request uses it as is.
+        try:
+            self.connection.settimeout(gate.timeout)
+        except OSError:
+            pass
+        body_in, read_error = self._read_body()
         with gate.lock:
             if gate.used and gate._reauth_allowed():
                 # The sign-in retry: start the record over for the answer that counts.
@@ -349,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
                 gate.answered = False
                 gate.status = gate.failure = gate.failure_network = None
                 gate.retry_after = gate.request_id = None
+                gate.headers = {}
                 gate.error_body = b""
                 gate.capture = Capture()
                 log.debug("claude admission: admitted the CLI's one retry after a sign-in refusal")
@@ -367,9 +419,9 @@ class Handler(BaseHTTPRequestHandler):
         conn: http.client.HTTPConnection | None = None
         upstream_socket = None
         try:
-            self.connection.settimeout(gate.timeout)
-            payload = self.rfile.read(int(self.headers["Content-Length"]))
-            payload = pin_message_breakpoint(payload, gate.queried)
+            if read_error is not None:
+                raise read_error
+            payload = pin_message_breakpoint(body_in, gate.queried)
             target = gate.upstream
             if target.scheme == "https":
                 proxy = proxy_for(target)
@@ -413,11 +465,12 @@ class Handler(BaseHTTPRequestHandler):
             headers["Accept-Encoding"] = "identity"
             route = target.path.rstrip("/") + "/v1/messages" + ("?" + path.query if path.query else "")
             conn.request("POST", route, payload, headers)
-            del headers, payload
+            del headers, payload, body_in
             response = conn.getresponse()
             gate.request_id = response.getheader("request-id") or response.getheader("x-request-id")
             gate.status = response.status
             gate.retry_after = response.getheader("retry-after")
+            gate.headers = exposed_headers(response.getheaders())
             log.debug("claude admission: upstream answered status %s", response.status)
             self.send_response(response.status)
             for key, value in response.getheaders():

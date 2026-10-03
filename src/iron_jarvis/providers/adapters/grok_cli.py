@@ -24,13 +24,22 @@ The wire shape was verified LIVE (2026-07-04) — do not "simplify" it blind:
 The credential is read fresh each call from ``cli_detect.grok_session()`` (the
 CLI refreshes it in place). An expired session raises a clear, catchable error.
 The async HTTP client is injectable so tests stay offline.
+
+IRON-PROXY ACCOUNTS (v1.301.0, ``iron_proxy/accounts.py``): when Iron-Proxy is on
+and has a Grok CLI account, each call reads the session from THAT account's
+``GROK_HOME`` (never the process environment, which other calls share),
+reports a limit/sign-in refusal (Iron-Proxy parks the account) or a success,
+and retries with the next Grok account only while nothing has streamed. Off,
+not running, or no account: exactly as before.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, Callable
 
 from ..cli_detect import GROK_PROXY_BASE, grok_session, grok_session_expired
@@ -206,9 +215,45 @@ class GrokCliAdapter(LLMAdapter):
         extra_body: dict | None = None,
         reasoning: str = "",
     ) -> LLMResponse:
+        from ...iron_proxy import accounts
+
+        # v1.301.0: the Iron-Proxy account to run as (None = the default
+        # session, exactly as before). Blocking HTTP: off the loop.
+        lease = await asyncio.to_thread(accounts.lease, self.provider)
+        if lease is None:
+            return await self._complete_once(system, messages, tools, None)
+        tried: list[str] = []
+        while True:
+            started = time.monotonic()
+            try:
+                resp = await self._complete_once(system, messages, tools, lease)
+            except Exception as exc:  # noqa: BLE001 — re-raised unless a retry is due
+                lease = await accounts.retry_lease(lease, exc, _account_signal(exc), tried)
+                continue
+            await accounts.report_success_async(
+                lease, resp.usage, int((time.monotonic() - started) * 1000), self.model
+            )
+            return resp
+
+    async def _session(self, lease: Any) -> dict[str, Any] | None:
+        """The session to call with: the default provider's, or — for an
+        Iron-Proxy account — the one in THAT account's home (off the loop)."""
+        if lease is None:
+            return await asyncio.to_thread(self._session_provider)
+        return await asyncio.to_thread(account_session, lease.home)
+
+    async def _complete_once(
+        self,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        lease: Any,
+    ) -> LLMResponse:
         # Resolve the session off the loop (a small file read, but keep the
         # contract identical to token-refreshing adapters).
-        session = await asyncio.to_thread(self._session_provider)
+        session = await self._session(lease)
+        if lease is not None and (not session or not session.get("token") or grok_session_expired(session)):
+            raise _account_not_signed_in(lease)
         if not session or not session.get("token"):
             raise RuntimeError(
                 "grok-cli: no Grok session found — run `grok login` "
@@ -257,7 +302,7 @@ class GrokCliAdapter(LLMAdapter):
                 )
             # Typed error so the router classifies transient (429/5xx) vs
             # permanent (401/426) by status and honours any Retry-After.
-            raise provider_error_from_response("grok-cli", resp, detail)
+            raise _with_signal(provider_error_from_response("grok-cli", resp, detail), resp, detail)
         return self._parse_sse(getattr(resp, "text", "") or "")
 
     # -- streaming (FX-01) --------------------------------------------------
@@ -287,18 +332,42 @@ class GrokCliAdapter(LLMAdapter):
         transport lacking a streaming surface — we degrade to the base
         (non-streaming) stream instead of fabricating output. A failure
         MID-stream re-raises honestly rather than re-running and double-emitting.
+
+        With an Iron-Proxy account (v1.301.0) a limit/sign-in refusal before the
+        first frame is reported and the next Grok account streams instead; any
+        other early failure degrades exactly as above.
         """
-        started = False
-        try:
-            async for frame in self._stream_sse(
-                system=system, messages=messages, tools=tools
-            ):
-                started = True
-                yield frame
-            return
-        except Exception:  # noqa: BLE001 — degrade to the honest non-streaming path
-            if started:
-                raise
+        from ...iron_proxy import accounts
+
+        lease = await asyncio.to_thread(accounts.lease, self.provider)
+        tried: list[str] = []
+        while True:
+            started = False
+            t0 = time.monotonic()
+            try:
+                async for frame in self._stream_sse(
+                    system=system, messages=messages, tools=tools, lease=lease
+                ):
+                    started = True
+                    if frame.get("type") == "final" and lease is not None:
+                        await accounts.report_success_async(
+                            lease, frame["response"].usage,
+                            int((time.monotonic() - t0) * 1000), self.model,
+                        )
+                    yield frame
+                return
+            except Exception as exc:  # noqa: BLE001 — degrade to the honest non-streaming path
+                if started:
+                    if lease is not None:
+                        # Text already streamed: report the limit, raise as before.
+                        await accounts.retry_lease(
+                            lease, exc, _account_signal(exc), tried, retry_ok=False
+                        )
+                    raise
+                if lease is not None and _account_signal(exc) is not None:
+                    lease = await accounts.retry_lease(lease, exc, _account_signal(exc), tried)
+                    continue
+            break
         async for frame in super().stream(
             system=system, messages=messages, tools=tools
         ):
@@ -310,8 +379,11 @@ class GrokCliAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        lease: Any = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        session = await asyncio.to_thread(self._session_provider)
+        session = await self._session(lease)
+        if lease is not None and (not session or not session.get("token") or grok_session_expired(session)):
+            raise _account_not_signed_in(lease)
         if not session or not session.get("token"):
             raise RuntimeError(
                 "grok-cli: no Grok session found — run `grok login` "
@@ -363,7 +435,9 @@ class GrokCliAdapter(LLMAdapter):
                         f"{detail} (Iron Jarvis sent x-grok-client-version="
                         f"{version}; run `grok update` if the proxy rejects it)"
                     )
-                raise provider_error_from_response("grok-cli", resp, detail)
+                raise _with_signal(
+                    provider_error_from_response("grok-cli", resp, detail), resp, detail
+                )
 
             async for line in resp.aiter_lines():
                 raw_lines.append(line)
@@ -388,6 +462,94 @@ class GrokCliAdapter(LLMAdapter):
         # response is byte-identical (raises if the stream lacked completed).
         final = self._parse_sse("\n".join(raw_lines))
         yield {"type": "final", "response": final}
+
+
+# --------------------------------------------------------------------------- #
+# Iron-Proxy accounts (v1.301.0)
+# --------------------------------------------------------------------------- #
+#: Statuses that may mean "this ACCOUNT is limited / signed out" — handed to
+#: Iron-Proxy, whose own classifier decides. Never a 5xx/529 (an overload is
+#: the provider's) and never a 403 (it may be a model/plan refusal, which is
+#: not one account's limit and must keep its failover).
+_LIMIT_STATUSES = (401, 429)
+
+#: The response headers handed to Iron-Proxy (its xAI reset readers) — an
+#: allow-list: never Authorization, cookies or anything else.
+_EXPOSED_HEADERS = ("retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens")
+
+
+def _with_signal(exc: Exception, resp: Any, detail: str) -> Exception:
+    """Attach what Iron-Proxy's detector reads (status, allow-listed headers,
+    the proxy's words) to an HTTP error — read only when the call ran as an
+    Iron-Proxy account. Never raises."""
+    try:
+        status = getattr(resp, "status_code", None)
+        headers: dict[str, str] = {}
+        raw = getattr(resp, "headers", None)
+        if raw is not None:
+            for name in _EXPOSED_HEADERS:
+                value = raw.get(name)
+                if value:
+                    headers[name] = str(value)[:200]
+        exc.account_signal = {"status": status, "headers": headers, "text": (detail or "")[:4000]}  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    return exc
+
+
+def _account_signal(exc: BaseException) -> dict[str, Any] | None:
+    """The report for a failed attempt, or None when it is not a limit/auth signal."""
+    signal = getattr(exc, "account_signal", None)
+    if not isinstance(signal, dict):
+        return None
+    status = signal.get("status")
+    if "status" in signal and status not in _LIMIT_STATUSES:
+        return None
+    return signal
+
+
+class _AccountNotSignedIn(RuntimeError):
+    pass
+
+
+def _account_not_signed_in(lease: Any) -> Exception:
+    """An Iron-Proxy account whose home holds no live session: reported as
+    'not logged in' so Iron-Proxy marks THAT account for sign-in."""
+    exc = _AccountNotSignedIn(
+        f'grok-cli: the Grok account "{lease.title}" in Iron-Proxy is not logged in '
+        "— sign it in on the Connections page (Iron-Proxy card)."
+    )
+    exc.account_signal = {"text": "not logged in: no Grok session in this account's home"}  # type: ignore[attr-defined]
+    return exc
+
+
+def account_session(home: str) -> dict[str, Any] | None:
+    """The Grok session stored in ``home`` (an Iron-Proxy account's
+    ``GROK_HOME``) — the same reading :func:`cli_detect.grok_session` does for
+    the default home, without touching the process environment. Never raises."""
+    from .. import cli_detect
+
+    try:
+        root = Path(home)
+        entry = cli_detect._grok_session_entry(cli_detect._read_json(root / "auth.json"))
+        if entry is None or not str(entry.get("key") or ""):
+            return None
+        version = cli_detect.GROK_MIN_VERSION
+        ver = cli_detect._read_json(root / "version.json")
+        if isinstance(ver, dict) and ver.get("version"):
+            version = str(ver["version"])
+        else:
+            # The installed CLI's version (the default home's), else the floor.
+            version = cli_detect._grok_client_version()
+        return {
+            "token": str(entry["key"]),
+            "base_url": GROK_PROXY_BASE,
+            "expires_at": entry.get("expires_at"),
+            "version": version,
+            "email": entry.get("email"),
+        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _error_detail(resp: Any) -> str:

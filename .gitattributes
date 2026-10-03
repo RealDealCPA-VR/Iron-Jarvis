@@ -1,0 +1,3 @@
+# v1.301.0: the vendored Iron-Proxy bundle is checked byte-for-byte against
+# SOURCE.txt's sha256 — never let autocrlf rewrite it on checkout.
+desktop/vendor/iron-proxy/** -text

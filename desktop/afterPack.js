@@ -68,6 +68,16 @@ exports.default = async function afterPack(context) {
   }
   console.log(`[afterPack] browser add-on staged -> ${addonDir}`);
 
+  // Iron-Proxy (v1.301.0): one bundled ES module the daemon starts with
+  // Electron's own Node when the user turns it on in Connections. It is
+  // committed (desktop/vendor/iron-proxy, see scripts/vendor_iron_proxy.py), so
+  // a missing or empty file here means the copy itself failed — fail the BUILD.
+  const ironProxy = path.join(resourcesDir, "iron-proxy", "iron-proxy.mjs");
+  if (!fs.existsSync(ironProxy) || fs.statSync(ironProxy).size === 0) {
+    throw new Error(`[afterPack] Iron-Proxy bundle missing or empty: ${ironProxy} — run scripts/vendor_iron_proxy.py`);
+  }
+  console.log(`[afterPack] Iron-Proxy bundle staged -> ${ironProxy}`);
+
   // Inventory everything we just shipped so the packaged app can verify at boot
   // that the NSIS extraction actually completed (see integrity.js for the
   // v1.124.0 truncated-update incident this guards against).
@@ -78,7 +88,7 @@ exports.default = async function afterPack(context) {
   // `to:` target to build.extraResources means adding it here in the same
   // change; tests/test_browser_packaging_v1239.py pins the two lists together.
   const version = context.packager.appInfo.version;
-  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model", "browser-addon"], version);
+  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model", "browser-addon", "iron-proxy"], version);
   const count = Object.keys(manifest.files).length;
   if (count < MANIFEST_FLOOR) {
     throw new Error(`[afterPack] install manifest has only ${count} files — the bundle is hollow`);

@@ -291,6 +291,10 @@ class Platform:
     approvals: "object | None" = None
     #: Standing grants store (v1.299.0): exact-argument grants per scope.
     grants: "object | None" = None
+    #: Iron-Proxy (v1.301.0): the ONE service that locates / starts / stops
+    #: Iron-Proxy and hands out its client (``iron_proxy.service``). Also
+    #: reachable as ``iron_proxy.service.current()`` for the adapters.
+    iron_proxy: "object | None" = None
 
 
 
@@ -1199,6 +1203,15 @@ def build_platform(
     from .core.grants import GrantStore as _GrantStore
 
     platform.grants = _GrantStore(platform.engine, platform.event_bus)
+    # Iron-Proxy (v1.301.0): constructed always (cheap: no disk, no network,
+    # no process); it does nothing until the switch is on and the daemon's
+    # lifespan watch loop (or POST /iron-proxy/enable) starts it.
+    from .iron_proxy.service import IronProxyService as _IronProxyService
+
+    platform.iron_proxy = _IronProxyService(config)
+    # Provider availability asks it (CACHED snapshot, never a call): a
+    # signed-out default login must not hide a usable Iron-Proxy account.
+    platform.providers.iron_proxy_usable = platform.iron_proxy.has_usable_account
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))

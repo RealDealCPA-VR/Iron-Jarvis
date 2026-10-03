@@ -23,6 +23,12 @@ attempt failed: native renders its own error, never an answer):
 FAKE_CLAUDE_NATIVE_ERROR (the assistant ``error`` code, default ``unknown``),
 FAKE_CLAUDE_NATIVE_TEXT (its words), FAKE_CLAUDE_STREAMED (text native had
 already streamed before the failure, default none).
+
+v1.301.0 (Iron-Proxy accounts), additive: ``CLAUDE_CONFIG_DIR`` is recorded;
+in the relay scenarios the fake sends ``X-Fake-Config-Dir: <its
+CLAUDE_CONFIG_DIR>`` when one is set (so a fake upstream can answer per
+account); ``relay_auto`` behaves as ``relay`` when the relay's first answer
+was 200 and as ``relay_error`` otherwise.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ ENV_KEYS = (
     "ENABLE_TOOL_SEARCH", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
     "CLAUDE_CODE_MAX_RETRIES", "DISABLE_AUTO_COMPACT", "DISABLE_COMPACT",
     "CLAUDE_CODE_TOTAL_TOKENS_REMINDER", "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-    "NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+    "NO_PROXY", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "CLAUDE_CONFIG_DIR",
 )
 
 
@@ -163,12 +169,15 @@ def main() -> int:
         emit({"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "num_turns": 1,
               "result": "Reached the --max-budget-usd ceiling"})
         return 1
-    if SCENARIO in ("relay", "relay_error"):
+    scenario = SCENARIO
+    if SCENARIO in ("relay", "relay_error", "relay_auto"):
         url = os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages"
         statuses = []
+        headers = {"Content-Type": "application/json"}
+        if os.environ.get("CLAUDE_CONFIG_DIR"):
+            headers["X-Fake-Config-Dir"] = os.environ["CLAUDE_CONFIG_DIR"]
         for _ in range(2):  # native "recovery" tries a second request; the relay refuses it
-            req = urllib.request.Request(url, data=b'{"messages":[]}',
-                                         headers={"Content-Type": "application/json"})
+            req = urllib.request.Request(url, data=b'{"messages":[]}', headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     resp.read()
@@ -179,7 +188,9 @@ def main() -> int:
                 statuses.append("dropped:" + type(exc).__name__)
         record["relay_statuses"] = statuses
         save()
-    if SCENARIO == "relay_error":
+        if SCENARIO == "relay_auto":
+            scenario = "relay" if statuses[0] == 200 else "relay_error"
+    if scenario == "relay_error":
         streamed = os.environ.get("FAKE_CLAUDE_STREAMED", "")
         if streamed:
             emit(delta("text_delta", "text", streamed))
@@ -190,7 +201,7 @@ def main() -> int:
                           "content": [{"type": "text", "text": text}], "stop_reason": "stop_sequence"}})
         emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1, "result": text})
         return 1
-    if SCENARIO == "relay":
+    if scenario == "relay":
         # What native renders after a denied retry: its OWN (different) words.
         emit(delta("text_delta", "text", "FIRST"))
         emit({"type": "assistant", "message": {"id": "native", "role": "assistant",

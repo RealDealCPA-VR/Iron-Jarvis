@@ -85,6 +85,7 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { RestHookups } from "@/components/connections/RestHookups";
+import { IronProxyCard } from "@/components/connections/IronProxyCard";
 import {
   EnvelopeRowControls,
   MeasuredEndpoints,
@@ -1906,6 +1907,10 @@ export default function ConnectionsPage() {
           </p>
         </Card>
       </Reveal>
+
+      {/* Iron-Proxy accounts (v1.301.0): renders nothing on an older daemon,
+          so it is not wrapped in Reveal (no empty husk). */}
+      <IronProxyCard />
 
       <Reveal>
         <RestHookups />

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.300.0 (2026-10-02).*
+holds itself to. Current as of v1.301.0 (2026-10-03).*
 
 ---
 
@@ -1694,6 +1694,31 @@ used. A keyless Anthropic connection keeps its older models in the list after
 the live ones, and the quality dial always picks the newest of each family.
 The design follows Nous Research's open-source Claude subscription plugin
 for Hermes (MIT licence).
+**v1.301.0 — several accounts per provider, through Iron-Proxy.** The
+Connections page has an **Iron-Proxy** card. Iron-Proxy is RealDealCPA's
+open-source account switcher (MIT), and it now ships inside the app: turn it on
+and Iron Jarvis starts it for you (or uses one that is already running on this
+PC, such as the Iron-Proxy tray app, sharing the same accounts). Add a Claude,
+Codex or Grok account, or press **Use this PC's login** to bring in the one you
+already use; **Sign in** opens a Build terminal that runs that account's own
+sign-in. Put the accounts in the order you want them used. From then on, every
+Claude, Codex and Grok call Iron Jarvis makes runs as the first account that is
+free; when one hits its limit, Iron-Proxy parks it until its reset time and the
+next account takes over — only ever another account of the SAME provider,
+never a different provider. The switch happens only before any of the answer
+has appeared; a limit in the middle of an answer ends that answer and the next
+message uses the next account. When no account can take the work, the error
+says why for each one (request limit, usage limit, needs to sign in) and when
+the first is free again — and the chat stays on that provider (with the
+model set to Auto, it may move to another provider, and the receipt says so). A momentary
+Anthropic overload is not blamed on an account; it is retried as before. While
+Iron-Proxy is on, Iron Jarvis never quietly falls back to this PC's own login:
+if Iron-Proxy is not answering, or is an older copy (for example an outdated
+tray app), the error says so. Your accounts also keep Claude, Codex and Grok
+usable when this PC's own sign-in has expired. Everything else about these calls is
+unchanged: tools, pictures, streaming and the cost line work as before. API-key
+accounts can be managed in Iron-Proxy too, but Iron Jarvis keeps using its own
+keys for API providers. With Iron-Proxy off, nothing changes.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

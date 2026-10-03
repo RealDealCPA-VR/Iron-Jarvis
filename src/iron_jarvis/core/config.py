@@ -601,6 +601,13 @@ class Config(BaseModel):
     #   read_only    → the inspection tools only
     #   interactive  → the full MVP tool set (risk classification still applies)
     browser_access: str = "off"
+    # IRON-PROXY (v1.301.0) — shared subscription accounts. OFF by default:
+    # when on, the daemon starts (or reuses) Iron-Proxy and runs CLI-lane calls
+    # AS the account it picks. Managed by POST /iron-proxy/enable|disable (which
+    # start/stop the proxy and persist this flag), deliberately NOT in
+    # _SETTINGS_KEYS: a settings-page write would flip the flag without
+    # starting or stopping anything.
+    iron_proxy_enabled: bool = False
 
     @field_validator("autonomy_level")
     @classmethod

@@ -2445,6 +2445,82 @@ does not need a bump, stop and bump it.
   `"<install>\resources\daemon\ironjarvis.exe" claude-inert-mcp <manifest>`
   and feed one `initialize` line — one JSON-RPC line must come back.
 
+- **Iron-Proxy is the ACCOUNT MANAGER; Iron Jarvis still EXECUTES** (v1.301.0;
+  RealDealCPA-VR/Iron-Proxy, MIT, user decision 2026-10-03 "shared accounts").
+  Iron-Proxy's own Claude lane is one prompt, no tools, no images — routing
+  Iron Jarvis's traffic THROUGH it would undo v1.300.0. So Iron-Proxy only
+  answers WHICH account (`GET /iron/pick` -> profile + the vendor CLI's home
+  env) and is TOLD what happened (`POST /iron/profiles/:id/signal` with the raw
+  status/allow-listed headers/text — ITS classifier parks; `/finished` records
+  usage). `iron_proxy/accounts.py`: claude-cli -> anthropic/CLAUDE_CONFIG_DIR,
+  codex-cli -> openai/CODEX_HOME, grok-cli -> xai/GROK_HOME; only the HOME var
+  is applied (after `claude_models.child_env`), protected names (PATH, TEMP…)
+  are never unset; a retry with the next account happens ONLY when Iron-Proxy
+  answers `parked: true` and nothing reached the caller, at most once per
+  account and 5 attempts; OVERLOAD (500/502/503/504/529, "overloaded") is not an
+  account problem — never reported, never rotated, raised exactly as v1.300.0
+  (transient); CODEX hands Iron-Proxy only its own `ERROR:` lines (no
+  last-line fallback — it can be the model's answer), never a line of the prompt (`cli_error_lines` — codex echoes the prompt
+  into stderr, and a prompt saying "credit balance" parked every account for
+  24 h as `billing`); all-parked / needs-sign-in / refused-token / too-old /
+  unavailable are non-transient status-less ProviderErrors worded BY KIND
+  ("request limit" / "usage limit" / names each account in a mix — never the
+  word "rate-limited", which the router's transient regex matches) and carry
+  `no_failover = True`: `router.is_no_failover` raises them at the top of
+  BOTH complete() and stream() error paths (no pin fallback, no default
+  fallback, no sideways failover) and `is_transient_error` is False for them
+  (so the same-adapter retry and app.py's one-shot failover skip them too) —
+  the "never another provider" promise on the card and in the Handbook rests
+  on this. ONE EXCEPTION, the user's standing one: an AUTO turn
+  (`(provider or default_provider) == "auto"`) may substitute sideways and is
+  disclosed as `failover` with `from`. A no_failover error never strikes the
+  breaker (parked accounts are not an unhealthy provider), Auto included.
+  ONCE A LEASE EXISTED and the failure was an ACCOUNT signal (401/403/429 or
+  Iron-Proxy's billing/sign-in/limit words), the error that leaves the
+  adapter is ALWAYS no_failover — Iron-Proxy could not be told ("…hit a limit
+  and Iron-Proxy could not be told — try again shortly"), declined to park,
+  re-picked a tried account, or the 5-attempt cap hit (one more pick fetches
+  the by-kind sentence); unmarked raw re-raises of an account 429 once took a
+  151 s retry ladder and then failed over to codex. Iron-Proxy ON never silently uses this PC's own
+  login: the lease goes through `service.lease_client(timeout_s=15)` (waits
+  for a start, starts it at most every 30 s, raises `IronProxyUnavailable`
+  when down / OUTDATED (health lacks `features: ["executor-v1"]`) / token
+  refused). With a lease a sign-in refusal never touches
+  `cli_auth.DEFAULT_PROBE`; every pick/signal/finished runs off the loop and a
+  reporting failure never fails a turn. Iron-Proxy OFF or NO_PROFILE for that
+  provider = byte-identical to v1.300.0. AVAILABILITY: `ProviderManager.
+  iron_proxy_usable` (wired to `has_usable_account`, a CACHED snapshot the
+  watch loop and every account route refresh — `available()` never calls
+  Iron-Proxy) keeps claude/codex/grok available when this PC's own login is
+  signed out but Iron-Proxy holds a usable account. The admission relay reads
+  a request's body BEFORE any refusal (404 / 400 CONSUMED) — replying over
+  unread bytes RST the socket on Windows (WinError 10053, ~1 in 12).
+  RUNTIME: `platform.iron_proxy` (`iron_proxy/service.py`) reuses a running
+  proxy found via `<IRON_PROXY_DATA_DIR or ~/.iron-proxy>/proxy.json` (pid
+  alive + /iron/health), else spawns the vendored bundle `serve --port 0`
+  with `IRONJARVIS_IRON_PROXY_NODE` + `_BUNDLE` (desktop/main.js passes
+  Electron's exe + resources path only when the file exists; the child gets
+  `ELECTRON_RUN_AS_NODE=1`), stops only an OWNED child, keeps the token inside
+  the daemon (never in a route, log or error), recognises its OWN child after a
+  daemon crash (`<home>/iron-proxy-owned.json`: pid + create time) so Disable
+  still stops it; `Config.iron_proxy_enabled` is
+  persisted by the enable/disable routes ONLY (not a settings key — a settings
+  write would flip it without starting anything). Routes `/iron-proxy*`
+  (status, accounts CRUD, adopt, reorder, unpark, signin = a Build pane running
+  the account's login command, signout); the card is
+  `components/connections/IronProxyCard.tsx`. THE BUNDLE: `desktop/vendor/
+  iron-proxy/iron-proxy.mjs` is produced ONLY by `scripts/vendor_iron_proxy.py`
+  from a CLEAN Iron-Proxy commit (SOURCE.txt: commit + sha256, pinned;
+  `.gitattributes` `-text` so autocrlf never rewrites it); push the Iron-Proxy
+  commit BEFORE the Iron Jarvis one so SOURCE names a public commit;
+  electron-builder ships it to `resources/iron-proxy` and afterPack fails the
+  build when it is missing and inventories it. Pins:
+  `tests/test_iron_proxy_{service,routes,accounts,vendor}_v1301.py` (+
+  `fixtures/fake_iron_proxy_v1301.py`; `accounts.plain_hint` rewrites every
+  Iron-Proxy hint that names its CLI or switcher into a whole Connections-page
+  sentence, table-pinned against the VENDORED bundle's DEFAULT_HINTS),
+  `dashboard/__tests__/iron-proxy-card-v1301.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

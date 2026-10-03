@@ -1266,6 +1266,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _arm_fleet()
 
+        # IRON-PROXY (v1.301.0): when the switch is on, start (or reuse)
+        # Iron-Proxy AFTER boot — the watch loop's first cycle runs off the
+        # event loop once this lifespan yields, so a slow or failing start
+        # never delays the daemon. Each cycle reports ITS OWN outcome on
+        # loop_health["iron_proxy"] (armed is not healthy); off clears the row.
+        _iron_proxy = getattr(platform, "iron_proxy", None)
+        if _iron_proxy is not None:
+            from ..iron_proxy.service import watch as _iron_proxy_watch
+
+            bg_tasks["iron_proxy"] = asyncio.create_task(
+                _iron_proxy_watch(
+                    _iron_proxy,
+                    lambda ok, exc: _tick("iron_proxy", ok, exc),
+                    clear=lambda: loop_health.pop("iron_proxy", None),
+                )
+            )
+
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
         # Comm thread appends can happen from sync route threads — hand the
@@ -1502,6 +1519,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _curator_stop.set()
             for task in bg_tasks.values():
                 task.cancel()
+            # Iron-Proxy (v1.301.0): stop the child WE started (an Iron-Proxy
+            # the user runs — tray, `iron-proxy serve` — is never touched).
+            # Off the loop: the tree kill shells out to taskkill.
+            _iron_proxy_svc = getattr(platform, "iron_proxy", None)
+            if _iron_proxy_svc is not None:
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(_iron_proxy_svc.stop), timeout=20.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("iron-proxy stop at shutdown failed", exc_info=True)
             if compact_task is not None:
                 compact_task.cancel()
             if backup_task is not None:
@@ -2800,6 +2826,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import coach as _coach_routes
 
     _coach_routes.register(app, d)
+    # Iron-Proxy (v1.301.0): shared subscription accounts on Connections.
+    from .routes import iron_proxy as _iron_proxy_routes
+
+    _iron_proxy_routes.register(app, d)
     # Worklist (v1.174.0): the durable per-item checkpoints a chunked
     # job reports progress through — without this the store exists and
     # no surface can read it.

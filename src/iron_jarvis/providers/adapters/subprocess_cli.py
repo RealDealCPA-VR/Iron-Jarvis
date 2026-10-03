@@ -16,13 +16,32 @@ and permission engine stay in charge), text streams as it is written, images
 ride the user turn, and usage carries the cache buckets and the CLI's own
 list-price cost. One fresh process per step, cancellable as a tree. The
 ``codex`` adapter stays text-only.
+
+IRON-PROXY ACCOUNTS (v1.301.0, ``iron_proxy/accounts.py``): when Iron-Proxy is
+on and has a CLI account for the provider, each call runs AS the account it
+picks (that account's ``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME``), reports a limit
+(Iron-Proxy parks the account) or a success (usage), and retries with the next
+account of the SAME provider only while nothing has reached the caller. Off,
+not running, or no account: exactly as before. The claude model catalog
+(``claude_models``' handshake) keeps reading the DEFAULT login.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable
+
+from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
+from ..budget import run_budget
+from ..cli_auth import cli_failure_message, note_cli_failure
 
 
 def _which_cli(binary: str) -> str | None:
@@ -40,15 +59,7 @@ def _which_cli(binary: str) -> str | None:
         return _find(binary)
     except Exception:  # noqa: BLE001 — degraded envs keep the plain probe
         return shutil.which(binary)
-import subprocess
-import tempfile
-import threading
-from pathlib import Path
-from typing import Any, AsyncIterator, Callable
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
-from ..budget import run_budget
-from ..cli_auth import cli_failure_message, note_cli_failure
 
 #: Hard wall-clock cap per CLI call — a wedged CLI must never hang a turn. A
 #: tool-using step can legitimately take 10–20s, so this is generous.
@@ -80,15 +91,19 @@ _STEP_SCHEMA = {
 }
 
 
-def _spawn(argv: list[str]) -> "subprocess.Popen[str]":
+def _spawn(argv: list[str], env: dict[str, str] | None = None) -> "subprocess.Popen[str]":
     """Start the CLI with its own pipes — the caller owns the handle.
 
     POSIX: its own session, so ``_kill_tree``'s ``killpg`` reaches the CLI's
     helpers and nothing else. Windows: ``taskkill /T`` walks the PID tree.
+    ``env`` (v1.301.0) is passed ONLY for an Iron-Proxy account; None keeps
+    the inherited environment exactly as before.
     """
     popen_kw: dict[str, Any] = {}
     if os.name != "nt":
         popen_kw["start_new_session"] = True
+    if env is not None:
+        popen_kw["env"] = env
     return subprocess.Popen(  # noqa: S603 — argv list, no shell
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", **popen_kw,
@@ -134,7 +149,7 @@ def _run(
 
 
 async def run_cli(
-    argv: list[str], stdin: str | None, *, timeout: float
+    argv: list[str], stdin: str | None, *, timeout: float, env: dict[str, str] | None = None
 ) -> tuple[int, str, str]:
     """Run a CLI off the loop — and KILL it when the awaiting turn is cancelled.
 
@@ -151,7 +166,7 @@ async def run_cli(
     box: dict[str, Any] = {"proc": None, "cancelled": False}
 
     def _work() -> tuple[int, str, str]:
-        proc = _spawn(argv)
+        proc = _spawn(argv, env)
         with lock:
             box["proc"] = proc
             cancelled = box["cancelled"]
@@ -181,13 +196,22 @@ async def run_cli(
 
 
 async def _call(
-    runner: Callable[..., tuple[int, str, str]] | None, argv: list[str], stdin: str
+    runner: Callable[..., tuple[int, str, str]] | None,
+    argv: list[str],
+    stdin: str,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """The adapters' one door to the CLI: the injected runner, else `run_cli`
-    with the cap read at CALL time (tests shrink ``_TIMEOUT_S``)."""
+    with the cap read at CALL time (tests shrink ``_TIMEOUT_S``). ``env`` is
+    only ever set for an Iron-Proxy account; a runner double then receives it
+    as ``env=`` (without one, a runner is called exactly as before)."""
     if runner is not None:
-        return await asyncio.to_thread(runner, argv, stdin)
-    return await run_cli(argv, stdin, timeout=_TIMEOUT_S)
+        if env is None:
+            return await asyncio.to_thread(runner, argv, stdin)
+        return await asyncio.to_thread(lambda: runner(argv, stdin, env=env))
+    if env is None:
+        return await run_cli(argv, stdin, timeout=_TIMEOUT_S)
+    return await run_cli(argv, stdin, timeout=_TIMEOUT_S, env=env)
 
 
 # --- Codex (`codex exec …`) — TEXT-ONLY -------------------------------------
@@ -268,6 +292,41 @@ class SubprocessCliAdapter(LLMAdapter):
             raise RuntimeError(
                 f"{self.provider}: the '{self._binary}' CLI is not installed/on PATH"
             )
+        from ...iron_proxy import accounts
+
+        # v1.301.0: the Iron-Proxy account to run as (None = the default login,
+        # exactly as before). Blocking HTTP: off the loop.
+        lease = await asyncio.to_thread(accounts.lease, self.provider)
+        if lease is None:
+            return await self._complete_once(exe, system, messages, reasoning, None)
+        tried: list[str] = []
+        while True:
+            started = time.monotonic()
+            try:
+                resp = await self._complete_once(exe, system, messages, reasoning, lease)
+            except _AccountRefused as refused:
+                # The CLI's own words go to Iron-Proxy's classifier; nothing has
+                # reached the caller (a text CLI answers all at once).
+                lease = await accounts.retry_lease(
+                    lease, refused.error, {"text": refused.detail}, tried
+                )
+                continue
+            await accounts.report_success_async(
+                lease, None, int((time.monotonic() - started) * 1000), self.model
+            )
+            return resp
+
+    async def _complete_once(
+        self,
+        exe: str,
+        system: str,
+        messages: list[LLMMessage],
+        reasoning: str,
+        lease: Any,
+    ) -> LLMResponse:
+        """One CLI run — as ``lease``'s account when given (its home on the
+        child env; a failure raised as :class:`_AccountRefused` so the caller
+        can report it), else exactly the v1.300.0 run."""
         prompt = _flatten(system, messages)
         argv = [exe] + self._argv_builder(prompt, self.model)
         if reasoning and self._reasoning_argv is not None:
@@ -283,7 +342,8 @@ class SubprocessCliAdapter(LLMAdapter):
             try:
                 # The prompt rides STDIN (never argv): Windows caps a command
                 # line at 32,767 chars, and an extracted-PDF prompt exceeds it.
-                code, out, err = await _call(self._runner, argv, prompt)
+                env = lease.apply(dict(os.environ)) if lease is not None else None
+                code, out, err = await _call(self._runner, argv, prompt, env)
             except subprocess.TimeoutExpired as exc:
                 # A wedged CLI is a TRANSIENT failure (typed) — the router should
                 # fail over to another provider, not surface it as a hard error.
@@ -294,6 +354,10 @@ class SubprocessCliAdapter(LLMAdapter):
                 # v1.234.0: the CLI's own words, mapped to the remedy when it
                 # is a sign-in refusal — and the shared probe hears about it.
                 msg = cli_failure_message(self.provider, self._binary, code, out, err)
+                if lease is not None:
+                    # One account's refusal: Iron-Proxy parks THAT account; the
+                    # shared probe (the whole provider) is not told.
+                    raise _AccountRefused(RuntimeError(msg), cli_error_lines(err, out, prompt))
                 note_cli_failure(self._binary, msg)
                 raise RuntimeError(msg)
             text = ""
@@ -315,6 +379,42 @@ class SubprocessCliAdapter(LLMAdapter):
         if not text:
             raise RuntimeError(f"{self.provider}: CLI returned no output")
         return LLMResponse(text=text, tool_calls=[], usage={})
+
+
+#: A line the CLI itself wrote as an error ("ERROR: ...", "error: ...",
+#: optionally after a "[timestamp]" prefix).
+_ERROR_LINE = re.compile(r"^(?:\[[^\]]*\]\s*)?(?:ERROR|error|Error)\s*:")
+
+
+def cli_error_lines(err: str, out: str, prompt: str) -> str:
+    """ONLY the CLI's own error words, for Iron-Proxy's classifier (v1.301.0).
+
+    ``codex exec`` echoes the whole transcript — the USER'S PROMPT included —
+    into stderr. Handing that to Iron-Proxy let a prompt that merely mentions
+    "credit balance" or "billing" (ordinary words for this firm) park every
+    account for a day — and the last line can be the MODEL'S OWN ANSWER
+    ("…the billing statement shows a credit balance."). So: ONLY the lines that
+    start ``ERROR:``/``error:``, never a line that occurs in the prompt. A
+    failure with no such line reports nothing (it is raised as before)."""
+    lines: list[str] = []
+    for src in (err or "", out or ""):
+        for raw in src.splitlines():
+            line = raw.strip()
+            if line and _ERROR_LINE.match(line) and line not in lines:
+                lines.append(line)
+    prompt = prompt or ""
+    kept = [ln for ln in lines if ln not in prompt]
+    return "\n".join(kept)[-4000:]
+
+
+class _AccountRefused(Exception):
+    """A failed CLI run as an Iron-Proxy account: ``error`` is what the caller
+    raises when no retry happens; ``detail`` is the CLI's own words."""
+
+    def __init__(self, error: Exception, detail: str) -> None:
+        super().__init__(str(error))
+        self.error = error
+        self.detail = detail
 
 
 def _codex_argv(_prompt: str, _model: str) -> list[str]:
@@ -448,7 +548,12 @@ class ClaudeCliAdapter(LLMAdapter):
         self._env = env
 
     def _native_call(
-        self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]], reasoning: str
+        self,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        reasoning: str,
+        lease: Any = None,
     ):
         from .claude_native import frames as native_frames
         from .claude_native.transport import DEFAULT_IDLE_TIMEOUT_S, NativeCall
@@ -477,24 +582,54 @@ class ClaudeCliAdapter(LLMAdapter):
             # Read at CALL time: tests shrink the module cap.
             total_timeout_s=_CLAUDE_TOTAL_TIMEOUT_S,
             base_env=self._env,
+            # v1.301.0: the Iron-Proxy account (its CLAUDE_CONFIG_DIR), or the
+            # default login when None.
+            account_env=dict(lease.env_set) if lease is not None else None,
+            account_unset=tuple(lease.env_unset) if lease is not None else (),
         )
 
     async def _frames(
         self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]], reasoning: str
     ) -> AsyncIterator[dict[str, Any]]:
+        from ...iron_proxy import accounts
         from .claude_native import transport
 
-        # Off the loop: frames copy every image's base64, and the model
-        # catalog may read its disk cache on first use.
-        call = await asyncio.to_thread(self._native_call, system, messages, tools, reasoning)
-        agen = transport.run(call, runner=self._runner)
-        try:
-            async for frame in agen:
-                yield frame
-        finally:
-            # Walking away from the stream (Stop, a closed tab, an error in the
-            # consumer) must kill the process — aclose() runs the teardown.
-            await agen.aclose()
+        # v1.301.0: the Iron-Proxy account to run as (None = the default login,
+        # exactly as before). Blocking HTTP: off the loop.
+        lease = await asyncio.to_thread(accounts.lease, self.provider)
+        tried: list[str] = []
+        while True:
+            # Off the loop: frames copy every image's base64, and the model
+            # catalog may read its disk cache on first use.
+            call = await asyncio.to_thread(
+                self._native_call, system, messages, tools, reasoning, lease
+            )
+            attempt = transport.Attempt()
+            started = time.monotonic()
+            agen = transport.run(call, runner=self._runner, attempt=attempt)
+            try:
+                try:
+                    async for frame in agen:
+                        if frame.get("type") == "final" and lease is not None:
+                            response = frame["response"]
+                            await accounts.report_success_async(
+                                lease, response.usage, int((time.monotonic() - started) * 1000),
+                                call.model_arg or self.model,
+                            )
+                        yield frame
+                    return
+                except Exception as exc:
+                    if lease is None:
+                        raise
+                    # A limit before any text: report it and run as the next
+                    # account. After text: report it, then raise as before.
+                    lease = await accounts.retry_lease(
+                        lease, exc, attempt.limit_report(), tried, retry_ok=not attempt.emitted
+                    )
+            finally:
+                # Walking away from the stream (Stop, a closed tab, an error in the
+                # consumer) must kill the process — aclose() runs the teardown.
+                await agen.aclose()
 
     async def complete(
         self,

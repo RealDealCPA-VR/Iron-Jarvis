@@ -27,6 +27,13 @@ ef73726, ``directsdk.py``) adapted to asyncio and to Iron Jarvis's rules:
 
 Nothing blocking runs on the loop: file writes, the relay's socket, the spawn,
 stdin writes, the kill and the relay's shutdown all hop to a worker thread.
+
+IRON-PROXY ACCOUNTS (v1.301.0): a call may carry an account (``account_env`` —
+the vendor-CLI home Iron-Proxy picked, applied AFTER the login-env guard so the
+home survives it). Such a call never marks the whole provider signed out on the
+shared probe (that ACCOUNT is parked instead), and ``run`` fills an
+:class:`Attempt` the adapter reads to report a limit to Iron-Proxy. A call with
+no account is byte-identical to v1.300.0.
 """
 
 from __future__ import annotations
@@ -279,6 +286,23 @@ class NativeCall:
     max_output_tokens: int | None = None
     #: The env to start from (tests); None = ``os.environ``.
     base_env: dict[str, str] | None = None
+    #: v1.301.0: the Iron-Proxy account this call runs as — the variables to SET
+    #: (its ``CLAUDE_CONFIG_DIR``) and to UNSET, applied after ``child_env``.
+    #: None = no account: the default login, exactly as before.
+    account_env: dict[str, str] | None = None
+    account_unset: tuple[str, ...] = ()
+
+
+def with_account(env: dict[str, str], call: NativeCall) -> dict[str, str]:
+    """``env`` with the call's account applied (unset first, then set) — after
+    the shared login guard, so the account's home survives it. Untouched (the
+    same object) when the call carries no account."""
+    if call.account_env is None:
+        return env
+    for key in call.account_unset:
+        env.pop(key, None)
+    env.update(call.account_env)
+    return env
 
 
 def build_argv(call: NativeCall, root: Path) -> list[str]:
@@ -620,19 +644,24 @@ class _ListSource:
 # --------------------------------------------------------------------------- #
 # Failure wording
 # --------------------------------------------------------------------------- #
-def failure_message(detail: str, code: int | None = 1) -> str:
+def failure_message(detail: str, code: int | None = 1, *, probe: bool = True) -> str:
     """The sentence for a failed run — sign-in refusals mapped to the remedy
     by the ONE place that knows them (``cli_auth``, v1.234.0), and the shared
-    probe told so availability turns honest at once."""
+    probe told so availability turns honest at once. ``probe=False`` (a call
+    run as an Iron-Proxy account, v1.301.0): the probe is NOT told — one
+    account's refusal does not sign the whole provider out."""
     detail = (detail or "").strip() or "the CLI failed without saying why"
     result = json.dumps({"type": "result", "is_error": True, "result": detail})
     msg = cli_failure_message(PROVIDER, BINARY, int(code if code is not None else 1), result, "")
-    note_cli_failure(BINARY, msg)
+    if probe:
+        note_cli_failure(BINARY, msg)
     return msg
 
 
-def signed_out_message(native_error: str) -> str:
+def signed_out_message(native_error: str, *, probe: bool = True) -> str:
     msg = f"{PROVIDER}: {SIGN_IN_FIX[BINARY]} (the CLI said: {(native_error or '').strip()[:120]})"
+    if not probe:
+        return msg  # an Iron-Proxy account: that account is parked, not the provider
     try:
         DEFAULT_PROBE.mark_signed_out(BINARY, "not signed in (a request was refused)")
     except Exception:  # noqa: BLE001 — feedback is best-effort
@@ -653,7 +682,9 @@ def _native_error_of(event: dict) -> tuple[str, str] | None:
     return (detail or str(code)), str(code)
 
 
-def _diagnose(events: list[dict], code: int | None, stderr: str, fallback: str) -> RuntimeError:
+def _diagnose(
+    events: list[dict], code: int | None, stderr: str, fallback: str, *, probe: bool = True
+) -> RuntimeError:
     """The best sentence for a run that ended before it answered."""
     for event in events:
         if event.get("type") == "assistant":
@@ -661,13 +692,14 @@ def _diagnose(events: list[dict], code: int | None, stderr: str, fallback: str) 
             if found:
                 detail, err_code = found
                 if err_code == "authentication_failed":
-                    return RuntimeError(signed_out_message(detail))
-                return RuntimeError(failure_message(detail, code))
+                    return RuntimeError(signed_out_message(detail, probe=probe))
+                return RuntimeError(failure_message(detail, code, probe=probe))
     for event in reversed(events):
         if event.get("type") == "result" and event.get("is_error"):
-            return RuntimeError(failure_message(str(event.get("result") or event.get("subtype") or ""), code))
+            return RuntimeError(failure_message(
+                str(event.get("result") or event.get("subtype") or ""), code, probe=probe))
     if stderr.strip():
-        return RuntimeError(failure_message(stderr.strip()[-400:], code))
+        return RuntimeError(failure_message(stderr.strip()[-400:], code, probe=probe))
     return RuntimeError(f"{PROVIDER}: {fallback}" + (f" (exit {code})" if code not in (None, 0) else ""))
 
 
@@ -727,7 +759,7 @@ def _reads_as_auth(admission: Any, got: Collected, said: str) -> bool:
     )
 
 
-def upstream_failure(got: Collected, admission: Any) -> Exception:
+def upstream_failure(got: Collected, admission: Any, *, probe: bool = True) -> Exception:
     """The error for a relayed request that did not end in a complete 200.
 
     In plain words, classified for the router — the technical detail goes to
@@ -759,7 +791,9 @@ def upstream_failure(got: Collected, admission: Any) -> Exception:
         cli_said = got.native_error or ""
         if CONSUMED_MESSAGE in cli_said:
             cli_said = ""
-        return ProviderError(signed_out_message(said or cli_said or f"HTTP {status}"), status_code=status)
+        return ProviderError(
+            signed_out_message(said or cli_said or f"HTTP {status}", probe=probe), status_code=status
+        )
     if status is not None and status != 200:
         words = said[:300] or "no reason given"
         if status == 429:
@@ -796,15 +830,17 @@ def assemble(
     admission: Any,
     names: F.ToolNames,
     stderr: str = "",
+    probe: bool = True,
 ) -> tuple[LLMResponse, str]:
     """``(response, remainder)`` — ``remainder`` is final text the stream had
-    not yet emitted (always a suffix; anything else is :data:`STREAM_MISMATCH`)."""
+    not yet emitted (always a suffix; anything else is :data:`STREAM_MISMATCH`).
+    ``probe=False``: a call run as an Iron-Proxy account (see :func:`failure_message`)."""
     assistants, stopped = list(got.assistants), got.stopped
     used = bool(admission is not None and getattr(admission, "used", False))
     if used:
         capture = admission.capture
         if admission.status != 200 or not capture.complete:
-            raise upstream_failure(got, admission)
+            raise upstream_failure(got, admission, probe=probe)
         assistants = [capture.message]
         stopped = True
     handled = bool(admission is not None and getattr(admission, "denied", 0)) or (
@@ -813,14 +849,15 @@ def assemble(
     if got.native_error and not handled:
         if got.native_error_code == "authentication_failed" and not used:
             # No usable login: native refuses before any upstream request.
-            raise RuntimeError(signed_out_message(got.native_error))
-        raise RuntimeError(failure_message(got.native_error, returncode))
+            raise RuntimeError(signed_out_message(got.native_error, probe=probe))
+        raise RuntimeError(failure_message(got.native_error, returncode, probe=probe))
     if len(got.results) != 1 or not assistants or not stopped:
         events = got.results
         raise _diagnose(
             events, returncode, stderr,
             "the CLI ended without a complete answer (an assistant message, message_stop "
             "and one result are required)",
+            probe=probe,
         )
     final = got.results[0]
     blocks = [b for a in assistants for b in (a.get("content") or []) if isinstance(b, dict)]
@@ -839,6 +876,7 @@ def assemble(
         raise RuntimeError(failure_message(
             str(final.get("result") or f"the CLI request failed ({final.get('subtype')})"),
             returncode,
+            probe=probe,
         ))
     usage = _usage(assistants[0].get("usage") if used else final.get("usage"))
     cost = _cost(final)
@@ -866,6 +904,74 @@ def assemble(
 
 
 # --------------------------------------------------------------------------- #
+# What one attempt did (v1.301.0: read by the adapter to report to Iron-Proxy)
+# --------------------------------------------------------------------------- #
+#: Upstream statuses that may mean "this ACCOUNT is limited" — handed to
+#: Iron-Proxy, whose own classifier decides. NOT 503/529: an overload is the
+#: provider's, not one account's — it is never reported and never rotates.
+LIMIT_STATUSES = (429,)
+
+
+@dataclass
+class Attempt:
+    """Filled by :func:`run` whatever happened (in its ``finally``)."""
+
+    #: Did the relay forward a request upstream at all?
+    relay_used: bool = False
+    status: int | None = None
+    #: The allow-listed response headers (``admission.exposed_headers``).
+    headers: dict[str, str] = field(default_factory=dict)
+    #: Anthropic's own words for a non-200 (bounded), '' when none.
+    error_text: str = ""
+    #: A 403 that reads as "your login no longer works" (``_reads_as_auth``).
+    auth_refusal: bool = False
+    #: The CLI's own error words when it refused WITHOUT asking upstream.
+    native_error: str = ""
+    #: True once any text reached the caller.
+    emitted: bool = False
+
+    def limit_report(self) -> dict[str, Any] | None:
+        """What to hand Iron-Proxy for this failed attempt, or None (not a
+        limit/auth signal: a model-access 403, a 400, a dropped connection).
+
+        Relayed: 429, 401, or a 403 that reads as auth — with the
+        status, the allow-listed headers and Anthropic's words. Not relayed:
+        the CLI refused locally (its usage-limit or sign-in wording) — the
+        text alone. Iron-Proxy's classifier decides (``parked``)."""
+        if self.relay_used:
+            status = self.status
+            if status in LIMIT_STATUSES or status == 401 or (status == 403 and self.auth_refusal):
+                return {"status": status, "headers": dict(self.headers), "text": self.error_text[:4000]}
+            return None
+        if self.native_error.strip():
+            return {"text": self.native_error[:4000]}
+        return None
+
+
+def _record_attempt(attempt: Attempt, admission: Any, got: Collected) -> None:
+    """Copy what the attempt did into ``attempt`` (never raises)."""
+    try:
+        attempt.emitted = bool(got.emitted)
+        if admission is not None and getattr(admission, "used", False):
+            attempt.relay_used = True
+            attempt.status = admission.status if isinstance(admission.status, int) else None
+            attempt.headers = dict(getattr(admission, "headers", None) or {})
+            said = (admission.error_text() or "").strip()
+            attempt.error_text = said[:4000]
+            attempt.auth_refusal = attempt.status == 403 and _reads_as_auth(admission, got, said)
+            return
+        text = got.native_error or ""
+        if not text:
+            for row in got.results:
+                if row.get("is_error"):
+                    text = str(row.get("result") or "")
+                    break
+        attempt.native_error = text[:4000]
+    except Exception:  # noqa: BLE001 — a report is best-effort, never the failure
+        pass
+
+
+# --------------------------------------------------------------------------- #
 # The run
 # --------------------------------------------------------------------------- #
 Runner = Callable[[list[str], str], tuple[int, str, str]]
@@ -886,18 +992,26 @@ async def _teardown(res: _Resources) -> None:
         raise asyncio.CancelledError()
 
 
-async def run(call: NativeCall, *, runner: Runner | None = None) -> AsyncIterator[dict]:
+async def run(
+    call: NativeCall, *, runner: Runner | None = None, attempt: Attempt | None = None
+) -> AsyncIterator[dict]:
     """Drive one request. Yields ``{"type": "text", "text": d}`` deltas as the
     CLI streams them, then ``{"type": "final", "response": LLMResponse}``.
 
     The consumer MUST ``aclose()`` this generator when it stops early (the
     adapter does, in a ``finally``) — that is what kills the process.
+    ``attempt`` (v1.301.0) is filled with what the request did, whatever
+    happened, before the teardown.
     """
     started = time.monotonic()
-    env = child_env(call.base_env, max_output_tokens=call.max_output_tokens)
+    env = with_account(
+        child_env(call.base_env, max_output_tokens=call.max_output_tokens), call
+    )
+    probe = call.account_env is None
     res = _Resources()
     timeouts = _Timeouts(call, started)
     frames = marked_frames(call.frames)
+    got = Collected()
     try:
         child = await asyncio.to_thread(res.prepare, call, env)
         if runner is None:
@@ -920,7 +1034,8 @@ async def run(call: NativeCall, *, runner: Runner | None = None) -> AsyncIterato
                         raise RuntimeError(str(event))
                     if event is None:
                         raise _diagnose(early, await source.returncode(), res.stderr_text(),
-                                        "the CLI exited before acknowledging the conversation history")
+                                        "the CLI exited before acknowledging the conversation history",
+                                        probe=probe)
                     early.append(event)
                     if event.get("type") == "result":
                         if event.get("num_turns") != 0 or event.get("is_error"):
@@ -928,12 +1043,12 @@ async def run(call: NativeCall, *, runner: Runner | None = None) -> AsyncIterato
                                 early, None, res.stderr_text(),
                                 "this Claude Code version did not acknowledge history replay "
                                 "(expected a zero-turn result) — update Claude Code",
+                                probe=probe,
                             )
                         break
         await source.close_stdin()
 
         # 2. the answer.
-        got = Collected()
         while True:
             event = await source.receive()
             if event is None:
@@ -962,10 +1077,13 @@ async def run(call: NativeCall, *, runner: Runner | None = None) -> AsyncIterato
         returncode = await source.returncode()
         response, remainder = assemble(
             got, returncode=returncode, admission=res.admission, names=call.names,
-            stderr=res.stderr_text(),
+            stderr=res.stderr_text(), probe=probe,
         )
         if remainder:
+            got.emitted += remainder
             yield {"type": "text", "text": remainder}
         yield {"type": "final", "response": response}
     finally:
+        if attempt is not None:
+            _record_attempt(attempt, res.admission, got)
         await _teardown(res)

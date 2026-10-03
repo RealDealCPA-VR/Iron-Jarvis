@@ -1,0 +1,5 @@
+repo: https://github.com/RealDealCPA-VR/Iron-Proxy
+commit: e74e0a7110bf9a52fbe9ea40af6b98241863db3d
+version: 0.1.0
+sha256: 8fb1c41a8dea875a96663d764caa95a6a77119f419c911d5b75314f5096683b4
+built-by: scripts/vendor_iron_proxy.py

@@ -136,6 +136,11 @@ class ProviderManager:
         # tests that build a bare ProviderManager() stay hermetic — a bare manager
         # reports grok-cli unavailable regardless of what's installed on the box.
         self._grok_cli_available_fn = grok_cli_available
+        #: Iron-Proxy (v1.301.0): ``fn(provider) -> bool`` — does Iron-Proxy
+        #: hold a usable CLI account for this provider? Assigned by the
+        #: platform (``IronProxyService.has_usable_account``, a CACHED read);
+        #: a bare manager has none, so availability is unchanged there.
+        self.iron_proxy_usable: "Callable[[str], bool] | None" = None
         # Presence-only resolver for availability/health: when wired it avoids a
         # blocking OAuth refresh on the async loop. Falls back to the (possibly
         # refreshing) credential check when None, preserving legacy behavior.
@@ -406,6 +411,18 @@ class ProviderManager:
 
         return GrokCliAdapter(model=model or "grok-build")
 
+    def _iron_proxy_has(self, name: str) -> bool:
+        """A usable Iron-Proxy account for this CLI provider (v1.301.0) — a
+        CACHED snapshot, never a call (``available()`` runs on the loop and per
+        ``/health``). Never raises."""
+        fn = self.iron_proxy_usable
+        if fn is None:
+            return False
+        try:
+            return bool(fn(name))
+        except Exception:  # noqa: BLE001 — a bad oracle never breaks routing
+            return False
+
     def _grok_cli_available(self) -> bool:
         """Availability for the locally-installed Grok CLI via the injected
         probe. A bare manager (no probe wired — the unit-test path) reports
@@ -620,14 +637,21 @@ class ProviderManager:
                 return True
             return self._endpoint_reachable(name) is not False
         if name == "grok-cli":
-            # Locally-installed Grok CLI: live on-disk session check.
-            return self._grok_cli_available()
+            # Locally-installed Grok CLI: live on-disk session check — or a
+            # usable Iron-Proxy account (v1.301.0), which runs on its own home.
+            return self._grok_cli_available() or self._iron_proxy_has(name)
         if name == "claude-cli":
             # Installed AND not known to be signed out (v1.234.0). An
-            # inconclusive probe keeps it available — the run decides.
-            return self._cli_binary_present("claude") and self._cli_signed_in("claude") is not False
+            # inconclusive probe keeps it available — the run decides. The
+            # probe reads the DEFAULT login only: a usable Iron-Proxy account
+            # (v1.301.0) makes it available even when that login expired.
+            return self._cli_binary_present("claude") and (
+                self._cli_signed_in("claude") is not False or self._iron_proxy_has(name)
+            )
         if name == "codex-cli":
-            return self._cli_binary_present("codex") and self._cli_signed_in("codex") is not False
+            return self._cli_binary_present("codex") and (
+                self._cli_signed_in("codex") is not False or self._iron_proxy_has(name)
+            )
         if name == "opencode-cli":
             # Installed AND at least one model that actually runs locally —
             # an OpenCode with only hosted models is not available HERE, and

@@ -121,6 +121,17 @@ _FAILOVER_ORDER = (
 )
 
 
+def is_no_failover(exc: BaseException) -> bool:
+    """True for an error that must NEVER move a call to another provider
+    (v1.301.0): Iron-Proxy's account sentences — every account parked, one
+    needing sign-in, a refused token, an Iron-Proxy too old or not answering —
+    set ``no_failover``. The user picked THIS provider's accounts; another
+    provider is their privacy and billing decision, not a routing fallback.
+    The ONE exception is an AUTO turn (the user delegated the choice): there
+    the router may substitute, and discloses it."""
+    return bool(getattr(exc, "no_failover", False))
+
+
 def is_transient_error(exc: Exception) -> bool:
     """Classify a provider failure as transient (retry / fail over) or permanent.
 
@@ -132,6 +143,10 @@ def is_transient_error(exc: Exception) -> bool:
       3. a word-boundary phrase match on the message (rate-limit / overload /
          timeout wording) — the fallback for untyped errors.
     """
+    # 0) An Iron-Proxy account sentence (v1.301.0) is never retried or failed
+    #    over, whatever its words say ("rate-limited" would read transient).
+    if is_no_failover(exc):
+        return False
     # 1) Typed provider error — authoritative.
     if isinstance(exc, ProviderError):
         if exc.transient:
@@ -1418,10 +1433,27 @@ class ModelRouter:
                 reasoning=applied,
             )
         except Exception as exc:
-            transient = is_transient_error(exc)
+            # IRON-PROXY ACCOUNTS (v1.301.0): an account sentence is raised as
+            # it is — no default-provider fallback (A), no sideways failover
+            # (B), and no breaker strike (the provider is not unhealthy; its
+            # accounts are parked). AUTO is the user's one opted-in exception:
+            # an Auto turn may substitute (the sideways candidates below), and
+            # says so on the receipt. MIRROR NOTE (lock-step): stream().
+            no_failover = is_no_failover(exc)
+            if no_failover and not auto_selected:
+                await self.event_bus.publish(
+                    EventType.PROVIDER_FAILED,
+                    {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                    session_id=session_id,
+                )
+                raise
+            # Under Auto a parked-accounts sentence is substitutable like a
+            # transient failure (it is never RETRIED on the same adapter).
+            transient = is_transient_error(exc) or no_failover
             # The ONE derived reason every disclosure below carries (v1.228.0).
             why = failure_reason(exc)
-            self.health.record_failure(adapter.provider)
+            if not no_failover:
+                self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
             await self.event_bus.publish(
@@ -1827,11 +1859,24 @@ class ModelRouter:
                 if wrapped is None:
                     raise
                 raise wrapped from exc
+            # IRON-PROXY ACCOUNTS (v1.301.0): never fallback (A) or failover (B)
+            # on an account sentence, no breaker strike — except on an AUTO
+            # turn (the user's one opted-in exception). MIRROR NOTE
+            # (lock-step): complete().
+            no_failover = is_no_failover(exc)
+            if no_failover and not auto_selected:
+                await self.event_bus.publish(
+                    EventType.PROVIDER_FAILED,
+                    {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                    session_id=session_id,
+                )
+                raise
             primary_exc = exc
-            transient = is_transient_error(exc)
+            transient = is_transient_error(exc) or no_failover
             # The ONE derived reason every disclosure below carries (v1.228.0).
             why = failure_reason(exc)
-            self.health.record_failure(adapter.provider)
+            if not no_failover:
+                self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
             await self.event_bus.publish(
