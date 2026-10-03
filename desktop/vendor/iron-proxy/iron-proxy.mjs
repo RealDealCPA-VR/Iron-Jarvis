@@ -286,6 +286,28 @@ var AllProfilesExhaustedError = class extends IronProxyError {
     this.earliestResetAt = earliestResetAt;
   }
 };
+var ProfileParkedError = class extends IronProxyError {
+  profileId;
+  resetAt;
+  constructor(profile, resetAt, kind) {
+    const until = resetAt ? ` until ${resetAt}` : "";
+    const wait = resetAt ? `Wait until ${localTime(resetAt)} for "${profile.title}" to reset` : `Wait for "${profile.title}" to reset`;
+    super("QUOTA_EXCEEDED", `Profile "${profile.title}" is parked${until}.`, {
+      retryable: true,
+      details: {
+        profileId: profile.id,
+        title: profile.title,
+        provider: profile.provider,
+        ...resetAt ? { resetAt } : {},
+        ...kind ? { kind } : {}
+      },
+      hint: `${wait}, or pick without a profile id so the next ready ${profile.provider} account is used.`
+    });
+    this.name = "ProfileParkedError";
+    this.profileId = profile.id;
+    this.resetAt = resetAt;
+  }
+};
 var ProviderError = class extends IronProxyError {
   status;
   constructor(message, opts = {}) {
@@ -4755,7 +4777,12 @@ var IronProxy = class {
    * on `lane` (default `cli`; `any` for every lane), not parked (a park whose
    * cooldown has passed is cleared, exactly as the router does), not signed out,
    * lowest order. With `profileId`, that profile, if it is an enabled account of
-   * that provider on that lane.
+   * that provider on that lane (INVALID_REQUEST otherwise; PROFILE_NOT_FOUND for
+   * an unknown id). It is returned even when parked or signed out (the caller
+   * chose it), unless `requireUsable` is set: then a parked one throws
+   * ProfileParkedError (`QUOTA_EXCEEDED`, details.resetAt), a signed-out one
+   * AuthRequiredError, and one whose lane has no handler `UNSUPPORTED`; never
+   * another account.
    *
    * Throws NoProfileError when there is no such account, AllProfilesExhaustedError
    * (with the earliest reset) when the rest are parked, and AuthRequiredError when
@@ -4784,8 +4811,27 @@ var IronProxy = class {
           details: { profileId: p.id },
           hint: `Enable it first: iron-proxy profiles enable ${p.id}.`
         });
-      await this.router.availability(p, { profileId: p.id });
-      return p;
+      if (!opts.requireUsable) {
+        await this.router.availability(p, { profileId: p.id });
+        return p;
+      }
+      const { usable, state } = await this.router.availability(p);
+      if (usable) return p;
+      if (state.status === "parked")
+        throw new ProfileParkedError(p, state.parkedUntil, state.parkedReason?.kind);
+      if (state.status === "unauthenticated")
+        throw new AuthRequiredError(p.id, `Profile "${p.title}" needs to log in again.`, {
+          title: p.title,
+          lane: p.lane
+        });
+      throw new IronProxyError(
+        "UNSUPPORTED",
+        `Profile "${p.title}" uses the ${p.lane} lane, which nothing here can run.`,
+        {
+          details: { profileId: p.id, lane: p.lane },
+          hint: `Register a ${p.lane} lane for ${p.provider} (registry.addLane()), or pick a cli account.`
+        }
+      );
     }
     const candidates = (await this.router.candidates(provider)).filter(onLane);
     if (!candidates.length) throw new NoProfileError(provider);
@@ -5126,7 +5172,7 @@ var LocalIronClient = class {
 import { randomBytes as randomBytes4, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 var PROXY_VERSION = true ? "0.1.0" : "0.0.0-dev";
-var PROXY_FEATURES = ["executor-v1"];
+var PROXY_FEATURES = ["executor-v1", "pick-profile"];
 var LANES = ["cli", "api-key", "oauth", "any"];
 var HttpError = class extends Error {
   constructor(status2, message, code2 = "INVALID_REQUEST", extra = {}) {
@@ -5155,7 +5201,7 @@ function statusForCode(code2) {
   return STATUS_BY_CODE[code2] ?? 502;
 }
 function retryAfterSeconds(details) {
-  const at = details?.earliestResetAt;
+  const at = details?.earliestResetAt ?? details?.resetAt;
   if (typeof at !== "string") return void 0;
   const ms = new Date(at).getTime() - Date.now();
   if (Number.isNaN(ms)) return void 0;
@@ -5519,8 +5565,15 @@ function createProxyServer(opts) {
       const lane = q.get("lane") || "cli";
       if (!LANES.includes(lane))
         throw new HttpError(400, `\`lane\` must be one of ${LANES.join(", ")}, not "${lane}".`);
+      const profileId = q.get("profileId");
+      if (profileId === "")
+        throw new HttpError(
+          400,
+          "`profileId` is empty: leave it out to pick the next ready account."
+        );
       const profile = await iron.pickProfile(provider, {
-        lane
+        lane,
+        ...profileId !== null ? { profileId, requireUsable: true } : {}
       });
       const env = profile.lane === "cli" ? await iron.shellEnv(profile.id) : null;
       return send(res, 200, { profile, env }, h);

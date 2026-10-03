@@ -30,6 +30,11 @@ MAX_SESSIONS = 20
 #: evicting them, so a long-lived daemon's ``_sessions`` dict stays bounded.
 MAX_DEAD_RETAINED = 10
 
+#: v1.302.0: how long a boot's rehydrate may spend, IN TOTAL across every
+#: pane, re-resolving accounts recorded by a snapshot that predates recorded
+#: homes. A snapshot with homes never asks Iron-Proxy at all.
+RESTORE_ACCOUNTS_BUDGET_S = 2.0
+
 #: A PTY shell that's going to die (e.g. a frozen build whose ConPTY has no
 #: OpenConsole.exe host) dies within a fraction of a second; give it this long
 #: to reveal itself before trusting it. Only paid ONCE per daemon run (the
@@ -92,7 +97,9 @@ _PTY_VERIFY_SECONDS = 0.7
 _DAEMON_ONLY_ENV = ("IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN")
 
 
-def _with_pane_env(env: dict | None, pane_env: dict[str, str]) -> dict:
+def _with_pane_env(
+    env: dict | None, pane_env: dict[str, str], accounts: Any | None = None
+) -> dict:
     """`env` plus the pane's identity, minus the daemon's own credentials.
 
     The backends REPLACE the child environment when handed one
@@ -107,10 +114,18 @@ def _with_pane_env(env: dict | None, pane_env: dict[str, str]) -> dict:
     It applies to a caller-supplied `env` too: the credential is the same
     credential whichever dict it travelled in, and no caller in this repository
     passes one deliberately.
+
+    `accounts` (v1.302.0, a `pane_accounts.PaneAccounts`) is applied to that
+    same base BEFORE the pane's identity: the account's home variable set,
+    Iron-Proxy's unset list removed, an inherited home removed for "this PC's
+    login" — and nothing an account says can touch the `IRONJARVIS_*` identity.
+    None (every caller before v1.302.0) changes nothing.
     """
     base = dict(env) if env is not None else os.environ.copy()
     for name in _DAEMON_ONLY_ENV:
         base.pop(name, None)
+    if accounts:
+        accounts.apply(base)
     base.update(pane_env)
     return base
 
@@ -142,6 +157,32 @@ def _snapshot_key(sessions: "list[TerminalSession]") -> tuple:
             for s in sessions
         )
     )
+
+
+def _account_records(accounts: Any) -> dict[str, dict[str, Any]] | None:
+    """What a pane records about its accounts (`PaneAccounts.records`), or None
+    for a pane that has none (every pane before v1.302.0)."""
+    records = getattr(accounts, "records", None) if accounts is not None else None
+    if not records:
+        return None
+    return {str(p): dict(r) for p, r in records.items()}
+
+
+def _persisted_accounts(records: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """The snapshot's copy: id + title + source, and for an Iron-Proxy account
+    the home VALUE the shell was started with and its unset names (a folder
+    path, not a secret) — so a restore re-applies them without asking
+    Iron-Proxy (boot never waits on it). Never a note."""
+    out: dict[str, dict[str, Any]] = {}
+    for p, r in records.items():
+        if not isinstance(r, Mapping):
+            continue
+        row = {k: r.get(k) for k in ("id", "title", "source")}
+        if r.get("home"):
+            row["home"] = r["home"]
+            row["unset"] = list(r.get("unset") or [])
+        out[str(p)] = row
+    return out
 
 
 class TerminalManager:
@@ -225,6 +266,37 @@ class TerminalManager:
         #: IRONJARVIS_MCP_URL beside the token. Empty until a caller sets it —
         #: the manager does not know the daemon's own address.
         self.mcp_url = mcp_url
+        #: v1.302.0 — `(request, *, restoring, titles) -> PaneAccounts`, the
+        #: Iron-Proxy account resolver (`pane_accounts.resolve` bound to the
+        #: daemon's service; wired by the terminals routes). `None` = no
+        #: accounts machinery: `accounts=` is ignored and a restored pane that
+        #: recorded accounts comes back on this PC's login with a note.
+        self.account_resolver: Callable[..., Any] | None = None
+        #: v1.302.0 — `() -> None`, run on a background thread after a
+        #: rehydrate restored a pane on an Iron-Proxy account: reads Iron-Proxy
+        #: (no spawn) so the chips' cached snapshot is current. OFF the boot
+        #: path by construction. Wired by the terminals routes.
+        self.account_verifier: Callable[[], Any] | None = None
+        #: Set for the duration of a rehydrate: the shared deadline of
+        #: :data:`RESTORE_ACCOUNTS_BUDGET_S` for legacy re-resolution.
+        self._restore_deadline: float | None = None
+
+    # --- pane accounts (v1.302.0) ------------------------------------------
+
+    def resolve_accounts(
+        self,
+        request: Mapping[str, Any] | None,
+        *,
+        restoring: bool = False,
+        titles: Mapping[str, str] | None = None,
+    ) -> Any | None:
+        """The accounts a pane would start on (`pane_accounts.PaneAccounts`),
+        or None without a resolver. BLOCKING (loopback HTTP to Iron-Proxy) —
+        call off the event loop. Raises `pane_accounts.PaneAccountRefused`
+        (never while `restoring`)."""
+        if self.account_resolver is None:
+            return None
+        return self.account_resolver(request, restoring=restoring, titles=titles)
 
     def create(
         self,
@@ -239,6 +311,7 @@ class TerminalManager:
         agent_cli: str | None = None,
         capabilities: Mapping[str, Any] | None = None,
         recipe: str | None = None,
+        accounts: Any | None = None,
     ) -> TerminalSession:
         """Create, start, and register a new session.
 
@@ -252,6 +325,12 @@ class TerminalManager:
         given a capability token in its child environment before the shell
         starts — the one moment that is possible — and the recipe preparer, if
         one is wired, contributes the rest of the harness configuration.
+
+        ``accounts`` (v1.302.0) is which subscription account each vendor CLI
+        in this pane runs as: a request mapping (``{provider: id | "default"}``,
+        resolved here through :attr:`account_resolver` — BLOCKING, and a
+        refusal raises before anything is spawned) or an already-resolved
+        ``PaneAccounts``. ``None`` = today's behaviour exactly.
         """
         cwd = cwd or str(Path.home())
         # `shell_name` (was `name`): the PARAMETER `name` is the pane's
@@ -269,6 +348,10 @@ class TerminalManager:
                 raise RuntimeError(
                     f"terminal session cap reached ({self.max_sessions})"
                 )
+        if accounts is not None and isinstance(accounts, Mapping):
+            # Resolved BEFORE the id is minted: a refused account must leave
+            # no pane, no token and no pending entry behind.
+            accounts = self.resolve_accounts(accounts)
 
         # THE PANE KNOWS WHERE IT IS (v1.217.0). A coding CLI started in here
         # otherwise has no way to tell it is inside Build, which pane it
@@ -302,13 +385,20 @@ class TerminalManager:
             if recipe:
                 pane_env.update(self._prepare_recipe(recipe, pane_id, caps, cwd))
             session = self._spawn(
-                cwd, shell_name, argv, cols, rows, backend, _with_pane_env(env, pane_env)
+                cwd,
+                shell_name,
+                argv,
+                cols,
+                rows,
+                backend,
+                _with_pane_env(env, pane_env, accounts),
             )
             session.id = pane_id
             session.pane_name = name
             session.agent_cli = agent_cli
             session.capabilities = caps
             session.pane_env_extra = pane_env
+            session.accounts = _account_records(accounts)
             with self._lock:
                 self._sessions[session.id] = session
                 # Dropped INSIDE the same lock hold that registers the session,
@@ -599,6 +689,15 @@ class TerminalManager:
                             if isinstance(s.capabilities, dict)
                             else None
                         ),
+                        # v1.302.0: which account each CLI ran as (ids +
+                        # titles + source; never a note — a restore writes
+                        # its own). Only for a pane that has accounts, so
+                        # every other entry is byte-identical to v1.301.0.
+                        **(
+                            {"accounts": _persisted_accounts(s.accounts)}
+                            if getattr(s, "accounts", None)
+                            else {}
+                        ),
                         "scrollback_b64": base64.b64encode(sb).decode("ascii"),
                     }
                 )
@@ -661,6 +760,7 @@ class TerminalManager:
             # Kept in the fresh shell's environment: the likeliest next process
             # in this pane is that same CLI, resumed.
             pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
+        accounts = self._restore_accounts(entry.get("accounts"))
         session = self._spawn(
             cwd,
             name or "shell",
@@ -668,8 +768,9 @@ class TerminalManager:
             cols,
             rows,
             backend,
-            _with_pane_env(env, pane_env),
+            _with_pane_env(env, pane_env, accounts),
         )
+        session.accounts = _account_records(accounts)
         session.id = rid
         session.pane_name = pane_name
         # v1.245.0: the shell is FRESH — whatever CLI ran here died with the
@@ -701,6 +802,76 @@ class TerminalManager:
             self._sessions[rid] = session
         return session
 
+    def _restore_accounts(self, recorded: Any) -> Any | None:
+        """The accounts a RESTORED pane comes back on (v1.302.0), never another
+        one, and WITHOUT WAITING ON IRON-PROXY: a recorded home is applied
+        again as it was at spawn (no call — `pane_accounts.from_recorded`);
+        the post-boot check updates the chip. Only an account recorded before
+        homes were is re-resolved by id, bounded by the rehydrate's shared
+        :data:`RESTORE_ACCOUNTS_BUDGET_S`; past it, or on any failure, it comes
+        back on this PC's login with a note. Never raises."""
+        if not isinstance(recorded, Mapping) or not recorded:
+            return None
+        from .pane_accounts import from_recorded, late_note
+
+        out, legacy, titles = from_recorded(recorded)
+        if legacy:
+            resolved, late = self._bounded_resolve(legacy, titles)
+            if resolved is not None:
+                out.merge(resolved)
+            else:
+                for provider, pid in legacy.items():
+                    title = titles.get(provider) or pid
+                    out.use_default(
+                        provider,
+                        note=late_note(title) if late else (
+                            f'This pane came back on this PC\'s login instead of "{title}".'
+                        ),
+                    )
+        return out if out else None
+
+    def _bounded_resolve(
+        self, request: dict[str, str], titles: dict[str, str]
+    ) -> tuple[Any | None, bool]:
+        """`(resolved, timed_out)` — `resolve_accounts(restoring=True)` on a
+        worker thread, given only what is left of the restore budget. A
+        resolution still running past it is abandoned (its answer unused)."""
+        if self.account_resolver is None:
+            return None, False
+        deadline = self._restore_deadline
+        if deadline is None:
+            deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["out"] = self.resolve_accounts(request, restoring=True, titles=titles)
+            except Exception:  # noqa: BLE001 — a restore must never lose the pane
+                log.warning("could not re-resolve a restored pane's accounts", exc_info=True)
+
+        worker = threading.Thread(target=work, name="pane-accounts-restore", daemon=True)
+        worker.start()
+        worker.join(max(0.0, deadline - time.monotonic()))
+        if worker.is_alive():
+            return None, True
+        return box.get("out"), False
+
+    def _verify_accounts_later(self) -> None:
+        """After a rehydrate restored panes on Iron-Proxy accounts: read
+        Iron-Proxy on a background thread (never the boot path) so the chips'
+        cached snapshot says whether each account is still there / parked."""
+        verifier = self.account_verifier
+        if verifier is None:
+            return
+
+        def run() -> None:
+            try:
+                verifier()
+            except Exception:  # noqa: BLE001 — a chip refresh never matters more
+                log.debug("post-boot account check failed", exc_info=True)
+
+        threading.Thread(target=run, name="pane-accounts-verify", daemon=True).start()
+
     def rehydrate(self, *, env: dict | None = None, backend: PtyBackend | None = None) -> int:
         """On boot, re-open every persisted session. Best-effort per entry;
         returns how many were restored. No-op without a snapshot file."""
@@ -714,21 +885,32 @@ class TerminalManager:
         if not isinstance(entries, list):
             return 0
         restored = 0
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                session = self.restore(entry, env=env, backend=backend)
-                if session is not None:
-                    # No pane is attached at boot, so without a reader the fresh
-                    # shell's output (banner + prompt) never reaches the tail —
-                    # a studio session resumed against the STALE replayed tail
-                    # would then type briefs into a bare shell. Drain from the
-                    # start; it yields whenever a Build pane attaches.
-                    session.start_autodrain()
-                    restored += 1
-            except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
-                log.debug("failed to restore a terminal", exc_info=True)
+        on_accounts = False
+        self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
+        try:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    session = self.restore(entry, env=env, backend=backend)
+                    if session is not None:
+                        # No pane is attached at boot, so without a reader the fresh
+                        # shell's output (banner + prompt) never reaches the tail —
+                        # a studio session resumed against the STALE replayed tail
+                        # would then type briefs into a bare shell. Drain from the
+                        # start; it yields whenever a Build pane attaches.
+                        session.start_autodrain()
+                        restored += 1
+                        on_accounts = on_accounts or any(
+                            a.get("source") == "iron-proxy"
+                            for a in (session.accounts or {}).values()
+                        )
+                except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
+                    log.debug("failed to restore a terminal", exc_info=True)
+        finally:
+            self._restore_deadline = None
         if restored:
             self._persist()  # rewrite with the freshly-restored (same) set
+        if on_accounts:
+            self._verify_accounts_later()
         return restored

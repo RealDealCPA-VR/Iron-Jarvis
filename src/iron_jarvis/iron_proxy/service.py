@@ -147,6 +147,11 @@ def _read_descriptor(path: Path) -> dict[str, Any] | None:
 #: and answers ``/iron/pick`` 404, so the version cannot tell them apart.
 REQUIRED_FEATURE = "executor-v1"
 
+#: v1.302.0: ``GET /iron/pick?profileId=`` picks THAT account. An Iron-Proxy
+#: without it IGNORES the parameter and answers the first free account, so a
+#: Build pane asked to start on a chosen account checks this first.
+PICK_PROFILE_FEATURE = "pick-profile"
+
 #: Iron Jarvis provider id -> the Iron-Proxy provider whose CLI accounts it runs as.
 JARVIS_TO_PROXY = {"claude-cli": "anthropic", "codex-cli": "openai", "grok-cli": "xai"}
 
@@ -237,6 +242,16 @@ class IronProxyService:
         #: sign-in", from the last account read. Read by ``has_usable_account``
         #: (provider availability), which must never block.
         self._usable: dict[str, bool] = {}
+        #: v1.302.0: the last ``(profiles, states)`` read, for the per-pane
+        #: account chips (``cached_accounts``) — never a blocking call in a
+        #: list route. Cleared wherever ``_usable`` is.
+        self._accounts_cache: tuple[list[Any], dict[str, Any]] | None = None
+        #: Iron-Proxy providers that had a CLI account at the last read (kept
+        #: across a failed read, so an unanswering Iron-Proxy can still be
+        #: named per provider on a new pane). Cleared only when turned off.
+        self._providers_seen: set[str] = set()
+        #: Health ``features`` from the last answer (``has_feature``).
+        self._features: frozenset[str] = frozenset()
         # status() is read on the event loop: the bundle's presence and
         # version are read HERE (and refreshed off the loop on start/check),
         # never per status() call.
@@ -260,6 +275,8 @@ class IronProxyService:
         if not value:
             self._error = None
             self._usable = {}
+            self._accounts_cache = None
+            self._providers_seen = set()
 
     def data_dir(self) -> Path:
         override = os.environ.get("IRON_PROXY_DATA_DIR", "").strip()
@@ -407,6 +424,9 @@ class IronProxyService:
             self._version = health["version"]
         features = health.get("features")
         self._outdated = not (isinstance(features, list) and REQUIRED_FEATURE in features)
+        self._features = frozenset(
+            str(f) for f in (features if isinstance(features, list) else []) if isinstance(f, str)
+        )
 
     def _adopt(self, url: str, token: str, pid: int, *, owned: bool) -> None:
         if self._client is not None and (self._url, self._token) != (url, token):
@@ -465,6 +485,8 @@ class IronProxyService:
         self._outdated = False
         self._token_bad = False
         self._usable = {}
+        self._accounts_cache = None
+        self._features = frozenset()
 
     def _invalidate(self) -> None:
         """A call could not reach Iron-Proxy: drop the cached client so the
@@ -655,6 +677,7 @@ class IronProxyService:
             if loc is None:
                 self._invalidate()
                 self._usable = {}
+                self._accounts_cache = None
                 if self._error is None:
                     self._error = "Iron-Proxy is not running."
                 return False
@@ -690,6 +713,16 @@ class IronProxyService:
                 continue
             usable[str(p.get("provider"))] = True
         self._usable = usable
+        if isinstance(profiles, list) and isinstance(states, dict):
+            self._accounts_cache = (
+                [dict(p) for p in profiles if isinstance(p, dict)],
+                {str(k): dict(v) for k, v in states.items() if isinstance(v, dict)},
+            )
+            self._providers_seen = {
+                str(p.get("provider"))
+                for p in profiles
+                if isinstance(p, dict) and (p.get("lane") or "cli") == "cli"
+            }
 
     def refresh_accounts(self) -> None:
         """Re-read the accounts for :meth:`has_usable_account`. Blocking; never
@@ -697,11 +730,13 @@ class IronProxyService:
         c = self._client
         if c is None or not self.enabled:
             self._usable = {}
+            self._accounts_cache = None
             return
         try:
             self.note_accounts(c.profiles(), c.states())
         except Exception:  # noqa: BLE001 — availability never breaks on a read
             self._usable = {}
+            self._accounts_cache = None
 
     def has_usable_account(self, ij_provider: str) -> bool:
         """Does Iron-Proxy (on, running, current) have an enabled CLI account
@@ -715,6 +750,26 @@ class IronProxyService:
             return bool(self._usable.get(proxy))
         except Exception:  # noqa: BLE001 — availability never raises
             return False
+
+    def cached_accounts(self) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+        """v1.302.0: the last ``(profiles, states)`` read (the watch loop, every
+        account route and every pane resolution refresh it), or ``None`` when
+        Iron-Proxy is off / not running / has not been read. CACHED — no
+        network, safe on the event loop (the Build pane rows read it)."""
+        try:
+            if not self.running():
+                return None
+            return self._accounts_cache
+        except Exception:  # noqa: BLE001 — a chip never breaks a list
+            return None
+
+    def providers_seen(self) -> set[str]:
+        """Iron-Proxy providers that had a CLI account at the last good read."""
+        return set(self._providers_seen)
+
+    def has_feature(self, name: str) -> bool:
+        """Did the last ``/iron/health`` answer advertise ``name``? CACHED."""
+        return name in self._features
 
     # ------------------------------------------------------------- status
     def running(self) -> bool:

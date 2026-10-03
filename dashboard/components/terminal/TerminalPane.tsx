@@ -4,7 +4,7 @@
 // to one daemon shell session. xterm itself is imported dynamically inside the
 // effect so it never runs during SSR / `next build`.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -47,6 +47,19 @@ import { resizeAllowed } from "@/components/terminal/resizeGate";
 import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
+import { usePolledApi } from "@/lib/useApi";
+import { terminalsHref } from "@/lib/ironProxy";
+import {
+  LAUNCH_ACCOUNTS_POLL_MS,
+  launchOffer,
+  paneAccountsOf,
+  type PaneAccounts,
+} from "@/lib/paneAccounts";
+import {
+  LaunchAccountRows,
+  PaneAccountChip,
+  type OpenedPane,
+} from "@/components/terminal/PaneAccountChip";
 
 type AIResult = {
   reply: string;
@@ -414,6 +427,8 @@ export function TerminalPane({
   onRenamed,
   onLaunched,
   onLaunchWithCapabilities,
+  onOpenedPane,
+  liveAccounts,
   paneState,
   agentCli,
   paneStateLine,
@@ -447,6 +462,13 @@ export function TerminalPane({
    *  can never receive them, and the token must never be typed, because a
    *  shell keeps history and scrollback. */
   onLaunchWithCapabilities?: (cli: string) => void;
+  /** v1.302.0: Launch → "as <another account>" started a NEW pane on that
+   *  account (a running CLI cannot change accounts) — add it and focus it.
+   *  Without it the page is reloaded on `/terminals?focus=<id>`. */
+  onOpenedPane?: (pane: OpenedPane) => void;
+  /** v1.302.0: this pane's accounts with their LIVE state, from the page's
+   *  activity poll (`livePaneAccounts`). Absent → the pane row's own. */
+  liveAccounts?: PaneAccounts | null;
   /** v1.217.0: what the agent occupying this pane is doing. */
   paneState?: PaneState | null;
   /** Which coding CLI Build believes occupies this pane. */
@@ -667,6 +689,21 @@ export function TerminalPane({
     });
   }, [draftName, paneName, info.id, onRenamed]);
   const installedClis: LaunchCli[] = aiClis.filter((c) => c.installed);
+
+  // --- Accounts (v1.302.0) — see components/terminal/PaneAccountChip ---------
+  // Iron-Proxy's accounts are read ONLY while the Launch menu is open (no
+  // poller per pane, S-05), and only the LIGHT view (`?discover=0`: no vendor
+  // CLI status runs — review F3); off / 404 / no account → today's menu.
+  const { data: ironProxySnap } = usePolledApi<unknown>(
+    launchOpen ? "/iron-proxy?discover=0" : null,
+    LAUNCH_ACCOUNTS_POLL_MS,
+  );
+  const paneAccounts = liveAccounts !== undefined ? liveAccounts : paneAccountsOf(info);
+  function openedPane(pane: OpenedPane) {
+    setLaunchOpen(false);
+    if (onOpenedPane) onOpenedPane(pane);
+    else window.location.assign(terminalsHref(pane.id));
+  }
   const notInstalledClis = aiClis.filter((c) => !c.installed);
 
   function launchCli(cli: AiCli) {
@@ -1444,6 +1481,7 @@ export function TerminalPane({
         {paneState && (
           <PaneStateChip state={paneState} cli={agentCli} line={paneStateLine} />
         )}
+        <PaneAccountChip paneId={info.id} accounts={paneAccounts} agentCli={agentCli || paneCli} />
         <span
           className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500"
           title={info.cwd}
@@ -1556,33 +1594,51 @@ export function TerminalPane({
                 Installed — click to type, then Enter
               </div>
             )}
-            {installedClis.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => {
-                  launchCli(c);
-                  setLaunchOpen(false);
-                }}
-                className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
-              >
-                <span className="flex w-full items-center justify-between gap-2">
-                  <span className="flex items-center gap-2">
-                    <Rocket size={12} className="text-accent-soft/80" />
-                    <span className="font-medium">{c.label}</span>
-                    {c.version ? (
-                      <span
-                        data-testid={`launch-version-${c.id}`}
-                        className="font-mono text-[10px] text-zinc-600"
-                      >
-                        {c.version}
+            {installedClis.map((c) => {
+              const offer = launchOffer(c.id, ironProxySnap);
+              return (
+                <Fragment key={c.id}>
+                  <button
+                    onClick={() => {
+                      launchCli(c);
+                      setLaunchOpen(false);
+                    }}
+                    className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                  >
+                    <span className="flex w-full items-center justify-between gap-2">
+                      <span className="flex items-center gap-2">
+                        <Rocket size={12} className="text-accent-soft/80" />
+                        <span className="font-medium">{c.label}</span>
+                        {c.version ? (
+                          <span
+                            data-testid={`launch-version-${c.id}`}
+                            className="font-mono text-[10px] text-zinc-600"
+                          >
+                            {c.version}
+                          </span>
+                        ) : null}
                       </span>
-                    ) : null}
-                  </span>
-                  <span className="font-mono text-[10px] text-zinc-500">{c.command.trim()}</span>
-                </span>
-                <LaunchRecipeNote cli={c} />
-              </button>
-            ))}
+                      <span className="font-mono text-[10px] text-zinc-500">{c.command.trim()}</span>
+                    </span>
+                    <LaunchRecipeNote cli={c} />
+                  </button>
+                  {offer && (
+                    <LaunchAccountRows
+                      cliId={c.id}
+                      cliLabel={c.label}
+                      paneId={info.id}
+                      paneAccount={paneAccounts?.[offer.provider]}
+                      accounts={offer.accounts}
+                      onTypeHere={() => {
+                        launchCli(c);
+                        setLaunchOpen(false);
+                      }}
+                      onOpened={openedPane}
+                    />
+                  )}
+                </Fragment>
+              );
+            })}
             {/* THE SECOND DOOR (v1.238.0). A recipe hands the harness the MCP
                 address and a pane-scoped token through the child ENVIRONMENT,
                 which the daemon merges before the shell is spawned. Launching

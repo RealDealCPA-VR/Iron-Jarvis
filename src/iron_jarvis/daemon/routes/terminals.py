@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -20,6 +21,7 @@ from ..app import _first_code_block, _ws_token_ok
 from ..schemas import (
     TerminalAIBody,
     TerminalCreate,
+    TerminalLaunch,
     TerminalUpdate,
     TerminalWorkflowBody,
 )
@@ -120,11 +122,140 @@ def _store_snippet(cwd: str, uploads, name: str, blob: bytes):
     return target, "uploads", note
 
 
+def pane_row(platform, info: dict[str, Any]) -> dict[str, Any]:
+    """A pane row as the dashboard reads it (v1.302.0): a pane that has
+    accounts gets each one's live ``state`` from Iron-Proxy's CACHED snapshot
+    (``pane_accounts.with_live_state`` — never a network call, so a list route
+    stays a list route). Every other row is returned untouched."""
+    if info.get("accounts"):
+        from ...terminals.pane_accounts import with_live_state
+
+        info["accounts"] = with_live_state(
+            getattr(platform, "iron_proxy", None), info["accounts"]
+        )
+    return info
+
+
+#: Held across "pick a free name" + "create the pane" (review nit): two
+#: launches at once must not both take "Claude Code · Work Max".
+_LAUNCH_NAME_LOCK = threading.Lock()
+
+
+def _unique_pane_name(terminals, wanted: str) -> str:
+    """``wanted``, or ``wanted (2)``/``(3)``… when a live pane already has it —
+    agents address panes by name."""
+    taken = {
+        str(i.get("name") or "")
+        for i in terminals.list()
+        if i.get("alive") and i.get("name")
+    }
+    if wanted not in taken:
+        return wanted
+    n = 2
+    while f"{wanted} ({n})" in taken:
+        n += 1
+    return f"{wanted} ({n})"
+
+
+def launch_pane(platform, body: TerminalLaunch):
+    """A NEW pane on an account with a catalog CLI started in it (v1.302.0).
+
+    BLOCKING (the account resolution is loopback HTTP; the spawn is a ConPTY
+    start): a sync route runs it on the threadpool, an async one through
+    ``asyncio.to_thread``. The CLI's catalog command is typed AND Enter is
+    pressed — the click that asked for it is the consent (ResumeStrip's rule;
+    the Launch menu into an EXISTING pane still leaves Enter to the user). A
+    catalog command that expects an argument (a trailing space: ``llm``,
+    ``ollama run``) is typed without Enter. Raises ``HTTPException``."""
+    from ...terminals.ai_clis import AI_CLIS
+    from ...terminals.pane_accounts import CLI_PROVIDER, PaneAccountRefused
+
+    cli_id = (body.cli or "").strip().lower()
+    cat = next((c for c in AI_CLIS if c["id"] == cli_id), None)
+    if cat is None:
+        raise HTTPException(
+            status_code=400, detail=f'"{body.cli}" is not a CLI on the Launch menu.'
+        )
+    provider = CLI_PROVIDER.get(cli_id)
+    account = (body.account or "").strip()
+    if account and provider is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{cat['label']} does not run on an Iron-Proxy account.",
+        )
+    terminals = platform.terminals
+    cwd = (body.cwd or "").strip() or None
+    if body.near:
+        near = terminals.get(body.near)
+        if near is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        cwd = cwd or near.cwd
+    request = {provider: account} if (provider and account) else {}
+    try:
+        accounts = terminals.resolve_accounts(request)
+    except PaneAccountRefused as refused:
+        raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
+    title = None
+    if accounts is not None and provider:
+        title = (accounts.records.get(provider) or {}).get("title")
+    with _LAUNCH_NAME_LOCK:
+        name = (body.name or "").strip() or _unique_pane_name(
+            terminals, f"{cat['label']} · {title}" if title else cat["label"]
+        )
+        try:
+            session = terminals.create(
+                cwd=cwd,
+                cols=body.cols,
+                rows=body.rows,
+                name=name,
+                agent_cli=cli_id,
+                accounts=accounts,
+            )
+        except RuntimeError as exc:  # the session cap
+            raise HTTPException(status_code=429, detail=str(exc)) from None
+    # Nobody is attached until the page focuses it: keep the CLI's first
+    # screen in the pane's tail so the attach replays it (the sign-in pane's
+    # pattern), and answer ConPTY's start-up query meanwhile.
+    session.start_autodrain()
+    command = cat["command"]
+    session.write(command if command.endswith(" ") else command + "\r")
+    return session
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+
+    # THE ACCOUNT RESOLVER IS WIRED HERE (v1.302.0), before the lifespan's
+    # rehydrate runs, so a restored pane is re-resolved by id through the
+    # daemon's OWN Iron-Proxy service (never the module-global one).
+    def _account_resolver(request, *, restoring=False, titles=None):
+        from ...terminals.pane_accounts import resolve
+
+        return resolve(
+            getattr(d.platform, "iron_proxy", None),
+            request,
+            restoring=restoring,
+            titles=titles,
+        )
+
+    def _account_verifier() -> None:
+        """Post-boot (background thread): read Iron-Proxy — locate + health,
+        never a spawn — and refresh the account snapshot the chips read."""
+        svc = getattr(d.platform, "iron_proxy", None)
+        if svc is not None and svc.enabled and svc.check():
+            svc.refresh_accounts()
+
+    try:
+        d.platform.terminals.account_resolver = _account_resolver
+        d.platform.terminals.account_verifier = _account_verifier
+    except Exception:  # noqa: BLE001 — a stand-in manager without the slot
+        pass
+
     @app.get("/terminals")
     def list_terminals() -> dict[str, Any]:
-        return {"terminals": d.platform.terminals.list()}
+        return {
+            "terminals": [pane_row(d.platform, i) for i in d.platform.terminals.list()]
+        }
 
     @app.get("/terminals/shells")
     def terminal_shells() -> dict[str, Any]:
@@ -159,20 +290,30 @@ def register(app: FastAPI, d) -> None:
         """
         panes = []
         for info in d.platform.terminals.list():
-            panes.append(
-                {
-                    "id": info["id"],
-                    "name": info.get("name"),
-                    "agent_cli": info.get("agent_cli"),
-                    "state": info.get("state"),
-                    "state_line": info.get("state_line"),
-                    "alive": info.get("alive"),
-                }
-            )
+            row = {
+                "id": info["id"],
+                "name": info.get("name"),
+                "agent_cli": info.get("agent_cli"),
+                "state": info.get("state"),
+                "state_line": info.get("state_line"),
+                "alive": info.get("alive"),
+            }
+            # v1.302.0: the page reads GET /terminals ONCE and then polls
+            # only this, so a pane's account chip (parked later, signed out,
+            # removed) stays current only if its live state rides here too —
+            # from Iron-Proxy's CACHED snapshot, never a call on this 2.5 s
+            # poll. Only for a pane that has accounts.
+            if info.get("accounts"):
+                row["accounts"] = pane_row(d.platform, info)["accounts"]
+            panes.append(row)
         return {"panes": panes}
 
     @app.post("/terminals")
     def create_terminal(body: TerminalCreate) -> dict[str, Any]:
+        # A sync `def` on the threadpool: the account resolution (v1.302.0)
+        # is loopback HTTP to Iron-Proxy and must stay off the event loop.
+        from ...terminals.pane_accounts import PaneAccountRefused
+
         try:
             session = d.platform.terminals.create(
                 cwd=body.cwd,
@@ -183,10 +324,25 @@ def register(app: FastAPI, d) -> None:
                 agent_cli=getattr(body, "agent_cli", None),
                 capabilities=getattr(body, "capabilities", None),
                 recipe=getattr(body, "recipe", None),
+                # Always a mapping: a provider not named is ABSENT (Iron-Proxy's
+                # first free account while it is on; nothing while it is off).
+                accounts=dict(getattr(body, "accounts", None) or {}),
             )
+        except PaneAccountRefused as refused:  # no pane was created
+            raise HTTPException(status_code=refused.status, detail=refused.sentence)
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
-        return session.info()
+        return pane_row(d.platform, session.info())
+
+    @app.post("/terminals/launch")
+    def launch_terminal(body: TerminalLaunch) -> dict[str, Any]:
+        """A NEW pane on an account, a catalog CLI started in it (v1.302.0).
+
+        ``{cli, account?, cwd?, name?, near?}`` -> the new pane's row. A
+        running CLI cannot change account, so switching account = a new pane
+        (``near`` lends its folder). An account that cannot be used is a 409
+        sentence and no pane. Sync ``def``: the resolution blocks."""
+        return pane_row(d.platform, launch_pane(d.platform, body).info())
 
     @app.patch("/terminals/{term_id}")
     def update_terminal(term_id: str, body: TerminalUpdate) -> dict[str, Any]:
@@ -232,7 +388,7 @@ def register(app: FastAPI, d) -> None:
         # the write that makes `terminals.json` current; without it the pane
         # would be correct until the next daemon boot and then silently revert.
         d.platform.terminals.snapshot()
-        return session.info()
+        return pane_row(d.platform, session.info())
 
     @app.delete("/terminals/{term_id}")
     def kill_terminal(term_id: str) -> dict[str, Any]:

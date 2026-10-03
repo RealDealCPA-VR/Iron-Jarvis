@@ -52,7 +52,9 @@ vi.mock("@/lib/api", () => {
     API_BASE: "http://127.0.0.1:8787",
     ijToken: () => null,
     get: (path: string) => {
-      if (path === "/iron-proxy") {
+      // v1.302.0: the card's 5 s poll is the light view (`?discover=0`) and the
+      // full view is read every 30 s — this fake daemon answers both alike.
+      if (path === "/iron-proxy" || path === "/iron-proxy?discover=0") {
         hooks.gets += 1;
         if (hooks.getError) {
           return Promise.reject(new ApiError(hooks.getError.message, hooks.getError.status));

@@ -14,9 +14,19 @@
  * routes) or is offline (the page's OfflineHint owns that).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, Laptop, LogIn, Play, Plus, Power, Users } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Laptop,
+  LogIn,
+  Play,
+  Plus,
+  Power,
+  SquareTerminal,
+  Users,
+} from "lucide-react";
 import { post, patch, del } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
 import { Badge, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
@@ -35,9 +45,19 @@ import {
   type IronProxyAccount,
   type IronProxySnapshot,
 } from "@/lib/ironProxy";
+import { CLI_ACCOUNT_PROVIDER, openedPaneId } from "@/lib/paneAccounts";
+
+/** The providers whose accounts a Build pane can start a CLI on (v1.302.0). */
+const BUILD_PROVIDERS = new Set(Object.values(CLI_ACCOUNT_PROVIDER));
 
 /** How often the card re-reads `GET /iron-proxy` while on screen. */
 export const IRON_PROXY_POLL_MS = 5000;
+/** How often the card re-reads the FULL view, whose `discovered` list makes
+ *  Iron-Proxy run every vendor CLI's status command (v1.302.0, review F3).
+ *  The 5 s poll is the light read (`?discover=0`: same shape, no CLI checks). */
+export const IRON_PROXY_DISCOVER_POLL_MS = 30_000;
+/** The light read: status + accounts, `discovered: []`, no CLI runs. */
+export const IRON_PROXY_LIGHT_PATH = "/iron-proxy?discover=0";
 /** …and while it waits for a just-enabled Iron-Proxy to answer "running". */
 export const IRON_PROXY_STARTING_POLL_MS = 1000;
 /** Give up showing "Starting…" after this long (the daemon's own start wait is
@@ -54,17 +74,34 @@ export function IronProxyCard() {
   // `waiting` = the user switched it on and we have not yet seen a snapshot
   // taken AFTER that POST that says running (or says why not).
   const [waiting, setWaiting] = useState(false);
-  const { data, error, reload } = usePolledApi<IronProxySnapshot>(
-    "/iron-proxy",
+  // v1.302.0 (review F3): status + accounts come from the LIGHT read every
+  // 5 s (1 s while starting); only `discovered` needs the full view, which
+  // makes Iron-Proxy run each vendor CLI's status command — every 30 s.
+  const light = usePolledApi<IronProxySnapshot>(
+    IRON_PROXY_LIGHT_PATH,
     waiting ? IRON_PROXY_STARTING_POLL_MS : IRON_PROXY_POLL_MS,
   );
+  const full = usePolledApi<IronProxySnapshot>("/iron-proxy", IRON_PROXY_DISCOVER_POLL_MS);
+  const live = isSnapshot(light.data) ? light.data : full.data;
+  const error = isSnapshot(live) ? null : light.error ?? full.error;
+  const data = useMemo(() => {
+    if (!isSnapshot(live)) return live;
+    if (live === full.data || !isSnapshot(full.data)) return live;
+    return { ...live, discovered: full.data.discovered ?? live.discovered ?? [] };
+  }, [live, full.data]);
+  const reloadLight = light.reload;
+  const reloadFull = full.reload;
+  const reload = () => {
+    reloadLight();
+    reloadFull();
+  };
   // The snapshot object held when the enable POST returned: only a NEWER one
   // may end the wait (the held one predates the start).
   const staleRef = useRef<unknown>(null);
   useEffect(() => {
-    if (!waiting || !isSnapshot(data) || data === staleRef.current) return;
-    if (data.status.running || data.status.error) setWaiting(false);
-  }, [waiting, data]);
+    if (!waiting || !isSnapshot(live) || live === staleRef.current) return;
+    if (live.status.running || live.status.error) setWaiting(false);
+  }, [waiting, live]);
   useEffect(() => {
     if (!waiting) return;
     const t = setTimeout(() => setWaiting(false), STARTING_GIVE_UP_MS);
@@ -87,7 +124,7 @@ export function IronProxyCard() {
       snap={data}
       waiting={waiting}
       onEnablePosted={() => {
-        staleRef.current = data;
+        staleRef.current = live;
         setWaiting(true);
       }}
       onEnableFailed={() => setWaiting(false)}
@@ -168,6 +205,16 @@ function IronProxyBody({
       );
       if (!res?.terminal_id) throw new Error("The daemon did not open a sign-in terminal.");
       router.push(terminalsHref(res.terminal_id));
+    });
+  }
+
+  /** v1.302.0: start this account's CLI in a NEW Build pane and go there. */
+  async function openInBuild(id: string) {
+    await run(`${id}:open`, async () => {
+      const res = await post<unknown>(`/iron-proxy/accounts/${enc(id)}/open`);
+      const paneId = openedPaneId(res);
+      if (!paneId) throw new Error("The daemon did not open a Build pane.");
+      router.push(terminalsHref(paneId));
     });
   }
 
@@ -310,6 +357,7 @@ function IronProxyBody({
                         last={i === g.accounts.length - 1}
                         busy={anyBusy}
                         onSignIn={() => signIn(a.id)}
+                        onOpen={() => openInBuild(a.id)}
                         onUnpark={() =>
                           act(`${a.id}:unpark`, () => post(`/iron-proxy/accounts/${enc(a.id)}/unpark`))
                         }
@@ -426,6 +474,10 @@ function IronProxyBody({
           provider — never to another provider. API-key accounts are managed in Iron-Proxy, but
           Iron Jarvis keeps using its own keys.
         </p>
+        <p id="iron-proxy-build-help" className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+          How accounts work in Build: a terminal pane keeps the account it started on — read
+          “Several accounts in Build” in the Handbook (Help → Guides).
+        </p>
       </Card>
     </div>
   );
@@ -437,6 +489,7 @@ function AccountRow({
   last,
   busy,
   onSignIn,
+  onOpen,
   onUnpark,
   onMove,
   onEnable,
@@ -447,6 +500,7 @@ function AccountRow({
   last: boolean;
   busy: boolean;
   onSignIn: () => void;
+  onOpen: () => void;
   onUnpark: () => void;
   onMove: (dir: -1 | 1) => void;
   onEnable: () => void;
@@ -456,6 +510,17 @@ function AccountRow({
   const usage = usageLine(a.usage);
   const isCli = a.lane === "cli";
   const parked = a.state?.status === "parked";
+  // v1.302.0: a CLI account of Claude/Codex/Grok can start its CLI in Build.
+  // Parked / signed-out / switched-off accounts could not start a session, so
+  // the button says why instead of opening a pane that is refused.
+  const canOpen = isCli && BUILD_PROVIDERS.has(a.provider);
+  const openBlocked = !a.enabled
+    ? "This account is switched off — enable it first."
+    : parked
+      ? "This account is parked — unpark it, or wait until its limit resets."
+      : a.state?.status === "unauthenticated"
+        ? "Sign this account in first."
+        : null;
   return (
     <div
       id={`iron-proxy-account-${a.id}`}
@@ -492,6 +557,18 @@ function AccountRow({
             className={`${a.state?.status === "unauthenticated" ? "btn-accent" : "btn-ghost"} px-2.5 py-1 text-xs`}
           >
             <LogIn size={13} /> Sign in
+          </button>
+        )}
+        {canOpen && (
+          <button
+            type="button"
+            data-testid={`iron-proxy-open-${a.id}`}
+            onClick={onOpen}
+            disabled={busy || openBlocked !== null}
+            title={openBlocked ?? "Open a new Build terminal with this account's CLI already running"}
+            className="btn-ghost px-2.5 py-1 text-xs"
+          >
+            <SquareTerminal size={13} /> Open in Build
           </button>
         )}
         {parked && (

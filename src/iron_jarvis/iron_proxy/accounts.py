@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -83,9 +84,42 @@ _PROTECTED = frozenset({
 })
 
 
+#: The vendor CLI's OWN default home under the user's profile (Iron-Proxy's
+#: specs: ``claude`` -> ``~/.claude``, ``codex`` -> ``~/.codex``, ``grok`` ->
+#: ``~/.grok``). v1.302.0 (review F1).
+_DEFAULT_HOME_DIRS = {"CLAUDE_CONFIG_DIR": ".claude", "CODEX_HOME": ".codex", "GROK_HOME": ".grok"}
+
+
+def _dir_key(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.expanduser(str(path))))
+
+
+def is_default_home(home_var: str, home: str) -> bool:
+    """Is ``home`` the CLI's own default home (an ADOPTED "this PC's login")?
+
+    Such an account must NOT be run with its home variable SET: with
+    ``CLAUDE_CONFIG_DIR`` set, Claude Code reads ``$CLAUDE_CONFIG_DIR/.claude.json``
+    instead of the user's own ``~/.claude.json`` (MCP servers, projects, trust)
+    — a different config even though the folder is the same. The default is
+    what the CLI already uses with the variable UNSET. Compared resolved and,
+    on Windows, case-insensitively. Never raises."""
+    name = _DEFAULT_HOME_DIRS.get(str(home_var or "").upper())
+    if not name or not str(home or "").strip():
+        return False
+    try:
+        return _dir_key(home) == _dir_key(os.path.join(os.path.expanduser("~"), name))
+    except (OSError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class Lease:
-    """One account, borrowed for one call."""
+    """One account, borrowed for one call.
+
+    An account whose home IS the CLI's own default home (:func:`is_default_home`)
+    carries NO ``env_set`` and its home variable in ``env_unset``: the child
+    runs as this PC's own login (that account), with an inherited variable
+    removed. ``home`` still names the folder."""
 
     profile_id: str
     title: str
@@ -97,16 +131,23 @@ class Lease:
     env_unset: tuple[str, ...] = ()
     #: The Iron Jarvis provider id this lease is for (``claude-cli`` ...).
     ij_provider: str = ""
+    #: v1.302.0: the account's home folder, set or not (a default home is not).
+    home_dir: str = ""
 
     @property
     def home(self) -> str:
+        if self.home_dir:
+            return self.home_dir
         spec = PROVIDERS.get(self.ij_provider)
         return self.env_set.get(spec.home_var, "") if spec else ""
 
     def apply(self, env: dict[str, str]) -> dict[str, str]:
         """``env`` with this account applied: unset first, then set. Mutates
         and returns ``env`` (callers pass their own copy)."""
-        for key in self.env_unset:
+        # Case-insensitive (v1.302.0): Windows keeps one variable per name
+        # whatever its case, so an inherited "Claude_Config_Dir" is the same one.
+        drop = {k.upper() for k in self.env_unset}
+        for key in [k for k in env if k.upper() in drop]:
             env.pop(key, None)
         env.update(self.env_set)
         return env
@@ -489,17 +530,34 @@ def _lease_of(spec: ProviderAccounts, answer: Any) -> Lease | None:
         # move a subscription CLI off the account it is meant to run as.
         _note("pick", ValueError("ignored env " + ",".join(ignored)))
     unset_raw = (env or {}).get("unset") if isinstance(env, dict) else None
-    unset = tuple(
-        k for k in (unset_raw if isinstance(unset_raw, list) else [])
+    return make_lease(
+        spec,
+        pid,
+        str(profile.get("title") or pid),
+        home,
+        unset_raw if isinstance(unset_raw, list) else [],
+    )
+
+
+def make_lease(
+    spec: ProviderAccounts, profile_id: str, title: str, home: str, unset: Any
+) -> Lease:
+    """The ONE place a lease's environment is decided: only the home is set
+    (none for the CLI's own default home — :func:`is_default_home` — whose
+    variable is unset instead), and the unset names minus PATH & co."""
+    names = tuple(
+        k for k in (unset if isinstance(unset, (list, tuple)) else [])
         if isinstance(k, str) and k and k.upper() not in _PROTECTED and k != spec.home_var
     )
+    default = is_default_home(spec.home_var, home)
     return Lease(
-        profile_id=pid,
-        title=str(profile.get("title") or pid),
+        profile_id=profile_id,
+        title=title,
         provider=spec.proxy_provider,
-        env_set={spec.home_var: home},
-        env_unset=unset,
+        env_set={} if default else {spec.home_var: home},
+        env_unset=names + ((spec.home_var,) if default else ()),
         ij_provider=spec.ij_provider,
+        home_dir=home,
     )
 
 

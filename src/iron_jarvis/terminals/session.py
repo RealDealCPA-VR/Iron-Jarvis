@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
     from .agent_state import PaneActivity
 
 from ..core.ids import new_id, utcnow
@@ -552,6 +554,12 @@ class TerminalSession:
     #: `TerminalManager.create`. A plain dict, not the process environment:
     #: the shell is already spawned by the time we know the pane's id.
     pane_env_extra: dict[str, str] | None = None
+    #: v1.302.0: which subscription account each vendor CLI in this pane runs
+    #: as — Iron-Proxy provider -> ``{"id", "title", "source"[, "note"]}``
+    #: (``id`` None = this PC's own login). Fixed for the pane's life: its
+    #: shell was STARTED with that account's home variable, and a running CLI
+    #: cannot change account. ``None`` for a pane that has none.
+    accounts: dict[str, dict[str, Any]] | None = None
 
     def pane_env(self) -> dict[str, str]:
         """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
@@ -622,7 +630,7 @@ class TerminalSession:
         from .ai_clis import RESUME_COMMANDS
 
         act = self.activity()
-        return {
+        row = {
             "id": self.id,
             "cwd": self.cwd,
             "shell": self.shell,
@@ -649,3 +657,13 @@ class TerminalSession:
             # capabilities differently depending on when the pane was made.
             "capabilities": self.effective_capabilities(),
         }
+        # v1.302.0 additive, ONLY for a pane that has accounts (every other row
+        # is byte-identical to v1.301.0). The live per-account `state` is added
+        # by the routes from Iron-Proxy's CACHED snapshot, never here.
+        if self.accounts:
+            # Only the row keys: the recorded home/unset stay in the daemon.
+            row["accounts"] = {
+                p: {k: a[k] for k in ("id", "title", "source", "note") if k in a}
+                for p, a in self.accounts.items()
+            }
+        return row

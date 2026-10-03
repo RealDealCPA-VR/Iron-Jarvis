@@ -37,6 +37,7 @@ import {
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
 import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
+import { livePaneAccounts, paneAccountBadge } from "@/lib/paneAccounts";
 import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
 import {
@@ -281,6 +282,9 @@ export default function TerminalsPage() {
             // server is the only authority, and the rail's checkbox writes back
             // through PATCH rather than deciding anything itself.
             capabilities: t.capabilities ?? null,
+            // v1.302.0: the account this pane started on (the header chip's label).
+            // Live: the activity poll's accounts win over the row read at load.
+            account: paneAccountBadge(livePaneAccounts(t, a), cli),
           };
         }),
     [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus, cliLabel],
@@ -795,6 +799,20 @@ export default function TerminalsPage() {
     [shell],
   );
 
+  /** v1.302.0: a pane the daemon started for this page (Launch → "as <another
+   *  account>") — added and focused like one made with the + button. */
+  const adoptPane = useCallback(
+    (pane: { id: string }) => {
+      const info = { alive: true, ...pane } as unknown as TerminalInfo;
+      setTerminals((prev) => (prev.some((t) => t.id === info.id) ? prev : [...prev, info]));
+      setLayout((prev) =>
+        prev[info.id] ? prev : { ...prev, [info.id]: findFreeSlot(Object.values(prev), 620, 380) },
+      );
+      bringToFront(info.id);
+    },
+    [findFreeSlot, bringToFront],
+  );
+
   const closeTerminal = useCallback((id: string) => {
     // Optimistically remove the pane, then kill server-side. Its terminal
     // and socket OUTLIVE an unmount (v1.243.0 — that is how a return to
@@ -1071,6 +1089,8 @@ export default function TerminalsPage() {
                               }
                               onLaunched={(cli) => notePaneOverride(t.id, { cli })}
                               onLaunchWithCapabilities={(cli) => addTerminal(t.cwd, cli)}
+                              onOpenedPane={adoptPane}
+                              liveAccounts={livePaneAccounts(t, act)}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}

@@ -10,7 +10,11 @@ Shapes:
 * ``GET /iron-proxy`` → ``{status, accounts, discovered, providers_used_by_jarvis}``
   (``status`` = ``service.status()``; accounts/discovered ``[]`` and the reason
   in ``status.error`` when Iron-Proxy is off or not running). ``discover_error``
-  is added only when the login scan itself failed.
+  is added only when the login scan itself failed. ``?discover=0`` (v1.302.0,
+  the Build Launch menu's light read) skips the login scan — which makes
+  Iron-Proxy run every vendor CLI's own status command — and answers
+  ``discovered: []`` with ``discover_skipped: true``; everything else is the
+  same.
 * ``POST /iron-proxy/enable`` / ``POST /iron-proxy/disable`` → the same body as
   ``GET /iron-proxy`` after starting/stopping (the flag is persisted).
 * ``POST /iron-proxy/accounts`` ``{provider, title}`` → 201 account.
@@ -22,6 +26,10 @@ Shapes:
 * ``POST /iron-proxy/accounts/{id}/signin`` → ``{terminal_id, name}`` — a Build
   pane whose shell runs the account's login command with that account's env.
 * ``POST /iron-proxy/accounts/{id}/signout`` → ``{ok: true}``.
+* ``POST /iron-proxy/accounts/{id}/open`` ``{cli?}`` → ``{terminal_id, name}``
+  (v1.302.0) — a NEW Build pane on that account with its CLI started (claude
+  for anthropic, codex for openai, grok for xai); ``/terminals/launch``'s own
+  internals.
 
 Every account route answers 409 with ONE plain sentence when Iron-Proxy is off
 or not running; an Iron-Proxy error passes its ``hint`` (else its message)
@@ -110,6 +118,11 @@ class IronProxyAccountPatch(BaseModel):
 class IronProxyReorder(BaseModel):
     provider: str
     ids: list[str]
+
+
+class IronProxyOpen(BaseModel):
+    #: The catalog CLI to start (v1.302.0); default = the account's own CLI.
+    cli: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -308,7 +321,7 @@ def register(app: FastAPI, d) -> None:
         reads, so a just-added (or removed) account counts at once."""
         await asyncio.to_thread(svc.refresh_accounts)
 
-    async def _view(svc) -> dict[str, Any]:
+    async def _view(svc, discover: bool = True) -> dict[str, Any]:
         body: dict[str, Any] = {
             "status": svc.status(),
             "accounts": [],
@@ -322,11 +335,14 @@ def register(app: FastAPI, d) -> None:
         if client is None:
             body["status"] = svc.status()
             return body
+        async def _no_scan() -> list[Any]:
+            return []
+
         profiles, states, usage, discovered = await asyncio.gather(
             asyncio.to_thread(client.profiles),
             asyncio.to_thread(client.states),
             asyncio.to_thread(client.usage),
-            asyncio.to_thread(client.discover, 20.0),
+            asyncio.to_thread(client.discover, 20.0) if discover else _no_scan(),
             return_exceptions=True,
         )
         for got in (profiles, states):
@@ -363,18 +379,21 @@ def register(app: FastAPI, d) -> None:
             body["discovered"] = _discovered_view(
                 discovered, [p for p in profiles if isinstance(p, dict)]
             )
+        if not discover:
+            body["discover_skipped"] = True
         body["status"] = svc.status()
         return body
 
     @app.get("/iron-proxy")
-    async def iron_proxy_view() -> dict[str, Any]:
+    async def iron_proxy_view(discover: bool = True) -> dict[str, Any]:
         """Iron-Proxy on Connections: ``status`` (enabled/running/owned/url/
         version/error/bundled — never the token), ``accounts`` (grouped by
         provider in failover order, each with its state chip data and usage),
         ``discovered`` (this PC's existing CLI logins not yet an account) and
         ``providers_used_by_jarvis`` (which Iron Jarvis provider runs as each
-        Iron-Proxy provider's accounts)."""
-        return await _view(_svc())
+        Iron-Proxy provider's accounts). ``?discover=0``: no login scan
+        (``discovered: []``, ``discover_skipped: true``) — the light read."""
+        return await _view(_svc(), discover=discover)
 
     @app.post("/iron-proxy/enable")
     async def iron_proxy_enable() -> dict[str, Any]:
@@ -506,3 +525,47 @@ def register(app: FastAPI, d) -> None:
         line = _command_line(getattr(session, "shell", ""), binary, args, env)
         await asyncio.to_thread(session.write, line + "\r")
         return {"terminal_id": session.id, "name": session.pane_name or name}
+
+    @app.post("/iron-proxy/accounts/{account_id}/open")
+    async def iron_proxy_open(
+        account_id: str, body: IronProxyOpen | None = None
+    ) -> dict[str, Any]:
+        """Open a NEW Build pane on this account with its CLI started in it
+        (v1.302.0) — the card's "Open in Build". Answers ``{terminal_id,
+        name}``; the dashboard opens Build focused on it. An account that
+        cannot be used right now is a 409 sentence and no pane."""
+        from ...terminals.pane_accounts import CLI_PROVIDER, PROVIDER_CLI
+        from ..schemas import TerminalLaunch
+        from .terminals import launch_pane
+
+        svc = _svc()
+        client = await _client(svc)
+        profiles = await _call(client.profiles)
+        prof = next(
+            (p for p in (profiles or []) if isinstance(p, dict) and p.get("id") == account_id),
+            None,
+        )
+        if prof is None:
+            raise HTTPException(status_code=404, detail="Iron-Proxy has no account with that id.")
+        if prof.get("lane") != "cli":
+            raise HTTPException(
+                status_code=400,
+                detail="Only a subscription (CLI) account opens in Build; "
+                "API-key accounts are managed in Iron-Proxy.",
+            )
+        provider = str(prof.get("provider") or "")
+        cli = ((body.cli if body is not None else None) or "").strip().lower()
+        cli = cli or PROVIDER_CLI.get(provider, "")
+        if not cli:
+            raise HTTPException(
+                status_code=400, detail=f"Build has no CLI for {provider} accounts yet."
+            )
+        if CLI_PROVIDER.get(cli) != provider:
+            raise HTTPException(
+                status_code=400,
+                detail=f'"{cli}" does not run as a {provider} account.',
+            )
+        session = await asyncio.to_thread(
+            launch_pane, d.platform, TerminalLaunch(cli=cli, account=account_id)
+        )
+        return {"terminal_id": session.id, "name": session.pane_name}

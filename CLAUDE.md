@@ -2521,6 +2521,51 @@ does not need a bump, stop and bump it.
   sentence, table-pinned against the VENDORED bundle's DEFAULT_HINTS),
   `dashboard/__tests__/iron-proxy-card-v1301.test.tsx`.
 
+- **A Build pane's ACCOUNT is chosen when the pane STARTS, and shown on it**
+  (v1.302.0). A vendor CLI signs in once, at process start, through its home
+  var (CLAUDE_CONFIG_DIR / CODEX_HOME / GROK_HOME) and then talks to its vendor
+  directly — no app can move a running session, and Iron-Proxy never handles
+  tokens. So the account is the pane's SHELL ENV at spawn, never a `$env:…=`
+  typed into a live shell. `terminals/pane_accounts.py` resolves
+  `TerminalCreate.accounts {provider: "<profile id>" | "default"}`: explicit id
+  → Iron-Proxy `GET /iron/pick?profileId=` (ONLY when health `features` has
+  "pick-profile" — an older proxy ignores the id and hands out the next ready
+  account), applied with `iron_proxy.accounts.Lease.apply` (one rule, not a
+  fork) inside `_with_pane_env` (daemon creds stripped, account, then pane
+  identity); "default" REMOVES any inherited home var (really this PC's
+  login); a key absent + Iron-Proxy on → the first free account (chat's order);
+  Iron-Proxy off → a NEW pane is byte-identical to v1.301.0 (no `accounts`
+  key); a RESTORED pane that recorded an account keeps that account's folder
+  and row even with Iron-Proxy off (deliberate — its conversations live there).
+  An ADOPTED account whose home is the CLI's own default (`~/.claude`) sets NO
+  home var, in panes AND in the v1.301.0 chat lease: with CLAUDE_CONFIG_DIR set,
+  Claude Code reads `$CLAUDE_CONFIG_DIR/.claude.json`, not the user's real
+  `~/.claude.json` (MCP servers, projects, trust) — measured here. A pane
+  strips only the CHOSEN provider's own key names, never the user's other keys
+  (the v1.217.0 rule); a plain "+" pane picks its first free account from the
+  CACHED snapshot (no Iron-Proxy call); the Launch menu reads the light
+  `?discover=0` view (the full view makes Iron-Proxy run every vendor CLI's
+  status command).
+  An unusable EXPLICIT account is a 409 sentence by kind and NO pane — never a
+  different account; Iron-Proxy not answering for an absent key → this PC's
+  login WITH a `note` (a plain "+" uses the CACHED snapshot; no snapshot = "not answering yet" note). Rows (`GET /terminals`, create/launch/PATCH answers AND
+  `/terminals/activity`) carry `accounts` with live state from the CACHED
+  snapshot (`active|ready|parked|needs-sign-in|missing(+reason disabled)|
+  default|unknown`) — list routes never call Iron-Proxy, and the Build page
+  reads GET /terminals once, so the activity rows are what keep the chip live.
+  Restore applies the RECORDED home (a stable folder) with no Iron-Proxy call
+  — boot must never wait on it — and verifies off the boot path.
+  `POST /terminals/launch {cli, account?, near?}` opens a NEW pane on that
+  account in `near`'s folder and presses Enter (the click is the consent);
+  `POST /iron-proxy/accounts/{id}/open` is the card's one-press version.
+  Dashboard: Launch rows "as <account>" (`launchOffer` — Iron-Proxy off = the
+  menu is exactly v1.301.0's; it reads /iron-proxy only while the menu is
+  open), `PaneAccountChip` (`#pane-account-<id>`), the rail label, and
+  `adoptPane` on the Build page (a `router.push` with only a new `?focus=`
+  keeps Next's page state, so it would neither show nor focus the new pane).
+  Pins: `tests/test_build_accounts_v1302.py`,
+  `dashboard/__tests__/build-accounts-v1302.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

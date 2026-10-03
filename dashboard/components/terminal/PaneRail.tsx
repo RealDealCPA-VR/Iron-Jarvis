@@ -51,6 +51,7 @@ import {
   type PaneDisplay,
 } from "@/components/terminal/PaneState";
 import type { BrowserStatus } from "@/lib/types";
+import type { PaneAccountBadge } from "@/lib/paneAccounts";
 
 /**
  * A pane's Capabilities (v1.238.0, D20). Deliberately declared HERE rather than
@@ -195,6 +196,9 @@ export interface RailPane {
    *  asked yet, which renders as five unticked boxes — the safe default and
    *  exactly how an old `terminals.json` snapshot restores. */
   capabilities?: RailPaneCapabilities | null;
+  /** v1.302.0: the account the pane started on — the header chip's short
+   *  label ("Claude · Work Max"). Absent for a pane without accounts. */
+  account?: PaneAccountBadge | null;
 }
 
 export function PaneRail({
@@ -452,6 +456,22 @@ export function PaneRail({
                         className="block truncate text-[10px] text-zinc-500"
                       >
                         {p.cli}
+                      </span>
+                    ) : null}
+                    {p.account ? (
+                      <span
+                        data-testid={`rail-account-${p.id}`}
+                        data-tone={p.account.tone}
+                        title={p.account.tooltip}
+                        className={`block truncate text-[10px] ${
+                          p.account.tone === "amber"
+                            ? "text-amber-300/90"
+                            : p.account.tone === "red"
+                              ? "text-rose-300/70"
+                              : "text-zinc-500"
+                        }`}
+                      >
+                        {p.account.label}
                       </span>
                     ) : null}
                   </span>

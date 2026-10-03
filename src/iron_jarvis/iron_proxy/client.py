@@ -307,12 +307,23 @@ class IronProxyClient:
         return self._call("POST", f"/iron/profiles/{self._id(profile_id)}/logout")
 
     # ------------------------------------------- the external-executor API
-    def pick(self, provider: str, lane: str = "cli") -> dict[str, Any]:
+    def pick(
+        self, provider: str, lane: str = "cli", profile_id: str | None = None
+    ) -> dict[str, Any]:
         """``{"profile": Profile, "env": {"set": {...}, "unset": [...]}}`` — the
         account a call should run as right now. Raises ``NO_PROFILE``,
         ``ALL_PROFILES_EXHAUSTED`` (``details.resetAt``) or ``AUTH_REQUIRED``
-        (``details.profileId``/``title``)."""
-        return self._call("GET", "/iron/pick", params={"provider": provider, "lane": lane})
+        (``details.profileId``/``title``).
+
+        ``profile_id`` (v1.302.0) asks for THAT account (``profileId``; an
+        Iron-Proxy whose health ``features`` has ``"pick-profile"``). Same 200
+        shape; an account that cannot be used answers an error naming it. An
+        older Iron-Proxy IGNORES the parameter and picks the first free account
+        — callers check the feature first and compare the answer's id."""
+        params: dict[str, Any] = {"provider": provider, "lane": lane}
+        if profile_id:
+            params["profileId"] = profile_id
+        return self._call("GET", "/iron/pick", params=params)
 
     def signal(
         self,

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.301.0 (2026-10-03).*
+holds itself to. Current as of v1.302.0 (2026-10-03).*
 
 ---
 
@@ -1719,6 +1719,33 @@ usable when this PC's own sign-in has expired. Everything else about these calls
 unchanged: tools, pictures, streaming and the cost line work as before. API-key
 accounts can be managed in Iron-Proxy too, but Iron Jarvis keeps using its own
 keys for API providers. With Iron-Proxy off, nothing changes.
+
+**Several accounts in Build (v1.302.0).** Chat, agents and the Build pane's
+assistant switch accounts by themselves (above). A Claude Code, Codex or Grok
+session you run in a Build terminal is different: the program signs in once,
+when it starts, and talks to its company directly for as long as it runs — no
+app can move a running session to another account, and Iron-Proxy never
+handles your login tokens. So in Build you choose the account WHEN A PANE
+STARTS:
+- With Iron-Proxy on, a new pane starts on the first free account of each
+  provider, the same order chat uses. The pane's header shows which one
+  ("Claude · Work Max"); amber means that account is parked and says until when.
+- **Launch → Claude Code → as <account>** starts Claude Code on exactly that
+  account. Picking the pane's own account types the command into that pane, as
+  Launch always has (press Enter to start it); picking another account opens a
+  new pane next to it, already running, so the pane you were in keeps its
+  session.
+- A pane on an account keeps your other keys: only that provider's own API key
+  is left out of it (so the program uses the account, not a key), and if the
+  account is your own login on this PC, Claude Code keeps all of its usual
+  settings, MCP servers and trusted folders.
+- On the Connections page, each account on the Iron-Proxy card has **Open in
+  Build**, which does the same in one press.
+- **as this PC's login** runs the program on the login you made yourself in a
+  terminal, outside Iron-Proxy.
+An account is fixed for the life of its pane. Each account keeps its own
+conversation history, so `claude --continue` in a pane on a different account
+does not see the first account's conversations.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,

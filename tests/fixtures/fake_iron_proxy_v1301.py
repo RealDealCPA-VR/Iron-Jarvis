@@ -69,6 +69,10 @@ STATUS_BY_CODE = {
     "UNSUPPORTED": 400,
 }
 FAKE_VERSION = "0.0.0-fake"
+#: v1.302.0: an Iron-Proxy that picks a CHOSEN account (``/iron/pick?profileId=``).
+#: Without "pick-profile" the fake behaves like the older one: the parameter is
+#: IGNORED and the first free account is answered.
+FEATURES_PICK_PROFILE = ("executor-v1", "pick-profile")
 #: Iron-Proxy's own DEFAULT_HINTS (packages/core/src/errors.ts), verbatim.
 HINT_PROFILE_NOT_FOUND = (
     "Run iron-proxy profiles list (or open the switcher) and use one of the ids shown there."
@@ -116,6 +120,11 @@ class FakeIronProxy:
         self.states: dict[str, dict[str, Any]] = {}
         self.discovered: list[dict[str, Any]] = []
         self.calls: list[tuple[str, str, Any]] = []  # (method, path, body)
+        #: v1.302.0: (path, query) for every request — ``calls`` drops the query.
+        self.queries: list[tuple[str, dict[str, list[str]]]] = []
+        #: v1.302.0: True = a pinned pick lends a parked / signed-out account
+        #: anyway (what ``pickProfile`` did before it checked availability).
+        self.pinned_lenient = False
         self.auth_headers: list[str | None] = []
         self._seq = 0
         self.server: ThreadingHTTPServer | None = None
@@ -207,6 +216,50 @@ class FakeIronProxy:
         raise FakeError("ALL_PROFILES_EXHAUSTED", f"All {provider} accounts are parked.",
                         details={"resetAt": earliest, "earliestResetAt": earliest})
 
+    def pick_profile(self, provider: str, lane: str, pid: str) -> dict[str, Any]:
+        """``GET /iron/pick?profileId=`` (v1.302.0): THAT account, or an error
+        naming it — Iron-Proxy 2d4f645's ``pickProfile(provider, {profileId,
+        lane})``: unknown 404 PROFILE_NOT_FOUND ``{profileId}``; wrong
+        provider/lane 400 INVALID_REQUEST; disabled 400 INVALID_REQUEST
+        ("…is disabled."); parked 429 QUOTA_EXCEEDED ``{profileId, title,
+        provider, resetAt?, kind?}``; signed out 401 AUTH_REQUIRED
+        ``{profileId, title}``; an expired park answers 200."""
+        if pid not in self.profiles:
+            raise FakeError("PROFILE_NOT_FOUND", f'No profile "{pid}".',
+                            hint=HINT_PROFILE_NOT_FOUND, details={"profileId": pid})
+        p = self._get(pid)
+        if p["provider"] != provider or p["lane"] != lane:
+            raise FakeError(
+                "INVALID_REQUEST",
+                f'Profile "{p["title"]}" is a {p["provider"]} {p["lane"]} account, '
+                f"not a {provider} {lane} one.",
+                details={"profileId": pid, "provider": p["provider"], "lane": p["lane"]},
+            )
+        if not p["enabled"]:
+            raise FakeError("INVALID_REQUEST", f'Profile "{p["title"]}" is disabled.',
+                            details={"profileId": pid})
+        st = self.states[pid]
+        if not self.pinned_lenient:
+            if st["status"] == "unauthenticated":
+                raise FakeError("AUTH_REQUIRED", f'"{p["title"]}" needs to sign in.',
+                                details={"profileId": pid, "title": p["title"]},
+                                hint=HINT_AUTH_REQUIRED)
+            until = st.get("parkedUntil")
+            if st["status"] == "parked" and until and datetime.fromisoformat(
+                until.replace("Z", "+00:00")
+            ) > datetime.now(timezone.utc):
+                details = {"profileId": pid, "title": p["title"], "provider": p["provider"],
+                           "resetAt": until}
+                reason = st.get("parkedReason")
+                if isinstance(reason, dict) and reason.get("kind"):
+                    details["kind"] = reason["kind"]
+                raise FakeError("QUOTA_EXCEEDED", f'"{p["title"]}" is parked.', details=details)
+        home_var = HOME_VAR.get(provider, "HOME")
+        return {
+            "profile": p,
+            "env": {"set": {home_var: p["cli"]["home"]}, "unset": list(COMMON_STRIP)},
+        }
+
     def signal(self, pid: str, body: dict[str, Any]) -> dict[str, Any]:
         self._get(pid)
         status = body.get("status")
@@ -264,6 +317,7 @@ class FakeIronProxy:
         query = parse_qs(parsed.query)
         with self.lock:
             self.calls.append((method, path, body))
+            self.queries.append((path, query))
             if path == "/iron/health":
                 out: dict[str, Any] = {"ok": True, "name": "iron-proxy",
                                        "profiles": len(self.profiles)}
@@ -292,6 +346,9 @@ class FakeIronProxy:
             if sub == "pick" and method == "GET":
                 provider = (query.get("provider") or [""])[0]
                 lane = (query.get("lane") or ["cli"])[0]
+                chosen = (query.get("profileId") or [""])[0]
+                if chosen and "pick-profile" in (self.features or []):
+                    return 200, self.pick_profile(provider, lane, chosen)
                 return 200, self.pick(provider, lane)
             if sub == "adopt" and method == "POST":
                 if not isinstance(body.get("provider"), str) or not isinstance(body.get("home"), str):

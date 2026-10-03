@@ -936,6 +936,33 @@ class TerminalCreate(BaseModel):
     #: by `cli_id`. When set, the pane is spawned with a capability token in its
     #: environment. Absent = today's behaviour exactly: no recipe, no token.
     recipe: str | None = None
+    #: v1.302.0 additive — which subscription account each vendor CLI in this
+    #: pane runs as: Iron-Proxy provider (`anthropic` / `openai` / `xai`) ->
+    #: `"<profile id>"` or `"default"` (this PC's own login). A provider not
+    #: named gets Iron-Proxy's first free account while Iron-Proxy is on, and
+    #: nothing at all while it is off (`terminals.pane_accounts`). An account
+    #: that cannot be used is a 409 sentence and no pane. Fixed for the pane's
+    #: life — not in TerminalUpdate.
+    accounts: dict[str, str | None] | None = None
+
+
+class TerminalLaunch(BaseModel):
+    """`POST /terminals/launch` (v1.302.0): a NEW pane on an account, with a
+    catalog CLI started in it (typed + Enter — the click is the consent).
+
+    `cli` is a Launch-catalog id (`terminals.ai_clis.AI_CLIS`); `account` is
+    the profile id (or `"default"`) for THAT CLI's provider (claude ->
+    anthropic, codex -> openai, grok -> xai) — a CLI with no account provider
+    takes none. `cwd` defaults to the `near` pane's folder; `name` to
+    "<CLI label> · <account title>"."""
+
+    cli: str
+    account: str | None = None
+    cwd: str | None = None
+    name: str | None = None
+    near: str | None = None
+    cols: int = 100
+    rows: int = 30
 
 
 class TerminalUpdate(BaseModel):
