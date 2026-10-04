@@ -125,6 +125,12 @@ def child_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
             "CLAUDE_CODE_EXTRA_BODY",
         ):
             env.pop(key, None)
+    # v1.303.0: never pass a PARENT Claude Code session's markers (a daemon
+    # started from inside one) — the child is its own session; the parent's
+    # messaging token must not travel. Same list as the Build panes'.
+    from ..core.claude_markers import drop_claude_session_markers
+
+    drop_claude_session_markers(env)
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     return env
 

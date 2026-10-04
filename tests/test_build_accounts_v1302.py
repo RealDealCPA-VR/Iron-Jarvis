@@ -266,7 +266,14 @@ def test_no_key_with_iron_proxy_off_is_byte_identical_to_v1301(client, monkeypat
     assert r.status_code == 200, r.text
     row = r.json()
     assert "accounts" not in row
-    expected = {k: v for k, v in os.environ.items() if k not in DAEMON_ONLY}
+    # v1.303.0: a parent Claude Code session's markers never reach a pane
+    # (tests/test_claude_session_markers_v1303.py) -- v1.301.0's env minus those.
+    from iron_jarvis.core.claude_markers import CLAUDE_SESSION_MARKERS
+
+    markers = {m.upper() for m in CLAUDE_SESSION_MARKERS}
+    expected = {
+        k: v for k, v in os.environ.items() if k not in DAEMON_ONLY and k.upper() not in markers
+    }
     expected.update({
         "IRONJARVIS_BUILD": "1",
         "IRONJARVIS_PANE_ID": row["id"],

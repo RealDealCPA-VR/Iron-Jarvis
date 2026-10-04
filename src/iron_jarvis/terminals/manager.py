@@ -96,6 +96,8 @@ _PTY_VERIFY_SECONDS = 0.7
 #: key is a file and never appears in the environment at all.
 _DAEMON_ONLY_ENV = ("IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN")
 
+from ..core.claude_markers import drop_claude_session_markers  # noqa: E402
+
 
 def _with_pane_env(
     env: dict | None, pane_env: dict[str, str], accounts: Any | None = None
@@ -124,6 +126,7 @@ def _with_pane_env(
     base = dict(env) if env is not None else os.environ.copy()
     for name in _DAEMON_ONLY_ENV:
         base.pop(name, None)
+    drop_claude_session_markers(base)
     if accounts:
         accounts.apply(base)
     base.update(pane_env)

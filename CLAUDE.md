@@ -2607,6 +2607,27 @@ does not need a bump, stop and bump it.
   countdown repaints). Pins: `tests/test_build_continue_v1303.py`,
   `dashboard/__tests__/continue-next-v1303.test.tsx`.
 
+- **A Build pane and a `claude` child are TOP-LEVEL sessions: a parent Claude
+  Code session's markers never cross** (v1.303.1, found by the LIVE end-to-end
+  run). A daemon started from inside a Claude Code session (a dev shell, an
+  agent) handed `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`,
+  `CLAUDE_CODE_MESSAGING_TOKEN`/`_SOCKET`, `CLAUDE_CODE_SESSION_ID`,
+  `CLAUDE_PID`, … to every pane and child; Claude Code in the pane printed
+  "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker"
+  (no conversation file → Continue had nothing to carry) and the parent's
+  messaging TOKEN reached shells it was never meant for.
+  `core/claude_markers.drop_claude_session_markers` runs in
+  `terminals.manager._with_pane_env` and `claude_models.child_env`
+  (case-insensitive). The user's own Claude settings (CLAUDE_CONFIG_DIR, …)
+  are not markers. LIVE-PROVEN the same day (real ConPTY, real claude 2.1.289,
+  Claude Max): a pane on the ADOPTED ~/.claude starts `claude --session-id`,
+  answers, saves its transcript, has no CLAUDE_CONFIG_DIR and keeps other keys;
+  the shipped `carry_over` copied that real jsonl byte-identical into a second
+  account's home and `claude --resume <id>` there got past lookup to "Not
+  logged in" — the only unproven step is a SECOND SIGNED-IN account's API
+  accepting it (Anthropic documents thinking signatures as portable across
+  platforms). Pin: `tests/test_claude_session_markers_v1303.py`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

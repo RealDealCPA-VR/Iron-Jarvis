@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.303.0 (2026-10-04).*
+holds itself to. Current as of v1.303.1 (2026-10-04).*
 
 ---
 
@@ -1776,6 +1776,9 @@ pane: which account ran out, when it is free again, and **Continue on
 - Whether the second account accepts a conversation begun on the first has not
   been seen fail, but if Claude cannot continue it, type `/clear` in the new
   pane to start fresh.
+(v1.303.1) A Build pane always runs Claude Code as a session of its own, so its
+conversations are saved even when Iron Jarvis itself was started from inside
+another Claude Code window.
 A "Context limit reached" message is not an account limit (the conversation is
 full; use `/compact`) and shows no strip. It is always the same provider, and
 never this PC's own login unless you added that login to Iron-Proxy.
