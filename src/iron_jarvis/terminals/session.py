@@ -560,6 +560,11 @@ class TerminalSession:
     #: shell was STARTED with that account's home variable, and a running CLI
     #: cannot change account. ``None`` for a pane that has none.
     accounts: dict[str, dict[str, Any]] | None = None
+    #: v1.303.0: the Claude Code conversation id THIS app started here
+    #: (`claude --session-id <uuid>` / `claude --resume <id>`), so "continue on
+    #: the next account" carries THAT conversation and Resume reopens it. None
+    #: when the user typed `claude` themselves.
+    claude_session_id: str | None = None
 
     def pane_env(self) -> dict[str, str]:
         """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
@@ -617,14 +622,78 @@ class TerminalSession:
         cached = getattr(self, "_activity_cache", None)
         if cached is not None and cached[0] == key:
             return cached[1]
+        tail = self.output_tail()
         result = agent_state.classify(
-            self.output_tail(),
+            tail,
             cli=self.agent_cli,
             seen=seen,
             alive=alive,
         )
         self._activity_cache = (key, result)
+        self._note_limit(tail if alive and result.cli == "claude" else "")
         return result
+
+    # ---- the account limit (v1.303.0) ------------------------------------
+    #: The live limit line (``limit_state.PaneLimit``) and when it was first
+    #: seen; recomputed in the SAME cached step as :meth:`activity`.
+    _limit: Any = None
+    _limit_since: str | None = None
+
+    def _note_limit(self, tail: str) -> None:
+        from datetime import datetime, timezone
+
+        from .limit_state import detect_limit
+
+        found = detect_limit(tail) if tail else None
+        if found is None:
+            self._limit, self._limit_since = None, None
+            return
+        if self._limit is None:
+            # `since` holds while the limit stays on screen (a countdown
+            # repaints the line); a cleared limit starts a new one.
+            self._limit_since = datetime.now(timezone.utc).isoformat()
+        self._limit = found
+
+    _resume_command_cache: str | None = None
+
+    def decide_claude_resume(self) -> None:
+        """v1.303.0: reopen the conversation this app started BY ID — but only
+        while that id is still the NEWEST conversation in its folder of the
+        pane's Claude home (the user may have /clear-ed into a new id before
+        the restart); otherwise `claude --continue`. BLOCKING (a glob + one
+        folder's stats): the manager calls it from ``restore`` — never from
+        ``info()``, which async callers (pane tools) run on the event loop."""
+        from .ai_clis import RESUME_COMMANDS
+        from .continue_on import claude_home, newest_recorded
+
+        try:
+            by_id = newest_recorded(claude_home(self), self.claude_session_id) is not None
+        except Exception:  # noqa: BLE001 — a restore never fails on this
+            by_id = False
+        self._resume_command_cache = (
+            f"claude --resume {self.claude_session_id}" if by_id else RESUME_COMMANDS["claude"]
+        )
+
+    def _claude_resume_command(self) -> str:
+        """The decision ``restore`` made, read only — no filesystem here."""
+        from .ai_clis import RESUME_COMMANDS
+
+        return self._resume_command_cache or RESUME_COMMANDS["claude"]
+
+    def limit_info(self) -> dict[str, Any] | None:
+        """``{line, kind, since, reset_words?, reset_at?}`` while a Claude Code
+        in this pane shows its account's limit, else None. Reads the cached
+        classification (refreshes it when the pane printed since)."""
+        self.activity()
+        found = self._limit
+        if found is None:
+            return None
+        out: dict[str, Any] = {"line": found.line, "kind": found.kind, "since": self._limit_since}
+        if found.reset_words:
+            out["reset_words"] = found.reset_words
+        if found.reset_at is not None:
+            out["reset_at"] = found.reset_at.isoformat()
+        return out
 
     def info(self) -> dict[str, Any]:
         from .ai_clis import RESUME_COMMANDS
@@ -651,7 +720,11 @@ class TerminalSession:
             # v1.245.0 additive: the CLI a restart ended, and the command that
             # resumes its last conversation ("" = no known way, so no button).
             "resume_cli": self.resume_cli,
-            "resume_command": RESUME_COMMANDS.get(self.resume_cli or "", ""),
+            "resume_command": (
+                self._claude_resume_command()
+                if self.resume_cli == "claude" and self.claude_session_id
+                else RESUME_COMMANDS.get(self.resume_cli or "", "")
+            ),
             # v1.238.0 additive, and ALWAYS all five keys: a surface that has to
             # ask whether the field is present would render a pane's
             # capabilities differently depending on when the pane was made.
@@ -660,6 +733,12 @@ class TerminalSession:
         # v1.302.0 additive, ONLY for a pane that has accounts (every other row
         # is byte-identical to v1.301.0). The live per-account `state` is added
         # by the routes from Iron-Proxy's CACHED snapshot, never here.
+        if self.claude_session_id:  # v1.303.0 additive
+            row["claude_session_id"] = self.claude_session_id
+        # v1.303.0 additive, ONLY while a limit is on screen.
+        limit = self.limit_info()
+        if limit:
+            row["limit"] = limit
         if self.accounts:
             # Only the row keys: the recorded home/unset stay in the daemon.
             row["accounts"] = {

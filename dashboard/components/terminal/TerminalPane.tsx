@@ -54,7 +54,9 @@ import {
   launchOffer,
   paneAccountsOf,
   type PaneAccounts,
+  type PaneLimit,
 } from "@/lib/paneAccounts";
+import { ContinuedFromLine, PaneContinue } from "@/components/terminal/ContinueStrip";
 import {
   LaunchAccountRows,
   PaneAccountChip,
@@ -429,6 +431,7 @@ export function TerminalPane({
   onLaunchWithCapabilities,
   onOpenedPane,
   liveAccounts,
+  paneLimit,
   paneState,
   agentCli,
   paneStateLine,
@@ -469,6 +472,9 @@ export function TerminalPane({
   /** v1.302.0: this pane's accounts with their LIVE state, from the page's
    *  activity poll (`livePaneAccounts`). Absent → the pane row's own. */
   liveAccounts?: PaneAccounts | null;
+  /** v1.303.0: the activity row's `limit` — this Claude pane's account ran
+   *  out. With an Iron-Proxy account the pane offers "Continue on …". */
+  paneLimit?: PaneLimit | null;
   /** v1.217.0: what the agent occupying this pane is doing. */
   paneState?: PaneState | null;
   /** Which coding CLI Build believes occupies this pane. */
@@ -1706,6 +1712,8 @@ export function TerminalPane({
           onDismiss={dismissResume}
         />
       )}
+      <PaneContinue paneId={info.id} accounts={paneAccounts} limit={paneLimit} onOpened={openedPane} />
+      <ContinuedFromLine paneId={info.id} />
       {launchHint && (
         <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">
           <CornerDownLeft size={12} /> Press <span className="font-semibold">Enter</span> in the

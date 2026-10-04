@@ -153,6 +153,7 @@ def _snapshot_key(sessions: "list[TerminalSession]") -> tuple:
                 s.pane_name or "",
                 s.agent_cli or "",
                 getattr(s, "resume_cli", None) or "",
+                getattr(s, "claude_session_id", None) or "",
             )
             for s in sessions
         )
@@ -312,6 +313,7 @@ class TerminalManager:
         capabilities: Mapping[str, Any] | None = None,
         recipe: str | None = None,
         accounts: Any | None = None,
+        claude_session_id: str | None = None,
     ) -> TerminalSession:
         """Create, start, and register a new session.
 
@@ -399,6 +401,7 @@ class TerminalManager:
             session.capabilities = caps
             session.pane_env_extra = pane_env
             session.accounts = _account_records(accounts)
+            session.claude_session_id = claude_session_id or None
             with self._lock:
                 self._sessions[session.id] = session
                 # Dropped INSIDE the same lock hold that registers the session,
@@ -698,6 +701,12 @@ class TerminalManager:
                             if getattr(s, "accounts", None)
                             else {}
                         ),
+                        # v1.303.0: the conversation this app started here.
+                        **(
+                            {"claude_session_id": s.claude_session_id}
+                            if getattr(s, "claude_session_id", None)
+                            else {}
+                        ),
                         "scrollback_b64": base64.b64encode(sb).decode("ascii"),
                     }
                 )
@@ -771,6 +780,8 @@ class TerminalManager:
             _with_pane_env(env, pane_env, accounts),
         )
         session.accounts = _account_records(accounts)
+        sid = entry.get("claude_session_id")
+        session.claude_session_id = sid if isinstance(sid, str) and sid else None
         session.id = rid
         session.pane_name = pane_name
         # v1.245.0: the shell is FRESH — whatever CLI ran here died with the
@@ -779,6 +790,10 @@ class TerminalManager:
         # shell for as long as the pane lived.
         session.agent_cli = None
         session.resume_cli = agent_cli
+        if agent_cli == "claude" and session.claude_session_id:
+            # Decided HERE (the boot rehydrate, off the serving loop): rows
+            # only read it, and `info()` runs on the loop for pane tools.
+            session.decide_claude_resume()
         # The other half of the round trip. An entry written before this field
         # existed has no key, which normalises to no capabilities — the safe
         # default, and the reason this is read through `_capabilities_or_none`

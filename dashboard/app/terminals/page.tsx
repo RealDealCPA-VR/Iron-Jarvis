@@ -37,7 +37,7 @@ import {
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
 import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
-import { livePaneAccounts, paneAccountBadge } from "@/lib/paneAccounts";
+import { livePaneAccounts, paneAccountBadge, paneLimitOf } from "@/lib/paneAccounts";
 import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
 import {
@@ -1091,6 +1091,7 @@ export default function TerminalsPage() {
                               onLaunchWithCapabilities={(cli) => addTerminal(t.cwd, cli)}
                               onOpenedPane={adoptPane}
                               liveAccounts={livePaneAccounts(t, act)}
+                              paneLimit={paneLimitOf(act)}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}

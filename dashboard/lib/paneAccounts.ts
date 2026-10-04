@@ -312,3 +312,156 @@ export function openedPaneId(res: unknown): string | null {
   const id = r.terminal_id ?? r.id;
   return typeof id === "string" && id ? id : null;
 }
+
+/* ---- v1.303.0: continue on the next account -------------------------------- */
+
+/** The light Iron-Proxy read (status + accounts, `discovered: []`, no vendor
+ *  CLI status runs — v1.302.0 review F3). Every Build surface reads this one. */
+export const IRON_PROXY_LIGHT = "/iron-proxy?discover=0";
+
+/** A Claude pane at its usage limit, as the activity row reports it. */
+export interface PaneLimit {
+  /** The CLI's own limit line (shown nowhere verbatim). A countdown repaints
+   *  it, so it never keys Dismiss — `limitKey` does. */
+  line: string;
+  /** session | weekly | credits … when the daemon names the kind of limit. */
+  kind?: string | null;
+  /** When the limit resets (ISO), when the daemon read an exact time. */
+  reset_at?: string | null;
+  /** Best-effort reset words read off the line ("resets 3:45pm (…)"). */
+  reset_words?: string | null;
+  /** When this limit was first seen — stable while the limit lasts. */
+  since?: string | null;
+}
+
+/** What Dismiss remembers: the limit EPISODE (its `since`, else its kind),
+ *  never the line — a repainting countdown changes the line every minute and
+ *  would bring a dismissed strip straight back (review F5). */
+export function limitKey(l: PaneLimit): string {
+  return l.since || l.kind || l.line;
+}
+
+/** The strip's words for every `limit.kind` the daemon reports. */
+export const LIMIT_WORDS: Record<string, string> = {
+  session: "hit its session limit",
+  weekly: "hit its weekly limit",
+  daily: "hit its daily limit",
+  monthly: "hit its monthly limit",
+  usage: "hit its usage limit",
+  credits: "ran out of usage credits",
+  model: "hit its limit for that model",
+};
+
+/** "hit its session limit" / "hit its weekly limit" / … by the limit's kind. */
+export function limitWords(l: PaneLimit | null | undefined): string {
+  return (l?.kind && LIMIT_WORDS[l.kind.toLowerCase()]) || "hit its usage limit";
+}
+
+/** The activity row's `limit`, or null (no limit, an older daemon). */
+export function paneLimitOf(row: unknown): PaneLimit | null {
+  if (!row || typeof row !== "object") return null;
+  const raw = (row as { limit?: unknown }).limit;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const line = str(r.line);
+  if (!line) return null;
+  return {
+    line,
+    kind: str(r.kind),
+    reset_at: str(r.reset_at),
+    reset_words: str(r.reset_words),
+    since: str(r.since),
+  };
+}
+
+/** The pane's Claude account when it is an Iron-Proxy one (the only kind
+ *  that can be continued elsewhere), else null. */
+export function continuableAccount(accounts: PaneAccounts | null | undefined): PaneAccount | null {
+  const a = accounts?.anthropic;
+  if (!a || isDefault(a) || !a.id) return null;
+  return a;
+}
+
+/** "resets 3:00 PM", in the viewer's LOCAL time: the CLI's own reset time
+ *  when the daemon read one (`reset_at`), else Iron-Proxy's parked-until,
+ *  else the words off the CLI's line; null when there is nothing. */
+export function limitResetWords(
+  account: PaneAccount | null,
+  limit: PaneLimit | null,
+  now: Date = new Date(),
+): string | null {
+  if (limit?.reset_at && !Number.isNaN(Date.parse(limit.reset_at))) {
+    return `resets ${localTime(limit.reset_at, now)}`;
+  }
+  if (account?.state === "parked" && account.until) return `resets ${localTime(account.until, now)}`;
+  const w = limit?.reset_words?.trim();
+  if (!w) return null;
+  return /^resets?\b/i.test(w) ? w : `resets ${w}`;
+}
+
+export type NextAccount =
+  /** Iron-Proxy's snapshot is not in hand (loading, off, 404): the daemon picks. */
+  | { kind: "unknown" }
+  | { kind: "next"; account: IronProxyAccount }
+  /** Every other account is parked: when the first one frees. */
+  | { kind: "wait"; account: IronProxyAccount; until: string | null }
+  /** No other Claude account could take over (none, signed out, switched off). */
+  | { kind: "none" };
+
+/** Which account "Continue on …" would move to: the first usable Claude CLI
+ *  account other than the pane's own, in Iron-Proxy's order — the same order
+ *  the daemon's `pick("anthropic")` walks. */
+export function nextAccount(snap: unknown, currentId: string | null): NextAccount {
+  if (!isSnapshot(snap) || !snap.status.enabled || !snap.status.running) return { kind: "unknown" };
+  const others = (snap.accounts ?? [])
+    .filter((a) => a.provider === "anthropic" && a.lane === "cli" && a.enabled && a.id !== currentId)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.title.localeCompare(b.title));
+  const usable = others.find((a) => {
+    const s = a.state?.status ?? "unknown";
+    return s === "ready" || s === "active" || s === "unknown";
+  });
+  if (usable) return { kind: "next", account: usable };
+  const parked = others
+    .filter((a) => a.state?.status === "parked")
+    .sort((a, b) => {
+      const ta = a.state.parkedUntil ? Date.parse(a.state.parkedUntil) : Infinity;
+      const tb = b.state.parkedUntil ? Date.parse(b.state.parkedUntil) : Infinity;
+      return ta - tb;
+    });
+  if (parked.length) {
+    return { kind: "wait", account: parked[0], until: parked[0].state.parkedUntil ?? null };
+  }
+  return { kind: "none" };
+}
+
+/** `POST /terminals/{id}/continue-on-next`'s answer. */
+export interface ContinueAnswer {
+  pane: { id: string; [k: string]: unknown };
+  resumed: boolean;
+  session_id?: string | null;
+  parked: boolean;
+  from: { id: string; title: string };
+  to: { id: string; title: string };
+  note?: string | null;
+}
+
+export function isContinueAnswer(v: unknown): v is ContinueAnswer {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  const pane = r.pane as Record<string, unknown> | undefined;
+  return !!pane && typeof pane === "object" && typeof pane.id === "string" && !!pane.id;
+}
+
+/** What the new pane says about how it started: the daemon's note when it
+ *  sent one, else a sentence built from `resumed` / `parked`. */
+export function continueNote(a: ContinueAnswer): string {
+  const note = a.note?.trim();
+  if (note) return note;
+  const from = a.from?.title ? `“${a.from.title}”` : "the old account";
+  const head = a.resumed
+    ? "Carried your conversation over."
+    : "Started fresh — there was no conversation to carry over.";
+  return a.parked
+    ? head
+    : `${head} Iron-Proxy did not mark ${from} as out of usage, so it may be tried again.`;
+}

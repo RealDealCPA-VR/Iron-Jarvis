@@ -157,7 +157,15 @@ def _unique_pane_name(terminals, wanted: str) -> str:
     return f"{wanted} ({n})"
 
 
-def launch_pane(platform, body: TerminalLaunch):
+def launch_pane(
+    platform,
+    body: TerminalLaunch,
+    *,
+    accounts=None,
+    command: str | None = None,
+    name_base: str | None = None,
+    claude_session_id: str | None = None,
+):
     """A NEW pane on an account with a catalog CLI started in it (v1.302.0).
 
     BLOCKING (the account resolution is loopback HTTP; the spawn is a ConPTY
@@ -166,7 +174,18 @@ def launch_pane(platform, body: TerminalLaunch):
     pressed — the click that asked for it is the consent (ResumeStrip's rule;
     the Launch menu into an EXISTING pane still leaves Enter to the user). A
     catalog command that expects an argument (a trailing space: ``llm``,
-    ``ollama run``) is typed without Enter. Raises ``HTTPException``."""
+    ``ollama run``) is typed without Enter. Raises ``HTTPException``.
+
+    v1.303.0 (continue on the next account): ``accounts`` = an already
+    resolved ``PaneAccounts`` (no second resolution), ``command`` = the exact
+    line to type instead of the catalog command (Enter pressed), ``name_base``
+    = the name to make unique instead of "<CLI label> · <title>".
+
+    v1.303.0: Claude Code started from the catalog is typed as ``claude
+    --session-id <uuid4>`` and that id is RECORDED on the pane (and its
+    snapshot), so "continue on the next account" carries exactly that
+    conversation and Resume reopens it by id. ``claude_session_id`` records
+    the id a ``command`` already names (``claude --resume <id>``)."""
     from ...terminals.ai_clis import AI_CLIS
     from ...terminals.pane_accounts import CLI_PROVIDER, PaneAccountRefused
 
@@ -190,17 +209,24 @@ def launch_pane(platform, body: TerminalLaunch):
         if near is None:
             raise HTTPException(status_code=404, detail="no such terminal")
         cwd = cwd or near.cwd
-    request = {provider: account} if (provider and account) else {}
-    try:
-        accounts = terminals.resolve_accounts(request)
-    except PaneAccountRefused as refused:
-        raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
+    if accounts is None:
+        request = {provider: account} if (provider and account) else {}
+        try:
+            accounts = terminals.resolve_accounts(request)
+        except PaneAccountRefused as refused:
+            raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
     title = None
     if accounts is not None and provider:
         title = (accounts.records.get(provider) or {}).get("title")
+    if command is None and cli_id == "claude":
+        import uuid
+
+        claude_session_id = str(uuid.uuid4())
+        command = f"{cat['command']} --session-id {claude_session_id}"
     with _LAUNCH_NAME_LOCK:
         name = (body.name or "").strip() or _unique_pane_name(
-            terminals, f"{cat['label']} · {title}" if title else cat["label"]
+            terminals,
+            name_base or (f"{cat['label']} · {title}" if title else cat["label"]),
         )
         try:
             session = terminals.create(
@@ -210,6 +236,7 @@ def launch_pane(platform, body: TerminalLaunch):
                 name=name,
                 agent_cli=cli_id,
                 accounts=accounts,
+                claude_session_id=claude_session_id,
             )
         except RuntimeError as exc:  # the session cap
             raise HTTPException(status_code=429, detail=str(exc)) from None
@@ -217,6 +244,9 @@ def launch_pane(platform, body: TerminalLaunch):
     # screen in the pane's tail so the attach replays it (the sign-in pane's
     # pattern), and answer ConPTY's start-up query meanwhile.
     session.start_autodrain()
+    if command is not None:
+        session.write(command + "\r")
+        return session
     command = cat["command"]
     session.write(command if command.endswith(" ") else command + "\r")
     return session
@@ -298,6 +328,10 @@ def register(app: FastAPI, d) -> None:
                 "state_line": info.get("state_line"),
                 "alive": info.get("alive"),
             }
+            # v1.303.0: the account-limit line on screen (Claude panes), only
+            # while it is there — the ContinueStrip's cue.
+            if info.get("limit"):
+                row["limit"] = info["limit"]
             # v1.302.0: the page reads GET /terminals ONCE and then polls
             # only this, so a pane's account chip (parked later, signed out,
             # removed) stays current only if its live state rides here too —
@@ -333,6 +367,67 @@ def register(app: FastAPI, d) -> None:
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
         return pane_row(d.platform, session.info())
+
+    @app.post("/terminals/{term_id}/continue-on-next")
+    def continue_on_next(term_id: str) -> dict[str, Any]:
+        """Continue this pane's Claude Code conversation on the NEXT Iron-Proxy
+        account (v1.303.0): tell Iron-Proxy the limit line (ONLY that line),
+        pick the next account, carry the conversation file over (never
+        overwriting, confined to the next account's folder) and open a NEW
+        pane on it running ``claude --resume <id>`` (or ``claude`` when there
+        is nothing to carry). The old pane is left as it is. Sync ``def``:
+        everything here blocks. Answers ``{pane, resumed, session_id?,
+        parked, from, to, note}``; a refusal is a 409 sentence and no pane."""
+        from ...terminals import continue_on
+        from ...terminals.pane_accounts import PaneAccounts, from_recorded
+
+        session = d.platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        terminals = d.platform.terminals
+        live = sum(1 for i in terminals.list() if i.get("alive"))
+        try:
+            plan = continue_on.prepare(
+                getattr(d.platform, "iron_proxy", None),
+                session,
+                room_for_pane=live < terminals.max_sessions,
+                # An older copy of the same conversation is MOVED here, never deleted.
+                trash_root=Path(d.platform.config.home) / "trash",
+            )
+        except continue_on.ContinueRefused as refused:
+            raise HTTPException(status_code=refused.status, detail=refused.sentence) from None
+        # The other CLIs keep the accounts the old pane had (their recorded
+        # homes; no call); Claude moves to the next account.
+        others = {
+            p: r for p, r in (session.accounts or {}).items() if p != continue_on.PROVIDER
+        }
+        accounts, _legacy, _titles = from_recorded(others) if others else (PaneAccounts(), {}, {})
+        accounts.use_lease(continue_on.PROVIDER, plan.lease)
+        carried = plan.carried
+        # Resumed: the same conversation id, kept by `--resume`. Fresh: a new
+        # id this app mints (launch_pane types `claude --session-id <uuid>`).
+        new = launch_pane(
+            d.platform,
+            TerminalLaunch(cli="claude", near=term_id),
+            accounts=accounts,
+            command=f"claude --resume {carried.session_id}" if carried.resumed else None,
+            name_base=f"Claude Code · {plan.lease.title} (continued)",
+            claude_session_id=carried.session_id if carried.resumed else None,
+        )
+        note = " ".join(x for x in (carried.note, plan.told) if x)
+        out: dict[str, Any] = {
+            "pane": pane_row(d.platform, new.info()),
+            "resumed": carried.resumed,
+            "parked": plan.parked,
+            "from": dict(plan.from_rec),
+            "to": {"id": plan.lease.profile_id, "title": plan.lease.title},
+            "note": note,
+        }
+        if carried.session_id:
+            out["session_id"] = carried.session_id
+        if plan.reset_at is not None:
+            out["reset_at"] = plan.reset_at.isoformat()
+        return out
 
     @app.post("/terminals/launch")
     def launch_terminal(body: TerminalLaunch) -> dict[str, Any]:

@@ -28,6 +28,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -817,7 +818,11 @@ def test_launch_opens_a_new_pane_on_the_account_and_starts_the_cli(client, fake,
     assert be.env["IRONJARVIS_PANE_CLI"] == "claude"
     assert be.env["IRONJARVIS_PANE_NAME"] == "Claude Code · Work Max"
     assert be.cwd == str(folder)
-    assert be.written == ["claude\r"]  # typed AND Enter: the click is the consent
+    # typed AND Enter (the click is the consent); v1.303.0: with the
+    # conversation id this app mints and records on the pane.
+    sid = row["claude_session_id"]
+    assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", sid)
+    assert be.written == [f"claude --session-id {sid}\r"]
     assert _backend_of(near["id"]).written == []
 
     again = c.post("/terminals/launch", json={"cli": "claude", "account": work["id"]}).json()

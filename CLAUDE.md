@@ -2566,6 +2566,47 @@ does not need a bump, stop and bump it.
   Pins: `tests/test_build_accounts_v1302.py`,
   `dashboard/__tests__/build-accounts-v1302.test.tsx`.
 
+- **Continue on the next account is DETECTED from Claude Code's own limit
+  record, CHOSEN by session id, and COPIED, never moved** (v1.303.0). Evidence
+  on this PC (claude 2.1.288): real account limits read "You've hit your
+  session limit · resets 3:45pm (America/New_York)", "You've hit your weekly
+  limit · …", "You're out of usage credits …" (the binary's classifier prefixes
+  "You've hit your", "You've reached your", "You're out of usage credits",
+  "Your org is out of usage credits"), and each is also written into the
+  session jsonl as `isApiErrorMessage: true, error: "rate_limit"` with
+  `sessionId`, `cwd`, `timestamp`, `quotaLimits`. "Context limit reached" is
+  the CONTEXT WINDOW, not an account — never a limit (it parked a healthy
+  account in the first cut). `terminals/limit_state.py` is an ALLOW-LIST of
+  account-limit shapes at line start inside an allow-listed frame; `>`/`❯`
+  prompt lines and `⏺`/`●` answer lines are never the hit (they are the
+  user's / the model's text); a later answer or working line clears it.
+  Iron-Proxy gets ONLY `PaneLimit.signal_text()` (the matched message + a
+  normalised reset suffix), never other scrollback. WHICH conversation
+  (`terminals/continue_on.py`): every Claude WE start is typed `claude
+  --session-id <uuid4>` and the id is recorded on the pane (snapshot; restart
+  resumes `claude --resume <id>`); else only a session whose LAST record is a
+  rate_limit error with the pane's cwd and a fresh timestamp, exactly one —
+  several → fresh + note; NEVER newest-by-mtime (two panes on one account hit
+  the same limit at the same moment). Located by glob
+  `<home>/projects/*/<id>.jsonl` and copied into the SAME-NAMED folder of the
+  next account's home (Claude truncates/hashes long encoded names — never
+  recompute them), never overwriting a DIVERGED file, links skipped, confined
+  to the home. `--resume` KEEPS the session id (`--fork-session` would change
+  it), so a round trip A→B→A meets A's OLDER copy of the same id: a byte-PREFIX
+  destination is the same append-only conversation and is replaced (old bytes
+  copied to `<home>/trash/<stamp>/claude-carry/…` first, then temp +
+  `os.replace`); only a true divergence refuses. A recorded id counts only
+  while it is the NEWEST conversation in its folder (the user may /clear into
+  a new id): restart Resume falls back to `claude --continue`, continue to the
+  unique-limit-record scan. `tzdata` is declared for win32 (zoneinfo named
+  zones; pyinstaller-hooks-contrib's hook-zoneinfo/hook-tzdata ship it).
+  Every refusal (this PC's login, pane cap 429, Iron-Proxy off/unavailable, no
+  other usable account) runs BEFORE any signal or copy. The strip says before
+  the press that the conversation is COPIED to the other account (work →
+  personal privacy) and Dismiss keys on the limit's `since`, not its text (a
+  countdown repaints). Pins: `tests/test_build_continue_v1303.py`,
+  `dashboard/__tests__/continue-next-v1303.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

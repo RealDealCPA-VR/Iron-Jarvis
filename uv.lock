@@ -708,7 +708,7 @@ wheels = [
 
 [[package]]
 name = "iron-jarvis"
-version = "1.302.0"
+version = "1.303.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -740,6 +740,7 @@ dependencies = [
     { name = "starlette" },
     { name = "tomli-w" },
     { name = "typer" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "winrt-runtime", marker = "sys_platform == 'win32'" },
     { name = "winrt-windows-foundation", marker = "sys_platform == 'win32'" },
@@ -799,6 +800,7 @@ requires-dist = [
     { name = "starlette", specifier = ">=0.40" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "vosk", marker = "extra == 'voice'", specifier = ">=0.3.45" },
     { name = "winrt-runtime", marker = "sys_platform == 'win32'", specifier = ">=3" },

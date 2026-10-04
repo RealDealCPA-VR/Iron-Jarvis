@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.302.0"
+version = "1.303.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -48,6 +48,10 @@ dependencies = [
     "winrt-windows-foundation-collections>=3 ; sys_platform == 'win32'",
     "winrt-windows-globalization>=3 ; sys_platform == 'win32'",
     "xlrd>=2.0.1",
+    # v1.303.0: zoneinfo needs the IANA database on Windows (the Build pane
+    # limit's "resets 3:45pm (America/New_York)"); was only transitive via
+    # apscheduler -> tzlocal. PyInstaller: hook-zoneinfo + hook-tzdata collect it.
+    "tzdata>=2024.1 ; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.302.0 (2026-10-03).*
+holds itself to. Current as of v1.303.0 (2026-10-04).*
 
 ---
 
@@ -1746,6 +1746,39 @@ STARTS:
 An account is fixed for the life of its pane. Each account keeps its own
 conversation history, so `claude --continue` in a pane on a different account
 does not see the first account's conversations.
+
+**When an account runs out (v1.303.0).** When Claude Code in a pane on an
+Iron-Proxy account shows its own limit message — "You've hit your session
+limit", "…weekly limit", "You're out of usage credits" — a strip appears in the
+pane: which account ran out, when it is free again, and **Continue on
+“<next account>”**. Nothing happens until you press it. When you do:
+- Iron-Proxy is told that account is at its limit — it is sent only that one
+  limit message, never anything else from the pane — so chat, agents and new
+  panes skip it until it resets.
+- A NEW pane opens in the same folder on the next free Claude account and
+  resumes the same conversation there. The pane you were in stays as it was.
+- Before you press, the strip says it plainly: your conversation is COPIED
+  into the other account's history and continues there, which means it is sent
+  to Anthropic under that account (worth knowing between a work and a personal
+  account). Nothing is deleted or overwritten in either account.
+- Iron Jarvis knows exactly which conversation a pane holds when it started
+  Claude there (Launch, Open in Build, Continue). If you typed `claude`
+  yourself, it carries the conversation only when exactly one conversation in
+  that folder just hit the limit; otherwise the new pane starts fresh and says
+  why (use `/resume` there to pick one).
+- Taking turns works: when the second account runs out later and you continue
+  back on the first, the first account's older copy of the conversation is
+  brought up to date. That older copy is kept in Iron Jarvis's trash (Settings
+  → Storage, "Cleared, awaiting deletion") until you press Empty trash. Close
+  Claude in the old pane on that account first: if the conversation is still
+  open there, the update is refused ("the conversation file is open in another
+  pane") and anything that pane writes meanwhile would not be carried.
+- Whether the second account accepts a conversation begun on the first has not
+  been seen fail, but if Claude cannot continue it, type `/clear` in the new
+  pane to start fresh.
+A "Context limit reached" message is not an account limit (the conversation is
+full; use `/compact`) and shows no strip. It is always the same provider, and
+never this PC's own login unless you added that login to Iron-Proxy.
 **v1.290.0:** the Activity page has a **Safety checks** card: Iron Jarvis
 looks at what its agents did — commands, files, web requests — against a set
 of safety rules (reading a password or key file, sending secrets out,
