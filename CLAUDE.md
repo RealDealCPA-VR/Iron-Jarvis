@@ -2665,6 +2665,58 @@ does not need a bump, stop and bump it.
   `tests/test_build_handoff_v13032.py`,
   `dashboard/__tests__/start-fresh-v1303-2.test.tsx`.
 
+- **Iron-Proxy is TOLD to re-check a sign-in; it never notices by itself**
+  (v1.303.3, a USER BUG). The Sign in pane runs the account's login outside
+  Iron-Proxy's own login session, so the login landed (`.credentials.json`
+  written, `claude auth status` loggedIn: true) while Iron-Proxy's state stayed
+  `unauthenticated` from the account's creation — the card said "Needs sign-in"
+  forever and the user looped. Now: `IronProxyClient.refresh` (POST
+  /iron/refresh); `GET /iron-proxy` re-checks an unauthenticated account ONLY
+  while a sign-in is IN PROGRESS for it (an open `signin_for` pane, or Sign in
+  pressed in the last 3 minutes) — Iron-Proxy's refreshStatus marks `ready`
+  whenever `claude auth status` reads the LOCAL credentials file as logged in,
+  so re-checking every signed-out account flipped a 401-revoked account back
+  to ready within 10 s and into a 401 loop (caught in review); the sign-in pane carries `signin_for` and
+  `terminals/signin_watch.py` spots Claude Code's own "Login successful."
+  (claude 2.1.289 binary; "Authentication successful" is the browser/MCP page,
+  not matched — only the exact body `Login successful.` or `Login successful.
+  Press Enter…` under `Logged in as …`; a `⎿`/`>`/`❯` row or an `echo` never
+  counts) → the FIRST sighting forces a refresh, later ones are throttled,
+  ≤ 6 per pane → `signed_in` only on Iron-Proxy's `ready`; the card read never
+  waits (`wait_s=0`), only `/check` does;
+  `POST /iron-proxy/accounts/{id}/check` re-checks now. The second "login" the
+  user saw was Claude Code's ONE-TIME first-run welcome in a new config dir
+  (credentials written once — timestamps), so the sign-in pane says so. SAME
+  BUG: a proxy started by an EARLIER Iron Jarvis (a source run, old bundle
+  without "pick-profile") was reused forever with no error; a located proxy
+  that lacks a feature the bundle advertises is REPLACED only when its command
+  line is an Iron Jarvis bundle (`iron_jarvis_owner`: the FIRST script argument
+  is `iron-proxy.mjs` in THIS repo's `desktop/vendor/iron-proxy` or in an
+  install's `resources/iron-proxy` whose install folder holds `Iron Jarvis.exe`)
+  — anything else (the tray app, `iron-proxy serve`, another clone) is never
+  stopped and gets the OUTDATED sentence. Replacement is at most once per
+  (bundle path, version) and 2 per 10 min — two Iron Jarvis copies sharing
+  `~/.iron-proxy` (a source run + the installed app) otherwise killed each
+  other's proxy forever; past the limit status.error names the other copy. A
+  kill is CONFIRMED (pid dead) before proxy.json is removed or a new proxy
+  spawned; else "could not stop the older Iron-Proxy (pid N)". A packaged
+  daemon cannot recognise a source run's proxy (no repo path when frozen): it
+  only says OUTDATED.
+  Verified live on the user's install: the packaged app started its own bundle
+  as `Iron Jarvis.exe …\resources\iron-proxy\iron-proxy.mjs serve` (owned,
+  pick-profile). Also: `continue_on` compares bytes directly — `filecmp.cmp`
+  caches by (size, mtime) and judged a same-size rewrite unchanged. Pins:
+  `tests/test_iron_proxy_signin_v13033.py`,
+  `dashboard/__tests__/signin-check-v1303-3.test.tsx`.
+  SAME RELEASE, found by the full suite under load: (a) the Build pane CAP
+  counted only REGISTERED panes, so creates still spawning all passed it (16
+  panes against a cap of 5) — `TerminalManager.create` now reserves its slot
+  (`_reserved`) in the same lock hold as the check and counts `_pending_panes`
+  + reservations; pin `test_terminal_cap_counts_creates_still_in_flight` (a
+  slow backend makes it deterministic). (b) `comm/prompts.newest_open`
+  ordered by `created_at` alone — the v1.286.0 same-tick rule — and failed its
+  pin 2 runs in 3; tie-break on `rowid DESC`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

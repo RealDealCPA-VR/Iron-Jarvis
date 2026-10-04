@@ -43,6 +43,7 @@ import {
   paneLimitOf,
   resumeFailedOf,
   signInNeededOf,
+  signedInOf,
 } from "@/lib/paneAccounts";
 import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
@@ -1100,6 +1101,7 @@ export default function TerminalsPage() {
                               paneLimit={paneLimitOf(act)}
                               paneResumeFailed={resumeFailedOf(act)}
                               paneSignInNeeded={signInNeededOf(act)}
+                              paneSignedIn={signedInOf(act)}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}

@@ -249,6 +249,9 @@ class TerminalManager:
         # harness's first call answered "the pane token expired when Iron
         # Jarvis restarted" — naming a restart that never happened.
         self._pending_panes: set[str] = set()
+        #: create() calls that passed the cap check and have not yet registered
+        #: (or put their id in `_pending_panes`) -- counted by the cap (v1.303.3).
+        self._reserved = 0
         # --- pane capability tokens (v1.238.0) -------------------------------
         # The manager owns the store because it owns the only two facts a pane
         # token is made of: the pane id (minted here, before the spawn) and the
@@ -357,15 +360,33 @@ class TerminalManager:
         shell_name, argv = resolve_shell(shell)
         with self._lock:
             # Evict stale dead sessions first so the dict can't grow without bound,
-            # then enforce the cap. (Registration happens after the possibly-slow
-            # spawn+verify below; a rare concurrent create may overshoot the cap
-            # by one, which is harmless for a human-driven, bounded action.)
+            # then enforce the cap — counting the creates still IN FLIGHT and
+            # reserving this one's slot in the SAME lock hold. Registration
+            # happens after the possibly-slow account resolution + spawn below;
+            # counting only registered sessions let 20 concurrent creates open
+            # 16 panes against a cap of 5 under load (test_concurrency_fixes,
+            # v1.303.3). The reservation is released on every exit path.
             self.purge_dead()
             live = sum(1 for s in self._sessions.values() if s.alive)
-            if live >= self.max_sessions:
+            if live + len(self._pending_panes) + self._reserved >= self.max_sessions:
                 raise RuntimeError(
                     f"terminal session cap reached ({self.max_sessions})"
                 )
+            self._reserved += 1
+        try:
+            return self._create_reserved(
+                cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
+                capabilities, recipe, accounts, claude_session_id,
+            )
+        finally:
+            with self._lock:
+                self._reserved -= 1
+
+    def _create_reserved(
+        self, cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
+        capabilities, recipe, accounts, claude_session_id,
+    ) -> TerminalSession:
+        """The body of :meth:`create` once its cap slot is reserved."""
         if accounts is not None and isinstance(accounts, Mapping):
             # Resolved BEFORE the id is minted: a refused account must leave
             # no pane, no token and no pending entry behind.

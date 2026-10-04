@@ -63,6 +63,7 @@ import {
   ContinuedFromLine,
   PaneContinue,
   ResumeFailedStrip,
+  SignedInStrip,
 } from "@/components/terminal/ContinueStrip";
 import {
   LaunchAccountRows,
@@ -441,6 +442,7 @@ export function TerminalPane({
   paneLimit,
   paneResumeFailed,
   paneSignInNeeded,
+  paneSignedIn,
   paneState,
   agentCli,
   paneStateLine,
@@ -489,6 +491,8 @@ export function TerminalPane({
   paneResumeFailed?: ResumeFailed | null;
   /** v1.303.2: the activity row's `sign_in_needed` — that account's login expired. */
   paneSignInNeeded?: SignInNeeded | null;
+  /** v1.303.3: this sign-in pane's login finished (`signedInOf` of its activity row). */
+  paneSignedIn?: { title: string } | null;
   /** v1.217.0: what the agent occupying this pane is doing. */
   paneState?: PaneState | null;
   /** Which coding CLI Build believes occupies this pane. */
@@ -1736,6 +1740,7 @@ export function TerminalPane({
         onOpened={openedPane}
       />
       <ContinuedFromLine paneId={info.id} />
+      <SignedInStrip paneId={info.id} signedIn={paneSignedIn} />
       {launchHint && (
         <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">
           <CornerDownLeft size={12} /> Press <span className="font-semibold">Enter</span> in the

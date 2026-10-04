@@ -346,8 +346,10 @@ def register(app: FastAPI, d) -> None:
         )
 
     def _account_verifier() -> None:
-        """Post-boot (background thread): read Iron-Proxy — locate + health,
-        never a spawn — and refresh the account snapshot the chips read."""
+        """Post-boot (background thread): read Iron-Proxy — locate + health —
+        and refresh the account snapshot the chips read. ``check()`` may
+        replace a stale proxy an Iron Jarvis started (v1.303.3), which spawns
+        the current bundle; nothing else here spawns."""
         svc = getattr(d.platform, "iron_proxy", None)
         if svc is not None and svc.enabled and svc.check():
             svc.refresh_accounts()
@@ -413,6 +415,18 @@ def register(app: FastAPI, d) -> None:
             # that account refuse the conversation it was handed (or is it
             # signed out)? The carried file is read here, on the threadpool
             # (bounded tail, only when it changed); info() reads caches only.
+            # v1.303.3: a sign-in pane watches for its CLI's own "Login
+            # successful" and has Iron-Proxy re-check that account; the row
+            # says ``signed_in: true`` once Iron-Proxy confirms it.
+            if info.get("signin_for"):
+                from ...terminals.signin_watch import watch_signin
+
+                session = d.platform.terminals.get(info["id"])
+                if session is not None:
+                    watch_signin(session, getattr(d.platform, "iron_proxy", None))
+                    row["signin_for"] = info["signin_for"]
+                    if session.signed_in:
+                        row["signed_in"] = True
             if info.get("continued_from"):
                 row["continued_from"] = info["continued_from"]
                 session = d.platform.terminals.get(info["id"])

@@ -378,3 +378,40 @@ def test_connection_connect_disconnect_consistent_under_threads(platform):
         assert cred is not None
     else:
         assert cred is None
+
+
+def test_terminal_cap_counts_creates_still_in_flight():
+    """v1.303.3: the cap counted only REGISTERED panes, so creates still spawning
+    (account resolution + a slow shell start) all passed it — 16 panes against a
+    cap of 5 under load. A slow backend makes the race deterministic: every
+    create is in flight at once, and the cap must still hold."""
+    import time as _time
+
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.manager import TerminalManager
+
+    class _SlowStart(FakeBackend):
+        def start(self, argv, cwd, env, cols, rows) -> None:  # type: ignore[override]
+            _time.sleep(0.2)
+            super().start(argv, cwd, env, cols, rows)
+
+    m = TerminalManager(max_sessions=3)
+    refused: list[int] = []
+    lock = threading.Lock()
+
+    def grab() -> None:
+        try:
+            m.create(backend=_SlowStart())
+        except RuntimeError:
+            with lock:
+                refused.append(1)
+
+    threads = [threading.Thread(target=grab) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    alive = sum(1 for s in m.list() if s["alive"])
+    assert alive <= 3, f"{alive} panes open against a cap of 3"
+    assert len(refused) >= 9  # at least every create beyond the cap was refused
+    assert m._reserved == 0  # every reservation released

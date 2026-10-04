@@ -46,7 +46,6 @@ Everything here BLOCKS (loopback HTTP, file copies): the route is a sync
 
 from __future__ import annotations
 
-import filecmp
 import json
 import logging
 import os
@@ -260,6 +259,26 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
+def _same_bytes(a: Path, b: Path) -> bool:
+    """Byte-for-byte equal? NOT ``filecmp.cmp``: it caches each verdict by
+    (size, mtime), so a file rewritten with the same size inside one clock
+    tick is judged by the OLD verdict — in a long-running daemon that is a
+    copy refused (or skipped) for content it never compared (found by a
+    v1.303.3 suite run on an idle machine)."""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                x, y = fa.read(65536), fb.read(65536)
+                if x != y:
+                    return False
+                if not x:
+                    return True
+    except OSError:
+        return False
+
+
 def _is_prefix(older: Path, newer: Path) -> bool:
     """Is ``older`` a byte-PREFIX of ``newer`` (and shorter)? A Claude Code
     conversation file is append-only JSONL, so an earlier copy of the SAME
@@ -387,7 +406,7 @@ def carry_over(
     )
     try:
         if dest.exists():
-            if dest.resolve() == source.resolve() or filecmp.cmp(source, dest, shallow=False):
+            if dest.resolve() == source.resolve() or _same_bytes(source, dest):
                 pass  # already there, byte for byte
             elif trash is not None and _is_prefix(dest, Path(os.fspath(source))):
                 # The same conversation, older: replaced, the old copy kept.

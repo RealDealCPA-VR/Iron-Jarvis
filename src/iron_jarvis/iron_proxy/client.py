@@ -270,6 +270,17 @@ class IronProxyClient:
     def usage(self, profile_id: str | None = None) -> list[dict[str, Any]]:
         return self._call("GET", "/iron/usage", params={"profileId": profile_id})
 
+    def refresh(
+        self, profile_id: str | None = None, timeout: float | None = None
+    ) -> list[dict[str, Any]]:
+        """v1.303.3: re-check sign-in — ONE account (``id``) or, with no id,
+        every account. ``POST /iron/refresh`` → the re-checked states (a list
+        of ``ProfileState``). Iron-Proxy runs each vendor CLI's own status
+        command, so pass a longer ``timeout``. An unknown id is
+        ``PROFILE_NOT_FOUND``."""
+        body: dict[str, Any] = {"id": str(profile_id)} if profile_id else {}
+        return self._call("POST", "/iron/refresh", json=body, timeout=timeout)
+
     def login_command(self, profile_id: str) -> dict[str, Any]:
         return self._call("GET", f"/iron/profiles/{self._id(profile_id)}/login-command")
 

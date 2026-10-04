@@ -577,6 +577,14 @@ class TerminalSession:
     #: ``at`` = when the pane was opened, ISO UTC). Watched for a resume that
     #: the account refused while the pane still runs THAT conversation.
     continued_from: dict[str, Any] | None = None
+    #: v1.303.3: a "Sign in: <account>" pane — the Iron-Proxy profile id it
+    #: signs in and that account's provider (``terminals.signin_watch``), and
+    #: whether Iron-Proxy has since confirmed the login (``signed_in``).
+    signin_for: str | None = None
+    signin_provider: str = ""
+    signed_in: bool = False
+    _signin_future: Any = None
+    _signin_checks: int = 0
 
     def pane_env(self) -> dict[str, str]:
         """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
@@ -821,6 +829,10 @@ class TerminalSession:
         # by the routes from Iron-Proxy's CACHED snapshot, never here.
         if self.claude_session_id:  # v1.303.0 additive
             row["claude_session_id"] = self.claude_session_id
+        if self.signin_for:  # v1.303.3 additive: a sign-in pane
+            row["signin_for"] = self.signin_for
+            if self.signed_in:
+                row["signed_in"] = True
         if self.continued_from:  # v1.303.2 additive
             row["continued_from"] = dict(self.continued_from)
             failed = self.resume_failed_info()

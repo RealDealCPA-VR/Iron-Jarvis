@@ -24,11 +24,14 @@ import {
   Play,
   Plus,
   Power,
+  RefreshCw,
   SquareTerminal,
+  TriangleAlert,
   Users,
 } from "lucide-react";
 import { post, patch, del } from "@/lib/api";
-import { usePolledApi } from "@/lib/useApi";
+import { useApi, type ApiState } from "@/lib/useApi";
+import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { Badge, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import {
   ADDABLE_PROVIDERS,
@@ -64,7 +67,78 @@ export const IRON_PROXY_STARTING_POLL_MS = 1000;
  *  ~10 s and it records a reason in status.error when it fails). */
 const STARTING_GIVE_UP_MS = 30_000;
 
+/** v1.303.3: after Sign in, how often the card re-reads the light view, and
+ *  for how long — so the chip flips to Ready without a reload. */
+export const IRON_PROXY_SIGNIN_POLL_MS = 1000;
+export const SIGNIN_WATCH_MS = 3 * 60_000;
+
+/** The account whose sign-in the user started, kept per WINDOW: Sign in
+ *  opens Build (this card unmounts), and the watch resumes when the user
+ *  comes back to Connections within the 3 minutes. */
+let signInWatch: { id: string; title: string; until: number } | null = null;
+
+/** Test seam. */
+export function resetSignInWatch() {
+  signInWatch = null;
+}
+
+/** The account's status out of `POST …/check`'s answer (the account itself,
+ *  or wrapped as `account` / `profile`, or a bare `{status}`). */
+export function checkedStatus(res: unknown): string | null {
+  if (!res || typeof res !== "object") return null;
+  const r = res as Record<string, unknown>;
+  const pick = (o: unknown): string | null => {
+    if (!o || typeof o !== "object") return null;
+    const x = o as Record<string, unknown>;
+    const st = x.state as Record<string, unknown> | undefined;
+    if (st && typeof st.status === "string") return st.status;
+    return typeof x.status === "string" ? x.status : null;
+  };
+  return pick(r) ?? pick(r.account) ?? pick(r.profile);
+}
+
+/** The daemon's "the running Iron-Proxy is too old" sentence. */
+export function isOutdatedError(error: string | null | undefined): boolean {
+  return !!error && /older than|too old|outdated/i.test(error);
+}
+
 const enc = encodeURIComponent;
+
+/**
+ * A poll that never STACKS (v1.303.3 review): a tick is skipped while the
+ * previous read of the same path is still in flight. `usePolledApi` starts a
+ * new GET every tick regardless, and while Iron-Proxy was being replaced one
+ * read took seconds — at the 1 s sign-in cadence that queued 10–15 GETs and
+ * used up the browser's six connections to the daemon, stalling every other
+ * page request. Otherwise it is `usePolledApi`: paused while the window is
+ * hidden, one re-read on the hidden→visible edge, `reload()` still immediate.
+ */
+export function useSerialPolledApi<T>(path: string, intervalMs: number): ApiState<T> {
+  const [tick, setTick] = useState(0);
+  const state = useApi<T>(path, [tick]);
+  const loadingRef = useRef(state.loading);
+  loadingRef.current = state.loading;
+  const visible = useDocumentVisible();
+  useEffect(() => {
+    if (!visible) return;
+    const id = setInterval(() => {
+      if (!loadingRef.current) setTick((t) => t + 1);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs, visible]);
+  const wasHiddenRef = useRef(false);
+  useEffect(() => {
+    if (!visible) {
+      wasHiddenRef.current = true;
+      return;
+    }
+    if (wasHiddenRef.current) {
+      wasHiddenRef.current = false;
+      if (!loadingRef.current) setTick((t) => t + 1);
+    }
+  }, [visible]);
+  return state;
+}
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -74,14 +148,23 @@ export function IronProxyCard() {
   // `waiting` = the user switched it on and we have not yet seen a snapshot
   // taken AFTER that POST that says running (or says why not).
   const [waiting, setWaiting] = useState(false);
+  // v1.303.3: the sign-in the user started (survives leaving the page).
+  const [watch, setWatch] = useState(() =>
+    signInWatch && signInWatch.until > Date.now() ? signInWatch : null,
+  );
+  const [signedIn, setSignedIn] = useState<string | null>(null);
   // v1.302.0 (review F3): status + accounts come from the LIGHT read every
   // 5 s (1 s while starting); only `discovered` needs the full view, which
   // makes Iron-Proxy run each vendor CLI's status command — every 30 s.
-  const light = usePolledApi<IronProxySnapshot>(
+  const light = useSerialPolledApi<IronProxySnapshot>(
     IRON_PROXY_LIGHT_PATH,
-    waiting ? IRON_PROXY_STARTING_POLL_MS : IRON_PROXY_POLL_MS,
+    waiting
+      ? IRON_PROXY_STARTING_POLL_MS
+      : watch
+        ? IRON_PROXY_SIGNIN_POLL_MS
+        : IRON_PROXY_POLL_MS,
   );
-  const full = usePolledApi<IronProxySnapshot>("/iron-proxy", IRON_PROXY_DISCOVER_POLL_MS);
+  const full = useSerialPolledApi<IronProxySnapshot>("/iron-proxy", IRON_PROXY_DISCOVER_POLL_MS);
   const live = isSnapshot(light.data) ? light.data : full.data;
   const error = isSnapshot(live) ? null : light.error ?? full.error;
   const data = useMemo(() => {
@@ -107,6 +190,25 @@ export function IronProxyCard() {
     const t = setTimeout(() => setWaiting(false), STARTING_GIVE_UP_MS);
     return () => clearTimeout(t);
   }, [waiting]);
+  // v1.303.3: the watched account left "needs sign-in" -> say so ONCE, stop.
+  useEffect(() => {
+    if (!watch || !isSnapshot(live)) return;
+    const a = (live.accounts ?? []).find((x) => x.id === watch.id);
+    const s = a?.state?.status;
+    if (s === "ready" || s === "active") {
+      setSignedIn(`Signed in — ${a?.title ?? watch.title} is ready.`);
+      signInWatch = null;
+      setWatch(null);
+    }
+  }, [watch, live]);
+  useEffect(() => {
+    if (!watch) return;
+    const t = setTimeout(() => {
+      signInWatch = null;
+      setWatch(null);
+    }, Math.max(0, watch.until - Date.now()));
+    return () => clearTimeout(t);
+  }, [watch]);
 
   if (error?.status === 404) return null; // older daemon: no Iron-Proxy routes
   if (!isSnapshot(data)) {
@@ -129,6 +231,13 @@ export function IronProxyCard() {
       }}
       onEnableFailed={() => setWaiting(false)}
       reload={reload}
+      signedIn={signedIn}
+      onSignInStarted={(id, title) => {
+        signInWatch = { id, title, until: Date.now() + SIGNIN_WATCH_MS };
+        setSignedIn(null);
+        setWatch(signInWatch);
+      }}
+      onClearSignedIn={() => setSignedIn(null)}
     />
   );
 }
@@ -141,12 +250,19 @@ function IronProxyBody({
   onEnablePosted,
   onEnableFailed,
   reload,
+  signedIn = null,
+  onSignInStarted,
+  onClearSignedIn,
 }: {
   snap: IronProxySnapshot;
   waiting: boolean;
   onEnablePosted: () => void;
   onEnableFailed: () => void;
   reload: () => void;
+  /** v1.303.3: "Signed in — <title> is ready.", shown once. */
+  signedIn?: string | null;
+  onSignInStarted?: (id: string, title: string) => void;
+  onClearSignedIn?: () => void;
 }) {
   const router = useRouter();
   const { status } = snap;
@@ -168,6 +284,7 @@ function IronProxyBody({
     setBusy(key);
     setActionError(null);
     setNote(null);
+    onClearSignedIn?.();
     try {
       await fn();
       return true;
@@ -204,8 +321,27 @@ function IronProxyBody({
         `/iron-proxy/accounts/${enc(id)}/signin`,
       );
       if (!res?.terminal_id) throw new Error("The daemon did not open a sign-in terminal.");
+      // v1.303.3: watch a signed-out account so its chip flips to Ready on
+      // its own (an account that is already usable has nothing to wait for).
+      const acc = accounts.find((a) => a.id === id);
+      if (acc?.state?.status === "unauthenticated") onSignInStarted?.(id, acc.title);
       router.push(terminalsHref(res.terminal_id));
     });
+  }
+
+  /** v1.303.3: ask Iron-Proxy to re-check one account's login now. */
+  async function checkAgain(id: string, title: string) {
+    let status: string | null = null;
+    const ok = await run(`${id}:check`, async () => {
+      status = checkedStatus(await post<unknown>(`/iron-proxy/accounts/${enc(id)}/check`));
+    });
+    if (!ok) return;
+    reload();
+    if (status === "unauthenticated") {
+      setActionError("Still not signed in — finish the login in the Sign in pane.");
+    } else if (status === "ready" || status === "active") {
+      setNote(`Signed in — ${title} is ready.`);
+    }
   }
 
   /** v1.302.0: start this account's CLI in a NEW Build pane and go there. */
@@ -294,6 +430,27 @@ function IronProxyBody({
           )}
         </div>
 
+        {status.running && isOutdatedError(status.error) && (
+          <div
+            id="iron-proxy-outdated"
+            role="alert"
+            className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/[0.1] px-3 py-2.5 text-sm text-amber-100"
+          >
+            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-amber-300" />
+            <div>
+              <div className="font-medium">{status.error}</div>
+              <div className="mt-0.5 text-xs text-amber-200/80">
+                Until then Iron Jarvis cannot pick accounts through it: Build&apos;s “as &lt;account&gt;”
+                launches and account switching are refused.
+              </div>
+            </div>
+          </div>
+        )}
+        {status.running && status.error && !isOutdatedError(status.error) && (
+          <div className="mt-3">
+            <ErrorNote>{status.error}</ErrorNote>
+          </div>
+        )}
         {status.enabled && !status.running && !waiting && status.error && (
           <div className="mt-3">
             <ErrorNote>{status.error}</ErrorNote>
@@ -307,6 +464,11 @@ function IronProxyBody({
         {note && (
           <div className="mt-3">
             <SuccessNote>{note}</SuccessNote>
+          </div>
+        )}
+        {signedIn && !note && (
+          <div className="mt-3" data-testid="iron-proxy-signed-in">
+            <SuccessNote>{signedIn}</SuccessNote>
           </div>
         )}
         {added && (
@@ -357,6 +519,7 @@ function IronProxyBody({
                         last={i === g.accounts.length - 1}
                         busy={anyBusy}
                         onSignIn={() => signIn(a.id)}
+                        onCheck={() => checkAgain(a.id, a.title)}
                         onOpen={() => openInBuild(a.id)}
                         onUnpark={() =>
                           act(`${a.id}:unpark`, () => post(`/iron-proxy/accounts/${enc(a.id)}/unpark`))
@@ -489,6 +652,7 @@ function AccountRow({
   last,
   busy,
   onSignIn,
+  onCheck,
   onOpen,
   onUnpark,
   onMove,
@@ -500,6 +664,7 @@ function AccountRow({
   last: boolean;
   busy: boolean;
   onSignIn: () => void;
+  onCheck: () => void;
   onOpen: () => void;
   onUnpark: () => void;
   onMove: (dir: -1 | 1) => void;
@@ -557,6 +722,18 @@ function AccountRow({
             className={`${a.state?.status === "unauthenticated" ? "btn-accent" : "btn-ghost"} px-2.5 py-1 text-xs`}
           >
             <LogIn size={13} /> Sign in
+          </button>
+        )}
+        {isCli && a.state?.status === "unauthenticated" && (
+          <button
+            type="button"
+            data-testid={`iron-proxy-check-${a.id}`}
+            onClick={onCheck}
+            disabled={busy}
+            title="Ask Iron-Proxy to check this account's login again now"
+            className="btn-ghost px-2.5 py-1 text-xs"
+          >
+            <RefreshCw size={13} /> Check again
           </button>
         )}
         {canOpen && (

@@ -126,6 +126,12 @@ class FakeIronProxy:
         #: anyway (what ``pickProfile`` did before it checked availability).
         self.pinned_lenient = False
         self.auth_headers: list[str | None] = []
+        #: v1.303.3: what a sign-in re-check (``POST /iron/refresh``) finds per
+        #: account — True = its login is in place. Absent = True. A test flips
+        #: it to model "the user logged in in the sign-in pane".
+        self.login_ok: dict[str, bool] = {}
+        #: Seconds a refresh takes (Iron-Proxy runs the vendor CLI's status).
+        self.refresh_delay = 0.0
         self._seq = 0
         self.server: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
@@ -296,6 +302,22 @@ class FakeIronProxy:
         st["lastUsedAt"] = _now()
         return {"ok": True, "state": st}
 
+    def refresh(self, pid: str | None) -> list[dict[str, Any]]:
+        """``refreshStatus`` (packages/core/src/manager.ts @ 2d4f645): a
+        disabled account reads ``disabled``; a parked or active one keeps its
+        state; anything else becomes ``ready`` when its login is in place
+        (``login_ok``), else ``unauthenticated``."""
+        targets = [self._get(pid)] if pid else list(self.profiles.values())
+        out = []
+        for prof in targets:
+            st = self.states.setdefault(prof["id"], self._fresh_state(prof["id"]))
+            if not prof.get("enabled", True):
+                st["status"] = "disabled"
+            elif st.get("status") not in ("parked", "active"):
+                st["status"] = "ready" if self.login_ok.get(prof["id"], True) else "unauthenticated"
+            out.append(dict(st))
+        return out
+
     def usage(self, pid: str | None) -> list[dict[str, Any]]:
         targets = [self._get(pid)] if pid else self._ordered()
         out = []
@@ -315,6 +337,8 @@ class FakeIronProxy:
         parsed = urlparse(raw_path)
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query)
+        if path == "/iron/refresh" and self.refresh_delay:
+            time.sleep(self.refresh_delay)  # outside the lock, like a CLI check
         with self.lock:
             self.calls.append((method, path, body))
             self.queries.append((path, query))
@@ -336,6 +360,8 @@ class FakeIronProxy:
             action = parts[3] if len(parts) > 3 else None
             if sub == "states" and method == "GET":
                 return 200, dict(self.states)
+            if sub == "refresh" and method == "POST":
+                return 200, self.refresh((body or {}).get("id"))
             if sub == "discover" and method == "GET":
                 return 200, list(self.discovered)
             if sub == "usage" and method == "GET":

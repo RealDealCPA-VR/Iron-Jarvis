@@ -562,3 +562,27 @@ export function handoffNote(a: HandoffAnswer | null | undefined): string {
   const note = a?.note?.trim();
   return note ? `${head} ${note}` : head;
 }
+
+/* ---- v1.303.3: a sign-in pane whose login finished ------------------------- */
+
+/** A sign-in pane's activity row says `signed_in: true` once the login is
+ *  done. The account's title comes from the row when the daemon names it,
+ *  else from the pane's own name ("Sign in: Personal"). Null otherwise. */
+export function signedInOf(row: unknown): { title: string } | null {
+  if (!row || typeof row !== "object") return null;
+  const r = row as Record<string, unknown>;
+  const flag = r.signed_in;
+  if (flag !== true && !(flag && typeof flag === "object")) return null;
+  const obj = flag && typeof flag === "object" ? (flag as Record<string, unknown>) : null;
+  const acc =
+    r.sign_in_account && typeof r.sign_in_account === "object"
+      ? (r.sign_in_account as Record<string, unknown>)
+      : null;
+  const fromName = str(r.name)?.match(/^Sign in:\s*(.+)$/i)?.[1]?.trim() || null;
+  const title =
+    (obj ? str(obj.title) ?? str((obj.account as Record<string, unknown> | undefined)?.title) : null) ??
+    (acc ? str(acc.title) : null) ??
+    str(r.account_title) ??
+    fromName;
+  return { title: title ?? "this account" };
+}

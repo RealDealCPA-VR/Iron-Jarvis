@@ -81,6 +81,7 @@ function useStoreVersion() {
 export function resetContinueMemory() {
   dismissedLine.clear();
   dismissedFailure.clear();
+  dismissedSignedIn.clear();
   continued.clear();
   changed();
 }
@@ -462,6 +463,52 @@ function SignInNeededStrip({
           {error}
         </span>
       )}
+    </div>
+  );
+}
+
+/* ---- v1.303.3: the sign-in pane's login is done ----------------------------- */
+
+const dismissedSignedIn = new Set<string>();
+
+/**
+ * A sign-in pane (opened by Sign in on the Iron-Proxy card or the sign-in
+ * strip) whose login finished: the activity row says `signed_in: true`. The
+ * user once mistook Claude Code's one-time first-run welcome for a second
+ * login, so this says what to do next and what that welcome is.
+ */
+export function SignedInStrip({
+  paneId,
+  signedIn,
+}: {
+  paneId: string;
+  signedIn: { title: string } | null | undefined;
+}) {
+  useStoreVersion();
+  if (!signedIn || dismissedSignedIn.has(paneId)) return null;
+  const named = signedIn.title === "this account" ? "this account" : `“${signedIn.title}”`;
+  return (
+    <div
+      id={`pane-signed-in-${paneId}`}
+      data-testid="signed-in-strip"
+      className="flex shrink-0 items-center gap-2 border-b border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-1 text-[11px] text-emerald-200"
+    >
+      <LogIn size={12} className="shrink-0" />
+      <span className="min-w-0 flex-1">
+        Signed in to {named}. Type <code className="rounded bg-white/[0.08] px-1 font-mono">claude</code> here
+        to use it — Claude Code shows its one-time welcome the first time.
+      </span>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={() => {
+          dismissedSignedIn.add(paneId);
+          changed();
+        }}
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-emerald-200/80 hover:bg-emerald-500/15"
+      >
+        <X size={12} />
+      </button>
     </div>
   );
 }

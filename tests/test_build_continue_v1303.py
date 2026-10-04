@@ -804,7 +804,12 @@ def test_a_diverged_copy_is_never_replaced(tmp_path):
     assert dest.read_bytes() == diverged and not trash.exists()
 
     # The sibling folder: one file diverged, one is an older prefix, one is new.
-    dest.write_bytes(src.read_bytes())  # the main file agrees now
+    # The main file agrees now — rewritten with the SAME size inside the SAME
+    # clock tick (mtime put back): v1.303.3 found `filecmp.cmp` answering from
+    # its (size, mtime) cache here. MUTATION: compare with filecmp -> red.
+    before = dest.stat()
+    dest.write_bytes(src.read_bytes())
+    os.utime(dest, ns=(before.st_atime_ns, before.st_mtime_ns))
     src_side = src.parent / sid / "subagents"
     (src_side / "agent-2.jsonl").write_text('{"a":1}\n{"a":2}\n', encoding="utf-8")
     (src_side / "agent-3.jsonl").write_text('{"new":1}\n', encoding="utf-8")

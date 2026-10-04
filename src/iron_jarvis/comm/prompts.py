@@ -49,7 +49,7 @@ import json
 import threading
 from typing import Any
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -328,7 +328,14 @@ class PendingPromptStore:
                         PendingPromptRecord.sender_id == str(sender_id),
                         PendingPromptRecord.status == "open",
                     )
-                    .order_by(PendingPromptRecord.created_at.desc())  # type: ignore[attr-defined]
+                    # Same-tick tie-break on insertion order (the v1.286.0 rule:
+                    # Windows' utcnow() ticks every 15.6 ms, so two prompts
+                    # registered back to back share created_at and "newest"
+                    # was a coin toss -- 2 of 3 local runs failed the pin).
+                    .order_by(
+                        PendingPromptRecord.created_at.desc(),  # type: ignore[attr-defined]
+                        text("rowid DESC"),
+                    )
                 ).first()
         except Exception:  # noqa: BLE001
             log.warning("newest_open failed for %s/%s", channel, sender_id, exc_info=True)

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.303.2 (2026-10-04).*
+holds itself to. Current as of v1.303.3 (2026-10-04).*
 
 ---
 
@@ -1746,6 +1746,19 @@ STARTS:
 An account is fixed for the life of its pane. Each account keeps its own
 conversation history, so `claude --continue` in a pane on a different account
 does not see the first account's conversations.
+
+**Signing an account in (v1.303.3).** **Sign in** on the Iron-Proxy card opens a
+Build pane that runs that account's own Claude login. As soon as Claude says
+"Login successful", the pane says you are signed in and the card turns the
+account to Ready by itself (for the few minutes after you press Sign in it keeps
+checking; **Check again** checks at once). An account Anthropic signed out on its
+own (an expired or revoked login) stays "Needs sign-in" until you sign it in
+again — it is never quietly marked ready. The
+first time you start `claude` on a new account, Claude Code shows its one-time
+welcome — that is not a second sign-in. If the Iron-Proxy running on this PC is
+an older copy that Iron Jarvis started, Iron Jarvis replaces it with the current
+one; if it is one Iron Jarvis did not start (the tray app, or a copy started
+from elsewhere), the card names that process so you can close or update it.
 
 **When an account runs out (v1.303.0).** When Claude Code in a pane on an
 Iron-Proxy account shows its own limit message — "You've hit your session

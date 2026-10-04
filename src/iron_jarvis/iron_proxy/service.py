@@ -44,6 +44,7 @@ The token from proxy.json stays inside this object and the client: never in
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -152,6 +153,34 @@ REQUIRED_FEATURE = "executor-v1"
 #: Build pane asked to start on a chosen account checks this first.
 PICK_PROFILE_FEATURE = "pick-profile"
 
+#: Every health ``feature`` Iron Jarvis knows; the BUNDLED Iron-Proxy's own set
+#: is read from the bundle text (``_bundle_features``).
+KNOWN_FEATURES = (REQUIRED_FEATURE, PICK_PROFILE_FEATURE)
+
+#: v1.303.3: an account that needs sign-in (or whose state is unknown) is
+#: re-checked (``POST /iron/refresh {id}``) at most this often, per account.
+REFRESH_EVERY_S = 10.0
+#: How long ``recheck_signed_out`` waits by default. ``GET /iron-proxy``
+#: passes 0 (the card polls every second during a sign-in; a result lands in
+#: the snapshot and the next read); "Check again" waits on its own future.
+REFRESH_WAIT_S = 3.0
+#: One re-check runs the vendor CLI's own status command: seconds, not ms.
+REFRESH_TIMEOUT_S = 30.0
+#: States worth re-checking: a sign-in that may have happened since.
+RECHECK_STATES = frozenset({"unauthenticated", "unknown"})
+#: v1.303.3 review: an account is re-checked AUTOMATICALLY only while a sign-in
+#: is in progress — a sign-in pane for it is open, or the Sign in route was
+#: pressed within this window. Iron-Proxy's re-check trusts the LOCAL
+#: credentials file (``claude auth status``), so re-checking an account a real
+#: request just found signed out (a revoked token, a failed refresh: 401)
+#: would flip it back to ready and lease it into the same 401 again.
+SIGNIN_WINDOW_S = 180.0
+#: A stale Iron-Jarvis-started proxy is replaced at most this many times per
+#: :data:`REPLACE_WINDOW_S` (two Iron Jarvis copies sharing one data dir —
+#: a source run and the installed app — would otherwise kill each other's).
+REPLACE_LIMIT = 2
+REPLACE_WINDOW_S = 600.0
+
 #: Iron Jarvis provider id -> the Iron-Proxy provider whose CLI accounts it runs as.
 JARVIS_TO_PROXY = {"claude-cli": "anthropic", "codex-cli": "openai", "grok-cli": "xai"}
 
@@ -162,6 +191,12 @@ NOT_ANSWERING = (
 OUTDATED = (
     "The Iron-Proxy running on this PC is older than this Iron Jarvis needs — "
     "update it, or close it so Iron Jarvis starts its own."
+)
+#: OUTDATED when the running proxy's process can be named (v1.303.3).
+OUTDATED_NAMED = (
+    "The Iron-Proxy running on this PC (process {pid}, {what}) is older than this "
+    "Iron Jarvis needs and was not started by this Iron Jarvis — close that "
+    "process (or update it), then turn Iron-Proxy off and on in Connections."
 )
 TOKEN_REFUSED = (
     "Iron-Proxy refused Iron Jarvis's access token; turn Iron-Proxy off and on again."
@@ -223,6 +258,84 @@ def _kill_pids(pids: list[int]) -> None:
         pass
 
 
+def _cmdline(pid: int) -> list[str]:
+    """The process's command line, or ``[]`` when it cannot be read."""
+    try:
+        import psutil
+
+        return [str(a) for a in psutil.Process(int(pid)).cmdline()]
+    except Exception:  # noqa: BLE001 — gone or not ours to read: not a bundle
+        return []
+
+
+#: The executable an Iron Jarvis install keeps beside ``resources/``.
+_IJ_EXE_NAMES = ("Iron Jarvis.exe", "Iron Jarvis", "iron-jarvis")
+
+
+def _repo_bundle_dir() -> Path:
+    """THIS repo's ``desktop/vendor/iron-proxy`` (a source run's bundle)."""
+    return Path(__file__).resolve().parents[3] / "desktop" / "vendor" / "iron-proxy"
+
+
+def _norm(path: Path | str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(str(path))))
+
+
+def _script_arg(cmdline: list[str]) -> str | None:
+    """The first SCRIPT argument after the runtime (``node``, Electron): the
+    first argument after ``argv[0]`` that is not a runtime flag."""
+    for arg in list(cmdline or [])[1:]:
+        a = str(arg).strip().strip('"')
+        if a and not a.startswith("-"):
+            return a
+    return None
+
+
+def iron_jarvis_owner(cmdline: list[str]) -> Path | None:
+    """The Iron Jarvis whose bundle this command line runs — the folder of THIS
+    repo (a source run) or of an install — or ``None``. The bundle must be the
+    FIRST script argument after the runtime and live in this repo's
+    ``desktop/vendor/iron-proxy``, or in an install's ``resources/iron-proxy``
+    whose install folder holds the Iron Jarvis executable. Reads the disk."""
+    script = _script_arg(cmdline)
+    if not script:
+        return None
+    bundle = Path(script)
+    if bundle.name.lower() != "iron-proxy.mjs":
+        return None
+    folder = bundle.parent
+    try:
+        if _norm(folder) == _norm(_repo_bundle_dir()):
+            return _repo_bundle_dir().parents[2]
+        if folder.name.lower() == "iron-proxy" and folder.parent.name.lower() == "resources":
+            install = folder.parent.parent
+            if any((install / name).is_file() for name in _IJ_EXE_NAMES):
+                return install
+    except OSError:
+        return None
+    return None
+
+
+def is_iron_jarvis_bundle(cmdline: list[str]) -> bool:
+    """Does this command line run the Iron-Proxy bundle an Iron Jarvis ships
+    (:func:`iron_jarvis_owner`)?"""
+    return iron_jarvis_owner(cmdline) is not None
+
+
+def _another_iron_jarvis(where: Path | str) -> str:
+    return (
+        f"Another Iron Jarvis on this PC ({where}) keeps starting an older Iron-Proxy, so "
+        "this one stopped replacing it — update or close that copy of Iron Jarvis."
+    )
+
+
+def _could_not_stop(pid: int) -> str:
+    return (
+        f"Iron Jarvis could not stop the older Iron-Proxy (pid {pid}) — close it, then "
+        "press Turn on again."
+    )
+
+
 class IronProxyService:
     def __init__(self, config: Any, *, register: bool = True) -> None:
         self._config = config
@@ -257,6 +370,31 @@ class IronProxyService:
         # never per status() call.
         self._bundled_cached = False
         self._bundle_version_cached: str | None = None
+        #: v1.303.3: the health features the BUNDLED Iron-Proxy advertises
+        #: (read from its text, cached by the file's size + mtime).
+        self._bundle_features: frozenset[str] = frozenset()
+        self._bundle_features_key: tuple[Any, ...] | None = None
+        #: A located Iron-Proxy that lacks a bundled feature and is NOT one an
+        #: Iron Jarvis started (the tray app, a user-run serve): said in
+        #: ``status().error``, never stopped.
+        self._stale_foreign = False
+        #: Pids this daemon tried to stop as stale Iron-Jarvis-started proxies,
+        #: the (bundle, version) pairs it replaced, when, and the pids it could
+        #: not stop (their sentence). ``_stale_error`` = the sentence to show.
+        self._replaced: set[int] = set()
+        self._replaced_keys: set[tuple[str, str]] = set()
+        self._replace_times: list[float] = []
+        self._kill_failed: dict[int, str] = {}
+        self._stale_error: str | None = None
+        #: Profile id -> when the Sign in route opened a pane for it.
+        self._signin_started: dict[str, float] = {}
+        #: Guards the account snapshot's read-modify-write.
+        self._snapshot_lock = threading.RLock()
+        #: v1.303.3: per-account re-checks (``request_refresh``).
+        self._refresh_lock = threading.Lock()
+        self._refresh_at: dict[str, float] = {}
+        self._refresh_futures: dict[str, concurrent.futures.Future] = {}
+        self._refresh_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._refresh_bundle_facts()
         if register:
             _set_current(self)
@@ -314,6 +452,28 @@ class IronProxyService:
     def _refresh_bundle_facts(self) -> None:
         self._bundled_cached = self.bundled()
         self._bundle_version_cached = self._bundle_version()
+        self._read_bundle_features()
+
+    def _read_bundle_features(self) -> None:
+        """Which :data:`KNOWN_FEATURES` the bundle advertises (its health
+        answer is built from string literals in the file). Blocking; re-read
+        only when the file's size or mtime changed."""
+        try:
+            path = self._bundle_path()
+            if path is None or not path.is_file():
+                self._bundle_features, self._bundle_features_key = frozenset(), None
+                return
+            st = path.stat()
+            key = (str(path), st.st_size, st.st_mtime_ns)
+            if key == self._bundle_features_key:
+                return
+            text = path.read_text(encoding="utf-8", errors="replace")
+            self._bundle_features = frozenset(
+                f for f in KNOWN_FEATURES if f'"{f}"' in text or f"'{f}'" in text
+            )
+            self._bundle_features_key = key
+        except OSError:
+            self._bundle_features, self._bundle_features_key = frozenset(), None
 
     def _command(self) -> tuple[list[str], dict[str, str]]:
         """``(argv prefix, extra child env)`` that runs the bundle, or raise a
@@ -483,6 +643,8 @@ class IronProxyService:
         self._pid = None
         self._owned = False
         self._outdated = False
+        self._stale_foreign = False
+        self._stale_error = None
         self._token_bad = False
         self._usable = {}
         self._accounts_cache = None
@@ -497,6 +659,80 @@ class IronProxyService:
 
     def _owned_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
+
+    # ------------------------------------------- a stale proxy we started
+    def _missing_features(self) -> frozenset[str]:
+        """Features the bundled Iron-Proxy has and the running one lacks."""
+        return self._bundle_features - self._features
+
+    def _replace_if_stale(self, pid: int | None) -> bool:
+        """v1.303.3 (a LIVE bug): the running Iron-Proxy (``pid``, health
+        already noted) lacks a feature the bundle has. When its command line
+        runs an Iron Jarvis bundle (:func:`iron_jarvis_owner`) — this or
+        another Iron Jarvis started it, owned record or not — stop that tree
+        and start the current bundle; True when it did. Never: our OWN child
+        of this run (it IS the current bundle); a pid twice; the same (bundle,
+        version) twice, or more than :data:`REPLACE_LIMIT` times in
+        :data:`REPLACE_WINDOW_S` (another Iron Jarvis sharing the data dir
+        keeps starting it — said in ``status().error``, naming it); a process
+        that did not die (its descriptor is kept, said). Anyone else's proxy
+        is never touched and reads as outdated. Caller holds the lock."""
+        missing = self._missing_features()
+        self._stale_foreign = False
+        self._stale_error = None
+        if not missing or pid is None:
+            return False
+        if self._owned_alive() and pid in _family(self._proc.pid):  # type: ignore[union-attr]
+            return False
+        cmdline = _cmdline(pid)
+        owner = iron_jarvis_owner(cmdline)
+        if owner is None:
+            self._stale_foreign = True
+            # Not ours, so never stopped — but say WHICH process, or the user
+            # (the v1.303.2 report: an old source-run proxy the packaged app
+            # cannot recognise) has no way to act on "close it".
+            what = _script_arg(cmdline) or (cmdline[0] if cmdline else "")
+            if what:
+                self._stale_error = OUTDATED_NAMED.format(pid=pid, what=what)
+            return False
+        if pid in self._replaced:
+            self._stale_error = self._kill_failed.get(pid) or _another_iron_jarvis(owner)
+            return False
+        now = time.monotonic()
+        self._replace_times = [t for t in self._replace_times if now - t < REPLACE_WINDOW_S]
+        key = (_norm(_script_arg(cmdline) or ""), str(self._version or ""))
+        if key in self._replaced_keys or len(self._replace_times) >= REPLACE_LIMIT:
+            self._stale_error = _another_iron_jarvis(owner)
+            return False
+        log.warning(
+            "iron-proxy pid %s runs an older Iron Jarvis bundle (missing %s); restarting it",
+            pid, ", ".join(sorted(missing)),
+        )
+        self._replaced.add(int(pid))
+        self._replaced_keys.add(key)
+        self._replace_times.append(now)
+        _kill_pids([int(pid)])
+        if _pid_alive(int(pid)):
+            # Still running: keep its descriptor (it still serves) and say so.
+            self._kill_failed[int(pid)] = _could_not_stop(int(pid))
+            self._stale_error = self._kill_failed[int(pid)]
+            return False
+        descriptor = self.data_dir() / "proxy.json"
+        desc = _read_descriptor(descriptor)
+        if desc is not None and desc["pid"] == pid:
+            try:
+                descriptor.unlink()  # the killed process cannot remove it
+            except OSError:
+                pass
+        if self._proc is not None and not self._owned_alive():
+            self._proc = None
+        self._clear_owned_record()
+        self._forget()
+        try:
+            self._spawn()
+        except _StartProblem as exc:
+            self._error = str(exc)
+        return True
 
     # -------------------------------------------------------------- start
     def start(self) -> dict[str, Any]:
@@ -521,10 +757,12 @@ class IronProxyService:
             health = _health(self._url)
             if health is not None:
                 self._note_health(health)
-                return  # already running and answering
+                self._replace_if_stale(self._pid)
+                return  # already running and answering (or just replaced)
         loc = self.locate()
         if loc is not None:
-            self._adopt_located(loc)
+            if not self._replace_if_stale(loc[2]):
+                self._adopt_located(loc)
             return
         if self._proc is not None or self._owned:
             # Our child is there but not answering: it is not coming back.
@@ -649,6 +887,13 @@ class IronProxyService:
             except Exception:  # noqa: BLE001 — shutdown never raises
                 log.debug("iron-proxy stop failed", exc_info=True)
             finally:
+                # The queued re-checks go FIRST: closing the client below
+                # frees the busy workers, which would pick them up.
+                pool, self._refresh_pool = self._refresh_pool, None
+                if pool is not None:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                with self._refresh_lock:
+                    self._refresh_futures.clear()
                 self._forget()
 
     # ------------------------------------------------------------- health
@@ -663,6 +908,8 @@ class IronProxyService:
                 health = _health(self._url)
                 if health is not None:
                     self._note_health(health)
+                    if self._replace_if_stale(self._pid):
+                        return self.running()
                     return True
             if self._proc is not None and self._proc.poll() is not None:
                 rc = self._proc.returncode
@@ -681,6 +928,8 @@ class IronProxyService:
                 if self._error is None:
                     self._error = "Iron-Proxy is not running."
                 return False
+            if self._replace_if_stale(loc[2]):
+                return self.running()
             self._adopt_located(loc)
             return True
 
@@ -702,6 +951,10 @@ class IronProxyService:
     def note_accounts(self, profiles: Any, states: Any) -> None:
         """Record which Iron-Proxy providers have an enabled CLI account that
         does not need sign-in (from a profiles + states read already in hand)."""
+        with self._snapshot_lock:
+            self._note_accounts_locked(profiles, states)
+
+    def _note_accounts_locked(self, profiles: Any, states: Any) -> None:
         usable: dict[str, bool] = {}
         st_map = states if isinstance(states, dict) else {}
         for p in profiles if isinstance(profiles, list) else []:
@@ -737,6 +990,127 @@ class IronProxyService:
         except Exception:  # noqa: BLE001 — availability never breaks on a read
             self._usable = {}
             self._accounts_cache = None
+
+    # ------------------------------------------- re-checking a sign-in
+    def _pool(self) -> concurrent.futures.ThreadPoolExecutor:
+        if self._refresh_pool is None:
+            self._refresh_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix="iron-proxy-refresh"
+            )
+        return self._refresh_pool
+
+    def request_refresh(
+        self, profile_id: str, *, force: bool = False
+    ) -> "concurrent.futures.Future | None":
+        """v1.303.3: ask Iron-Proxy to re-check ONE account's sign-in
+        (``POST /iron/refresh {id}`` — it runs the vendor CLI's own status
+        command), in the background. NON-blocking: returns the future (its
+        result = that account's new state dict, or None), an in-flight one
+        shared, or ``None`` when Iron-Proxy is not in reach or the account was
+        re-checked within :data:`REFRESH_EVERY_S` (``force`` skips that — the
+        manual "Check again" and a sign-in pane that just logged in). The
+        answer lands in the account snapshot (chips, availability)."""
+        pid = str(profile_id or "")
+        if not pid or not self.enabled:
+            return None
+        with self._refresh_lock:
+            fut = self._refresh_futures.get(pid)
+            if fut is not None and not fut.done():
+                return fut
+            now = time.monotonic()
+            if not force and now - self._refresh_at.get(pid, float("-inf")) < REFRESH_EVERY_S:
+                return None
+            client = self._client
+            if client is None:
+                return None
+            self._refresh_at[pid] = now
+            fut = self._pool().submit(self._do_refresh, client, pid)
+            self._refresh_futures[pid] = fut
+            return fut
+
+    def _do_refresh(self, client: IronProxyClient, pid: str) -> dict[str, Any] | None:
+        states = client.refresh(pid, timeout=REFRESH_TIMEOUT_S)
+        st = next(
+            (
+                dict(x) for x in (states if isinstance(states, list) else [])
+                if isinstance(x, dict) and x.get("profileId") == pid
+            ),
+            None,
+        )
+        if st is not None:
+            self._merge_state(pid, st)
+        return st
+
+    def _merge_state(self, pid: str, state: dict[str, Any]) -> None:
+        """One account's new state into the cached snapshot (and with it the
+        per-provider "usable" answer). Never raises."""
+        try:
+            with self._snapshot_lock:
+                cache = self._accounts_cache
+                if cache is None:
+                    return
+                profiles, states = cache
+                merged = dict(states)
+                merged[pid] = dict(state)
+                self._note_accounts_locked(profiles, merged)
+        except Exception:  # noqa: BLE001 — a snapshot update never breaks a check
+            log.debug("iron-proxy state merge failed", exc_info=True)
+
+    def note_signin_started(self, profile_id: str) -> None:
+        """The Sign in route opened a pane for this account: re-check it
+        automatically for :data:`SIGNIN_WINDOW_S` (``recheck_signed_out``)."""
+        if profile_id:
+            self._signin_started[str(profile_id)] = time.monotonic()
+
+    def signing_in(self, open_panes: Any = ()) -> set[str]:
+        """Accounts with a sign-in IN PROGRESS: an open sign-in pane for it
+        (``open_panes``, the ids the caller found) or a Sign in press within
+        :data:`SIGNIN_WINDOW_S`."""
+        now = time.monotonic()
+        recent = {
+            pid for pid, at in list(self._signin_started.items())
+            if now - at < SIGNIN_WINDOW_S
+        }
+        return recent | {str(x) for x in open_panes or () if x}
+
+    def recheck_signed_out(
+        self,
+        profiles: Any,
+        states: Any,
+        wait_s: float | None = None,
+        open_panes: Any = (),
+    ) -> dict[str, dict[str, Any]]:
+        """Re-check the enabled CLI accounts that need sign-in (or are
+        unknown) AND have a sign-in in progress (:meth:`signing_in`) —
+        throttled per account, waiting up to ``wait_s``. Any other account is
+        re-checked only on demand (``POST …/check``): Iron-Proxy's re-check
+        reads the local credentials, so it would flip an account a real 401
+        just signed out back to ready. Off the loop; ``GET /iron-proxy`` only.
+        Returns ``{id: new state}`` for the checks that finished in time."""
+        st_map = states if isinstance(states, dict) else {}
+        wanted = self.signing_in(open_panes)
+        futures: dict[str, concurrent.futures.Future] = {}
+        for p in profiles if isinstance(profiles, list) else []:
+            if not isinstance(p, dict) or p.get("lane") != "cli" or not p.get("enabled", True):
+                continue
+            pid = str(p.get("id") or "")
+            if pid not in wanted:
+                continue
+            st = st_map.get(pid) if isinstance(st_map.get(pid), dict) else {}
+            if str(st.get("status") or "unknown") not in RECHECK_STATES:
+                continue
+            fut = self.request_refresh(pid)
+            if fut is not None:
+                futures[pid] = fut
+        if futures:
+            wait = REFRESH_WAIT_S if wait_s is None else wait_s
+            if wait > 0:
+                concurrent.futures.wait(list(futures.values()), timeout=wait)
+        out: dict[str, dict[str, Any]] = {}
+        for pid, fut in futures.items():
+            if fut.done() and fut.exception() is None and isinstance(fut.result(), dict):
+                out[pid] = fut.result()
+        return out
 
     def has_usable_account(self, ij_provider: str) -> bool:
         """Does Iron-Proxy (on, running, current) have an enabled CLI account
@@ -788,7 +1162,9 @@ class IronProxyService:
             error = None
         elif not running:
             error = self._error
-        elif self._outdated:
+        elif self._stale_error:
+            error = self._stale_error
+        elif self._outdated or self._stale_foreign:
             error = OUTDATED
         elif self._token_bad:
             error = TOKEN_REFUSED

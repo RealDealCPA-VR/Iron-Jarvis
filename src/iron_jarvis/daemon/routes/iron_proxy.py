@@ -26,6 +26,8 @@ Shapes:
 * ``POST /iron-proxy/accounts/{id}/signin`` → ``{terminal_id, name}`` — a Build
   pane whose shell runs the account's login command with that account's env.
 * ``POST /iron-proxy/accounts/{id}/signout`` → ``{ok: true}``.
+* ``POST /iron-proxy/accounts/{id}/check`` → the account row (v1.303.3) — a
+  manual "Check again": Iron-Proxy re-checks that account's sign-in now.
 * ``POST /iron-proxy/accounts/{id}/open`` ``{cli?}`` → ``{terminal_id, name}``
   (v1.302.0) — a NEW Build pane on that account with its CLI started (claude
   for anthropic, codex for openai, grok for xai); ``/terminals/launch``'s own
@@ -216,6 +218,27 @@ def _discovered_view(items: Any, profiles: list[dict[str, Any]] | None = None) -
     return out
 
 
+def _signin_panes(d) -> set[str]:
+    """Profile ids of the sign-in panes open right now (v1.303.3). Never
+    raises; reads the live sessions, never their output."""
+    try:
+        terminals = d.platform.terminals
+        sessions = list(getattr(terminals, "_sessions", {}).values())
+    except Exception:  # noqa: BLE001 — no terminals, no panes
+        return set()
+    out: set[str] = set()
+    for s in sessions:
+        try:
+            # A pane whose login was already confirmed is no longer "signing
+            # in": keeping it here would re-arm that account after a later
+            # 401 for as long as the pane stays open (review finding).
+            if getattr(s, "signin_for", None) and s.alive and not getattr(s, "signed_in", False):
+                out.add(str(s.signin_for))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _home_key(home: str) -> str:
     """Compare CLI homes the way the filesystem does (case-insensitive and
     separator-agnostic on Windows)."""
@@ -366,9 +389,26 @@ def register(app: FastAPI, d) -> None:
                     )
                 body["status"] = st
                 return body
+        # v1.303.3 (a LIVE bug): an account added signed-out stayed "Needs
+        # sign-in" forever after its login landed — nothing asked Iron-Proxy
+        # to look again. An account with a sign-in IN PROGRESS (its sign-in
+        # pane open, or Sign in pressed in the last 3 minutes) is re-checked
+        # here, throttled per account, off the loop and WITHOUT waiting (the
+        # card polls every second during a sign-in; the answer lands in the
+        # next read). Every other account only on "Check again": Iron-Proxy's
+        # re-check reads the local credentials, and would flip an account a
+        # real 401 just signed out back to ready.
+        states_map = dict(states) if isinstance(states, dict) else {}
+
+        def _recheck() -> dict[str, Any]:
+            return svc.recheck_signed_out(
+                profiles, states_map, wait_s=0.0, open_panes=_signin_panes(d)
+            )
+
+        fresh = await asyncio.to_thread(_recheck)
+        states_map.update(fresh)
         # The SAME read refreshes the snapshot provider availability reads.
-        svc.note_accounts(profiles, states)
-        states_map = states if isinstance(states, dict) else {}
+        svc.note_accounts(profiles, states_map)
         usage_map: dict[str, Any] = {}
         if isinstance(usage, list):
             usage_map = {u.get("profileId"): u for u in usage if isinstance(u, dict)}
@@ -494,6 +534,38 @@ def register(app: FastAPI, d) -> None:
         await _changed(svc)
         return {"ok": True}
 
+    @app.post("/iron-proxy/accounts/{account_id}/check")
+    async def iron_proxy_check(account_id: str) -> dict[str, Any]:
+        """"Check again" (v1.303.3): Iron-Proxy re-checks this account's
+        sign-in NOW (its vendor CLI's own status command — seconds), and the
+        answer is the account row with the new state. Bypasses the 10 s
+        throttle of the automatic re-check; shares one already in flight."""
+        from ...iron_proxy.service import REFRESH_TIMEOUT_S
+
+        svc = _svc()
+        client = await _client(svc)
+        fut = svc.request_refresh(account_id, force=True)
+        if fut is None:
+            raise HTTPException(status_code=409, detail=_NOT_RUNNING)
+        try:
+            state = await asyncio.to_thread(fut.result, REFRESH_TIMEOUT_S + 5)
+        except IronProxyError as exc:
+            raise _fail(exc) from None
+        except Exception:  # noqa: BLE001 — a timeout or a dead worker is one sentence
+            raise HTTPException(
+                status_code=409,
+                detail="Iron-Proxy did not finish checking that account; try again shortly.",
+            ) from None
+        profiles = await _call(client.profiles)
+        prof = next(
+            (p for p in (profiles or []) if isinstance(p, dict) and p.get("id") == account_id),
+            None,
+        )
+        if prof is None:
+            raise HTTPException(status_code=404, detail="Iron-Proxy has no account with that id.")
+        await _changed(svc)
+        return _account_view(prof, state)
+
     @app.post("/iron-proxy/accounts/{account_id}/signin")
     async def iron_proxy_signin(account_id: str) -> dict[str, Any]:
         """Open a Build pane named ``Sign in: <title>`` whose shell runs the
@@ -522,6 +594,9 @@ def register(app: FastAPI, d) -> None:
         args = [str(a) for a in ((cmd or {}).get("args") or [])]
         env = _signin_env((cmd or {}).get("env") or {})
         name = f"Sign in: {prof.get('title') or account_id}"
+        # A sign-in is now IN PROGRESS: the card's reads re-check this account
+        # for the next few minutes (and while its pane stays open).
+        svc.note_signin_started(account_id)
         try:
             session = await asyncio.to_thread(
                 d.platform.terminals.create, None, None, 100, 30, env=env, name=name
@@ -531,6 +606,11 @@ def register(app: FastAPI, d) -> None:
         # Nobody is attached until the dashboard opens Build: keep the output
         # (the sign-in URL/code) in the pane's tail so the attach replays it.
         session.start_autodrain()
+        # v1.303.3: the pane knows which account it signs in, so the activity
+        # step can see the CLI's own "Login successful" and have Iron-Proxy
+        # re-check that account at once (``terminals.signin_watch``).
+        session.signin_for = str(account_id)
+        session.signin_provider = str(prof.get("provider") or "")
         line = _command_line(getattr(session, "shell", ""), binary, args, env)
         await asyncio.to_thread(session.write, line + "\r")
         return {"terminal_id": session.id, "name": session.pane_name or name}
