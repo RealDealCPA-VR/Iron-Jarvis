@@ -579,7 +579,11 @@ describe("TerminalPane and the page wire it", () => {
   it("the strip reads only the LIGHT Iron-Proxy view", () => {
     const strip = src("components", "terminal", "ContinueStrip.tsx");
     expect(strip).toContain("usePolledApi<unknown>(IRON_PROXY_LIGHT, LAUNCH_ACCOUNTS_POLL_MS)");
-    expect(strip.match(/["'`]\/iron-proxy[^"'`]*["'`]/g)).toBeNull();
+    // The only Iron-Proxy path named in the file is the v1.303.2 sign-in POST
+    // for one account — never a GET of the (full) Iron-Proxy view.
+    expect(strip.match(/["'`]\/iron-proxy[^"'`]*["'`]/g)).toEqual([
+      "`/iron-proxy/accounts/${encodeURIComponent(need.account.id)}/signin`",
+    ]);
     expect(src("lib", "paneAccounts.ts")).toContain('export const IRON_PROXY_LIGHT = "/iron-proxy?discover=0";');
   });
 });

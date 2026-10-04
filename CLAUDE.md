@@ -2628,6 +2628,43 @@ does not need a bump, stop and bump it.
   accepting it (Anthropic documents thinking signatures as portable across
   platforms). Pin: `tests/test_claude_session_markers_v1303.py`.
 
+- **A carried conversation the next account refuses ends in a HANDOFF, never a
+  dead end** (v1.303.2). Whether a second signed-in account accepts the first
+  one's transcript cannot be proven without one, so the product does not
+  depend on it. The pane opened by Continue records `continued_from`
+  (`from_title`, `session_id`, `carried_path` = the copy in the NEW home, `at`).
+  ONLY THE FILE raises a problem (`terminals/resume_failed.py`): a new exact
+  `isApiErrorMessage` record after `at` in that copy (bounded tail read, only on
+  size/mtime change, in the sync activity route) — the SCREEN only clears,
+  because tool output under `⎿` ("⎿ API Error: 400 from upstream", "token has
+  expired") read as Claude's own error and would /exit a working Claude. A
+  failure needs a 4xx other than 429 (limit flow) / 401 (sign-in), or
+  invalid_request / "does not have access" / "prompt is too long" / signature
+  words — timeouts, "fetch failed", a 408 and billing/server/max-output errors
+  (even with a 400) are not; a login expiry ("Login expired ·
+  Please run /login", by a 401 OR sign-in words, never the 403
+  `authentication_failed` code) is `sign_in_needed` with the account id. `POST /terminals/{id}/start-
+  fresh-with-handoff` (`terminals/handoff.py`): refused while the pane is
+  working/blocked; a deterministic handoff (first ask ≤ 1,500, last 6 text turns
+  ≤ 800, tool_result payloads excluded, ≤ 30 paths, ≤ 8,000 total, secrets
+  MASKED with `detections.redact.mask`) at `<home>/handoffs/<sid>/handoff.md`
+  (one folder per conversation; others older than 30 days pruned; listed in the
+  storage report; included, masked, in backups; never the project); then Ctrl+C (clears Claude Code's
+  composer, multi-line drafts included — measured live on 2.1.289; Esc Esc can
+  open the rewind menu, Ctrl+U clears one line), `/exit`, Enter, wait for the
+  pane's OWN shell prompt (15 s; else a 409 "could not see the shell prompt …
+  if Claude has exited, run: <line>"), then ONE line `claude --session-id <new>
+  "--add-dir=<that conversation's folder>" "Read the handoff…"`. `--add-dir
+  <directories...>` is VARIADIC on 2.1.289 — the two-token form swallows the
+  prompt (measured). LIVE-PROVEN on the real signed-in login: the fresh session
+  answered a fact only the handoff carried. Also fixed by the live run:
+  `session._ANSI_RE` now strips CSI with `<=>!` params and `ESC 7/8/=/>` (Claude
+  Code's exit left `>4m<u` before the prompt), and ConPTY glues the prompt onto
+  the row it overwrites, so pwsh/cmd prompts are matched at the line END.
+  Shared quoting: `routes/iron_proxy.shell_line(shell, argv)`. Pins:
+  `tests/test_build_handoff_v13032.py`,
+  `dashboard/__tests__/start-fresh-v1303-2.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

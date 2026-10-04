@@ -256,7 +256,16 @@ def _command_line(shell: str, binary: str, args: list[str], env: dict[str, str])
     path = env.get("PATH", env.get("Path"))
     resolved = shutil.which(binary, path=path) if path is not None else shutil.which(binary)
     exe = resolved or binary
-    argv = [exe, *[str(a) for a in args]]
+    return shell_line(shell, [exe, *[str(a) for a in args]])
+
+
+def shell_line(shell: str, argv: list[str]) -> str:
+    """``argv`` as ONE line typed into a pane running ``shell``, every token
+    quoted for that shell: PowerShell (``& 'a' 'b'``, ``'`` doubled), cmd
+    (``"…"`` around a token with a space or a metacharacter, ``"`` doubled) and
+    POSIX (``shlex``). The sign-in pane's quoting, shared (v1.303.2: the
+    Build pane's "start fresh with a handoff" types its ``claude`` line with it)."""
+    argv = [str(a) for a in argv]
     name = (shell or "").lower()
     if name in ("pwsh", "powershell") or name.endswith(("pwsh.exe", "powershell.exe")):
         return "& " + " ".join("'" + a.replace("'", "''") + "'" for a in argv)

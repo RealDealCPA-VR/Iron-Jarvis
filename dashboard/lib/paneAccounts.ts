@@ -465,3 +465,100 @@ export function continueNote(a: ContinueAnswer): string {
     ? head
     : `${head} Iron-Proxy did not mark ${from} as out of usage, so it may be tried again.`;
 }
+
+/* ---- v1.303.2: when the next account cannot pick the conversation up ------- */
+
+/** The activity row's `resume_failed`: the CLI's own sentence (a refused
+ *  resume, or a sign-in variant) and when it was first seen. */
+export interface ResumeFailed {
+  line: string;
+  since?: string | null;
+}
+
+/** The activity row's `resume_failed`, read tolerantly (`line`, else
+ *  `sentence` / `message`); null when absent or empty. */
+export function resumeFailedOf(row: unknown): ResumeFailed | null {
+  if (!row || typeof row !== "object") return null;
+  const raw = (row as { resume_failed?: unknown }).resume_failed;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const line = str(r.line) ?? str(r.sentence) ?? str(r.message);
+  if (!line) return null;
+  return { line, since: str(r.since) };
+}
+
+/** Dismiss remembers the failure EPISODE (`since`), never the line. */
+export function resumeFailedKey(f: ResumeFailed): string {
+  return f.since || f.line;
+}
+
+/** The activity row's `sign_in_needed` (v1.303.2): the account this pane was
+ *  continued on has an expired login ("Login expired · Please run /login"). */
+export interface SignInNeeded {
+  line: string;
+  since?: string | null;
+  account: { id: string; title: string };
+}
+
+export function signInNeededOf(row: unknown): SignInNeeded | null {
+  if (!row || typeof row !== "object") return null;
+  const raw = (row as { sign_in_needed?: unknown }).sign_in_needed;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const line = str(r.line) ?? str(r.sentence) ?? str(r.message);
+  const acc = r.account && typeof r.account === "object" ? (r.account as Record<string, unknown>) : null;
+  const id = acc ? str(acc.id) : null;
+  if (!line || !id) return null;
+  return { line, since: str(r.since), account: { id, title: str(acc?.title) ?? id } };
+}
+
+/** Dismiss for the sign-in variant: its own episode key, never the line. */
+export function signInNeededKey(s: SignInNeeded): string {
+  return `sign-in:${s.since || s.line}`;
+}
+
+/** "(<line>)" without a doubled full stop. */
+export function resumeFailedWords(f: { line: string }): string {
+  return f.line.trim().replace(/[.\s]+$/, "");
+}
+
+/** The pane row's `continued_from` (v1.303.2): where this pane's conversation
+ *  came from. Null for a pane that was not continued. */
+export interface ContinuedFrom {
+  from_id: string | null;
+  from_title: string;
+  session_id?: string | null;
+  carried_path?: string | null;
+  at?: string | null;
+}
+
+export function continuedFromOf(row: unknown): ContinuedFrom | null {
+  if (!row || typeof row !== "object") return null;
+  const raw = (row as { continued_from?: unknown }).continued_from;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const title = str(r.from_title) ?? str(r.title);
+  if (!title) return null;
+  return {
+    from_id: str(r.from_id),
+    from_title: title,
+    session_id: str(r.session_id),
+    carried_path: str(r.carried_path),
+    at: str(r.at),
+  };
+}
+
+/** `POST /terminals/{id}/start-fresh-with-handoff`'s answer. */
+export interface HandoffAnswer {
+  pane?: { id: string; [k: string]: unknown } | null;
+  session_id?: string | null;
+  handoff_path?: string | null;
+  note?: string | null;
+}
+
+/** What the "Continued from …" line says after a fresh start with a handoff. */
+export function handoffNote(a: HandoffAnswer | null | undefined): string {
+  const head = "Started fresh with a summary of what you were doing.";
+  const note = a?.note?.trim();
+  return note ? `${head} ${note}` : head;
+}

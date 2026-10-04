@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -27,12 +28,17 @@ TAIL_MAX_BYTES = 256 * 1024
 #: ANSI escape sequences (CSI + OSC) — stripped from the AI-facing tail so the
 #: model reads clean text instead of color/cursor noise.
 _ANSI_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI ... final byte
+    # CSI ... final byte. The PRIVATE parameter bytes < = > are CSI too
+    # (v1.303.2, measured live): Claude Code leaves the kitty keyboard modes
+    # with ESC[>4m / ESC[<u on exit, and a CSI rule without them stripped only
+    # "ESC[" and glued ">4m<u" in front of the shell prompt that followed.
+    r"\x1b\[[0-9;?<=>!]*[ -/]*[@-~]"
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL / ST
     r"|\x1b[()#%*+][0-9A-Za-z]"  # charset designation (ESC ( B …) — ConPTY
     # interleaves these MID-STRING, which used to split mode banners like
     # "auto-accept edits on" so detection missed them (live-hit 2026-07-07)
     r"|\x1b[@-_]"  # lone two-byte escapes
+    r"|\x1b[78=>]"  # save/restore cursor, keypad modes (ESC 7 / ESC 8 on exit)
 )
 
 
@@ -565,6 +571,12 @@ class TerminalSession:
     #: the next account" carries THAT conversation and Resume reopens it. None
     #: when the user typed `claude` themselves.
     claude_session_id: str | None = None
+    #: v1.303.2: set on the pane "continue on the next account" opened —
+    #: ``{from_id, from_title, session_id, carried_path, at}`` (``carried_path``
+    #: = the COPY in this pane's account home, None when nothing was carried;
+    #: ``at`` = when the pane was opened, ISO UTC). Watched for a resume that
+    #: the account refused while the pane still runs THAT conversation.
+    continued_from: dict[str, Any] | None = None
 
     def pane_env(self) -> dict[str, str]:
         """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
@@ -632,6 +644,80 @@ class TerminalSession:
         self._activity_cache = (key, result)
         self._note_limit(tail if alive and result.cli == "claude" else "")
         return result
+
+    # ---- a carried conversation the account refused (v1.303.2) -----------
+    #: What the carried FILE records (``refresh_resume_check``, blocking,
+    #: threadpool only): ``(Failure, since)`` or None. Only the file RAISES a
+    #: resume failure — tool output on screen can read like Claude's own
+    #: error (review) — and the screen only CLEARS it (``_resume_problem``).
+    _resume_file: Any = None
+    _resume_file_key: Any = None
+
+    def watching_resume(self) -> bool:
+        """True while this pane runs the conversation it was handed: opened by
+        "continue on the next account", carried, and not since started fresh."""
+        cf = self.continued_from or {}
+        return bool(
+            cf.get("carried_path")
+            and cf.get("session_id")
+            and cf.get("session_id") == self.claude_session_id
+        )
+
+    def refresh_resume_check(self) -> None:
+        """Read the carried conversation's newest records (a bounded tail)
+        when the file changed since the last read. BLOCKING: the sync
+        activity route calls it on the threadpool; ``info()`` never does."""
+        from .resume_failed import check_file
+
+        if not self.watching_resume():
+            self._resume_file, self._resume_file_key = None, None
+            return
+        cf = self.continued_from or {}
+        path = str(cf.get("carried_path"))
+        try:
+            st = os.stat(path)
+            key = (path, st.st_size, st.st_mtime_ns, cf.get("at"))
+        except OSError:
+            self._resume_file, self._resume_file_key = None, None
+            return
+        if key == self._resume_file_key:
+            return
+        found = check_file(path, str(cf.get("at") or ""))
+        self._resume_file = (found, found.when) if found is not None else None
+        self._resume_file_key = key
+
+    def _resume_problem(self) -> Any:
+        """The carried file's ``(Failure, since)``, or None — also None while
+        the pane shows Claude WORKING again (the screen only clears). Reads
+        the caches only."""
+        act = self.activity()
+        if not self.watching_resume() or act.state.value == "working":
+            return None
+        return self._resume_file
+
+    def resume_failed_info(self) -> dict[str, Any] | None:
+        """``{line, since}`` while the account refused the carried
+        conversation, else None."""
+        got = self._resume_problem()
+        if not got or got[0].kind != "failed":
+            return None
+        return {"line": got[0].line, "since": got[1]}
+
+    def sign_in_info(self) -> dict[str, Any] | None:
+        """``{line, since, account: {id, title}}`` while the account this pane
+        runs on is signed out (a resume cannot be judged until it signs in)."""
+        got = self._resume_problem()
+        if not got or got[0].kind != "sign_in":
+            return None
+        rec = (self.accounts or {}).get("anthropic") or {}
+        return {
+            "line": got[0].line,
+            "since": got[1],
+            "account": {"id": rec.get("id"), "title": rec.get("title")},
+        }
+
+    def clear_resume_problem(self) -> None:
+        self._resume_file = self._resume_file_key = None
 
     # ---- the account limit (v1.303.0) ------------------------------------
     #: The live limit line (``limit_state.PaneLimit``) and when it was first
@@ -735,6 +821,14 @@ class TerminalSession:
         # by the routes from Iron-Proxy's CACHED snapshot, never here.
         if self.claude_session_id:  # v1.303.0 additive
             row["claude_session_id"] = self.claude_session_id
+        if self.continued_from:  # v1.303.2 additive
+            row["continued_from"] = dict(self.continued_from)
+            failed = self.resume_failed_info()
+            if failed:
+                row["resume_failed"] = failed
+            signed_out = self.sign_in_info()
+            if signed_out:
+                row["sign_in_needed"] = signed_out
         # v1.303.0 additive, ONLY while a limit is on screen.
         limit = self.limit_info()
         if limit:

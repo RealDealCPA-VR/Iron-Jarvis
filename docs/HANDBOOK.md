@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.303.1 (2026-10-04).*
+holds itself to. Current as of v1.303.2 (2026-10-04).*
 
 ---
 
@@ -1773,9 +1773,14 @@ pane: which account ran out, when it is free again, and **Continue on
   Claude in the old pane on that account first: if the conversation is still
   open there, the update is refused ("the conversation file is open in another
   pane") and anything that pane writes meanwhile would not be carried.
-- Whether the second account accepts a conversation begun on the first has not
-  been seen fail, but if Claude cannot continue it, type `/clear` in the new
-  pane to start fresh.
+- If the next account cannot pick the conversation up (v1.303.2), the new pane
+  says so and offers **Start fresh with what we were doing**: Iron Jarvis writes
+  a short handoff — your first request, the last few messages, the files
+  involved — into its own folder (never your project), closes that Claude and
+  starts a new one on the same account that reads the handoff first. Nothing is
+  lost: the old conversation stays in both accounts' histories. If the account
+  needs to sign in again instead, the pane offers **Sign in** for it. You can
+  still type `/clear` to start empty.
 (v1.303.1) A Build pane always runs Claude Code as a session of its own, so its
 conversations are saved even when Iron Jarvis itself was started from inside
 another Claude Code window.

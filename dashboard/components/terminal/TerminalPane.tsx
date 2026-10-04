@@ -55,8 +55,15 @@ import {
   paneAccountsOf,
   type PaneAccounts,
   type PaneLimit,
+  type ResumeFailed,
+  type SignInNeeded,
+  continuedFromOf,
 } from "@/lib/paneAccounts";
-import { ContinuedFromLine, PaneContinue } from "@/components/terminal/ContinueStrip";
+import {
+  ContinuedFromLine,
+  PaneContinue,
+  ResumeFailedStrip,
+} from "@/components/terminal/ContinueStrip";
 import {
   LaunchAccountRows,
   PaneAccountChip,
@@ -432,6 +439,8 @@ export function TerminalPane({
   onOpenedPane,
   liveAccounts,
   paneLimit,
+  paneResumeFailed,
+  paneSignInNeeded,
   paneState,
   agentCli,
   paneStateLine,
@@ -475,6 +484,11 @@ export function TerminalPane({
   /** v1.303.0: the activity row's `limit` — this Claude pane's account ran
    *  out. With an Iron-Proxy account the pane offers "Continue on …". */
   paneLimit?: PaneLimit | null;
+  /** v1.303.2: the activity row's `resume_failed` — the account this pane
+   *  was continued on refused the carried conversation. */
+  paneResumeFailed?: ResumeFailed | null;
+  /** v1.303.2: the activity row's `sign_in_needed` — that account's login expired. */
+  paneSignInNeeded?: SignInNeeded | null;
   /** v1.217.0: what the agent occupying this pane is doing. */
   paneState?: PaneState | null;
   /** Which coding CLI Build believes occupies this pane. */
@@ -1713,6 +1727,14 @@ export function TerminalPane({
         />
       )}
       <PaneContinue paneId={info.id} accounts={paneAccounts} limit={paneLimit} onOpened={openedPane} />
+      <ResumeFailedStrip
+        paneId={info.id}
+        failed={paneResumeFailed}
+        signIn={paneSignInNeeded}
+        accounts={paneAccounts}
+        continuedFrom={continuedFromOf(info)}
+        onOpened={openedPane}
+      />
       <ContinuedFromLine paneId={info.id} />
       {launchHint && (
         <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">

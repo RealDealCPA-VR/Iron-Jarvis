@@ -247,6 +247,9 @@ class Carried:
     resumed: bool
     session_id: str | None
     note: str
+    #: v1.303.2: the COPY in the next account's home (what the new pane's
+    #: resume-failure check and its handoff read), when one was carried.
+    path: Path | None = None
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -412,7 +415,8 @@ def carry_over(
     return Carried(
         True, sid,
         f'Carried your conversation over to "{to_title}". If Claude cannot continue it there, '
-        "type /clear in the new pane to start fresh.",
+        "the new pane offers to start fresh with a handoff of where it stopped.",
+        dest,
     )
 
 

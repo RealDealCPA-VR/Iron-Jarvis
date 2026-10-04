@@ -594,6 +594,9 @@ _REPORT_DIRS = (
     ("Living documents", "livedocs"),
     ("Documents Jarvis wrote", "documents"),
     ("Browser profile", "browser"),
+    # v1.303.2: Build-pane handoffs (Continue on the next account), pruned
+    # after 30 days when a new one is written.
+    ("Conversation handoffs", "handoffs"),
     ("Cleared, awaiting deletion", TRASH_DIRNAME),
 )
 #: The ``dir`` of the catch-all row: the home itself, minus every listed folder

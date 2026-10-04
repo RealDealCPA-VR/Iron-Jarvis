@@ -157,10 +157,23 @@ def _snapshot_key(sessions: "list[TerminalSession]") -> tuple:
                 s.agent_cli or "",
                 getattr(s, "resume_cli", None) or "",
                 getattr(s, "claude_session_id", None) or "",
+                # v1.303.2: a pane "continue on the next account" opened.
+                json.dumps(getattr(s, "continued_from", None) or {}, sort_keys=True),
             )
             for s in sessions
         )
     )
+
+
+_CONTINUED_KEYS = ("from_id", "from_title", "session_id", "carried_path", "at")
+
+
+def _continued_from_or_none(raw: Any) -> dict[str, Any] | None:
+    """A snapshot's ``continued_from`` (v1.303.2): its five keys, each a
+    string or None, or None for anything else (an older snapshot has none)."""
+    if not isinstance(raw, Mapping) or not raw.get("session_id"):
+        return None
+    return {k: (raw.get(k) if isinstance(raw.get(k), str) else None) for k in _CONTINUED_KEYS}
 
 
 def _account_records(accounts: Any) -> dict[str, dict[str, Any]] | None:
@@ -710,6 +723,13 @@ class TerminalManager:
                             if getattr(s, "claude_session_id", None)
                             else {}
                         ),
+                        # v1.303.2: where this pane's conversation came from
+                        # (its resume-failure check and handoff read it).
+                        **(
+                            {"continued_from": dict(s.continued_from)}
+                            if getattr(s, "continued_from", None)
+                            else {}
+                        ),
                         "scrollback_b64": base64.b64encode(sb).decode("ascii"),
                     }
                 )
@@ -785,6 +805,7 @@ class TerminalManager:
         session.accounts = _account_records(accounts)
         sid = entry.get("claude_session_id")
         session.claude_session_id = sid if isinstance(sid, str) and sid else None
+        session.continued_from = _continued_from_or_none(entry.get("continued_from"))
         session.id = rid
         session.pane_name = pane_name
         # v1.245.0: the shell is FRESH — whatever CLI ran here died with the

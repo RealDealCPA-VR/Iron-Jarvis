@@ -26,15 +26,24 @@
  */
 
 import { useState, useSyncExternalStore } from "react";
-import { ArrowRightLeft, Loader2, X } from "lucide-react";
-import { ApiError, post } from "@/lib/api";
+import { ArrowRightLeft, LogIn, Loader2, RotateCcw, X } from "lucide-react";
+import { ApiError, get, post } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
-import { localTime } from "@/lib/ironProxy";
+import { localTime, terminalsHref } from "@/lib/ironProxy";
 import {
   IRON_PROXY_LIGHT,
   LAUNCH_ACCOUNTS_POLL_MS,
   continuableAccount,
   continueNote,
+  handoffNote,
+  openedPaneId,
+  resumeFailedKey,
+  resumeFailedWords,
+  signInNeededKey,
+  type SignInNeeded,
+  type ContinuedFrom,
+  type HandoffAnswer,
+  type ResumeFailed,
   isContinueAnswer,
   limitKey,
   limitResetWords,
@@ -51,6 +60,8 @@ import {
  * kept per window, outside React, the way paneHost keeps the terminals. */
 
 const dismissedLine = new Map<string, string>();
+/** v1.303.2: the resume-failed episode (its `since`) dismissed per pane. */
+const dismissedFailure = new Map<string, string>();
 const continued = new Map<string, { from: string; note: string }>();
 const listeners = new Set<() => void>();
 let version = 0;
@@ -69,6 +80,7 @@ function useStoreVersion() {
 /** Test seam: forget everything this window remembered. */
 export function resetContinueMemory() {
   dismissedLine.clear();
+  dismissedFailure.clear();
   continued.clear();
   changed();
 }
@@ -248,6 +260,208 @@ export function ContinuedFromLine({ paneId }: { paneId: string }) {
       >
         <X size={12} />
       </button>
+    </div>
+  );
+}
+
+/* ---- v1.303.2: the next account could not pick the conversation up -------- */
+
+/**
+ * A continued Claude session can be refused by the account it was carried to
+ * (Anthropic is not obliged to accept another account's transcript). The
+ * daemon's activity row then carries `resume_failed: {line, since}` and this
+ * strip — ContinueStrip's pattern — offers the way out: start a NEW Claude
+ * session on this pane's account, handed a short summary of the conversation
+ * so far (`POST /terminals/{id}/start-fresh-with-handoff`). `/clear` stays the
+ * user's own way to start empty. Dismiss hides it for this failure episode.
+ */
+export function ResumeFailedStrip({
+  paneId,
+  failed,
+  signIn,
+  accounts,
+  continuedFrom,
+  onOpened,
+}: {
+  paneId: string;
+  failed: ResumeFailed | null | undefined;
+  /** The activity row's `sign_in_needed`: the next account's login expired.
+   *  Its own variant — a fresh start would not fix a login. */
+  signIn?: SignInNeeded | null;
+  accounts: PaneAccounts | null | undefined;
+  /** The pane row's `continued_from` (where the conversation came from). */
+  continuedFrom?: ContinuedFrom | null;
+  /** A DIFFERENT pane answered: show and focus it. */
+  onOpened: (pane: ContinuedPane) => void;
+}) {
+  useStoreVersion();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (signIn && dismissedFailure.get(paneId) !== signInNeededKey(signIn)) {
+    return <SignInNeededStrip paneId={paneId} need={signIn} onOpened={onOpened} />;
+  }
+  if (!failed || dismissedFailure.get(paneId) === resumeFailedKey(failed)) return null;
+  const key = resumeFailedKey(failed);
+  const here = accounts?.anthropic?.title ? `“${accounts.anthropic.title}”` : "This account";
+  const hereShort = accounts?.anthropic?.title ? `“${accounts.anthropic.title}”` : "this account";
+
+  async function go() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = (await post<unknown>(
+        `/terminals/${encodeURIComponent(paneId)}/start-fresh-with-handoff`,
+      )) as HandoffAnswer | null;
+      const target = res?.pane && typeof res.pane.id === "string" && res.pane.id ? res.pane.id : paneId;
+      const from = continued.get(paneId)?.from ?? continuedFrom?.from_title ?? "the other account";
+      continued.set(target, { from, note: handoffNote(res) });
+      dismissedFailure.set(paneId, key);
+      changed();
+      if (target !== paneId && res?.pane) onOpened(res.pane as ContinuedPane);
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      id={`pane-resume-failed-${paneId}`}
+      data-testid="resume-failed-strip"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-1 text-[11px] text-amber-200"
+    >
+      <RotateCcw size={12} className="shrink-0" />
+      <span className="min-w-0 flex-1">
+        {here} could not pick up this conversation ({resumeFailedWords(failed)}).
+      </span>
+      <button
+        type="button"
+        data-testid={`pane-start-fresh-${paneId}`}
+        onClick={() => void go()}
+        disabled={busy}
+        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/15 disabled:opacity-60"
+      >
+        {busy ? (
+          <span className="flex items-center gap-1">
+            <Loader2 size={11} className="animate-spin" /> Starting…
+          </span>
+        ) : (
+          "Start fresh with what we were doing"
+        )}
+      </button>
+      <span className="shrink-0 text-amber-200/70">or type /clear to start empty</span>
+      <button
+        type="button"
+        onClick={() => {
+          dismissedFailure.set(paneId, key);
+          changed();
+        }}
+        className="shrink-0 rounded-md px-1.5 py-0.5 text-amber-200/80 transition-colors hover:bg-amber-500/10"
+      >
+        Dismiss
+      </button>
+      <span data-testid={`pane-start-fresh-how-${paneId}`} className="basis-full text-[10.5px] text-amber-200/80">
+        Iron Jarvis writes a short summary of the conversation so far (your first request, the last few
+        messages, the files involved) and starts a new Claude session on {hereShort} with it.
+      </span>
+      {error && (
+        <span
+          role="alert"
+          data-testid={`pane-start-fresh-error-${paneId}`}
+          className="basis-full whitespace-pre-line text-rose-200"
+        >
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The sign-in variant of the resume-failed strip: the account this pane was
+ *  continued on needs its login renewed. Sign in opens Iron-Proxy's sign-in
+ *  terminal for THAT account (the card's own route) and focuses it. */
+function SignInNeededStrip({
+  paneId,
+  need,
+  onOpened,
+}: {
+  paneId: string;
+  need: SignInNeeded;
+  onOpened: (pane: ContinuedPane) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function signIn() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await post<unknown>(`/iron-proxy/accounts/${encodeURIComponent(need.account.id)}/signin`);
+      const id = openedPaneId(res);
+      if (!id) throw new Error("The daemon did not open a sign-in terminal.");
+      // The page adopts a FULL pane row; the sign-in answer is only its id.
+      let row: ContinuedPane | undefined;
+      try {
+        const list = await get<{ terminals?: ContinuedPane[] }>("/terminals");
+        row = list?.terminals?.find((t) => t.id === id);
+      } catch {
+        row = undefined;
+      }
+      if (row) onOpened(row);
+      else window.location.assign(terminalsHref(id));
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      id={`pane-resume-failed-${paneId}`}
+      data-testid="resume-failed-strip"
+      data-variant="sign-in"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-1 text-[11px] text-amber-200"
+    >
+      <LogIn size={12} className="shrink-0" />
+      <span className="min-w-0 flex-1">
+        “{need.account.title}” needs to sign in again ({resumeFailedWords(need)}).
+      </span>
+      <button
+        type="button"
+        data-testid={`pane-sign-in-${paneId}`}
+        onClick={() => void signIn()}
+        disabled={busy}
+        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/15 disabled:opacity-60"
+      >
+        {busy ? (
+          <span className="flex items-center gap-1">
+            <Loader2 size={11} className="animate-spin" /> Opening…
+          </span>
+        ) : (
+          "Sign in"
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          dismissedFailure.set(paneId, signInNeededKey(need));
+          changed();
+        }}
+        className="shrink-0 rounded-md px-1.5 py-0.5 text-amber-200/80 transition-colors hover:bg-amber-500/10"
+      >
+        Dismiss
+      </button>
+      {error && (
+        <span
+          role="alert"
+          data-testid={`pane-sign-in-error-${paneId}`}
+          className="basis-full whitespace-pre-line text-rose-200"
+        >
+          {error}
+        </span>
+      )}
     </div>
   );
 }

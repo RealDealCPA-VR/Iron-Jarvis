@@ -10,6 +10,8 @@ import asyncio
 import json
 import os
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -252,6 +254,81 @@ def launch_pane(
     return session
 
 
+#: "Start fresh with a handoff" (v1.303.2): the pause between typing /exit
+#: and the Enter that submits it (Claude Code's composer), how long to wait for
+#: the shell prompt after it, and how often to look.
+_EXIT_SETTLE_S = 0.3
+#: Clears Claude Code's composer before /exit — Ctrl+C. MEASURED LIVE on
+#: claude 2.1.289 in a real ConPTY pane (no model call): Ctrl+C empties a
+#: one-line AND a three-line draft in one press, and on an empty composer only
+#: shows "Press Ctrl-C again to exit", after which "/exit" + Enter still exits.
+#: Ctrl+U deletes to the start of the CURRENT line only (a multi-line draft
+#: survived four presses); Esc Esc clears a draft but on an empty composer of a
+#: conversation with history opens the rewind menu, where "/exit" would land.
+_CLEAR_COMPOSER = "\x03"
+_EXIT_WAIT_S = 15.0
+_EXIT_POLL_S = 0.1
+
+
+#: Pieces of Claude Code's own TUI (footer, input box, tool gutter). The
+#: starship-style "❯" is deliberately NOT here: it is also a shell prompt.
+_CLAUDE_UI_MARKERS = (
+    "? for shortcuts",
+    "esc to interrupt",
+    "shift+tab to cycle",
+    "⏵⏵",
+    "╰",
+    "╭",
+    "⎿",
+    # Claude Code 2.1.289 draws its input box between long horizontal rules
+    # (seen live); a shell prompt never has a run like this.
+    "────────",
+)
+
+
+def _claude_ui_visible(tail: str, lines: int = 8) -> bool:
+    """True when Claude Code's own screen furniture is in the last ``lines``
+    non-empty lines of ``tail`` (Claude is still painting this pane)."""
+    rows = [r for r in (tail or "").splitlines() if r.strip()][-lines:]
+    joined = "\n".join(rows)
+    return any(m in joined for m in _CLAUDE_UI_MARKERS)
+
+
+def _quit_claude(session) -> bool:
+    """Quit the Claude Code in ``session`` and wait (bounded) until its SHELL
+    prompt is the last line — True then. Already at the prompt = True at once.
+    One extra Enter halfway, in case the first was taken by the command menu.
+    BLOCKING."""
+    from ...terminals.handoff import at_shell_prompt
+
+    tail_now = session.output_tail()
+    # "Already at the prompt" is trusted only when none of Claude Code's own
+    # screen furniture is in the last lines: a row Claude DREW can end like a
+    # prompt (a tool line reading "the prompt reads C:\Users\VR>"), and typing
+    # the claude line then would send it to the model as a message.
+    if at_shell_prompt(tail_now, session.shell) and not _claude_ui_visible(tail_now):
+        return True
+    seq = session.output_seq
+    session.write(_CLEAR_COMPOSER)  # a half-typed draft must not become "draft/exit"
+    time.sleep(_EXIT_SETTLE_S)
+    session.write("/exit")
+    time.sleep(_EXIT_SETTLE_S)
+    session.write("\r")
+    deadline = time.monotonic() + _EXIT_WAIT_S
+    nudge_at = time.monotonic() + _EXIT_WAIT_S / 2
+    nudged = False
+    while time.monotonic() < deadline:
+        if not session.alive:
+            return False
+        if session.output_seq != seq and at_shell_prompt(session.output_tail(), session.shell):
+            return True
+        if not nudged and time.monotonic() >= nudge_at:
+            session.write("\r")
+            nudged = True
+        time.sleep(_EXIT_POLL_S)
+    return False
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -332,6 +409,21 @@ def register(app: FastAPI, d) -> None:
             # while it is there — the ContinueStrip's cue.
             if info.get("limit"):
                 row["limit"] = info["limit"]
+            # v1.303.2: a pane "continue on the next account" opened — did
+            # that account refuse the conversation it was handed (or is it
+            # signed out)? The carried file is read here, on the threadpool
+            # (bounded tail, only when it changed); info() reads caches only.
+            if info.get("continued_from"):
+                row["continued_from"] = info["continued_from"]
+                session = d.platform.terminals.get(info["id"])
+                if session is not None:
+                    session.refresh_resume_check()
+                    for key, value in (
+                        ("resume_failed", session.resume_failed_info()),
+                        ("sign_in_needed", session.sign_in_info()),
+                    ):
+                        if value:
+                            row[key] = value
             # v1.302.0: the page reads GET /terminals ONCE and then polls
             # only this, so a pane's account chip (parked later, signed out,
             # removed) stays current only if its live state rides here too —
@@ -404,6 +496,9 @@ def register(app: FastAPI, d) -> None:
         accounts, _legacy, _titles = from_recorded(others) if others else (PaneAccounts(), {}, {})
         accounts.use_lease(continue_on.PROVIDER, plan.lease)
         carried = plan.carried
+        # BEFORE the pane types `claude --resume`: a record the next account
+        # writes after this instant is that account's answer (v1.303.2).
+        opened_at = datetime.now(timezone.utc).isoformat()
         # Resumed: the same conversation id, kept by `--resume`. Fresh: a new
         # id this app mints (launch_pane types `claude --session-id <uuid>`).
         new = launch_pane(
@@ -414,6 +509,13 @@ def register(app: FastAPI, d) -> None:
             name_base=f"Claude Code · {plan.lease.title} (continued)",
             claude_session_id=carried.session_id if carried.resumed else None,
         )
+        new.continued_from = {
+            "from_id": plan.from_rec.get("id"),
+            "from_title": plan.from_rec.get("title"),
+            "session_id": carried.session_id if carried.resumed else new.claude_session_id,
+            "carried_path": str(carried.path) if (carried.resumed and carried.path) else None,
+            "at": opened_at,
+        }
         note = " ".join(x for x in (carried.note, plan.told) if x)
         out: dict[str, Any] = {
             "pane": pane_row(d.platform, new.info()),
@@ -428,6 +530,104 @@ def register(app: FastAPI, d) -> None:
         if plan.reset_at is not None:
             out["reset_at"] = plan.reset_at.isoformat()
         return out
+
+    @app.post("/terminals/{term_id}/start-fresh-with-handoff")
+    def start_fresh_with_handoff(term_id: str) -> dict[str, Any]:
+        """When the next account cannot continue the conversation it was
+        handed (v1.303.2): write a HANDOFF of where it stopped (deterministic,
+        no model call) under Iron Jarvis's own home, quit Claude in THIS pane,
+        wait for the shell, and start a NEW conversation that reads it —
+        ``claude --session-id <new> --add-dir=<its folder> "<prompt>"``. Sync
+        ``def``: the file read and the wait block. Answers ``{pane,
+        session_id, handoff_path, note}``; a refusal is a 409 sentence."""
+        import uuid
+
+        from ...terminals.handoff import HANDOFF_PROMPT, build_handoff, write_handoff
+        from .iron_proxy import shell_line
+
+        session = d.platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        cf = session.continued_from or {}
+        if not cf:
+            raise HTTPException(
+                status_code=409,
+                detail="This pane was not opened by Continue on the next account, so there "
+                "is no carried conversation to hand off.",
+            )
+        carried = cf.get("carried_path")
+        if not carried or not Path(carried).is_file():
+            raise HTTPException(
+                status_code=409,
+                detail="No conversation was carried into this pane, so there is nothing to "
+                "hand off — type /clear in the pane to start fresh.",
+            )
+        if not session.watching_resume():
+            raise HTTPException(
+                status_code=409,
+                detail="This pane has already left the carried conversation, so there is "
+                "nothing to hand off again.",
+            )
+        if not session.alive:
+            raise HTTPException(
+                status_code=409, detail="This pane's shell has ended — open a new pane."
+            )
+        # Never /exit a Claude that is mid-answer or waiting on a question.
+        state = session.activity().state.value
+        if state == "working":
+            raise HTTPException(
+                status_code=409, detail="Claude is still answering — press Esc, then try again."
+            )
+        if state == "blocked":
+            raise HTTPException(
+                status_code=409,
+                detail="Claude is waiting for an answer in this pane — answer it or press Esc, "
+                "then try again.",
+            )
+        from_title = cf.get("from_title") or "the other account"
+        rec = (session.accounts or {}).get("anthropic") or {}
+        to_title = rec.get("title") or "this account"
+        handoffs = Path(d.platform.config.home) / "handoffs"
+        try:
+            path = write_handoff(build_handoff(carried, from_title), handoffs, str(cf["session_id"]))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"The handoff could not be written ({type(exc).__name__}), so nothing "
+                "in the pane was touched.",
+            ) from None
+        new_sid = str(uuid.uuid4())
+        line = shell_line(
+            session.shell,
+            [
+                "claude",
+                "--session-id",
+                new_sid,
+                # ONE token: `--add-dir` is variadic in claude 2.1.289, so a
+                # separate prompt after `--add-dir <dir>` is read as a second
+                # directory and Claude starts with no prompt (measured live).
+                # THIS conversation's folder only: never another's handoff.
+                f"--add-dir={path.parent}",
+                HANDOFF_PROMPT.format(path=path),
+            ],
+        )
+        if not _quit_claude(session):
+            raise HTTPException(
+                status_code=409,
+                detail="Could not see the shell prompt in this pane, so nothing else was "
+                f"typed. The handoff is saved at {path}; if Claude has exited, run: {line}",
+            )
+        session.write(line + "\r")
+        session.claude_session_id = new_sid
+        session.agent_cli = "claude"
+        session.clear_resume_problem()
+        return {
+            "pane": pane_row(d.platform, session.info()),
+            "session_id": new_sid,
+            "handoff_path": str(path),
+            "note": f'Started a fresh conversation on "{to_title}" that reads a handoff of '
+            f'where it stopped on "{from_title}". The old conversation is kept on both accounts.',
+        }
 
     @app.post("/terminals/launch")
     def launch_terminal(body: TerminalLaunch) -> dict[str, Any]:
