@@ -39,17 +39,23 @@ export function FaceStack({
 }) {
   const shown = participants.slice(0, max);
   const extra = participants.length - shown.length;
+  // LARGE STACKS (v1.304.0): a world card layers its team at 40px, where the
+  // rail's fixed 6px overlap would read as a row of separate coins. The
+  // overlap and the separating ring now SCALE with the face (~28% / 2-3px),
+  // so a 20px rail stack is unchanged and a 40px one still reads as a team.
+  const overlap = Math.round(size * 0.28);
+  const ring = size >= 32 ? "ring-[3px]" : "ring-2";
   return (
-    <span className="flex items-center -space-x-1.5">
-      {shown.map((p) => (
+    <span data-testid="face-stack" className="flex items-center">
+      {shown.map((p, i) => (
         // The ring is on the WRAPPER, not the face: `AgentFace` renders either
         // an <svg> or an <img> depending on whether a portrait is stored, and
         // a ring that only lands on one of the two would make a panel of mixed
         // agents read as two different components.
         <span
           key={p.key}
-          className="grid shrink-0 place-items-center rounded-full bg-ink-900 ring-2 ring-ink-900"
-          style={{ width: size, height: size }}
+          className={`grid shrink-0 place-items-center rounded-full bg-ink-900 ${ring} ring-ink-900`}
+          style={{ width: size, height: size, marginLeft: i === 0 ? 0 : -overlap }}
         >
           <AgentFace
             name={p.name}
@@ -62,8 +68,13 @@ export function FaceStack({
       ))}
       {extra > 0 && (
         <span
-          className="grid shrink-0 place-items-center rounded-full border border-white/10 bg-ink-800 text-[9px] font-semibold text-zinc-400 ring-2 ring-ink-900"
-          style={{ width: size, height: size }}
+          className={`grid shrink-0 place-items-center rounded-full border border-white/10 bg-ink-800 font-semibold text-zinc-400 ${ring} ring-ink-900`}
+          style={{
+            width: size,
+            height: size,
+            marginLeft: shown.length > 0 ? -overlap : 0,
+            fontSize: Math.max(9, Math.round(size * 0.32)),
+          }}
           title={`${extra} more on this panel`}
         >
           +{extra}

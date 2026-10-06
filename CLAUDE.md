@@ -2717,6 +2717,51 @@ does not need a bump, stop and bump it.
   ordered by `created_at` alone — the v1.286.0 same-tick rule — and failed its
   pin 2 runs in 3; tie-break on `rowid DESC`.
 
+- **The Agents page is a set of PROJECT WORLDS; a project's room is
+  grounded in that project and private to its table** (v1.304.0). The user:
+  "make the agent profile images more prominent" and "a round table for each
+  set of agents, grouped by the project … tabs for board, items pending the
+  user, completed tasks, new tasks". BACKEND: `AgentThreadRecord.project_id`
+  (additive, indexed in `_HOT_INDEXES`) — `GET /agents/threads` with no
+  `project_id` lists ONLY rooms with none (the General world is today's page);
+  `Project.team_json` holds the curated team (roster names; remote and the
+  supervisor allowed; more than 24 (`TEAM_MAX`) refused BEFORE matching; an
+  ambiguous bare name is refused). `projects/world.py` is the one place for team validation, seating,
+  suggestions (agents with work in the project in 30 days, not seated, newest
+  first, at most 6, each with a `why`), and the Waiting / Completed buckets:
+  `needs_you` and interrupted runs are WAITING (never `done_7d`, never
+  Completed), as are paused asks (NUMBERS, never arguments) and blocked/held
+  assignments. Routes: `GET /agents/worlds` (active projects by last
+  activity + `general.thread_count`), `GET|PUT /projects/{id}/team` (PUT
+  re-seats the room server-side), `GET /projects/{id}/world`,
+  `POST /projects/{id}/world/room` (201 created / 200 exists / 409 no team).
+  `DELETE /projects/{id}` untags its rooms. GROUNDING (`run_round`): a project
+  room's speakers get `project_room_block` (the project's context through
+  promptguard) — but a REMOTE seat gets only the user's messages and its own
+  lines plus one sentence saying so (member rows carry `sees: "only your
+  messages"`), a seat with no model pin answers on the project's default model
+  (when the project has one), and a seat pinned to a different PROVIDER than a
+  LOCAL project default gets no block, sees only the user's lines and its own,
+  and is flagged `ungrounded: true` + `ungrounded_reason: "runs on <provider>"` (the
+  v1.162.0 rule: a local project's files never reach a cloud model by a
+  seat's pin). `for_chat(adopt=)` adopts only rooms with NO project.
+  DASHBOARD: `components/agents/TableSeats.tsx` (`seatLayout(n, width)`: a
+  solid elliptical table, 72 px seats outside the rim, one ring up to 6, a
+  second ring past that, a 56 px strip on narrow screens; the speaker lifts
+  with a glow; status ring from roster health + the live round; reduced
+  motion respected); message portraits 40 px; `AgentSeatModal` / AgentsModal
+  hero 160 px; the inbox defaults to the room's project. `app/agents/page.tsx`
+  routes between `WorldsGrid` (one card per project, non-overlapping
+  `TeamFaces` with "+N"), General (`GeneralAgents` = the old page) and
+  `WorldView` (`?project=<id>`; room created lazily; RoundTable takes
+  `projectId`/`projectName` and NEVER creates a project room itself) with
+  `WorldTabs` Board / Waiting on you / Completed / New task (`ProjectTasks`
+  with `assigneeChoices` = the team + "Whole team — Jarvis decides") and
+  `TeamEditor` (saving re-seats; says what a remote seat sees). A 404 from an
+  older daemon renders today's page. Pins: `tests/test_agent_worlds_v1304.py`,
+  `dashboard/__tests__/agent-faces-v1304.test.tsx`,
+  `dashboard/__tests__/agent-worlds-v1304.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

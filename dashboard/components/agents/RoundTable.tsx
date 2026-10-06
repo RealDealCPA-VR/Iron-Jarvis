@@ -73,11 +73,15 @@
 // mid-round flinch.
 
 import {
+  Suspense,
   createContext,
   isValidElement,
+  lazy,
+  memo,
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -90,6 +94,7 @@ import {
   Briefcase,
   Check,
   Copy,
+  Folder,
   LoaderCircle,
   MessagesSquare,
   Send,
@@ -122,6 +127,7 @@ import {
   type JobAssign,
 } from "./JobPostCard";
 import type { RosterEntry } from "./RosterStrip";
+import { TableSeats, buildSeats, rosterAvatarSrc, rosterKey } from "./TableSeats";
 import { PanelPicker, type PickerCatalog, type PickerOption } from "./PanelPicker";
 import {
   RolePill,
@@ -134,6 +140,25 @@ import {
   type ThreadDetail,
   type ThreadEntry,
 } from "./identity";
+
+/* ---------------------------------------------------------------- faces --- */
+
+/** A transcript bubble's portrait (v1.304.0; was 26). */
+export const MESSAGE_FACE_PX = 40;
+/** The agent in full, opened from its seat. Loaded on the first click: the
+ *  detail pulls the setup surfaces (face picker, inbox, folder, coach), which
+ *  a room that is only being talked in never needs. */
+const AgentSeatModal = lazy(() =>
+  import("./AgentsModal").then((mod) => ({ default: mod.AgentSeatModal })),
+);
+
+/** Stable empties, so a memo keyed on "the panel" or "the roster" does not
+ *  see a NEW empty array on every render (the composer re-renders this
+ *  component per keystroke). */
+const NO_PARTICIPANTS: Participant[] = [];
+const NO_MESSAGES: ThreadEntry[] = [];
+const NO_ROSTER: RosterEntry[] = [];
+const NO_KEYS: string[] = [];
 
 /* ------------------------------------------------------------- markdown --- */
 /* Same pattern as the chat page's Markdown (kept local — pages don't import
@@ -371,8 +396,20 @@ function KindBadge({ source }: { source?: string }) {
   );
 }
 
-function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Participant> }) {
-  const p = byKey.get(entry.who);
+/** One agent line. MEMOIZED (v1.304.0): the composer's text is this
+ *  component's parent's state, so without `memo` every keystroke re-parsed
+ *  every reply's markdown. Its props are the entry (a stable object until the
+ *  transcript is refetched), the seat (stable with the panel) and a portrait
+ *  URL string — nothing the composer touches. */
+const AgentTurn = memo(function AgentTurn({
+  entry,
+  p,
+  avatarUrl,
+}: {
+  entry: ThreadEntry;
+  p?: Participant;
+  avatarUrl?: string | null;
+}) {
   // "<source>:<name>" → the name; a key without a colon renders as-is.
   const name = p?.name ?? faceIdentity(entry.who);
   const role = entry.role ?? p?.role;
@@ -393,7 +430,8 @@ function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Pa
           name={faceIdentity(entry.who)}
           title=""
           mood={entry.error ? "error" : "idle"}
-          size={26}
+          size={MESSAGE_FACE_PX}
+          avatarUrl={avatarUrl ?? undefined}
           className="mt-0.5"
         />
       </span>
@@ -436,9 +474,43 @@ function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Pa
         ) : (
           <p className="text-xs italic text-zinc-600">(empty reply)</p>
         )}
+        {/* NOT GROUNDED (v1.304.0). In a project room the daemon gives a seat
+            NO project material when it runs on a different model than the
+            project's own (local) one, and marks the line `ungrounded` with a
+            short reason. Said quietly under the reply — never hidden, so the
+            user knows this answer did not see the project's files. */}
+        {ungroundedNote(entry) && (
+          <p
+            data-testid="entry-ungrounded"
+            className="mt-1 flex items-center gap-1 text-[10.5px] text-zinc-500"
+          >
+            <Folder size={10} aria-hidden="true" className="shrink-0 text-zinc-600" />
+            {ungroundedNote(entry)}
+          </p>
+        )}
       </div>
     </div>
   );
+});
+
+/** The quiet line for an `ungrounded` entry, or "" (v1.304.0). The daemon's
+ *  short reason ("runs on claude-cli") when it sent one; else the provider the
+ *  entry names; else the bare fact. Fields are read defensively: an older
+ *  daemon sends none of them and the line never appears. */
+export function ungroundedNote(entry: ThreadEntry): string {
+  const e = entry as ThreadEntry & {
+    ungrounded?: boolean;
+    ungrounded_reason?: string;
+    reason?: string;
+    provider?: string;
+  };
+  if (!e.ungrounded) return "";
+  const reason = String(e.ungrounded_reason ?? e.reason ?? "").trim();
+  if (reason) return `Not given the project's files — ${reason}`;
+  const provider = String(e.provider ?? "").trim();
+  return provider
+    ? `Not given the project's files — runs on ${provider}`
+    : "Not given the project's files";
 }
 
 /* ---------------------------------------------------------------- memory --- */
@@ -939,11 +1011,29 @@ export function RoundTable({
   reloadNonce,
   onEditPanel,
   onRoundDone,
-  roster = [],
+  roster = NO_ROSTER,
   assign = null,
   initialInput = "",
+  projectId: roomProjectId = "",
+  projectName,
+  onRosterChanged,
 }: {
+  /** The room to open. "" renders a quiet "no room open" card and fetches
+   *  nothing. */
   threadId: string;
+  /** v1.304.0: the PROJECT this room belongs to (a project's world). Shown
+   *  as a small "Project: <name>" tag and used as the default grounding of a
+   *  job given out from here. THIS CARD NEVER CREATES A PROJECT ROOM: the
+   *  daemon creates and seats it (`POST /projects/{id}/world/room`; a team
+   *  edit re-seats it) and the world mounts this card once the id exists —
+   *  a second door that also creates rooms would seat a different panel than
+   *  the team the user curated. Absent/"" = a general room, as before. */
+  projectId?: string;
+  /** The project's name for the tag. Absent → read once from
+   *  GET /projects/{id}; never shown as an id the user never saw. */
+  projectName?: string;
+  /** A portrait/face was changed from a seat's detail — refetch the roster. */
+  onRosterChanged?: () => void;
   /** v1.224.0: a question to PREFILL the composer with (never sent) — the
    *  Help page's "Ask the Guide" arrives with one. Applied once, and only
    *  onto an empty composer, so it never clobbers what the user is typing. */
@@ -962,6 +1052,11 @@ export function RoundTable({
    *  separate form. Null = the target is the thread's own. */
   assign?: JobAssign | null;
 }) {
+  const [fetchedProject, setFetchedProject] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  // Which seat's agent is open in full (participant key), or none.
+  const [seatOpen, setSeatOpen] = useState<string | null>(null);
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [input, setInput] = useState("");
@@ -1003,7 +1098,7 @@ export function RoundTable({
   const [jobOptions, setJobOptions] = useState(false);
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [projectsError, setProjectsError] = useState<string | null>(null);
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(roomProjectId);
   const [maxSteps, setMaxSteps] = useState("");
   // An EXPLICIT target choice (the rail's Give-work, or the options select).
   // null = "whoever this thread is with" — see dispatchTarget. Kept separate
@@ -1066,7 +1161,9 @@ export function RoundTable({
     setJobOptions(false);
     setProjects(null);
     setProjectsError(null);
-    setProjectId("");
+    // A project's room grounds its jobs in that project by default (v1.304.0)
+    // — the daemon puts a job from a project room on that project's Board.
+    setProjectId(roomProjectId);
     setMaxSteps("");
     setTarget(null);
     setJobs(null);
@@ -1074,18 +1171,44 @@ export function RoundTable({
     setDispatching(false);
     setDispatchError(null);
     setDispatched(null);
-    get<ThreadDetail>(`/agents/threads/${encodeURIComponent(threadId)}`)
-      .then((d) => {
-        if (!cancelled) setDetail(d);
+    setSeatOpen(null);
+    // No room id: nothing to load (the card says so; it never makes one).
+    if (threadId) {
+      get<ThreadDetail>(`/agents/threads/${encodeURIComponent(threadId)}`)
+        .then((d) => {
+          if (!cancelled) setDetail(d);
+        })
+        .catch((e: unknown) => {
+          if (!cancelled)
+            setLoadError(e instanceof ApiError ? e : new ApiError(String(e), 500));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId, reloadNonce, roomProjectId]);
+
+  // The project's NAME for the tag, read once when the caller did not hand it
+  // over. A failed read shows "Project" alone — never the id.
+  useEffect(() => {
+    if (!roomProjectId || projectName) return;
+    let cancelled = false;
+    get<{ name?: string; project?: { name?: string } }>(
+      `/projects/${encodeURIComponent(roomProjectId)}`,
+    )
+      .then((r) => {
+        const name = r?.name ?? r?.project?.name ?? "";
+        if (!cancelled && name) setFetchedProject({ id: roomProjectId, name });
       })
-      .catch((e: unknown) => {
-        if (!cancelled)
-          setLoadError(e instanceof ApiError ? e : new ApiError(String(e), 500));
+      .catch(() => {
+        /* the tag degrades to "Project" — the room still works */
       });
     return () => {
       cancelled = true;
     };
-  }, [threadId, reloadNonce]);
+  }, [roomProjectId, projectName]);
+  const roomProjectName =
+    projectName || (fetchedProject?.id === roomProjectId ? fetchedProject.name : "");
 
   // THE RAIL'S "Give work" ARMS THIS COMPOSER (v1.180.0). Declared AFTER the
   // thread-switch reset above and therefore applied after it, which is the
@@ -1096,10 +1219,58 @@ export function RoundTable({
     if (assign) setTarget(wireTarget(assign.kind, assign.name));
   }, [assign]);
 
-  const messages = detail?.messages ?? [];
-  const participants = detail?.participants ?? [];
-  const byKey = new Map(participants.map((p) => [p.key, p]));
+  const messages = detail?.messages ?? NO_MESSAGES;
+  const participants = detail?.participants ?? NO_PARTICIPANTS;
+  const byKey = useMemo(() => new Map(participants.map((p) => [p.key, p])), [participants]);
   detailRef.current = detail;
+
+  /* THE SEATS (v1.304.0). Everything below is memoized on the transcript,
+   * the round and the roster — never on the composer — so typing re-renders
+   * no seat and no reply (TableSeats and AgentTurn are memo'd; their props
+   * here stay referentially stable between keystrokes). */
+  const rosterByKey = useMemo(() => {
+    const map = new Map<string, RosterEntry>();
+    for (const e of roster) {
+      if (e && typeof e.name === "string") map.set(rosterKey(e), e);
+    }
+    return map;
+  }, [roster]);
+  /** participant key → stored portrait URL (token-signed), or null. */
+  const avatarByKey = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const [key, e] of rosterByKey)
+      map.set(key, e.avatar ? rosterAvatarSrc(e.avatar, e.last_active) : null);
+    return map;
+  }, [rosterByKey]);
+  // Who already answered THIS round (entries landed after the round's base),
+  // and who is speaking now: rounds are SEQUENTIAL in the daemon
+  // (`run_round` asks each speaker in turn), so the first expected speaker
+  // without a landed entry is the one whose reply is pending.
+  const landedKeys = useMemo(
+    () =>
+      round
+        ? messages.slice(round.base).filter((m) => m.who !== "user").map((m) => m.who)
+        : NO_KEYS,
+    [round, messages],
+  );
+  const nowSpeaking = round
+    ? round.expected.find((k) => !landedKeys.includes(k))
+    : undefined;
+  const seats = useMemo(
+    () =>
+      buildSeats({
+        participants,
+        rosterByKey,
+        messages,
+        speakingKey: nowSpeaking ?? null,
+        roundKeys: round?.expected ?? NO_KEYS,
+        answeredKeys: landedKeys,
+        projectRoom: Boolean(roomProjectId),
+      }),
+    [participants, rosterByKey, messages, nowSpeaking, round, landedKeys, roomProjectId],
+  );
+  const openSeat = useCallback((key: string) => setSeatOpen(key), []);
+  const seatEntry = seatOpen ? rosterByKey.get(seatOpen) : undefined;
 
   /**
    * Keep the transcript pinned to the newest line — and ONLY the transcript
@@ -1660,6 +1831,31 @@ export function RoundTable({
 
   /* ----------------------------------------------------------- render ----- */
 
+  const projectTag = roomProjectId ? (
+    <span
+      data-testid="room-project-tag"
+      title={
+        roomProjectName
+          ? `This round table belongs to the project "${roomProjectName}" — its rounds are grounded in it`
+          : "This round table belongs to a project — its rounds are grounded in it"
+      }
+      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-1.5 py-0.5 text-[10.5px] font-medium text-accent-soft"
+    >
+      <Folder size={11} aria-hidden="true" />
+      {roomProjectName ? `Project: ${roomProjectName}` : "Project"}
+    </span>
+  ) : null;
+
+  if (!threadId) {
+    return (
+      <div data-testid="room-not-open" className="card-surface">
+        <Empty icon={<MessagesSquare size={22} />}>
+          No round table is open — pick a thread to sit down at it.
+        </Empty>
+      </div>
+    );
+  }
+
   if (loadError) {
     if (loadError.status === 0) return <OfflineHint />;
     if (loadError.status === 404)
@@ -1680,14 +1876,6 @@ export function RoundTable({
         <SkeletonRows rows={4} />
       </div>
     );
-
-  // Who already answered THIS round (entries landed after the round's base).
-  const landedKeys = round
-    ? messages.slice(round.base).filter((m) => m.who !== "user").map((m) => m.who)
-    : [];
-  const nowSpeaking = round
-    ? round.expected.find((k) => !landedKeys.includes(k))
-    : undefined;
 
   /* THE ROOM BELONGS TO THE OPENING, NOT TO THE CARD (v1.181.0).
    *
@@ -1734,6 +1922,7 @@ export function RoundTable({
           <h2 className="min-w-0 truncate text-sm font-semibold tracking-wide text-zinc-100">
             {detail.title || "Agent thread"}
           </h2>
+          {projectTag}
           {/* Extract to memory. Disabled with an empty transcript (the daemon
               400s: there is nothing to remember) and DURING a round — a
               preview taken while replies are still landing would ask the user
@@ -1765,33 +1954,33 @@ export function RoundTable({
             <UserRoundPen size={13} /> Edit panel
           </button>
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {participants.map((p) => (
-            <span
-              key={p.key}
-              className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] py-0.5 pl-1 pr-2"
-              title={`${p.name} — ${p.role} (${p.source})`}
-            >
-              {/* Mood is REAL round state only: the panel tracks who is
-                  speaking mid-round (nowSpeaking); everyone else sits idle.
-                  Seeded by the bare name (= p.name) so the chip matches the
-                  face on every other surface; decorative because the name is
-                  the visible text right beside it. */}
-              <span aria-hidden="true" className="contents">
-                <AgentFace
-                  name={p.name}
-                  title=""
-                  mood={round && p.key === nowSpeaking ? "work" : "idle"}
-                  size={18}
-                />
-              </span>
-              <span className="text-xs text-zinc-200">{p.name}</span>
-              <RolePill role={p.role} />
-              <SourceIcon source={p.source} size={11} />
-            </span>
-          ))}
-        </div>
+        {/* NO CHIPS ROW (v1.304.0). The panel used to be listed here as small
+            chips; the SEATS right below show every participant — portrait,
+            name, role and live status — so the chips said it all twice.
+            The header keeps its buttons (memory, Edit panel). */}
       </div>
+
+      {/* THE TABLE (v1.304.0): the panel as seats around it — 72px portraits
+          in live status rings; the speaker lifts forward. A seat opens the
+          agent in full (below). Memoized: typing never redraws it. */}
+      <TableSeats seats={seats} onOpen={openSeat} live={round !== null} />
+      {seatEntry && (
+        <Suspense fallback={null}>
+          <AgentSeatModal
+            entry={seatEntry}
+            // "Give work" from the hero ARMS THIS COMPOSER — the room is
+            // where the work is given out — and brings the user back to it.
+            onAssign={(kind, name) => {
+              setTarget(wireTarget(kind, name));
+              setSeatOpen(null);
+              inputRef.current?.focus();
+            }}
+            onAgentsChanged={() => onRosterChanged?.()}
+            onClose={() => setSeatOpen(null)}
+            projectId={roomProjectId || undefined}
+          />
+        </Suspense>
+      )}
 
       {/* The review step — present only while there is something to approve.
           Nothing has been written while this is on screen. */}
@@ -1862,19 +2051,11 @@ export function RoundTable({
             data-testid="thread-empty"
             className="flex min-h-[36vh] flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
           >
-            {/* The panel's faces, idle — waiting for the first question.
-                These KEEP their title/label: no visible name sits beside them,
-                so the face is the only identity carrier here. */}
-            <div className="flex items-center gap-1.5">
-              {participants.slice(0, 6).map((p) => (
-                <AgentFace key={p.key} name={p.name} title={p.name} size={34} />
-              ))}
-              {participants.length > 6 && (
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-ink-800 text-[12px] text-zinc-400">
-                  +{participants.length - 6}
-                </span>
-              )}
-            </div>
+            {/* NO FACE ROW HERE (v1.304.0). The empty room used to greet with
+                the panel's faces; the SEATS above now show every participant
+                — large, named, in their rings — so a second row of the same
+                faces right under them showed everyone twice. The sentence
+                stays: it is what the empty room says. */}
             <p className="max-w-sm text-sm leading-relaxed text-zinc-400">
               Ask the panel anything — every agent answers in turn, and they can
               respond to each other. Mention one with @name to ask just them.
@@ -1885,7 +2066,12 @@ export function RoundTable({
             m.who === "user" ? (
               <UserBubble key={i} content={m.content} at={m.at} />
             ) : (
-              <AgentTurn key={i} entry={m} byKey={byKey} />
+              <AgentTurn
+                key={i}
+                entry={m}
+                p={byKey.get(m.who)}
+                avatarUrl={avatarByKey.get(m.who) ?? null}
+              />
             ),
           )
         )}
@@ -1922,6 +2108,7 @@ export function RoundTable({
                         title=""
                         mood={done ? "done" : current ? "work" : "idle"}
                         size={14}
+                        avatarUrl={avatarByKey.get(key) ?? undefined}
                       />
                     </span>
                     {name}
@@ -2218,7 +2405,12 @@ export function RoundTable({
                   {/* Bare-name seed + decorative: the option's visible text
                       IS the name — see faceIdentity. */}
                   <span aria-hidden="true" className="contents">
-                    <AgentFace name={p.name} title="" size={18} />
+                    <AgentFace
+                      name={p.name}
+                      title=""
+                      size={18}
+                      avatarUrl={avatarByKey.get(p.key) ?? undefined}
+                    />
                   </span>
                   <span className="min-w-0 truncate">{p.name}</span>
                   <RolePill role={p.role} />

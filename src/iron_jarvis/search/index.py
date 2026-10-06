@@ -1437,7 +1437,12 @@ class SearchIndex:
             for m in msgs:
                 if isinstance(m, dict) and not m.get("at"):
                     m["at"] = (rec.updated_at or rec.created_at)
-            indexed += self.sync_thread(rec.id, "round", rec.title or "", "", msgs)
+            # v1.304.0: a PROJECT room files under its project, exactly as the
+            # live sync (``AgentThreads._index_thread``) does — a forced repair
+            # must not move a project table's lines into General's recall.
+            # NULL (a row older than the column) reads as general.
+            room_project = str(getattr(rec, "project_id", "") or "").strip()
+            indexed += self.sync_thread(rec.id, "round", rec.title or "", room_project, msgs)
         return indexed, len(rows), self._tail_cursor(rows[-1])
 
     def _backfill_sessions(

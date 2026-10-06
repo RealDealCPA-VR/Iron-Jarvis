@@ -81,7 +81,6 @@
 //     dict fallback stays kind-blind on purpose so it cannot start to.
 import { type ReactElement, useState } from "react";
 import { Briefcase, ChevronDown, MessageCircle, PauseCircle, WifiOff } from "lucide-react";
-import { API_BASE, ijToken } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { allowanceSummary, formatTokens, timeAgo } from "@/lib/format";
 import type { AgentAllowance, AgentHealth } from "@/lib/types";
@@ -89,6 +88,18 @@ import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
 import AgentFace, { type FaceOverride } from "@/components/agents/AgentFace";
 import { SOURCE_LABEL, type AgentSource } from "@/components/agents/identity";
+// The pure roster helpers live with the seats since v1.304.0 (TableSeats must
+// not import this framer-backed file to read a word off a row); re-exported
+// here under the same names, so every existing import keeps working.
+import {
+  StatusRing,
+  bareName,
+  livenessOf,
+  rosterAvatarSrc,
+  rosterStatus,
+  type Liveness,
+} from "@/components/agents/TableSeats";
+export { bareName, livenessOf, rosterAvatarSrc, type Liveness };
 
 interface RosterStats {
   sessions?: number | null;
@@ -144,6 +155,10 @@ export interface RosterEntry {
    *  for builtin and custom agents; null/absent = nothing to say. */
   health?: AgentHealth | null;
 }
+
+/** A roster card's portrait (v1.304.0) — "make the agent profile images more
+ *  prominent": the rail's 26px dot became a 64px portrait card. */
+export const ROSTER_CARD_PX = 64;
 
 /* ------------------------------------------------------- health caption --- */
 
@@ -281,33 +296,11 @@ export function PausedPill({
   );
 }
 
-/** <img> can't send the Authorization header — the token rides as ?token=,
- *  the same pattern every media surface uses (creative gallery, previews).
- *  `cacheKey` (the row's last_active — SetupCard's `rev` idea at low
- *  resolution) busts the browser cache after a portrait is replaced, so the
- *  roster never keeps rendering a stale image the daemon no longer serves. */
-export function rosterAvatarSrc(rel: string, cacheKey?: string | null): string {
-  const token = ijToken();
-  const v = encodeURIComponent(cacheKey || "0");
-  return `${API_BASE}${rel}?v=${v}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
-}
-
 export const KIND_PILL: Record<AgentSource, string> = {
   builtin: "border-accent/30 bg-accent/[0.08] text-accent-soft",
   dynamic: "border-violet-500/25 bg-violet-500/10 text-violet-300",
   remote: "border-zinc-500/25 bg-zinc-500/10 text-zinc-400",
 };
-
-/** The shown name: the bare slug — the kind pill carries provenance, so the
- *  wire prefixes ("custom:", "remote:") stay off the screen. */
-export function bareName(name: string): string {
-  if (name.startsWith("custom:")) return name.slice("custom:".length);
-  if (name.startsWith("remote:")) return name.slice("remote:".length);
-  return name;
-}
-
-export type Liveness = "busy" | "queued";
-const LIVE_STATES = new Set<string>(["busy", "queued"]);
 
 /** The trailing parenthetical of the daemon's composed `line`, with any
  *  LIVENESS prefix removed — `_suffix()` (agents/roster.py) puts liveness and
@@ -320,31 +313,6 @@ function statsParen(e: RosterEntry): string | null {
   const lead = /^(busy|queued),\s*/i.exec(paren);
   const rest = lead ? paren.slice(lead[0].length).trim() : paren;
   return rest || null;
-}
-
-/** Is this agent working right now? "busy" | "queued" | null (v1.193.0).
- *
- *  TWO SOURCES, ONE MEANING, both the daemon's own word — never inferred from
- *  anything else the UI happens to know:
- *    1. `activity`, the roster field itself;
- *    2. the liveness prefix the daemon already bakes into `line`'s suffix,
- *       which is what a daemon whose /agents/roster serializer does not forward
- *       `activity` still sends today (see the report for that gap).
- *  An OFFLINE remote reports nothing: the daemon's own `_suffix()` drops
- *  liveness for an unhealthy entry, the row already shows the more urgent
- *  offline pill, and "busy" about an unreachable box is noise.
- *  null is NOT "free" — it is "no claim" (idle, unknown, and every delegated
- *  child, which this signal structurally cannot see). Nothing renders for it. */
-export function livenessOf(e: RosterEntry): Liveness | null {
-  if (!e.healthy) return null;
-  const direct = String(e.activity ?? "").trim().toLowerCase();
-  if (LIVE_STATES.has(direct)) return direct as Liveness;
-  const paren = /\(([^()]+)\)\s*$/.exec(e.line ?? "")?.[1] ?? "";
-  const head = paren.split(",")[0]?.trim().toLowerCase() ?? "";
-  // The comma is required: the daemon only ever prefixes liveness ONTO a stats
-  // phrase, so a bare "(queued)" from anywhere else is not this signal.
-  if (paren.includes(",") && LIVE_STATES.has(head)) return head as Liveness;
-  return null;
 }
 
 /** The liveness marker: a DOT plus the word, so it reads at a glance without
@@ -731,25 +699,30 @@ export function RosterStrip({
                       title={`${bare} — ${SOURCE_LABEL[e.kind] ?? e.kind}${
                         off ? " (offline)" : ""
                       }${!e.delegable ? " (chat-only)" : ""}`}
-                      className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-left"
+                      className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left"
                     >
-                      <AgentFace
+                      {/* A PORTRAIT CARD (v1.304.0): 64px inside the same
+                          status ring the round-table seats wear, read from
+                          the same row (`rosterStatus`), so the rail and the
+                          table can never disagree. The face is decorative
+                          inside the ring: the visible name beside it is
+                          already the accessible name of this button. */}
+                      <StatusRing
                         name={bare}
-                        mood="idle"
-                        size={26}
-                        // title="" = decorative: the visible name beside it is
-                        // already the accessible name of this button.
-                        title=""
+                        size={ROSTER_CARD_PX}
+                        status={rosterStatus(e).status}
                         avatarUrl={e.avatar ? rosterAvatarSrc(e.avatar, e.last_active) : undefined}
                         className={off ? "opacity-50" : ""}
                       />
+                      <span className="flex min-w-0 flex-1 flex-col gap-1">
                       <span
-                        className={`min-w-0 flex-1 truncate text-[12.5px] ${
-                          active ? "text-accent-soft" : "text-zinc-300"
+                        className={`min-w-0 truncate text-[13px] font-medium ${
+                          active ? "text-accent-soft" : "text-zinc-200"
                         }`}
                       >
                         {bare}
                       </span>
+                      <span className="flex flex-wrap items-center gap-1">
                       {/* WORKING RIGHT NOW (v1.193.0), before provenance and
                           after health: a taken teammate is the fact that
                           changes who you pick. Nothing renders when the daemon
@@ -800,6 +773,8 @@ export function RosterStrip({
                           {SOURCE_LABEL.remote}
                         </span>
                       )}
+                      </span>
+                      </span>
                     </button>
 
                     {/* THE DETAIL, ON THE ROW. Outside the button on purpose: a
@@ -1006,7 +981,7 @@ export function RosterStrip({
             <AgentFace
               name={shown}
               mood="idle"
-              size={30}
+              size={ROSTER_CARD_PX}
               avatarUrl={
                 selected.avatar
                   ? rosterAvatarSrc(selected.avatar, selected.last_active)

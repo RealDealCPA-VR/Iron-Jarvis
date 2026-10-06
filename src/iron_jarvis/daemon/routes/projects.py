@@ -6,7 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
@@ -122,6 +122,44 @@ def _validate_project_model(d, provider: str, model: str) -> None:
             status_code=400,
             detail=f"unknown provider '{provider}' — pick one from the model list",
         )
+
+
+def _review_ids(d) -> list[str]:
+    """Session ids with a pending git review — read ON the loop: the
+    orchestrator's review map is in-memory and mutated by the loop."""
+    try:
+        return [str(k) for k in (d.orchestrator.pending_reviews() or {}).keys()]
+    except Exception:  # noqa: BLE001 — no reviews is the honest fallback
+        return []
+
+
+def _world_asks(d, session_ids) -> dict[str, dict]:
+    """``{session id: {waiting_on, since}}`` for the sessions parked on an
+    ask (v1.304.0) — the SAME ``waiting_on`` view every session listing and
+    the bell carry (``routes.sessions._waiting_on``: approval id, tool, a
+    batch COUNT — never arguments), plus when the oldest ask was filed. ON the
+    loop: the approvals registry is in-memory and loop-owned."""
+    from datetime import datetime, timezone
+
+    from .sessions import _waiting_on
+
+    approvals = getattr(getattr(d, "platform", None), "approvals", None)
+    out: dict[str, dict] = {}
+    for sid in session_ids:
+        waiting_on = _waiting_on(d, sid)
+        if not waiting_on:
+            continue
+        since = None
+        try:
+            rows = approvals.pending_for(sid) if approvals is not None else []
+            if rows:
+                since = datetime.fromtimestamp(
+                    float(rows[0]["requested_at"]), tz=timezone.utc
+                ).replace(tzinfo=None)
+        except Exception:  # noqa: BLE001 — a missing stamp falls back to the run's start
+            since = None
+        out[sid] = {"waiting_on": waiting_on, "since": since}
+    return out
 
 
 def register(app: FastAPI, d) -> None:
@@ -360,6 +398,27 @@ def register(app: FastAPI, d) -> None:
                 sched.payload_json = _json.dumps(payload, default=str)
                 db.add(sched)
                 untagged["schedules"] += 1
+            # A PROJECT ROOM (v1.304.0) goes back to the General world: left
+            # bound, it would vanish from the Agents page entirely (General
+            # lists rooms with no project; the dead project has no world).
+            try:
+                from ...agents.threads import AgentThreadRecord
+
+                rooms = list(
+                    db.exec(
+                        select(AgentThreadRecord).where(
+                            AgentThreadRecord.project_id == project_id
+                        )
+                    )
+                )
+            except OperationalError:
+                log.warning("project delete: no agent-thread table to untag")
+                rooms = []
+            untagged["agent_threads"] = 0
+            for room in rooms:
+                room.project_id = ""
+                db.add(room)
+                untagged["agent_threads"] += 1
             # Knowledge belongs TO the project — delete it (no home without it).
             for k in db.exec(
                 select(ProjectKnowledge).where(ProjectKnowledge.project_id == project_id)
@@ -367,7 +426,20 @@ def register(app: FastAPI, d) -> None:
                 db.delete(k)
                 knowledge_deleted += 1
             db.delete(proj)
+            room_ids = [room.id for room in rooms]
             db.commit()
+        # The handed-back rooms' history-search docs follow them to General
+        # (v1.304.0): otherwise project-scoped recall would keep filing them
+        # under a project that no longer exists. Best-effort per room.
+        if room_ids:
+            from ...agents.threads import AgentThreads
+
+            threads = AgentThreads(d.platform.engine)
+            for rid in room_ids:
+                try:
+                    threads.reindex(rid)
+                except Exception:  # noqa: BLE001 — the delete already landed
+                    log.warning("project delete: re-index of room %s failed", rid, exc_info=True)
         if getattr(d.platform.config, "active_project_id", None) == project_id:
             d.platform.config.active_project_id = None
             d._persist_config(["active_project_id"])
@@ -863,3 +935,145 @@ def register(app: FastAPI, d) -> None:
             for n in dict.fromkeys(names)  # de-dupe, keep order
         ]
         return {"tools": tools}
+
+    # --- the project's WORLD on the Agents page (v1.304.0) --------------------
+    # Team (you pick, Jarvis suggests), the world's aggregates, and its round
+    # table. Every DB step runs off the loop (projects/world.py is blocking by
+    # design); the asks are read from the in-memory approvals registry ON the
+    # loop. Plain-sentence errors; 404 for an unknown project.
+
+    @app.get("/projects/{project_id}/team")
+    async def get_project_team(project_id: str) -> dict[str, Any]:
+        """``{project_id, members: [roster names], team: [roster rows —
+        the /agents/roster fields incl. avatar/face, health, paused — plus
+        label, participant_key, missing], suggestions: [same + why, tasks,
+        last_worked_at]}``. Suggestions = agents with sessions/assignments in
+        this project in the last 30 days, not on the team, newest work first,
+        at most 6."""
+        from ...projects import world as _world
+
+        out = await _asyncio.to_thread(_world.team_payload, d.platform, project_id)
+        if out is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        return out
+
+    @app.put("/projects/{project_id}/team")
+    async def put_project_team(project_id: str, body: dict) -> dict[str, Any]:
+        """Replace the team: ``{members: [roster names]}`` (``builder``,
+        ``custom:<slug>`` or the bare slug, ``remote:<name>``; the supervisor
+        and remote agents are allowed; ``[]`` clears it). Validated against
+        the roster — an unknown name is a 400 that names it. The project's
+        round table, when it has one, is re-seated to match (``room_synced``:
+        its id, or null). Answers the GET shape: {project_id, members, team,
+        suggestions, thread_id (the project room, or null), room_synced}."""
+        from ...core.models import Project
+        from ...projects import world as _world
+
+        body = body if isinstance(body, dict) else {}
+
+        def _exists() -> bool:
+            with session_scope(d.platform.engine) as db:
+                return db.get(Project, project_id) is not None
+
+        if not await _asyncio.to_thread(_exists):
+            raise HTTPException(status_code=404, detail="no such project")
+        if "members" not in body:
+            raise HTTPException(
+                status_code=400,
+                detail="members is required — the full list of agents on this team",
+            )
+        try:
+            members = await _asyncio.to_thread(
+                _world.validate_members, d.platform, body.get("members")
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        saved = await _asyncio.to_thread(_world.save_team, d.platform, project_id, members)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        try:
+            synced = await _asyncio.to_thread(_world.sync_room, d.platform, project_id, members)
+        except Exception:  # noqa: BLE001 — the team is saved; a seat sync is a bonus
+            log.warning("project team: room re-seat failed", exc_info=True)
+            synced = None
+        out = await _asyncio.to_thread(_world.team_payload, d.platform, project_id)
+        if out is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        out["room_synced"] = synced
+        return out
+
+    @app.get("/projects/{project_id}/world")
+    async def get_project_world(project_id: str) -> dict[str, Any]:
+        """One project's world: ``{project, members, team (full rows),
+        thread_id (its round table — the most recent project-bound room — or
+        null; POST /world/room makes one), counts: {waiting, running,
+        queued, done_7d}, waiting: [{kind ask|blocked|held|review, id, key,
+        title, agent, since, reason, link, session_id?|assignment_id?,
+        waiting_on? (numbers, never arguments)}] oldest first, completed:
+        [{kind session|assignment, id, key, title, agent, finished_at,
+        status, outcome, files: [names], files_total, link, session_id,
+        assignment_id?}] newest first, at most 50}``."""
+        from ...projects import world as _world
+
+        reviews = _review_ids(d)
+        data = await _asyncio.to_thread(_world.gather_world, d.platform, project_id, reviews)
+        if data is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        snap = data.pop("snap")
+        asks = _world_asks(d, [s["id"] for s in snap["active"]])
+        data["counts"] = _world.counts_for(snap, asks)
+        data["waiting"] = _world.waiting_items(project_id, snap, asks)
+        return data
+
+    @app.post("/projects/{project_id}/world/room")
+    async def open_project_room(
+        project_id: str, body: dict | None = Body(default=None)
+    ) -> dict[str, Any]:
+        """The project's round table, made on first open. Body ``{}``.
+        IDEMPOTENT: an existing project room is returned as it is (200,
+        ``created: false``); otherwise one is made SEATING THE TEAM — team
+        order, each member with its roster role (``world.seat_role``) — bound
+        to the project (201, ``created: true``). Answers ``{thread_id,
+        thread: <the /agents/threads/{id} row>, created}``. 404 unknown
+        project; 400 archived project; 409 when there is no team to seat.
+        (``participants`` in the body overrides the team — a test/API door.)"""
+        from ...agents.threads import clean_participants, thread_view
+        from ...core.models import Project
+        from ...projects import world as _world
+
+        body = body if isinstance(body, dict) else {}
+
+        def _load():
+            with session_scope(d.platform.engine) as db:
+                row = db.get(Project, project_id)
+                if row is not None:
+                    db.expunge(row)
+                return row
+
+        project = await _asyncio.to_thread(_load)
+        if project is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        if (project.status or "active") != "active":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{project.name} is archived — unarchive it before opening its round table",
+            )
+        raw = body.get("participants")
+        try:
+            if raw is not None:
+                participants = clean_participants(raw)
+            else:
+                members = _world.decode_team(project.team_json)
+                seats = await _asyncio.to_thread(_world.team_seats, d.platform, members)
+                participants = clean_participants(seats) if seats else []
+            rec, created = await _asyncio.to_thread(
+                _world.ensure_room, d.platform, project, participants
+            )
+        except _world.NoTeamError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content={"thread_id": rec.id, "thread": thread_view(rec), "created": created},
+        )

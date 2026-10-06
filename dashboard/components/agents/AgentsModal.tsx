@@ -70,13 +70,21 @@ import {
   statsText,
   type RosterEntry,
 } from "./RosterStrip";
+import { SEAT_STATUS_LABEL, StatusRing, rosterStatus } from "./TableSeats";
 import { SOURCE_LABEL, type AgentSource, type RemoteAgentInfo } from "./identity";
 
 export type AgentsTab = "agents" | "manage";
 
+/** The detail panel's HERO portrait (v1.304.0): the agent opens on a big
+ *  picture of itself — the user asked for the faces to be "more prominent",
+ *  and this is the one place there is room for the whole face. */
+export const AGENT_HERO_PX = 160;
+/** A row in the room's list (was 26). */
+export const AGENT_LIST_PX = 40;
+
 /** Everything a row needs to draw itself, resolved once so the list and the
  *  detail panel can never disagree about who they are showing. */
-function useFaces(): { faces: FaceMap; supported: boolean; reload: () => void } {
+export function useFaces(): { faces: FaceMap; supported: boolean; reload: () => void } {
   const [faces, setFaces] = useState<FaceMap>(null);
   const [supported, setSupported] = useState(true);
 
@@ -244,7 +252,7 @@ export function AgentsModal({
                     <AgentFace
                       name={bare}
                       mood="idle"
-                      size={26}
+                      size={AGENT_LIST_PX}
                       title=""
                       face={faceFor(faces, bare, e.face)}
                       avatarUrl={
@@ -295,7 +303,10 @@ export function AgentsModal({
               title="Create an agent of your own, or connect one on another computer"
               className="mt-1 flex w-full items-center gap-2 rounded-xl border border-dashed border-white/[0.10] px-2 py-2 text-left text-zinc-400 transition-colors hover:border-accent/40 hover:bg-white/[0.04] hover:text-accent-soft"
             >
-              <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full border border-white/[0.10]">
+              <span
+                className="grid shrink-0 place-items-center rounded-full border border-white/[0.10]"
+                style={{ width: AGENT_LIST_PX, height: AGENT_LIST_PX }}
+              >
                 <Plus size={13} aria-hidden />
               </span>
               <span className="min-w-0 flex-1 truncate text-[12.5px]">
@@ -359,7 +370,7 @@ export function AgentsModal({
  *  them. Keyed by the caller so switching rows MOUNTS a fresh panel — the face
  *  picker holds an unapplied draft, and a draft is per-agent (the v1.180.0
  *  lesson, which cost an Apply written to the wrong agent). */
-function AgentDetail({
+export function AgentDetail({
   entry,
   faces,
   facesSupported,
@@ -367,8 +378,11 @@ function AgentDetail({
   onAssign,
   onAgentsChanged,
   onFaceChanged,
+  projectId,
 }: {
   entry: RosterEntry;
+  /** v1.304.0: the project a new assignment defaults to (a project room). */
+  projectId?: string;
   faces: FaceMap;
   facesSupported: boolean;
   onTalk?: (kind: AgentSource, name: string) => void;
@@ -392,24 +406,41 @@ function AgentDetail({
    *  portrait and the agent's name in full. There is nothing for the click to
    *  be ambiguous about. */
   const actionable = entry.delegable && entry.healthy;
+  const status = rosterStatus(entry).status;
 
   return (
     <div data-testid={`agent-detail-${bare}`} className="space-y-4">
-      <div className="flex items-start gap-3">
-        <AgentFace
-          name={bare}
-          mood="idle"
-          size={52}
-          face={face}
-          avatarUrl={
-            entry.avatar ? rosterAvatarSrc(entry.avatar, entry.last_active) : undefined
-          }
-          title={`${bare} — ${SOURCE_LABEL[entry.kind] ?? entry.kind}`}
-          className={off ? "opacity-50" : ""}
-        />
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+        {/* THE HERO (v1.304.0). 160px inside the same status ring the table's
+            seats wear, on a soft accent halo — the agent opens on its own
+            face. The ring is read from this row (`rosterStatus`), so it says
+            what the seat said. Labelled: the picture is the first thing a
+            screen reader meets in the panel, and its words are the status. */}
+        <span
+          data-testid="agent-hero"
+          data-status={status}
+          role="img"
+          aria-label={`${bare} — ${SOURCE_LABEL[entry.kind] ?? entry.kind}, ${SEAT_STATUS_LABEL[status]}`}
+          className="relative grid shrink-0 place-items-center rounded-full p-2"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle at center, rgb(var(--accent-rgb) / 0.18), transparent 70%)",
+          }}
+        >
+          <StatusRing
+            name={bare}
+            size={AGENT_HERO_PX}
+            status={status}
+            face={face}
+            avatarUrl={
+              entry.avatar ? rosterAvatarSrc(entry.avatar, entry.last_active) : undefined
+            }
+            className={off ? "opacity-50" : ""}
+          />
+        </span>
+        <div className="min-w-0 flex-1 text-center sm:pt-6 sm:text-left">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-[15px] font-semibold text-zinc-100">
+            <span className="truncate text-[20px] font-semibold tracking-wide text-zinc-100">
               {bare}
             </span>
             <span
@@ -527,7 +558,7 @@ function AgentDetail({
           and a composer to add to the queue. Builtin and custom agents only —
           a remote has no queue on this daemon. Renders nothing on a daemon
           without the route. */}
-      {entry.kind !== "remote" && <AgentInbox name={entry.name} />}
+      {entry.kind !== "remote" && <AgentInbox name={entry.name} projectId={projectId} />}
 
       {/* THE FOLDER + THE COACH (v1.297.0): a custom agent's instructions
           file (with revisions) and private notebook, then the reflection
@@ -537,6 +568,72 @@ function AgentDetail({
       {entry.kind === "dynamic" && <AgentFiles name={bare} />}
       {entry.kind === "dynamic" && <AgentCoach name={bare} />}
     </div>
+  );
+}
+
+/**
+ * ONE AGENT, opened from its SEAT at the round table (v1.304.0).
+ *
+ * The table's seats are doors: a click opens that agent in full — the hero
+ * portrait, its status, Give work, its inbox, its folder — without leaving
+ * the room or switching the open thread (the page's own room dialog would
+ * select the agent's 1:1 thread on the way, which is the opposite of what a
+ * click on someone at THIS table means). It is the same `AgentDetail` the
+ * room renders, so the two can never show an agent differently.
+ */
+export function AgentSeatModal({
+  entry,
+  onAssign,
+  onAgentsChanged,
+  onClose,
+  projectId,
+}: {
+  entry: RosterEntry;
+  /** The room's project (a project world): the inbox's "Assign work"
+   *  defaults to it instead of "No project". */
+  projectId?: string;
+  /** Aim the room's own composer at this agent. */
+  onAssign?: (kind: AgentSource, name: string) => void;
+  /** A portrait/face write landed — the caller refetches its roster. */
+  onAgentsChanged: () => void;
+  onClose: () => void;
+}) {
+  const { faces, supported, reload } = useFaces();
+  return (
+    <Modal
+      label={`${bareName(entry.name)} — at the table`}
+      onClose={onClose}
+      className="max-h-[88vh] w-full max-w-3xl"
+      testId="agent-seat-modal"
+    >
+      <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-2.5">
+        <Users size={15} className="text-accent-soft/80" aria-hidden />
+        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
+          At the table
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          title="Close"
+          className="ml-auto rounded-lg p-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+        >
+          <X size={15} />
+        </button>
+      </header>
+      <div className="min-h-0 overflow-y-auto p-5">
+        <AgentDetail
+          key={entry.name}
+          entry={entry}
+          faces={faces}
+          facesSupported={supported}
+          onAssign={onAssign}
+          onAgentsChanged={onAgentsChanged}
+          onFaceChanged={reload}
+          projectId={projectId}
+        />
+      </div>
+    </Modal>
   );
 }
 

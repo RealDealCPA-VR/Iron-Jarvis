@@ -157,8 +157,10 @@ export function faceIdentity(key: string): string {
   return colon >= 0 ? key.slice(colon + 1) : key;
 }
 
-/** True when the OS asks for reduced motion — stills blinks and scans. */
-function useReducedMotion(): boolean {
+/** True when the OS asks for reduced motion — stills blinks and scans.
+ *  Exported (v1.304.0) so the round-table seats honour the SAME reading: a
+ *  speaker that still lifts while its face sits still would be half a rule. */
+export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
     // jsdom (vitest) has no matchMedia — animation stays on, harmlessly.

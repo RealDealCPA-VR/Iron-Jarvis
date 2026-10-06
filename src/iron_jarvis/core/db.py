@@ -115,6 +115,12 @@ _HOT_INDEXES = (
     # project Board asks "what waits in this project".
     ("ix_assignment_assignee_status", "assignment", "assignee, status"),
     ("ix_assignment_project_status", "assignment", "project_id, status"),
+    # v1.304.0: a project world asks "which rooms belong to this project" and
+    # the General world "which belong to none". The model declares
+    # ``index=True``, but the reconciler adds a column to an EXISTING table
+    # without its index — this line gives an old install the same index a
+    # fresh one gets (same name as SQLModel's, so a fresh DB is a no-op).
+    ("ix_agentthreadrecord_project_id", "agentthreadrecord", "project_id"),
 )
 
 

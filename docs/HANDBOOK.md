@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.303.3 (2026-10-04).*
+holds itself to. Current as of v1.304.0 (2026-10-04).*
 
 ---
 
@@ -206,6 +206,26 @@ Chat is where most work happens, and it is wired into everything:
   "Completed · needs you") now keep their own case.
 
 ### Agents & jobs
+**Project worlds and the table (v1.304.0).** The Agents page opens on your
+**worlds**: one card per active project with its team's faces (a status dot on
+each: working, paused, offline, ready), what is waiting on you, what is running
+and what got done this week — plus **General** for rooms that belong to no
+project. Step into a project and its **round table** fills the screen: the team
+sits around a real table, each with a large portrait and a ring that shows what
+they are doing; whoever is speaking leans in. Click a seat to open that agent on
+a big portrait (give work, change the face, see its inbox — work given from
+there lands in this project). Beside the table: **Board** (this project's work),
+**Waiting on you** (questions a job is paused on, blocked work, work that stopped
+for your answer or was cut off by a restart), **Completed**, and **New task**
+(give it to one teammate, or to the whole team and let Jarvis decide). **Edit
+team** picks who sits at the table — Jarvis suggests agents that already worked
+on the project; saving the team re-seats the table. What a project room keeps
+private: the project's instructions and files reach only the agents at its own
+table; an agent on another computer sees only what you type there, never the
+project's files or the other agents' replies; an agent without its own model runs
+on the project's model when the project has one; and when the project runs on a
+local model, an agent set to a different provider is not given the project's files
+or the other agents' replies (its reply says so).
 - **Post a job** on the Agents page: default target **"Team"** runs a
   supervisor that plans and delegates to specialist agents *in parallel*
   (builder, researcher, reviewer, and your custom agents; a remote agent is

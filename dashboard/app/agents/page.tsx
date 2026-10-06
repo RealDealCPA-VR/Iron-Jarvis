@@ -61,9 +61,9 @@
 // hiding them there would delete capabilities from the daemons least able to
 // spare them.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { MessagesSquare } from "lucide-react";
-import { del, post, put, ApiError } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, MessagesSquare } from "lucide-react";
+import { del, get, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
@@ -98,6 +98,16 @@ import {
   type PickerOption,
 } from "@/components/agents/PanelPicker";
 import { RoundTable } from "@/components/agents/RoundTable";
+import { WorldsGrid } from "@/components/agents/world/WorldsGrid";
+import { WorldView } from "@/components/agents/world/WorldView";
+import {
+  parseWorldRoute,
+  threadProjectId,
+  worldCards,
+  worldPath,
+  type WorldRoute,
+  type WorldsResponse,
+} from "@/lib/agentWorlds";
 
 type PickerState =
   | { mode: "create" }
@@ -128,6 +138,51 @@ function bareRosterName(name: string): string {
   return name;
 }
 
+/**
+ * The participant picker's catalog (moved out of the page body in v1.304.0 so
+ * a project world's panel picker reads the SAME catalog the General rooms do).
+ * Roster-fed when available: descriptions + live health, offline remotes shown
+ * but disabled. Roster names arrive as "builder" / "custom:<slug>" /
+ * "remote:<name>"; the thread routes want source + BARE name.
+ */
+function buildPickerCatalog(
+  rosterEntries: RosterEntry[],
+  builtin: string[],
+  dynamic: DynamicAgentFull[],
+  remotes: RemoteAgentInfo[],
+): PickerCatalog {
+  const rosterOptions = (kind: AgentSource): PickerOption[] =>
+    rosterEntries
+      .filter((e) => e.kind === kind)
+      .map((e) => ({
+        source: kind,
+        name: bareRosterName(e.name),
+        description: e.description || undefined,
+        offline: kind === "remote" && !e.healthy,
+        avatar: e.avatar ?? null,
+      }));
+  return rosterEntries.length > 0
+    ? {
+        builtin: rosterOptions("builtin"),
+        dynamic: rosterOptions("dynamic"),
+        remotes: rosterOptions("remote"),
+      }
+    : {
+        builtin: builtin.map((name) => ({ source: "builtin" as const, name })),
+        dynamic: dynamic.map((a) => ({
+          source: "dynamic" as const,
+          name: a.name,
+          description: a.description || undefined,
+        })),
+        remotes: remotes.map((r) => ({
+          source: "remote" as const,
+          name: r.name,
+          description: r.kind || undefined,
+          offline: r.enabled === false,
+        })),
+      };
+}
+
 /** What the module is, said once. The room shows it inside the thread rail
  *  (v1.214.3); the older-daemon page still shows it through `PageHeader`. Two
  *  copies of this sentence would be two chances for them to drift. */
@@ -144,7 +199,14 @@ function defaultTitle(participants: Participant[]): string {
   return `${names[0]}, ${names[1]} & ${names.length - 2} more`;
 }
 
-export default function AgentsPage() {
+/**
+ * THE GENERAL WORLD (v1.304.0) — today's Agents page, unchanged: the global
+ * round-table rooms (threads bound to no project), the thread rail, the agents
+ * room, and every deep link (`?thread=`, `?talk=&ask=`). `worldsNav` is the
+ * one addition: a way back to the worlds grid, rendered only when there ARE
+ * project worlds to go back to.
+ */
+function GeneralAgents({ worldsNav = null }: { worldsNav?: ReactNode }) {
   // --- catalog (also feeds the agents room + the panel picker) -------------
   const {
     data: agentsData,
@@ -503,41 +565,8 @@ export default function AgentsPage() {
     host?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
   }, [setupOpen]);
 
-  // --- the participant picker's catalog ------------------------------------
-  // Roster-fed when available: descriptions + live health, offline remotes
-  // shown but disabled. Roster names arrive as "builder" / "custom:<slug>" /
-  // "remote:<name>"; the thread routes want source + BARE name.
-  const rosterOptions = (kind: AgentSource): PickerOption[] =>
-    rosterEntries
-      .filter((e) => e.kind === kind)
-      .map((e) => ({
-        source: kind,
-        name: bareRosterName(e.name),
-        description: e.description || undefined,
-        offline: kind === "remote" && !e.healthy,
-        avatar: e.avatar ?? null,
-      }));
-  const catalog: PickerCatalog =
-    rosterEntries.length > 0
-      ? {
-          builtin: rosterOptions("builtin"),
-          dynamic: rosterOptions("dynamic"),
-          remotes: rosterOptions("remote"),
-        }
-      : {
-          builtin: builtin.map((name) => ({ source: "builtin" as const, name })),
-          dynamic: dynamic.map((a) => ({
-            source: "dynamic" as const,
-            name: a.name,
-            description: a.description || undefined,
-          })),
-          remotes: remotes.map((r) => ({
-            source: "remote" as const,
-            name: r.name,
-            description: r.kind || undefined,
-            offline: r.enabled === false,
-          })),
-        };
+  // --- the participant picker's catalog (see buildPickerCatalog) ----------
+  const catalog: PickerCatalog = buildPickerCatalog(rosterEntries, builtin, dynamic, remotes);
 
   /** Portraits and faces are written by name, and BOTH lists carry them: the
    *  roster feeds the rail and the room, `/agents` feeds the dynamic rows. A
@@ -631,6 +660,9 @@ export default function AgentsPage() {
         roster={rosterEntries}
         assign={assign}
         initialInput={pendingAsk}
+        // v1.304.0: a portrait changed from a seat's detail — both lists
+        // that carry faces are refetched, like the agents room's own writes.
+        onRosterChanged={agentsChanged}
       />
     ) : (
       <Card>
@@ -644,6 +676,7 @@ export default function AgentsPage() {
 
     return (
       <PageShell className="space-y-0">
+        {worldsNav}
         {/* THE MODULE FILLS THE APP. `md:h-[calc(100vh-4.5rem)]` is the title
             bar (2.5rem) plus MainContent's own `py-4` (2rem), so the row ends
             exactly where the window does and nothing but the two panes
@@ -653,7 +686,12 @@ export default function AgentsPage() {
             see ThreadRail). */}
         <div
           data-testid="agents-room"
-          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem)] md:min-h-[28rem] md:flex-row"
+          // v1.304.0: the worlds nav row (2.5rem with its margin) comes off
+          // the module's height when it is there, so the window still ends
+          // exactly where the two panes do.
+          className={`flex flex-col gap-4 md:min-h-[28rem] md:flex-row ${
+            worldsNav ? "md:h-[calc(100vh-7rem)]" : "md:h-[calc(100vh-4.5rem)]"
+          }`}
         >
           <div className="shrink-0 md:h-full md:w-[17rem]">
             <ThreadRail
@@ -717,6 +755,7 @@ export default function AgentsPage() {
   /* ------------------------------------------- the older-daemon page, as-is */
   return (
     <PageShell>
+      {worldsNav}
       <Reveal>{header}</Reveal>
 
       {offline && (
@@ -828,6 +867,7 @@ export default function AgentsPage() {
                           roster={rosterEntries}
                           assign={assign}
                           initialInput={pendingAsk}
+                          onRosterChanged={agentsChanged}
                         />
                       ) : (
                         <Card>
@@ -847,6 +887,239 @@ export default function AgentsPage() {
       </div>
 
       {modals}
+    </PageShell>
+  );
+}
+
+/**
+ * A project world's screen (v1.304.0): the catalog the world's table and team
+ * picker read — the same three lists the General rooms read — around
+ * `WorldView`.
+ */
+function ProjectWorldScreen({
+  projectId,
+  threadId,
+  onBack,
+}: {
+  projectId: string;
+  threadId?: string;
+  onBack: () => void;
+}) {
+  const { data: agentsData } = useApi<AgentsResponse>("/agents");
+  const { data: remoteData } = useApi<{
+    agents?: RemoteAgentInfo[];
+    remotes?: RemoteAgentInfo[];
+  }>("/agents/remote");
+  const { data: rosterData, reload: reloadRoster } =
+    useApi<{ roster?: RosterEntry[] }>("/agents/roster");
+  const rosterEntries = useMemo(
+    () =>
+      (rosterData?.roster ?? []).filter(
+        (e): e is RosterEntry => Boolean(e) && typeof e.name === "string",
+      ),
+    [rosterData],
+  );
+  const catalog = buildPickerCatalog(
+    rosterEntries,
+    agentsData?.builtin ?? [],
+    (agentsData?.dynamic ?? []) as DynamicAgentFull[],
+    remoteData?.agents ?? remoteData?.remotes ?? [],
+  );
+  return (
+    <PageShell className="space-y-0">
+      <WorldView
+        projectId={projectId}
+        pinnedThreadId={threadId}
+        roster={rosterEntries}
+        catalog={catalog}
+        onBack={onBack}
+        onRosterChanged={reloadRoster}
+      />
+    </PageShell>
+  );
+}
+
+/** The history-state marker a world entered FROM the grid carries, so the
+ *  in-app back control can be a real `history.back()` (one entry, the same
+ *  one the browser's back button pops) instead of a second forward entry. */
+const FROM_GRID = "ijWorldFromGrid";
+
+/**
+ * AGENTS = WORLDS (v1.304.0). "a round table for each set of agents … grouped
+ * by the project; when a project is selected you enter the world of that
+ * project".
+ *
+ * The URL is the state: `/agents` is the worlds grid (or General straight
+ * away when there are no project worlds), `/agents?project=<id>` a project's
+ * world, `/agents?world=general` the General rooms — and every link that
+ * already meant General (`?thread=`, `?talk=&ask=`) still opens General, as
+ * it always did. Read off `window.location` (a static route — see the
+ * deep-link note in GeneralAgents) and kept in step with the browser's
+ * back/forward through `popstate`.
+ *
+ * AN OLDER DAEMON IS TODAY'S PAGE EXACTLY. No `/agents/worlds` (404/405) →
+ * `GeneralAgents` with no worlds nav, whatever the URL says.
+ */
+export default function AgentsPage() {
+  // null = the URL has not been read yet (first client render).
+  const [route, setRoute] = useState<WorldRoute | null>(null);
+  useEffect(() => {
+    const read = () => setRoute(parseWorldRoute(window.location.search));
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
+  /**
+   * A ROOM OPENED BY ID belongs to whichever world it lives in (v1.304.0).
+   * `GET /agents/threads` (General's list) EXCLUDES project rooms now, so a
+   * `?thread=<id>` link — the palette's history hits, the chat page's "open
+   * the room" link, any old bookmark — is asked about ONCE before General
+   * opens: a project room reroutes to `/agents?project=<pid>&thread=<id>`
+   * (replaceState — the link was always meant to land there). Every producer
+   * of a room link speaks `/agents?thread=`, so this is the one choke point.
+   * A failed or field-less answer (an older daemon) is General, as before.
+   */
+  const pendingThread = route?.kind === "general" ? route.thread ?? "" : "";
+  const [resolved, setResolved] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingThread || resolved === pendingThread) return;
+    let alive = true;
+    const done = () => {
+      if (alive) setResolved(pendingThread);
+    };
+    Promise.resolve()
+      .then(() => get<unknown>(`/agents/threads/${encodeURIComponent(pendingThread)}`))
+      .then((row) => {
+        const pid = threadProjectId(row);
+        if (!alive || !pid) return;
+        const next: WorldRoute = { kind: "project", id: pid, thread: pendingThread };
+        try {
+          window.history.replaceState(null, "", worldPath(next));
+        } catch {
+          /* no history API — the screen still changes */
+        }
+        setRoute(next);
+      })
+      .catch(() => {
+        /* unknown room or older daemon: General reports it honestly */
+      })
+      .finally(done);
+    return () => {
+      alive = false;
+    };
+  }, [pendingThread, resolved]);
+  const resolvingThread = Boolean(pendingThread) && resolved !== pendingThread;
+
+  const onGrid = route?.kind === "auto";
+  // Polled only while the grid is on screen (its counts are the point);
+  // elsewhere it is read once and refreshed rarely — the page needs it only to
+  // know whether worlds exist at all. usePolledApi already stops while hidden.
+  const worlds = usePolledApi<WorldsResponse>(
+    route === null ? null : "/agents/worlds",
+    onGrid ? 15000 : 300000,
+  );
+  const worldsMissing = worlds.error?.status === 404 || worlds.error?.status === 405;
+  const cards = worldCards(worlds.data);
+  const reloadWorlds = worlds.reload;
+
+  const go = useCallback(
+    (next: WorldRoute, fromGrid = false) => {
+      try {
+        window.history.pushState(fromGrid ? { [FROM_GRID]: true } : null, "", worldPath(next));
+      } catch {
+        /* no history API — the screen still changes */
+      }
+      setRoute(next);
+      if (next.kind === "auto") reloadWorlds();
+    },
+    [reloadWorlds],
+  );
+
+  const backToGrid = useCallback(() => {
+    let fromGrid = false;
+    try {
+      fromGrid = Boolean((window.history.state as Record<string, unknown> | null)?.[FROM_GRID]);
+    } catch {
+      /* unreadable state — push instead */
+    }
+    if (fromGrid) {
+      window.history.back(); // popstate re-reads the URL
+      reloadWorlds();
+      return;
+    }
+    go({ kind: "auto" });
+  }, [go, reloadWorlds]);
+
+  if (route === null) return null;
+
+  if (worldsMissing && !resolvingThread) return <GeneralAgents />;
+
+  if (route.kind === "project") {
+    return (
+      <ProjectWorldScreen
+        key={route.id}
+        projectId={route.id}
+        threadId={route.thread}
+        onBack={backToGrid}
+      />
+    );
+  }
+
+  // Asking the daemon whose room a `?thread=` link is: a placeholder, never
+  // General-then-world.
+  if (resolvingThread) {
+    return (
+      <PageShell>
+        <Card>
+          <SkeletonRows rows={4} />
+        </Card>
+      </PageShell>
+    );
+  }
+
+  const worldsNav =
+    cards.length > 0 ? (
+      <div data-testid="general-world-nav" className="mb-3 flex items-center gap-3">
+        <button
+          type="button"
+          data-testid="general-back"
+          onClick={backToGrid}
+          className="btn-ghost text-sm"
+          aria-label="Back to all worlds"
+        >
+          <ArrowLeft size={14} /> Worlds
+        </button>
+        <span className="text-sm font-medium text-zinc-300">General</span>
+      </div>
+    ) : null;
+
+  if (route.kind === "general") return <GeneralAgents worldsNav={worldsNav} />;
+
+  // `auto`: the grid when there are project worlds; while the first answer is
+  // in flight, a placeholder rather than General-then-grid flashing.
+  if (worlds.data === null && worlds.error === null && worlds.loading) {
+    return (
+      <PageShell>
+        <Card>
+          <SkeletonRows rows={4} />
+        </Card>
+      </PageShell>
+    );
+  }
+  if (cards.length === 0) return <GeneralAgents />;
+  return (
+    <PageShell>
+      <WorldsGrid
+        worlds={cards}
+        generalCount={
+          typeof worlds.data?.general?.thread_count === "number"
+            ? worlds.data.general.thread_count
+            : undefined
+        }
+        onEnter={(id) => go({ kind: "project", id }, true)}
+        onGeneral={() => go({ kind: "general" }, true)}
+      />
     </PageShell>
   );
 }

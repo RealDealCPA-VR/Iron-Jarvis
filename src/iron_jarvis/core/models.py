@@ -87,6 +87,15 @@ class Project(SQLModel, table=True):
     memory_sources: str = ""
     status: str = "active"  # active | archived
     created_at: datetime = Field(default_factory=utcnow)
+    #: THE PROJECT'S TEAM (v1.304.0, project worlds): a JSON list of ROSTER
+    #: names (``builder`` | ``custom:<slug>`` | ``remote:<name>``) the user
+    #: curated for this project — the seats at its round table. EMPTY (or NULL
+    #: on a row older than the column) = no team yet, and the world shows the
+    #: "build the team" step. Validated against the roster on
+    #: ``PUT /projects/{id}/team``; read through ``projects.world.decode_team``
+    #: so a NULL and a corrupt blob both read as "no team". Additive column
+    #: (auto-reconciled by ``core.db._reconcile_additive_columns``).
+    team_json: str = ""
 
 
 class ProjectKnowledge(SQLModel, table=True):

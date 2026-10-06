@@ -305,12 +305,22 @@ function Section({
 
 /** "Assign work": task, optional reason, priority, optional project →
  *  POST /assignments for this agent. */
-function AssignComposer({ name, onQueued }: { name: string; onQueued: () => void }) {
+function AssignComposer({
+  name,
+  onQueued,
+  defaultProjectId = "",
+}: {
+  name: string;
+  onQueued: () => void;
+  /** v1.304.0: opened from a PROJECT room's seat, the work belongs to that
+   *  project unless the user picks another. */
+  defaultProjectId?: string;
+}) {
   const bare = bareAssignee(name);
   const [task, setTask] = useState("");
   const [reason, setReason] = useState("");
   const [priority, setPriority] = useState("0");
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(defaultProjectId);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -433,7 +443,7 @@ function AssignComposer({ name, onQueued }: { name: string; onQueued: () => void
  * `<AgentInbox name="builder" />` / `<AgentInbox name="custom:analyst" />` —
  * `name` is the ROSTER name, exactly as the daemon keys the queue.
  */
-export function AgentInbox({ name }: { name: string }) {
+export function AgentInbox({ name, projectId }: { name: string; projectId?: string }) {
   const bare = bareAssignee(name);
   const path = `/agents/${encodeURIComponent(name)}/inbox`;
   const { data, error, reload } = usePolledApi<AgentInboxView>(path, 8000);
@@ -481,7 +491,7 @@ export function AgentInbox({ name }: { name: string }) {
         </p>
       </div>
 
-      <AssignComposer name={name} onQueued={reload} />
+      <AssignComposer name={name} onQueued={reload} defaultProjectId={projectId ?? ""} />
 
       {empty ? (
         <p className="text-[11.5px] leading-relaxed text-zinc-500">

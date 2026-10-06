@@ -260,13 +260,14 @@ describe("adding is additive", () => {
     fireEvent.click(within(dialog).getByTitle("Add planner to the panel"));
     fireEvent.click(within(dialog).getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
-      // The header chip carries the participant's own title — proof this is
-      // the THREAD's panel and not a leftover card in the picker.
-      expect(screen.getByTitle("planner — participant (builtin)")).toBeInTheDocument();
+      // The newcomer's SEAT at the table — proof this is the THREAD's panel
+      // and not a leftover card in the picker. (v1.304.0: the seats replaced
+      // the header chips this pin used to read, on purpose.)
+      expect(screen.getByTestId("seat-builtin:planner")).toBeInTheDocument();
     });
     expect(screen.getByText(/planner joined this thread/i)).toBeInTheDocument();
-    expect(screen.getByTitle("builder — lead (builtin)")).toBeInTheDocument();
-    expect(screen.getByTitle("remy — critic (dynamic)")).toBeInTheDocument();
+    expect(screen.getByTestId("seat-builtin:builder")).toBeInTheDocument();
+    expect(screen.getByTestId("seat-dynamic:remy")).toBeInTheDocument();
   });
 
   /* REVIEWER-ADDED. The receipt is a CLAIM about what landed, so it has to be
@@ -327,9 +328,10 @@ describe("a failed add changes nothing", () => {
     // NOBODY WAS ADDED: the thread's own chips still read builder + remy, and
     // no receipt claims a join. (The picker is still open with planner picked
     // — the retry is one click — so the assertion is scoped to the panel.)
-    expect(screen.queryByTitle(/^planner —/)).toBeNull();
-    expect(screen.getByTitle("builder — lead (builtin)")).toBeInTheDocument();
-    expect(screen.getByTitle("remy — critic (dynamic)")).toBeInTheDocument();
+    // (v1.304.0: read off the SEATS, which replaced the header chips.)
+    expect(screen.queryByTestId("seat-builtin:planner")).toBeNull();
+    expect(screen.getByTestId("seat-builtin:builder")).toBeInTheDocument();
+    expect(screen.getByTestId("seat-dynamic:remy")).toBeInTheDocument();
     expect(screen.queryByText(/joined this thread/i)).toBeNull();
   });
 

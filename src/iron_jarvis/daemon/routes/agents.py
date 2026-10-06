@@ -2039,37 +2039,94 @@ def register(app: FastAPI, d) -> None:
         return AgentThreads(d.platform.engine)
 
     def _thread_view(rec) -> dict[str, Any]:
-        import json as _json
+        # ONE shape, shared with the project world's room route (v1.304.0:
+        # + ``project_id``, "" for a general room).
+        from ...agents.threads import thread_view
 
-        msgs = _json.loads(rec.messages_json or "[]")
-        return {
-            "id": rec.id,
-            "title": rec.title,
-            "participants": _json.loads(rec.participants_json or "[]"),
-            "messages": msgs,
-            "message_count": len(msgs),
-            "updated_at": rec.updated_at.isoformat(),
-        }
+        return thread_view(rec)
 
     @app.get("/agents/threads")
-    def list_agent_threads() -> dict[str, Any]:
+    def list_agent_threads(project_id: str = "") -> dict[str, Any]:
+        """The rooms of ONE world (v1.304.0). No ``project_id`` (or an empty
+        one) = the GENERAL world: rooms bound to no project — the Agents page
+        exactly as it was, chat-bound panels included. ``?project_id=<id>`` =
+        that project's rooms. A project room never shows up in General: its
+        world is where it lives."""
         out = []
-        for rec in _threads().list():
+        for rec in _threads().list(project_id=(project_id or "").strip()):
             view = _thread_view(rec)
             view.pop("messages")  # list rows stay light; GET one for the transcript
             out.append(view)
         return {"threads": out}
 
+    def _room_project(raw: Any) -> str:
+        """``project_id`` on a new room: "" (general) or an existing ACTIVE
+        project's id — else a 400 in plain words (v1.304.0)."""
+        pid = str(raw or "").strip()
+        if not pid:
+            return ""
+        from ...core.db import session_scope
+        from ...core.models import Project
+
+        with session_scope(d.platform.engine) as db:
+            project = db.get(Project, pid)
+        if project is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"there is no project with id {pid} — pick one from the Projects page",
+            )
+        if (project.status or "active") != "active":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{project.name} is archived — unarchive it before starting a "
+                    "round table there"
+                ),
+            )
+        return pid
+
     @app.post("/agents/threads")
     def create_agent_thread(body: dict) -> dict[str, Any]:
+        """A new room. ``project_id`` (v1.304.0, optional) binds it to that
+        project's world — its rounds are grounded in the project and its
+        jobs carry the project; absent = a general room, as before."""
         from ...agents.threads import clean_participants
 
         try:
             participants = clean_participants(body.get("participants"))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        rec = _threads().create(str(body.get("title") or ""), participants)
+        project_id = _room_project(body.get("project_id"))
+        rec = _threads().create(str(body.get("title") or ""), participants, project_id=project_id)
         return _thread_view(rec)
+
+    @app.get("/agents/worlds")
+    async def agent_worlds() -> dict[str, Any]:
+        """The Agents page's landing (v1.304.0): one WORLD per active project
+        — ``{project: {id, name, status, brief, root, created_at}, team:
+        [{name, kind, label, avatar, face}], thread_id (its round table, or
+        null), counts: {waiting, running, queued, done_7d}, last_activity}``
+        — newest activity first, plus ``general: {thread_count}`` (the rooms
+        bound to no project). A few grouped queries off the loop; the asks
+        are read from the approvals registry ON the loop (in-memory)."""
+        from ...projects import world as _world
+        from .projects import _review_ids, _world_asks
+
+        reviews = _review_ids(d)
+        data = await asyncio.to_thread(_world.gather_worlds, d.platform, reviews)
+        out = []
+        for w in data["worlds"]:
+            snap = w.pop("snap")
+            asks = _world_asks(d, [s["id"] for s in snap["active"]])
+            last = w.pop("last_activity", None)
+            out.append(
+                {
+                    **w,
+                    "counts": _world.counts_for(snap, asks),
+                    "last_activity": _world._iso(last),
+                }
+            )
+        return {"worlds": out, "general": data["general"]}
 
     @app.get("/agents/threads/{thread_id}")
     def get_agent_thread(thread_id: str) -> dict[str, Any]:

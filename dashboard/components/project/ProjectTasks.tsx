@@ -128,9 +128,19 @@ export function ProjectTasks({
   hasRoot,
   sessions,
   reloadSessions,
+  assigneeChoices,
+  selfLabel,
 }: {
   projectId: string;
   hasRoot: boolean;
+  /** v1.304.0 (Agents → project world): the ONLY "Assign to" choices, in
+   *  place of every agent the daemon lists — a world offers its team. Absent
+   *  = today's list (and today's GET /agents). */
+  assigneeChoices?: Array<{ value: string; label: string }>;
+  /** v1.304.0: the words on the "" (no assignee) choice. Absent = "You —
+   *  run now". The world says "Whole team — Jarvis decides": the same plain
+   *  project task, no assignee on the wire. */
+  selfLabel?: string;
   /** This project's recent sessions, fetched ONCE by the parent workspace
    *  (avoids a second identical GET /projects/{id} just to read `sessions`). */
   sessions: SessionView[];
@@ -160,8 +170,9 @@ export function ProjectTasks({
      as before); a roster name queues the job for that agent instead. */
   const [assignee, setAssignee] = useState("");
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
-  const { data: agentsData } = useApi<AgentsResponse>("/agents");
-  const assignees = assigneeOptions(agentsData);
+  // A caller that names the choices (a project world's team) needs no catalog.
+  const { data: agentsData } = useApi<AgentsResponse>(assigneeChoices ? null : "/agents");
+  const assignees = assigneeChoices ?? assigneeOptions(agentsData);
   // The chosen assignee must still exist in the list the user can see; a
   // custom agent deleted since is not quietly posted anyway.
   const effectiveAssignee = assignees.some((o) => o.value === assignee) ? assignee : "";
@@ -457,7 +468,7 @@ export function ProjectTasks({
             className="field w-40 min-w-0 text-sm"
             title="Run it now yourself, or queue it for an agent — it runs when that agent is free"
           >
-            <option value="">You — run now</option>
+            <option value="">{selfLabel || "You — run now"}</option>
             {assignees.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}

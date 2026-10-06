@@ -354,17 +354,19 @@ describe("RoundTable faces", () => {
     );
   }
 
-  it("the same seat wears the same face in the header chip and its bubble — seeded by the BARE name", async () => {
+  it("the same agent wears the same face at its seat and in its bubble — seeded by the BARE name", async () => {
     renderTable();
     expect(await screen.findByText("hello there")).toBeInTheDocument();
-    // builder: one header chip + one message bubble, both wearing the shape
-    // of "builder" — NOT of "builtin:builder" (the meta-guard above proves
-    // those shapes differ, so a key-seed regression flips this red).
+    // builder: one SEAT at the table + one message bubble, both wearing the
+    // shape of "builder" — NOT of "builtin:builder" (the meta-guard above
+    // proves those shapes differ, so a key-seed regression flips this red).
+    // v1.304.0, CHANGED ON PURPOSE: the header chips row is gone (the seats
+    // show the panel), so the chip face was replaced by the seat face.
     const faces = facesOf("builder");
     expect(faces).toHaveLength(2);
-    expect(faces[0].getAttribute("data-face-shape")).toBe(
-      faces[1].getAttribute("data-face-shape"),
-    );
+    for (const f of faces.slice(1)) {
+      expect(f.getAttribute("data-face-shape")).toBe(faces[0].getAttribute("data-face-shape"));
+    }
     // remy's shape collides across seeds, but its COLOR pins the bare seed.
     for (const f of facesOf("remy")) {
       expect(f.querySelector("g")?.getAttribute("fill")).toBe(faceColor("remy"));
@@ -382,9 +384,9 @@ describe("RoundTable faces", () => {
     cleanup();
     renderTable();
     expect(await screen.findByText("hello there")).toBeInTheDocument();
-    const chip = screen.getByTitle("builder — lead (builtin)");
-    const chipFace = within(chip).getByTestId("agent-face");
-    expect(chipFace.getAttribute("data-face-shape")).toBe(kanbanShape);
+    // v1.304.0: the panel's face is the SEAT now (the chips row is gone).
+    const seatFace = within(screen.getByTestId("seat-builtin:builder")).getByTestId("agent-face");
+    expect(seatFace.getAttribute("data-face-shape")).toBe(kanbanShape);
   });
 
   it("an errored entry's bubble face shows X-X eyes; landed replies sit idle", async () => {
@@ -394,9 +396,12 @@ describe("RoundTable faces", () => {
     expect(
       screen.getByText("remy couldn't answer: provider unreachable"),
     ).toBeInTheDocument();
+    // v1.304.0, CHANGED ON PURPOSE: the idle header chip is gone. The SEAT
+    // reads the room's facts too (its newest line is an error → the seat's
+    // ring and face say error), so the seat and the bubble now AGREE.
     const remyMoods = facesOf("remy").map((f) => f.getAttribute("data-face-mood"));
-    expect(remyMoods).toContain("error"); // the bubble
-    expect(remyMoods).toContain("idle"); // the header chip — no round running
+    expect(remyMoods).toEqual(["error", "error"]); // the seat + the bubble
+    expect(screen.getByTestId("seat-dynamic:remy").getAttribute("data-seat-status")).toBe("error");
     const errorFace = facesOf("remy").find(
       (f) => f.getAttribute("data-face-mood") === "error",
     )!;
@@ -410,8 +415,9 @@ describe("RoundTable faces", () => {
   it("chip and bubble faces are decorative — each name is a SINGLE text node", async () => {
     renderTable();
     expect(await screen.findByText("hello there")).toBeInTheDocument();
-    // "builder" appears exactly twice: the header chip's span and the
-    // bubble's name span — no SVG <title> duplicates riding along.
+    // "builder" appears exactly twice: the seat's visible name and the
+    // bubble's name span — no SVG <title> duplicates riding along. (v1.304.0:
+    // the seat's name replaced the header chip's — the chips row is gone.)
     expect(screen.getAllByText("builder")).toHaveLength(2);
     for (const f of [...facesOf("builder"), ...facesOf("remy")]) {
       expectDecorative(f);
@@ -438,7 +444,7 @@ describe("RoundTable faces", () => {
     expect(within(listbox).getAllByText("builder")).toHaveLength(1);
   });
 
-  it("an empty thread greets with the panel's LABELLED idle faces", async () => {
+  it("an empty thread greets with the panel SEATED (one face each, bare-name seeded)", async () => {
     api.responses["/agents/threads/t1"] = { ...THREAD, messages: [] };
     render(
       <RoundTable
@@ -449,13 +455,14 @@ describe("RoundTable faces", () => {
       />,
     );
     expect(await screen.findByText(/Ask the panel anything/)).toBeInTheDocument();
-    // 2 header chips (decorative) + 2 empty-state faces (labelled: no visible
-    // name sits beside them, so the face keeps its title — it is the only
-    // identity carrier there).
-    expect(screen.getAllByTestId("agent-face")).toHaveLength(4);
-    const greeter = facesLabelled("builder");
-    expect(greeter).toHaveLength(1);
-    expect(greeter[0].getAttribute("data-face-shape")).toBe(faceShape("builder"));
+    // v1.304.0, CHANGED ON PURPOSE: the empty room no longer draws its own
+    // row of labelled faces, and the header chips row is gone — the SEATS at
+    // the table show every participant (named, so decorative). 2 seats = 2
+    // faces (was 2 chips + 2 labelled greeting faces).
+    expect(screen.getAllByTestId("agent-face")).toHaveLength(2);
+    expect(facesLabelled("builder")).toHaveLength(0);
+    const seatFace = within(screen.getByTestId("seat-builtin:builder")).getByTestId("agent-face");
+    expect(seatFace.getAttribute("data-face-shape")).toBe(faceShape("builder"));
   });
 });
 

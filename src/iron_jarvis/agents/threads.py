@@ -57,6 +57,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import literal_column, or_
 from sqlmodel import Field, SQLModel, select
 
 from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
@@ -162,6 +163,16 @@ class AgentThreadRecord(SQLModel, table=True):
     #: room instead of opening a second one where they cannot see what was
     #: already said. Empty = created on the Agents page. Additive column.
     chat_thread_id: str = Field(default="", index=True)
+    #: THE PROJECT THIS ROOM BELONGS TO (v1.304.0, project worlds). ``""`` = a
+    #: GENERAL room — the Agents page's global rooms and every chat-bound
+    #: panel, exactly as before; a NULL on a row older than the column reads
+    #: the same (``project_of``). A project-bound room is the round table of
+    #: that project's world: its rounds are grounded in the project (see
+    #: :func:`project_room_block`), it is indexed for history search under the
+    #: project, and ``GET /agents/threads`` lists it only when asked for that
+    #: project. Additive column (auto-reconciled; indexed at boot by
+    #: ``core.db._HOT_INDEXES`` for existing databases).
+    project_id: str = Field(default="", index=True)
     #: JSON list of participants:
     #: {key, source, name, role, provider?, model?} — ``key`` is
     #: "<source>:<name>" and unique within the thread.
@@ -257,6 +268,172 @@ def clean_participants(raw: Any) -> list[dict[str, str]]:
             }
         )
     return out
+
+
+def thread_view(rec: Any) -> dict[str, Any]:
+    """A room as the routes answer it — ONE shape for ``/agents/threads``
+    and the project world's ``/world/room`` (v1.304.0: + ``project_id``,
+    ``""`` for a general room)."""
+    try:
+        msgs = json.loads(rec.messages_json or "[]")
+    except (TypeError, ValueError):
+        msgs = []
+    try:
+        participants = json.loads(rec.participants_json or "[]")
+    except (TypeError, ValueError):
+        participants = []
+    return {
+        "id": rec.id,
+        "title": rec.title,
+        "participants": participants,
+        "messages": msgs,
+        "message_count": len(msgs),
+        "updated_at": rec.updated_at.isoformat(),
+        "project_id": project_of(rec),
+    }
+
+
+def _is_local_provider(name: str) -> bool:
+    """The router's ONE definition of "runs on the user's own hardware"
+    (``providers.local.is_local_provider``). Never raises."""
+    try:
+        from ..providers.local import is_local_provider
+
+        return bool(is_local_provider(name))
+    except Exception:  # noqa: BLE001 — unknown = not local (withhold nothing new)
+        return False
+
+
+def project_of(rec: Any) -> str:
+    """The project a room belongs to, ``""`` for a general room. NULL (a row
+    older than the column) and whitespace both read as general — never None."""
+    return str(getattr(rec, "project_id", "") or "").strip()
+
+
+#: The sentence that opens a project room's grounding block (v1.304.0): the
+#: seat is told WHY the project material is there, the way the agent runtime
+#: says "You are working within the user's project". Advisory wording on
+#: purpose — a panelist still has no tools (:data:`PANEL_NO_TOOLS`).
+PROJECT_ROOM_LINE = (
+    "THIS ROUND TABLE BELONGS TO ONE OF THE USER'S PROJECTS. Advise in its "
+    "context: the project's instructions below apply to you here, and its "
+    "knowledge is reference material you already hold."
+)
+
+
+def project_room_block(platform: Any, project_id: str, query: str = "") -> str:
+    """A project room's grounding (v1.304.0) — ``""`` for a general room or a
+    project that no longer exists. Never raises.
+
+    "Grounded like a project task": the project block every other lane
+    renders (``projects.locate.project_context_block`` — name, instructions,
+    brief, folder) and the project's KNOWLEDGE (``projects.knowledge.ground``,
+    the query-relevant items for the user's message). The instructions and
+    brief go through ``core.promptguard.guarded_project_text`` FIRST — the
+    same scan both chat lanes and the agent runtime apply — and ``ground``
+    scans every knowledge item itself, so a poisoned project note reaches a
+    panelist as a ``[BLOCKED: …]`` placeholder exactly as it reaches a task.
+
+    BLOCKING (DB reads, a possible embed over HTTP, a CPU-bound scan): the
+    round calls it ONCE per round through ``asyncio.to_thread``.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return ""
+    try:
+        from ..core.models import Project
+
+        with session_scope(platform.engine) as db:
+            row = db.get(Project, pid)
+            if row is None:
+                return ""
+            snap = Project(
+                id=row.id,
+                name=row.name,
+                root=row.root or "",
+                brief=row.brief or "",
+                instructions=row.instructions or "",
+                status=row.status or "active",
+            )
+    except Exception:  # noqa: BLE001 — an unreadable project grounds nothing
+        log.warning("project room grounding: project %s unreadable", pid, exc_info=True)
+        return ""
+    try:
+        from ..core.promptguard import guarded_project_text
+        from ..projects.locate import project_context_block
+
+        # ``session_id=None``: a room is not a session, and the bell turns a
+        # session id into a /sessions/<id> link — an empty id lands on the
+        # activity page instead of a dead one. ``cap=2000`` = the clip
+        # ``project_context_block`` applies to the instructions (the scanned
+        # bytes are the injected bytes, the wave-4a PERF rule).
+        instructions, brief = guarded_project_text(
+            snap,
+            event_bus=getattr(platform, "event_bus", None),
+            session_id=None,
+            cap=2000,
+        )
+        guarded = Project(
+            id=snap.id, name=snap.name, root=snap.root, brief=brief, instructions=instructions
+        )
+        parts = [PROJECT_ROOM_LINE, project_context_block(guarded)]
+    except Exception:  # noqa: BLE001 — a scan failure must not ship raw text
+        log.warning("project room grounding: guard failed for %s", pid, exc_info=True)
+        return ""
+    try:
+        from ..projects.knowledge import ground
+
+        knowledge = ground(platform, pid, query or snap.name, session_id=None)
+        if knowledge and knowledge.strip():
+            parts.append("Project knowledge (reference material):\n" + knowledge.strip())
+    except Exception:  # noqa: BLE001 — knowledge is a bonus, the block still lands
+        log.warning("project room grounding: knowledge failed for %s", pid, exc_info=True)
+    return "\n\n".join(part for part in parts if part)
+
+
+def project_room_defaults(platform: Any, project_id: str) -> tuple[str, str]:
+    """``(default_provider, default_model)`` of a room's project — ``("", "")``
+    for a general room, a missing project, or none set. Never raises.
+    BLOCKING (one DB read): the round calls it through ``asyncio.to_thread``."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return "", ""
+    try:
+        from ..core.models import Project
+
+        with session_scope(platform.engine) as db:
+            row = db.get(Project, pid)
+            if row is None:
+                return "", ""
+            return (
+                str(row.default_provider or "").strip(),
+                str(row.default_model or "").strip(),
+            )
+    except Exception:  # noqa: BLE001 — no defaults is the honest fallback
+        return "", ""
+
+
+def project_room_context(
+    platform: Any, project_id: str, query: str = "", with_block: bool = True
+) -> tuple[str, str, str]:
+    """``(block, default_provider, default_model)`` for one round of a
+    project room — one hop off the loop for both (v1.304.0)."""
+    provider, model = project_room_defaults(platform, project_id)
+    block = project_room_block(platform, project_id, query) if with_block else ""
+    return block, provider, model
+
+
+#: Said to a seat that does NOT see the room (a remote seat in a project room,
+#: or a local seat pinned off the project's own local model): the other
+#: seats' replies are grounded in the project, so they are withheld from it,
+#: and it is told so rather than left to think the room is silent.
+PROJECT_ROOM_PRIVATE_NOTE = "Other seats' replies are not shared with you in a project room."
+
+
+def ungrounded_reason(provider: str) -> str:
+    """The phrase a withheld seat's message carries (``ungrounded_reason``);
+    the UI puts it after "not given the project's files —"."""
+    return f"runs on {provider}"
 
 
 # -- committing a panel to long-term memory (v1.178.0) ----------------------- #
@@ -454,10 +631,16 @@ class AgentThreads:
 
     # -- CRUD ----------------------------------------------------------------
 
-    def create(self, title: str, participants: list[dict[str, str]]) -> AgentThreadRecord:
+    def create(
+        self, title: str, participants: list[dict[str, str]], project_id: str = ""
+    ) -> AgentThreadRecord:
+        """A new room. ``project_id`` (v1.304.0) binds it to a project's world;
+        the ROUTE validates it (an existing, active project) — the store only
+        records it, so a caller that already checked never pays twice."""
         rec = AgentThreadRecord(
             title=(title or "").strip() or "Agent thread",
             participants_json=json.dumps(participants),
+            project_id=(project_id or "").strip(),
         )
         with session_scope(self.engine) as db:
             db.add(rec)
@@ -496,7 +679,15 @@ class AgentThreads:
                     return AgentThreadRecord(**found.model_dump())
             if adopt:
                 orphan = db.get(AgentThreadRecord, adopt)
-                if orphan is not None and not (orphan.chat_thread_id or "").strip():
+                # v1.304.0: a PROJECT room is never adopted by a chat — its
+                # transcript is grounded in the project, and an id offered
+                # here (a stale or crafted panel_thread_id) must not pull
+                # it into a chat that is not that project's.
+                if (
+                    orphan is not None
+                    and not (orphan.chat_thread_id or "").strip()
+                    and not project_of(orphan)
+                ):
                     if chat_thread_id:
                         orphan.chat_thread_id = chat_thread_id
                         orphan.updated_at = utcnow()
@@ -541,11 +732,45 @@ class AgentThreads:
                     db.refresh(rec)
                 return AgentThreadRecord(**rec.model_dump())
 
-    def list(self) -> list[AgentThreadRecord]:
+    def list(self, project_id: str | None = None) -> list[AgentThreadRecord]:
+        """Every room, newest first — or, with ``project_id`` (v1.304.0), only
+        that world's rooms: ``""`` = the GENERAL rooms (no project; a NULL
+        from a row older than the column counts as none), a project id = that
+        project's rooms. ``None`` (the default) keeps every internal caller —
+        the roster's activity join, search — reading the whole store."""
         with session_scope(self.engine) as db:
-            rows = list(db.exec(select(AgentThreadRecord)))
+            stmt = select(AgentThreadRecord)
+            if project_id is not None:
+                pid = (project_id or "").strip()
+                col = AgentThreadRecord.project_id
+                if pid:
+                    stmt = stmt.where(col == pid)
+                else:
+                    stmt = stmt.where(or_(col == "", col.is_(None)))  # type: ignore[union-attr]
+            rows = list(db.exec(stmt))
         rows.sort(key=lambda r: r.updated_at, reverse=True)
         return rows
+
+    def latest_for_project(self, project_id: str) -> AgentThreadRecord | None:
+        """The project's round table (v1.304.0): its most recently active
+        room, or None. ``updated_at`` ties (Windows' 15.6 ms clock) break on
+        the SQLite ``rowid`` — insertion order, never a random id."""
+        pid = (project_id or "").strip()
+        if not pid:
+            return None
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(AgentThreadRecord)
+                .where(AgentThreadRecord.project_id == pid)
+                .order_by(
+                    AgentThreadRecord.updated_at.desc(),  # type: ignore[attr-defined]
+                    literal_column("rowid").desc(),
+                )
+                .limit(1)
+            ).first()
+            if row is None:
+                return None
+            return AgentThreadRecord(**row.model_dump())
 
     def get(self, thread_id: str) -> AgentThreadRecord | None:
         with session_scope(self.engine) as db:
@@ -613,12 +838,32 @@ class AgentThreads:
             db.commit()
             return len(msgs)
 
+    def reindex(self, thread_id: str) -> bool:
+        """Re-file one room's history-search docs under its CURRENT project
+        (v1.304.0 — a project delete hands its rooms back to General, and
+        their docs must follow or project-scoped recall keeps finding them
+        under a project that no longer exists). Same lock + transaction as an
+        append. False when the room is gone. BLOCKING."""
+        with _APPEND_LOCK, session_scope(self.engine) as db:
+            rec = db.get(AgentThreadRecord, thread_id)
+            if rec is None:
+                return False
+            try:
+                msgs = json.loads(rec.messages_json or "[]")
+            except (TypeError, ValueError):
+                msgs = []
+            self._index_thread(db, rec, msgs if isinstance(msgs, list) else [])
+            db.commit()
+            return True
+
     def _index_thread(self, db: Any, rec: AgentThreadRecord, msgs: list) -> None:
         """History-search sync for a round table, in the caller's transaction.
 
-        Rounds have no project binding (the Agents page is global), hence the
-        empty ``project_id``. Never raises — an index failure must not sink a
-        round that already cost real provider calls.
+        A general room indexes with an empty ``project_id`` (the Agents page
+        is global); a PROJECT room (v1.304.0) indexes under its project, so
+        what that table worked out is found by project-scoped recall. Never
+        raises — an index failure must not sink a round that already cost
+        real provider calls.
         """
         try:
             from ..core.db import search_index  # lazy: keeps the import graph flat
@@ -626,7 +871,7 @@ class AgentThreads:
             index = search_index(self.engine)
             if index is None:
                 return
-            index.sync_thread(rec.id, "round", rec.title or "", "", msgs, db=db)
+            index.sync_thread(rec.id, "round", rec.title or "", project_of(rec), msgs, db=db)
         except Exception:  # noqa: BLE001 — a round must never fail on search
             log.warning("history-search sync failed for agent thread %s",
                         getattr(rec, "id", "?"), exc_info=True)
@@ -753,6 +998,23 @@ class AgentThreads:
         the whole chat — neither belongs on the loop (v1.153.1 rule)."""
         budget = cls._transcript_budget(p, d)
         return cls.chat_transcript(history, round_entries, participants, budget)
+
+    @staticmethod
+    def _own_provider(p: dict[str, str], d: Any) -> str:
+        """The provider a LOCAL seat is pinned to by ITSELF — the seat's own
+        pin, else a dynamic record's — ``""`` when it has none (then the
+        project's default, or the configured default, decides). Never raises."""
+        provider = str(p.get("provider") or "").strip()
+        if provider:
+            return provider
+        if p.get("source") == "dynamic":
+            try:
+                row = d.platform.agents_registry.get(p["name"])
+            except Exception:  # noqa: BLE001 — no record = no pin of its own
+                row = None
+            if row is not None:
+                return str(getattr(row, "provider", "") or "").strip()
+        return ""
 
     @staticmethod
     def _provider_model_for(p: dict[str, str], d: Any) -> tuple[str, str]:
@@ -1004,26 +1266,85 @@ class AgentThreads:
             self._mentioned(user_message or "", participants, extra=directed) or participants
         )
 
+        # A PROJECT ROOM IS GROUNDED LIKE A PROJECT TASK (v1.304.0): the
+        # project's block (guarded instructions + brief + folder) and its
+        # knowledge for this message, built ONCE per round and OFF the loop
+        # (DB reads, a possible embed, the injection scan), together with the
+        # project's own model pin. A general room builds nothing and its
+        # speakers are called exactly as before.
+        project_block = ""
+        proj_provider = proj_model = ""
+        room_project = project_of(rec)
+        if room_project:
+            wants_block = any(p.get("source") != "remote" for p in speakers)
+            query = (user_message or "").strip() or self._transcript(messages, participants)[-600:]
+            try:
+                project_block, proj_provider, proj_model = await asyncio.to_thread(
+                    project_room_context, d.platform, room_project, query, wants_block
+                )
+            except Exception:  # noqa: BLE001 — grounding must never sink a round
+                log.warning("project room grounding failed", exc_info=True)
+                project_block, proj_provider, proj_model = "", "", ""
+
         for p in speakers:
             others = [o for o in participants if o["key"] != p["key"]]
-            if chat_history is not None:
+            # WHO MAY SEE THE ROOM (v1.304.0, privacy). In a project room the
+            # local seats' replies are grounded in the project (its
+            # instructions, its files), so a seat that does not get the project
+            # block must not read them second-hand either: a REMOTE seat (another
+            # machine) and a local seat pinned off the project's LOCAL model
+            # see only the user's lines and their own. A general room: as before.
+            seat = p
+            withheld = ""
+            restricted = bool(room_project) and p["source"] == "remote"
+            if room_project and p["source"] != "remote":
+                own_provider = self._own_provider(p, d)
+                if not own_provider and proj_provider:
+                    # No pin of its own: the seat runs on the PROJECT's model,
+                    # as a project task does.
+                    seat = {**p, "provider": proj_provider, "model": proj_model}
+                elif (
+                    own_provider
+                    and proj_provider
+                    and own_provider != proj_provider
+                    and _is_local_provider(proj_provider)
+                ):
+                    # The project keeps its work on the user's own hardware;
+                    # a seat pinned elsewhere is not handed the project.
+                    withheld = ungrounded_reason(own_provider)
+                    restricted = True
+            if restricted:
+                keep = ("user", p["key"])
+                seen_msgs = [m for m in messages if str(m.get("who") or "user") in keep]
+                seen_round = [e for e in new_entries if str(e.get("who") or "user") in keep]
+                seen_history = (
+                    [r for r in chat_history if str(r.get("who") or "user") in keep]
+                    if chat_history is not None
+                    else None
+                )
+            else:
+                seen_msgs, seen_round, seen_history = messages, new_entries, chat_history
+            if seen_history is not None:
                 # THE CHAT IS THE SPINE (v1.284.0): everything the user and
                 # Iron Jarvis said, plus earlier panel replies as they landed in
                 # chat, then this round's entries so the second speaker sees
                 # the first's answer. Budgeting + rendering is real work over
                 # a possibly long conversation — off the loop (v1.153.1 rule).
                 transcript, dropped = await asyncio.to_thread(
-                    self._transcript_for, p, d, chat_history, new_entries, participants
+                    self._transcript_for, seat, d, seen_history, seen_round, participants
                 )
                 chat_dropped = max(chat_dropped, dropped)
             else:
-                transcript = self._transcript(messages, participants)
+                transcript = self._transcript(seen_msgs, participants)
             entry: dict[str, Any] = {
                 "who": p["key"],
                 "role": p["role"],
                 "source": p["source"],
                 "at": utcnow().isoformat(),
             }
+            if withheld:
+                entry["ungrounded"] = True
+                entry["ungrounded_reason"] = withheld
             remote_record = None
             if p["source"] == "remote":
                 remote_record = self._remote_record(p["name"], d)
@@ -1043,16 +1364,18 @@ class AgentThreads:
                     # A CONVERSATION for the remote (v1.285.0): the chat rows
                     # when the round has them, else the room before this
                     # round, plus this round's earlier speakers — and the
-                    # user's own line as the task.
+                    # user's own line as the task. In a project room, only
+                    # the user's lines and its own (see WHO MAY SEE above).
                     prior = (
                         chat_history
                         if chat_history is not None
                         else messages[: len(messages) - len(new_entries)]
                     )
                     others_this_round = [e for e in new_entries if e.get("who") != "user"]
-                    rows = self.remote_history(
-                        list(prior) + others_this_round, p, participants
-                    )
+                    shown = list(prior) + others_this_round
+                    if restricted:
+                        shown = [e for e in shown if str(e.get("who") or "user") in keep]
+                    rows = self.remote_history(shown, p, participants)
                     reply, extra = await self._speak_remote(
                         p,
                         transcript,
@@ -1061,10 +1384,23 @@ class AgentThreads:
                         history=rows,
                         message=(user_message or "").strip(),
                         conversation_id=thread_id,
+                        **({"project_room": True} if room_project else {}),
                     )
                     entry.update(extra)
                 else:
-                    reply = await self._speak_local(p, others, transcript, d)
+                    # A REMOTE never receives the project block: it is another
+                    # machine, and the project's instructions and knowledge
+                    # are the user's material (the low-trust rule keeps
+                    # flagged content off ``delegate_remote`` for the same
+                    # reason). Local seats only — and only those on the
+                    # project's own model when that model is local.
+                    if withheld:
+                        local_kw: dict[str, Any] = {"seat_note": PROJECT_ROOM_PRIVATE_NOTE}
+                    elif project_block:
+                        local_kw = {"project_block": project_block}
+                    else:
+                        local_kw = {}
+                    reply = await self._speak_local(seat, others, transcript, d, **local_kw)
                 entry["content"] = reply
             except Exception as exc:  # noqa: BLE001 — honest error, round continues
                 entry["content"] = ""
@@ -1090,10 +1426,21 @@ class AgentThreads:
         return out
 
     async def _speak_local(
-        self, p: dict[str, str], others: list[dict], transcript: str, d: Any
+        self,
+        p: dict[str, str],
+        others: list[dict],
+        transcript: str,
+        d: Any,
+        project_block: str = "",
+        seat_note: str = "",
     ) -> str:
         """A builtin/dynamic participant answers via the one-shot LLM path
-        (retry + cross-provider failover — the same path terminal assist uses)."""
+        (retry + cross-provider failover — the same path terminal assist uses).
+
+        ``project_block`` (v1.304.0): a project room's grounding, built once
+        per round by :func:`project_room_block`; ``""`` for a general room
+        (and :meth:`run_round` then passes nothing at all, so a caller or a
+        test double with the old four-argument shape keeps working)."""
         base_prompt = ""
         if p["source"] == "dynamic":
             registry = d.platform.agents_registry
@@ -1143,14 +1490,23 @@ class AgentThreads:
         # has been learned, so no empty heading is ever injected. Lessons are
         # user-scope working knowledge, like the "how" slice above — they do
         # NOT erode panelist distinctness (profile stays include=("how",)).
-        # No project knowledge here ON PURPOSE: agent threads carry no
-        # project_id (the Agents page is global — see ``_index_thread``).
+        # A GENERAL room carries no project knowledge — the Agents page is
+        # global. A PROJECT room (v1.304.0) gets its project's block below.
         learning = getattr(d.platform, "learning", None)
         if learning is not None:
             try:
                 system = learning.apply_to_prompt(system)
             except Exception:  # noqa: BLE001 — never break a round
                 pass
+
+        # THE PROJECT (v1.304.0): after the identity → seat → NO TOOLS spine
+        # and the user-scope lessons, as reference material — the panelist
+        # still advises; it does not act. "" for a general room.
+        if project_block:
+            system += "\n\n" + project_block
+        # A WITHHELD seat (v1.304.0) is told the room is not shared with it.
+        if seat_note:
+            system += "\n\n" + seat_note
 
         # THE GUIDE AT THE TABLE (v1.224.0). Panelists have no tools, and the
         # Guide's whole value is looking things up — so the retrieval its
@@ -1266,6 +1622,7 @@ class AgentThreads:
         history: list[dict[str, Any]] | None = None,
         message: str = "",
         conversation_id: str = "",
+        project_room: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """A remote participant answers over its registered transport.
 
@@ -1289,6 +1646,9 @@ class AgentThreads:
                 f"user (and Iron Jarvis, their assistant). Answer the user's latest "
                 f"message; keep it under ~200 words unless asked for more."
             )
+            if project_room:
+                # v1.304.0: it was handed only the user's lines and its own.
+                brief += " " + PROJECT_ROOM_PRIVATE_NOTE
             task = f"{brief}\n\n{message or transcript or '(no message)'}"
             out = await registry.run(
                 record,

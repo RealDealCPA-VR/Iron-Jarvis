@@ -245,9 +245,12 @@ describe("an empty thread keeps its generous centred treatment", () => {
     // …and it FILLS whatever the card gives it rather than leaving the
     // reserved room blank under the copy (the chat page's technique).
     expect(empty.className).toMatch(/(?:^|\s)flex-1(?:\s|$)/);
-    // The idle faces are the thing the room is for.
-    expect(screen.getByTitle("builder")).toBeInTheDocument();
-    expect(screen.getByTitle("remy")).toBeInTheDocument();
+    // The panel is the thing the room is for — since v1.304.0 it is SEATED
+    // at the table above the transcript (the greeting's own face row was
+    // dropped on purpose: it showed everyone twice), so the pin moved from
+    // the greeting's titled faces to the seats.
+    expect(screen.getByTestId("seat-builtin:builder")).toBeInTheDocument();
+    expect(screen.getByTestId("seat-dynamic:remy")).toBeInTheDocument();
   });
 
   it("holds the room on the scroller too, so the card cannot render short", async () => {
