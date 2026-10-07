@@ -407,10 +407,15 @@ describe("the Continue strip", () => {
   it("says BEFORE the press that the conversation is copied to the other account (F4)", async () => {
     hooks.responses[LIGHT] = snap([WORK, PERSONAL]);
     mountStrip();
-    const line = await screen.findByTestId("pane-continue-privacy-t1");
-    expect(line.textContent).toBe(
-      "Your conversation is copied to “Personal” and continues there (sent to Anthropic under that account); “Work Max” keeps its copy.",
+    // The line renders "the next account" until the light snapshot lands, so
+    // wait for the NAMED sentence itself (v1.305.0: the release runner
+    // asserted in that window).
+    await waitFor(() =>
+      expect(screen.getByTestId("pane-continue-privacy-t1").textContent).toBe(
+        "Your conversation is copied to “Personal” and continues there (sent to Anthropic under that account); “Work Max” keeps its copy.",
+      ),
     );
+    const line = screen.getByTestId("pane-continue-privacy-t1");
     expect(line.getAttribute("title")).toMatch(/sends the conversation to Anthropic under the account/);
     expect(hooks.calls).toEqual([]); // nothing was pressed
   });

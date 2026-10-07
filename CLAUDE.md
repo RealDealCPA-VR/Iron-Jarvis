@@ -2820,6 +2820,12 @@ does not need a bump, stop and bump it.
   `via == "scan"` only, `quiet` (no badge, no desktop toast). Pins:
   `tests/test_corrections_v1305.py`, `tests/test_preferences_v1305.py`,
   `dashboard/__tests__/preferences-v1305.test.tsx`.
+  v1.305.1 (test-only): v1.305.0's Release gate went red on
+  `continue-next-v1303` F4 — `findByTestId` found the copy sentence while it
+  still read "the next account" (before the light snapshot landed) and
+  asserted the NAMED one; the wait is now on the named sentence itself.
+  Reproduced locally by delaying the mocked read 150 ms (old shape: CI's exact
+  error; new: green).
 
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
