@@ -8,6 +8,7 @@ import {
   GitBranch,
   GraduationCap,
   KeyRound,
+  Lightbulb,
   MonitorCog,
   Inbox,
   ArrowRight,
@@ -84,11 +85,32 @@ export interface ActivityItem {
   icon: LucideIcon;
   title: string;
   body: string;
+  /** v1.305.0: a row for the dropdown only — never pinged to the desktop. */
+  quiet?: boolean;
 }
 
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
+  if (e.type === "preference.suggested") {
+    // v1.305.0: a preference the user's OWN press minted ("Look through my
+    // Claude Code and Codex sessions") waits on the Memory page. Payload:
+    // {id, text, count, via}. ONLY via "scan": the in-chat suggestion is
+    // already the line under the reply the user is reading — a bell row for
+    // it would say the same thing twice. Quiet: a dropdown row, no desktop
+    // ping — the user is on the page that asked.
+    if (p.via !== "scan") return null;
+    const text = typeof p.text === "string" ? p.text.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/memory#prefs-suggested",
+      icon: Lightbulb,
+      title: "A suggested preference is waiting on the Memory page",
+      body: text.length > 140 ? `${text.slice(0, 139)}…` : text,
+      quiet: true,
+    };
+  }
   if (e.type === "detection.finding") {
     // v1.290.0: a post-session safety scan found something high/critical.
     // Payload: Finding.to_dict(text=False) — {rule_id, title, severity,
@@ -874,6 +896,7 @@ export function NotificationBell() {
     const latest = activity[0];
     if (!latest || prevActivityId.current === latest.id) return;
     prevActivityId.current = latest.id;
+    if (latest.quiet) return; // v1.305.0: a dropdown row, never a desktop ping
     notify(latest.title, latest.body || "Open the dashboard for details.", () =>
       setOpen(true),
     );

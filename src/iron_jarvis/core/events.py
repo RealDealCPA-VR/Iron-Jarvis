@@ -174,6 +174,13 @@ class EventType:
     # CUSTOM agent was minted from its recent runs. {id, agent, categories,
     # rationale} — nothing is written until POST /coach/proposals/{id}/accept.
     COACH_PROPOSAL = "coach.proposal"
+    # Preferences you approve (v1.305.0, idea from agent-personalizer, MIT):
+    # a repeated correction became ONE suggestion (proposed row) — {id, text,
+    # count, via: "chat" | "scan"}; the user kept it ({id, text}) or said
+    # "not this" ({id}). No message text rides beyond the proposal sentence.
+    PREFERENCE_SUGGESTED = "preference.suggested"
+    PREFERENCE_KEPT = "preference.kept"
+    PREFERENCE_DECLINED = "preference.declined"
     # Messaging surfaces (v1.136.0): the DAEMON appended a message to a chat
     # thread (comm/threads.py — inbound phone message or the daemon's reply),
     # so an open dashboard thread can live-refresh. {thread_id, messages} —

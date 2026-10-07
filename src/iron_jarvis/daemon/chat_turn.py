@@ -3520,7 +3520,8 @@ def _persist_chat_usage(
 
 
 async def run_chat_turn(
-    platform, personas: dict, body, *, trust: str = "full", trust_reason: str = ""
+    platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
+    suggest_preferences: bool = False,
 ) -> dict[str, Any]:
     """One conversational turn: full history in → one reply out.
 
@@ -4605,6 +4606,18 @@ async def run_chat_turn(
                 f"\n\n_Note: {provider_choice} can't run tools — this "
                 f"turn was answered text-only._"
             )
+    # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT): when this
+    # message corrects HOW the assistant answers and the user made the same
+    # correction in another turn, ONE proposed preference is minted and asked
+    # about under the reply. Only the dashboard's own routes ask for it
+    # (``suggest_preferences``) — never the phone lane, the sidebar or an
+    # agent. Never raises; the look-back runs off the loop under a budget.
+    # MIRROR NOTE (lock-step): the stream lane calls the SAME helper.
+    from ..learning import preferences as _prefs
+
+    suggestion = (
+        await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
+    )
     out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,
@@ -4644,6 +4657,10 @@ async def run_chat_turn(
         # on absence. MIRROR NOTE (lock-step): the stream done-frame carries
         # the identical key — edit both or neither.
         "remembered": remembered,
+        # SUGGESTION (v1.305.0): {id, text, count, quotes, since} or null —
+        # ALWAYS present, like `remembered`. MIRROR NOTE (lock-step): the
+        # stream done-frame carries the identical key — edit both or neither.
+        "suggestion": suggestion,
         # DOORS (v1.199.0): server-derived links into the surfaces this turn's
         # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
         # ALWAYS present (possibly empty) so clients never branch on absence.

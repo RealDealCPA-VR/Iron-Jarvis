@@ -2826,6 +2826,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import coach as _coach_routes
 
     _coach_routes.register(app, d)
+    # Preferences you approve (v1.305.0): kept / suggested / never-ask rows,
+    # and the consent-per-press look through Claude Code / Codex messages.
+    from .routes import preferences as _preferences_routes
+
+    _preferences_routes.register(app, d)
     # Iron-Proxy (v1.301.0): shared subscription accounts on Connections.
     from .routes import iron_proxy as _iron_proxy_routes
 

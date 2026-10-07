@@ -115,6 +115,12 @@ import {
   type TurnRoute,
 } from "@/components/chat/TurnReceipt";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
+import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
+import {
+  applySettled,
+  decodeSuggestion,
+  type ChatSuggestion,
+} from "@/lib/preferences";
 import { RecipesRow } from "@/components/chat/RecipesRow";
 import {
   ArtifactsRail,
@@ -313,6 +319,10 @@ interface ChatMessage {
   steer?: boolean;
   /** v1.282.0: the preference sentences this turn kept (the receipt says them). */
   remembered?: string[];
+  /** v1.305.0: a repeated correction the daemon proposes keeping — the quiet
+   *  line under the receipt. `state` records the user's answer, so a reload
+   *  renders "Remembered: …" (or "won't suggest again"), never the ask. */
+  suggestion?: ChatSuggestion;
   /** v1.298.0: the turn's trust posture ("low" when it ran under low trust),
    *  the daemon's reason and its note — the receipt's quiet line. Absent on
    *  full-trust turns and on messages from before the field existed. */
@@ -445,6 +455,9 @@ interface ChatResponse {
   denied_tools?: string[];
   /** v1.282.0: the preference sentences this turn kept. */
   remembered?: string[];
+  /** v1.305.0: null or {id, text, count, quotes, since} — decoded through
+   *  decodeSuggestion (the stream lane's whitelist), never trusted raw. */
+  suggestion?: unknown;
   /** v1.298.0: trust posture of the turn (optional on the wire). */
   trust?: string;
   trust_reason?: string;
@@ -1869,6 +1882,9 @@ export interface RowHandlers {
   /** v1.284.0: "Have builder do this" — the panel seat proposed; a REAL
    *  session of that agent carries it out, with the conversation as recap. */
   handOff: (index: number) => void;
+  /** v1.305.0: the user answered the suggestion under reply `index` — store
+   *  the answer on that message and save it. */
+  settleSuggestion: (index: number, next: ChatSuggestion) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -2092,6 +2108,7 @@ const MessageRow = memo(function MessageRow({
         </div>
       </div>
     );
+  const suggestion = decodeSuggestion(m.suggestion);
   return (
     <div className="group/msg">
       <Bubble role="assistant">
@@ -2131,6 +2148,18 @@ const MessageRow = memo(function MessageRow({
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
             onUndo={h.undoWrite}
+          />
+        </div>
+      )}
+      {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
+          a standing preference in the receipt's own quiet voice — directly
+          under it, with Keep · Edit · Not this. Decoded again here because a
+          reopened thread hands back whatever the disk held. */}
+      {suggestion && suggestion.state !== "gone" && (
+        <div className="ml-11">
+          <PreferenceSuggestion
+            suggestion={suggestion}
+            onSettle={(next) => h.settleSuggestion(i, next)}
           />
         </div>
       )}
@@ -2910,6 +2939,10 @@ export default function ChatPage() {
   // and event watchers, where `messages` from the closure could be stale).
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // v1.305.0: every suggestion answered in this window, by id. queueSave runs
+  // each save through it, so a turn that began BEFORE the press (its history
+  // still holds the open ask) can never put the question back on disk.
+  const settledSuggestionsRef = useRef<Map<string, ChatSuggestion>>(new Map());
   // Latest thread-doc list (v1.166.0). A turn's async closure spans awaits, so
   // by completion its captured `threadDocs` is stale — a second merge in the
   // same turn (attachments up front, made-docs at the end) would silently drop
@@ -3713,6 +3746,7 @@ export default function ChatPage() {
     target: SaveTarget = saveTargetRef.current,
   ) {
     if (msgs.length === 0) return;
+    msgs = applySettled(msgs, settledSuggestionsRef.current);
     // MESSAGING threads (owner === "daemon") are the server's to write: the
     // daemon has already persisted every message, and PUT would 409. The next
     // chat.thread_updated refetch reconciles the view instead.
@@ -5511,6 +5545,7 @@ export default function ChatPage() {
           tools_used,
           deniedTools,
           remembered,
+          suggestion,
           trust,
           trustReason,
           trustNote,
@@ -5574,6 +5609,8 @@ export default function ChatPage() {
           ...(adapted ? { adapted } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
           ...(remembered?.length ? { remembered } : {}),
+          // Suggestion (v1.305.0): already whitelisted by the done-frame decode.
+          ...(suggestion ? { suggestion } : {}),
           // Trust (v1.298.0): only a LOW posture lands on the message — a
           // "full" would be noise on every reply, and absent is today's look.
           ...(trust === "low"
@@ -5719,11 +5756,15 @@ export default function ChatPage() {
       const adaptedPost = adaptedFrom(res.adapted);
       // Usage (v1.300.0) — the POST lane's copy of the stream lane's decode.
       const usagePost = turnUsageFrom(res.usage);
+      // Suggestion (v1.305.0) — the POST lane's copy of the stream lane's
+      // whitelist decode. MIRROR NOTE: keep in step with the stream path.
+      const suggestionPost = decodeSuggestion(res.suggestion);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.remembered?.length ? { remembered: res.remembered } : {}),
+        ...(suggestionPost ? { suggestion: suggestionPost } : {}),
         // Trust (v1.298.0) — the POST lane's copy of the stream lane's rule.
         ...(res.trust === "low"
             ? {
@@ -6782,6 +6823,21 @@ export default function ChatPage() {
     },
     crystallize: (id) => void crystallizeThread(id),
     handOff: (index) => void handOffPanelReply(index),
+    settleSuggestion: (index, next) => {
+      // v1.305.0: the answer is remembered for every LATER save too — a turn
+      // that started before the press ends with a history still holding the
+      // open ask, and queueSave runs every save through this map.
+      settledSuggestionsRef.current.set(next.id, next);
+      const cur = messagesRef.current;
+      const target = cur[index];
+      if (!target || target.suggestion?.id !== next.id) return;
+      const updated = cur.map((m, j) => (j === index ? { ...m, suggestion: next } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      // Mid-turn the turn's own end save carries it (through the map); a
+      // save now would race that turn's start save for the same thread.
+      if (!busy) queueSave(updated);
+    },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -6796,6 +6852,8 @@ export default function ChatPage() {
       editMessage: (index) => rowImplRef.current.editMessage(index),
       crystallize: (id) => rowImplRef.current.crystallize(id),
       handOff: (index) => rowImplRef.current.handOff(index),
+      settleSuggestion: (index, next) =>
+        rowImplRef.current.settleSuggestion(index, next),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),

@@ -81,7 +81,9 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail="text is required")
         with session_scope(d.platform.engine) as db:
             rec = LessonRecord(text=text[:2000], scope=body.scope or "user",
-                               source="preference", weight=3)
+                               source="preference", weight=3,
+                               # v1.305.0: typed by the user = said + kept.
+                               status="confirmed", origin="said")
             db.add(rec)
             db.commit()
             db.refresh(rec)

@@ -2762,6 +2762,65 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/agent-faces-v1304.test.tsx`,
   `dashboard/__tests__/agent-worlds-v1304.test.tsx`.
 
+- **A preference has a STATUS, and only a confirmed one reaches a prompt;
+  the second same correction becomes ONE question** (v1.305.0; ideas from
+  agent-personalizer, MIT, Auny LLC — no code taken). `LessonRecord` gained
+  nullable `status`/`origin`/`evidence_json`/`signature`/`decided_at`;
+  `learning/models.lesson_status` is the ONE place NULL reads as confirmed
+  (never rewritten on disk), and `learning/engine.confirmed_clause()` sits
+  inside `lessons()` — the single query every reader goes through
+  (apply_to_prompt, recall_lessons, fabric, graph, overview, /lessons, cli);
+  `improvement/engine.py`'s raw select filters too, and a grep pin lists
+  every `.lessons(` caller and raw `select(LessonRecord)` so a new reader is
+  caught. `remember_preference` ("from now on …") is unchanged: confirmed,
+  origin said, the v1.282.0 receipt. `learning/corrections.py` is pure and
+  makes NO model call: `is_correction` needs a correction shape AND a style
+  target and refuses task verbs, made things, questions, code, links, a
+  correction scoped to one case (`_ONE_OFF`: "for this client", "this time",
+  "on my phone"), > 280 chars, > 3 lines (table tests: 42 match / 58
+  must-not); `signature` folds
+  synonyms and keeps polarity; `similar` = Jaccard ≥ 0.5 + same polarity + a
+  shared content token; `proposal_text` builds the sentence from the user's
+  OWN words. `learning/preferences.suggest_for_turn` is called by BOTH chat
+  lanes (lock-step; only POST /chat and /chat/stream ask, as
+  `suggest_preferences=not body.pane_id.strip()` — the sidebar, phone,
+  agents AND a Build pane's turn get null: PaneChat renders no line, so a
+  pane-minted row would be an unseen question holding an open slot; the
+  pane's saved thread still counts as evidence for the main chat): the detector runs
+  first, only a correction pays the look-back (`asyncio.to_thread` inside
+  `wait_for(2 s)`, wrapped, logs no text) over 30 days of chat + phone lines
+  in a DIFFERENT turn (a saved thread matching the body's user lines is this
+  conversation — ChatBody carries no thread id); it mints a `proposed` row
+  (max 3 open, `mint` serialised) and puts `suggestion` on the done frame /
+  POST response ALWAYS (null when none). Declined is FINAL (`_blocked` on the
+  signature) until "Ask again" deletes the row; a kept or stated preference
+  also blocks. Routes `routes/preferences.py`: `GET /memory/preferences`
+  (kept/suggested/never/open_limit/scan.sources), keep {text?} / decline /
+  ask-again / PATCH / DELETE (edited text 1–280 chars, promptguard-scanned),
+  `POST /memory/preferences/scan {sources}` — consent PER PRESS, the user's
+  typed prompts only from each session's OWN file (the history reader's
+  subagent fold holds the parent agent's prompts, not the user's; a record
+  that starts with markup is the CLI's own — `!` mode stores
+  `<bash-stdout>` OUTPUT as a user record — and is skipped), newest 20
+  per source, mints only when a Claude Code/Codex line is in the cluster.
+  Events preference.suggested {via: chat|scan} / kept / declined. DASHBOARD:
+  `lib/preferences.ts` (decoders OUTSIDE api.ts; `decodeSuggestion` is the
+  stream hook's whitelist), `components/chat/PreferenceSuggestion.tsx` (the
+  quiet line under TurnReceipt: Keep · Edit · Not this; Enter/Escape never
+  bubble to the composer; never takes focus), stored on `ChatMessage.
+  suggestion` by BOTH lanes; `settledSuggestionsRef` + `applySettled` inside
+  `queueSave` so a Keep pressed mid-turn survives that turn's save; a
+  keep/decline answered 409/404 (decided on the Memory page / another
+  window) re-reads `GET /memory/preferences` and settles to the REAL outcome
+  (`settledElsewhere`: kept with the kept words, declined, or `state: "gone"`
+  which renders nothing) through the same `onSettle` save — only another
+  error (400 flagged, network) shows the sentence;
+  `components/memory/PreferenceSections.tsx` (#prefs-kept/-suggested/-never/
+  -scan) inside KnowsAboutYou (404 = today's card); the bell maps
+  `via == "scan"` only, `quiet` (no badge, no desktop toast). Pins:
+  `tests/test_corrections_v1305.py`, `tests/test_preferences_v1305.py`,
+  `dashboard/__tests__/preferences-v1305.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

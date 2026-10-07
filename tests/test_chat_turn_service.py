@@ -420,14 +420,19 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # output_tokens} always; cache counts / cost_usd / list_price_equivalent
     # only when known), built by the SAME `_usage_frame` the SSE done frame
     # uses. Semantics pinned by tests/test_subscription_cost_v1300.py.
+    # v1.305.0 (preferences you approve): one more — "suggestion" ({id, text,
+    # count, quotes, since} | null, always present) — a repeated correction
+    # becomes ONE proposed preference. Same key in the SSE done frame;
+    # semantics pinned by tests/test_preferences_v1305.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
         "route", "doors", "adapted", "remembered",
-        "trust", "trust_reason", "trust_note", "usage",
+        "trust", "trust_reason", "trust_note", "usage", "suggestion",
     }
     assert body["remembered"] == []
+    assert body["suggestion"] is None
     assert body["trust"] == "full" and body["trust_reason"] == "" and body["trust_note"] is None
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"

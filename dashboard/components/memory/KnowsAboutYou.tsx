@@ -13,11 +13,19 @@
 //
 // Silent on a daemon that cannot answer (an older daemon, a fetch failure):
 // an empty card claiming "nothing known" would be a verdict nobody reached.
+//
+// v1.305.0: every preference has a status. With `GET /memory/preferences`
+// the list becomes three sections — Kept, Suggested (a correction the user
+// repeated, with their own words as evidence) and Never ask again — plus the
+// opt-in look through Claude Code / Codex sessions (PreferenceSections). An
+// older daemon (404) or any unreadable answer keeps exactly today's list.
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BrainCircuit, UserRound } from "lucide-react";
 import { get } from "@/lib/api";
 import { Card } from "@/components/ui";
+import { decodePreferences, type PreferencesView } from "@/lib/preferences";
+import { PreferenceSections } from "./PreferenceSections";
 
 export interface MemoryOverview {
   profile: {
@@ -73,6 +81,18 @@ export function countsLine(o: MemoryOverview): string {
 
 export function KnowsAboutYou() {
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
+  // null = the daemon has no status-aware list (older daemon, failed read):
+  // the card keeps the v1.279.0 list from the overview.
+  const [prefs, setPrefs] = useState<PreferencesView | null>(null);
+
+  const loadPrefs = useCallback(async (live: () => boolean = () => true) => {
+    try {
+      const view = decodePreferences(await get<unknown>("/memory/preferences"));
+      if (live() && view) setPrefs(view);
+    } catch {
+      /* 404 on an older daemon, or a failed read: keep today's list */
+    }
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -86,10 +106,23 @@ export function KnowsAboutYou() {
         /* an older daemon or a failed fetch: say nothing rather than "nothing" */
       }
     })();
+    void loadPrefs(() => live);
     return () => {
       live = false;
     };
-  }, []);
+  }, [loadPrefs]);
+
+  // The bell's scan row links to #prefs-suggested; the section arrives after
+  // the fetch, so the browser's own jump found nothing — do it once it exists.
+  useEffect(() => {
+    if (!prefs || prefs.suggested.length === 0) return;
+    try {
+      if (window.location.hash !== "#prefs-suggested") return;
+      document.getElementById("prefs-suggested")?.scrollIntoView?.({ block: "center" });
+    } catch {
+      /* no window (SSR) — nothing to scroll */
+    }
+  }, [prefs]);
 
   if (!overview) return null;
 
@@ -128,7 +161,13 @@ export function KnowsAboutYou() {
         </div>
 
         {/* The preferences: read into every conversation, forgettable one by one. */}
-        {preferences.length > 0 ? (
+        {prefs ? (
+          <PreferenceSections
+            view={prefs}
+            apply={(fn) => setPrefs((v) => (v ? fn(v) : v))}
+            onChanged={() => void loadPrefs()}
+          />
+        ) : preferences.length > 0 ? (
           <ul data-testid="knows-preferences" className="space-y-1">
             {preferences.map((p) => (
               <li key={p.id} className="flex items-start gap-2 text-[12.5px] text-zinc-300">

@@ -22,6 +22,7 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
+import { decodeSuggestion, type ChatSuggestion } from "./preferences";
 
 // ------------------------------------------------------------------ wire types
 
@@ -88,6 +89,10 @@ export type SSEEvent =
       denied_tools?: string[];
       /** v1.282.0: the preference sentences this turn kept. */
       remembered?: string[];
+      /** v1.305.0: a repeated correction the daemon proposes keeping as a
+       *  standing preference. The daemon sends the key on every turn (null
+       *  when it has nothing to ask); the decode keeps only a valid shape. */
+      suggestion?: ChatSuggestion;
       /** v1.298.0: the turn's trust posture ("full" | "low"), the daemon's
        *  reason, and its one-line note ("low trust: 4 tools kept away").
        *  All optional on the wire; absent on older daemons. */
@@ -149,6 +154,8 @@ export interface ChatStreamResult {
   deniedTools?: string[];
   /** v1.282.0: the preference sentences this turn kept (remember_preference). */
   remembered?: string[];
+  /** v1.305.0: the one suggestion this turn carries (absent when none). */
+  suggestion?: ChatSuggestion;
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
   trust?: string;
   trustReason?: string;
@@ -328,6 +335,12 @@ export function sseEventFrom(
         ev.remembered = (data.remembered as unknown[]).filter(
           (x): x is string => typeof x === "string" && x.length > 0,
         );
+      // Suggestion (v1.305.0): whitelisted like remembered — only a valid
+      // {id, text, …} survives; null and junk leave the key absent.
+      {
+        const sug = decodeSuggestion(data.suggestion);
+        if (sug) ev.suggestion = sug;
+      }
       // Trust (v1.298.0): the posture, its reason and its note — strings
       // only, each absent when the daemon sent none (whitelist, like
       // remembered: an un-listed field dies here silently).
@@ -935,6 +948,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 tools_used: ev.tools_used,
                 deniedTools: ev.denied_tools,
                 remembered: ev.remembered,
+                ...(ev.suggestion ? { suggestion: ev.suggestion } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,
                 trustNote: ev.trust_note,

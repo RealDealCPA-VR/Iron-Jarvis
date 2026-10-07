@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.304.0 (2026-10-04).*
+holds itself to. Current as of v1.305.0 (2026-10-04).*
 
 ---
 
@@ -387,6 +387,33 @@ with the request typed in.
   Long-term memory** that opens it.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
+- **Preferences you approve** (v1.305.0; the idea comes from
+  agent-personalizer, MIT). Every preference Jarvis keeps about how you like
+  to work has a status: **Kept**, **Suggested** or **Never ask again** — and
+  only Kept ones ever reach a model. Saying "from now on…" keeps it at once,
+  exactly as before ("Remembered: …" under the reply). New: when you correct
+  the same thing a SECOND time ("shorter, please" today, "too long" last
+  week), a quiet line under the reply asks once — "You've said this twice:
+  … keep it as a standing preference?" — with **Keep**, **Edit** (the
+  sentence is built from your own words; change it before keeping) and
+  **Not this**. Not this is final: that correction is never suggested again
+  unless you press **Ask again** on the Memory page. Spotting a correction is
+  a plain word check on this PC — no model reads your messages for it — and
+  it never fails a reply: only a message that reads like a correction is
+  looked into, and that look gives up after two seconds rather than hold the
+  reply's finish any longer. A correction you scope to one case ("for this
+  client", "this time") is not suggested. At most three suggestions wait at
+  a time. A correction you type in a Build pane's chat counts too, but a
+  Build pane never asks: the question comes in the main chat, the next time
+  you say it there. Answered it already on the Memory page or in another
+  window? Pressing Keep or Not this on the old line just shows what you
+  decided (or quietly removes the line if you asked again or forgot it).
+  The Memory page's **What Jarvis knows about you** card lists all three
+  groups (edit or forget a kept one there) and, when Claude Code or Codex is
+  on this PC, offers **Look through my Claude Code and Codex sessions**: it
+  reads only the messages YOU typed in your newest sessions (never the
+  replies or tool output), only when you press it, and nothing leaves this
+  PC; it says how many sessions it read and how many suggestions it made.
 - **Memory steward**: a scheduled curator that proposes memory changes for
   your approval — it never silently rewrites what the app knows about you.
 - **The 3D memory graph**, lessons, and a "What I can remember" index the

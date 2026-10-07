@@ -1526,7 +1526,18 @@ def register(app: FastAPI, d) -> None:
         # about, and it has no Session row to be counted by (it runs as
         # session id "chat") — so /system/activity counts it through here.
         with CHAT_INFLIGHT.track():
-            return await run_chat_turn(d.platform, d._PERSONAS, body)
+            # v1.305.0: the dashboard's own route asks for the
+            # repeated-correction suggestion (the phone lane never does) —
+            # but NOT for a Build pane's turn: PaneChat renders no suggestion
+            # line, so a row minted there would be a question nobody sees
+            # holding one of the open slots. The pane's lines still count as
+            # evidence (they are saved chat threads) for the main chat.
+            return await run_chat_turn(
+                d.platform,
+                d._PERSONAS,
+                body,
+                suggest_preferences=not (body.pane_id or "").strip(),
+            )
 
     @app.post("/chat/stream")
     async def chat_stream_route(body: ChatBody, request: Request):
@@ -1544,6 +1555,11 @@ def register(app: FastAPI, d) -> None:
             d._PERSONAS,
             body,
             should_stop=request.is_disconnected,
+            # v1.305.0: the dashboard's route asks for the suggestion; the
+            # sidebar (browser/panel.py) and other callers never do, and
+            # neither does a Build pane's turn (no line renders there — see
+            # POST /chat above).
+            suggest_preferences=not (body.pane_id or "").strip(),
         )
         # v1.246.0: never quiet for long — see HeartbeatStreamingResponse.
         # v1.249.0: and counted while it streams — see ChatReplyStreamingResponse.
@@ -1619,6 +1635,7 @@ async def stream_chat_turn(
     arm_family: "frozenset[str] | None" = None,
     trust: str = "full",
     trust_reason: str = "",
+    suggest_preferences: bool = False,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -1731,12 +1748,14 @@ async def stream_chat_turn(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=None, tool_ceiling=tool_ceiling,
             arm_family=arm_family, trust=trust, trust_reason=trust_reason,
+            suggest_preferences=suggest_preferences,
         )
     try:
         inner = await chat_stream(
             platform, personas, body, should_stop=should_stop,
             steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
             arm_family=arm_family, trust=trust, trust_reason=trust_reason,
+            suggest_preferences=suggest_preferences,
         )
     except BaseException:
         # Prep can raise (400/404) before there is any generator to release
@@ -1764,6 +1783,7 @@ async def chat_stream(
     arm_family: "frozenset[str] | None" = None,
     trust: str = "full",
     trust_reason: str = "",
+    suggest_preferences: bool = False,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -3441,6 +3461,16 @@ async def chat_stream(
         # and reports nothing as work handed to it. MIRROR NOTE (lock-step):
         # chat_turn.run_chat_turn names no turn and has no queue to close.
         unread_steers = handle.close_steers() if handle is not None else []
+        # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT) — a
+        # repeated correction of HOW the assistant answers becomes ONE
+        # proposed preference, asked about under the reply. MIRROR NOTE
+        # (lock-step): chat_turn.run_chat_turn calls the SAME helper — edit
+        # both or neither. Never raises; off the loop under a budget.
+        from ...learning import preferences as _prefs
+
+        suggestion = (
+            await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
+        )
         done_frame: dict[str, Any] = {
             "reply": reply,
             "provider": route_provider,
@@ -3468,6 +3498,10 @@ async def chat_stream(
             # REMEMBERED (v1.282.0) — MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "remembered": remembered,
+            # SUGGESTION (v1.305.0): {id, text, count, quotes, since} or
+            # null — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
+            # response carries the identical key — edit both or neither.
+            "suggestion": suggestion,
             # DOORS (v1.199.0): server-derived links into the surfaces
             # this turn's SUCCESSFUL creating tools changed — deduped by
             # href, capped at 4, ALWAYS present (possibly empty). Files

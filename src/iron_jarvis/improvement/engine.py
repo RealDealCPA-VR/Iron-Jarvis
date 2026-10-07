@@ -384,7 +384,10 @@ class ImprovementEngine:
             lesson_stats = {
                 s.lesson_id: s for s in db.exec(select(LessonStatRecord))
             }
-            lessons = list(db.exec(select(LessonRecord)))
+            # v1.305.0: a proposed / declined preference is not a lesson yet.
+            from ..learning.engine import confirmed_clause
+
+            lessons = list(db.exec(select(LessonRecord).where(confirmed_clause())))
             agents = list(db.exec(select(AgentStatRecord)))
 
         tot_n = sum(a.session_count for a in agents)

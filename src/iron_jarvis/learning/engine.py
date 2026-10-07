@@ -25,11 +25,11 @@ import json
 import re
 from typing import Awaitable, Callable
 
-from sqlalchemy import Engine, func
+from sqlalchemy import Engine, func, or_
 from sqlmodel import select
 
 from ..core.db import session_scope
-from .models import FeedbackRecord, LessonRecord
+from .models import STATUS_CONFIRMED, FeedbackRecord, LessonRecord
 
 #: Heading under which lessons are injected into the system prompt.
 _LESSONS_HEADING = "\n\n# What I've learned about working with you\n"
@@ -116,9 +116,17 @@ class LearningEngine:
 
     # -- preferences --------------------------------------------------------
     def note_preference(self, text: str) -> LessonRecord:
-        """Remember an explicit user preference as a top-priority (weight 5) lesson."""
+        """Remember an explicit user preference as a top-priority (weight 5) lesson.
+
+        v1.305.0: the user SAID it, so it is ``confirmed`` with origin
+        ``said`` straight away (no question), and its signature is stored so
+        a later repeated correction of the same thing is never proposed."""
+        from .corrections import signature
+
+        clean = (text or "").strip()
         return self._add_lesson(
-            (text or "").strip(), scope="user", source="preference", weight=5
+            clean, scope="user", source="preference", weight=5,
+            status=STATUS_CONFIRMED, origin="said", signature=signature(clean) or None,
         )
 
     # -- reflection ---------------------------------------------------------
@@ -163,6 +171,13 @@ class LearningEngine:
     ) -> list[LessonRecord]:
         """Lessons ordered for injection: highest EFFECTIVE weight first, newest next.
 
+        CONFIRMED rows only (v1.305.0). Every prompt reader
+        (``apply_to_prompt``, ``recall_lessons``, the memory fabric, the Build
+        assist, agents, the round table) comes through here, so a ``proposed``
+        or ``declined`` preference can reach NO prompt: it is filtered at the
+        one query they all share. A NULL status (a row older than v1.305.0)
+        reads as confirmed.
+
         The effective weight is the static ``weight`` plus the outcome-driven
         ``weight_bonus`` the ImprovementEngine maintains, so a lesson that has
         actually been helping surfaces ahead of one that has been hurting. (NULL
@@ -177,6 +192,7 @@ class LearningEngine:
             if exclude_sources:
                 # v1.279.0: the prompt asks for everything BUT task reflections.
                 query = query.where(LessonRecord.source.not_in(list(exclude_sources)))
+            query = query.where(confirmed_clause())
             query = query.order_by(
                 effective.desc(), LessonRecord.created_at.desc()
             ).limit(limit)
@@ -230,7 +246,11 @@ class LearningEngine:
         """How many lessons each source holds (v1.279.0) — the Memory page's
         "what Jarvis knows" card says how much of the pile is task notes."""
         with session_scope(self.engine) as db:
-            query = select(LessonRecord.source, func.count()).group_by(LessonRecord.source)
+            query = (
+                select(LessonRecord.source, func.count())
+                .where(confirmed_clause())
+                .group_by(LessonRecord.source)
+            )
             if scope is not None:
                 query = query.where(LessonRecord.scope == scope)
             return {str(src or ""): int(n) for src, n in db.exec(query)}
@@ -352,15 +372,22 @@ class LearningEngine:
         scope: str = "user",
         source: str = "reflection",
         weight: int = 1,
+        **extra,
     ) -> LessonRecord:
         with session_scope(self.engine) as db:
             record = LessonRecord(
-                text=text, scope=scope, source=source, weight=weight
+                text=text, scope=scope, source=source, weight=weight, **extra
             )
             db.add(record)
             db.commit()
             db.refresh(record)
             return record
+
+
+def confirmed_clause():
+    """The SQL condition "this lesson may reach a prompt" (v1.305.0): status
+    is ``confirmed`` or NULL (a row from before statuses existed)."""
+    return or_(LessonRecord.status.is_(None), LessonRecord.status == STATUS_CONFIRMED)
 
 
 def _parse_distilled(reply: str, *, max_out: int) -> list[str]:
