@@ -358,11 +358,15 @@ _WF_RUN_RX = re.compile(
 def test_block_is_injected_in_both_lanes_before_the_planner():
     """The repo rule: a system-prompt addition after the planner is a cost the
     budget cannot see. Both lanes, both orderings."""
+    # v1.311.0: the block is computed in the ONE grounding helper both lanes
+    # call (chat_turn._gather_grounding) and appended by each lane as
+    # `_grounding.after_skill()` — still before the planner.
+    assert "return _saved_workflows_block(platform)" in _lane("chat_turn.py")
     for name in ("chat_turn.py", "routes/chat.py"):
         src = _lane(name)
-        m = _INJECT_RX.search(src)
-        assert m, f"{name} never injects the saved-workflows block"
-        assert m.start() < src.index("plan = _plan_context"), (
+        at = src.find("system += _grounding.after_skill()")
+        assert at >= 0, f"{name} never injects the saved-workflows block"
+        assert at < src.index("plan = _plan_context"), (
             f"{name} adds the block after the budget planner runs"
         )
 

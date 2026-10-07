@@ -8,10 +8,12 @@ registry, and the permission engine.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
 import json
 import os
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -20,7 +22,7 @@ from sqlalchemy import Engine
 from .core.config import Config, load_config
 from .codelab.store import CodeArtifactStore
 from .core.db import open_db, persist_event, search_index as shared_search_index
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .core.db import session_scope
 from .core.events import EventBus
@@ -298,6 +300,12 @@ class Platform:
     #: Share my profile with Build (v1.306.0): keeps the generated profile
     #: block in a switched-on CLI's instruction files (``profile/share.py``).
     profile_share: "object | None" = None
+    #: MCP packs whose handshake was DEFERRED (v1.311.0): the server configs
+    #: ``build_platform(defer_mcp=True)`` left for the daemon lifespan to load
+    #: through :func:`load_deferred_mcp`. Empty on every platform built
+    #: WITHOUT a lifespan (the ~40 CLI entrypoints), whose packs are loaded
+    #: synchronously before ``build_platform`` returns — exactly as before.
+    mcp_deferred: "list[dict[str, Any]]" = field(default_factory=list)
 
 
 
@@ -373,8 +381,250 @@ def build_recipe_preparer(url: str):
     return prepare
 
 
+#: Longest string the events LOG line shows per payload value (v1.311.0).
+EVENT_LOG_VALUE_CHARS = 200
+#: Items of a list/tuple the events log line shows before eliding the rest.
+_EVENT_LOG_ITEMS = 20
+
+
+def _clip_log_value(value: Any, _depth: int = 0) -> Any:
+    """A payload value as the ``ironjarvis.events`` log line shows it: a long
+    string keeps its head and says how much was cut, containers are clipped
+    item by item (bounded depth), every other value is untouched. Display
+    only — ``persist_event`` stores the event whole."""
+    if isinstance(value, str):
+        if len(value) <= EVENT_LOG_VALUE_CHARS:
+            return value
+        return f"{value[:EVENT_LOG_VALUE_CHARS]}…(+{len(value) - EVENT_LOG_VALUE_CHARS} chars)"
+    if _depth >= 3:
+        return value if isinstance(value, (int, float, bool, type(None))) else "…"
+    if isinstance(value, dict):
+        return {k: _clip_log_value(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        head = [_clip_log_value(v, _depth + 1) for v in list(value)[:_EVENT_LOG_ITEMS]]
+        if len(value) > _EVENT_LOG_ITEMS:
+            head.append(f"…(+{len(value) - _EVENT_LOG_ITEMS} more)")
+        return head
+    return value
+
+
+class DeferredMcpLoad:
+    """A background MCP load in flight (v1.311.0): the pack configs, and the
+    future the worker thread resolves with their wrapped tools."""
+
+    def __init__(self, cfgs: "list[dict[str, Any]]", future: "concurrent.futures.Future") -> None:
+        self.cfgs = cfgs
+        self.future = future
+
+
+def start_deferred_mcp(platform: "Platform") -> "DeferredMcpLoad | None":
+    """Start the handshakes ``build_platform(defer_mcp=True)`` left pending —
+    NOW, on a daemon thread, without waiting for the event loop to get round to
+    a task (v1.311.0). The lifespan calls this first thing, synchronously, so
+    the handshakes overlap the rest of boot; ``finish_deferred_mcp`` then
+    registers what they return. ``None`` when nothing was deferred.
+
+    A plain daemon thread, not the loop's default executor: ``asyncio.run``
+    joins the default executor when its loop closes, so a pack parked in its
+    15 s connect timeout would hold the shutdown open."""
+    cfgs = list(platform.mcp_deferred or [])
+    platform.mcp_deferred = []
+    if not cfgs:
+        return None
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+    secret_get = platform.secrets.get
+    home = platform.config.home
+
+    def _work() -> None:
+        # RUNNING first: a shutdown that cancels the awaiting task then cannot
+        # cancel this future under us (set_result on a cancelled future
+        # raises InvalidStateError in this thread); the result is simply
+        # never registered. False = cancelled before the thread got here.
+        if not fut.set_running_or_notify_cancel():
+            return
+        try:
+            fut.set_result(mcp_tools(cfgs, secret_resolver=secret_get, home=home))
+        except BaseException as exc:  # noqa: BLE001 — handed to the awaiting task
+            fut.set_exception(exc)
+
+    threading.Thread(target=_work, name="mcp-boot-load", daemon=True).start()
+    return DeferredMcpLoad(cfgs, fut)
+
+
+async def finish_deferred_mcp(
+    platform: "Platform", started: "DeferredMcpLoad | None"
+) -> dict[str, Any]:
+    """Wait for a :func:`start_deferred_mcp` load and register its tools.
+
+    THE ORDER IS THE CONTRACT (verifier adjustments b + c):
+
+    1. the handshakes ran on a worker thread through the same ``mcp_tools``
+       loader boot always used — concurrent across packs (v1.257.0), each
+       bounded by its connect timeout, every outcome on its load record;
+    2. ``registry.register(tool, mcp=True)`` runs HERE, on the loop thread,
+       after the await — agent runs iterate the registry on the loop, so a
+       worker thread must never mutate it;
+    3. ``quarantine_registered`` runs after the registration (the loader also
+       diffs each pack's manifest as it lists it; this is the same backstop
+       boot ran), so a write-like tool that arrived in an update is never
+       usable unquarantined. Deliberately NOT load-bearing (review round): the
+       loader is called with ``home=`` and quarantines as it builds each tool,
+       which is what the boot test's ``quarantined is True`` pins; this call
+       only keeps the deferred path identical to the synchronous one in
+       ``build_platform`` so the two boots cannot drift.
+
+    Steps 2-3 contain no ``await``, so no request is served between "the tools
+    exist" and "the quarantine applies". Returns a summary for the caller's
+    ``mcp.loaded`` event. Never raises: a loader fault marks every pack still
+    "starting" as failed, so nothing reads as starting forever.
+    """
+    from .mcp.tools import STATE_STARTING, load_status, quarantine_registered
+    from .mcp.tools import _record_load
+
+    if started is None:
+        return {"packs": [], "tools": 0}
+    cfgs = started.cfgs
+    registered = 0
+    try:
+        try:
+            tools = await asyncio.wrap_future(started.future)
+        except asyncio.CancelledError:
+            # Shutdown arrived first: nothing is registered, and whatever the
+            # handshake still produces is CLOSED when it lands — an unowned
+            # stdio child must not outlive the app that started it.
+            started.future.add_done_callback(_close_discarded_mcp)
+            raise
+        # The user may have acted on a pack WHILE it was starting (review,
+        # v1.311.0): a DELETE that landed in the window must not be undone by
+        # the handshake arriving later (agents would hold a removed pack's
+        # tools, with a live child, that no surface can unload), and a Retry
+        # that already registered its own tools has WON — registering ours
+        # over it would orphan its clients. Either way our tools are dropped
+        # and their clients closed, exactly as a cancelled load's are.
+        keep, dropped, gone = _deferred_tools_to_keep(platform, cfgs, tools)
+        for tool in keep:
+            platform.registry.register(tool, mcp=True)
+            registered += 1
+        if dropped:
+            _close_mcp_tools(dropped)
+        for name in gone:
+            _forget_load(name)
+        quarantine_registered(platform.registry, platform.config.home)
+    except Exception as exc:  # noqa: BLE001 — a pack load never breaks the daemon
+        _log.exception("background MCP load failed")
+        for cfg in cfgs:
+            name = cfg.get("name") or "mcp"
+            if (load_status(name) or {}).get("state") == STATE_STARTING:
+                _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
+    packs = []
+    for cfg in cfgs:
+        name = cfg.get("name") or "mcp"
+        rec = load_status(name) or {}
+        packs.append(
+            {
+                "name": name,
+                "state": rec.get("state"),
+                "tools_loaded": len(platform.registry.mcp_names(name)),
+            }
+        )
+    return {"packs": packs, "tools": registered}
+
+
+def _deferred_tools_to_keep(
+    platform: "Platform", cfgs: "list[dict[str, Any]]", tools: "list[Any]"
+) -> "tuple[list[Any], list[Any], list[str]]":
+    """Split a background load's tools into (register, drop) — and name the
+    packs that are no longer configured at all (v1.311.0 review).
+
+    A pack's tools are KEPT only when the pack is still configured with the
+    config the load started from (a delete — or a delete and re-add with a
+    different command — makes this result stale) and the registry holds none
+    of its tools yet (a Retry pressed during the window already registered a
+    fresh connection; it wins). Runs on the loop thread with no await."""
+    current: dict[str, dict[str, Any]] = {}
+    for cfg in list(getattr(platform.config, "mcp_servers", None) or []):
+        if isinstance(cfg, dict):
+            current[cfg.get("name") or "mcp"] = cfg
+    started = {(c.get("name") or "mcp"): c for c in cfgs if isinstance(c, dict)}
+    usable: set[str] = set()
+    gone: list[str] = []
+    for name, cfg in started.items():
+        now = current.get(name)
+        if now is None:
+            gone.append(name)
+        elif _same_connection(now, cfg) and not platform.registry.mcp_names(name):
+            usable.add(name)
+    keep: list[Any] = []
+    dropped: list[Any] = []
+    for tool in tools:
+        server = getattr(tool, "server_name", None)
+        if server is None:
+            # Not a pack tool we can attribute (never produced by mcp_tools
+            # today) — keep the old behaviour rather than silently drop it.
+            keep.append(tool)
+        elif server in usable:
+            keep.append(tool)
+        else:
+            dropped.append(tool)
+    return keep, dropped, gone
+
+
+def _same_connection(a: "dict[str, Any]", b: "dict[str, Any]") -> bool:
+    """Whether two pack configs connect the same way — ``auto_approve`` is a
+    permission, toggled in place by the Tools page, not a connection."""
+    def strip(c: "dict[str, Any]") -> "dict[str, Any]":
+        return {k: v for k, v in c.items() if k != "auto_approve"}
+
+    return a is b or strip(a) == strip(b)
+
+
+def _forget_load(name: str) -> None:
+    """Drop the load record of a pack deleted while it was starting, so no
+    surface lists a removed pack as starting (or ready). Never raises."""
+    try:
+        from .mcp import tools as _mcp_tools_mod
+
+        _mcp_tools_mod._LOAD_STATUS.pop(name, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _close_mcp_tools(tools: "list[Any]") -> None:
+    """Close each distinct client behind ``tools`` (never raises) — an
+    unowned stdio child must not outlive the decision not to register it."""
+    seen: set[int] = set()
+    for tool in tools or []:
+        client = getattr(tool, "client", None)
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _close_discarded_mcp(fut: "concurrent.futures.Future") -> None:
+    """Close the clients of a load nobody will register (never raises)."""
+    try:
+        if fut.cancelled() or fut.exception() is not None:
+            return
+        _close_mcp_tools(list(fut.result() or []))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def load_deferred_mcp(platform: "Platform") -> dict[str, Any]:
+    """:func:`start_deferred_mcp` + :func:`finish_deferred_mcp` in one await
+    (v1.311.0) — for a caller that has no boot of its own to overlap."""
+    return await finish_deferred_mcp(platform, start_deferred_mcp(platform))
+
+
 def build_platform(
-    project_root: str, ask_resolver: AskResolver | None = None
+    project_root: str,
+    ask_resolver: AskResolver | None = None,
+    *,
+    defer_mcp: bool = False,
 ) -> Platform:
     config = load_config(project_root)
     config.ensure_dirs()
@@ -388,8 +638,18 @@ def build_platform(
     # Observability (§30): persist every event + log it.
     log = get_logger("events")
     event_bus.add_handler(lambda ev: persist_event(engine, ev))
+    # v1.311.0: CLIPPED. The line carried every payload value in full, so
+    # agent.completed `result` / session.completed `summary` wrote multi-KB
+    # bodies — private memory-note text included — into the 5 MB rotating
+    # daemon.log users paste into bug reports (up to 18.5 KB per line,
+    # ~9% of the log). The full payload is still persisted by the handler
+    # above; the log keeps the shape and the head of each value.
     event_bus.add_handler(
-        lambda ev: log.info("%s %s", ev.type, {k: v for k, v in ev.payload.items() if k != "content"})
+        lambda ev: log.info(
+            "%s %s",
+            ev.type,
+            {k: _clip_log_value(v) for k, v in ev.payload.items() if k != "content"},
+        )
     )
 
     vault = BrowserVault(config.browser_dir)
@@ -944,6 +1204,10 @@ def build_platform(
         # survive a daemon restart (the in-memory cache does not).
         secret_resolver=secrets.get,
     )
+    # v1.311.0: read the subscription index ONCE here, so the first event of
+    # the daemon's life does not pay for it (and an install with no outbound
+    # webhook never queries the table again until a row is written).
+    outbound_webhooks.warm()
     event_bus.add_handler(outbound_webhooks.on_event)
 
     # Long-term memory: built-in markdown brain + optional Obsidian / Notion.
@@ -1059,10 +1323,29 @@ def build_platform(
     # registered plain — invisible to every agent's tool loadout).
     # `home=` (v1.299.0): the pack manifest diff applies AT registration; the
     # post-assembly `quarantine_registered` pass below stays as the backstop.
-    for tool in mcp_tools(
-        getattr(config, "mcp_servers", None), secret_resolver=secrets.get, home=config.home
-    ):
-        registry.register(tool, mcp=True)
+    #
+    # `defer_mcp` (v1.311.0) — ONLY the daemon passes it. The handshakes
+    # (`npx -y …` resolves against the npm registry on every launch) were the
+    # whole of a 13.5 s "platform" boot phase on the user's install, so the
+    # daemon marks each pack "starting" here and its lifespan loads them
+    # (`start_deferred_mcp` / `finish_deferred_mcp`) while the server already
+    # answers /health. Every OTHER
+    # caller — the ~40 CLI entrypoints in daemon/cli.py, which have no
+    # lifespan — keeps the synchronous contract: the pack's tools are in the
+    # registry when this function returns (CLAUDE.md: "before deferring a boot
+    # step into the daemon lifespan, ask who builds a platform WITHOUT one").
+    _mcp_configs = [s for s in (getattr(config, "mcp_servers", None) or []) if isinstance(s, dict)]
+    _mcp_deferred: list[dict] = []
+    if defer_mcp and _mcp_configs:
+        from .mcp.tools import mark_starting as _mcp_mark_starting
+
+        _mcp_mark_starting(_mcp_configs)
+        _mcp_deferred = list(_mcp_configs)
+    else:
+        for tool in mcp_tools(
+            getattr(config, "mcp_servers", None), secret_resolver=secrets.get, home=config.home
+        ):
+            registry.register(tool, mcp=True)
 
     # Self-correcting learning loop: feedback + reflections become lessons that
     # get injected into every future agent prompt (gets better each interaction).
@@ -1195,6 +1478,7 @@ def build_platform(
         embedder=embedder,
         fabric=fabric,
         search_index=search_index,
+        mcp_deferred=_mcp_deferred,
     )
 
     # Mid-turn approvals (v1.189.0): built HERE so the chat route and the

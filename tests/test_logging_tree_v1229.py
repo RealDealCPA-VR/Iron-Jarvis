@@ -277,6 +277,10 @@ def test_access_filter_ignores_records_of_another_shape():
             "/reflex/rules",
             # v1.245.0: the Build page's 2.5 s pane-state poll.
             "/terminals/activity",
+            # v1.311.0: the Build Files panel's 4 s poll + the
+            # interrupted-jobs poll (72% of one daemon.log between them).
+            "/fs/files",
+            "/sessions/interrupted",
         }
     )
 

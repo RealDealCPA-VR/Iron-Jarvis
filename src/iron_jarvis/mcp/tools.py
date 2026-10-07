@@ -520,6 +520,9 @@ def _record_load(
     # the same sentence instead of each one classifying for itself.
     verdict = classify_load_failure(cfg, error)
     _LOAD_STATUS[name] = {
+        # v1.311.0: "ready" / "failed" once a load ran ("starting" is written
+        # by `mark_starting` while the daemon's background load is pending).
+        "state": "failed" if error else "ready",
         "last_error": error,
         "reason": verdict["reason"],
         "fix": verdict["fix"],
@@ -529,6 +532,97 @@ def _record_load(
         # user last looked, held back until trusted (additive; [] = none).
         "quarantined": sorted(quarantined or []),
     }
+
+
+#: The load-record state while a pack's handshake has not finished (v1.311.0).
+STATE_STARTING = "starting"
+
+
+def mark_starting(server_configs: "list[dict[str, Any]] | None") -> list[str]:
+    """Record every configured pack as ``state: "starting"`` (v1.311.0).
+
+    THE DAEMON NO LONGER WAITS FOR PACK HANDSHAKES BEFORE IT SERVES (finding
+    boot-blocked-by-mcp-and-pane-respawn: `npx -y …` resolves against the npm
+    registry on every launch, and boot sat inside it for up to 15 s). The
+    lifespan loads the packs in the background instead, and in the window
+    before they answer a pack must read as STARTING — never as "0 tools, no
+    error", which a truth surface would render as a pack that silently has
+    nothing. `/diagnostics` reads `state` off this record; any other surface
+    (the Tools row, the doctor's `mcp` check, a prompt seam) must read it too
+    — or `starting_packs()` — before it calls a pack with 0 tools broken.
+    Returns the names marked. A later `_record_load` replaces each record
+    with ready/failed.
+    """
+    from datetime import datetime, timezone
+
+    names: list[str] = []
+    for cfg in server_configs or []:
+        if not isinstance(cfg, dict):
+            continue
+        name = cfg.get("name") or "mcp"
+        _LOAD_STATUS[name] = {
+            "state": STATE_STARTING,
+            "last_error": None,
+            "reason": "",
+            "fix": "",
+            "tools_loaded": 0,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "quarantined": [],
+        }
+        names.append(name)
+    return names
+
+
+def starting_packs() -> list[str]:
+    """The packs whose background load has not finished yet (v1.311.0)."""
+    return sorted(n for n, rec in _LOAD_STATUS.items() if rec.get("state") == STATE_STARTING)
+
+
+#: How long a turn that starts while packs are still loading waits for them
+#: (v1.311.0 review). Bounded: one hung pack must never park a chat turn.
+PACKS_TURN_WAIT_S = 10.0
+
+
+async def wait_for_starting_packs(platform: Any, timeout_s: "float | None" = None) -> list[str]:
+    """Before a turn arms its tools, give packs that are still loading a
+    BOUNDED moment to register (v1.311.0 review of the deferred boot): a turn
+    started in the first seconds after boot used to see a registry with no
+    pack tools and say they "do not exist". Waits on the lifespan's
+    ``platform.mcp_ready`` event only when something is STARTING; returns the
+    packs still starting after the wait (usually none). Never raises."""
+    try:
+        # Only a platform whose OWN background load is still running (the
+        # daemon lifespan arms ``platform.mcp_ready``) — `_LOAD_STATUS` is
+        # process-wide, and a platform that loaded its packs synchronously
+        # (every CLI caller) must never be told someone else's are starting.
+        ready = getattr(platform, "mcp_ready", None)
+        if not isinstance(ready, asyncio.Event) or ready.is_set():
+            return []
+        if not starting_packs():
+            return []
+        try:
+            # Read at call time, so a test (or a future setting) can move it.
+            await asyncio.wait_for(
+                ready.wait(), timeout=PACKS_TURN_WAIT_S if timeout_s is None else timeout_s
+            )
+        except asyncio.TimeoutError:
+            pass
+        return [] if ready.is_set() else starting_packs()
+    except Exception:  # noqa: BLE001 — a readiness wait never breaks a turn
+        return []
+
+
+def packs_starting_note(names: "list[str]") -> str:
+    """The one Tools-seam sentence for packs still loading ("" when none) —
+    so a short tool list is never read as complete."""
+    if not names:
+        return ""
+    return (
+        "These tool packs are still starting, so their tools are not available "
+        "in this reply: " + ", ".join(names) + ". If the user asks for one of "
+        "their tools, say the pack is still starting and to try again in a "
+        "moment — never that the tool does not exist."
+    )
 
 
 def load_status(name: str) -> dict[str, Any] | None:
@@ -727,6 +821,12 @@ __all__ = [
     "mcp_tools",
     "load_status",
     "load_statuses",
+    "mark_starting",
+    "starting_packs",
+    "wait_for_starting_packs",
+    "packs_starting_note",
+    "PACKS_TURN_WAIT_S",
+    "STATE_STARTING",
     "annotations_of",
     "is_write_like",
     "risk_for",

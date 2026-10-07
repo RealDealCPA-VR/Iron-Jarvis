@@ -43,12 +43,9 @@
  */
 
 import { Check, Copy, Inbox, Mail, Send } from "lucide-react";
-import {
-  EmailComposeDialog,
-  draftHeaders,
-  type ComposeMode,
-  type ComposeResult,
-} from "@/components/chat/EmailComposeDialog";
+import dynamic from "next/dynamic";
+import type { ComposeMode, ComposeResult } from "@/components/chat/EmailComposeDialog";
+import { draftHeaders } from "@/components/chat/emailDraft";
 import { useThreadFiles } from "@/lib/threadFiles";
 import {
   Children,
@@ -60,6 +57,22 @@ import {
   useState,
   type ReactNode,
 } from "react";
+
+/* v1.311.0: the compose dialog opens only when someone presses Save to Drafts
+ * or Send, yet every chat visit downloaded it (~21 kB raw) because this card
+ * renders for every ```email fence. Deferred like the page's other on-demand
+ * panels (`{ ssr: false }`, no `loading`: the dialog is a portal that shows
+ * nothing until it mounts). `draftHeaders` — the one VALUE this card needs at
+ * render — now comes from ./emailDraft; a value import from the dialog's own
+ * module would have kept the whole dialog on the route regardless (v1.258.0).
+ * Only types are imported from the dialog, and types are erased. */
+const EmailComposeDialog = dynamic(
+  () =>
+    import("@/components/chat/EmailComposeDialog").then((m) => ({
+      default: m.EmailComposeDialog,
+    })),
+  { ssr: false },
+);
 
 /**
  * Fence languages that mark a draft the USER will send, rather than code.

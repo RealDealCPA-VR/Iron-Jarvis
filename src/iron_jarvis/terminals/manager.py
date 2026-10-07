@@ -777,10 +777,19 @@ class TerminalManager:
         return True
 
     def restore(
-        self, entry: dict[str, Any], *, env: dict | None = None, backend: PtyBackend | None = None
+        self,
+        entry: dict[str, Any],
+        *,
+        env: dict | None = None,
+        backend: PtyBackend | None = None,
+        register: bool = True,
     ) -> TerminalSession | None:
         """Re-open ONE persisted session under its original id, with its prior
-        scrollback preloaded. Returns None at the session cap."""
+        scrollback preloaded. Returns None at the session cap.
+
+        ``register=False`` (v1.311.0) leaves the session out of the manager's
+        dict: ``rehydrate`` restores panes concurrently and registers them
+        afterwards IN SNAPSHOT ORDER, so the rail keeps the user's order."""
         cwd = entry.get("cwd") or str(Path.home())
         if not Path(cwd).is_dir():  # the folder may have moved/been deleted
             cwd = str(Path.home())
@@ -858,8 +867,9 @@ class TerminalManager:
                 session._tail_truncated = len(session._tail) >= _SNAPSHOT_SCROLLBACK
             except Exception:  # pragma: no cover - bad data, keep the fresh shell
                 pass
-        with self._lock:
-            self._sessions[rid] = session
+        if register:
+            with self._lock:
+                self._sessions[rid] = session
         return session
 
     def _restore_accounts(self, recorded: Any) -> Any | None:
@@ -944,33 +954,81 @@ class TerminalManager:
         entries = data.get("terminals") if isinstance(data, dict) else data
         if not isinstance(entries, list):
             return 0
+        entries = [e for e in entries if isinstance(e, dict)]
+        if not entries:
+            return 0
+        # THE PANES COME BACK CONCURRENTLY (v1.311.0, finding
+        # boot-blocked-by-mcp-and-pane-respawn). Each restore is a shell spawn
+        # (~0.3 s for pwsh under ConPTY) and they ran one after another inside
+        # the lifespan: 0.85-1.0 s of every boot on the user's 3-pane install.
+        # They are independent processes, so they spawn side by side and boot
+        # waits for the SLOWEST one, not the sum.
+        #
+        # THE CAP IS DECIDED UP FRONT: concurrent restores would each pass
+        # `restore`'s own check-then-act before any of them registered, so
+        # only as many entries as there are free slots are attempted, and
+        # those slots are RESERVED (`_reserved`, the v1.303.3 create() rule)
+        # until the sessions are registered — a create() racing the boot
+        # cannot overshoot either.
+        with self._lock:
+            self.purge_dead()
+            live = sum(1 for s in self._sessions.values() if s.alive)
+            free = self.max_sessions - live - len(self._pending_panes) - self._reserved
+            batch = entries[: max(0, free)]
+            self._reserved += len(batch)
+        slots: list[TerminalSession | None] = [None] * len(batch)
+
+        def _restore_at(i: int) -> None:
+            try:
+                session = self.restore(batch[i], env=env, backend=backend, register=False)
+                if session is not None:
+                    # No pane is attached at boot, so without a reader the fresh
+                    # shell's output (banner + prompt) never reaches the tail —
+                    # a studio session resumed against the STALE replayed tail
+                    # would then type briefs into a bare shell. Drain from the
+                    # start; it yields whenever a Build pane attaches.
+                    session.start_autodrain()
+                    slots[i] = session
+            except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
+                log.debug("failed to restore a terminal", exc_info=True)
+
         restored = 0
         on_accounts = False
         self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
         try:
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    session = self.restore(entry, env=env, backend=backend)
-                    if session is not None:
-                        # No pane is attached at boot, so without a reader the fresh
-                        # shell's output (banner + prompt) never reaches the tail —
-                        # a studio session resumed against the STALE replayed tail
-                        # would then type briefs into a bare shell. Drain from the
-                        # start; it yields whenever a Build pane attaches.
-                        session.start_autodrain()
-                        restored += 1
-                        on_accounts = on_accounts or any(
-                            a.get("source") == "iron-proxy"
-                            for a in (session.accounts or {}).values()
-                        )
-                except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
-                    log.debug("failed to restore a terminal", exc_info=True)
+            if len(batch) == 1:
+                _restore_at(0)  # nothing to overlap: no pool, no extra thread
+            elif batch:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(
+                    max_workers=min(len(batch), 8), thread_name_prefix="pane-restore"
+                ) as pool:
+                    list(pool.map(_restore_at, range(len(batch))))
+            # Registered AFTER the join, in snapshot order, under one lock hold.
+            with self._lock:
+                for session in slots:
+                    if session is None:
+                        continue
+                    self._sessions[session.id] = session
+                    restored += 1
+                    on_accounts = on_accounts or any(
+                        a.get("source") == "iron-proxy"
+                        for a in (session.accounts or {}).values()
+                    )
         finally:
             self._restore_deadline = None
+            with self._lock:
+                self._reserved -= len(batch)
+        if len(entries) > len(batch):
+            log.warning(
+                "restored %d of %d terminal panes: the session cap (%d) was reached",
+                restored,
+                len(entries),
+                self.max_sessions,
+            )
         if restored:
-            self._persist()  # rewrite with the freshly-restored (same) set
+            self._persist()  # ONE snapshot of the freshly-restored (same) set
         if on_accounts:
             self._verify_accounts_later()
         return restored

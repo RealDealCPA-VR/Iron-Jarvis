@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, Mail, Paperclip, X } from "lucide-react";
 import { get, post } from "@/lib/api";
+import { splitAddresses } from "@/components/chat/emailDraft";
 
 export type ComposeMode = "draft" | "send";
 
@@ -32,43 +33,10 @@ interface ChannelRow {
   type?: string;
 }
 
-/** "a@x.com, Ann <b@y.com>; c@z.com" → one string per address. */
-export function splitAddresses(raw: string): string[] {
-  return raw
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/**
- * The draft's own "To:" / "Cc:" header lines, when the model wrote them at the
- * top of the body (only the first few lines count — a "To:" further down is
- * part of the message). `body` is the text with those header lines removed.
- */
-export function draftHeaders(text: string): { to: string[]; cc: string[]; body: string } {
-  const lines = text.split(/\r?\n/);
-  const to: string[] = [];
-  const cc: string[] = [];
-  const keep: string[] = [];
-  let scanned = 0;
-  let inHeader = true;
-  for (const line of lines) {
-    if (inHeader && scanned < 6) {
-      const m = /^\s*(to|cc)\s*:\s*(.+?)\s*$/i.exec(line);
-      if (m) {
-        (m[1].toLowerCase() === "to" ? to : cc).push(...splitAddresses(m[2]));
-        scanned += 1;
-        continue;
-      }
-      if (line.trim()) {
-        scanned += 1;
-        inHeader = false;
-      }
-    }
-    keep.push(line);
-  }
-  return { to, cc, body: keep.join("\n").replace(/^\s*\n/, "") };
-}
+// v1.311.0: the value helpers moved to ./emailDraft so DraftCard can call
+// draftHeaders without keeping this whole dialog on the chat route (it is now
+// loaded with next/dynamic). Re-exported so every importer is unchanged.
+export { draftHeaders, splitAddresses } from "@/components/chat/emailDraft";
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/);

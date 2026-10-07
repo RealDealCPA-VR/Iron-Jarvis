@@ -464,7 +464,13 @@ def register(app: FastAPI, d) -> None:
         force an immediate refresh (and is what the periodic boot loop calls).
         """
         from ...providers.cli_detect import detect_cli_providers
+        from ...providers.manager import invalidate_cli_presence
 
+        # v1.311.0 review: the PATH lookup is memoised now (cli-binary-probe-
+        # uncached-on-loop), so a CLI installed a moment ago would read "not
+        # installed" until its entry expired. Re-detect means LOOK AGAIN: drop
+        # the memo first (a sync route on the threadpool, so the scan is fine).
+        invalidate_cli_presence()
         detected = detect_cli_providers()
         rows = [dm.as_dict() for dm in detected]
         # v1.234.0: the subscription CLIs are re-PROBED for sign-in here

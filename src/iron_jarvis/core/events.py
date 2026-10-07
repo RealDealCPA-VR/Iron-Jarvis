@@ -245,6 +245,10 @@ class EventType:
     #: scope_id, tool, label, expires_at} — the label is the REDACTED line.
     GRANT_CREATED = "grant.created"
     GRANT_REVOKED = "grant.revoked"
+    #: The daemon's BACKGROUND MCP load finished (v1.311.0): boot no longer
+    #: waits on pack handshakes, so this says when the packs' tools reached
+    #: the registry. {packs: [{name, state, tools_loaded}], tools, ms}.
+    MCP_LOADED = "mcp.loaded"
 
 
 @dataclass
@@ -303,13 +307,34 @@ class EventBus:
             else:
                 self._enqueue(queue, event)
         # THEN the sync handlers (persistence, logging, comm/webhook delivery),
-        # which may do BLOCKING work. Run each off the event loop so a slow handler
+        # which may do BLOCKING work. They run off the event loop so a slow handler
         # can't freeze the daemon — sequentially so a single publish never fans out
         # concurrent SQLite writers. Awaiting keeps the contract "handlers have run
         # by the time publish returns".
-        for handler in self._handlers:
-            await self._dispatch(handler, event)
+        #
+        # ONE executor hop for all of them (v1.311.0, finding
+        # eventbus-serial-hops-and-webhook-select-per-event). Each handler used
+        # to get its own `to_thread`, so a publish awaited ~9 serial threadpool
+        # round trips — and the agent runtime and router await publish inline
+        # (provider.routed, llm.completed, tool.executed, plan.step_* on every
+        # step). Same order, same one-at-a-time, same per-handler isolation.
+        handlers = list(self._handlers)
+        if handlers:
+            await asyncio.to_thread(self._run_handlers, handlers, event)
         return event
+
+    @staticmethod
+    def _run_handlers(handlers: "list[Callable[[Event], None]]", event: Event) -> None:
+        """Run every sync handler for one event, in registration order, on the
+        calling (worker) thread. A raising handler is logged and the rest still
+        run — a bad consumer must not break publishing."""
+        for handler in handlers:
+            try:
+                handler(event)
+            except Exception:
+                logger.warning(
+                    "event handler %r failed for %s", handler, event.type, exc_info=True
+                )
 
     @staticmethod
     def _enqueue(queue: "asyncio.Queue[Event]", event: Event) -> None:
@@ -328,7 +353,9 @@ class EventBus:
 
     @staticmethod
     async def _dispatch(handler: Callable[[Event], None], event: Event) -> None:
-        """Run one sync handler off the loop; a failure is logged, never raised."""
+        """Run ONE sync handler off the loop; a failure is logged, never raised.
+        (``publish`` batches every handler into one hop since v1.311.0; this
+        stays for callers that dispatch a single handler.)"""
         try:
             await asyncio.to_thread(handler, event)
         except Exception:  # a bad consumer must not break publishing

@@ -121,6 +121,11 @@ _HOT_INDEXES = (
     # without its index — this line gives an old install the same index a
     # fresh one gets (same name as SQLModel's, so a fresh DB is a no-op).
     ("ix_agentthreadrecord_project_id", "agentthreadrecord", "project_id"),
+    # v1.311.0: the chat sidebar re-lists threads after EVERY autosave, newest
+    # first with a LIMIT (GET /chat/threads). Without this index SQLite builds a
+    # temp B-tree over every thread on each reply; with it, the LIMIT reads the
+    # newest N rows straight off the index (contract W3-3).
+    ("ix_chatthreadrecord_updated_at", "chatthreadrecord", "updated_at"),
 )
 
 

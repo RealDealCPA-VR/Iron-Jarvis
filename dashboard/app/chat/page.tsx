@@ -97,6 +97,7 @@ import {
   Zap,
 } from "lucide-react";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { cacheDrop, cachedGet, cacheSet } from "@/lib/apiCache";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import {
   CompactionCard,
@@ -186,6 +187,7 @@ interface PanelResponse {
   context?: { chat_messages?: number; chat_dropped?: number };
 }
 import { useEvents } from "@/lib/useEvents";
+import { CHAT_EVENT_TYPES } from "@/components/chat/chatEventTypes";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
 import {
@@ -227,9 +229,6 @@ const CHAT_HINT =
   "Talk to Iron Jarvis. Ask anything — quick answers come straight back, and " +
   "work that needs files, tools or several steps just gets done. Attach files, " +
   "or drop them anywhere on the page.";
-import { DocPreview } from "@/components/chat/DocPreview";
-import { FilesPanel } from "@/components/terminal/FilesPanel";
-import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import type { ProjectSurfaceView } from "@/components/project/ProjectSurfaces";
 import {
   SourcesRow,
@@ -295,6 +294,37 @@ const GoalBirth = dynamic(
   () =>
     import("@/components/chat/GoalContractCard").then((m) => ({
       default: m.GoalBirth,
+    })),
+  { ssr: false },
+);
+/* v1.311.0: three more panels that render only after a click — the file
+ * preview (a file chip or a generated document), the workspace's files list,
+ * and the folder tree that picks it (the workspace panel is closed by
+ * default). With the e-mail composer (deferred inside DraftCard) the finding
+ * measured ~62 kB of raw JS every chat visit parsed for nothing. Checked
+ * against the v1.258.0 rule first: the page imports ONLY the component from
+ * each module, and no other module on this route value-imports any of the
+ * three (DocPreview's helpers have no importers outside the file), so the
+ * modules really leave the route. The fourth, the e-mail composer, is
+ * deferred inside DraftCard. */
+const DocPreview = dynamic(
+  () =>
+    import("@/components/chat/DocPreview").then((m) => ({
+      default: m.DocPreview,
+    })),
+  { ssr: false },
+);
+const FilesPanel = dynamic(
+  () =>
+    import("@/components/terminal/FilesPanel").then((m) => ({
+      default: m.FilesPanel,
+    })),
+  { ssr: false },
+);
+const DirectoryTree = dynamic(
+  () =>
+    import("@/components/terminal/DirectoryTree").then((m) => ({
+      default: m.DirectoryTree,
     })),
   { ssr: false },
 );
@@ -1126,6 +1156,67 @@ const WORKSPACE_KEY = "ij_chat_workspace";
 const WORKSPACE_OPEN_KEY = "ij_chat_workspace_open";
 // The right-panel project selection persists across visits (like the folder).
 const PROJECT_KEY = "ij_chat_project";
+// v1.311.0: the conversation THIS WINDOW had open, so Chat → Overview → Chat
+// reopens it instead of a blank new chat. sessionStorage on purpose: per
+// window (two windows each keep their own place) and gone with the window, so
+// a fresh launch still opens on a new conversation. Value: JSON
+// {id, project} — the project lets a restore stay inside the scope the page
+// is opening on (a ?project= link to another project never pulls a foreign
+// conversation in).
+const OPEN_THREAD_KEY = "ij_chat_open_thread";
+// v1.311.0: the event filter, built ONCE so useEvents sees the same list on
+// every render (see components/chat/chatEventTypes.ts).
+const CHAT_EVENTS_OPTS = { types: CHAT_EVENT_TYPES };
+
+/** The thread-list path for a scope — also the payload-cache key, so each
+ *  project's list is remembered separately and one scope's list can never be
+ *  painted for another. */
+function threadsPath(scope: string | null): string {
+  return scope ? `/chat/threads?project_id=${encodeURIComponent(scope)}` : "/chat/threads";
+}
+
+/** The project this visit opens on: a ?project= deep link, else the last-used
+ *  choice. Read after mount only (never in a state initializer — the server
+ *  render has no window). */
+function wantedProjectId(): string | null {
+  try {
+    return (
+      new URLSearchParams(window.location.search).get("project") ||
+      window.localStorage.getItem(PROJECT_KEY) ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readOpenThread(): { id: string; project: string | null } | null {
+  try {
+    const raw = window.sessionStorage.getItem(OPEN_THREAD_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { id?: unknown; project?: unknown };
+    if (typeof v?.id !== "string" || !v.id) return null;
+    return { id: v.id, project: typeof v.project === "string" && v.project ? v.project : null };
+  } catch {
+    return null;
+  }
+}
+
+function rememberOpenThread(id: string, project: string | null): void {
+  try {
+    window.sessionStorage.setItem(OPEN_THREAD_KEY, JSON.stringify({ id, project }));
+  } catch {
+    /* a blocked or full storage only costs the restore */
+  }
+}
+
+function forgetOpenThread(): void {
+  try {
+    window.sessionStorage.removeItem(OPEN_THREAD_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 // Auto tools: "0" = the user turned the seamless arming off (default on).
 const AUTO_TOOLS_KEY = "ij_chat_auto_tools";
 // Selecting a project with a live folder auto-arms the file essentials (find,
@@ -2569,6 +2660,16 @@ export default function ChatPage() {
   const [rememberingId, setRememberingId] = useState<string | null>(null);
   const [rememberedId, setRememberedId] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
+  // v1.311.0: the scope the sidebar's list was last ASKED for (undefined =
+  // never). A list answer applies only while its scope is still this one, so a
+  // slow answer for an old scope can never repaint the rail; and a request for
+  // the scope already asked for is not sent again.
+  const listScopeRef = useRef<string | null | undefined>(undefined);
+  // True once the page KNOWS its project: /projects answered (or failed), or
+  // the user picked/cleared one. Before that a null projectId is "not known
+  // yet", not "no project".
+  const projectsSettledRef = useRef(false);
+  const mountedRef = useRef(false);
   // The reader scrolled up: show a "Jump to latest" pill and STOP auto-scrolling
   // so streamed tokens don't yank them back down while they re-read.
   const [showJump, setShowJump] = useState(false);
@@ -2592,7 +2693,10 @@ export default function ChatPage() {
   // deselecting the project then clears only that set, never a user's own.
   const autoArmedRef = useRef(false);
 
-  const { events } = useEvents(150);
+  // v1.311.0: only the event types this page reads reach it — a browser tab
+  // switch or the router's provider.routed no longer re-runs the whole page
+  // (see chatEventTypes.ts). Module-level options: one stable list.
+  const { events } = useEvents(150, CHAT_EVENTS_OPTS);
   // Threads are scoped to the selected project (the daemon filters by
   // project_id); with no project every saved conversation shows. The sidebar's
   // title filter narrows client-side on top.
@@ -2985,6 +3089,11 @@ export default function ChatPage() {
   // something — a plain reply on a thread whose setup wasn't restored (older
   // daemon, or nothing armed) must never PUT empties over a stored setup.
   const sendSetupRef = useRef(false);
+  // v1.311.0: how many USER setup edits this page has seen (markSetupChanged).
+  // openThread snapshots it at a cached paint: an edit made before the
+  // thread's GET answers is the user acting on the painted conversation, and
+  // that GET must then not lay the stored setup back over it.
+  const setupEditsRef = useRef(0);
   // Event-id boundary captured at the start of each agent turn: we only treat
   // events NEWER than this as belonging to the current turn. This stops a stale
   // `agent.completed` from the previous turn (same session id, still in the
@@ -3069,23 +3178,38 @@ export default function ChatPage() {
 
   // Load the saved-thread list, re-scoped whenever the project selection
   // changes (best-effort — the sidebar just stays empty).
-  useEffect(() => {
-    let cancelled = false;
-    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
-    get<{ threads: ThreadSummary[] }>(`/chat/threads${q}`)
-      .then((d) => {
-        if (!cancelled) setThreads(d.threads ?? []);
-      })
-      .catch(() => {
-        /* sidebar stays empty */
-      })
-      .finally(() => {
-        if (!cancelled) setThreadsLoading(false);
-      });
+  //
+  // v1.311.0 (chat-entry-waterfall): opening Chat used to fetch the list
+  // TWICE — unscoped on mount (projectId starts null), then again scoped once
+  // /projects confirmed the remembered project — and could paint the unscoped
+  // list in between. Until /projects settles, a null projectId now means "the
+  // project this visit is opening on" (wantedProjectId), so the FIRST request
+  // is already scoped and the confirmation finds that scope asked for and
+  // fetches nothing. A layout effect so a cached list (showThreadsFor seeds
+  // from lib/apiCache) is in the first frame, not a skeleton frame later.
+  useLayoutEffect(() => {
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
     };
+  }, []);
+  useLayoutEffect(() => {
+    const scope =
+      projectId === null && !projectsSettledRef.current ? wantedProjectId() : projectId;
+    void showThreadsFor(scope);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  /** v1.311.0: remember the open conversation for THIS window, so leaving
+   *  Chat and coming back reopens it (the restore lives with the landing
+   *  params below). Called where a thread BECOMES the open one — opened,
+   *  deep-linked, minted by its first save — and where its project changes;
+   *  New chat forgets it. Imperative on purpose: an effect keyed on threadId
+   *  ran AFTER a New chat pressed in the same tick and wrote the old id back. */
+  function noteOpenThread() {
+    const id = saveTargetRef.current.id;
+    if (id) rememberOpenThread(id, projectIdRef.current);
+  }
 
   // Restore the saved persona choice + workspace (after mount, so SSR markup
   // matches the first client render). When NO persona has ever been saved
@@ -3150,10 +3274,24 @@ export default function ChatPage() {
           /* ignore */
         }
         const found = wanted ? list.find((p) => p.id === wanted) : undefined;
-        if (found) applyProject(found, { armDefaults: true });
+        projectsSettledRef.current = true;
+        if (found) {
+          // v1.311.0: a conversation restored before /projects answered may
+          // already have scoped the page to this project — confirm it without
+          // arming the project's defaults over that thread's own setup.
+          applyProject(found, { armDefaults: projectIdRef.current !== found.id });
+        } else if (projectIdRef.current === null) {
+          // The remembered project is gone (or none was wanted): the rail was
+          // possibly asked for its list — fall back to every conversation.
+          void showThreadsFor(null);
+        }
       })
       .catch(() => {
         /* the panel just shows "No project" */
+        if (cancelled) return;
+        projectsSettledRef.current = true;
+        // Unconfirmed, the page is NOT scoped: the rail must agree with it.
+        if (projectIdRef.current === null) void showThreadsFor(null);
       });
     return () => {
       cancelled = true;
@@ -3194,6 +3332,14 @@ export default function ChatPage() {
         inputRef.current?.focus();
       }
       if (thread) void openThread(thread);
+      else if (!ask && !skill && !wantPersona) {
+        // v1.311.0: no landing params — reopen the conversation this window
+        // had open (a ?thread= link wins and becomes the remembered one; an
+        // ask/skill/persona landing is the start of something new). Only
+        // inside the scope this visit opens on.
+        const open = readOpenThread();
+        if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
+      }
       if (ask || skill || thread || wantPersona) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
@@ -3420,8 +3566,10 @@ export default function ChatPage() {
    *  chosen. `armDefaults` stays off when a thread restore drives the switch —
    *  the thread's own saved setup wins. */
   function applyProject(p: ProjectOption, opts: { armDefaults: boolean }) {
+    projectsSettledRef.current = true;
     setProjectId(p.id);
     projectIdRef.current = p.id;
+    noteOpenThread(); // the remembered conversation's scope follows
     try {
       window.localStorage.setItem(PROJECT_KEY, p.id);
     } catch {
@@ -3445,8 +3593,14 @@ export default function ChatPage() {
    *  panel auto-armed, and return the workspace to the user's own default. */
   function clearProject() {
     setProjectView("chat"); // a plain chat has no project surfaces
+    projectsSettledRef.current = true;
     setProjectId(null);
     projectIdRef.current = null;
+    noteOpenThread(); // the remembered conversation's scope follows
+    // Already null (cleared before /projects confirmed a remembered project):
+    // no state change re-runs the list effect, so unscope the rail here.
+    // showThreadsFor skips the request when the rail is already unscoped.
+    void showThreadsFor(null);
     try {
       window.localStorage.removeItem(PROJECT_KEY);
     } catch {
@@ -3505,13 +3659,37 @@ export default function ChatPage() {
    *  moot. Scoped to the selected project (read via ref: refreshes fire from
    *  the autosave chain, where closures go stale). */
   async function refreshThreads() {
+    // The scope the rail is SHOWING (v1.311.0) — before /projects confirms a
+    // remembered project that is the remembered one, not the still-null
+    // projectId, so a refresh never swaps in another scope's list.
+    const scope = listScopeRef.current === undefined ? projectIdRef.current : listScopeRef.current;
+    await showThreadsFor(scope, true);
+  }
+
+  /** Point the sidebar at `scope`'s conversations (v1.311.0). A scope already
+   *  asked for is not asked again unless `force` (a refresh); a NEW scope
+   *  paints its cached list at once (the last answer this window saw for that
+   *  exact path) and revalidates behind it. Quiet on failure, like before —
+   *  the list just goes stale until the next refresh. */
+  async function showThreadsFor(scope: string | null, force = false): Promise<void> {
+    if (!force && listScopeRef.current === scope) return;
+    const path = threadsPath(scope);
+    if (listScopeRef.current !== scope) {
+      const cached = cachedGet<{ threads?: ThreadSummary[] }>(path);
+      if (cached) {
+        setThreads(cached.threads ?? []);
+        setThreadsLoading(false);
+      }
+    }
+    listScopeRef.current = scope;
     try {
-      const pid = projectIdRef.current;
-      const q = pid ? `?project_id=${encodeURIComponent(pid)}` : "";
-      const d = await get<{ threads: ThreadSummary[] }>(`/chat/threads${q}`);
-      setThreads(d.threads ?? []);
+      const d = await get<{ threads: ThreadSummary[] }>(path);
+      cacheSet(path, d);
+      if (mountedRef.current && listScopeRef.current === scope) setThreads(d.threads ?? []);
     } catch {
-      /* quiet — the list just goes stale until the next refresh */
+      /* quiet — the sidebar keeps what it shows */
+    } finally {
+      if (mountedRef.current && listScopeRef.current === scope) setThreadsLoading(false);
     }
   }
 
@@ -3678,6 +3856,7 @@ export default function ChatPage() {
    *  (arming a tool then navigating off must not lose it). */
   function markSetupChanged() {
     sendSetupRef.current = true;
+    setupEditsRef.current += 1;
     setSetupVersion((v) => v + 1);
   }
 
@@ -3786,6 +3965,7 @@ export default function ChatPage() {
         const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
           setThreadId(res.id);
+          noteOpenThread(); // a new conversation's first save names it
           // On disk again — but only the LATEST queued save may retire the
           // chip (CL2): an older save landing while a newer one is still in
           // the chain says nothing about what is on screen now.
@@ -3862,6 +4042,22 @@ export default function ChatPage() {
     target.id = res.id; // "new" → real id; later saves in this convo reuse it
     if (res.updated_at) target.updatedAt = res.updated_at;
     target.syncedLen = sent.length;
+    // v1.311.0: keep this window's copy of the thread as current as the disk,
+    // so reopening it (or coming back to Chat) paints what was last saved, not
+    // what it held when it was first opened. The setup and persona this save
+    // carried ride the copy too (the daemon stores them wholesale), so a paint
+    // never restores a setup older than the one on disk.
+    const cachePath = `/chat/threads/${res.id}`;
+    const had = cachedGet<ThreadDetail>(cachePath);
+    cacheSet(cachePath, {
+      ...(had ?? { title: "" }),
+      id: res.id,
+      messages: sent,
+      updated_at: target.updatedAt ?? null,
+      project_id: body.project_id ?? null,
+      ...(body.setup ? { setup: body.setup } : {}),
+      ...(body.persona ? { persona: body.persona } : {}),
+    } satisfies ThreadDetail);
     if (sent !== msgs && saveTargetRef.current === target) {
       // The merged array is what is on disk: show it (the other window's
       // bubbles included) instead of the stale copy this window built.
@@ -3871,14 +4067,129 @@ export default function ChatPage() {
     return res;
   }
 
-  /** Load a saved thread into the pane (chat-mode concern; resets agent state). */
-  async function openThread(id: string) {
+  /** Point the chat's project scope at an opened thread's tag (the
+   *  context-follows-the-conversation step of openThread). `folder` lets the
+   *  project folder become the workspace when the thread saved none; it is
+   *  off while a turn sent on a cached paint is running (v1.311.0), whose
+   *  folder was already chosen when it was sent. */
+  function followThreadProject(t: ThreadDetail, folder: boolean) {
+    const tpid = t.project_id ?? null;
+    if (tpid === projectIdRef.current) return;
+    const proj = tpid ? projects.find((x) => x.id === tpid) : undefined;
+    if (tpid && proj) {
+      applyProject(proj, { armDefaults: false });
+    } else if (tpid) {
+      // Unknown project (list still loading / deleted) — keep the tag.
+      setProjectId(tpid);
+      projectIdRef.current = tpid;
+      syncProjectUrl(tpid);
+    } else {
+      clearProject();
+    }
+    if (folder && proj?.root && proj.root_exists !== false && !t.setup?.workspace_dir) {
+      setWorkspaceDir(proj.root);
+    }
+  }
+
+  /** The per-conversation setup a fresh open starts from: nothing armed, the
+   *  user's DEFAULT posture, no document chips, and nothing to persist until
+   *  a thread's own setup restores (or the user changes something). */
+  function resetThreadSetup() {
+    selectedToolsRef.current = [];
+    setSelectedTools([]); // armed tools are per-conversation
+    setSelectedConnectors([]); // so are connector toggles
+    setActiveSkill("");
+    // New chat returns to the user's DEFAULT posture (the localStorage one),
+    // not the previous thread's — a YOLO grant is per-conversation consent
+    // and must never leak into a conversation that never made it.
+    try {
+      setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
+    } catch {
+      setApprovalMode("approve_for_me");
+    }
+    threadDocsRef.current = [];
+    setThreadDocs([]);
+    sendSetupRef.current = false;
+  }
+
+  /** Restore an opened thread's persona, saved setup and document chips.
+   *  v1.311.0: lifted out of openThread's success path so the CACHED paint
+   *  applies it too. The paint moves the save box onto the real thread, and
+   *  the daemon replaces a stored setup wholesale on PUT — so a setup edit (or
+   *  a send) made on a paint still sitting on the reset defaults PUT empties
+   *  over the conversation's tools, folder, documents, model and posture.
+   *  The refs are written now, not at the next render, because a save queued
+   *  before React re-renders reads them. `hadSetup`: a setup applied earlier
+   *  (the paint's) that this copy no longer carries goes back to the reset. */
+  function applyThreadSetup(t: ThreadDetail, hadSetup = false) {
+    setPersonaEditorOpen(false); // never carry a stale draft into another thread
+    // A known name selects normally; an unlisted name / free-text instructions
+    // are tolerated by the select (and sent verbatim, which the server treats
+    // as free text). LOCAL selection only — a round-tripped persona (possibly
+    // an unsaved free-text draft) must never overwrite the stored default.
+    if (t.persona) selectPersonaLocal(t.persona);
+    // Restore the thread's saved setup so reopening a conversation comes back
+    // armed the way it was left. sendSetupRef stays false when the thread has
+    // none — a plain reply then never PUTs empties over a stored setup.
+    const setup = t.setup;
+    if (setup && typeof setup === "object") {
+      const tools = Array.isArray(setup.tools)
+        ? setup.tools.filter((x) => typeof x === "string").slice(0, MAX_TOOLS)
+        : [];
+      selectedToolsRef.current = tools;
+      setSelectedTools(tools);
+      setSelectedConnectors(
+        Array.isArray(setup.connectors)
+          ? setup.connectors
+              .filter((x) => typeof x === "string")
+              .slice(0, MAX_CONNECTORS)
+          : [],
+      );
+      setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
+      // Thread-local posture restore (v1.188.0): absent = the stored
+      // default IS "approve_for_me" (the daemon never stores the default),
+      // and a reopened thread must come back with the posture it was left
+      // on — a YOLO thread reopening as ask-everything would re-card work
+      // the user already waved through.
+      setApprovalMode(asApprovalMode(setup.approval_mode));
+      // Thread-local restore: the panel points at this conversation's folder
+      // without touching the localStorage default (New chat returns to it).
+      setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
+      setChoice(
+        setup.provider && setup.model ? `${setup.provider}::${setup.model}` : "",
+      );
+      setReasoning(REASONING_LEVELS.includes(setup.reasoning ?? "") ? (setup.reasoning as string) : "");
+      sendSetupRef.current = true;
+    } else if (hadSetup) {
+      resetThreadSetup();
+    }
+    // Document chips: recorded ones win; otherwise the server's transcript-
+    // derived recovery fills in for threads saved before v1.91.0 recorded
+    // them. No auto-open — the chips offer the preview until dismissed.
+    const recorded =
+      setup && typeof setup === "object" && Array.isArray(setup.documents)
+        ? setup.documents.filter((x) => typeof x === "string")
+        : [];
+    const derived = Array.isArray(t.derived_documents)
+      ? t.derived_documents.filter((x) => typeof x === "string")
+      : [];
+    const docs = (recorded.length ? recorded : derived).slice(-MAX_THREAD_DOCS);
+    threadDocsRef.current = docs;
+    setThreadDocs(docs);
+  }
+
+  /** Load a saved thread into the pane (chat-mode concern; resets agent state).
+   *  `restore` (v1.311.0): this is the window reopening the conversation it
+   *  had open — a thread that has since gone is forgotten quietly, because a
+   *  vanished thread is not an error the user made. */
+  async function openThread(id: string, opts: { restore?: boolean } = {}) {
     if (id === threadId) {
       setSidebarOpen(false);
       return;
     }
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
+    const openGen = chatGenRef.current;
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
     tts.cancel(); // stop reading the previous thread's reply
     awaitingIdRef.current = null;
@@ -3895,18 +4206,8 @@ export default function ChatPage() {
     convFolderRef.current = null;
     setWorkfolder(null);
     setWorkfolderNote("");
-    setSelectedTools([]); // armed tools are per-conversation
-    setSelectedConnectors([]); // so are connector toggles
-    // New chat returns to the user's DEFAULT posture (the localStorage one),
-    // not the previous thread's — a YOLO grant is per-conversation consent
-    // and must never leak into a conversation that never made it.
-    try {
-      setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
-    } catch {
-      setApprovalMode("approve_for_me");
-    }
+    resetThreadSetup(); // until this thread's setup (if any) restores its own
     setPreviewPath(null); // the preview belongs to the previous conversation
-    setThreadDocs([]); // until this thread's setup (if any) restores its own
     // Clear the chip AND orphan any in-flight compaction fetch: a bare state
     // clear leaves compactionGenRef untouched, so a GET started for the
     // PREVIOUS thread would still pass the gen guard when it resolves after
@@ -3928,9 +4229,102 @@ export default function ChatPage() {
     sendingRef.current = false;
     pinnedRef.current = true; // a loaded thread scrolls to its latest message
     setShowJump(false);
+    // v1.311.0: paint the copy this window last saw at once and revalidate
+    // behind it — reopening a conversation (or coming back to Chat) no longer
+    // waits on the GET to show anything. The SAVE BOX moves with the paint:
+    // a turn sent before the GET answers saves into THIS thread under the
+    // cached version stamp, and the CL3 409 merge re-bases it onto whatever
+    // is newer on disk, so a stale copy can never clobber the thread.
+    const path = `/chat/threads/${id}`;
+    const cached = cachedGet<ThreadDetail>(path);
+    const seeded = Boolean(cached && Array.isArray(cached.messages));
+    let seedTarget: SaveTarget | null = null;
+    const seedSetupEdits = setupEditsRef.current;
+    if (cached && seeded) {
+      const daemon = cached.owner === "daemon";
+      setMessages(cached.messages);
+      // The ref now, not at the next render: "has the user acted since the
+      // paint?" below compares against exactly this array, and a GET that
+      // answers before React re-renders must not read the LEFT thread's.
+      messagesRef.current = cached.messages;
+      setCommMeta(
+        daemon ? { channel: cached.comm_channel ?? "", display: cached.comm_display ?? "" } : null,
+      );
+      seedTarget = {
+        id: cached.id,
+        daemon,
+        updatedAt: cached.updated_at ?? undefined,
+        syncedLen: cached.messages.length,
+      };
+      saveTargetRef.current = seedTarget;
+      // The setup is painted WITH the messages: the save box above already
+      // points at the real thread, so an edit or a send on the paint must sit
+      // on this conversation's setup, never on the reset defaults (a PUT
+      // replaces the stored setup wholesale).
+      applyThreadSetup(cached);
+      // ...and its PROJECT (v1.311.0 review): the save and the send read
+      // `projectIdRef`, and a paint that left it null sent `project_id: null`
+      // — which the daemon reads as "untag" — and an ungrounded turn, while
+      // /projects or the thread GET were still on their way.
+      followThreadProject(cached, false);
+    }
+    // Has the user acted on the paint since it was drawn? (See the guard after
+    // the GET.) A send leaves `sendingRef` up while it runs and a new array in
+    // `messagesRef` once it lands; a setup edit bumps `setupEditsRef`.
+    const actedOnPaint = () =>
+      seedTarget !== null &&
+      cached !== undefined &&
+      (sendingRef.current ||
+        messagesRef.current !== cached.messages ||
+        setupEditsRef.current !== seedSetupEdits);
     try {
-      const t = await get<ThreadDetail>(`/chat/threads/${id}`);
+      const t = await get<ThreadDetail>(path);
+      // Only over the copy this open started from: a save that landed while
+      // this GET was out cached a NEWER copy (its own messages, setup and
+      // stamp), and the answer to a GET sent before that save is older.
+      if (cachedGet<ThreadDetail>(path) === cached) cacheSet(path, t);
+      // v1.311.0: New chat or another open while this GET was out owns the
+      // pane now. With the cached paint a user can act before the answer
+      // lands, so a late answer must not pull the conversation they left
+      // back onto the screen (and back into this window's memory).
+      if (chatGenRef.current !== openGen) return;
       const msgs = t.messages ?? [];
+      // v1.311.0: the cached paint looks loaded, so the user can send (or
+      // arm a tool) before this GET answers, and a send does not bump
+      // chatGenRef, so the guard above passes. Laying the server copy over
+      // that wiped the just-sent bubble mid-stream, swapped the save box out
+      // from under the in-flight queueSave (its `=== target` checks then
+      // skipped setThreadId / noteOpenThread), re-applied the stored setup
+      // over the live turn and, when the durable-at-send PUT landed first,
+      // offered Retry on a turn still streaming. So once the user has acted,
+      // the screen, the turn state and the save box stay theirs; only the
+      // conversation's identity (id, origin banner, compaction chip, project)
+      // is taken from the answer.
+      if (seedTarget && cached && actedOnPaint()) {
+        const isDaemon = t.owner === "daemon";
+        seedTarget.daemon = isDaemon; // a messaging thread's saves must no-op
+        // Fold the server's stamp in ONLY while it still describes what this
+        // window holds: no save has landed since the paint (that recorded
+        // its own, newer stamp) and the disk has exactly the painted bubbles.
+        // A newer disk copy keeps the paint's stamp, so the next save 409s
+        // and the CL3 merge re-bases this window's bubbles onto it; folding
+        // its stamp here would let that save clobber the other window's turns.
+        if (
+          seedTarget.updatedAt === (cached.updated_at ?? undefined) &&
+          msgs.length === cached.messages.length
+        ) {
+          seedTarget.updatedAt = t.updated_at ?? undefined;
+        }
+        setThreadId(t.id);
+        setCommMeta(
+          isDaemon ? { channel: t.comm_channel ?? "", display: t.comm_display ?? "" } : null,
+        );
+        void refreshCompaction(t.id);
+        followThreadProject(t, false);
+        noteOpenThread();
+        setSidebarOpen(false);
+        return;
+      }
       setMessages(msgs);
       setThreadId(t.id);
       setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
@@ -3990,79 +4384,43 @@ export default function ChatPage() {
       // chat to its project; an untagged one unscopes it. armDefaults stays
       // off — the thread's own saved setup (restored below) wins; without a
       // setup, the project folder still becomes the workspace.
-      const tpid = t.project_id ?? null;
-      if (tpid !== projectIdRef.current) {
-        const proj = tpid ? projects.find((x) => x.id === tpid) : undefined;
-        if (tpid && proj) {
-          applyProject(proj, { armDefaults: false });
-        } else if (tpid) {
-          // Unknown project (list still loading / deleted) — keep the tag.
-          setProjectId(tpid);
-          projectIdRef.current = tpid;
-          syncProjectUrl(tpid);
-        } else {
-          clearProject();
-        }
-        if (proj?.root && proj.root_exists !== false && !t.setup?.workspace_dir) {
-          setWorkspaceDir(proj.root);
-        }
-      }
-      setPersonaEditorOpen(false); // never carry a stale draft into another thread
-      // A known name selects normally; an unlisted name / free-text instructions
-      // are tolerated by the select (and sent verbatim, which the server treats
-      // as free text). LOCAL selection only — a round-tripped persona (possibly
-      // an unsaved free-text draft) must never overwrite the stored default.
-      if (t.persona) selectPersonaLocal(t.persona);
-      // Restore the thread's saved setup so reopening a conversation comes back
-      // armed the way it was left. sendSetupRef stays false when the thread has
-      // none — a plain reply then never PUTs empties over a stored setup.
-      const setup = t.setup;
-      if (setup && typeof setup === "object") {
-        setSelectedTools(
-          Array.isArray(setup.tools)
-            ? setup.tools.filter((x) => typeof x === "string").slice(0, MAX_TOOLS)
-            : [],
-        );
-        setSelectedConnectors(
-          Array.isArray(setup.connectors)
-            ? setup.connectors
-                .filter((x) => typeof x === "string")
-                .slice(0, MAX_CONNECTORS)
-            : [],
-        );
-        setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
-        // Thread-local posture restore (v1.188.0): absent = the stored
-        // default IS "approve_for_me" (the daemon never stores the default),
-        // and a reopened thread must come back with the posture it was left
-        // on — a YOLO thread reopening as ask-everything would re-card work
-        // the user already waved through.
-        setApprovalMode(asApprovalMode(setup.approval_mode));
-        // Thread-local restore: the panel points at this conversation's folder
-        // without touching the localStorage default (New chat returns to it).
-        setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
-        setChoice(
-          setup.provider && setup.model ? `${setup.provider}::${setup.model}` : "",
-        );
-        setReasoning(REASONING_LEVELS.includes(setup.reasoning ?? "") ? (setup.reasoning as string) : "");
-        sendSetupRef.current = true;
-      }
-      // Document chips: recorded ones win; otherwise the server's transcript-
-      // derived recovery fills in for threads saved before v1.91.0 recorded
-      // them. No auto-open — the chips offer the preview until dismissed.
-      const recorded =
-        setup && typeof setup === "object" && Array.isArray(setup.documents)
-          ? setup.documents.filter((x) => typeof x === "string")
-          : [];
-      const derived = Array.isArray(t.derived_documents)
-        ? t.derived_documents.filter((x) => typeof x === "string")
-        : [];
-      setThreadDocs(
-        (recorded.length ? recorded : derived).slice(-MAX_THREAD_DOCS),
-      );
+      followThreadProject(t, true);
+      noteOpenThread(); // after the project followed the conversation
+      // The paint already applied the cached copy's setup; the answer is the
+      // truth, so it is applied again (a copy that had a setup the disk no
+      // longer has goes back to the defaults the open started from).
+      applyThreadSetup(t, seeded && Boolean(cached?.setup));
       setSidebarOpen(false);
       inputRef.current?.focus();
     } catch (e) {
-      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      const offlineNow = e instanceof ApiError && e.status === 0;
+      if (e instanceof ApiError && e.status === 404) cacheDrop(path);
+      if (chatGenRef.current !== openGen) return; // the pane moved on
+      // v1.311.0: a turn the user already sent on the paint keeps its screen
+      // and its save box — the same rule as the success path. A thread that
+      // is gone is re-created by that turn's own save (the 404 path in
+      // noteSaveFailure), so wiping the pane here would only lose the turn.
+      if (actedOnPaint()) {
+        if (offlineNow) setOffline(true);
+        return;
+      }
+      // The cached paint was a promise the GET could not keep (the thread is
+      // gone or unreadable): take it back to a fresh conversation rather than
+      // leave a dead thread on screen with the save box aimed at it. Offline,
+      // the copy stays — it is still the last thing this window saw.
+      if (seeded && !offlineNow) {
+        setMessages([]);
+        setCommMeta(null);
+        setThreadId(null);
+        saveTargetRef.current = { id: null };
+        resetThreadSetup(); // the gone thread's painted setup must not arm the fresh one
+        forgetOpenThread();
+      }
+      if (opts.restore && !offlineNow) {
+        forgetOpenThread();
+        return;
+      }
+      if (offlineNow) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
     }
   }
@@ -5207,6 +5565,17 @@ export default function ChatPage() {
     tts.speakMore(full, flush);
   }
 
+  /** v1.311.0 (W3-1): the stream sent `reset` and a rewrite follows. The
+   *  consumed counter still points into the discarded text, so the rewrite
+   *  would be voiced from that offset (or not at all until it outgrew it).
+   *  An explicit signal from the stream, not an inference from a shorter
+   *  `full`: a rewrite whose first token is longer than the discarded text
+   *  never looks shorter. Before the first token there is nothing to undo. */
+  function resetTTSFeed() {
+    if (!tts.enabled || !ttsStreamStartedRef.current) return;
+    tts.resetStream();
+  }
+
   /** Persist the thread setup with an EXPLICIT documents list. State updates
    *  are async, so the doc-chip saves can't rely on currentSetup() seeing the
    *  new list — and the setupVersion effect skips a not-yet-saved thread,
@@ -5235,6 +5604,7 @@ export default function ChatPage() {
         const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
           setThreadId(res.id);
+          noteOpenThread(); // a new conversation's first save names it
           setSaveFailure(null);
         }
       } catch (e) {
@@ -5544,8 +5914,10 @@ export default function ChatPage() {
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
-        const streamRes = await stream.run(body, (_delta, full) =>
-          feedTTS(full, false),
+        const streamRes = await stream.run(
+          body,
+          (_delta, full) => feedTTS(full, false),
+          resetTTSFeed,
         );
         turnIdRef.current = "";
         // The notes the turn READ join the conversation as the user's own
@@ -6578,6 +6950,7 @@ export default function ChatPage() {
   }
 
   function newChat() {
+    forgetOpenThread(); // v1.311.0: the next visit starts fresh too
     chatGenRef.current += 1; // orphan any in-flight /chat reply
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
     tts.cancel(); // stop reading the old thread's reply

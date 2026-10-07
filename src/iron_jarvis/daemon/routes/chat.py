@@ -53,6 +53,9 @@ from ...core.trust import (
     low_trust_overrides,
     normalize_trust,
 )
+# The module itself, for the knobs read at CALL time (tests shrink
+# ``_FINAL_ANSWER_TIMEOUT_S``; a copied constant would not follow).
+from .. import chat_turn as _chat_turn
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -67,7 +70,10 @@ from ..chat_turn import (
     _can_always,
     _quarantined,
     _mint_always,
-    _taint_chat_turn,
+    _taint_chat_turn,  # noqa: F401 — re-exported; the lane taints via _fence_tool_output (v1.311.0)
+    _batchable_call,
+    _fence_tool_output,
+    _run_tool_round,
     _trust_receipt,
     _DOC_WRITING_TOOLS,
     _ESCALATE_SPEC,
@@ -81,12 +87,17 @@ from ..chat_turn import (
     _browser_section,
     _prepare_attachments,
     _compose_recall_query,
-    _connector_memory_block,
+    _connector_memory_block,  # noqa: F401 — re-exported; the lane reaches it via _gather_grounding (v1.311.0)
     _claimed_write_note,
     DRAFT_BLOCK,
     _creation_honesty_note,
-    _enforce_language,
-    _final_answer_after_tools,
+    _enforce_language,  # noqa: F401 — re-exported; POST keeps it (v1.311.0)
+    _final_answer_after_tools,  # noqa: F401 — re-exported; POST keeps it (v1.311.0)
+    _final_answer_messages,
+    _language_leak,
+    _rewrite_failed_note,
+    _rewrite_messages,
+    _rewrite_verdict,
     _last_user_text,
     _no_text_reply,
     _error_detail,
@@ -111,14 +122,16 @@ from ..chat_turn import (
     _fit_turn_transcript,
     _profile_section,
     _resolve_armed_tools,
-    _resolve_connectors,
+    _resolve_connectors,  # noqa: F401 — re-exported; the lane reaches it via _gather_grounding (v1.311.0)
     _resolve_persona,
     _resolve_tool_workspace,
     _draft_from_calls,
     _draft_from_text,
     _sanitize_draft,
     _workspace_grounding_block,
-    _saved_workflows_block,
+    _saved_workflows_block,  # noqa: F401 — re-exported; the lane reaches it via _gather_grounding (v1.311.0)
+    _gather_grounding,
+    _load_project,
     _write_directive,
     STRICT_ASK_TOOLS,
     normalize_approval_mode,
@@ -281,6 +294,69 @@ async def _router_frames(router, **kwargs):
         "from": getattr(route, "from_provider", ""),
         "why": getattr(route, "why", ""),
     }
+
+
+async def _bounded_frames(router, *, timeout_s: "float | None", **kwargs):
+    """:func:`_router_frames` for ONE extra completion of the stream lane —
+    the final-answer nudge and the language rewrite (v1.311.0) — bounded AS A
+    WHOLE by ``timeout_s`` (None = no bound, as the rewrite always had).
+
+    THE BOUND LIVES INSIDE ONE PUMP TASK that drives the model's stream from
+    start to finish, never across this generator's yields. An
+    ``asyncio.timeout`` held across a yield would fire on whatever the
+    CONSUMER happens to be awaiting at that moment (the response's socket
+    send), and an adapter bound to the task it began in (a timeout or cancel
+    scope held across a yield) must keep that task — the same reason
+    :func:`_frames_until_stop` pumps. A cut CANCELS the model's work (its
+    HTTP stream closes, a CLI's process tree dies) and surfaces here as an
+    ordinary ``TimeoutError`` once that cleanup has run, so the caller's
+    honest fallback takes over exactly as it did when the nudge was one
+    ``complete()`` under ``asyncio.timeout``.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    end = object()
+
+    async def _pump() -> None:
+        try:
+            async with asyncio.timeout(timeout_s):
+                async with contextlib.aclosing(_router_frames(router, **kwargs)) as frames:
+                    async for frame in frames:
+                        await queue.put((frame, None))
+        except Exception as exc:  # noqa: BLE001 — re-raised in the consumer, below
+            await queue.put((end, exc))
+        else:
+            await queue.put((end, None))
+
+    pump = asyncio.ensure_future(_pump())
+    got = None
+    try:
+        while True:
+            got = asyncio.ensure_future(queue.get())
+            await asyncio.wait({got, pump}, return_when=asyncio.FIRST_COMPLETED)
+            if not got.done():
+                # The pump ended first: normally its end marker is on the
+                # queue and `got` resolves next tick; a pump that died on a
+                # BaseException put nothing there — say so, never park.
+                if pump.cancelled() or pump.exception() is not None:
+                    cause = None if pump.cancelled() else pump.exception()
+                    raise RuntimeError(
+                        "the model's stream ended without a result"
+                    ) from cause
+                await got
+            frame, exc = got.result()
+            got = None
+            if frame is end:
+                if exc is not None:
+                    raise exc
+                return
+            yield frame
+    finally:
+        for task in (got, pump):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.wait({pump})
+        if not pump.cancelled():
+            pump.exception()  # retrieved: an error on the way out is not news
 
 
 #: The frame :func:`_frames_until_stop` yields when Stop wins the race. It is
@@ -791,33 +867,55 @@ def register(app: FastAPI, d) -> None:
         """List saved threads (newest first). ``project_id`` (optional) scopes
         the list to ONE project's conversations — the in-project workspace fetches
         only its own threads; empty returns every thread (unchanged behavior)."""
-        from ...core.models import ChatThreadRecord
+        from sqlalchemy import and_, case, func
 
+        from ...core.models import ChatThreadRecord as T
+
+        # v1.311.0 (W3-3): the sidebar re-lists after EVERY autosave, so this
+        # read used to cost every transcript in the database per reply — it
+        # SELECTed all rows with their full ``messages_json``, sorted in
+        # Python and json-parsed 100 of them to count messages. Now ONE
+        # statement projects the list columns, orders + limits in SQL (the
+        # ``ix_chatthreadrecord_updated_at`` index answers it with no sort)
+        # and counts in SQL. The count is GUARDED: a bare json_array_length
+        # raises "malformed JSON" and fails the WHOLE query, where one bad row
+        # used to count 0 — so a malformed row still counts 0. ``has_setup``
+        # keeps ``bool(setup_json)``. ORDER BY updated_at alone: a secondary
+        # rowid key brings the temp B-tree back (tie order is not a contract).
+        # Response shape unchanged.
         pid = (project_id or "").strip()
+        msgs_col = T.messages_json
+        count_expr = case(
+            (func.json_valid(msgs_col) == 1, func.json_array_length(msgs_col)),
+            else_=0,
+        )
+        setup_expr = case(
+            (and_(T.setup_json.is_not(None), T.setup_json != ""), 1), else_=0
+        )
         with session_scope(d.platform.engine) as db:
-            stmt = select(ChatThreadRecord)
+            stmt = select(
+                T.id, T.title, T.persona, T.project_id, T.owner,
+                T.comm_channel, T.comm_display, T.updated_at,
+                count_expr, setup_expr,
+            )
             if pid:
-                stmt = stmt.where(ChatThreadRecord.project_id == pid)
+                stmt = stmt.where(T.project_id == pid)
+            stmt = stmt.order_by(T.updated_at.desc()).limit(100)  # type: ignore[attr-defined]
             rows = list(db.exec(stmt))
-        rows.sort(key=lambda r: r.updated_at, reverse=True)
         out = []
-        for r in rows[:100]:
-            try:
-                count = len(json.loads(r.messages_json or "[]"))
-            except Exception:  # noqa: BLE001
-                count = 0
+        for (tid, title, persona, proj, owner, comm_channel, comm_display,
+             updated_at, count, has_setup) in rows:
             out.append(
-                {"id": r.id, "title": r.title or "(untitled)",
-                 "persona": r.persona, "messages": count,
-                 "project_id": r.project_id,
-                 "has_setup": bool(r.setup_json),
-                 # v1.136.0 additive comm-thread fields, getattr-read so this
-                 # route works whether or not the columns have landed (and
-                 # pre-existing NULL rows read as the "user" default).
-                 "owner": getattr(r, "owner", "user") or "user",
-                 "comm_channel": getattr(r, "comm_channel", "") or "",
-                 "comm_display": getattr(r, "comm_display", "") or "",
-                 "updated_at": r.updated_at.isoformat()}
+                {"id": tid, "title": title or "(untitled)",
+                 "persona": persona, "messages": int(count or 0),
+                 "project_id": proj,
+                 "has_setup": bool(has_setup),
+                 # v1.136.0 additive comm-thread fields; pre-existing NULL
+                 # rows read as the "user" default.
+                 "owner": owner or "user",
+                 "comm_channel": comm_channel or "",
+                 "comm_display": comm_display or "",
+                 "updated_at": updated_at.isoformat()}
             )
         return {"threads": out}
 
@@ -1965,148 +2063,20 @@ async def chat_stream(
     # `_plan_context`, so the section is priced by the budget planner.
     system += _browser_section(d, getattr(body, "pane_id", "") or "")
     pid = (body.project_id or "").strip() or None
-    resolved_proj = None
-    if pid:
-        try:
-            from ...core.models import Project
+    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
 
-            with session_scope(d.platform.engine) as db:
-                resolved_proj = db.get(Project, pid)
-        except Exception:  # noqa: BLE001 — never block a chat turn
-            resolved_proj = None
-    if resolved_proj is not None:
-        block = f"\n\n# Project: {resolved_proj.name}"
-        # v1.298.0: the instructions and brief are SCANNED for prompt
-        # injection at the source (core/promptguard.guarded_project_text —
-        # a flagged paragraph becomes "[BLOCKED: …]"; one context.blocked
-        # per (session, source)). Same helper for the stream mirror and the
-        # agent runtime. The clips below are unchanged.
-        from ...core.promptguard import guarded_project_text
-
-        # Off the loop (a CPU-bound scan), clipped to the consumer's 2,000
-        # BEFORE scanning (PERF, wave-4a review). Lock-step with chat_turn.
-        instructions, _brief = await asyncio.to_thread(
-            guarded_project_text,
-            resolved_proj,
-            event_bus=getattr(d.platform, "event_bus", None),
-            session_id="chat",
-            cap=2000,
-        )
-        if instructions:
-            block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
-        if _brief:
-            block += f"\n\nAbout this project: {_brief[:1500]}"
-        # PROJECT PARITY (v1.141.0): root line + recent-activity recap,
-        # the agents/runtime.py _project_context formats. MIRROR NOTE
-        # (lock-step): same block in chat_turn.run_chat_turn — edit both
-        # or neither.
-        if (resolved_proj.root or "").strip():
-            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
-        # Knowledge keyed off the turn's composed recall query (X.3).
-        try:
-            from ...projects.knowledge import ground
-
-            # v1.226.0: embed round-trip off the loop (mirror of chat_turn).
-            knowledge = await asyncio.to_thread(
-                ground, d.platform, pid, recall_query, session_id="chat"
-            )
-            if knowledge:
-                block += f"\n\nProject knowledge (reference):\n{knowledge}"
-        except Exception:  # noqa: BLE001 — retrieval must never break a turn
-            pass
-        # Recent activity: the last 5 sessions in this project, in the
-        # exact line format the agent runtime injects. Best-effort.
-        try:
-            from sqlmodel import select as _select
-
-            from ...core.models import Session as _Session
-
-            with session_scope(d.platform.engine) as db:
-                _siblings = list(
-                    db.exec(
-                        _select(_Session)
-                        .where(_Session.project_id == pid)
-                        .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
-                        .limit(5)
-                    )
-                )
-            _recent = [
-                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
-                for s in _siblings
-            ]
-            if _recent:
-                block += (
-                    "\n\nRecent activity in this project (newest first):\n"
-                    + "\n".join(_recent)
-                )
-        except Exception:  # noqa: BLE001 — the recap must never break a turn
-            pass
-        system += block
-
-    learning = getattr(d.platform, "learning", None)
-    if learning is not None:
-        try:
-            # Off the loop: each lesson is scanned (promptguard, v1.298.0).
-            # Lock-step with chat_turn.
-            system = await asyncio.to_thread(
-                learning.apply_to_prompt,
-                system,
-                event_bus=getattr(d.platform, "event_bus", None),
-                session_id="chat",
-            )
-        except Exception:  # noqa: BLE001 — never block a chat turn
-            pass
-
-    # AWARENESS INDEX (v1.141.0): Pair Y's memory_index_block, injected
-    # after lessons. Import-guarded + callable-checked for landing order.
-    # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
-    # edit both or neither.
-    try:
-        from ...memory.index_block import memory_index_block as _memory_index_block
-    except ImportError:  # Pair Y's module not landed yet
-        _memory_index_block = None
-    if callable(_memory_index_block):
-        try:
-            _idx = _memory_index_block(d.platform, project_id=pid)
-            if _idx:
-                system += "\n\n" + _idx.strip("\n")
-        except Exception:  # noqa: BLE001 — awareness must never break a turn
-            pass
-
-    # MEMORY FABRIC (mirrors chat_complete): keyed off the composed
-    # recall query; grounding failures LOG (never silently pass, never
-    # break the turn) — a bare ``pass`` here swallowed the day-one
-    # ``sources=`` TypeError. MIRROR NOTE (lock-step): same block in
-    # chat_turn.run_chat_turn — edit both or neither.
-    fabric = getattr(d.platform, "fabric", None)
-    if fabric is not None and recall_query.strip():
-        try:
-            # OFF THE EVENT LOOP (v1.173.0) — lock-step with chat_turn:
-            # grounding hits the DB and remote bases, and can now fan out
-            # into several passes.
-            grounding = await asyncio.to_thread(
-                fabric.ground,
-                recall_query,
-                project_id=pid,
-                sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
-            )
-            if grounding:
-                system += grounding
-        except Exception:  # noqa: BLE001 — never break a turn, never silent
-            log.exception(
-                "chat memory-fabric grounding failed (turn continues)"
-            )
-
-    # Connector toggles (mirrors chat_complete): memory hits injected
-    # directly; MCP tool groups merge into the armed set below. Same
-    # composed recall query as the fabric (X.3).
-    conn_tools, conn_memory = _resolve_connectors(d, body)
-    if conn_memory:
-        cm_block = await asyncio.to_thread(
-            _connector_memory_block, d, conn_memory, recall_query
-        )
-        if cm_block:
-            system += cm_block
+    # GROUNDING (v1.311.0) — the ONE helper chat_turn.run_chat_turn calls at
+    # the same seam: the project block, lessons, memory index, fabric,
+    # connector memory, roster and saved workflows run at ONCE and off the
+    # loop, and are joined in the fixed order the prompt has always had (the
+    # roster + saved workflows after the attachments and the "/" skill). THIS
+    # is the lane the dashboard watches, so it is the lane whose "Thinking…"
+    # the serial chain lengthened. MIRROR NOTE (lock-step): chat_turn.
+    _grounding = await _gather_grounding(
+        d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+    )
+    system += _grounding.before_attachments()
+    conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
     # scale to the model that will actually answer.
@@ -2167,32 +2137,13 @@ async def chat_stream(
             + _playbook[:8000]
         )
 
-    # CAPABILITY ROSTER (v1.139.0): who could take escalated work — after
-    # the skills section, before the tools block, so the model can NAME a
-    # specialist in escalate_to_agent's optional ``agent`` arg. Skipped
-    # cleanly when empty; a missing/broken roster module never breaks a
-    # turn.
-    # MIRROR NOTE (lock-step): this is an inline copy of the same block in
-    # chat_turn.run_chat_turn. The stream prep started as a byte-identical
-    # lift of the turn service; from v1.139.0 it is kept in lock-step BY
-    # HAND — edit both sites or neither.
-    try:
-        from ...agents.roster import roster_block
-
-        _roster = roster_block(d.platform)
-        if _roster:
-            system += "\n\n" + _roster
-    except Exception:  # noqa: BLE001 — the roster must never break a turn
-        pass
-
-    # SAVED WORKFLOWS (v1.170.0) — the lock-step copy of chat_turn's
-    # injection: the bounded one-line map of the user's stored workflows,
-    # added BEFORE the budget planner runs so its cost is priced (the
-    # repo rule). This is the STREAMING lane — the one the dashboard
-    # uses — so skipping it here would make the model workflow-blind on
-    # every real turn. MIRROR NOTE (lock-step): same line in
-    # chat_turn.run_chat_turn — edit both or neither.
-    system += _saved_workflows_block(d.platform)
+    # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0), computed in
+    # the grounding gather above and appended in their old place — after the
+    # skills section, before the tools block and BEFORE the budget planner
+    # runs, so their cost is priced (the repo rule). This is the lane the
+    # dashboard uses, so skipping them here would make the model roster- and
+    # workflow-blind on every real turn. MIRROR NOTE (lock-step): chat_turn.
+    system += _grounding.after_skill()
 
     # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
     # injection: a chat bound to a folder (the Build pane's per-pane chat
@@ -2932,8 +2883,23 @@ async def chat_stream(
                     if _cp:
                         _round_asks.setdefault(_cp, []).append(_c)
                 _round_answers: dict[str, str] = {}
+                # A ROUND'S READERS RUN TOGETHER (v1.311.0) — three phases,
+                # lock-step with chat_turn's loop:
+                #   1. DECIDE, serially and in call order, BEFORE anything
+                #      runs: the repeated-call guard and EVERY approval card
+                #      of the round (consent first — no call of the round
+                #      starts while a card is still open);
+                #   2. RUN through the ONE shared runner (`_run_tool_round`):
+                #      allow-listed readers that did not card run TOGETHER,
+                #      then everything else serially in model order. A
+                #      reader's taint is settled before any writer starts;
+                #   3. RECORD in CALL order (`ready`): the receipt lists, the
+                #      `finished` frame and the role="tool" message — so the
+                #      frames and the assistant turn's tool results keep the
+                #      model's order whatever order the readers finished in.
+                _turn_tools = {*armed, *ask_armed}
+                _plans: list[dict[str, Any]] = []
                 for tc in calls:
-                    ran = False
                     _t = d.platform.registry.get(tc.name)
                     # REDACT args before they cross the wire — a planted secret
                     # (secrets/computeruse tools redact) never streams to the
@@ -2941,6 +2907,11 @@ async def chat_stream(
                     safe_args = (
                         _t.redact_args(tc.arguments) if _t is not None else tc.arguments
                     )
+                    _plan: dict[str, Any] = {
+                        "t": _t, "safe_args": safe_args, "refused": "",
+                        "carded": False, "card_deny": "", "grant_extra": set(),
+                    }
+                    _plans.append(_plan)
                     # MID-TURN APPROVAL (v1.187.0). The two halves of this
                     # mechanism predate it: `authorize` names the
                     # interactive session grant as the sanctioned lift for
@@ -2964,30 +2935,10 @@ async def chat_stream(
                     # make their Allow a lie. MIRROR NOTE (lock-step):
                     # chat_turn.py's loop does the same at its invoke.
                     _call_key = _repeat_key(tc.name, tc.arguments)
+                    _plan["key"] = _call_key
                     if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
-                        content = repeated_call_refusal(tc.name, _failed_calls[_call_key])
-                        yield _sse("tool_call", {
-                            "id": tc.id, "name": tc.name,
-                            "status": "started", "args": safe_args,
-                        })
-                        yield _sse("tool_call", {
-                            "id": tc.id, "name": tc.name, "status": "finished",
-                            "ok": False, "output": str(content)[:2000],
-                        })
-                        msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                               name=tc.name, content=str(content)[:12000]))
+                        _plan["refused"] = repeated_call_refusal(tc.name, _failed_calls[_call_key])
                         continue
-                    _deny_reason = ""
-                    _deny_label = ""
-                    # LOW TRUST (v1.298.0): a kept-away call (armed BEFORE
-                    # a mid-turn taint, or an ask-tier name) is refused
-                    # through the registry's deny path with the sentence
-                    # that names the cause — and never CARDS. MIRROR NOTE
-                    # (lock-step): chat_turn passes the same kwargs.
-                    _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
-                    if _low_kw:
-                        _deny_reason = _low_kw["deny_reason"]
-                        _deny_label = _low_kw["deny_label"]
                     _grant_extra: set[str] = set()
                     _perm_name = _t.perm_key() if _t is not None else tc.name
                     _mode = d.platform.permissions.mode_for(_perm_name, overrides)
@@ -3018,7 +2969,6 @@ async def chat_stream(
                     # cannot run would make their Allow a lie.
                     # MIRROR NOTE (lock-step): chat_turn.py passes its
                     # armed set the same way — edit both or neither.
-                    _turn_tools = {*armed, *ask_armed}
                     _unarmed = tc.name not in _turn_tools
                     if approval_mode == "yolo":
                         if _engine_asks:
@@ -3059,6 +3009,7 @@ async def chat_stream(
                         # ledger row, which a name in `session_allow` could
                         # not. The predicate and the gate read one store.
                         _needs_card = False
+                    _plan["carded"] = _needs_card
                     if _needs_card:
                         if _perm_name in _round_answers:
                             # ONE CARD FOR THE BATCH (v1.247.0): this call's
@@ -3204,18 +3155,42 @@ async def chat_stream(
                             armed_grant.update({tc.name, _perm_name})
                             card_grants.update({tc.name, _perm_name})
                         elif _decision == "deny":
-                            _deny_reason = (
+                            _plan["card_deny"] = (
                                 "you declined this call when asked"
                             )
                         else:
-                            _deny_reason = (
+                            _plan["card_deny"] = (
                                 "the approval request timed out with no"
                                 " answer"
                             )
-                    yield _sse("tool_call", {
-                        "id": tc.id, "name": tc.name,
-                        "status": "started", "args": safe_args,
-                    })
+                    _plan["grant_extra"] = _grant_extra
+
+                # A reader joins the round's batch only when nothing about it
+                # needs a human: a call that CARDED (whatever the answer) runs
+                # alone, in model order — the user consented to that one call.
+                _batched = [
+                    not _p["refused"] and not _p["carded"] and not _p["card_deny"]
+                    and _batchable_call(_tc.name, _tc.arguments)
+                    for _p, _tc in zip(_plans, calls)
+                ]
+                _slots: list[dict[str, Any]] = [{} for _ in calls]
+
+                async def _invoke(i: int) -> tuple[Any, str]:
+                    tc = calls[i]
+                    _p = _plans[i]
+                    if _p["refused"]:
+                        return None, _p["refused"]
+                    # LOW TRUST (v1.298.0): a kept-away call (armed BEFORE a
+                    # mid-turn taint, or an ask-tier name) is refused
+                    # through the registry's deny path with the sentence
+                    # that names the cause. Read HERE, at invoke time
+                    # (v1.311.0), so a taint the round's readers raised
+                    # reaches every writer after them. A human's refusal
+                    # keeps its own words. MIRROR NOTE (lock-step):
+                    # chat_turn passes the same kwargs.
+                    _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
+                    _deny_reason = _p["card_deny"] or _low_kw.get("deny_reason", "")
+                    _deny_label = _low_kw.get("deny_label", "") if _low_kw else ""
                     try:
                         # deny_reason rides ONLY when a human actually
                         # refused — the common path stays byte-identical
@@ -3228,7 +3203,7 @@ async def chat_stream(
                             _low_trust_args(_trust_state, tc.name, tc.arguments),
                             ctx, d.platform.permissions,
                             overrides,
-                            session_allow=(armed_grant | _grant_extra),
+                            session_allow=(armed_grant | _p["grant_extra"]),
                             allowed_names=_turn_tools,
                             # v1.246.0 — lock-step with chat_turn.
                             deadline_s=chat_tool_deadline(d.platform),
@@ -3251,121 +3226,141 @@ async def chat_stream(
                                 else {}
                             ),
                         )
-                        if result.ok:
-                            content = result.output
-                            ran = True
-                            last_tool_output = str(result.output or "")
-                        else:
-                            content = result.error or "error"
-                            if "permission denied" in (result.error or ""):
-                                denied_tools.append(tc.name)
+                        return result, ""
                     except Exception as exc:  # noqa: BLE001
-                        content = f"{type(exc).__name__}: {exc}"
-                    if ran:
-                        tools_used.append(tc.name)
-                        # DOOR (v1.199.0): a successful creating tool
-                        # opens a link into its surface. Same gate as
-                        # tools_used — inside this `if ran:` — so honesty
-                        # is enforced at the call site. MIRROR NOTE
-                        # (lock-step): chat_turn.py's tool loop carries
-                        # the same append — edit both or neither.
-                        door_entries.append(door_for(tc.name, result))
-                        # REMEMBERED (v1.282.0): the sentence a preference
-                        # call kept, for the receipt — same gate as
-                        # tools_used. MIRROR NOTE (lock-step): chat_turn.py
-                        # carries the same append.
-                        _kept = remembered_from_result(tc.name, result)
-                        if _kept:
-                            remembered.append(_kept)
-                        # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
-                        # SUCCESSFUL workflow_run's {run_id, workflow}
-                        # rides the done frame as `workflow_run` so the
-                        # client renders the live run under this reply.
-                        # Only a run the tool actually started counts —
-                        # a failed/denied call leaves the key absent —
-                        # and only with a real run id, because a chip
-                        # pointing at no run would poll a 404 forever.
-                        # The last successful call wins. MIRROR NOTE
-                        # (lock-step): chat_turn.py's tool loop carries
-                        # this same capture — edit both or neither.
-                        if tc.name == "workflow_run":
-                            _wr = getattr(result, "data", None) or {}
-                            _wr_id = str(_wr.get("run_id") or "").strip()
-                            if _wr_id:
-                                workflow_run_info = {
-                                    "run_id": _wr_id,
-                                    "name": str(
-                                        _wr.get("workflow") or ""
-                                    ).strip(),
-                                }
-                        # Track created/edited documents for the preview
-                        # (mirrors chat_complete).
-                        if tc.name in _DOC_WRITING_TOOLS:
-                            _rel = str(
-                                (getattr(result, "data", None) or {}).get("path")
-                                or ""
-                            )
-                            if _rel:
-                                try:
-                                    _abs = str((tool_ws / _rel).resolve())
-                                    if _abs not in made_docs:
-                                        made_docs.append(_abs)
-                                except Exception:  # noqa: BLE001
-                                    pass
-                        # EVERY file a turn creates is disclosed, not just
-                        # the document tools' (v1.165.0): merge the
-                        # ABSOLUTE ToolResult.created_paths (repl's
-                        # workspace diff, batch jobs) so a repl-written
-                        # file reaches `documents` here too. Call order
-                        # kept, deduped against the doc-tool entries.
-                        # ABSOLUTE paths only — the contract says absolute
-                        # (tools/base.py); a relative name from a lying
-                        # tool is an unverifiable claim and resolving it
-                        # against a guessed base could disclose the WRONG
-                        # file. MIRROR NOTE (lock-step): chat_turn.py's
-                        # tool loop carries this same merge — edit both
-                        # or neither.
-                        for _cp in getattr(result, "created_paths", None) or []:
-                            _cp = str(_cp)
-                            try:
-                                if not Path(_cp).is_absolute():
-                                    continue
-                            except (OSError, ValueError):
-                                continue
-                            if _cp not in made_docs:
-                                made_docs.append(_cp)
-                        # FENCE externally-sourced output before the model (and
-                        # the client) sees it — the same guard chat_complete +
-                        # the agent runtime apply to returns_untrusted_content.
-                        if getattr(_t, "returns_untrusted_content", False):
-                            from ...computeruse.safety import (
-                                detect_injection,
-                                wrap_untrusted,
-                            )
+                        return None, f"{type(exc).__name__}: {exc}"
 
-                            _inj = detect_injection(str(content))
-                            if _inj["flagged"]:
-                                # TAINT (v1.298.0): the rest of this turn is
-                                # low — lock-step with chat_turn (the helper
-                                # narrows ``overrides`` in place and publishes
-                                # ``trust.lowered`` once).
-                                await _taint_chat_turn(
-                                    d, _trust_state, overrides, tc.name, _inj
+                async def _settle(i: int, outcome: tuple[Any, str]) -> None:
+                    tc = calls[i]
+                    result, crash = outcome
+                    ran = False
+                    if result is None:
+                        content = crash
+                    elif result.ok:
+                        content = result.output
+                        ran = True
+                    else:
+                        content = result.error or "error"
+                    if ran:
+                        # FENCE + TAINT (v1.298.0) — the shared helper
+                        # (lock-step with chat_turn); for a batched reader
+                        # this lands before any writer of the round runs.
+                        content = await _fence_tool_output(
+                            d, _trust_state, overrides, tc.name,
+                            _plans[i]["t"], content,
+                        )
+                    _slots[i] = {"result": result, "content": content, "ran": ran}
+
+                async with contextlib.aclosing(
+                    _run_tool_round(_batched, _invoke, _settle)
+                ) as _round_events:
+                    async for _kind, _i in _round_events:
+                        tc = calls[_i]
+                        if _kind == "started":
+                            yield _sse("tool_call", {
+                                "id": tc.id, "name": tc.name,
+                                "status": "started",
+                                "args": _plans[_i]["safe_args"],
+                            })
+                            continue
+                        result = _slots[_i]["result"]
+                        content = _slots[_i]["content"]
+                        ran = _slots[_i]["ran"]
+                        if _plans[_i]["refused"]:
+                            # Answered, not run (v1.274.0): no counters move.
+                            yield _sse("tool_call", {
+                                "id": tc.id, "name": tc.name, "status": "finished",
+                                "ok": False, "output": str(content)[:2000],
+                            })
+                            msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                                   name=tc.name, content=str(content)[:12000]))
+                            continue
+                        if ran:
+                            last_tool_output = str(result.output or "")
+                        elif result is not None and "permission denied" in (result.error or ""):
+                            denied_tools.append(tc.name)
+                        if ran:
+                            tools_used.append(tc.name)
+                            # DOOR (v1.199.0): a successful creating tool
+                            # opens a link into its surface. Same gate as
+                            # tools_used — inside this `if ran:` — so honesty
+                            # is enforced at the call site. MIRROR NOTE
+                            # (lock-step): chat_turn.py's tool loop carries
+                            # the same append — edit both or neither.
+                            door_entries.append(door_for(tc.name, result))
+                            # REMEMBERED (v1.282.0): the sentence a preference
+                            # call kept, for the receipt — same gate as
+                            # tools_used. MIRROR NOTE (lock-step): chat_turn.py
+                            # carries the same append.
+                            _kept = remembered_from_result(tc.name, result)
+                            if _kept:
+                                remembered.append(_kept)
+                            # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
+                            # SUCCESSFUL workflow_run's {run_id, workflow}
+                            # rides the done frame as `workflow_run` so the
+                            # client renders the live run under this reply.
+                            # Only a run the tool actually started counts —
+                            # a failed/denied call leaves the key absent —
+                            # and only with a real run id, because a chip
+                            # pointing at no run would poll a 404 forever.
+                            # The last successful call wins. MIRROR NOTE
+                            # (lock-step): chat_turn.py's tool loop carries
+                            # this same capture — edit both or neither.
+                            if tc.name == "workflow_run":
+                                _wr = getattr(result, "data", None) or {}
+                                _wr_id = str(_wr.get("run_id") or "").strip()
+                                if _wr_id:
+                                    workflow_run_info = {
+                                        "run_id": _wr_id,
+                                        "name": str(
+                                            _wr.get("workflow") or ""
+                                        ).strip(),
+                                    }
+                            # Track created/edited documents for the preview
+                            # (mirrors chat_complete).
+                            if tc.name in _DOC_WRITING_TOOLS:
+                                _rel = str(
+                                    (getattr(result, "data", None) or {}).get("path")
+                                    or ""
                                 )
-                            content = wrap_untrusted(
-                                f"[content withheld — suspected {_inj['category']}: "
-                                f"{_inj['reason']}]"
-                                if _inj["flagged"]
-                                else str(content)
-                            )
-                    if not ran:
-                        _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
-                    yield _sse("tool_call", {
-                        "id": tc.id, "name": tc.name, "status": "finished",
-                        "ok": ran, "output": str(content)[:2000],
-                    })
-                    msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                           name=tc.name, content=str(content)[:12000]))
+                                if _rel:
+                                    try:
+                                        _abs = str((tool_ws / _rel).resolve())
+                                        if _abs not in made_docs:
+                                            made_docs.append(_abs)
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                            # EVERY file a turn creates is disclosed, not just
+                            # the document tools' (v1.165.0): merge the
+                            # ABSOLUTE ToolResult.created_paths (repl's
+                            # workspace diff, batch jobs) so a repl-written
+                            # file reaches `documents` here too. Call order
+                            # kept, deduped against the doc-tool entries.
+                            # ABSOLUTE paths only — the contract says absolute
+                            # (tools/base.py); a relative name from a lying
+                            # tool is an unverifiable claim and resolving it
+                            # against a guessed base could disclose the WRONG
+                            # file. MIRROR NOTE (lock-step): chat_turn.py's
+                            # tool loop carries this same merge — edit both
+                            # or neither.
+                            for _cp in getattr(result, "created_paths", None) or []:
+                                _cp = str(_cp)
+                                try:
+                                    if not Path(_cp).is_absolute():
+                                        continue
+                                except (OSError, ValueError):
+                                    continue
+                                if _cp not in made_docs:
+                                    made_docs.append(_cp)
+                        if not ran:
+                            _call_key = _plans[_i]["key"]
+                            _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
+                        yield _sse("tool_call", {
+                            "id": tc.id, "name": tc.name, "status": "finished",
+                            "ok": ran, "output": str(content)[:2000],
+                        })
+                        msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                               name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees
@@ -3387,61 +3382,152 @@ async def chat_stream(
             _persist_once(AgentState.CANCELLED)
             raise
 
-        # LANGUAGE GUARD (v1.144.0) — the lock-step copy of chat_turn's, and
-        # like it, run BEFORE the ledger so a rewrite is billed.
+        # FINAL ANSWER + LANGUAGE GUARD — the lock-step copies of chat_turn's,
+        # run BEFORE the ledger so both extra completions are billed.
         #
-        # STREAM-SPECIFIC NOTE: the leaked text has already been streamed to
-        # the client token by token, so the correction lands in the `done`
-        # frame instead — which useChatStream treats as AUTHORITATIVE
-        # ("done.reply is authoritative; fall back to the accumulated text"),
-        # so the finished bubble and the saved thread both carry the
-        # corrected reply. The user may see the wrong-language text flicker
-        # during generation; that is honest (it IS what the model produced)
-        # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
+        # STREAMED (v1.311.0, final-answer-not-streamed). POST /chat has no
+        # tokens to send and keeps one ``complete()`` for each; THIS lane is
+        # the one a user watches, and both used to arrive all at once in the
+        # `done` frame after a silent wait (up to 120 s for the nudge on a
+        # slow local model — the longest wait in the turn and the only one
+        # without tokens). Now:
+        #   * the final-answer nudge streams ordinary `token` frames into the
+        #     bubble, bounded as a WHOLE by `_FINAL_ANSWER_TIMEOUT_S` (read
+        #     from chat_turn at call time) inside one pump task;
+        #   * a language rewrite sends ONE `reset` frame at its first token
+        #     ("discard the reply text streamed so far; the tokens that
+        #     follow replace it" — W3-1) and then streams; a rewrite that
+        #     fails before any token sends no reset and the leaked text
+        #     stays, exactly the reply `done` then carries;
+        #   * Stop is read between frames (and raced, for a named turn) and
+        #     ends the turn CANCELLED through `_persist_once` with no frame —
+        #     an unfinished completion is not billed;
+        #   * `done.reply` stays AUTHORITATIVE (a rewrite that leaks again
+        #     keeps the original, as before).
+        # MIRROR NOTE (lock-step): chat_turn — same rules via the shared
+        # `_final_answer_messages` / `_language_leak` / `_rewrite_messages` /
+        # `_rewrite_verdict`.
         try:
-            # FINAL ANSWER (v1.246.0) — lock-step copy of chat_turn's. The
-            # heartbeat keeps the stream alive while it runs, and the answer
-            # lands in the authoritative `done` frame. Both post-loop
-            # completions send the transcript FITTED (v1.287.0, lock-step).
+            # Both post-loop completions send the transcript FITTED (v1.287.0,
+            # lock-step).
             _send, _send_system = _fit_turn_transcript(
                 d, msgs, system, provider_choice, model_choice, head=_head
             )
             if _cut_office or _wants_final_answer(
                 reply_text or "", workflow_draft, escalate, completions,
             ):
-                _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
-                    d.platform,
-                    system=_send_system,
-                    messages=_send,
-                    provider=provider_choice,
-                    model=model_choice,
-                    # v1.247.0 / v1.262.0 — lock-step with chat_turn: the
-                    # browser wording for a browser-agent turn, else office.
-                    **(
-                        {"instruction": _out_of_rounds_instruction({*armed, *ask_armed})}
-                        if _cut_office else {}
-                    ),
-                    tally=_tally,
-                )
-                reply_text = _f_text or reply_text
-                usage_in += _f_in
-                usage_out += _f_out
-                completions += _f_n
-            reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
-                d.platform,
-                text=reply_text or "",
-                user_text=_last_user_text(body.messages),
-                system=_send_system,
-                messages=_send,
-                provider=provider_choice,
-                model=model_choice,
-                tally=_tally,
-            )
+                _f_resp = None
+                _f_route = ("", "")
+                try:
+                    async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
+                        d.platform.router,
+                        # Read at CALL time — never copied into a constant.
+                        timeout_s=_chat_turn._FINAL_ANSWER_TIMEOUT_S,
+                        provider=provider_choice or None,
+                        model=model_choice or None,
+                        system=_send_system,
+                        # v1.247.0 / v1.262.0 — lock-step with chat_turn: the
+                        # browser wording for a browser-agent turn, else office.
+                        messages=_final_answer_messages(
+                            _send,
+                            _out_of_rounds_instruction({*armed, *ask_armed})
+                            if _cut_office else "",
+                        ),
+                        # EMPTY LIST, never None — a nudge must not run tools.
+                        tools=[],
+                        task_class="chat",
+                    ), handle)) as _ff:
+                        async for frame in _ff:
+                            if await _stop():
+                                _persist_once(AgentState.CANCELLED)
+                                return
+                            ftype = frame.get("type")
+                            if ftype == "text":
+                                txt = frame.get("text") or ""
+                                if txt:
+                                    yield _sse("token", {"text": txt})
+                            elif ftype == "reset":
+                                # A pre-first-token failover inside the nudge.
+                                yield _sse("reset", {"reason": frame.get("reason", "")})
+                            elif ftype == "final":
+                                _f_resp = frame.get("response")
+                                _f_route = (
+                                    frame.get("provider") or "", frame.get("model") or "",
+                                )
+                except Exception:  # noqa: BLE001 — the fallback below is still honest
+                    log.warning("final-answer completion failed", exc_info=True)
+                    _f_resp = None
+                if _f_resp is not None:
+                    _fu = _f_resp.usage or {}
+                    usage_in += int(_fu.get("input_tokens", 0) or 0)
+                    usage_out += int(_fu.get("output_tokens", 0) or 0)
+                    _tally.add(_f_route[0], _f_route[1], _fu)
+                    completions += 1
+                    reply_text = (_f_resp.text or "").strip() or reply_text
+            _l_in = _l_out = _l_n = 0
+            lang_note = ""
+            _user_text = _last_user_text(body.messages)
+            _code = _language_leak(d.platform, reply_text or "", _user_text)
+            if _code:
+                _r_resp = None
+                _r_route = ("", "")
+                _reset_sent = False
+                try:
+                    async with contextlib.aclosing(_frames_until_stop(_bounded_frames(
+                        d.platform.router,
+                        # The rewrite never had a bound; it keeps none.
+                        timeout_s=None,
+                        provider=provider_choice or None,
+                        model=model_choice or None,
+                        system=_send_system,
+                        messages=_rewrite_messages(_send, reply_text or "", _code),
+                        # EMPTY LIST, never None: a rewrite must not re-run
+                        # tools (see chat_turn._enforce_language).
+                        tools=[],
+                        task_class="chat",
+                    ), handle)) as _rf:
+                        async for frame in _rf:
+                            if await _stop():
+                                _persist_once(AgentState.CANCELLED)
+                                return
+                            ftype = frame.get("type")
+                            if ftype == "text":
+                                txt = frame.get("text") or ""
+                                if txt:
+                                    if not _reset_sent:
+                                        # W3-1: the leaked text goes; the
+                                        # rewrite's tokens replace it.
+                                        _reset_sent = True
+                                        yield _sse("reset", {"reason": "language"})
+                                    yield _sse("token", {"text": txt})
+                            elif ftype == "reset" and _reset_sent:
+                                # A failover inside the rewrite: its partial
+                                # text goes too.
+                                yield _sse("reset", {"reason": frame.get("reason", "")})
+                            elif ftype == "final":
+                                _r_resp = frame.get("response")
+                                _r_route = (
+                                    frame.get("provider") or "", frame.get("model") or "",
+                                )
+                except Exception:  # noqa: BLE001 — a failed rewrite must not fail the turn
+                    log.warning("language rewrite failed (original reply kept)", exc_info=True)
+                    _r_resp = None
+                if _r_resp is None:
+                    lang_note = _rewrite_failed_note(_code)
+                else:
+                    _ru = _r_resp.usage or {}
+                    _l_in = int(_ru.get("input_tokens", 0) or 0)
+                    _l_out = int(_ru.get("output_tokens", 0) or 0)
+                    _l_n = 1
+                    _tally.add(_r_route[0], _r_route[1], _ru)
+                    reply_text, lang_note = _rewrite_verdict(
+                        reply_text or "", _r_resp.text or "", _code, _user_text,
+                    )
         except BaseException:
-            # The one remaining await between the last billed round and the
-            # COMPLETED row below (it calls a model when it rewrites): a
-            # Stop delivered HERE drops exactly the same already-billed
-            # tokens as one delivered inside the loop.
+            # The awaits between the last billed round and the COMPLETED row
+            # below (each may call a model): a Stop delivered HERE drops
+            # exactly the same already-billed tokens as one delivered inside
+            # the loop.
             _persist_once(AgentState.CANCELLED)
             raise
         usage_in += _l_in

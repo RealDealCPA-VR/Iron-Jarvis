@@ -1627,6 +1627,14 @@ class AgentRuntime:
         # every pre-envelope run is byte-identical. The list is filled inside
         # the worker thread and read only after `to_thread` returns — no race.
         env_provider, env_model, env_profile = resolve_run_envelope(self.p, session)
+        # PACKS STILL LOADING (v1.311.0 review of the deferred boot): a run that
+        # starts in the first seconds after the daemon answers would arm a
+        # loadout without the MCP packs. Wait a BOUNDED moment (only while one
+        # is starting) and name what is still starting below — the chat lanes
+        # do the same (`chat_turn._gather_grounding`).
+        from ..mcp.tools import packs_starting_note, wait_for_starting_packs
+
+        packs_starting = await wait_for_starting_packs(self.p)
         adaptations: list[str] = []
         armed_names = list(
             await asyncio.to_thread(
@@ -1715,6 +1723,9 @@ class AgentRuntime:
         _retry_note = mission_retry_note(session, _run_options)
         if _retry_note:
             system_prompt += "\n\n" + _retry_note
+        _packs_note = packs_starting_note(packs_starting)
+        if _packs_note:
+            system_prompt += "\n\n" + _packs_note
         # LOW TRUST FROM THE DOOR (v1.298.0): ONE sentence, and only when the
         # row says low at the start. A run lowered MID-run appends nothing —
         # the refusal on its next kept-away call is its signal, and a prompt

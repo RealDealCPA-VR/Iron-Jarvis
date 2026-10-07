@@ -33,6 +33,7 @@ import {
 import { usePolledApi, useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
+import { OVERVIEW_EVENT_TYPES, OVERVIEW_LIVE_TYPES } from "@/components/overview/eventTypes";
 import { post, ApiError } from "@/lib/api";
 import type { Health, Metrics, VaultProvider, SessionView, IJEvent, Onboarding } from "@/lib/types";
 import {
@@ -114,7 +115,7 @@ interface Template {
 }
 
 /** Event types that describe an agent starting or finishing a run. */
-const LIVE_EVENT_TYPES = new Set(["agent.started", "agent.completed"]);
+const LIVE_EVENT_TYPES = new Set(OVERVIEW_LIVE_TYPES);
 
 /** Just the reflex-rule fields the Overview needs (see GET /reflex/rules). */
 type ReflexRuleLite = {
@@ -504,7 +505,9 @@ export default function OverviewPage() {
   const metrics = usePolledApi<Metrics>("/metrics", 5000);
   const vault = useApi<{ providers: VaultProvider[] }>("/vault");
   const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions?limit=50", 5000);
-  // /diagnostics runs a full DB integrity scan — poll slowly.
+  // /diagnostics reads provider health, MCP status and a DB liveness ping
+  // (the integrity scan is on-demand only since v1.229.0) — still not free,
+  // so poll slowly.
   const diag = usePolledApi<Diagnostics>("/diagnostics", 30000);
   // Reliability signal (free disk + recent provider failures) — read-only.
   const reliability = usePolledApi<Reliability>("/diagnostics/reliability", 30000);
@@ -533,7 +536,10 @@ export default function OverviewPage() {
   // Ambient Operator: the enabled reflex rules (signal→action bindings) so the
   // Overview shows what Iron Jarvis will do on its own, and recent fires.
   const reflexes = usePolledApi<{ rules: ReflexRuleLite[] }>("/reflex/rules", 15000);
-  const { events, connected } = useEvents(40);
+  // v1.311.0 (wave 3): only the types this page reads — every other frame
+  // (browser tab switches, provider.routed per LLM call) re-rendered the
+  // whole Overview for nothing.
+  const { events, connected } = useEvents(40, { types: OVERVIEW_EVENT_TYPES });
 
   // Respect the Sidebar's Simple/Advanced mode (seeded Simple for stable SSR,
   // hydrated from localStorage). Advanced reveals the deeper telemetry sections.
@@ -1257,7 +1263,9 @@ export default function OverviewPage() {
                   </li>
                 ))}
               </ul>
-            ) : sessions.loading ? (
+            ) : sessions.loading && !sessions.data ? (
+              // v1.311.0: a spinner only while NOTHING is held — an empty list
+              // already answered reads "No sessions yet", never a spinner.
               <Spinner />
             ) : (
               <Empty icon={<Boxes size={22} />}>No sessions yet.</Empty>

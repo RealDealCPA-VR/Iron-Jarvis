@@ -203,6 +203,9 @@ interface McpServer {
    *  text, e.g. "FileNotFoundError: npx not found"); null = it loaded, or no
    *  attempt has been made in this daemon process. */
   last_error?: string | null;
+  /** v1.311.0: "starting" while the daemon's background load has not
+   *  answered yet (packs load after boot); null/absent on older daemons. */
+  state?: string | null;
   /** v1.256.0 (R-02): the same failure in plain words — "npx isn't installed,
    *  or isn't on the PATH this app can see" — classified once on the daemon's
    *  load record so this row and the Overview hero cannot disagree. */
@@ -1938,7 +1941,11 @@ export default function ToolsPage() {
                             {s.name}
                           </span>
                           <Badge
-                            value={`${loaded} tool${loaded === 1 ? "" : "s"} loaded`}
+                            value={
+                              s.state === "starting" && loaded === 0
+                                ? "starting…"
+                                : `${loaded} tool${loaded === 1 ? "" : "s"} loaded`
+                            }
                             tone={loaded > 0 ? "green" : "slate"}
                           />
                           {/* A TOGGLE, not a badge (v1.103.0). auto-approve

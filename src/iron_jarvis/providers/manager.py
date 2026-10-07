@@ -41,6 +41,142 @@ XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
 
+# --------------------------------------------------------------------------- #
+# Subscription-CLI presence memo (v1.311.0).
+# --------------------------------------------------------------------------- #
+# `terminals.ai_clis._find` is `shutil.which` over every PATH dir x PATHEXT,
+# then the per-user bin dirs — 2-3 ms a call, and it had NO memo: one
+# `health()` made 9 of them (21-27 ms, on every /health and /diagnostics poll),
+# and the router's on-loop `_snapshot()` made ~4 per LLM call, i.e. filesystem
+# probes ON THE EVENT LOOP for every chat turn and agent step (finding
+# cli-binary-probe-uncached-on-loop). The answer changes only when the user
+# installs or removes a CLI, so it is remembered — with two bounds, both read
+# at CALL time so a test (or a future setting) can move them:
+#
+# * a FOUND binary is trusted for CLI_PRESENCE_TTL_S (30 s, the verifier's
+#   ceiling): an uninstall reads as installed for about that long (see the
+#   stale-while-revalidate note below — the call that notices the expiry
+#   still gets the old answer, the calls after the refresh the new one);
+# * a MISSING binary only for CLI_ABSENT_TTL_S (5 s): "I just installed
+#   claude" must not read as missing for a minute — a cache that hides a fresh
+#   install is worse than no cache.
+#
+# `invalidate_cli_presence()` drops it at once (a rescan route can call it). The memo is process-wide because the answer is a fact
+# about this PC, not about one manager instance.
+#
+# STALE-WHILE-REVALIDATE (v1.311.0 review round). A plain TTL memo still ran
+# the scan ON THE LOOP once an entry expired: `ModelRouter._snapshot()` and
+# `_resolve` call `available()` inline from `complete()`/`stream()`, so the
+# first LLM call after an expiry scanned PATH on the event loop — every 30 s
+# for an installed CLI, every 5 s for a missing one. So an EXPIRED entry is
+# answered at once from the memo and refreshed on a daemon thread, at most ONE
+# refresh per binary in flight (single-flight, the v1.251.0 lesson: a warm-up
+# that races itself is duplicated work). Only a binary that has NEVER been
+# probed, or one dropped by `invalidate_cli_presence()`, probes synchronously
+# on the caller's thread — and `warm_cli_logins` fills those off the loop at
+# boot. The two TTLs therefore bound how STALE an answer may be before a
+# refresh is started, not how long a caller waits.
+CLI_PRESENCE_TTL_S = 30.0
+CLI_ABSENT_TTL_S = 5.0
+_CLI_PRESENCE: dict[str, tuple[bool, float]] = {}
+_CLI_PRESENCE_LOCK = threading.Lock()
+#: Binaries with a background refresh in flight (single-flight guard).
+_CLI_REFRESHING: set[str] = set()
+#: Bumped by every invalidate: a probe that STARTED before an invalidate must
+#: not write its (older) answer over the memo the invalidate just cleared.
+_CLI_PRESENCE_GEN = 0
+
+
+def _probe_cli_binary(binary: str) -> bool:
+    """The uncached PATH scan. ``ai_clis._find`` is looked up at CALL time so
+    a test double (and the detection heuristics' own updates) are honoured."""
+    try:
+        from ..terminals import ai_clis  # shared detection heuristics
+
+        return ai_clis._find(binary) is not None
+    except Exception:  # noqa: BLE001
+        import shutil
+
+        return shutil.which(binary) is not None
+
+
+def _store_cli_presence(binary: str, present: bool, gen: int) -> None:
+    import time as _time
+
+    with _CLI_PRESENCE_LOCK:
+        if gen != _CLI_PRESENCE_GEN:
+            return  # invalidated while this probe ran — the next caller re-probes
+        _CLI_PRESENCE[binary] = (present, _time.monotonic())
+
+
+def refresh_cli_presence(binary: str) -> bool:
+    """Scan PATH for ``binary`` NOW, on the calling thread, and remember the
+    answer. BLOCKING — call it from a worker thread (the boot warm-up does).
+    Never raises."""
+    with _CLI_PRESENCE_LOCK:
+        gen = _CLI_PRESENCE_GEN
+    present = _probe_cli_binary(binary)
+    _store_cli_presence(binary, present, gen)
+    return present
+
+
+def _refresh_cli_presence_in_background(binary: str) -> None:
+    """Start ONE daemon-thread refresh for ``binary`` unless one is already
+    in flight. Returns at once; never raises."""
+    with _CLI_PRESENCE_LOCK:
+        if binary in _CLI_REFRESHING:
+            return
+        _CLI_REFRESHING.add(binary)
+        gen = _CLI_PRESENCE_GEN
+
+    def _run() -> None:
+        try:
+            _store_cli_presence(binary, _probe_cli_binary(binary), gen)
+        except Exception:  # noqa: BLE001 — a refresh never breaks anything
+            pass
+        finally:
+            with _CLI_PRESENCE_LOCK:
+                _CLI_REFRESHING.discard(binary)
+
+    try:
+        threading.Thread(target=_run, name=f"cli-presence-{binary}", daemon=True).start()
+    except Exception:  # noqa: BLE001 — no thread: the next call tries again
+        with _CLI_PRESENCE_LOCK:
+            _CLI_REFRESHING.discard(binary)
+
+
+def cli_binary_present(binary: str) -> bool:
+    """Is ``binary`` installed (on PATH or a known per-user bin dir)? Memoised
+    and stale-while-revalidate — see the note above. A remembered answer is a
+    dict read (an expired one also starts a background refresh); only a binary
+    never probed (or just invalidated) scans PATH on the calling thread.
+    Never raises."""
+    import time as _time
+
+    with _CLI_PRESENCE_LOCK:
+        hit = _CLI_PRESENCE.get(binary)
+    if hit is None:
+        return refresh_cli_presence(binary)
+    present, checked_at = hit
+    ttl = CLI_PRESENCE_TTL_S if present else CLI_ABSENT_TTL_S
+    if _time.monotonic() - checked_at >= ttl:
+        _refresh_cli_presence_in_background(binary)
+    return present
+
+
+def invalidate_cli_presence(binary: str | None = None) -> None:
+    """Forget the memo for ``binary`` (or every binary when omitted), so the
+    next check scans PATH again — what a rescan / a fresh install needs. A
+    refresh already in flight is told to discard its (older) answer."""
+    global _CLI_PRESENCE_GEN
+    with _CLI_PRESENCE_LOCK:
+        _CLI_PRESENCE_GEN += 1
+        if binary is None:
+            _CLI_PRESENCE.clear()
+        else:
+            _CLI_PRESENCE.pop(binary, None)
+
+
 def _normalize_ollama_url(url: str | None) -> str | None:
     """Accept a host, a ``/v1`` base, or a full chat URL → the chat endpoint.
 
@@ -351,12 +487,37 @@ class ProviderManager:
 
     def warm_cli_logins(self) -> None:
         """Boot warm-up: start one status probe per INSTALLED CLI on a
-        thread, so the first availability check after boot already knows."""
+        thread, so the first availability check after boot already knows.
+
+        v1.311.0: the PATH scans themselves run on that thread too. This is
+        called from the daemon lifespan — ON THE LOOP — and deciding "is it
+        installed?" here scanned PATH there before anything was handed off.
+        The thread also fills the presence memo — for ``opencode`` too, which
+        ``available("opencode-cli")`` asks about — which leaves the first
+        /health and the router's on-loop snapshot with nothing to scan. It does
+        NOT invalidate first (the review round): the memo is empty at boot
+        anyway, and an invalidate here opened a window in which a loop caller
+        found no entry and scanned PATH synchronously; an entry that IS there
+        refreshes itself in the background once it is stale.
+        Returns at once; never raises.
+        """
         from .cli_auth import CLI_BINARIES, DEFAULT_PROBE
 
-        for binary in CLI_BINARIES.values():
-            if self._cli_binary_present(binary):
-                DEFAULT_PROBE.warm((binary,))
+        binaries = tuple(CLI_BINARIES.values())
+
+        def _warm() -> None:
+            for binary in binaries:
+                try:
+                    if self._cli_binary_present(binary):
+                        DEFAULT_PROBE.warm((binary,))
+                except Exception:  # noqa: BLE001 — a warm-up never breaks boot
+                    pass
+            try:
+                self._cli_binary_present("opencode")  # presence only — no login probe
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_warm, name="cli-login-warm", daemon=True).start()
 
     def warm_opencode(self) -> None:
         """Boot warm-up: resolve the OpenCode allowlist on a THREAD (v1.250.0,
@@ -396,15 +557,9 @@ class ProviderManager:
     @staticmethod
     def _cli_binary_present(binary: str) -> bool:
         """Availability for subscription CLIs — the binary on PATH (or the
-        common per-user bin dirs the terminals launcher already scans)."""
-        try:
-            from ..terminals.ai_clis import _find  # shared detection heuristics
-
-            return _find(binary) is not None
-        except Exception:  # noqa: BLE001
-            import shutil
-
-            return shutil.which(binary) is not None
+        common per-user bin dirs the terminals launcher already scans).
+        v1.311.0: through the module's presence memo (``cli_binary_present``)."""
+        return cli_binary_present(binary)
 
     def _make_grok_cli(self, model: str | None) -> LLMAdapter:
         from .adapters.grok_cli import GrokCliAdapter

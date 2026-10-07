@@ -571,12 +571,19 @@ def test_stream_mirror_carries_every_new_prep_site():
     stream_src = (_SRC / "daemon" / "routes" / "chat.py").read_text(encoding="utf-8")
     for needle in (
         "_compose_recall_query(body.messages)",
-        'sources=["files", "notes", "memory", "lessons", "sessions", "chats"]',
-        "memory_index_block",
         "_resolve_persona(",
-        "Recent activity in this project (newest first):",
-        "log.exception",
         "MIRROR NOTE",
+        # v1.311.0: both lanes ground through the ONE shared helper.
+        "await _gather_grounding(",
     ):
         assert needle in turn_src, f"chat_turn.py lost: {needle}"
         assert needle in stream_src, f"routes/chat.py (stream mirror) lost: {needle}"
+    # v1.311.0: these prep sites moved into chat_turn._gather_grounding — one
+    # copy, so they are pinned once, there.
+    for needle in (
+        'sources=["files", "notes", "memory", "lessons", "sessions", "chats"]',
+        "memory_index_block",
+        "Recent activity in this project (newest first):",
+        "log.exception",
+    ):
+        assert needle in turn_src, f"chat_turn.py lost: {needle}"

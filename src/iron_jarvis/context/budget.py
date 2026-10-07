@@ -34,6 +34,7 @@ tells the user.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,7 +104,26 @@ _CJK_RANGES = (
 )
 
 
+#: The same ranges as ONE compiled run class (v1.311.0). ``estimate_tokens``
+#: used to classify every character with :func:`_is_cjk` — a Python call plus
+#: five range compares per character, ~300 ms per 800k chars, several passes
+#: per turn, ON the event loop before the first token. The regex engine walks
+#: the text in C and a run class (``[...]+``) hands back one match per CJK
+#: RUN rather than per character, so the count is the sum of run lengths:
+#: ~50x faster, and BYTE-IDENTICAL because it is the same set of code points
+#: (contract W3-2; ``tests/test_wave3_chat_helpers_v1311.py`` keeps the old
+#: loop inline and compares). Built from ``_CJK_RANGES`` so the two can never
+#: disagree; every bound is a BMP code point outside the surrogate block, so
+#: none needs escaping inside a character class. A compiled pattern is safe
+#: to share across the worker threads the chat lanes measure from.
+_CJK_RUN = re.compile(
+    "[" + "".join(f"{chr(lo)}-{chr(hi)}" for lo, hi in _CJK_RANGES) + "]+"
+)
+
+
 def _is_cjk(ch: str) -> bool:
+    """One character's class — kept for callers asking about ONE character.
+    Never call it per character over a text; :data:`_CJK_RUN` is that path."""
     o = ord(ch)
     return any(lo <= o <= hi for lo, hi in _CJK_RANGES)
 
@@ -149,7 +169,7 @@ def estimate_tokens(text: str, chars_per_token: float | None = None) -> int:
     if not text:
         return 0
     ratio = effective_chars_per_token(chars_per_token)
-    cjk = sum(1 for ch in text if _is_cjk(ch))
+    cjk = sum(map(len, _CJK_RUN.findall(text)))
     other = len(text) - cjk
     return int(other / ratio + cjk / CJK_CHARS_PER_TOKEN) + 1
 
@@ -313,8 +333,21 @@ def plan_history(
         win = DEFAULT_WINDOW
     cpt = chars_per_token
 
+    # Each distinct text is measured ONCE per plan (v1.311.0). The plan used to
+    # make three full passes — raw demand, ``full_cost`` and the backward walk —
+    # re-estimating the same messages each time. Keyed by the EXACT text, never
+    # by message index or a prefix: a message's raw content and its
+    # MAX_MESSAGE_CHARS cut are different keys with different costs, and
+    # reusing the raw figure for the cut would drop turns that fit. The
+    # module-level ``estimate_tokens`` is still looked up at call time, so a
+    # caller (or test) that swaps the estimator swaps every measurement.
+    measured: dict[str, int] = {}
+
     def _est(text: str) -> int:
-        return estimate_tokens(text, cpt)
+        n = measured.get(text)
+        if n is None:
+            n = measured[text] = estimate_tokens(text, cpt)
+        return n
 
     system_tokens = _est(system_text)
     reserve = output_reserve(win)

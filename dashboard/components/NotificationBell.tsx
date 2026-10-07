@@ -103,6 +103,39 @@ function agentHref(name: unknown): string {
     : agentsPath({ kind: "team" });
 }
 
+/** Every /events type the bell reads (v1.311.0, wave 3,
+ *  events-unfiltered-page-subscribers): what `toActivity` maps, the review
+ *  badge, the approval and workflow refetch triggers. The bell is in the
+ *  layout on every page, and every other frame (add-on tab switches,
+ *  provider.routed per LLM call) cost it a render for nothing. ADD A TYPE
+ *  HERE in the same change that makes the bell read it — a missing one is a
+ *  silent "the bell never showed it" (pinned against this file's own
+ *  comparisons in hooks-wave3-typesets-v1311). */
+export const BELL_EVENT_TYPES: readonly string[] = [
+  // the review badge (review.requested, and its resolutions)
+  "review.*",
+  // the agent-asks refetch + the workflow-question refetch
+  "approval.requested",
+  "approval.resolved",
+  "workflow.waiting",
+  // toActivity
+  "session.completed",
+  "preference.suggested",
+  "detection.finding",
+  "trust.lowered",
+  "context.blocked",
+  "comm.received",
+  "schedule.fired",
+  "agent.paused",
+  "agent.allowance_warning",
+  "assignment.blocked",
+  "assignment.finished",
+  "assignment.requeued",
+  "grant.revoked",
+  "coach.proposal",
+  "computeruse.run_finished",
+];
+
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
@@ -740,7 +773,7 @@ function AgentApprovalRow({
  * Self-contained; renders a calm "all clear" state when nothing is pending.
  */
 export function NotificationBell() {
-  const { events } = useEvents(100);
+  const { events } = useEvents(100, { types: BELL_EVENT_TYPES });
   // Computer-use approvals don't ride the event stream, so poll their count.
   const cu = usePolledApi<ComputerUseStatus>("/computeruse", 15000);
   const pendingApprovals = cu.data?.pending_approvals ?? 0;

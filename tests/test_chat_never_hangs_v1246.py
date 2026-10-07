@@ -273,21 +273,24 @@ def test_the_streaming_lane_asks_for_the_missing_answer_too(tmp_path, monkeypatc
     platform = client.app.state.platform
     s = {"i": 0}
 
+    nudges: list[dict] = []
+
     async def fake_stream(*, provider=None, model=None, system, messages,
                           tools, task_class=None, **kw):
+        if not tools:
+            # v1.311.0: the stream lane's nudge STREAMS (tools=[]).
+            nudges.append({"tools": tools, "last": messages[-1].content})
+            yield _final("Saved the summary to report.xlsx.")
+            return
         s["i"] += 1
         if s["i"] == 1:
             yield _final("", [_tool_call()])
         else:
             yield _final("")  # the silent stop
 
-    nudges: list[dict] = []
-
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        nudges.append({"tools": tools, "last": messages[-1].content})
-        return RouteResult(LLMResponse(text="Saved the summary to report.xlsx."),
-                           "mock", "mock")
+        raise AssertionError("the stream lane's nudge streams (v1.311.0)")
 
     monkeypatch.setattr(platform.router, "stream", fake_stream)
     monkeypatch.setattr(platform.router, "complete", fake_complete)

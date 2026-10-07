@@ -199,27 +199,35 @@ QUIET_PATHS = frozenset(
         # v1.245.0: the Build page's 2.5 s pane-state poll was 93% of the access
         # log, so the 5 MB daemon.log held under a week of history.
         "/terminals/activity",
+        # v1.311.0: the Build Files panel's 4 s poll was 72% of the current
+        # daemon.log (7,494 of 10,419 lines), and the interrupted-jobs note's
+        # poll another 13,183 lines — together days of history instead of weeks.
+        "/fs/files",
+        "/sessions/interrupted",
     }
 )
 
 
 class PolledRouteAccessFilter(logging.Filter):
     """Quiet ``uvicorn.access`` for OPTIONS preflights and status-200 GETs to
-    :data:`QUIET_PATHS`. Every non-200 stays (a failing poll must be visible),
-    every write stays (POST /sessions is a real event), every other GET stays.
-    uvicorn's access record carries args
-    ``(client_addr, method, path_with_query, http_version, status_code)``."""
+    :data:`QUIET_PATHS`. Every other status stays (a failing poll must be
+    visible), every write stays (POST /sessions is a real event), every other
+    GET stays. uvicorn's access record carries args
+    ``(client_addr, method, path_with_query, http_version, status_code)``.
+
+    v1.311.0: a GET 304 on a QUIET path is quiet too — it is the same poll as
+    the 200, answered with "nothing changed" (the conditional /sessions poll
+    alone wrote 8,900 lines). Only there: a 304 anywhere else, and every
+    4xx/5xx on a quiet path, is still logged."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
         if not isinstance(args, tuple) or len(args) != 5:
             return True
         _, method, path, _, status = args
-        if status != 200:
-            return True
         if method == "OPTIONS":
-            return False
-        if method != "GET":
+            return status != 200
+        if method != "GET" or status not in (200, 304):
             return True
         return str(path).split("?", 1)[0] not in QUIET_PATHS
 

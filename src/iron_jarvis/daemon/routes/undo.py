@@ -14,6 +14,7 @@ through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -123,14 +124,20 @@ def register(app: FastAPI, d) -> None:
                 )
         return {"actions": items}
 
-    @app.post("/undo/{action_id}")
-    async def undo_action(action_id: str) -> dict[str, Any]:
-        platform = d.platform
-        engine = platform.engine
+    # NOTHING HERE TOUCHES THE DATABASE ON THE EVENT LOOP (v1.311.0, finding
+    # undo-revert-db-writes-on-loop). Both routes are `async def` — `tool.revert`
+    # is a coroutine that offloads its own file I/O — and every SQLite
+    # transaction they opened ran ON the loop: a revert of N actions was ~2N
+    # transactions there, and with BUSY_TIMEOUT_MS = 30 s one write lock held
+    # elsewhere (a backup, a VACUUM) froze every chat stream, pane and poll —
+    # the v1.153.1 shape. The lookup, the finalize write, the candidate query and
+    # the config restore are sync helpers run through `asyncio.to_thread`; an
+    # HTTPException raised inside one propagates through the await unchanged.
 
-        # 1) Look up the action + its captured inverse. Snapshot the fields we need
-        # before the session closes (SQLModel attrs expire after commit).
-        with session_scope(engine) as db:
+    def _lookup(action_id: str) -> dict[str, Any]:
+        """Step 1: the action + its captured inverse, snapshotted into plain
+        values before the session closes (SQLModel attrs expire after commit)."""
+        with session_scope(d.platform.engine) as db:
             inv = db.get(ToolInvocation, action_id)
             if inv is None:
                 raise HTTPException(status_code=404, detail="unknown action")
@@ -138,16 +145,20 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(status_code=409, detail="action already undone")
             journal = db.get(UndoJournal, action_id)
             session = db.get(Session, inv.session_id)
-            tool_name = inv.tool
-            session_id = inv.session_id
-            agent_run_id = inv.agent_run_id
-            reversibility = (inv.reversibility or "").lower()
-            workspace_path = session.workspace_path if session is not None else ""
-            desc: dict[str, Any] = {}
-            journal_kind = ""
+            out: dict[str, Any] = {
+                "tool_name": inv.tool,
+                "session_id": inv.session_id,
+                "agent_run_id": inv.agent_run_id,
+                "reversibility": (inv.reversibility or "").lower(),
+                "workspace_path": session.workspace_path if session is not None else "",
+                "has_journal": journal is not None,
+                "journal_kind": "",
+                "journal_reversible": False,
+                "desc": {},
+            }
             if journal is not None:
-                journal_kind = journal.kind
-                desc = {
+                out["journal_kind"] = journal.kind
+                out["desc"] = {
                     "kind": journal.kind,
                     "reversible": bool(journal.reversible),
                     "pre_ref": journal.pre_ref,
@@ -155,9 +166,127 @@ def register(app: FastAPI, d) -> None:
                     "pre_sha256": journal.pre_sha256,
                     "post_sha256": journal.post_sha256,
                 }
-                journal_reversible = bool(journal.reversible)
-            else:
-                journal_reversible = False
+                out["journal_reversible"] = bool(journal.reversible)
+            return out
+
+    def _restore_settings(desc: dict[str, Any]) -> str:
+        """Step 3: reverse a settings change against the live config — the
+        restore rewrites config.toml and re-pointing a local endpoint builds
+        adapters, so both run here, off the loop."""
+        platform = d.platform
+        try:
+            prior = json.loads(desc.get("pre_inline") or "{}").get("prior", {})
+        except (TypeError, ValueError):
+            prior = {}
+        updated = restore_config_values(platform.config, prior)
+        result_output = f"undo: restored settings {', '.join(updated) or '(none)'}"
+        # LIVE re-apply — mirror PUT /settings so undoing an endpoint/autonomy
+        # setting takes effect immediately instead of silently needing a restart.
+        # Best-effort: a re-point/re-arm error must never fail the undo itself.
+        cfg = platform.config
+        if any(
+            k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
+            for k in updated
+        ):
+            try:
+                platform.providers.configure_local(
+                    ollama_base_url=cfg.ollama_base_url,
+                    ollama_model=cfg.ollama_model,
+                    custom_base_url=cfg.custom_base_url,
+                    custom_model=cfg.custom_model,
+                )
+            except Exception:  # noqa: BLE001 — next boot still picks config up
+                pass
+        try:
+            rearm = getattr(d, "_live_rearm", None)
+            if rearm:
+                loop = rearm.get("loop")
+                if loop is not None:
+                    for group in ("autonomy", "sentinels"):
+                        if any(k.startswith(group) for k in updated):
+                            fn = rearm.get(group)
+                            if fn is not None:
+                                # Thread-safe hop onto the daemon loop (this
+                                # helper runs on a worker thread).
+                                loop.call_soon_threadsafe(fn)
+        except Exception:  # noqa: BLE001 — re-arm must never fail the undo itself
+            pass
+        return result_output
+
+    def _finalize(
+        action_id: str,
+        undo_inv_id: str,
+        session_id: str,
+        agent_run_id: str,
+        tool_name: str,
+        result_output: str,
+    ) -> None:
+        """Step 5's write transaction: mark the action undone, consume the
+        journal, and record the undo AS a first-class ledger entry."""
+        with session_scope(d.platform.engine) as db:
+            inv = db.get(ToolInvocation, action_id)
+            if inv is None:  # deleted underneath us (race) — nothing to finalize
+                raise HTTPException(status_code=404, detail="unknown action")
+            if inv.undone_at is not None:  # a concurrent undo won
+                raise HTTPException(status_code=409, detail="action already undone")
+            inv.undone_at = utcnow()
+            db.add(inv)
+            j = db.get(UndoJournal, action_id)
+            if j is not None:
+                j.applied_at = utcnow()
+                db.add(j)
+            db.add(
+                ToolInvocation(
+                    id=undo_inv_id,
+                    session_id=session_id,
+                    agent_run_id=agent_run_id,
+                    tool=tool_name,
+                    args_json="{}",
+                    verdict=PermissionMode.ALLOW,
+                    ok=True,
+                    output=(result_output or "")[:4000],
+                    # the undo action itself is not further reversible
+                    reversibility=Reversibility.IRREVERSIBLE.value,
+                    undo_of=action_id,
+                )
+            )
+            db.commit()
+
+    def _revert_candidates(session_id: str) -> list[str]:
+        """``revert_session``'s candidate query (newest first)."""
+        with session_scope(d.platform.engine) as db:
+            if db.get(Session, session_id) is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            rows = db.exec(
+                select(UndoJournal, ToolInvocation)
+                .where(UndoJournal.action_id == ToolInvocation.id)
+                .where(ToolInvocation.session_id == session_id)
+                .where(UndoJournal.reversible == True)  # noqa: E712
+                .where(ToolInvocation.undone_at == None)  # noqa: E711
+                .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
+            ).all()
+            return [
+                inv.id
+                for journal, inv in rows
+                if (inv.reversibility or "").lower() != Reversibility.IRREVERSIBLE.value
+            ]
+
+    @app.post("/undo/{action_id}")
+    async def undo_action(action_id: str) -> dict[str, Any]:
+        platform = d.platform
+        engine = platform.engine
+
+        # 1) Look up the action + its captured inverse (off the loop).
+        found = await asyncio.to_thread(_lookup, action_id)
+        tool_name = found["tool_name"]
+        session_id = found["session_id"]
+        agent_run_id = found["agent_run_id"]
+        reversibility = found["reversibility"]
+        workspace_path = found["workspace_path"]
+        desc: dict[str, Any] = found["desc"]
+        journal_kind = found["journal_kind"]
+        journal_reversible = found["journal_reversible"]
+        journal = desc if found["has_journal"] else None
 
         # 2) Refuse honestly when there is nothing safe to reverse.
         if journal is None:
@@ -185,43 +314,10 @@ def register(app: FastAPI, d) -> None:
                 ),
             )
 
-        # 3) Settings changes are reversed against the live config, not a tool.
+        # 3) Settings changes are reversed against the live config, not a tool
+        # (a config.toml rewrite + an endpoint re-point: off the loop).
         if journal_kind == "setting_restore":
-            try:
-                prior = json.loads(desc.get("pre_inline") or "{}").get("prior", {})
-            except (TypeError, ValueError):
-                prior = {}
-            updated = restore_config_values(platform.config, prior)
-            result_output = f"undo: restored settings {', '.join(updated) or '(none)'}"
-            # LIVE re-apply — mirror PUT /settings so undoing an endpoint/autonomy
-            # setting takes effect immediately instead of silently needing a restart.
-            # Best-effort: a re-point/re-arm error must never fail the undo itself.
-            cfg = platform.config
-            if any(
-                k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
-                for k in updated
-            ):
-                try:
-                    platform.providers.configure_local(
-                        ollama_base_url=cfg.ollama_base_url,
-                        ollama_model=cfg.ollama_model,
-                        custom_base_url=cfg.custom_base_url,
-                        custom_model=cfg.custom_model,
-                    )
-                except Exception:  # noqa: BLE001 — next boot still picks config up
-                    pass
-            try:
-                rearm = getattr(d, "_live_rearm", None)
-                if rearm:
-                    loop = rearm.get("loop")
-                    if loop is not None:
-                        for group in ("autonomy", "sentinels"):
-                            if any(k.startswith(group) for k in updated):
-                                fn = rearm.get(group)
-                                if fn is not None:
-                                    loop.call_soon_threadsafe(fn)
-            except Exception:  # noqa: BLE001 — re-arm must never fail the undo itself
-                pass
+            result_output = await asyncio.to_thread(_restore_settings, desc)
         else:
             # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
             tool = platform.registry.get(tool_name)
@@ -289,34 +385,15 @@ def register(app: FastAPI, d) -> None:
         # loudly (below) rather than let a reverted-but-unrecorded state pass silently.
         undo_inv_id = new_id("tool")
         try:
-            with session_scope(engine) as db:
-                inv = db.get(ToolInvocation, action_id)
-                if inv is None:  # deleted underneath us (race) — nothing to finalize
-                    raise HTTPException(status_code=404, detail="unknown action")
-                if inv.undone_at is not None:  # a concurrent undo won
-                    raise HTTPException(status_code=409, detail="action already undone")
-                inv.undone_at = utcnow()
-                db.add(inv)
-                j = db.get(UndoJournal, action_id)
-                if j is not None:
-                    j.applied_at = utcnow()
-                    db.add(j)
-                db.add(
-                    ToolInvocation(
-                        id=undo_inv_id,
-                        session_id=session_id,
-                        agent_run_id=agent_run_id,
-                        tool=tool_name,
-                        args_json="{}",
-                        verdict=PermissionMode.ALLOW,
-                        ok=True,
-                        output=(result_output or "")[:4000],
-                        # the undo action itself is not further reversible
-                        reversibility=Reversibility.IRREVERSIBLE.value,
-                        undo_of=action_id,
-                    )
-                )
-                db.commit()
+            await asyncio.to_thread(
+                _finalize,
+                action_id,
+                undo_inv_id,
+                session_id,
+                agent_run_id,
+                tool_name,
+                result_output,
+            )
         except HTTPException:
             raise  # the intended race conditions (404/409) — not an inconsistency
         except Exception as exc:  # noqa: BLE001 — finalize failed AFTER the revert ran
@@ -371,23 +448,7 @@ def register(app: FastAPI, d) -> None:
         reason, while the rest still revert. Never all-or-nothing — a file that
         cannot be safely restored must not block restoring the four that can.
         """
-        engine = d.platform.engine
-        with session_scope(engine) as db:
-            if db.get(Session, session_id) is None:
-                raise HTTPException(status_code=404, detail="session not found")
-            rows = db.exec(
-                select(UndoJournal, ToolInvocation)
-                .where(UndoJournal.action_id == ToolInvocation.id)
-                .where(ToolInvocation.session_id == session_id)
-                .where(UndoJournal.reversible == True)  # noqa: E712
-                .where(ToolInvocation.undone_at == None)  # noqa: E711
-                .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
-            ).all()
-            candidates = [
-                inv.id
-                for journal, inv in rows
-                if (inv.reversibility or "").lower() != Reversibility.IRREVERSIBLE.value
-            ]
+        candidates = await asyncio.to_thread(_revert_candidates, session_id)
 
         reverted: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []

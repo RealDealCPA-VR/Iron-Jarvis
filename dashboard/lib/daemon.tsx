@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -17,6 +18,9 @@ import {
   onUnauthorizedChange,
 } from "./api";
 import type { Health } from "./types";
+// v1.311.0: the epoch rides its own context (see ./daemonEpoch for why it
+// lives in a module of its own).
+import { DaemonEpochContext } from "./daemonEpoch";
 import { useDocumentVisible } from "./useDocumentVisible";
 
 /** /health cadence while the document is hidden (v1.230.0, FP2). A minimised
@@ -82,6 +86,12 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   // at once — going hidden must not cost a request.
   const visible = useDocumentVisible();
   const lastNonceRef = useRef(0);
+  // v1.311.0 (wave 3, daemon-ctx-rerender-storm): the JSON of the /health
+  // payload we hold. /health is effectively static (version, defaults,
+  // providers), yet every 5 s poll stored a brand-new object, so every
+  // consumer — the whole ChatPage included — re-rendered twelve times a
+  // minute for nothing. An equal answer now keeps the held object.
+  const healthJsonRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -135,7 +145,16 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
         const h = await get<Health>("/health", { timeoutMs: 8000 });
         if (!latest()) return;
         missesRef.current = 0;
-        setHealth(h);
+        let json: string | null = null;
+        try {
+          json = JSON.stringify(h);
+        } catch {
+          json = null; // unserialisable (never from a real daemon): always store
+        }
+        if (json === null || json !== healthJsonRef.current) {
+          healthJsonRef.current = json;
+          setHealth(h);
+        }
         markOnline();
       } catch (err) {
         if (!latest()) return;
@@ -178,21 +197,26 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
     };
   }, [nonce, visible]);
 
+  // v1.311.0: memoised, so the provider re-rendering for an unrelated reason
+  // (a bailed-out same-value setOnline) never hands consumers a new object.
+  const value = useMemo<DaemonState>(
+    () => ({
+      online,
+      unauthorized,
+      requestError,
+      health,
+      checking,
+      epoch,
+      refresh,
+      provided: true,
+    }),
+    [online, unauthorized, requestError, health, checking, epoch, refresh],
+  );
+
   return (
-    <DaemonContext.Provider
-      value={{
-        online,
-        unauthorized,
-        requestError,
-        health,
-        checking,
-        epoch,
-        refresh,
-        provided: true,
-      }}
-    >
-      {children}
-    </DaemonContext.Provider>
+    <DaemonEpochContext.Provider value={epoch}>
+      <DaemonContext.Provider value={value}>{children}</DaemonContext.Provider>
+    </DaemonEpochContext.Provider>
   );
 }
 

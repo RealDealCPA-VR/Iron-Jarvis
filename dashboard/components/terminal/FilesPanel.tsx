@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE, ApiError, get, ijToken } from "@/lib/api";
+import { etagOf, isNotModified } from "@/lib/etag";
 import { Empty, ErrorNote, OfflineHint, Spinner } from "@/components/ui";
 
 /** One file from `GET /fs/files` — mtime is a UNIX epoch SECONDS float. */
@@ -38,7 +39,12 @@ interface FilesResponse {
   root: string;
   files: FileRow[];
   count: number;
+  /** More files were found than the list holds (it is the newest of them). */
   truncated: boolean;
+  /** v1.311.0: the WALK stopped early (entry budget or deadline); absent on
+   *  an older daemon. `scanned` = how many entries it examined. */
+  scan_truncated?: boolean;
+  scanned?: number;
 }
 
 type Kind = "image" | "video" | "audio" | "text" | "other";
@@ -299,23 +305,34 @@ export function FilesPanel({
   const [files, setFiles] = useState<FileRow[]>([]);
   const [count, setCount] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [scanCut, setScanCut] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<FileRow | null>(null);
   const tickRef = useRef<() => void>(() => {});
+  // The last answer this panel SHOWS — its ETag is what the next poll sends.
+  const lastRef = useRef<FilesResponse | null>(null);
 
   // Poll `/fs/files` every 4s (and immediately on folder change). A small
   // in-flight guard keeps a slow response from stacking overlapping requests.
+  //
+  // v1.311.0: the poll is CONDITIONAL. It sends the ETag the shown answer
+  // came with (`If-None-Match`, the `/sessions` mechanism: `lib/api.ts`'s
+  // `ifNoneMatch` + `lib/etag.ts`), and a 304 sets NO state — an unchanged
+  // folder costs no ~130 KB body and no re-render of up to 400 rows. A
+  // failed poll forgets the tag, so recovery always re-downloads in full.
   useEffect(() => {
     setError(null);
     setOffline(false);
+    lastRef.current = null;
     if (!folder) {
       setLoading(false);
       setFiles([]);
       setRoot(null);
       setCount(0);
       setTruncated(false);
+      setScanCut(null);
       return;
     }
     setLoading(true);
@@ -326,24 +343,36 @@ export function FilesPanel({
     const tick = async () => {
       if (inFlight || cancelled) return;
       inFlight = true;
+      let unchanged = false;
       try {
-        const data = await get<FilesResponse>(
-          `/fs/files?path=${encodeURIComponent(folder)}&depth=4&limit=600`,
-        );
+        const url = `/fs/files?path=${encodeURIComponent(folder)}&depth=4&limit=600`;
+        const tag = etagOf(lastRef.current);
+        // One argument when there is no tag: a mocked `get` keeps seeing the
+        // exact call it always saw.
+        const data = tag
+          ? await get<FilesResponse>(url, { ifNoneMatch: tag })
+          : await get<FilesResponse>(url);
         if (cancelled) return;
+        if (isNotModified(data)) {
+          unchanged = true; // what is on screen is still the answer
+          return;
+        }
+        lastRef.current = data;
         setRoot(data.root);
         setFiles(data.files);
         setCount(data.count);
         setTruncated(data.truncated);
+        setScanCut(data.scan_truncated ? (data.scanned ?? 0) : null);
         setOffline(false);
         setError(null);
       } catch (e) {
         if (cancelled) return;
+        lastRef.current = null;
         if (e instanceof ApiError && e.status === 0) setOffline(true);
         else setError(e instanceof ApiError ? e.message : String(e));
       } finally {
         inFlight = false;
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !unchanged) setLoading(false);
       }
     };
 
@@ -465,6 +494,9 @@ export function FilesPanel({
           {files.length > MAX_ROWS ? `Showing ${MAX_ROWS} of ` : ""}
           {count} file{count === 1 ? "" : "s"}
           {truncated ? " (capped at 600 — newest shown)" : ""}
+          {scanCut !== null
+            ? ` — newest of the first ${scanCut.toLocaleString()} entries scanned; this folder is too big to read in full`
+            : ""}
         </footer>
       )}
 

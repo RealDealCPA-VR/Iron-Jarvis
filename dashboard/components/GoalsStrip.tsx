@@ -258,6 +258,9 @@ export function scheduleWords(schedule?: string | null): string {
 /*  Live fetch: GET /goals, refetched when a goal.* event lands               */
 /* -------------------------------------------------------------------------- */
 
+/** The /events types `useLiveGoals` reads (v1.311.0): every goal.* frame. */
+export const GOALS_EVENT_TYPES: readonly string[] = ["goal.*"];
+
 /**
  * GET /goals kept fresh by the live stream: any goal.* frame
  * (iteration_started / iteration_completed / satisfied / tripped / …) marks
@@ -267,7 +270,9 @@ export function scheduleWords(schedule?: string | null): string {
  */
 export function useLiveGoals(): ApiState<{ goals: GoalRecord[] }> {
   const goals = useApi<{ goals: GoalRecord[] }>("/goals");
-  const { events } = useEvents(40);
+  // v1.311.0 (wave 3): only goal.* frames reach this window — the strip sits
+  // on the Overview, and every other frame re-rendered it for nothing.
+  const { events } = useEvents(40, { types: GOALS_EVENT_TYPES });
   const seenRef = useRef<string | null>(null);
   const reload = goals.reload;
   useEffect(() => {

@@ -37,8 +37,22 @@ const LABEL: Record<Mood, string> = {
   alert: "Attention needed — something is waiting for you",
 };
 
+/** The /events types the orb reads (v1.311.0, wave 3): reviews and
+ *  proposals for ALERT, session/agent lifecycle for THINKING. The orb is in
+ *  the layout on every page; any other frame cost it a render for nothing.
+ *  Add a type here in the same change that makes `mood` read it. */
+export const MOOD_EVENT_TYPES: readonly string[] = [
+  "review.*",
+  "autonomy.proposed",
+  "autonomy.executed",
+  "session.created",
+  "session.completed",
+  "agent.started",
+  "agent.completed",
+];
+
 export function MoodOrb() {
-  const { events, connected } = useEvents(100);
+  const { events, connected } = useEvents(100, { types: MOOD_EVENT_TYPES });
 
   const mood = useMemo<Mood>(() => {
     // ALERT: an unresolved review request or a fresh autonomy proposal wins.

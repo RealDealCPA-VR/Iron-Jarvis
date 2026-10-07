@@ -56,21 +56,33 @@ tops the remainder back up when they aren't.
 
 from __future__ import annotations
 
+import contextvars
 import json
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ..core.db import session_scope
 from ..core.fs_policy import fs_path_allowed, is_protected_path
 from ..ltm.manager import LongTermMemory as _LongTermMemory
 from ..ltm.manager import shared_deadline as _ltm_deadline
 
+log = logging.getLogger(__name__)
+
 #: The store keys a caller may filter on (``sources=``). Order here is also the
 #: tie-break/diversity order when scores are equal.
 FABRIC_SOURCES = (
     "files", "notes", "memory", "knowledge", "lessons", "sessions", "chats",
 )
+
+#: Most stores ONE recall queries at the same time (v1.311.0) — one per
+#: source, so a full recall never queues behind itself. A per-call pool, not
+#: a shared one: two chat turns recalling at once must not wait on each
+#: other's slow remote base, and a pool that lives only as long as the call
+#: leaves no threads behind.
+_FANOUT_MAX_WORKERS = len(FABRIC_SOURCES)
 
 #: Rows scanned for the lexical stores — bounded so a huge history stays fast.
 _MAX_SESSION_SCAN = 400
@@ -269,23 +281,39 @@ class MemoryFabric:
         per_source = max(k, 4)
         qtokens = _tokens(query)
 
-        hits: list[FabricHit] = []
+        # The stores are independent, so they are asked AT THE SAME TIME
+        # (v1.311.0): a turn used to wait for the SUM of a semantic file search
+        # (a query embed), remote notes bases (a 2.5 s fallback budget) and the
+        # memory graph, one after another, before the model was even called.
+        # Jobs are listed in FABRIC_SOURCES order and read back in that order
+        # (never completion order), so equal scores still tie-break by store
+        # exactly as the serial code did and the ranked list is unchanged.
+        jobs: list[tuple[str, Callable[[], list[FabricHit]]]] = []
         if "files" in wanted:
-            hits += self._files(query, per_source)
+            jobs.append(("files", lambda: self._files(query, per_source)))
         if "notes" in wanted:
-            hits += self._notes(
+            jobs.append(("notes", lambda: self._notes(
                 query, per_source, qtokens, self._project_bases(project_id)
-            )
+            )))
         if "memory" in wanted:
-            hits += self._memory(query, per_source)
+            jobs.append(("memory", lambda: self._memory(query, per_source)))
         if "knowledge" in wanted and project_id:
-            hits += self._knowledge(query, per_source, project_id)
+            jobs.append(("knowledge", lambda: self._knowledge(query, per_source, project_id)))
         if "lessons" in wanted:
-            hits += self._lessons(per_source, qtokens)
+            jobs.append(("lessons", lambda: self._lessons(per_source, qtokens)))
         if "sessions" in wanted:
-            hits += self._sessions(query, per_source, qtokens)
+            jobs.append(("sessions", lambda: self._sessions(query, per_source, qtokens)))
         if "chats" in wanted:
-            hits += self._chats(query, per_source)
+            jobs.append(("chats", lambda: self._chats(query, per_source)))
+        if "sessions" in wanted or "chats" in wanted:
+            # Resolve (and cache) the shared history index HERE, on the calling
+            # thread, so the two jobs that read it never race its lazy first
+            # lookup. It is cached either way; this only fixes WHEN.
+            self._index()
+
+        hits: list[FabricHit] = []
+        for part in self._gather(jobs):
+            hits += part
 
         hits = [h for h in hits if h.score > min_score]
         hits.sort(key=lambda h: h.score, reverse=True)
@@ -341,6 +369,59 @@ class MemoryFabric:
             lines.append(line)
             used += len(line)
         return "\n".join(lines) if len(lines) > 1 else ""
+
+    @staticmethod
+    def _gather(
+        jobs: "list[tuple[str, Callable[[], list[FabricHit]]]]",
+    ) -> "list[list[FabricHit]]":
+        """Run the store *jobs* concurrently; results in SUBMISSION order.
+
+        Bounded: a per-call pool of at most :data:`_FANOUT_MAX_WORKERS`
+        threads, shut down before returning (the ``with`` waits for every job,
+        which the merge needs anyway). Safe when recall itself already runs in
+        a worker thread — both chat lanes call it through ``asyncio.to_thread``
+        — because a job never submits back into the pool that runs it.
+
+        Each job runs in a COPY of the caller's context: ``to_thread`` carries
+        contextvars into the turn's thread and a bare pool would drop them, so
+        a store reading one (a per-run budget, a permission key) sees exactly
+        what it saw when the stores ran inline. A job that raises contributes
+        no hits — every adapter already swallows its own store's failure, and
+        "never raises from recall" now holds for an adapter's own bug too. A
+        single job runs inline (no pool for nothing to overlap with), and a
+        pool that cannot start — interpreter shutdown — degrades to the serial
+        path rather than to an exception.
+        """
+
+        def _run(name: str, fn: Callable[[], list[FabricHit]]) -> list[FabricHit]:
+            try:
+                return fn()
+            except Exception:  # noqa: BLE001 — one store never breaks recall
+                log.debug("memory fabric: %s store failed", name, exc_info=True)
+                return []
+
+        if len(jobs) <= 1:
+            return [_run(name, fn) for name, fn in jobs]
+        try:
+            pool = ThreadPoolExecutor(
+                max_workers=min(len(jobs), _FANOUT_MAX_WORKERS),
+                thread_name_prefix="ij-fabric",
+            )
+        except RuntimeError:
+            return [_run(name, fn) for name, fn in jobs]
+        with pool:
+            futures = []
+            for name, fn in jobs:
+                try:
+                    futures.append(
+                        pool.submit(contextvars.copy_context().run, _run, name, fn)
+                    )
+                except RuntimeError:  # cannot schedule (shutting down)
+                    futures.append(None)
+            out: list[list[FabricHit]] = []
+            for (name, fn), fut in zip(jobs, futures):
+                out.append(_run(name, fn) if fut is None else fut.result())
+        return out
 
     def _project_bases(self, project_id: "str | None") -> "list[str] | None":
         """The LTM source names this project is bound to, or None for "all".

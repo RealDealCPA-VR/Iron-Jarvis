@@ -2411,6 +2411,10 @@ def register(app: FastAPI, d) -> None:
                     "reason": status.get("reason") if status else None,
                     "fix": status.get("fix") if status else None,
                     "last_attempt_at": status.get("at") if status else None,
+                    # v1.311.0: "starting" while the daemon's background load
+                    # has not answered yet (packs load after boot now) — a row
+                    # must not read as "0 tools, broken" in that window.
+                    "state": status.get("state") if status else None,
                 }
             )
         # The Tools page checkbox binds to EFFECTIVE (what the boot-time
@@ -2512,8 +2516,19 @@ def register(app: FastAPI, d) -> None:
         from ...mcp.tools import load_status as _mcp_load_status
         from ...mcp.tools import mcp_tools as _mcp_tools
 
+        replaced = []
         for tool_name in d.platform.registry.mcp_names(name):
+            live = d.platform.registry.get(tool_name)
+            if live is not None:
+                replaced.append(live)
             d.platform.registry.unregister(tool_name)
+        # v1.311.0 review: the tools this Retry replaces had a live client (a
+        # stdio child); unregistering them alone orphaned it — and with packs
+        # now loading after boot, a Retry pressed in that window replaces the
+        # boot load's tools. Close what is replaced, never what is kept.
+        from ...platform import _close_mcp_tools
+
+        _close_mcp_tools(replaced)
         loaded = 0
         try:
             # `home` (v1.299.0): the reload RE-DIFFS the pack against its

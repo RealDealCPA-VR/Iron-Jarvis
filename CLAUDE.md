@@ -2905,6 +2905,57 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Fast where people wait: the turn, the boot, the poll** (v1.311.0, /goal
+  adoption wave 3 — 17 speed findings). CHAT LANES (both, lock-step):
+  `chat_turn._gather_grounding` runs every independent grounding hop
+  CONCURRENTLY off the loop and the lanes join the result in the old fixed
+  order (byte-identical prompt, pinned; learning runs on "" because it
+  APPENDS; attachments/skill/workspace stay outside; no silent deadline);
+  connector toggles are resolved ON the loop (a worker iterating the registry
+  raced a pack registering). Auto-compaction finally runs
+  (`_compaction_complete` read off `platform` first). A round's tool calls
+  go through `_run_tool_round`: every card is answered first, then only the
+  allow-list `CONCURRENT_READ_TOOLS` (never browser/desktop/pane tools, never
+  a reader that cards, never `_store_as`) runs with `asyncio.gather`, its
+  taint applied in call order BEFORE the writers run serially in model order;
+  frames and `role=tool` messages keep the original call order. The stream
+  lane STREAMS the final-answer nudge and the language rewrite (a new `reset`
+  frame clears the bubble; `useChatStream` handles it in both reducers;
+  `done.reply` stays authoritative). `GET /chat/threads` is ORDER BY/LIMIT in
+  SQL with a `json_valid`-guarded count (`ix_chatthreadrecord_updated_at`).
+  `estimate_tokens` is one run-class regex (~60x, byte-identical);
+  `fabric.recall` fans its stores out per call, results in submission order.
+  BOOT: the daemon builds the platform with `defer_mcp=True` and loads packs
+  in the background (CLI callers of `build_platform` keep the synchronous
+  contract); a pack reads `state: "starting"` (`/mcp/servers`, the Tools
+  badge, the doctor) until it answers; `platform.mcp_ready` is the lifespan's
+  event and `mcp.tools.wait_for_starting_packs` makes a chat turn or an agent
+  run wait up to `PACKS_TURN_WAIT_S` (10 s) for it, then `packs_starting_note`
+  rides `_Grounding.after_skill()` (both lanes) and the runtime prompt —
+  scoped to a platform whose OWN load is running (`_LOAD_STATUS` is
+  process-wide); the assignment dispatcher waits on the same event; a Retry
+  closes the clients of the tools it replaces. CLI presence is memoised with
+  stale-while-revalidate (`cli_binary_present`, one background refresh per
+  binary, generation-checked); `POST /providers/rescan` calls
+  `invalidate_cli_presence()` first so Re-detect really looks again. The event
+  bus runs sync handlers in ONE executor hop; outbound webhooks keep an
+  in-memory subscription index (invalidated on any ORM write, one entry per
+  (type, record)); undo/revert write off the loop; the Build Files panel keeps
+  the newest N by mtime. DASHBOARD: `DaemonProvider` keeps /health when
+  unchanged and `epoch` lives in `lib/daemonEpoch.ts`; `useApi`/`usePolledApi`
+  share `useApiCore` (a poll never flips `loading`, an equal answer sets
+  nothing, identical in-flight GETs are joined); `useEvents(n, {types})`
+  filters per subscriber (Overview, bell, MoodOrb, notify bridge, downgrade
+  banner, chat page). CHAT PAGE: reopening paints the cached thread at once
+  WITH its setup and its PROJECT (`followThreadProject(cached)` — a null
+  project on the paint untagged the thread), restores the last conversation,
+  fetches the list once, and lazy-loads DocPreview/FilesPanel/DirectoryTree/
+  EmailComposeDialog (`components/chat/emailDraft.ts` holds the helpers the
+  page renders). Measured: /chat first load 283 → 266 kB. Pins:
+  `tests/test_wave3_{chat_lanes,chat_helpers,platform_speed,packs_starting}_v1311.py`,
+  `dashboard/__tests__/{hooks-wave3,chat-wave3,chat-wave3-reset,chat-wave3-seeded-race}-v1311.test.tsx`,
+  `chat-wave3-deferred-v1311.test.ts`.
+
 - **The first answer is REAL, the wizard tells the truth, and the first
   screen leads somewhere** (v1.310.0, /goal adoption wave 2 — 8 first-run
   findings + wave-1 carry-overs). THE MOCK TRAP: a user signed in to Claude

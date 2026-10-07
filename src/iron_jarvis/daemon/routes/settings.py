@@ -345,6 +345,10 @@ def register(app: FastAPI, d) -> None:
             out["mcp_servers"] = [
                 {
                     "name": str(s.get("name") or ""),
+                    # v1.311.0: "starting" while the daemon's background load
+                    # has not heard from the pack yet (boot no longer waits on
+                    # handshakes), then "ready" / "failed"; None = never tried.
+                    "state": (_mcp_load_status(str(s.get("name") or "")) or {}).get("state"),
                     "tools_loaded": len(d.platform.registry.mcp_names(str(s.get("name") or ""))),
                     "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
                     # v1.256.0 (R-02): the plain-words cause and the next action,

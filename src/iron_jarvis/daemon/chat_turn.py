@@ -37,6 +37,7 @@ to the prep or the escalate branch here must land in the stream copy too
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json as _json
 import logging
 import re as _re
@@ -48,6 +49,7 @@ from typing import Any
 
 from ..providers.reasoning import normalize_level
 from ..core.db import session_scope
+from ..mcp.tools import packs_starting_note
 from ..core.events import EventType
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
@@ -305,7 +307,19 @@ async def _apply_compaction(d, body, system: str, provider: str, model: str):
     if rec is None and report["level"] == "auto":
         complete = None
         try:
-            complete = d._compaction_complete(provider, model)
+            # v1.311.0: the factory lives on the PLATFORM (app.py sets
+            # ``platform._compaction_complete``; agents/runtime reads it the
+            # same way). Both chat lanes hand this helper a
+            # ``SimpleNamespace(platform=...)`` shim that never had the
+            # attribute, so the AttributeError below was swallowed on every
+            # turn and the ceiling's automatic summary never ran in chat
+            # (since v1.153.0 on POST, v1.241.0 on the stream). The daemon's
+            # own ``d`` (POST /chat/compact) still resolves through the
+            # second lookup.
+            factory = getattr(d.platform, "_compaction_complete", None) or getattr(
+                d, "_compaction_complete", None
+            )
+            complete = factory(provider, model) if factory is not None else None
         except Exception:  # noqa: BLE001 — no real model -> keep the recap
             complete = None
         if complete is not None:
@@ -1062,27 +1076,10 @@ async def _enforce_language(
     Usage page like every other completion — an invisible extra call is exactly
     the kind of thing that makes token spend impossible to explain.
     """
-    from ..profile import profile_language
-    from ..profile.language import (
-        NOTE_CORRECTED,
-        NOTE_FAILED,
-        detect_leak,
-        label,
-        rewrite_instruction,
-    )
-
-    code, enforce = profile_language(platform)
-    if not code or not enforce:
+    code = _language_leak(platform, text, user_text)
+    if not code:
         return (text, "", 0, 0, 0)
-    if detect_leak(text, code, user_text) is None:
-        return (text, "", 0, 0, 0)
-
-    from ..providers.adapters.base import LLMMessage
-
-    retry_msgs = list(messages or []) + [
-        LLMMessage(role="assistant", content=text),
-        LLMMessage(role="user", content=rewrite_instruction(code)),
-    ]
+    retry_msgs = _rewrite_messages(messages, text, code)
     try:
         route = await platform.router.complete(
             provider=provider or None,
@@ -1099,7 +1096,7 @@ async def _enforce_language(
         )
     except Exception:  # noqa: BLE001 — a failed rewrite must not fail the turn
         log.warning("language rewrite failed (original reply kept)", exc_info=True)
-        return (text, NOTE_FAILED.format(name=label(code)), 0, 0, 0)
+        return (text, _rewrite_failed_note(code), 0, 0, 0)
 
     usage = route.response.usage or {}
     u_in = int(usage.get("input_tokens", 0) or 0)
@@ -1108,10 +1105,60 @@ async def _enforce_language(
     # the turn's tally — the int return keeps its shape for the callers.
     if tally is not None:
         tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
-    rewritten = (route.response.text or "").strip()
+    out_text, note = _rewrite_verdict(text, route.response.text or "", code, user_text)
+    return (out_text, note, u_in, u_out, 1)
+
+
+# The language guard's pure halves (v1.311.0) — shared by POST /chat's
+# ``_enforce_language`` (one ``complete()``) and /chat/stream's STREAMED
+# rewrite (``routes/chat.py``), so the two lanes decide the leak, ask the
+# model and judge the answer with ONE set of rules.
+
+
+def _language_leak(platform, text: str, user_text: str) -> str:
+    """The configured language's code when ``text`` leaks out of it (and the
+    profile ENFORCES it), else "" — the common path, a regex over the reply,
+    costs no model call."""
+    from ..profile import profile_language
+    from ..profile.language import detect_leak
+
+    code, enforce = profile_language(platform)
+    if not code or not enforce:
+        return ""
+    if detect_leak(text, code, user_text) is None:
+        return ""
+    return code
+
+
+def _rewrite_messages(messages, text: str, code: str) -> list:
+    """The SAME history plus the leaked reply and the instruction to rewrite
+    it in ``code`` — sent WITHOUT tools (a rewrite must not re-run side
+    effects)."""
+    from ..profile.language import rewrite_instruction
+    from ..providers.adapters.base import LLMMessage
+
+    return list(messages or []) + [
+        LLMMessage(role="assistant", content=text),
+        LLMMessage(role="user", content=rewrite_instruction(code)),
+    ]
+
+
+def _rewrite_failed_note(code: str) -> str:
+    from ..profile.language import NOTE_FAILED, label
+
+    return NOTE_FAILED.format(name=label(code))
+
+
+def _rewrite_verdict(text: str, rewritten: str, code: str, user_text: str) -> tuple[str, str]:
+    """``(reply, note)`` once the rewrite came back: the rewrite when it is
+    clean (with an honest note that it was rewritten), else the ORIGINAL — a
+    second wrong answer is not an improvement."""
+    from ..profile.language import NOTE_CORRECTED, detect_leak, label
+
+    rewritten = (rewritten or "").strip()
     if rewritten and detect_leak(rewritten, code, user_text) is None:
-        return (rewritten, NOTE_CORRECTED.format(name=label(code)), u_in, u_out, 1)
-    return (text, NOTE_FAILED.format(name=label(code)), u_in, u_out, 1)
+        return rewritten, NOTE_CORRECTED.format(name=label(code))
+    return text, _rewrite_failed_note(code)
 
 
 #: The one "now write your answer" completion may take this long (v1.246.0).
@@ -1160,6 +1207,17 @@ def _wants_final_answer(text: str, workflow_draft, escalate: bool,
     )
 
 
+def _final_answer_messages(messages, instruction: str = "") -> list:
+    """The history plus the ONE "write your final answer now" user line
+    (v1.311.0: shared by POST's ``_final_answer_after_tools`` and the stream
+    lane's STREAMED nudge, so both ask with the same words)."""
+    from ..providers.adapters.base import LLMMessage
+
+    return list(messages or []) + [
+        LLMMessage(role="user", content=instruction or FINAL_ANSWER_INSTRUCTION),
+    ]
+
+
 async def _final_answer_after_tools(
     platform,
     *,
@@ -1182,11 +1240,7 @@ async def _final_answer_after_tools(
     bare "(no reply)". One bounded completion with no tools cannot re-run a
     side effect, and its usage rides back so it is billed like any other.
     """
-    from ..providers.adapters.base import LLMMessage
-
-    nudge = list(messages or []) + [
-        LLMMessage(role="user", content=instruction or FINAL_ANSWER_INSTRUCTION),
-    ]
+    nudge = _final_answer_messages(messages, instruction)
     try:
         async with asyncio.timeout(_FINAL_ANSWER_TIMEOUT_S):
             route = await platform.router.complete(
@@ -1237,6 +1291,127 @@ def repeated_call_refusal(name: str, times: int) -> str:
         "times this turn with the same outcome, so it was not run again. Change "
         "the approach — different arguments, a different tool, or read the page "
         "first — or tell the user what is blocking."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# A ROUND'S READERS RUN TOGETHER (v1.311.0, chat-tools-run-serially) — the
+# classifier and the round runner BOTH chat lanes call, lock-step.
+# --------------------------------------------------------------------------- #
+
+#: The tools a round may run CONCURRENTLY: readers that touch no shared live
+#: surface. An explicit ALLOW-LIST, never ``min_access == "read_only"``: the
+#: browser, computer-use, desktop, terminal and pane readers (snapshot,
+#: screenshot, page read, pane read) share ONE live browser/desktop/PTY and
+#: must not race, so they stay serial with everything else. Minus
+#: ``LOW_TRUST_DENY`` by construction: a batched reader's invoke is decided
+#: before its siblings' results are read, which is only sound for a tool a
+#: mid-round taint could never refuse.
+CONCURRENT_READ_TOOLS: frozenset[str] = frozenset({
+    "web_search", "web_fetch", "read_document", "read_file", "list_files",
+    "file_search", "memory_search", "memory_read", "ltm_search", "recall",
+    "guide_search", "guide_read", "app_search", "app_status",
+}) - LOW_TRUST_DENY
+
+
+def _batchable_call(name: str, args: object) -> bool:
+    """May this call join its round's concurrent batch? Only an allow-listed
+    reader, and never one carrying ``_store_as`` (that binds the result into
+    the session's ONE REPL namespace — two binds must not interleave). The
+    lanes exclude more on their own: a call the repeated-call guard answers,
+    and on the stream lane a call that CARDS or carries a deny reason."""
+    if name not in CONCURRENT_READ_TOOLS:
+        return False
+    return not (isinstance(args, dict) and "_store_as" in args)
+
+
+async def _run_tool_round(batched: list[bool], invoke, settle):
+    """Run one tool round. An async generator of ``("started", i)`` — call
+    ``i`` is about to begin — and ``("ready", i)`` — call ``i`` is settled AND
+    so is every call before it.
+
+    THE WAIT THIS REMOVES: three web_fetch/read_document calls in one round
+    (the common shape of a research or "compare these files" turn) cost the
+    SUM of their latencies, while the agent runtime already fans the same
+    calls out. Now:
+
+    1. every ``batched`` call (an allow-listed reader the lane cleared) runs
+       TOGETHER (``asyncio.gather``) — one awaited directly when it is alone;
+    2. their results are SETTLED in call order — ``settle`` is where a
+       reader's injection taint lands — BEFORE any other call starts, so a
+       writer the model listed first is still refused by a reader listed
+       after it;
+    3. every other call (writers, carded or refused calls, live-surface
+       readers) runs SERIALLY in the model's order, settled one by one.
+
+    ``("ready", i)`` is released strictly in CALL order (the ready prefix is
+    flushed as it grows), so the lane's ``finished`` frames and its
+    ``role="tool"`` messages keep the model's order whatever order the
+    readers finished in — an assistant turn and its tool results stay ONE
+    unit. ``invoke(i)`` must not raise for an ordinary tool failure (the
+    lanes turn one into the call's content, as before); a BaseException —
+    a cancel — propagates and cancels the batch.
+    """
+    n = len(batched)
+    settled = [False] * n
+    flushed = 0
+
+    def _ready() -> list[int]:
+        nonlocal flushed
+        out: list[int] = []
+        while flushed < n and settled[flushed]:
+            out.append(flushed)
+            flushed += 1
+        return out
+
+    batch = [i for i in range(n) if batched[i]]
+    if batch:
+        for i in batch:
+            yield ("started", i)
+        if len(batch) == 1:
+            outcomes = [await invoke(batch[0])]
+        else:
+            outcomes = await asyncio.gather(*(invoke(i) for i in batch))
+        for i, outcome in zip(batch, outcomes):
+            await settle(i, outcome)
+            settled[i] = True
+        for i in _ready():
+            yield ("ready", i)
+    for i in range(n):
+        if batched[i]:
+            continue
+        yield ("started", i)
+        outcome = await invoke(i)
+        await settle(i, outcome)
+        settled[i] = True
+        for j in _ready():
+            yield ("ready", j)
+
+
+async def _fence_tool_output(
+    d, state: dict[str, Any], overrides: dict[str, str], name: str, tool, content,
+):
+    """FENCE externally-sourced tool output before the model (and the client)
+    sees it — a planted file / web page / memory / PDF can't inject
+    instructions (the guard the agent runtime applies to
+    ``returns_untrusted_content`` tools). A flagged result TAINTS the turn
+    (v1.298.0): the rest of it is low — overrides narrowed in place,
+    kept-away calls refused at invoke, ``trust.lowered`` published once;
+    nothing is added to the prompt. Returns the content to hand on.
+    v1.311.0: ONE copy for both lanes (it was a hand-mirrored block in each),
+    called from :func:`_run_tool_round`'s settle step, so a batched reader's
+    taint has landed before any writer of the round starts."""
+    if not getattr(tool, "returns_untrusted_content", False):
+        return content
+    from ..computeruse.safety import detect_injection, wrap_untrusted
+
+    inj = detect_injection(str(content))
+    if inj["flagged"]:
+        await _taint_chat_turn(d, state, overrides, name, inj)
+    return wrap_untrusted(
+        f"[content withheld — suspected {inj['category']}: {inj['reason']}]"
+        if inj["flagged"]
+        else str(content)
     )
 
 
@@ -3519,6 +3694,297 @@ def _persist_chat_usage(
         pass
 
 
+def _load_project(platform, pid: "str | None"):
+    """The turn's grounded project row, or None (v1.311.0: lifted so both
+    lanes read it OFF the loop — a SQLite read, the v1.153.1 rule). Never
+    raises: a broken store must not block a chat turn."""
+    if not pid:
+        return None
+    try:
+        from ..core.models import Project
+
+        with session_scope(platform.engine) as db:
+            return db.get(Project, pid)
+    except Exception:  # noqa: BLE001 — never block a chat turn
+        return None
+
+
+class _Grounding:
+    """The grounded sections of ONE turn's system prompt (v1.311.0).
+
+    Computed together by :func:`_gather_grounding` and JOINED by the lanes in
+    the fixed order the prompt has always had — the order is the contract
+    (``tests/test_wave3_chat_lanes_v1311.py`` pins it byte for byte)::
+
+        project block → lessons → memory index → fabric → connector memory
+        [attachments + "/" skill: the lane's own, OUTSIDE the gather]
+        → roster → saved workflows
+
+    Every field is a ready-to-append section ("" when there is nothing).
+    """
+
+    __slots__ = (
+        "project", "lessons", "index", "fabric", "connector", "conn_tools",
+        "roster", "workflows", "packs_starting",
+    )
+
+    def __init__(self) -> None:
+        self.project = self.lessons = self.index = self.fabric = ""
+        self.connector = self.roster = self.workflows = ""
+        self.conn_tools: list[str] = []
+        #: MCP packs still loading after the bounded wait (v1.311.0 review);
+        #: the lanes put ``packs_starting_note`` on their Tools seam.
+        self.packs_starting: list[str] = []
+
+    def before_attachments(self) -> str:
+        return self.project + self.lessons + self.index + self.fabric + self.connector
+
+    def after_skill(self) -> str:
+        # The packs note rides the shared join (v1.311.0 review), so both
+        # lanes carry it on EVERY turn — not only one that armed tools — and
+        # it is "" (byte-identical prompt) whenever nothing is starting.
+        note = packs_starting_note(self.packs_starting)
+        return self.roster + self.workflows + (("\n\n" + note) if note else "")
+
+
+async def _gather_grounding(
+    d, body, *, pid: "str | None", resolved_proj, recall_query: str,
+) -> _Grounding:
+    """Every independent grounding hop of a turn, run CONCURRENTLY and OFF the
+    loop (v1.311.0, serial-grounding-prep). BOTH chat lanes call this — it
+    replaced two hand-mirrored copies (one MIRROR NOTE pair fewer to drift).
+
+    THE WAIT THIS REMOVES: the hops — project knowledge (a query embed, 10 s
+    HTTP timeout), lessons, the memory index (a glob + a stat per note on a
+    cache miss), the memory fabric (remote LTM bases, 2.5 s fallback budget),
+    toggled connector memory, the roster and the saved-workflows list — were
+    awaited one after another, three of them ON the loop, so every turn sat on
+    "Thinking…" for the SUM of them before the model was even called. None
+    depends on another, so the turn now waits for the SLOWEST one. Each hop is
+    one ``asyncio.to_thread`` and they are joined with ``asyncio.gather``.
+
+    What did NOT change, deliberately:
+
+    * the BYTES. The lanes join the returned sections in today's fixed order
+      (see :class:`_Grounding`). ``learning.apply_to_prompt`` APPENDS its
+      lessons (``LearningEngine.apply_to_prompt``: "Append the top lessons";
+      it returns the prompt unchanged when there is nothing), so it runs in
+      the gather on "" and its suffix lands exactly where the rewrite of the
+      whole prompt used to put it. A learning engine that REWROTE the prompt
+      instead of appending would need to move back after the gather.
+    * every hop's failure semantics: knowledge/lessons/index/roster swallow,
+      the fabric logs with a traceback (a bare ``pass`` there once hid a
+      day-one TypeError for a whole life), and the project-text scan and the
+      connector resolution raise exactly as they did. The first error in HOP
+      order is the one re-raised, so a failure is deterministic.
+    * no soft deadline. Dropping a slow hop's grounding would change answers
+      non-deterministically and silently; a slow hop still costs its own
+      latency, but no longer everyone else's.
+    * attachments, the "/" skill playbook and workspace resolution stay with
+      the lanes, outside this gather: they carry their own error and consent
+      semantics (the user's own files are never skipped).
+    * all of it runs BEFORE ``_apply_compaction``/``_plan_context``, so the
+      budget prices every section (the repo rule).
+
+    The hops are looked up AT CALL TIME where they live (the function-local
+    imports, this module's ``_saved_workflows_block`` /
+    ``_connector_memory_block`` / ``_resolve_connectors``,
+    ``platform.fabric``/``platform.learning``), so a patch of any of them
+    reaches both lanes.
+    """
+    platform = d.platform
+    bus = getattr(platform, "event_bus", None)
+    learning = getattr(platform, "learning", None)
+    fabric = getattr(platform, "fabric", None)
+    out = _Grounding()
+
+    # PACKS STILL LOADING (v1.311.0 review of the deferred boot): MCP packs
+    # register in the background after the daemon answers, so a turn in the
+    # first seconds would arm a loadout without them and the model would call
+    # a pack tool nonexistent. Wait a BOUNDED moment (only while something is
+    # starting), and name whatever is still starting on the Tools seam.
+    from ..mcp.tools import wait_for_starting_packs
+
+    out.packs_starting = await wait_for_starting_packs(platform)
+
+    # The connector toggles are resolved ON THE LOOP (in-memory dict reads):
+    # in a worker thread, ``registry.mcp_names()`` could iterate the registry
+    # while a pack registers on the loop ("dictionary changed size", review).
+    # A failure is held and re-raised at its HOP position, as before.
+    try:
+        _resolved_conn: "tuple[Any, BaseException | None]" = (_resolve_connectors(d, body), None)
+    except Exception as exc:  # noqa: BLE001 — re-raised in hop order below
+        _resolved_conn = (None, exc)
+
+    def _project_text() -> tuple[str, str, list[str]]:
+        # v1.298.0: the instructions and brief are SCANNED for prompt
+        # injection at the source (core/promptguard.guarded_project_text — a
+        # flagged paragraph becomes "[BLOCKED: …]"; one context.blocked per
+        # (session, source)), clipped to the consumer's 2,000 BEFORE scanning.
+        # Same helper as the agent runtime.
+        from ..core.promptguard import guarded_project_text
+
+        instructions, brief = guarded_project_text(
+            resolved_proj, event_bus=bus, session_id="chat", cap=2000,
+        )
+        # Recent activity: the last 5 sessions in this project, in the exact
+        # line format the agent runtime injects (PROJECT PARITY, v1.141.0).
+        # Best-effort — the recap must never break a turn.
+        recent: list[str] = []
+        try:
+            from sqlmodel import select as _select
+
+            from ..core.models import Session as _Session
+
+            with session_scope(platform.engine) as db:
+                _siblings = list(
+                    db.exec(
+                        _select(_Session)
+                        .where(_Session.project_id == pid)
+                        .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
+                        .limit(5)
+                    )
+                )
+            recent = [
+                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
+                for s in _siblings
+            ]
+        except Exception:  # noqa: BLE001 — the recap must never break a turn
+            recent = []
+        return instructions, brief, recent
+
+    def _knowledge() -> str:
+        # Keyed off the turn's composed recall query (short follow-ups inherit
+        # the conversation's subject — _compose_recall_query). A >6000-char
+        # knowledge base embeds the query over HTTP (v1.226.0).
+        try:
+            from ..projects.knowledge import ground
+
+            return ground(platform, pid, recall_query, session_id="chat") or ""
+        except Exception:  # noqa: BLE001 — retrieval must never break a chat turn
+            return ""
+
+    def _lessons() -> str:
+        # Self-correction: lessons + preferences (each lesson scanned by
+        # promptguard, v1.298.0). See the docstring for why "" is passed.
+        try:
+            return learning.apply_to_prompt(
+                "", event_bus=bus, session_id="chat"
+            ) or ""
+        except Exception:  # noqa: BLE001 — never block a chat turn
+            return ""
+
+    def _index() -> str:
+        # AWARENESS INDEX (v1.141.0): "what I can remember" — LTM bases,
+        # memory-graph layers, project-bound bases, recent note titles.
+        # Import-guarded + callable-checked; the block never raises.
+        try:
+            from ..memory.index_block import memory_index_block as _memory_index_block
+        except ImportError:
+            return ""
+        if not callable(_memory_index_block):
+            return ""
+        try:
+            idx = _memory_index_block(platform, project_id=pid)
+            return ("\n\n" + idx.strip("\n")) if idx else ""
+        except Exception:  # noqa: BLE001 — awareness must never break a turn
+            return ""
+
+    def _fabric() -> str:
+        # MEMORY FABRIC: the most relevant snippets from every store, so a
+        # plain chat turn is grounded in what the user knows without arming a
+        # tool. Grounding reads the DB and, for a remote base, the NETWORK
+        # (v1.173.0) — never on the loop.
+        try:
+            # Every store: files, notes, memory graph, lessons, past sessions
+            # and — v1.142.0 — past CONVERSATIONS (project knowledge is the
+            # project block's).
+            return fabric.ground(
+                recall_query,
+                project_id=pid,
+                sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
+            ) or ""
+        except Exception:  # noqa: BLE001 — grounding must never BREAK a turn,
+            # but never fail silently either: a bare ``pass`` here swallowed a
+            # day-one TypeError (ground() had no ``sources`` kwarg) and chat
+            # shipped ungrounded for its entire life.
+            log.exception("chat memory-fabric grounding failed (turn continues)")
+            return ""
+
+    def _connector() -> tuple[list[str], str]:
+        # Connector toggles (the "+" menu): a toggled MEMORY connector grounds
+        # this turn with its own top hits, injected directly (it must reliably
+        # reach the model, not compete in fabric ranking); a toggled MCP
+        # connector's tool group merges into the armed set later.
+        if _resolved_conn[1] is not None:
+            raise _resolved_conn[1]
+        conn_tools, conn_memory = _resolved_conn[0]
+        block = (
+            _connector_memory_block(d, conn_memory, recall_query) if conn_memory else ""
+        )
+        return conn_tools, block or ""
+
+    def _roster() -> str:
+        # CAPABILITY ROSTER (v1.139.0): who could take escalated work, so the
+        # model can NAME a specialist in escalate_to_agent's ``agent`` arg.
+        try:
+            from ..agents.roster import roster_block
+
+            r = roster_block(platform)
+            return ("\n\n" + r) if r else ""
+        except Exception:  # noqa: BLE001 — the roster must never break a turn
+            return ""
+
+    def _workflows() -> str:
+        # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
+        return _saved_workflows_block(platform)
+
+    hops: list[tuple[str, Any]] = []
+    if resolved_proj is not None:
+        hops += [("project", _project_text), ("knowledge", _knowledge)]
+    if learning is not None:
+        hops.append(("lessons", _lessons))
+    hops.append(("index", _index))
+    if fabric is not None and recall_query.strip():
+        hops.append(("fabric", _fabric))
+    hops += [("connector", _connector), ("roster", _roster), ("workflows", _workflows)]
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(fn) for _name, fn in hops), return_exceptions=True,
+    )
+    for r in results:  # the first failure in HOP order, as the serial code did
+        if isinstance(r, BaseException):
+            raise r
+    got = {name: r for (name, _fn), r in zip(hops, results)}
+
+    if resolved_proj is not None:
+        instructions, brief, recent = got["project"]
+        block = f"\n\n# Project: {resolved_proj.name}"
+        if instructions:
+            block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
+        if brief:
+            block += f"\n\nAbout this project: {brief[:1500]}"
+        # PROJECT PARITY (v1.141.0): the ROOT line + recent-activity recap
+        # agent sessions have always had (agents/runtime.py _project_context).
+        if (resolved_proj.root or "").strip():
+            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+        if got["knowledge"]:
+            block += f"\n\nProject knowledge (reference):\n{got['knowledge']}"
+        if recent:
+            block += (
+                "\n\nRecent activity in this project (newest first):\n"
+                + "\n".join(recent)
+            )
+        out.project = block
+    out.lessons = got.get("lessons", "")
+    out.index = got["index"]
+    out.fabric = got.get("fabric", "")
+    out.conn_tools, out.connector = got["connector"]
+    out.roster = got["roster"]
+    out.workflows = got["workflows"]
+    return out
+
+
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
     suggest_preferences: bool = False,
@@ -3616,170 +4082,21 @@ async def run_chat_turn(
     # instructions + brief + knowledge. The MAIN chat sends none and stays
     # project-agnostic — the globally "active" project never leaks in here.
     pid = (body.project_id or "").strip() or None
-    resolved_proj = None
-    if pid:
-        try:
-            from ..core.models import Project
+    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
 
-            with session_scope(d.platform.engine) as db:
-                resolved_proj = db.get(Project, pid)
-        except Exception:  # noqa: BLE001 — never block a chat turn
-            resolved_proj = None
-    if resolved_proj is not None:
-        block = f"\n\n# Project: {resolved_proj.name}"
-        # v1.298.0: the instructions and brief are SCANNED for prompt
-        # injection at the source (core/promptguard.guarded_project_text —
-        # a flagged paragraph becomes "[BLOCKED: …]"; one context.blocked
-        # per (session, source)). Same helper for the stream mirror and the
-        # agent runtime. The clips below are unchanged.
-        from ..core.promptguard import guarded_project_text
-
-        # Off the loop (a CPU-bound scan), clipped to the consumer's 2,000
-        # BEFORE scanning (PERF, wave-4a review). MIRROR NOTE (lock-step).
-        instructions, _brief = await asyncio.to_thread(
-            guarded_project_text,
-            resolved_proj,
-            event_bus=getattr(d.platform, "event_bus", None),
-            session_id="chat",
-            cap=2000,
-        )
-        if instructions:
-            block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
-        if _brief:
-            block += f"\n\nAbout this project: {_brief[:1500]}"
-        # PROJECT PARITY (v1.141.0 — spec'd in Pair Y's brief, implemented
-        # here because chat_turn is Pair X's file): the ROOT line + recent-
-        # activity recap agent sessions have always had (the exact
-        # agents/runtime.py _project_context formats), so chat sees the same
-        # context spine. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-        if (resolved_proj.root or "").strip():
-            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
-        # Knowledge keyed off the turn's composed recall query (short
-        # follow-ups inherit the conversation's subject — see
-        # _compose_recall_query); ground() retrieves the relevant items.
-        # Never let it break a turn.
-        try:
-            from ..projects.knowledge import ground
-
-            # v1.226.0: a >6000-char knowledge base embeds the query over HTTP
-            # (10s timeout) — off the loop, like the fabric hop below.
-            knowledge = await asyncio.to_thread(
-                ground, d.platform, pid, recall_query, session_id="chat"
-            )
-            if knowledge:
-                block += f"\n\nProject knowledge (reference):\n{knowledge}"
-        except Exception:  # noqa: BLE001 — retrieval must never break a chat turn
-            pass
-        # Recent activity: the last 5 sessions in this project, in the exact
-        # line format the agent runtime injects. Best-effort — never breaks.
-        try:
-            from sqlmodel import select as _select
-
-            from ..core.models import Session as _Session
-
-            with session_scope(d.platform.engine) as db:
-                _siblings = list(
-                    db.exec(
-                        _select(_Session)
-                        .where(_Session.project_id == pid)
-                        .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
-                        .limit(5)
-                    )
-                )
-            _recent = [
-                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
-                for s in _siblings
-            ]
-            if _recent:
-                block += (
-                    "\n\nRecent activity in this project (newest first):\n"
-                    + "\n".join(_recent)
-                )
-        except Exception:  # noqa: BLE001 — the recap must never break a turn
-            pass
-        system += block
-
-    # Self-correction: fold accumulated lessons + user preferences into the
-    # system prompt so the chat surface gets a little smarter every turn
-    # too (same injection the agent runtime does). Never blocks a turn.
-    learning = getattr(d.platform, "learning", None)
-    if learning is not None:
-        try:
-            # Off the loop: each lesson is scanned (promptguard, v1.298.0).
-            # MIRROR NOTE (lock-step): routes/chat.py.
-            system = await asyncio.to_thread(
-                learning.apply_to_prompt,
-                system,
-                event_bus=getattr(d.platform, "event_bus", None),
-                session_id="chat",
-            )
-        except Exception:  # noqa: BLE001 — never block a chat turn
-            pass
-
-    # AWARENESS INDEX (v1.141.0): a compact "what I can remember" map — LTM
-    # bases, memory-graph layers, project-bound bases, recent note titles.
-    # Pair Y builds memory/index_block; the injection lives HERE because
-    # chat_turn is Pair X's file this wave. Import-guarded + callable-checked
-    # so this module is green in either landing order; the block itself never
-    # raises and returns "" when there is nothing to say.
-    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    try:
-        from ..memory.index_block import memory_index_block as _memory_index_block
-    except ImportError:  # Pair Y's module not landed yet
-        _memory_index_block = None
-    if callable(_memory_index_block):
-        try:
-            _idx = _memory_index_block(d.platform, project_id=pid)
-            if _idx:
-                system += "\n\n" + _idx.strip("\n")
-        except Exception:  # noqa: BLE001 — awareness must never break a turn
-            pass
-
-    # MEMORY FABRIC: fold in the most relevant snippets from every store
-    # (files, notes, memory graph, lessons, past sessions, and — v1.142.0 —
-    # past CONVERSATIONS via the history index; project knowledge is already
-    # injected above when a project is set) so a plain chat turn is grounded
-    # in what the user knows, without arming a tool.
-    # Keyed off the turn's composed recall query (X.3) — short follow-ups
-    # inherit the conversation's subject instead of recalling on noise.
-    fabric = getattr(d.platform, "fabric", None)
-    if fabric is not None and recall_query.strip():
-        try:
-            # OFF THE EVENT LOOP (v1.173.0). Grounding reads the DB and, for
-            # a remote base (an MCP-served wiki, Notion, a cloud drive), makes
-            # NETWORK calls — and since v1.173.0 a thin multi-word query can
-            # fan out into several passes. Run synchronously it froze every
-            # request in the daemon (the v1.153.1 rule: one loop, so a blocking
-            # call is not slow, it is "Daemon offline").
-            grounding = await asyncio.to_thread(
-                fabric.ground,
-                recall_query,
-                project_id=pid,
-                sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
-            )
-            if grounding:
-                system += grounding
-        except Exception:  # noqa: BLE001 — grounding must never BREAK a turn,
-            # but never fail silently either: a bare ``pass`` here swallowed a
-            # day-one TypeError (ground() had no ``sources`` kwarg) and chat
-            # shipped ungrounded for its entire life. Log with traceback; the
-            # turn continues ungrounded.
-            log.exception("chat memory-fabric grounding failed (turn continues)")
-
-    # Connector toggles (the "+" menu): a toggled MEMORY connector grounds
-    # this turn with its own top hits, injected directly — it must reliably
-    # reach the model, not compete in blended fabric ranking. A toggled MCP
-    # connector's tool group merges into the armed set below. Same composed
-    # recall query as the fabric (X.3).
-    conn_tools, conn_memory = _resolve_connectors(d, body)
-    if conn_memory:
-        # Same reason as the fabric above: a toggled memory connector is a
-        # remote read (v1.173.0).
-        cm_block = await asyncio.to_thread(
-            _connector_memory_block, d, conn_memory, recall_query
-        )
-        if cm_block:
-            system += cm_block
+    # GROUNDING (v1.311.0): the project block, lessons, memory index, fabric,
+    # connector memory, roster and saved workflows — every independent hop at
+    # ONCE and off the loop, via the ONE helper both lanes call. Joined below
+    # in the fixed order the prompt has always had: the project block through
+    # connector memory here, the roster + saved workflows after the attachments
+    # and the "/" skill (which stay this lane's own). Keyed off the turn's
+    # composed recall query (X.3). MIRROR NOTE (lock-step): routes/chat.py
+    # POST /chat/stream calls the same helper at the same seam.
+    _grounding = await _gather_grounding(
+        d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+    )
+    system += _grounding.before_attachments()
+    conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted above attachments): an explicit body choice
     # always wins; else the project's default. Needed here so attachment
@@ -3837,30 +4154,16 @@ async def run_chat_turn(
             + _playbook[:8000]
         )
 
-    # CAPABILITY ROSTER (v1.139.0): who could take escalated work — injected
-    # after the skills section, before the tools block, so the model can NAME
-    # a specialist in escalate_to_agent's optional ``agent`` arg. Cheap and
-    # compact (roster_block is bounded); skipped cleanly when empty, and a
-    # missing/broken roster module must never break a turn.
-    # MIRROR NOTE (lock-step): routes/chat.py POST /chat/stream carries an
-    # inline copy of this block — edit both or neither.
-    try:
-        from ..agents.roster import roster_block
-
-        _roster = roster_block(platform)
-        if _roster:
-            system += "\n\n" + _roster
-    except Exception:  # noqa: BLE001 — the roster must never break a turn
-        pass
-
-    # SAVED WORKFLOWS (v1.170.0): the bounded one-line map of the user's
-    # stored workflows, so the model can suggest (and, with workflow_run
-    # armed, actually start) a process the user already built instead of
-    # re-deriving its steps. Added HERE — before the budget planner runs —
-    # so its cost is priced like every other section (the repo rule).
-    # MIRROR NOTE (lock-step): routes/chat.py POST /chat/stream carries this
-    # same line — edit both or neither.
-    system += _saved_workflows_block(platform)
+    # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0): who could
+    # take escalated work (after the skills section, before the tools block,
+    # so the model can NAME a specialist in escalate_to_agent's ``agent`` arg)
+    # and the bounded one-line map of the user's stored workflows (so the
+    # model can suggest — and with workflow_run armed, start — a process the
+    # user already built). Both were computed in the grounding gather above;
+    # appended HERE, in their old place and before the budget planner runs,
+    # so their cost is priced (the repo rule).
+    # MIRROR NOTE (lock-step): routes/chat.py appends the same sections.
+    system += _grounding.after_skill()
 
     # WORKSPACE GROUNDING (v1.210.0): a chat bound to a folder (the Build
     # pane's per-pane chat sends `workspace_dir` every turn) has that folder
@@ -4320,10 +4623,41 @@ async def run_chat_turn(
                                    tool_calls=calls,
                                    # v1.263.0 — lock-step with the stream lane.
                                    raw_blocks=list(getattr(route.response, "raw_blocks", None) or [])))
+            # v1.311.0 (chat-tools-run-serially): the round's allow-listed
+            # readers run TOGETHER, then every other call serially in model
+            # order, through the ONE runner both lanes use
+            # (`_run_tool_round`). Decided per call BEFORE anything runs: the
+            # repeated-call guard (an answered call never joins the batch).
+            # Settled per call as it lands: the result, the injection fence
+            # and its taint — so a reader's taint is in place before any
+            # writer starts. Recorded per call in CALL order (`ready`): the
+            # receipt lists, the failure count, the role="tool" message.
+            # MIRROR NOTE (lock-step): routes/chat.py's stream loop runs the
+            # same three phases (plus its cards, resolved before the batch).
+            from ..tools.base import ToolResult as _ToolResult
+
+            _keys: list[tuple[str, str]] = []
+            _refused: list[str] = []
             for tc in calls:
-                ran = False
                 _call_key = _repeat_key(tc.name, tc.arguments)
+                _keys.append(_call_key)
+                # v1.274.0: answered, not run. MIRROR NOTE (lock-step): the
+                # stream loop in routes/chat.py does the same BEFORE its card.
+                if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
+                    _refused.append(repeated_call_refusal(tc.name, _failed_calls[_call_key]))
+                else:
+                    _refused.append("")
+            _batched = [
+                not _refused[i] and _batchable_call(tc.name, tc.arguments)
+                for i, tc in enumerate(calls)
+            ]
+            _slots: list[dict[str, Any]] = [{} for _ in calls]
+
+            async def _invoke(i: int) -> tuple[Any, str]:
+                tc = calls[i]
                 try:
+                    if _refused[i]:
+                        return _ToolResult(ok=False, output="", error=_refused[i]), ""
                     # THE ARMED SET IS THE GATE (v1.227.0, RT1). `armed` is
                     # what this turn showed the model; a call naming any
                     # other registered tool (history carries earlier turns'
@@ -4332,163 +4666,155 @@ async def run_chat_turn(
                     # run whenever ANY tool was armed. MIRROR NOTE
                     # (lock-step): the stream loop in routes/chat.py passes
                     # its own armed set the same way — edit both or neither.
-                    # v1.246.0: the agent run's tool deadline, so a hung
-                    # tool ends as a failed result instead of a hung turn.
-                    if _failed_calls.get(_call_key, 0) >= REPEATED_CALL_LIMIT:
-                        # v1.274.0: answered, not run. MIRROR NOTE (lock-step):
-                        # the stream loop in routes/chat.py does the same
-                        # BEFORE its approval card — edit both or neither.
-                        from ..tools.base import ToolResult as _ToolResult
-
-                        result = _ToolResult(
-                            ok=False, output="",
-                            error=repeated_call_refusal(tc.name, _failed_calls[_call_key]),
-                        )
-                    else:
-                        # LOW TRUST (v1.298.0): a kept-away tool still in
-                        # the armed set (armed BEFORE a mid-turn taint) is
-                        # refused through the registry's ledgered deny path
-                        # with the sentence that names the cause. Passed
-                        # ONLY when set — older invoke doubles take no kw.
-                        # MIRROR NOTE (lock-step): routes/chat.py folds the
-                        # same refusal into its ``_deny_reason``.
-                        _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
-                        result = await d.platform.registry.invoke(
-                            tc.name,
-                            # ``shell`` isolates under low trust (v1.298.0).
-                            _low_trust_args(_trust_state, tc.name, tc.arguments),
-                            ctx, d.platform.permissions,
-                            overrides, session_allow=armed_grant,
-                            allowed_names=set(armed),
-                            deadline_s=chat_tool_deadline(d.platform),
-                            **_low_kw,
-                            # STANDING GRANTS (v1.299.0) — lock-step with the
-                            # stream lane: the store + this turn's scopes ride
-                            # into the registry's gate (only when a store
-                            # exists). This lane never CARDS — every armed tool
-                            # is its own grant — so it has no "always" to
-                            # answer; the kwargs keep the ledger's grant id
-                            # honest for a call a standing grant lifted.
-                            **_grant_invoke_kwargs(
-                                d.platform,
-                                chat_grant_scopes(pid if resolved_proj is not None else None),
-                            ),
-                        )
-                    if result.ok:
-                        content = result.output
-                        ran = True
-                        last_tool_output = str(result.output or "")
-                    else:
-                        content = result.error or "error"
-                        # An honest permission refusal is not "used" — record it
-                        # so the reply can note it (a tool-internal failure just
-                        # rides back to the model as its tool-message content).
-                        if "permission denied" in (result.error or ""):
-                            denied_tools.append(tc.name)
+                    # LOW TRUST (v1.298.0): a kept-away tool still in the
+                    # armed set (armed BEFORE a mid-turn taint) is refused
+                    # through the registry's ledgered deny path with the
+                    # sentence that names the cause. Read HERE, at invoke
+                    # time, so a taint the round's readers raised reaches
+                    # every writer after them. Passed ONLY when set — older
+                    # invoke doubles take no kw. MIRROR NOTE (lock-step):
+                    # routes/chat.py folds the same refusal into its
+                    # ``_deny_reason``.
+                    _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
+                    return await d.platform.registry.invoke(
+                        tc.name,
+                        # ``shell`` isolates under low trust (v1.298.0).
+                        _low_trust_args(_trust_state, tc.name, tc.arguments),
+                        ctx, d.platform.permissions,
+                        overrides, session_allow=armed_grant,
+                        allowed_names=set(armed),
+                        # v1.246.0: the agent run's tool deadline, so a hung
+                        # tool ends as a failed result instead of a hung turn.
+                        deadline_s=chat_tool_deadline(d.platform),
+                        **_low_kw,
+                        # STANDING GRANTS (v1.299.0) — lock-step with the
+                        # stream lane: the store + this turn's scopes ride
+                        # into the registry's gate (only when a store
+                        # exists). This lane never CARDS — every armed tool
+                        # is its own grant — so it has no "always" to
+                        # answer; the kwargs keep the ledger's grant id
+                        # honest for a call a standing grant lifted.
+                        **_grant_invoke_kwargs(
+                            d.platform,
+                            chat_grant_scopes(pid if resolved_proj is not None else None),
+                        ),
+                    ), ""
                 except Exception as exc:  # noqa: BLE001
-                    content = f"{type(exc).__name__}: {exc}"
-                if not ran:
-                    _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
-                # tools_used counts ONLY tools that actually executed — a denied
-                # or failed call is not honestly reported as run.
-                if ran:
-                    tools_used.append(tc.name)
-                    # DOOR (v1.199.0): a successful creating tool opens a link
-                    # into its surface. Same gate as tools_used — inside this
-                    # `if ran:` — so honesty is enforced at the call site.
-                    # MIRROR NOTE (lock-step): routes/chat.py's stream loop
-                    # carries the same append — edit both or neither.
-                    door_entries.append(door_for(tc.name, result))
-                    # REMEMBERED (v1.282.0): the sentence a preference call
-                    # kept, for the receipt — same gate as tools_used. MIRROR
-                    # NOTE (lock-step): routes/chat.py carries the same append.
-                    _kept = remembered_from_result(tc.name, result)
-                    if _kept:
-                        remembered.append(_kept)
-                    # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
-                    # SUCCESSFUL workflow_run's {run_id, workflow} rides the
-                    # response as `workflow_run` so the client can render the
-                    # live run under this very reply. Only a run the tool
-                    # actually started counts — a failed/denied call leaves
-                    # the key absent — and only with a real run id, because a
-                    # chip pointing at no run would poll a 404 forever. The
-                    # last successful call wins. MIRROR NOTE (lock-step): the
-                    # stream loop in routes/chat.py carries this same capture
-                    # — edit both or neither.
-                    if tc.name == "workflow_run":
-                        _wr = getattr(result, "data", None) or {}
-                        _wr_id = str(_wr.get("run_id") or "").strip()
-                        if _wr_id:
-                            workflow_run_info = {
-                                "run_id": _wr_id,
-                                "name": str(_wr.get("workflow") or "").strip(),
-                            }
-                    # Track created/edited documents (workspace-relative in
-                    # the tool result) as ABSOLUTE paths for the preview.
-                    if tc.name in _DOC_WRITING_TOOLS:
-                        _rel = str(
-                            (getattr(result, "data", None) or {}).get("path") or ""
-                        )
-                        if _rel:
-                            try:
-                                _abs = str((tool_ws / _rel).resolve())
-                                if _abs not in made_docs:
-                                    made_docs.append(_abs)
-                            except Exception:  # noqa: BLE001
-                                pass
-                    # EVERY file a turn creates is disclosed, not just the
-                    # document tools' (v1.165.0): ToolResult.created_paths
-                    # carries ABSOLUTE paths for files a tool could not name
-                    # up front (the repl tool's workspace diff, batch jobs).
-                    # Without this merge a repl-written file never reached
-                    # `documents`, so the preview rail heard nothing about it.
-                    # Merged in call order, deduped against the doc-tool
-                    # entries above. ABSOLUTE paths only: the contract says
-                    # absolute (tools/base.py), and a third-party tool's
-                    # relative name is an unverifiable claim — resolving it
-                    # against a guessed base could disclose the WRONG file,
-                    # which is worse than not disclosing it. MIRROR NOTE
-                    # (lock-step): the stream loop in routes/chat.py carries
-                    # this same merge — edit both or neither.
-                    for _cp in getattr(result, "created_paths", None) or []:
-                        _cp = str(_cp)
-                        try:
-                            if not Path(_cp).is_absolute():
-                                continue
-                        except (OSError, ValueError):
-                            continue
-                        if _cp not in made_docs:
-                            made_docs.append(_cp)
-                    # FENCE externally-sourced tool output before the model
-                    # sees it — a planted file / web page / memory / PDF can't
-                    # inject instructions (the same guard the agent runtime
-                    # applies to returns_untrusted_content tools).
-                    _t = d.platform.registry.get(tc.name)
-                    if getattr(_t, "returns_untrusted_content", False):
-                        from ..computeruse.safety import (
-                            detect_injection,
-                            wrap_untrusted,
-                        )
+                    return None, f"{type(exc).__name__}: {exc}"
 
-                        _inj = detect_injection(str(content))
-                        if _inj["flagged"]:
-                            # TAINT (v1.298.0): the turn READ something that
-                            # tried to instruct it — the rest of the turn is
-                            # low (overrides narrowed in place, kept-away
-                            # calls refused at invoke), ``trust.lowered``
-                            # published once. Nothing is added to the prompt.
-                            # MIRROR NOTE (lock-step): routes/chat.py.
-                            await _taint_chat_turn(
-                                d, _trust_state, overrides, tc.name, _inj
+            async def _settle(i: int, outcome: tuple[Any, str]) -> None:
+                tc = calls[i]
+                result, crash = outcome
+                ran = False
+                if result is None:
+                    content = crash
+                elif result.ok:
+                    content = result.output
+                    ran = True
+                else:
+                    content = result.error or "error"
+                if ran:
+                    # FENCE + TAINT (v1.298.0) — the shared helper; for a
+                    # batched reader this lands before any writer runs.
+                    content = await _fence_tool_output(
+                        d, _trust_state, overrides, tc.name,
+                        d.platform.registry.get(tc.name), content,
+                    )
+                _slots[i] = {"result": result, "content": content, "ran": ran}
+
+            async with contextlib.aclosing(
+                _run_tool_round(_batched, _invoke, _settle)
+            ) as _round_events:
+                async for _kind, _i in _round_events:
+                    if _kind != "ready":
+                        continue
+                    tc = calls[_i]
+                    result = _slots[_i]["result"]
+                    content = _slots[_i]["content"]
+                    ran = _slots[_i]["ran"]
+                    if ran:
+                        last_tool_output = str(result.output or "")
+                    elif result is not None and "permission denied" in (result.error or ""):
+                        # An honest permission refusal is not "used" — record
+                        # it so the reply can note it (a tool-internal failure
+                        # just rides back to the model as its tool content).
+                        denied_tools.append(tc.name)
+                    if not ran:
+                        _call_key = _keys[_i]
+                        _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
+                    # tools_used counts ONLY tools that actually executed — a
+                    # denied or failed call is not honestly reported as run.
+                    if ran:
+                        tools_used.append(tc.name)
+                        # DOOR (v1.199.0): a successful creating tool opens a
+                        # link into its surface. Same gate as tools_used —
+                        # inside this `if ran:` — so honesty is enforced at the
+                        # call site. MIRROR NOTE (lock-step): routes/chat.py's
+                        # stream loop carries the same append — edit both or
+                        # neither.
+                        door_entries.append(door_for(tc.name, result))
+                        # REMEMBERED (v1.282.0): the sentence a preference call
+                        # kept, for the receipt — same gate as tools_used.
+                        # MIRROR NOTE (lock-step): routes/chat.py carries the
+                        # same append.
+                        _kept = remembered_from_result(tc.name, result)
+                        if _kept:
+                            remembered.append(_kept)
+                        # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
+                        # SUCCESSFUL workflow_run's {run_id, workflow} rides
+                        # the response as `workflow_run` so the client can
+                        # render the live run under this very reply. Only a
+                        # run the tool actually started counts — a
+                        # failed/denied call leaves the key absent — and only
+                        # with a real run id, because a chip pointing at no
+                        # run would poll a 404 forever. The last successful
+                        # call wins. MIRROR NOTE (lock-step): the stream loop
+                        # in routes/chat.py carries this same capture — edit
+                        # both or neither.
+                        if tc.name == "workflow_run":
+                            _wr = getattr(result, "data", None) or {}
+                            _wr_id = str(_wr.get("run_id") or "").strip()
+                            if _wr_id:
+                                workflow_run_info = {
+                                    "run_id": _wr_id,
+                                    "name": str(_wr.get("workflow") or "").strip(),
+                                }
+                        # Track created/edited documents (workspace-relative
+                        # in the tool result) as ABSOLUTE paths for the preview.
+                        if tc.name in _DOC_WRITING_TOOLS:
+                            _rel = str(
+                                (getattr(result, "data", None) or {}).get("path") or ""
                             )
-                        content = wrap_untrusted(
-                            f"[content withheld — suspected {_inj['category']}: "
-                            f"{_inj['reason']}]"
-                            if _inj["flagged"]
-                            else str(content)
-                        )
-                msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                       name=tc.name, content=str(content)[:12000]))
+                            if _rel:
+                                try:
+                                    _abs = str((tool_ws / _rel).resolve())
+                                    if _abs not in made_docs:
+                                        made_docs.append(_abs)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        # EVERY file a turn creates is disclosed, not just the
+                        # document tools' (v1.165.0): ToolResult.created_paths
+                        # carries ABSOLUTE paths for files a tool could not
+                        # name up front (the repl tool's workspace diff, batch
+                        # jobs). Merged in call order, deduped against the
+                        # doc-tool entries above. ABSOLUTE paths only: the
+                        # contract says absolute (tools/base.py), and a
+                        # third-party tool's relative name is an unverifiable
+                        # claim — resolving it against a guessed base could
+                        # disclose the WRONG file. MIRROR NOTE (lock-step):
+                        # the stream loop in routes/chat.py carries this same
+                        # merge — edit both or neither.
+                        for _cp in getattr(result, "created_paths", None) or []:
+                            _cp = str(_cp)
+                            try:
+                                if not Path(_cp).is_absolute():
+                                    continue
+                            except (OSError, ValueError):
+                                continue
+                            if _cp not in made_docs:
+                                made_docs.append(_cp)
+                    msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                           name=tc.name, content=str(content)[:12000]))
     except Exception as exc:  # noqa: BLE001 — honest, human error
         # The rounds that DID complete were still billed — persist their
         # usage before surfacing the failure, or a round-2 error silently

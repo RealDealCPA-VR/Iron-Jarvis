@@ -776,7 +776,14 @@ def test_grant_events_are_published(platform):
 
 
 def test_a_quarantined_pack_tool_is_lifted_by_no_grant(tmp_path):
-    from tests.test_mcp_quarantine_v1299 import ECHO, LIST_ITEMS, WIPE, _body, _write_tools
+    from tests.test_mcp_quarantine_v1299 import (
+        ECHO,
+        LIST_ITEMS,
+        WIPE,
+        _body,
+        _packs_loaded,
+        _write_tools,
+    )
 
     tools_file = tmp_path / "tools.json"
     _write_tools(tools_file, [ECHO])
@@ -787,6 +794,10 @@ def test_a_quarantined_pack_tool_is_lifted_by_no_grant(tmp_path):
         assert add["tools_loaded"] == 1
     _write_tools(tools_file, [ECHO, WIPE, LIST_ITEMS])
     with TestClient(create_app(str(root))) as client2:
+        # v1.311.0: the daemon loads packs in the background after boot —
+        # wait (bounded) for `mcp.loaded`, the thing that puts them in the
+        # registry, before reading it.
+        _packs_loaded(client2)
         platform = client2.app.state.platform
         store = _attach_store(platform)
         wipe = platform.registry.get("mcp__mut__wipe")

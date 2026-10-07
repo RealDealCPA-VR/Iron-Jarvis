@@ -182,32 +182,69 @@ export function EventsProvider({ children, hub }: { children?: ReactNode; hub?: 
   return createElement(EventsContext.Provider, { value: owned }, children);
 }
 
+/** Options for `useEvents` (v1.311.0, wave 3, events-unfiltered-page-subscribers). */
+export interface UseEventsOptions {
+  /** Only these event types reach the caller's window. An entry ending in
+   *  `.*` matches by prefix (`"review.*"` takes `review.requested` and
+   *  `review.approved`, never `reviewer.assigned`); every other entry is an
+   *  exact type. Omitted = every frame (EventStream, TimeTravelFeed). */
+  types?: readonly string[];
+}
+
+/** A matcher for a joined type list, or null for "everything". */
+function typeMatcher(typesKey: string | null): ((type: unknown) => boolean) | null {
+  if (typesKey === null) return null;
+  const exact = new Set<string>();
+  const prefixes: string[] = [];
+  for (const t of typesKey ? typesKey.split("\n") : []) {
+    if (t.endsWith(".*")) prefixes.push(t.slice(0, -1)); // keep the dot: "review."
+    else if (t) exact.add(t);
+  }
+  return (type) =>
+    typeof type === "string" && (exact.has(type) || prefixes.some((p) => type.startsWith(p)));
+}
+
 /**
  * Subscribe to the daemon's `/events` feed. Every call site keeps its OWN
  * window (`max` newest frames) and `connected` flag over the window's one
  * shared socket; it never throws — when the daemon is offline it simply
  * reports `connected:false`. A frame whose id the window already holds is
  * not appended twice (a replay after reconnect is idempotent).
+ *
+ * v1.311.0 (wave 3, events-unfiltered-page-subscribers): `opts.types` drops
+ * a frame the caller never reads BEFORE any state update, so it costs that
+ * caller no render. Every subscriber used to take every frame — the add-on's
+ * tab switches, the router's provider.routed per LLM call — and the bell, the
+ * MoodOrb, the desktop bridge, the Overview and the whole ChatPage
+ * re-rendered for each one while a reply streamed. `max` counts MATCHING
+ * frames, so noise can no longer push a wanted event out of the window. The
+ * subscription is keyed on the list's CONTENT, so an inline array literal
+ * does not resubscribe on every render. `connected` still updates for a
+ * filtered caller.
  */
-export function useEvents(max = 100): EventsState {
+export function useEvents(max = 100, opts?: UseEventsOptions): EventsState {
   const hub = useContext(EventsContext) ?? defaultHub;
   const [events, setEvents] = useState<IJEvent[]>([]);
   const [connected, setConnected] = useState(false);
+  // null = no filter; "" = an empty list (matches nothing). Types never hold
+  // a newline, so it is a safe separator.
+  const typesKey = opts?.types ? opts.types.join("\n") : null;
 
-  useEffect(
-    () =>
-      hub.subscribe({
-        frame: (data) =>
-          setEvents((prev) => {
-            if (typeof data.id === "string" && data.id && prev.some((e) => e.id === data.id)) {
-              return prev;
-            }
-            return [data, ...prev].slice(0, max);
-          }),
-        state: setConnected,
-      }),
-    [hub, max],
-  );
+  useEffect(() => {
+    const matches = typeMatcher(typesKey);
+    return hub.subscribe({
+      frame: (data) => {
+        if (matches && !matches(data.type)) return; // not read here: no update
+        setEvents((prev) => {
+          if (typeof data.id === "string" && data.id && prev.some((e) => e.id === data.id)) {
+            return prev;
+          }
+          return [data, ...prev].slice(0, max);
+        });
+      },
+      state: setConnected,
+    });
+  }, [hub, max, typesKey]);
 
   return { events, connected };
 }

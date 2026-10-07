@@ -547,19 +547,24 @@ def test_the_stream_lane_gives_an_office_turn_the_same_budget(tmp_path, monkeypa
     platform = client.app.state.platform
     rounds = {"n": 0}
 
+    nudges: list[str] = []
+
     async def fake_stream(*, provider=None, model=None, system, messages,
                           tools, task_class=None, **kw):
+        if not tools:
+            # v1.311.0: the stream lane's out-of-rounds answer STREAMS.
+            nudges.append(messages[-1].content)
+            yield {"type": "final", "response": LLMResponse(text=_ANSWER),
+                   "provider": "mock", "model": "mock"}
+            return
         rounds["n"] += 1
         yield {"type": "final",
                "response": LLMResponse(text="", tool_calls=[_write_call(rounds["n"])]),
                "provider": "mock", "model": "mock"}
 
-    nudges: list[str] = []
-
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        nudges.append(messages[-1].content)
-        return RouteResult(LLMResponse(text=_ANSWER), "mock", "mock")
+        raise AssertionError("the stream lane's answer streams (v1.311.0)")
 
     monkeypatch.setattr(platform.router, "stream", fake_stream)
     monkeypatch.setattr(platform.router, "complete", fake_complete)

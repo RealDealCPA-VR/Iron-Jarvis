@@ -696,6 +696,11 @@ def test_the_lane_fence_this_file_mirrors_still_looks_like_this():
         src = root.joinpath(*parts).read_text(encoding="utf-8").replace(
             "\r\n", "\n"
         )
+        if parts == ("daemon", "routes", "chat.py"):
+            # v1.311.0: the stream lane fences through the ONE shared helper
+            # in chat_turn.py (checked by that file's iteration).
+            assert "await _fence_tool_output(" in src, parts
+            continue
         assert 'returns_untrusted_content", False)' in src, parts
         assert "[content withheld — suspected " in src, parts
         assert "wrap_untrusted" in src, parts

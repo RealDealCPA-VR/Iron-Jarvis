@@ -241,9 +241,16 @@ def test_both_chat_loops_fence_on_the_same_attribute(site, module_name):
     import importlib
     import inspect
 
+    # v1.311.0: the fence is ONE shared helper (chat_turn._fence_tool_output,
+    # so a round's batched readers settle — and taint — before any writer);
+    # each loop calls it exactly once, and the helper checks the attribute.
+    from iron_jarvis.daemon import chat_turn
+
     src = inspect.getsource(importlib.import_module(module_name))
-    assert src.count('getattr(_t, "returns_untrusted_content", False)') == 1
-    assert src.count("wrap_untrusted(") == 1
+    assert src.count("await _fence_tool_output(") == 1
+    helper = inspect.getsource(chat_turn._fence_tool_output)
+    assert helper.count('"returns_untrusted_content", False)') == 1
+    assert helper.count("wrap_untrusted(") == 1
 
 
 def test_the_two_chat_fence_sites_total_exactly_two():
@@ -255,11 +262,17 @@ def test_the_two_chat_fence_sites_total_exactly_two():
     from iron_jarvis.daemon import chat_turn
     from iron_jarvis.daemon.routes import chat
 
+    # v1.311.0: one shared fence (chat_turn._fence_tool_output), called once
+    # by each of the two loops — still two fenced loops, one definition.
     total = sum(
-        inspect.getsource(m).count('getattr(_t, "returns_untrusted_content", False)')
+        inspect.getsource(m).count("await _fence_tool_output(")
         for m in (chat_turn, chat)
     )
     assert total == 2
+    assert sum(
+        inspect.getsource(m).count('"returns_untrusted_content", False)')
+        for m in (chat_turn, chat)
+    ) == 1
 
 
 def test_a_registered_mcp_tool_is_resolvable_by_the_name_the_fence_uses(tmp_path):

@@ -39,6 +39,23 @@ from iron_jarvis.tools.registry import ToolRegistry
 FIXTURE = str(Path(__file__).parent / "fixtures" / "echo_mcp_server.py")
 
 
+def _packs_loaded(client, timeout: float = 30.0) -> None:
+    """v1.311.0: the daemon no longer waits for MCP handshakes before it
+    serves — a configured pack loads in the background after boot and
+    ``mcp.loaded`` says when its tools reached the registry. A "restart"
+    assertion waits for THAT (the thing asserted), bounded, instead of
+    assuming the tools were registered inside ``create_app``."""
+    import time as _time
+
+    platform = client.app.state.platform
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if any(e.type == "mcp.loaded" for e in platform.event_bus.history):
+            return
+        _time.sleep(0.02)
+    raise AssertionError("the background MCP load never finished")
+
+
 # --------------------------------------------------------------------------- #
 # Helpers.
 # --------------------------------------------------------------------------- #
@@ -235,6 +252,7 @@ def test_permission_gating_and_restart_survival(tmp_path):
     # the resolver is now composed to trust mcp_call — AND the tools are
     # re-registered from persisted config (restart survival).
     with TestClient(create_app(str(tmp_path))) as client2:
+        _packs_loaded(client2)
         perms2 = client2.app.state.platform.permissions
         assert perms2.authorize("mcp_call", {}).allowed is True
 

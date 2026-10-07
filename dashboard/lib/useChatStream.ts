@@ -29,6 +29,10 @@ import { decodeSuggestion, type ChatSuggestion } from "./preferences";
 /** A single decoded SSE frame. Discriminated on `type` (the event name). */
 export type SSEEvent =
   | { type: "token"; text: string }
+  /** v1.311.0 (W3-1): "discard the reply text streamed so far; the tokens
+   *  that follow replace it" — the daemon's streamed language rewrite. The
+   *  daemon may send a `reason`; nothing here needs it. */
+  | { type: "reset" }
   | {
       type: "tool_call";
       id: string;
@@ -261,6 +265,8 @@ export function sseEventFrom(
   switch (event) {
     case "token":
       return { type: "token", text: str(data.text) };
+    case "reset":
+      return { type: "reset" };
     case "tool_call": {
       const ev: Extract<SSEEvent, { type: "tool_call" }> = {
         type: "tool_call",
@@ -774,6 +780,10 @@ export interface UseChatStream {
   run: (
     body: unknown,
     onToken?: (delta: string, full: string) => void,
+    /** v1.311.0 (W3-1): a `reset` frame discarded the text so far; the
+     *  tokens after it replace it (`full` restarts from them). A consumer
+     *  that tracks an offset into the text (the TTS feed) rewinds here. */
+    onReset?: () => void,
   ) => Promise<ChatStreamResult>;
   /** Abort the in-flight turn (resolves `run` with whatever streamed so far). */
   abort: () => void;
@@ -858,6 +868,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     async (
       body: unknown,
       onToken?: (delta: string, full: string) => void,
+      onReset?: () => void,
     ): Promise<ChatStreamResult> => {
       abortRef.current?.abort(); // tear down any prior turn
       const controller = new AbortController();
@@ -908,6 +919,19 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               textRef.current = acc;
               scheduleText();
               onToken?.(ev.text, acc);
+              break;
+            case "reset":
+              // v1.311.0 (W3-1): the daemon is about to stream a REPLACEMENT
+              // (the language rewrite). Without this the rewrite was glued
+              // onto the wrong-language text until `done` overwrote it. Clear
+              // the accumulator too — a Stop, a dropped stream or an error
+              // falls back to `acc`, and must see only the replacement. The
+              // empty bubble rides the same once-a-frame publish as a token.
+              // NOT `committed`: a reset is not work; the tokens around it are.
+              acc = "";
+              textRef.current = "";
+              scheduleText();
+              onReset?.();
               break;
             case "tool_call":
               committed = true;

@@ -184,4 +184,7 @@ def test_the_two_lanes_hold_the_rule_lock_step():
         assert "repeated_call_refusal(tc.name, _failed_calls[_call_key])" in src, where
     # The stream lane refuses BEFORE its card logic, never after.
     loop = lane[lane.index('_call_key = _repeat_key(tc.name, tc.arguments)'):]
-    assert loop.index("repeated_call_refusal(") < loop.index('_deny_reason = ""'), "the stream lane cards a call it will not run"
+    # v1.311.0: the card logic opens at the posture predicate (`_engine_asks`)
+    # — the per-call `_deny_reason = ""` seed it used to anchor on moved to
+    # invoke time, after the round's cards are all answered.
+    assert loop.index("repeated_call_refusal(") < loop.index("_engine_asks = ("), "the stream lane cards a call it will not run"

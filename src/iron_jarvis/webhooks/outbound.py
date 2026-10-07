@@ -19,9 +19,14 @@ in-memory ``_secrets`` dict is used for back-compat.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any, Callable, Optional
 
 from sqlalchemy import Engine
+from sqlalchemy import event as sa_event
+from sqlalchemy.orm import Session as _OrmSession
+from sqlalchemy.orm import object_session
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -39,6 +44,80 @@ EMPTY_EVENT_TYPES = (
 )
 #: resolves a persisted ``secret_name`` (vault key) to its live secret value.
 SecretResolver = Callable[[str], Optional[str]]
+
+
+# --------------------------------------------------------------------------- #
+# The subscription index's invalidation (v1.311.0).
+# --------------------------------------------------------------------------- #
+# `on_event` runs for EVERY event the daemon publishes (3-5 per agent step) and
+# used to open a session, SELECT every outbound row and serialise the event
+# before checking whether any webhook wanted that type — on a default install,
+# which has none. It now answers from an in-memory index, and the index must
+# never outlive the rows it was read from. So it is keyed to a process-wide
+# GENERATION that ANY ORM write to `WebhookRecord` bumps — not only this
+# class's own methods: `InboundWebhooks.register` writes the same table, and a
+# route or an import may too (verifier adjustment). Two bumps per write:
+#
+# * at FLUSH (mapper after_insert/update/delete), so a reader that starts after
+#   the write is visible to its own session rebuilds; and
+# * at COMMIT (the session was marked at flush), because a reader on ANOTHER
+#   thread that rebuilt between the flush and the commit read the OLD committed
+#   rows under the NEW generation — the commit-time bump makes its next event
+#   rebuild again. A reader captures the generation BEFORE it queries.
+#
+# Bulk ORM statements (`session.execute(update(WebhookRecord)…)`) mark the
+# session through `do_orm_execute`. A write that bypasses the ORM entirely (a
+# restored database file, an sqlite3 shell) is caught by INDEX_MAX_AGE_S.
+_GEN_LOCK = threading.Lock()
+_GENERATION = 0
+_DIRTY_KEY = "ij_webhook_index_dirty"
+#: Safety net for writes no ORM listener can see: the index is re-read at
+#: least this often (one cheap query per minute at most, never per event).
+INDEX_MAX_AGE_S = 60.0
+
+
+def _bump_generation() -> None:
+    global _GENERATION
+    with _GEN_LOCK:
+        _GENERATION += 1
+
+
+def _index_generation() -> int:
+    with _GEN_LOCK:
+        return _GENERATION
+
+
+def _on_row_write(_mapper: Any, _connection: Any, target: Any) -> None:
+    _bump_generation()
+    try:
+        sess = object_session(target)
+        if sess is not None:
+            sess.info[_DIRTY_KEY] = True
+    except Exception:  # noqa: BLE001 — invalidation bookkeeping never fails a write
+        pass
+
+
+def _on_orm_execute(state: Any) -> None:
+    try:
+        if not (state.is_update or state.is_delete or state.is_insert):
+            return
+        mapper = state.bind_mapper
+        if mapper is not None and mapper.class_ is WebhookRecord:
+            _bump_generation()
+            state.session.info[_DIRTY_KEY] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _on_commit(session: Any) -> None:
+    if session.info.pop(_DIRTY_KEY, False):
+        _bump_generation()
+
+
+for _evt in ("after_insert", "after_update", "after_delete"):
+    sa_event.listen(WebhookRecord, _evt, _on_row_write)
+sa_event.listen(_OrmSession, "do_orm_execute", _on_orm_execute)
+sa_event.listen(_OrmSession, "after_commit", _on_commit)
 
 
 class OutboundWebhooks:
@@ -59,6 +138,53 @@ class OutboundWebhooks:
         #: resolved from the persisted ``secret_name`` instead of memory.
         self._secret_resolver = secret_resolver
         self._secrets: dict[str, str] = {}
+        #: (generation, read_at, {event_type: [enabled outbound rows]}) — see
+        #: the invalidation note above. None until the first read.
+        self._index: "tuple[int, float, dict[str, list[WebhookRecord]]] | None" = None
+        self._index_lock = threading.Lock()
+
+    def warm(self) -> None:
+        """Read the subscription index now (boot), so the first event does not
+        pay for it. Never raises — an unreadable table is re-tried lazily."""
+        try:
+            self._subscribers()
+        except Exception:  # noqa: BLE001
+            self._index = None
+
+    def _subscribers(self) -> "dict[str, list[WebhookRecord]]":
+        """``{event_type: [enabled outbound rows]}``, re-read only when a
+        ``WebhookRecord`` write bumped the generation (or the safety-net age
+        passed). Disabled rows are left out here, exactly as ``on_event``
+        always skipped them."""
+        gen = _index_generation()
+        now = time.monotonic()
+        cached = self._index
+        if cached is not None and cached[0] == gen and now - cached[1] < INDEX_MAX_AGE_S:
+            return cached[2]
+        with self._index_lock:
+            cached = self._index
+            gen = _index_generation()  # captured BEFORE the read (see the note above)
+            if cached is not None and cached[0] == gen and now - cached[1] < INDEX_MAX_AGE_S:
+                return cached[2]
+            with session_scope(self.engine) as db:
+                records = db.exec(
+                    select(WebhookRecord).where(WebhookRecord.direction == "outbound")
+                ).all()
+            index: dict[str, list[WebhookRecord]] = {}
+            for rec in records:
+                if not rec.enabled:
+                    continue
+                try:
+                    types = json.loads(rec.event_types_json)
+                except (json.JSONDecodeError, TypeError):
+                    types = []
+                # ONE entry per (type, record) — a row that lists a type twice
+                # is still one subscription, and must get one POST, as before
+                # the index (v1.311.0 review).
+                for t in dict.fromkeys(str(x) for x in (types if isinstance(types, list) else [])):
+                    index.setdefault(t, []).append(rec)
+            self._index = (gen, time.monotonic(), index)
+            return index
 
     def register(
         self,
@@ -165,25 +291,18 @@ class OutboundWebhooks:
         or the in-memory cache), signs the body when present, and returns one
         delivery descriptor per webhook fired.
         """
+        # v1.311.0: the in-memory index answers "does any webhook want this
+        # type?" BEFORE anything is serialised or queried — the common answer
+        # (no outbound webhook at all, or none for this type) costs a dict
+        # lookup instead of a session, a SELECT and canonical JSON per event.
+        records = list(self._subscribers().get(event.type) or ())
+        if not records:
+            return []
         payload = event.to_dict()
         body_bytes = canonical_bytes(payload)
 
-        with session_scope(self.engine) as db:
-            records = db.exec(
-                select(WebhookRecord).where(WebhookRecord.direction == "outbound")
-            ).all()
-
         deliveries: list[dict[str, Any]] = []
         for rec in records:
-            if not rec.enabled:
-                continue
-            try:
-                types = json.loads(rec.event_types_json)
-            except json.JSONDecodeError:
-                types = []
-            if event.type not in types:
-                continue
-
             headers: dict[str, str] = {}
             secret = self._resolve_secret(rec)
             if secret:

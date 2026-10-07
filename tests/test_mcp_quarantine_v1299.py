@@ -47,6 +47,23 @@ from iron_jarvis.mcp.tools import (
 from iron_jarvis.tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
 from iron_jarvis.tools.registry import ToolRegistry
 
+
+def _packs_loaded(client, timeout: float = 30.0) -> None:
+    """v1.311.0: the daemon no longer waits for MCP handshakes before it
+    serves — a configured pack loads in the background after boot and
+    ``mcp.loaded`` says when its tools reached the registry. A "restart"
+    assertion waits for THAT (the thing asserted), bounded, instead of
+    assuming the tools were registered inside ``create_app``."""
+    import time as _time
+
+    platform = client.app.state.platform
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if any(e.type == "mcp.loaded" for e in platform.event_bus.history):
+            return
+        _time.sleep(0.02)
+    raise AssertionError("the background MCP load never finished")
+
 FIXTURE = str(Path(__file__).parent / "fixtures" / "mutable_mcp_server_v1299.py")
 
 _SCHEMA_A = {"type": "object", "properties": {"text": {"type": "string"}}}
@@ -302,6 +319,7 @@ def test_resolver_denies_a_quarantined_tool_under_auto_approve_through_real_invo
     _write_tools(tools_file, [ECHO, WIPE, LIST_ITEMS])
 
     with TestClient(create_app(str(root))) as client2:
+        _packs_loaded(client2)
         platform = client2.app.state.platform
         # The boot resolver is composed with the pack's auto_approve on.
         assert platform.permissions.authorize("mcp_call", {}).allowed is True
@@ -342,6 +360,7 @@ def test_trust_route_clears_the_quarantine_and_it_persists(tmp_path, tools_file)
     _write_tools(tools_file, [ECHO, WIPE])
 
     with TestClient(create_app(str(root))) as client2:
+        _packs_loaded(client2)
         platform = client2.app.state.platform
         assert _row(client2, "mut")["quarantined"] == ["wipe"]
         assert _invoke(platform, tmp_path, "mcp__mut__wipe").ok is False
@@ -366,6 +385,7 @@ def test_trust_route_clears_the_quarantine_and_it_persists(tmp_path, tools_file)
 
     # Persisted: a fresh boot still trusts it.
     with TestClient(create_app(str(root))) as client3:
+        _packs_loaded(client3)
         assert _row(client3, "mut")["quarantined"] == []
         assert client3.app.state.platform.registry.get("mcp__mut__wipe").quarantined is False
 
@@ -464,6 +484,7 @@ def test_a_cards_own_answer_runs_a_quarantined_tool_but_the_shared_key_never_doe
         client.post("/mcp/servers", json=_body("mut", tools_file, auto_approve=True))
     _write_tools(tools_file, [ECHO, WIPE])
     with TestClient(create_app(str(root))) as client2:
+        _packs_loaded(client2)
         platform = client2.app.state.platform
         ctx = _ctx(platform, tmp_path)
         assert platform.registry.get("mcp__mut__wipe").quarantined is True
@@ -501,6 +522,7 @@ def test_a_stale_asking_about_never_outlives_an_invoke_that_raised(tmp_path, too
         client.post("/mcp/servers", json=_body("mut", tools_file, auto_approve=True))
     _write_tools(tools_file, [ECHO, WIPE])
     with TestClient(create_app(str(root))) as client2:
+        _packs_loaded(client2)
         platform = client2.app.state.platform
         ctx = _ctx(platform, tmp_path)
         real_mode_for = platform.permissions.mode_for

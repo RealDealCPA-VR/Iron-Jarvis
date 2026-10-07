@@ -5,6 +5,9 @@ import { AlertTriangle, X } from "lucide-react";
 import Link from "next/link";
 import { useEvents } from "@/lib/useEvents";
 
+/** The one /events type the banner reads (v1.311.0). */
+export const PROVIDER_DOWNGRADE_EVENT_TYPES: readonly string[] = ["provider.downgraded"];
+
 /**
  * Loud, dismissible banner shown when the daemon emits `provider.downgraded` —
  * i.e. a session ran on the offline `mock` model instead of the model you
@@ -13,7 +16,9 @@ import { useEvents } from "@/lib/useEvents";
  * dismissed; re-appears on the next downgrade.
  */
 export function ProviderDowngradeBanner() {
-  const { events } = useEvents(40);
+  // v1.311.0 (wave 3): only the one type it reads. It sits on the Overview,
+  // and every other frame re-rendered the page's tree for nothing.
+  const { events } = useEvents(40, { types: PROVIDER_DOWNGRADE_EVENT_TYPES });
   const [dismissedTs, setDismissedTs] = useState<string | null>(null);
 
   const latest = events.find((e) => e.type === "provider.downgraded");

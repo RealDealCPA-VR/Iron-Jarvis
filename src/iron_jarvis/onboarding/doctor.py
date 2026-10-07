@@ -1023,7 +1023,7 @@ def check_mcp(platform) -> dict:
     """Each configured MCP server's last load result, plus the ``npx`` launcher
     when any server needs it. RECOMMENDED: a pack that did not start costs the
     agents its tools, not the install."""
-    from ..mcp.tools import load_status
+    from ..mcp.tools import STATE_STARTING, load_status
 
     servers = [
         s for s in (getattr(platform.config, "mcp_servers", None) or []) if isinstance(s, dict)
@@ -1040,9 +1040,15 @@ def check_mcp(platform) -> dict:
     # advertised nothing) — the record alone was fooled once.
     registry = getattr(platform, "registry", None)
     live_names = getattr(registry, "mcp_names", None) if registry is not None else None
+    starting: list[str] = []
     for s in servers:
         name = str(s.get("name") or "mcp")
         status = load_status(name)
+        # v1.311.0: packs load in the background after boot; one that has
+        # not answered yet is STARTING, not broken.
+        if status and status.get("state") == STATE_STARTING:
+            starting.append(name)
+            continue
         if status and status.get("last_error"):
             problems.append(f"{name} didn't start: {status['last_error']}")
         elif status and callable(live_names):
@@ -1056,7 +1062,11 @@ def check_mcp(platform) -> dict:
     return _result(
         "mcp",
         ok,
-        f"all {len(servers)} MCP server{'s' if len(servers) != 1 else ''} started."
+        (
+            f"still starting: {', '.join(starting)}."
+            if starting
+            else f"all {len(servers)} MCP server{'s' if len(servers) != 1 else ''} started."
+        )
         if ok
         else "; ".join(problems),
         fix=""

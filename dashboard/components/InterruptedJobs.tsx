@@ -14,7 +14,7 @@
 // read the same polled list and the same two actions, so they can never
 // disagree about what is offered.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { History } from "lucide-react";
@@ -87,11 +87,48 @@ function useOptionalRouter(): ReturnType<typeof useRouter> | null {
   }
 }
 
+/* ---- Answered in this window: ONE set for every surface (v1.311.0) -------- */
+
+// v1.311.0 (wave 3, duplicate-pollers-no-dedupe): each `useInterruptedJobs`
+// kept its own `handled` set, so a job continued or dismissed from the
+// Overview note stayed in the bell's dropdown and badge until the bell's next
+// 15 s poll — which reads as "it didn't work". The set is module state now:
+// every instance hides a handled job at once. It lives as long as some
+// instance is mounted (the bell, in the layout, for the window's life) and
+// is cleared when the last one unmounts, so it cannot outlive the surfaces
+// that read it.
+let handledIds: ReadonlySet<string> = new Set();
+const handledListeners = new Set<() => void>();
+let handledUsers = 0;
+
+function markHandled(id: string): void {
+  if (handledIds.has(id)) return;
+  handledIds = new Set(handledIds).add(id);
+  for (const l of handledListeners) l();
+}
+
+function subscribeHandled(listener: () => void): () => void {
+  handledListeners.add(listener);
+  return () => {
+    handledListeners.delete(listener);
+  };
+}
+
+const readHandled = () => handledIds;
+
 /** The polled list, minus anything answered from this window (so the row
- *  leaves on the click instead of lingering until the next poll). */
+ *  leaves on the click instead of lingering until the next poll) — on EVERY
+ *  surface at once (v1.311.0). */
 export function useInterruptedJobs(intervalMs = 15000) {
   const api = usePolledApi<{ sessions?: unknown[] }>(INTERRUPTED_PATH, intervalMs);
-  const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
+  const handled = useSyncExternalStore(subscribeHandled, readHandled, readHandled);
+  useEffect(() => {
+    handledUsers += 1;
+    return () => {
+      handledUsers -= 1;
+      if (handledUsers === 0) handledIds = new Set();
+    };
+  }, []);
   const jobs = useMemo(() => {
     const out: InterruptedJob[] = [];
     for (const raw of api.data?.sessions ?? []) {
@@ -103,7 +140,7 @@ export function useInterruptedJobs(intervalMs = 15000) {
   const reload = api.reload;
   const forget = useCallback(
     (id: string) => {
-      setHandled((prev) => new Set(prev).add(id));
+      markHandled(id);
       reload();
     },
     [reload],

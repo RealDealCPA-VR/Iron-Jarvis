@@ -26,10 +26,11 @@ from .. import __version__
 from ..agents.orchestrator import Orchestrator
 from ..core.config import persist_config_values
 from ..core.db import session_scope
+from ..core.events import EventType
 from ..core.logging import get_logger
 from ..core.models import AgentType
 from ..personas.builtins import BUILTIN_PERSONAS
-from ..platform import build_platform
+from ..platform import build_platform, finish_deferred_mcp, start_deferred_mcp
 from ..tools.permissions import headless_ask_resolver
 from .auth import token_matches as _token_matches
 
@@ -64,6 +65,12 @@ _MAX_UPLOAD_BYTES = _max_upload_bytes()
 # content.
 _BOOT_SLOWEST = 6  # how many phases the summary names; a 40-step list hides the cause
 _BOOT_SLOW_MS = 50.0  # under this a phase is noise, not an explanation
+
+#: How long work that fires right after boot (the assignment dispatcher) waits
+#: for the background MCP load before it runs anyway (v1.311.0). Above the
+#: default per-pack connect timeout (15 s), so a slow-but-healthy pack is
+#: waited for and only a hung one is not.
+MCP_READY_WAIT_S = 20.0
 
 
 def _boot_line(total_ms: float, steps: "dict[str, float]") -> str:
@@ -506,8 +513,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # tools (shell) fail-closed. This is what lets supervised sessions delegate.
     _t = time.perf_counter()
     try:
+        # `defer_mcp` (v1.311.0): the daemon is the ONE caller with a lifespan,
+        # so it is the one that may take the pack handshakes off the boot path
+        # (`platform.start_deferred_mcp`, called first thing in lifespan).
         platform = build_platform(
-            project_root or os.getcwd(), ask_resolver=headless_ask_resolver()
+            project_root or os.getcwd(),
+            ask_resolver=headless_ask_resolver(),
+            defer_mcp=True,
         )
     finally:
         # A build that RAISES still reports how long it spent: the phase that
@@ -643,6 +655,56 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # MCP PACKS LOAD IN THE BACKGROUND (v1.311.0, finding
+        # boot-blocked-by-mcp-and-pane-respawn). Started FIRST so the
+        # handshakes overlap the rest of boot instead of preceding it; the
+        # packs read "starting" on /diagnostics and the Tools row until they
+        # answer, then register ON THIS LOOP (`finish_deferred_mcp`), get the
+        # quarantine pass, the boot breakdown gains `platform.mcp`, and
+        # `mcp.loaded` goes out. `_mcp_ready` lets work that fires right
+        # after boot (the assignment dispatcher below) wait a BOUNDED time
+        # for the packs instead of building a loadout that lacks them.
+        _mcp_ready = asyncio.Event()
+        # The same event is what a chat turn or an agent run waits on (bounded,
+        # `mcp.tools.wait_for_starting_packs`) before it arms its tools.
+        platform.mcp_ready = _mcp_ready
+        _tm = time.perf_counter()
+        # The handshakes start NOW, on their own thread — not when the loop
+        # first gets round to a task (the rehydrate steps below run without
+        # yielding), so they overlap the whole rest of the lifespan.
+        _mcp_started = start_deferred_mcp(platform)
+
+        async def _load_mcp_after_boot() -> None:
+            summary: dict[str, Any] = {"packs": [], "tools": 0}
+            try:
+                summary = await finish_deferred_mcp(platform, _mcp_started)
+            finally:
+                # Recorded in the same synchronous step as the registration
+                # (no await in between), so no request can see the tools
+                # without the number.
+                _boot_step("platform.mcp", _tm)
+                _mcp_ready.set()
+            try:
+                summary["ms"] = _boot["steps_ms"].get("platform.mcp")
+                log.info(
+                    "MCP packs loaded in %.2f s: %s",
+                    (summary.get("ms") or 0) / 1000,
+                    ", ".join(
+                        f"{p['name']} {p['state']} ({p['tools_loaded']})"
+                        for p in summary.get("packs") or []
+                    )
+                    or "none",
+                )
+                await platform.event_bus.publish(EventType.MCP_LOADED, summary)
+            except Exception:  # noqa: BLE001 — the report never breaks the daemon
+                log.debug("mcp.loaded report failed", exc_info=True)
+
+        _mcp_task: asyncio.Task | None = None
+        if _mcp_started is not None:
+            _mcp_task = asyncio.create_task(_load_mcp_after_boot())
+        else:
+            _mcp_ready.set()
+
         _t = time.perf_counter()
         try:  # start the cron scheduler when the daemon boots
             platform.scheduler.start()
@@ -797,6 +859,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
         )
         # Terminal panes survive a restart / app update: re-open each persisted
         # session (fresh shell, same id + cwd + prior scrollback shown).
+        # v1.311.0: the panes spawn CONCURRENTLY inside `rehydrate`, so this
+        # step costs the SLOWEST spawn (~0.3 s for pwsh under ConPTY), no longer
+        # the sum (0.85-1.0 s on a 3-pane install). It deliberately stays IN the
+        # lifespan rather than becoming a post-startup task: the Build page
+        # calls `prunePaneStorage(liveIds)` after its first successful
+        # `GET /terminals` (v1.280.0), and a daemon serving while panes are
+        # still coming back would answer a PARTIAL list — pruning the restored
+        # panes' saved view/thread/layout keys — and the 30 s snapshot loop
+        # could persist that partial set over the real one. max(spawn) is the
+        # accepted boot cost.
         _rehydrate_step("rehydrate_terminals", platform.terminals.rehydrate)
         # v1.234.0: start the subscription-CLI sign-in probes on a thread so
         # the first /health after boot already knows whether `claude` /
@@ -1087,9 +1159,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _dispatcher_stop = asyncio.Event()
         if assignment_dispatcher is not None:
-            bg_tasks["dispatcher"] = asyncio.create_task(
-                assignment_dispatcher.run_forever(_dispatcher_stop)
-            )
+
+            async def _dispatch_once_packs_are_up() -> None:
+                # v1.311.0 (verifier adjustment a): a queued assignment that
+                # starts the instant the daemon is up would build its tool
+                # loadout before the MCP packs register, and its agent would
+                # then say a pack tool "does not exist". Wait for the packs —
+                # BOUNDED, so one hung pack never parks the queue — then run.
+                if not _mcp_ready.is_set():
+                    try:
+                        await asyncio.wait_for(_mcp_ready.wait(), timeout=MCP_READY_WAIT_S)
+                    except asyncio.TimeoutError:
+                        log.warning(
+                            "assignment dispatcher starting while MCP packs are still "
+                            "starting (waited %d s)",
+                            int(MCP_READY_WAIT_S),
+                        )
+                await assignment_dispatcher.run_forever(_dispatcher_stop)
+
+            bg_tasks["dispatcher"] = asyncio.create_task(_dispatch_once_packs_are_up())
             log.info("assignment dispatcher armed")
 
         # The skill curator (v1.297.0): agent-made skills that nobody used
@@ -1526,6 +1614,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _curator_stop.set()
             for task in bg_tasks.values():
                 task.cancel()
+            # v1.311.0: a pack load still in flight is cancelled — nothing is
+            # registered after shutdown begins; its worker thread finishes its
+            # bounded handshake on its own and what it opened is closed
+            # (`finish_deferred_mcp` hands the result to a closer).
+            if _mcp_task is not None and not _mcp_task.done():
+                _mcp_task.cancel()
             # Share my profile with Build (v1.306.0): no re-render after
             # shutdown, and a write already running finishes (off the loop,
             # bounded) — a daemon thread killed at exit could strand a temp

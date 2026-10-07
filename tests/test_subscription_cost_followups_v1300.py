@@ -738,18 +738,23 @@ def test_stream_lane_bills_the_final_answer_nudge(tmp_path, monkeypatch):
     platform = client.app.state.platform
     s = {"i": 0}
 
+    nudges: list = []
+
     async def fake_stream(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
+        if not tools:
+            # v1.311.0: the stream lane's nudge STREAMS (router.stream,
+            # tools=[]) — POST keeps complete(), pinned above.
+            nudges.append(messages[-1].content)
+            yield _final("Saved the report.", _usage(0.04))
+            return
         s["i"] += 1
         if s["i"] == 1:
             yield _final("", _usage(0.01), [_TOOL_CALL])
         else:
             yield _final("", _usage(0.02))
 
-    nudges: list = []
-
     async def fake_complete(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
-        nudges.append(messages[-1].content)
-        return _cli(LLMResponse(text="Saved the report.", usage=_usage(0.04)))
+        raise AssertionError("the stream lane's nudge streams (v1.311.0)")
 
     monkeypatch.setattr(platform.router, "stream", fake_stream)
     monkeypatch.setattr(platform.router, "complete", fake_complete)
@@ -794,15 +799,22 @@ def test_stream_lane_bills_the_language_rewrite(tmp_path, monkeypatch):
     platform = client.app.state.platform
     _english_only(client)
 
-    async def fake_stream(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
-        yield {"type": "text", "text": f"Sure. {CHINESE}"}
-        yield _final(f"Sure. {CHINESE}", _usage(0.01))
+    from iron_jarvis.profile.language import rewrite_instruction
 
     rewrites: list = []
 
+    async def fake_stream(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
+        if messages and getattr(messages[-1], "content", "") == rewrite_instruction("en"):
+            # v1.311.0: the stream lane's rewrite STREAMS (after a reset).
+            rewrites.append(1)
+            yield {"type": "text", "text": "Sure. Here is the answer."}
+            yield _final("Sure. Here is the answer.", _usage(0.02))
+            return
+        yield {"type": "text", "text": f"Sure. {CHINESE}"}
+        yield _final(f"Sure. {CHINESE}", _usage(0.01))
+
     async def fake_complete(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
-        rewrites.append(1)
-        return _cli(LLMResponse(text="Sure. Here is the answer.", usage=_usage(0.02)))
+        raise AssertionError("the stream lane's rewrite streams (v1.311.0)")
 
     monkeypatch.setattr(platform.router, "stream", fake_stream)
     monkeypatch.setattr(platform.router, "complete", fake_complete)

@@ -18,9 +18,11 @@ endpoint that exposes this should additionally apply the existing
 
 from __future__ import annotations
 
+import heapq
 import os
 import stat
 import string
+import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -299,13 +301,43 @@ _WALK_SKIP_DIRS = frozenset({
 })
 
 
+#: How many directory entries (files AND folders) one recursive file walk may
+#: examine before it stops (v1.311.0). Read at CALL time. Bounds the work by
+#: what is SCANNED, not by what is kept — the old bound ("stop at the first 600
+#: files") is what made "newest first" false.
+WALK_ENTRY_BUDGET = 20_000
+#: Wall-clock ceiling for one recursive file walk, in seconds (v1.311.0). Read
+#: at CALL time and checked before every directory (and every 512 entries
+#: inside a big one): an entry budget alone can take seconds on a OneDrive- or
+#: AV-loaded tree (CLAUDE.md: a walk caps entries AND enforces a deadline).
+WALK_DEADLINE_S = 2.0
+_DEADLINE_EVERY = 512
+
+
 def list_files_recursive(
     path: str, *, depth: int = 4, limit: int = 600, show_hidden: bool = False
 ) -> dict:
     """Every FILE under ``path`` (bounded), NEWEST FIRST — so files a CLI just
     created surface at the top. Walks at most ``depth`` levels, returns at most
     ``limit`` files, and skips heavy/noise dirs (node_modules/.git/…). Each file:
-    ``{name, path, rel, size, mtime}``. Unreadable children are skipped."""
+    ``{name, path, rel, size, mtime}``. Unreadable children are skipped.
+
+    v1.311.0 — NEWEST FIRST FOR REAL (finding
+    fs-files-newest-first-is-false-and-polled-4s). The walk used to stop at the
+    first ``limit`` files in directory order and only then sort, so on this
+    repo the panel showed 506 dashboard/ files and nothing from src/ or tests/
+    — an agent editing backend code showed no activity at all. Now the walk is
+    bounded by what it SCANS (:data:`WALK_ENTRY_BUDGET` entries and
+    :data:`WALK_DEADLINE_S`), breadth-first so a cut scan still covers every
+    top-level folder before it goes deep, and keeps the newest ``limit`` files
+    seen with a heap. Two separate facts are reported:
+
+    * ``truncated`` — more files were found than ``limit`` (the list is the
+      newest ``limit`` of them);
+    * ``scan_truncated`` — the WALK stopped early (budget or deadline), so
+      files it never reached are not considered; ``scanned`` says how many
+      entries it examined. A short scan must never read as complete.
+    """
     root = Path(path)
     if not root.exists():
         raise FileNotFoundError(f"no such directory: {path}")
@@ -313,43 +345,82 @@ def list_files_recursive(
         raise NotADirectoryError(f"not a directory: {path}")
     depth = max(1, min(int(depth), 8))
     limit = max(1, min(int(limit), MAX_ENTRIES))
+    budget = max(1, int(WALK_ENTRY_BUDGET))
+    deadline = time.monotonic() + max(0.0, float(WALK_DEADLINE_S))
 
-    files: list[dict] = []
     root_str = str(root)
-
-    def _walk(d: str, level: int) -> None:
-        if level > depth or len(files) >= limit:
-            return
-        try:
-            it = list(os.scandir(d))
-        except OSError:
-            return
-        for e in it:
-            if len(files) >= limit:
-                return
-            name = e.name
-            if not show_hidden and name.startswith("."):
-                continue
+    # Min-heap of the newest `limit` files: (mtime, -seq, path, name, size).
+    # `-seq` breaks an mtime tie toward the file met FIRST (scan order), and
+    # keeps tuples comparable without ever comparing the strings behind it.
+    heap: list[tuple[float, int, str, str, int]] = []
+    seq = 0
+    found = 0
+    scanned = 0
+    cut = False
+    level_dirs = [root_str]
+    level = 1
+    first_dir = True
+    while level_dirs and level <= depth and not cut:
+        next_dirs: list[str] = []
+        for d in level_dirs:
+            # The root is always read (a panel with nothing is no answer);
+            # every later directory first checks the clock.
+            if not first_dir and time.monotonic() >= deadline:
+                cut = True
+                break
+            first_dir = False
             try:
-                if e.is_dir(follow_symlinks=False):
-                    if name in _WALK_SKIP_DIRS:
-                        continue
-                    _walk(e.path, level + 1)
-                elif e.is_file(follow_symlinks=False):
-                    st = e.stat()
-                    files.append(
-                        {
-                            "name": name,
-                            "path": e.path,
-                            "rel": os.path.relpath(e.path, root_str).replace("\\", "/"),
-                            "size": st.st_size,
-                            "mtime": st.st_mtime,
-                        }
-                    )
+                it = os.scandir(d)
             except OSError:
                 continue
+            with it:
+                for e in it:
+                    if scanned >= budget:
+                        cut = True
+                        break
+                    scanned += 1
+                    if scanned % _DEADLINE_EVERY == 0 and time.monotonic() >= deadline:
+                        cut = True
+                        break
+                    name = e.name
+                    if not show_hidden and name.startswith("."):
+                        continue
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            if name not in _WALK_SKIP_DIRS and level < depth:
+                                next_dirs.append(e.path)
+                        elif e.is_file(follow_symlinks=False):
+                            st = e.stat()
+                            found += 1
+                            seq += 1
+                            item = (st.st_mtime, -seq, e.path, name, st.st_size)
+                            if len(heap) < limit:
+                                heapq.heappush(heap, item)
+                            elif item > heap[0]:
+                                heapq.heapreplace(heap, item)
+                    except OSError:
+                        continue
+            if cut:
+                break
+        level_dirs = next_dirs
+        level += 1
 
-    _walk(root_str, 1)
-    files.sort(key=lambda f: f["mtime"], reverse=True)  # newest created first
-    truncated = len(files) >= limit
-    return {"root": root_str, "files": files[:limit], "count": len(files), "truncated": truncated}
+    files = [
+        {
+            "name": name,
+            "path": fpath,
+            "rel": os.path.relpath(fpath, root_str).replace("\\", "/"),
+            "size": size,
+            "mtime": mtime,
+        }
+        for mtime, _neg_seq, fpath, name, size in sorted(heap, reverse=True)
+    ]
+    return {
+        "root": root_str,
+        "files": files,
+        "count": len(files),
+        "found": found,
+        "truncated": found > limit,
+        "scan_truncated": cut,
+        "scanned": scanned,
+    }

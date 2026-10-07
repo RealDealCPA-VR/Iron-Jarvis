@@ -26,8 +26,12 @@ interface NotifyBridge {
   notify?: (title: string, body: string) => Promise<boolean>;
 }
 
+/** The one /events type the bridge reads (v1.311.0, wave 3). It is mounted
+ *  on every page; any other frame cost it a render for nothing. */
+export const DESKTOP_NOTIFY_EVENT_TYPES: readonly string[] = ["comm.desktop"];
+
 export function DesktopNotifyBridge() {
-  const { events } = useEvents(50);
+  const { events } = useEvents(50, { types: DESKTOP_NOTIFY_EVENT_TYPES });
   // v1.283.0: every window holds its own events socket, so with a module
   // popped out the same comm.desktop event would toast once per window. The
   // main window is the one that speaks for the app; a pop-out stays quiet.
