@@ -873,7 +873,23 @@ describe("What Jarvis knows about you — by status (v1.305.0)", () => {
     await waitFor(() =>
       expect(H.api.patches).toEqual([{ path: "/memory/preferences/k1", body: { text: "Prefers numbered steps, always." } }]),
     );
-    fireEvent.click(within(document.getElementById("prefs-kept")!).getAllByTestId("prefs-forget")[1]);
+    // Wait for the EDIT TO FINISH, not for its request: the section ignores
+    // any press while one action is in flight (`act`'s busy guard clears in a
+    // `finally` after the PATCH resolves), so a Forget pressed in that window
+    // is dropped — the v1.311.0 Release gate (a smaller runner) found the
+    // window. Finished = the editor is gone and no row is busy (every Forget
+    // is enabled again — the precondition the press needs).
+    await waitFor(() => {
+      const kept = document.getElementById("prefs-kept")!;
+      expect(within(kept).queryByTestId("prefs-edit-input")).toBeNull();
+      const forgets = within(kept).getAllByTestId("prefs-forget") as HTMLButtonElement[];
+      expect(forgets.length).toBe(3);
+      expect(forgets.every((b) => !b.disabled)).toBe(true);
+    });
+    const k2row = within(document.getElementById("prefs-kept")!)
+      .getByText("Use plain words.")
+      .closest("li") as HTMLElement;
+    fireEvent.click(within(k2row).getByTestId("prefs-forget"));
     await waitFor(() => expect(H.api.dels).toEqual(["/memory/preferences/k2"]));
   });
 
