@@ -5,12 +5,28 @@
 // out; the right-hand cards show who it chose. A project is optional: picking
 // one grounds the run in that project and works in its folder, exactly as a
 // project task does (the daemon's create_session seam).
+//
+// v1.309.0 (UX/speed wave 1):
+// * PREFLIGHT. When the default model is KNOWN down (unreachable, signed out,
+//   or in the router's cooldown), the door says so above Start, in plain
+//   words, with the way to Connections — before the user spends a paragraph
+//   on a mission that will fail. Read off the app's ONE shared /health
+//   (`useDaemon().health`), never a poller of its own; silent while nothing
+//   is known, and softened to "could not check" when the last /health could
+//   not reach the daemon (chat's stale rule). It never switches models:
+//   Start still sends the objective
+//   alone (the never-auto-switch rule — a local default moving to a cloud
+//   API is the user's privacy decision).
+// * "NEEDS YOU". A recent row whose mission (or a teammate) is parked on an
+//   ask says so in amber, sorted first, instead of "Working".
 
+import Link from "next/link";
 import { useState } from "react";
 import { ArrowUp } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { Project } from "@/lib/types";
+import { useDaemon } from "@/lib/daemon";
+import type { Health, Project } from "@/lib/types";
 import { clock, decodeMissions, type MissionRow } from "@/lib/mission";
 
 const STATUS_WORD: Record<string, string> = {
@@ -20,6 +36,58 @@ const STATUS_WORD: Record<string, string> = {
   failed: "Failed",
   cancelled: "Stopped",
 };
+
+/** One sentence when the DEFAULT provider is known not to answer, else "".
+ *  Unknown is never a warning: no /health yet, no row for it, or "auto".
+ *
+ *  `stale` (v1.309.0 review) mirrors chat's PreflightNote: when the last
+ *  /health check could not reach the daemon (`!checking && !online`, the
+ *  rule `useProviderHealth` uses), the rows are the LAST KNOWN ones — so the
+ *  door says it could not check the default model, never that a task "will
+ *  fail" on evidence that may be minutes old. */
+export function preflightProblem(
+  health: Health | null | undefined,
+  stale = false,
+): { provider: string; text: string } | null {
+  const provider = (health?.default_provider ?? "").trim();
+  if (!provider || provider === "auto") return null;
+  const row = (health?.providers ?? []).find((p) => p && p.provider === provider);
+  if (!row) return null;
+  const wait = row.circuit?.open ? Math.max(0, Number(row.circuit.retry_in_s) || 0) : 0;
+  if (row.available !== false && wait <= 0) return null;
+  if (stale) {
+    return {
+      provider,
+      text: `Iron Jarvis could not check your default model, ${provider} — the last check couldn't reach the daemon, and it looked unavailable before that. If a task fails, check it on Connections.`,
+    };
+  }
+  if (row.available === false) {
+    if (row.installed && row.signed_in === false) {
+      return {
+        provider,
+        text: `Your default model, ${provider}, is installed but not signed in — a task started now will fail. Sign it in on Connections first.`,
+      };
+    }
+    return {
+      provider,
+      text: `Your default model, ${provider}, isn't reachable right now — a task started now will fail. Bring it back, or choose another default on Connections.`,
+    };
+  }
+  return {
+    provider,
+    text: `Your default model, ${provider}, failed repeatedly and is paused for ${wait} s — a task started now is refused. Wait, or choose another default on Connections.`,
+  };
+}
+
+/** Still open AND parked on an ask (the mission's or a teammate's). */
+function parked(r: MissionRow): boolean {
+  return r.waiting && (r.status === "active" || r.status === "queued");
+}
+
+/** A recent row's status word — "Needs you" beats "Working" for a parked ask. */
+function rowWord(r: MissionRow): string {
+  return parked(r) ? "Needs you" : (STATUS_WORD[r.status] ?? r.status);
+}
 
 export function MissionComposer({
   onStarted,
@@ -45,7 +113,13 @@ export function MissionComposer({
     fixedProject ? `/missions?project_id=${encodeURIComponent(fixedProject)}` : "/missions",
   );
   const projects = (projData?.projects ?? []).filter((p) => p.status !== "archived");
-  const recent: MissionRow[] = decodeMissions(missionData);
+  // Parked missions first (a stable sort keeps newest-first inside each).
+  const recent: MissionRow[] = decodeMissions(missionData)
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => Number(parked(b.r)) - Number(parked(a.r)) || a.i - b.i)
+    .map(({ r }) => r);
+  const daemon = useDaemon();
+  const preflight = preflightProblem(daemon.health, !daemon.checking && !daemon.online);
 
   const start = async () => {
     const text = objective.trim();
@@ -119,6 +193,18 @@ export function MissionComposer({
               </select>
             </label>
           )}
+          {preflight && (
+            <p
+              data-testid="mission-preflight"
+              role="status"
+              className="basis-full rounded-lg border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-[12.5px] text-amber-100"
+            >
+              {preflight.text}{" "}
+              <Link href="/connections" className="font-medium text-amber-200 underline hover:text-amber-100">
+                Open Connections
+              </Link>
+            </p>
+          )}
           <button
             type="button"
             data-testid="mission-start"
@@ -151,8 +237,12 @@ export function MissionComposer({
                 >
                   <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">{r.objective}</span>
                   <span className="shrink-0 text-[11px] text-zinc-500">{clock(r.created_at)}</span>
-                  <span className="w-16 shrink-0 text-right text-[11px] text-zinc-400">
-                    {STATUS_WORD[r.status] ?? r.status}
+                  <span
+                    className={`w-16 shrink-0 text-right text-[11px] ${
+                      parked(r) ? "font-medium text-amber-300" : "text-zinc-400"
+                    }`}
+                  >
+                    {rowWord(r)}
                   </span>
                 </button>
               </li>

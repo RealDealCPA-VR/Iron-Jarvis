@@ -17,7 +17,14 @@ from types import SimpleNamespace
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
-from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
+from ..core.models import (
+    AgentRun,
+    AgentState,
+    AgentType,
+    PermissionMode,
+    Session,
+    SessionStatus,
+)
 from ..core.grants import args_hash as _grant_hash
 from ..core.grants import grant_label as _grant_label
 from ..core.grants import pick_scope as _pick_scope
@@ -216,6 +223,27 @@ PAUSE_TIMEOUT_REASON = (
 )
 
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
+
+#: What a teammate's run records when the user stopped it (v1.309.0).
+STOPPED_BY_USER_RESULT = "Stopped by the user before it finished."
+
+
+class RunStoppedByUser(Exception):
+    """A DELEGATED run whose session row the user CANCELLED (v1.309.0).
+
+    A teammate runs inside its coordinator's task and is deliberately not in
+    ``Orchestrator._running`` (agents/team.py), so ``cancel_session`` has no
+    task to cancel — it writes CANCELLED to the row, and the loop checks that
+    row at every step boundary (:meth:`AgentRuntime._stop_requested`). Raised
+    there and caught in :meth:`AgentRuntime.run`, which ends the run
+    CANCELLED and RETURNS it: the coordinator's tool call gets a result
+    ("stopped by the user") and carries on. A cancellation of the PARENT is
+    still a ``CancelledError`` and still propagates — the two never mix.
+    """
+
+    def __init__(self, run: AgentRun) -> None:
+        super().__init__(STOPPED_BY_USER_RESULT)
+        self.run = run
 
 
 def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
@@ -1383,8 +1411,50 @@ class AgentRuntime:
         token = set_run_budget(await asyncio.to_thread(self._run_budget_usd, session))
         try:
             return await self._run_body(session, agent_def, parent_id)
+        except RunStoppedByUser as stop:
+            return await self._end_stopped(stop.run, session)
         finally:
             reset_run_budget(token)
+
+    def _stop_requested(self, session_id: str) -> bool:
+        """Has the user CANCELLED this session's row? BLOCKING (one primary-key
+        read); never raises — an unreadable row is not a Stop."""
+        try:
+            with session_scope(self.p.engine) as db:
+                row = db.get(Session, session_id)
+                return row is not None and row.status is SessionStatus.CANCELLED
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _check_stop(self, run: AgentRun, session: Session) -> None:
+        """Raise :class:`RunStoppedByUser` when a DELEGATED run's row says the
+        user stopped it (v1.309.0). Only a run with a parent is checked: a
+        top-level run is stopped by cancelling its own task, and reading its
+        row here could race that cancel into a second, different ending."""
+        if run.parent_id and await asyncio.to_thread(self._stop_requested, session.id):
+            raise RunStoppedByUser(run)
+
+    async def _end_stopped(self, run: AgentRun, session: Session) -> AgentRun:
+        """End a run the user stopped: CANCELLED, announced, stream closed —
+        and RETURNED, so the caller (``delegate``/``spawn_agent``) settles the
+        child CANCELLED and tells the coordinator."""
+        run.result = STOPPED_BY_USER_RESULT
+        await self._set_state(run, AgentState.CANCELLED, session.id)
+        try:
+            await self.p.event_bus.publish(
+                EventType.AGENT_COMPLETED,
+                {"run_id": run.id, "ok": False, "result": run.result},
+                session_id=session.id,
+            )
+        except Exception:  # noqa: BLE001 — narration must never break a stop
+            pass
+        hub = getattr(self.p, "streams", None)
+        if hub is not None:
+            try:
+                hub.sink(session.id, run.id).done(ok=False, result=run.result)
+            except Exception:  # noqa: BLE001
+                pass
+        return run
 
     def _notebook_slug(self, session: Session) -> str:
         """The custom agent's name when THIS run has a folder to read — a
@@ -2337,6 +2407,10 @@ class AgentRuntime:
         # survives only as a paraphrase can drift off what it was asked to do.
         _cpt_summary, _cpt_covers, _cpt_futile = "", 0, False
         for _ in range(max_steps):
+            # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
+            # its own to cancel, so the user's Stop is the row — read at every
+            # step boundary, before any model call is made.
+            await self._check_stop(run, session)
             # CONTEXT BUDGET (v1.152.0). The transcript grows by an assistant
             # turn plus every tool result on every step, and until now nothing
             # counted the tokens: the only guards were a 16k-char cap per tool
@@ -2526,6 +2600,11 @@ class AgentRuntime:
                 )
             except Exception:  # noqa: BLE001 — telemetry must never break the loop
                 pass
+
+            # …and again once the model has answered (v1.309.0): a Stop that
+            # landed DURING the model call must not run the tools it asked for.
+            # The step's tokens are already on the run (spent is spent).
+            await self._check_stop(run, session)
 
             if not resp.wants_tools:
                 await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop

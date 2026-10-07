@@ -406,7 +406,9 @@ interface ChatMessage {
    *  the participant key ("builtin:builder", "remote:hermes"). Rendered with
    *  the agent's name so a three-way conversation is readable. */
   panelWho?: string;
-  /** The agent thread the panel lives in — the "open in Agents" link. */
+  /** The agent room the panel round ran in — sent back as `panel_thread_id`
+   *  so the next round stays in the same room (v1.284.0). Not a link: the
+   *  conversation lives in chat (v1.309.0). */
   panelThreadId?: string;
   /** That agent failed this round; its content is an honest error, not a reply. */
   panelError?: boolean;
@@ -2025,14 +2027,12 @@ const MessageRow = memo(function MessageRow({
               {m.panelKind === "pending" ? "working — will report back" : m.panelKind}
             </span>
           )}
-          {m.panelThreadId && (
-            <Link
-              href={`/agents?thread=${m.panelThreadId}`}
-              className="ml-auto mr-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-            >
-              open in Agents →
-            </Link>
-          )}
+          {/* v1.309.0: the "open in Agents →" link is GONE. It sent a live
+              conversation to `/agents?thread=`, which since v1.308.0 is a
+              READ-ONLY transcript of "the old round table" — the user left
+              the chat they were in for a page they could not reply on. The
+              conversation is already here; keep it here. (No prefilled
+              "give this to the team" door exists to offer instead.) */}
         </div>
         {(m.content || !m.runResult) && (
           <Bubble role="assistant">

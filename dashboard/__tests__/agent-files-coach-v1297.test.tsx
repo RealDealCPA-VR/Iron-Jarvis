@@ -567,11 +567,12 @@ describe("toActivity maps coach.proposal", () => {
     payload,
   });
 
-  it("→ /agents, GraduationCap, the agent in the title, the rationale as body", () => {
+  // v1.309.0: the agent's coach card lives in its detail on Your team.
+  it("→ that agent on Your team, GraduationCap, the agent in the title, the rationale as body", () => {
     expect(
       toActivity(ev({ id: "p1", agent: "analyst", categories: ["tool-misuse"], rationale: "Use the file tool." })),
     ).toMatchObject({
-      href: "/agents",
+      href: "/agents?view=team&agent=analyst",
       icon: GraduationCap,
       title: "The coach has a suggestion for analyst",
       body: "Use the file tool.",

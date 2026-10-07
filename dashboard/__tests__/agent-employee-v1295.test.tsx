@@ -545,10 +545,12 @@ describe("toActivity maps the two employee events", () => {
     payload,
   });
 
-  it("agent.paused → /agents, PauseCircle, the name and the reason", () => {
+  // v1.309.0: bare /agents is the New-task composer now, so an agent's row
+  // opens THAT agent on Your team (links-wave1-v1309 pins the contract).
+  it("agent.paused → that agent on Your team, PauseCircle, the name and the reason", () => {
     const item = toActivity(ev("agent.paused", { name: "skeptic", reason: "budget review" }));
     expect(item).toMatchObject({
-      href: "/agents",
+      href: "/agents?view=team&agent=skeptic",
       icon: PauseCircle,
       title: "Agent paused: skeptic",
       body: "budget review",
@@ -560,7 +562,7 @@ describe("toActivity maps the two employee events", () => {
     });
   });
 
-  it("agent.allowance_warning → /agents, Wallet, the percentage and the bound that is set", () => {
+  it("agent.allowance_warning → that agent on Your team, Wallet, the percentage and the bound that is set", () => {
     const tokens = toActivity(
       ev("agent.allowance_warning", {
         name: "skeptic",
@@ -572,7 +574,7 @@ describe("toActivity maps the two employee events", () => {
       }),
     );
     expect(tokens).toMatchObject({
-      href: "/agents",
+      href: "/agents?view=team&agent=skeptic",
       icon: Wallet,
       title: "skeptic has used 82% of its monthly allowance",
       body: "41.2k of 50k tokens",

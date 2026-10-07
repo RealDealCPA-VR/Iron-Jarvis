@@ -254,12 +254,15 @@ class SpawnAgentTool(Tool):
             delegation_handle,
             publish_delegation_completed,
             publish_delegation_started,
+            stopped_by_user_error,
+            user_stopped_child,
         )
         from .orchestrator import (
             Orchestrator,
             child_fanout_key,
             child_slot,
             inherited_grants,
+            inherited_origin,
             inherited_trust,
             inherited_workspace_root,
         )
@@ -304,11 +307,13 @@ class SpawnAgentTool(Tool):
         # A dynamic agent BASED on the supervisor type counts as a supervisor
         # even when its own stored tool list is empty.
         # A PROJECT MISSION'S TEAM (v1.308.0): the same rule `delegate`
-        # applies — spawn is the other door the coordinator holds.
-        _caller = await asyncio.to_thread(
-            DelegateTool(self.platform)._caller_session, ctx.session_id
+        # applies — spawn is the other door the coordinator holds — read off
+        # the mission ROOT through the same walk (v1.309.0), so a teammate
+        # spawning a helper is held to the team too.
+        _root = await asyncio.to_thread(
+            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
         )
-        _project_team = _team.mission_team(_caller) if _caller is not None else []
+        _project_team = _team.mission_team(_root) if _root is not None else []
         if _project_team:
             _who = canonical_roster_name(self.platform, agent_name)
             if not _team.on_team(_project_team, _who):
@@ -361,8 +366,11 @@ class SpawnAgentTool(Tool):
         # parent keeps the child isolated. One predicate, both doors.
         workspace_root = inherited_workspace_root(self.platform.config, parent)
         # …and the GRANTS (v1.288.0), through the same predicate `delegate`
-        # uses: what the user pre-approved on the parent, never its origin.
+        # uses: what the user pre-approved on the parent.
         allow_tools, approval_mode = inherited_grants(parent)
+        # …and, inside a MISSION only, the right to ASK (v1.309.0) — the same
+        # predicate `delegate` uses; every other child keeps no origin.
+        origin = inherited_origin(parent, _root)
         _trust, _trust_reason = inherited_trust(parent)
         # The job card's posture and step budget apply when the caller states
         # none (v1.295.0); ``create_session`` normalises the posture.
@@ -402,6 +410,8 @@ class SpawnAgentTool(Tool):
                 # low — trust only flows down (``inherited_trust``).
                 trust=_trust,
                 trust_reason=_trust_reason,
+                # A mission's teammate may ask the user (v1.309.0).
+                origin=origin,
             )
             await publish_delegation_started(
                 self.platform,
@@ -433,10 +443,41 @@ class SpawnAgentTool(Tool):
                     canonical_roster_name(self.platform, agent_name),
                     task,
                 ):
-                    run = await AgentRuntime(self.platform).run(
-                        child_session, definition, parent_id=ctx.agent_run_id
+                    # Its OWN task (v1.309.0), so Stop on this one child can
+                    # cancel exactly it — the same shape as `delegate`.
+                    child_task = asyncio.ensure_future(
+                        AgentRuntime(self.platform).run(
+                            child_session, definition, parent_id=ctx.agent_run_id
+                        )
                     )
+                    _team.bind_task(child_session.id, child_task)
+                    run = await child_task
             except asyncio.CancelledError:
+                if await user_stopped_child(orch, child_session.id):
+                    # The USER stopped this child (v1.309.0), not the caller:
+                    # settle it CANCELLED, close the edge, tell the caller.
+                    await orch._finalize_cancelled(child_session)
+                    await publish_delegation_completed(
+                        self.platform,
+                        session_id=ctx.session_id,
+                        parent_run_id=ctx.agent_run_id,
+                        child_run_id=None,
+                        child_session_id=child_session.id,
+                        target=agent_name,
+                        ok=False,
+                        result="stopped by the user",
+                    )
+                    return ToolResult(
+                        ok=False,
+                        output="",
+                        error=stopped_by_user_error(agent_name),
+                        data={
+                            "agent": agent_name,
+                            "dynamic": self.registry.get(agent_name) is not None,
+                            "child_session_id": child_session.id,
+                            "state": "cancelled",
+                        },
+                    )
                 # A deadline is not the user (v1.288.0) — as in `delegate`.
                 by_deadline = tool_deadline_expired()
                 await orch._finalize_cancelled(
@@ -486,8 +527,33 @@ class SpawnAgentTool(Tool):
                 )
 
             # Reflect the run's outcome onto the child session and persist it —
-            # the ONE child settle `delegate` uses too (v1.307.0).
-            await orch.settle_child(child_session, run)
+            # the ONE child settle `delegate` uses too (v1.307.0). A child the
+            # USER stopped (v1.309.0) settles CANCELLED and the caller is told.
+            stopped = await orch.settle_child(child_session, run)
+            _team.consume_stop(child_session.id)
+            if stopped:
+                await publish_delegation_completed(
+                    self.platform,
+                    session_id=ctx.session_id,
+                    parent_run_id=ctx.agent_run_id,
+                    child_run_id=run.id,
+                    child_session_id=child_session.id,
+                    target=agent_name,
+                    ok=False,
+                    result="stopped by the user",
+                )
+                return ToolResult(
+                    ok=False,
+                    output="",
+                    error=stopped_by_user_error(agent_name),
+                    data={
+                        "agent": agent_name,
+                        "dynamic": self.registry.get(agent_name) is not None,
+                        "child_run_id": run.id,
+                        "child_session_id": child_session.id,
+                        "state": "cancelled",
+                    },
+                )
 
             # Close the learning loop for the child: spawned work teaches the system
             # too (evaluate -> record outcome -> reflect). Best-effort so a learning

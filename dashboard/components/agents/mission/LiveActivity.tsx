@@ -6,7 +6,7 @@
 // component only lays it out. It follows the newest line while the user is at
 // the bottom, and stays put when they scroll up to read.
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { clock, type MissionActivity } from "@/lib/mission";
 
 const DOT: Record<MissionActivity["tone"], string> = {
@@ -16,7 +16,7 @@ const DOT: Record<MissionActivity["tone"], string> = {
   info: "bg-accent",
 };
 
-export function LiveActivity({ lines, running }: { lines: MissionActivity[]; running: boolean }) {
+function LiveActivityLog({ lines, running }: { lines: MissionActivity[]; running: boolean }) {
   const box = useRef<HTMLOListElement | null>(null);
   const pinned = useRef(true);
   useEffect(() => {
@@ -62,3 +62,7 @@ export function LiveActivity({ lines, running }: { lines: MissionActivity[]; run
     </section>
   );
 }
+
+/** Memoised (v1.309.0): the log redraws when its lines change, never because
+ *  a token flush or an unchanged poll touched the screen around it. */
+export const LiveActivity = memo(LiveActivityLog);

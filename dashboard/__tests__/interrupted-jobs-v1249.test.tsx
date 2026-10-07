@@ -135,7 +135,13 @@ describe("Continue picks the work up", () => {
     });
     expect(apiState.posts[0].path).toBe("/sessions/sess_aaaaaaaa/continue");
     // An agent told only "continue" invents a reason; this one is told the truth.
-    expect(apiState.posts[0].body).toEqual({ message: CONTINUE_AFTER_RESTART, wait: false });
+    // v1.309.0: `resume: true` — a resume keeps the job's own objective, so a
+    // mission continued after a restart is not listed under this restart note.
+    expect(apiState.posts[0].body).toEqual({
+      message: CONTINUE_AFTER_RESTART,
+      wait: false,
+      resume: true,
+    });
     expect(CONTINUE_AFTER_RESTART).toMatch(/restarted/i);
     // The offer leaves on the click, rather than lingering until the next poll.
     await waitFor(() => {

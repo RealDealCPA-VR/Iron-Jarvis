@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   Bell,
+  CheckCircle2,
   GitBranch,
   GraduationCap,
   KeyRound,
@@ -30,6 +31,8 @@ import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { shortId, clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
+import { agentsPath, missionPath } from "@/lib/mission";
+import { MISSION_ORIGIN } from "@/lib/missionLinks";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -89,9 +92,71 @@ export interface ActivityItem {
   quiet?: boolean;
 }
 
+/** v1.309.0 (contract 8): where an agent's row opens — THAT agent on Your
+ *  team. Bare `/agents` has been the New-task composer since v1.308.0, so the
+ *  old link landed the user on a blank objective box that says nothing about
+ *  the agent that paused, ran low or was blocked. The payload's bare slug is
+ *  the roster name; no name (or a placeholder) opens Your team itself. */
+function agentHref(name: unknown): string {
+  return typeof name === "string" && name.trim()
+    ? agentsPath({ kind: "team", agent: name.trim() })
+    : agentsPath({ kind: "team" });
+}
+
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
+  if (e.type === "session.completed") {
+    // v1.309.0: a finished MISSION tells the user (contract 2: the payload
+    // carries `origin` + `project_id`). Before this the bell had no
+    // session.completed branch at all, so an objective the user walked away
+    // from finished in silence. Only the ROOT origin rings: a teammate
+    // ("job:mission-member") finishing is the team's business — a
+    // five-member mission must not buzz six times — and chat / untagged runs
+    // stay quiet as before. A mission the USER stopped rings nothing either:
+    // they pressed Stop, a "could not finish" ping would be noise.
+    if (p.origin !== MISSION_ORIGIN) return null;
+    const sid = typeof e.session_id === "string" ? e.session_id : "";
+    if (!sid) return null;
+    const status = typeof p.status === "string" ? p.status : "";
+    if (status === "cancelled") return null;
+    const ran = status === "completed" && p.ok !== false;
+    // `status` says the RUN ended cleanly; `outcome` (Session.outcome, the
+    // ledger's verdict on the JOB) says whether the work was done. A run whose
+    // ask timed out ends COMPLETED with outcome "needs_you" — the exact false
+    // "Task complete" headline Session.outcome exists to stop. So "is done"
+    // needs POSITIVE proof: outcome "completed" and nothing less. A payload
+    // with no outcome (fix round, v1.309.0 review: the orchestrator's
+    // completion payload once carried none, and the dashboard and daemon
+    // ship in one installer, so "an older daemon" is no excuse for the
+    // optimistic default) reads a neutral "finished" with the warning icon —
+    // the mission screen then says what actually happened. The words match
+    // the mission screen's own headline (lib/mission.missionHeadline).
+    const outcome = typeof p.outcome === "string" ? p.outcome : "";
+    const done = ran && outcome === "completed";
+    const title = !ran
+      ? "Your objective could not be finished"
+      : done
+        ? "Your objective is done"
+        : outcome === "needs_you"
+          ? "Your objective finished — something needs you"
+          : outcome === "completed_with_failures"
+            ? "Your objective finished, but part of it failed"
+            : outcome === ""
+              ? "Your objective finished"
+              : "Your objective finished — check what it did";
+    const project = typeof p.project_id === "string" ? p.project_id : "";
+    const summary = typeof p.summary === "string" ? p.summary.trim() : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: missionPath(sid, project),
+      icon: done ? CheckCircle2 : AlertTriangle,
+      // The exact words the Handbook promises. Nothing short of done borrows them.
+      title,
+      body: summary.length > 140 ? `${summary.slice(0, 139)}…` : summary,
+    };
+  }
   if (e.type === "preference.suggested") {
     // v1.305.0: a preference the user's OWN press minted ("Look through my
     // Claude Code and Codex sessions") waits on the Memory page. Payload:
@@ -206,7 +271,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: "/agents",
+      href: agentHref(p.name),
       icon: PauseCircle,
       title: `Agent paused: ${name}`,
       body: typeof p.reason === "string" ? p.reason : "",
@@ -232,7 +297,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: "/agents",
+      href: agentHref(p.name),
       icon: Wallet,
       title: `${name} has used ${pct}% of its monthly allowance`,
       body,
@@ -247,7 +312,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: "/agents",
+      // The agent's inbox lives in its detail on Your team.
+      href: agentHref(p.assignee),
       icon: OctagonAlert,
       title: `Blocked: ${title}`,
       body: `${assignee} — ${why}`,
@@ -269,7 +335,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: sid ? `/sessions/${encodeURIComponent(sid)}` : "/agents",
+      href: sid ? `/sessions/${encodeURIComponent(sid)}` : agentHref(p.assignee),
       icon: AlertTriangle,
       title: `Failed: ${title}`,
       body: `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
@@ -304,7 +370,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: "/agents",
+      href: agentHref(p.agent),
       icon: GraduationCap,
       title: `The coach has a suggestion for ${agent}`,
       body: rationale.length > 140 ? `${rationale.slice(0, 139)}…` : rationale,
@@ -320,7 +386,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: "/agents",
+      // Names no agent (several jobs, several assignees): Your team itself.
+      href: agentHref(null),
       icon: RotateCcw,
       title: `${picked} assignment${picked === 1 ? "" : "s"} picked back up after a restart`,
       body: "",

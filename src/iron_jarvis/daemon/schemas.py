@@ -397,6 +397,12 @@ class ContinueBody(BaseModel):
     # The posture for the follow-up run (v1.232.0, audit A7); "" = inherit
     # the parent's. Same vocabulary and the same yolo rule as SessionCreate.
     approval_mode: str = ""
+    # A RESUME, not a follow-up (v1.309.0): ``message`` is the app's own
+    # "pick up where you left off" (the bell's / the mission screen's
+    # Continue after a restart), so a mission's continuation keeps the
+    # PARENT's display objective instead of listing that instruction as
+    # what the user asked for. False = the user's own words (contract 3).
+    resume: bool = False
 
 
 class UploadBody(BaseModel):

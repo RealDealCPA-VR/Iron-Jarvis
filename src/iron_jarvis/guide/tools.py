@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from ..tools.base import Tool, ToolContext, ToolResult
 from .corpus import GuideIndex, index_for, tokens
@@ -38,13 +39,20 @@ _OPEN: dict[str, str] = {
     "reflex": "/reflex",
     "goal": "/goals",
     "skill": "/skills",
-    "agent": "/agents",
+    # v1.309.0: bare /agents is the New-task composer now; an agent opens
+    # on Your team with that agent selected (contract 8).
+    "agent": "/agents?view=team&agent={id}",
     "thread": "/chat?thread={id}",
     "session": "/sessions/{id}",
     "memory_base": "/memory?scope=longterm",
     "custom_tool": "/tools",
     "persona": "/you",
 }
+
+#: The root origin a mission session carries (sessions.py POST /missions).
+#: Spelled here rather than imported so the Guide's read-only search does not
+#: pull the daemon routes in.
+_MISSION_ORIGIN = "job:mission"
 
 #: Search order and the kinds a caller may ask for.
 APP_KINDS: tuple[str, ...] = tuple(_OPEN)
@@ -221,6 +229,9 @@ class AppSearchTool(Tool):
         self._platform = platform
 
     # -- readers: each returns (kind, id, name, blurb) rows, or raises --------
+    # A row may carry a 5th element, its own dashboard path, when the kind's
+    # _OPEN template is wrong for that one row (v1.309.0: a mission session
+    # opens its mission screen, not the raw session page).
 
     def _rows(self, kind: str) -> list[tuple[str, str, str, str]]:  # noqa: C901
         p = self._platform
@@ -277,7 +288,18 @@ class AppSearchTool(Tool):
             with session_scope(p.engine) as db:
                 stmt = select(SessionModel).order_by(SessionModel.created_at.desc()).limit(300)  # type: ignore[attr-defined]
                 for r in db.exec(stmt):
-                    out.append((kind, r.id, r.task[:100], f"{r.status.value}; {r.agent_type.value}; {(r.summary or '')[:120]}"))
+                    row = (kind, r.id, r.task[:100], f"{r.status.value}; {r.agent_type.value}; {(r.summary or '')[:120]}")
+                    if r.origin == _MISSION_ORIGIN:
+                        # v1.309.0 (contract 9): a mission's own place is
+                        # its mission screen, inside its project when it has
+                        # one. Only the ROOT origin matches — a teammate
+                        # ("job:mission-member") is not a mission of its own
+                        # and keeps its session page.
+                        path = f"/agents?mission={quote(r.id, safe='')}"
+                        if r.project_id:
+                            path += f"&project={quote(r.project_id, safe='')}"
+                        row = (*row, path)
+                    out.append(row)
         elif kind == "memory_base":
             for name in p.ltm.sources():
                 out.append((kind, name, name, "long-term memory base"))
@@ -312,10 +334,12 @@ class AppSearchTool(Tool):
                 log.exception("app_search: %s store unreadable", kind)
                 unreadable.append(kind)
                 continue
-            for k_, id_, name, blurb in rows:
+            for row in rows:
+                k_, id_, name, blurb = row[:4]
                 sc = _score(qt, name, blurb, id_)
                 if sc > 0.0:
-                    hits.append((sc, k_, id_, name, blurb))
+                    opens = row[4] if len(row) > 4 else _OPEN[k_].replace("{id}", quote(id_, safe=""))
+                    hits.append((sc, k_, id_, name, blurb, opens))
         hits.sort(key=lambda h: h[0], reverse=True)
         hits = hits[:k]
         rows_out = [
@@ -324,10 +348,10 @@ class AppSearchTool(Tool):
                 "id": id_,
                 "name": name,
                 "detail": blurb,
-                "open": _OPEN[k_].replace("{id}", id_),
+                "open": opens,
                 "score": round(sc, 2),
             }
-            for sc, k_, id_, name, blurb in hits
+            for sc, k_, id_, name, blurb, opens in hits
         ]
         if not rows_out:
             msg = f"(nothing in this install matches {query!r} across {', '.join(kinds)})"

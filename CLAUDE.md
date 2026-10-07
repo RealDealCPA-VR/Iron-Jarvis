@@ -2905,6 +2905,49 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A mission's teammates can ASK, can be STOPPED, are VISIBLE when remote,
+  and a mission is never a dead end** (v1.309.0, /goal adoption wave 1 — 25
+  verified findings from the 2026-10-07 theory audit). TEAMMATES: a child of
+  a mission (`team.is_mission_origin` on the caller's ROOT,
+  `team.mission_root`) is stamped `job:mission-member` (`MISSION_MEMBER_ORIGIN`,
+  an attended origin), so its asks wait for the user under ITS OWN session id
+  and the mission screen answers them inline; every other child keeps
+  `origin=None` and the instant headless denial. `consult` checks the project
+  team like delegate/spawn_agent. Stop on a teammate really ends it: the child
+  runs as its own asyncio task (`team.bind_task`/`team.stop_child`), the
+  runtime checks `_check_stop` each step, the coordinator is told and carries
+  on. Remote delegations publish delegation events and appear as members.
+  `session.completed` carries `origin`, `project_id` and `outcome`; the bell
+  maps a mission's completion ("Your objective is done" / failed / needs you —
+  never "done" for a failure) to `missionLinks.sessionHref`. VIEW:
+  `mission_view` gains `objective` (the user's words; a continuation stores
+  them as `options.objective`, a restart Continue sends `ContinueBody.resume`
+  so the restart note never becomes the objective), `interrupted`,
+  `continued_as`, `route_note`; members carry `provider`/`model`; `GET
+  /missions` rows carry `objective` + `waiting` ("Needs you", never "Working",
+  for a mission parked on an ask). The 2 s poll reads the ledger in ONE
+  transaction per view. `POST /missions/{id}/retry-failed` resets the failed
+  worklist items AND starts the continuation in one server step, in the
+  mission's own folder (409 when nothing failed or a follow-up already runs);
+  a retry of a retry names the ORIGINAL objective once. `/sessions/interrupted`
+  lists the mission ROOT only, never its teammates. DASHBOARD: the result
+  panel shows a teammate's draft, never the coordinator's (or a member's)
+  narration before a tool call; the live report re-parses only what changed
+  (lock-step with `components/chat` streaming markdown); a token flush does
+  not re-render the cards; the receipt names the model in the run's own tense
+  (tried / ran on / working on / answered by) and flags mock amber; the door
+  warns before Start when the default is down (and says "could not check" on a
+  stale /health); a finished mission offers Ask for changes / Run it again
+  (a FAILED one re-posts through `POST /missions` on the current default) /
+  Retry the N failed items; `/agents?view=team&agent=<name>` opens that
+  agent, and every bell/palette agent link uses it; TeamScreen and
+  RoomTranscript load only when opened. ONE definition of each origin string:
+  `agents/team.py`. Pins: `tests/test_wave1_teammates_v1309.py`,
+  `tests/test_wave1_mission_view_v1309.py`,
+  `tests/test_wave1_guide_words_v1309.py`,
+  `dashboard/__tests__/{mission-wave1,links-wave1}-v1309.test.tsx`,
+  `dashboard/__tests__/mission-live-markdown-lockstep-v1309.test.ts`.
+
 - **The round table is GONE from the dashboard; missions are the only way
   team work is given, and a project's TEAM is enforced** (v1.308.0). The
   user, seeing v1.307.0: "the roundtable view I saw wasn't very user
@@ -2933,7 +2976,8 @@ does not need a bump, stop and bump it.
   `agents/team.mission_team/on_team/off_team_refusal`; the runtime's roster
   block is `roster_block(only=team)`; `delegate` AND `spawn_agent` refuse an
   off-team target before any session exists (read off the CALLER's row via
-  `DelegateTool._caller_session`). `GET /missions?project_id=`. A remote on
+  `team.mission_root`/`team.team_for_session` since v1.309.0, which also
+  covers `consult`). `GET /missions?project_id=`. A remote on
   the team "sees only the task Jarvis hands it" (`projects/world.REMOTE_SEES`
   + `lib/agentWorlds.REMOTE_SEES`, lock-step wording). Pins:
   `tests/test_agents_project_missions_v1308.py`,
@@ -3011,7 +3055,9 @@ does not need a bump, stop and bump it.
   the parent's stored `allow_tools` + normalised `approval_mode`
   (`orchestrator.inherited_grants`), NEVER its origin — so a worker still
   cannot pause to ASK (its card would route under its own session id, which
-  the parent's chat page does not render); that half of agents-03 is open.
+  the parent's chat page does not render). ONE EXCEPTION since v1.309.0: a
+  MISSION's teammate is stamped `job:mission-member` (attended) and asks,
+  because the mission screen renders asks under each member's own id.
   (4) Every terminal path (`_finalize_cancelled`, `_finalize_failed`, the
   phone's `_run_dynamic_session`, boot reconcile) settles the session's
   AgentRun rows — the finalizers after draining in-flight WAITING→RUNNING

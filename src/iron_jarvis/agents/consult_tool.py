@@ -270,6 +270,26 @@ class ConsultTool(Tool):
             entry = resolve_target(self.platform, wanted, require_delegable=False)
         except Exception:  # noqa: BLE001 — roster trouble must refuse, not crash
             entry = None
+
+        # A PROJECT MISSION'S TEAM (v1.309.0). ``delegate`` and ``spawn_agent``
+        # held a project mission to the team the user picked, and consult —
+        # also on the coordinator's roster — did not: a mission whose team is
+        # [researcher] could send the client's context to a remote the user
+        # left off it. Same team, same walk to the mission ROOT
+        # (``team.mission_root``: a teammate's consult is held to it too), same
+        # refusal, before anything is sent. [] = no team, no restriction.
+        from . import team as _team
+
+        project_team = _team.team_for_session(
+            self.platform.engine,
+            getattr(ctx, "session_id", None),
+            getattr(ctx, "agent_run_id", None),
+        )
+        if entry is not None and project_team and not _team.on_team(
+            project_team, entry.name
+        ):
+            return _Consultation(error=_team.off_team_refusal(project_team, entry.name))
+
         if entry is None:
             # THE DAY OFF (v1.295.0): a paused custom agent is ``healthy=False``
             # on the roster, so it resolves to nobody — say WHY, in the same
@@ -281,6 +301,11 @@ class ConsultTool(Tool):
                 names = [e.name for e in build_roster(self.platform, with_health=False) if e.healthy]
             except Exception:  # noqa: BLE001
                 names = []
+            # …and the refusal names only the TEAM when one applies (v1.309.0)
+            # — listing the whole roster pointed the coordinator at exactly
+            # the agents it may not use.
+            if project_team:
+                names = [n for n in names if _team.on_team(project_team, n)]
             listed = ", ".join(names) if names else "(nobody is reachable right now)"
             return _Consultation(
                 error=f"there is no teammate '{wanted}' to consult — nothing was "

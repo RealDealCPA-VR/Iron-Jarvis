@@ -33,6 +33,7 @@ import {
   Sparkles,
   SquareKanban,
   Trash2,
+  Users,
   Zap,
   ZapOff,
   X,
@@ -60,6 +61,8 @@ import {
 } from "@/components/ui";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
+import { missionPath } from "@/lib/mission";
+import { sessionHref } from "@/lib/missionLinks";
 
 /** GET /projects/{id} → the project (plus workspace fields) and recent sessions. */
 interface ProjectWorkspace extends Project {
@@ -312,7 +315,10 @@ function ActivityList({ projectId }: { projectId: string }) {
           {sessions.map((s) => (
             <li key={s.id}>
               <Link
-                href={`/sessions/${encodeURIComponent(s.id)}`}
+                // v1.309.0: a mission opens on this project's mission screen
+                // (its objective, its team, its result); a plain run keeps
+                // its session page.
+                href={sessionHref(s)}
                 className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
               >
                 <span className="min-w-0 truncate text-xs text-zinc-300">{s.task || s.id}</span>
@@ -326,6 +332,43 @@ function ActivityList({ projectId }: { projectId: string }) {
         </ul>
       )}
     </Card>
+  );
+}
+
+/** The header's door to the project's team & objectives screen
+ *  (`/agents?project=<pid>`, contract 9), naming the team it will work with.
+ *  No team picked still links: Jarvis then chooses from all your agents. */
+function ProjectTeamLink({
+  projectId,
+  team,
+}: {
+  projectId: string;
+  team?: { name?: string; label?: string }[];
+}) {
+  const names = (team ?? [])
+    .map((t) => (typeof t?.label === "string" && t.label.trim()) || (typeof t?.name === "string" ? t.name : ""))
+    .filter((n): n is string => Boolean(n));
+  const shown = names.slice(0, 3).join(", ");
+  const more = names.length > 3 ? ` +${names.length - 3}` : "";
+  const title = names.length
+    ? `Give this project's team an objective — ${names.join(", ")}`
+    : "Give this project an objective — no team picked yet, so Jarvis chooses from all your agents";
+  return (
+    <Link
+      href={missionPath("", projectId)}
+      data-testid="project-team-link"
+      className={BTN_PILL}
+      title={title}
+      aria-label={title}
+    >
+      <Users size={13} /> Team &amp; objectives
+      {names.length > 0 && (
+        <span className="max-w-[16rem] truncate text-zinc-500">
+          · {shown}
+          {more}
+        </span>
+      )}
+    </Link>
   );
 }
 
@@ -351,6 +394,14 @@ function ProjectWorkspaceInner({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(id)}`);
+  // v1.309.0: the project's TEAM (v1.308.0 enforces it on every objective
+  // given in this project) — read here to name it on the header's
+  // "Team & objectives" link and to put it first in the Tasks tab's
+  // "Assign to". A failed read (an older daemon's 404) just leaves the names
+  // off and the picker flat; the link itself always renders.
+  const teamApi = useApi<{ team?: { name?: string; label?: string; missing?: boolean }[] }>(
+    `/projects/${encodeURIComponent(id)}/team`,
+  );
   const models = useModels(); // v1.250.0 (S-02): shared catalog
   // Live memory bases — the names the binding is validated against server-side,
   // so the checkboxes can never offer something the PATCH would reject.
@@ -775,6 +826,11 @@ function ProjectWorkspaceInner({
                   >
                     <MessageSquare size={13} /> Open in Chat
                   </Link>
+                  {/* v1.309.0: the project's own mission screen — its team, its
+                      objectives, its Board / Waiting on you / Completed. Before
+                      this nothing on the project page led there; the only door
+                      was Agents → Your projects. */}
+                  <ProjectTeamLink projectId={id} team={teamApi.data?.team} />
                   <select
                     value={modelValue}
                     onChange={(e) => chooseModel(e.target.value)}
@@ -1092,6 +1148,10 @@ function ProjectWorkspaceInner({
                       hasRoot={!!project.root}
                       sessions={detail.data?.sessions ?? []}
                       reloadSessions={detail.reload}
+                      // v1.309.0: the header's team read, handed down so
+                      // "Assign to" offers the team first without a second
+                      // GET of the same path (null until it lands / on 404).
+                      team={teamApi.data ? (teamApi.data.team ?? []) : null}
                     />
                   )
                 )}

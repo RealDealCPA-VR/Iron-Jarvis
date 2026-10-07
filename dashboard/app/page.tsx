@@ -62,6 +62,7 @@ import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PowerTips } from "@/components/PowerTips";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
+import { sessionHref } from "@/lib/missionLinks";
 import { GoalsStrip } from "@/components/GoalsStrip";
 import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
@@ -1036,7 +1037,7 @@ export default function OverviewPage() {
               {finished.map((s) => (
                 <li key={s.id}>
                   <Link
-                    href={`/sessions/${s.id}`}
+                    href={sessionHref(s)}
                     className="block rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1208,7 +1209,10 @@ export default function OverviewPage() {
                 {sessions.data.sessions.slice(0, 6).map((s) => (
                   <li key={s.id}>
                     <Link
-                      href={`/sessions/${s.id}`}
+                      // v1.309.0: a mission opens its mission screen (inside
+                      // its project), not the raw session page — the same
+                      // rule for "While you were away" above.
+                      href={sessionHref(s)}
                       className="block rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
                     >
                       <div className="flex items-center justify-between gap-2">

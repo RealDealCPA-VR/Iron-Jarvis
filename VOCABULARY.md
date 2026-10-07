@@ -22,7 +22,8 @@ PR that ships it.
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |
-| Talking it out with several agents at once (the Agents page; each conversation is a *thread*, its seated agents the *panel*) | **round-table** | — |
+| The one thing you ask the team to get done (the Agents page's New task; a project's screen; the bell's "Your objective is done") | **objective** | mission |
+| Several agents answering one @-mention message in chat (each conversation is a *thread*, its seated agents the *panel*; pre-v1.308.0 rooms open read-only) | **round-table** | — |
 | The user's own Chrome/Edge, driven by Jarvis | **Your browser** | browser bridge, chrome extension, browser agent |
 | A Jarvis-owned browser profile (phase 2) | **Jarvis browser** | managed browser, headless browser |
 | The thing you load into Chrome so Jarvis can reach it | **browser add-on** | chrome extension, browser extension |
@@ -33,6 +34,19 @@ messaging plan, shipped v1.136.0): the toggle that creates one reads
 platform" never shipped as user-visible words, so they are not search aliases
 in `lib/nav.ts` — they are retired-on-arrival; if one ever gets added to
 search, it goes in as an alias only.
+
+### mission → objective, and the round table moves to chat (v1.309.0)
+
+Since v1.308.0 the Agents page is one composer: you give Jarvis **one
+objective** and the team works it. The screen already said "objective"
+("Recent objectives", "Your objective"), while search, the Guide and this
+table still described the Agents page as a round table where agents "talk it
+out" — so a user who typed what they saw found nothing, and the Guide
+confidently described a screen that no longer exists. **objective** is the
+user's word; "mission" survives in the URL (`/agents?mission=<id>`) and the
+API (`/missions`) and is kept as a search alias. The round table did not
+vanish — it is the panel that answers an `@`-mention in chat — so its row
+stays, re-scoped to where it lives now.
 
 ## Reserved
 

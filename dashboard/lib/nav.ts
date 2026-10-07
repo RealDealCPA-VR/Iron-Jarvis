@@ -191,8 +191,22 @@ export const NAV: NavSectionDef[] = [
         href: "/agents",
         label: "Agents",
         icon: Bot,
-        aliases: ["personas", "roles", "team", "subagents", "assistants", "panel"],
-        blurb: "Assemble a panel of agents, give each a role, let them talk it out.",
+        // v1.309.0: the page is ONE objective worked by the team (v1.308.0) —
+        // the old blurb still promised the round table, so search described a
+        // screen that no longer exists and "objective" (the word the screen
+        // uses) found nothing. "mission" stays as an alias: it is the URL's
+        // word. "panel" went: the @-mention panel lives in chat now.
+        aliases: [
+          "objective",
+          "mission",
+          "personas",
+          "roles",
+          "team",
+          "your team",
+          "subagents",
+          "assistants",
+        ],
+        blurb: "Give Jarvis one objective; your team of agents works it and the result comes back here.",
       },
       {
         href: "/tools",

@@ -23,8 +23,21 @@
 // Everything is read from the daemon (`/sessions/{id}/mission` + the
 // coordinator's stream, `/projects/{id}/world`) — the page invents no progress
 // and no lines of its own.
+//
+// v1.309.0: this screen does NOT read the live text. `useMission` keeps it in
+// a store and only MissionOutput subscribes, so a token flush redraws the
+// centre and leaves the rail, the cards and the activity log alone.
+//
+// v1.309.0 review (agents-route-eager-bundle): MissionOutput — and with it
+// the markdown renderer and the document viewer — loads ON DEMAND. The front
+// door (New task) never shows a result, and a module something else still
+// imports statically moves zero bytes, so it must be deferred HERE, its only
+// importer (the room transcript, the other markdown user, is deferred in
+// app/agents/page.tsx). It is prefetched once the front door is idle, so
+// opening a recent objective lands on a module already in memory.
 
-import { useMemo } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useMemo } from "react";
 import { ArrowLeft } from "lucide-react";
 import AgentFace from "@/components/agents/AgentFace";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -34,11 +47,23 @@ import type { WorldDetail } from "@/lib/agentWorlds";
 import { AgentCards, ProgressBar } from "./AgentCards";
 import { LiveActivity } from "./LiveActivity";
 import { MissionComposer } from "./MissionComposer";
-import { MissionOutput } from "./MissionOutput";
 import { MissionRail, type RailTarget } from "./MissionRail";
 import { ProjectTeamPanel } from "./ProjectTeamPanel";
 import { ProjectTeams } from "./ProjectTeams";
 import { ProjectWork } from "./ProjectWork";
+
+const loadMissionOutput = () => import("./MissionOutput");
+
+const MissionOutput = dynamic(() => loadMissionOutput().then((m) => ({ default: m.MissionOutput })), {
+  ssr: false,
+  loading: () => (
+    <section
+      data-testid="mission-output-loading"
+      aria-busy="true"
+      className="card-surface min-h-[28rem] animate-pulse p-0"
+    />
+  ),
+});
 
 interface RosterRow {
   name: string;
@@ -113,6 +138,23 @@ export function MissionScreen({
 
   const onRail = (target: RailTarget) => (target === "new" ? onNew() : onTeam());
 
+  // The result panel's module, pulled in once the front door is quiet (never
+  // at import) — the page's Overlays.tsx pattern.
+  useEffect(() => {
+    if (missionId) return;
+    const prefetch = () => void loadMissionOutput().catch(() => {});
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === "function") {
+      const id = w.requestIdleCallback(prefetch, { timeout: 4000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = window.setTimeout(prefetch, 2000);
+    return () => window.clearTimeout(t);
+  }, [missionId]);
+
   return (
     <div
       data-testid="mission-screen"
@@ -170,7 +212,7 @@ export function MissionScreen({
             </button>
           </section>
         ) : (
-          <MissionOutput view={view} live={m.live} objective="" onChanged={m.reload} />
+          <MissionOutput view={view} liveStore={m.liveStore} objective="" onChanged={m.reload} onOpen={onOpen} />
         )}
         {m.error && missionId && (
           <p className="text-[12px] text-amber-300">
@@ -229,7 +271,7 @@ export function MissionScreen({
                   />
                 </div>
               )}
-              <AgentCards members={view.members} />
+              <AgentCards members={view.members} onChanged={m.reload} />
             </>
           ) : (
             <p className="px-1 text-[12px] text-zinc-500">Loading the team…</p>

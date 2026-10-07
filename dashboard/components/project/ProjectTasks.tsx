@@ -84,6 +84,57 @@ export function assigneeOptions(
   return out;
 }
 
+/** One `GET /projects/{id}/team` row, as far as "Assign to" reads it. */
+export interface TeamAssigneeRow {
+  name?: string;
+  label?: string;
+  missing?: boolean;
+}
+
+/** An "Assign to" choice; `group` renders it under an `<optgroup>`. */
+export interface AssigneeChoice {
+  value: string;
+  label: string;
+  group?: string;
+}
+
+export const TEAM_GROUP = "This project's team";
+export const OTHERS_GROUP = "Other agents";
+
+/** v1.309.0: "Assign to" for a project WITH a team. v1.308.0 made the team
+ *  real for objectives (delegate/spawn refuse an off-team agent), but this
+ *  picker still offered every agent flat — the same project ran objectives
+ *  through its team on one screen and handed jobs to anyone on another. The
+ *  team comes FIRST, under its own heading; everyone else follows under
+ *  "Other agents" rather than vanishing, because an assignment is a different
+ *  door from a mission and the daemon still accepts any assignee (the
+ *  verifier's adjustment: default to the team, do not refuse the rest).
+ *  Seats that cannot take a queued job are left off the team list — a
+ *  remote (the queue refuses `remote:*`), a coordinator (`canBeAssignee`)
+ *  and a member the roster no longer knows. null = no assignable team, so
+ *  the caller keeps today's flat list. Pure so a test can pin the order. */
+export function teamAssigneeChoices(
+  team: TeamAssigneeRow[] | null | undefined,
+  agents: AgentsResponse | null | undefined,
+): AssigneeChoice[] | null {
+  const all = assigneeOptions(agents);
+  const onTeam: AssigneeChoice[] = [];
+  const seen = new Set<string>();
+  for (const t of team ?? []) {
+    const name = typeof t?.name === "string" ? t.name.trim() : "";
+    if (!name || t.missing || seen.has(name)) continue;
+    if (name.startsWith("remote:") || !canBeAssignee(name)) continue;
+    seen.add(name);
+    const known = all.find((o) => o.value === name);
+    onTeam.push({ value: name, label: known?.label ?? bareAssignee(name), group: TEAM_GROUP });
+  }
+  if (onTeam.length === 0) return null;
+  const others = all
+    .filter((o) => !seen.has(o.value))
+    .map((o) => ({ ...o, group: OTHERS_GROUP }));
+  return [...onTeam, ...others];
+}
+
 /** How many of the project's assignments the compact list shows. */
 const MAX_ASSIGNMENTS = 10;
 
@@ -130,13 +181,20 @@ export function ProjectTasks({
   reloadSessions,
   assigneeChoices,
   selfLabel,
+  team,
 }: {
   projectId: string;
   hasRoot: boolean;
   /** v1.304.0 (Agents → project world): the ONLY "Assign to" choices, in
    *  place of every agent the daemon lists — a world offers its team. Absent
    *  = today's list (and today's GET /agents). */
-  assigneeChoices?: Array<{ value: string; label: string }>;
+  assigneeChoices?: AssigneeChoice[];
+  /** v1.309.0: the project's team rows (`GET /projects/{id}/team` → `team`)
+   *  when the caller already reads them (the project page's header does);
+   *  null = the caller's read has not landed or failed (no team yet).
+   *  Absent = read it here, so every door to this panel (the project page,
+   *  chat's project surfaces) offers the same team first. */
+  team?: TeamAssigneeRow[] | null;
   /** v1.304.0: the words on the "" (no assignee) choice. Absent = "You —
    *  run now". The world says "Whole team — Jarvis decides": the same plain
    *  project task, no assignee on the wire. */
@@ -172,7 +230,26 @@ export function ProjectTasks({
   const [queuedNote, setQueuedNote] = useState<string | null>(null);
   // A caller that names the choices (a project world's team) needs no catalog.
   const { data: agentsData } = useApi<AgentsResponse>(assigneeChoices ? null : "/agents");
-  const assignees = assigneeChoices ?? assigneeOptions(agentsData);
+  // v1.309.0: the team, first — read here only when the caller did not hand
+  // it over (an older daemon's 404 leaves it null: today's flat list).
+  const ownTeam = useApi<{ team?: TeamAssigneeRow[] }>(
+    assigneeChoices || team !== undefined
+      ? null
+      : `/projects/${encodeURIComponent(projectId)}/team`,
+  );
+  const teamRows = team !== undefined ? team : (ownTeam.data?.team ?? null);
+  const assignees: AssigneeChoice[] =
+    assigneeChoices ?? teamAssigneeChoices(teamRows, agentsData) ?? assigneeOptions(agentsData);
+  // Ungrouped choices first, then each heading in first-seen order (team,
+  // then the other agents) — a flat list renders exactly as before.
+  const ungrouped = assignees.filter((o) => !o.group);
+  const groups: Array<[string, AssigneeChoice[]]> = [];
+  for (const o of assignees) {
+    if (!o.group) continue;
+    const slot = groups.find(([g]) => g === o.group);
+    if (slot) slot[1].push(o);
+    else groups.push([o.group, [o]]);
+  }
   // The chosen assignee must still exist in the list the user can see; a
   // custom agent deleted since is not quietly posted anyway.
   const effectiveAssignee = assignees.some((o) => o.value === assignee) ? assignee : "";
@@ -469,10 +546,19 @@ export function ProjectTasks({
             title="Run it now yourself, or queue it for an agent — it runs when that agent is free"
           >
             <option value="">{selfLabel || "You — run now"}</option>
-            {assignees.map((o) => (
+            {ungrouped.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
+            ))}
+            {groups.map(([g, opts]) => (
+              <optgroup key={g} label={g}>
+                {opts.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <button

@@ -46,6 +46,7 @@ from ..git.review import (
     reject as _reject_review,
 )
 from .runtime import AgentRuntime, inherited_approval_mode, is_direct_workspace
+from .team import MISSION_ORIGIN
 from .decompose import is_bulk_task
 from .supervisor import run_supervised, with_worklist
 from .types import AgentDefinition, get_agent_definition
@@ -157,12 +158,11 @@ def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
 
     ``delegate``/``spawn_agent`` forwarded the parent's folder and project and
     never its GRANTS, so a Team job the user started with shell pre-approved
-    handed the actual work to a child with ``allow_tools=[]``. The child has no
-    origin, so it cannot pause to ask either (the module docstring of
-    ``delegate_tool``: a subagent never contacts the user) — every ask-tier call
-    it made died on the headless resolver with "grant it with allow_tools",
-    which the user had already done. One predicate, both doors, like
-    ``inherited_workspace_root``.
+    handed the actual work to a child with ``allow_tools=[]``. Outside a
+    mission the child has no origin, so it cannot pause to ask either — every
+    ask-tier call it made died on the headless resolver with "grant it with
+    allow_tools", which the user had already done. One predicate, both doors,
+    like ``inherited_workspace_root``.
 
     Exactly what the user granted the parent, never more: a session grant never
     lifts a base ``deny`` or an agent definition's floor (``invoke`` refuses
@@ -170,12 +170,18 @@ def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
     through ``inherited_approval_mode`` so ``yolo`` reaches no row.
 
     ``always_ask`` forwards the posture but NO grant list. Under that posture
-    the stored list does not pre-approve — the parent asks once per run — and
-    the child has no channel to ask through, so handing it the list would let
-    it silently run what its own parent would have asked about. It keeps the
-    honest headless refusal instead (fail closed). The ORIGIN is deliberately
-    not forwarded: a child's ask would card under its own session id, which
-    the chat page the parent was started from does not render.
+    the stored list does not pre-approve — the parent asks once per run — so
+    handing the child the list would let it silently run what its own parent
+    would have asked about. A mission teammate (v1.309.0) carries the posture
+    and ASKS once per run like its coordinator; every other child has no
+    channel and keeps the honest headless refusal (fail closed).
+
+    The ORIGIN is a separate predicate, :func:`inherited_origin`: a mission's
+    teammates are stamped ``job:mission-member`` and their asks wait for the
+    user (the mission screen, the bell and the desktop ask watcher all read
+    an ask by the teammate's own session id). Any other child keeps no origin
+    — a chat-started supervisor's child would card under a session id the
+    chat page does not render, so it takes the instant headless denial.
     """
     if parent is None:
         return [], ""
@@ -183,6 +189,40 @@ def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
     if mode == "always_ask":
         return [], mode
     return _stored_allow_tools(parent), mode
+
+
+def inherited_origin(parent: Session | None, root: Session | None = None) -> str | None:
+    """The ORIGIN a delegated/spawned child is created with (v1.309.0).
+
+    ``job:mission-member`` when the child's parent — or the team ROOT the
+    ``AgentRun.parent_id`` walk reaches (``team.mission_root``) — is a
+    mission's coordinator or one of its teammates; ``None`` for every other
+    child, exactly as before. Deriving from the root too means a teammate that
+    hands work on gives ITS child the member origin as well.
+
+    WHY a mission's teammate may ask and no other child may: an origin is a
+    claim that a person is watching the run. The mission screen shows every
+    teammate's ask by its own session id and the bell + desktop ask watcher
+    deliver it from any page, so a watched mission's builder could finally
+    use the shell the user is right there to allow — before this it died on
+    "nothing here could ask" with the user looking at it. A chat-escalated
+    supervisor's child has no such surface, so it keeps the instant headless
+    denial (pinned by a control).
+
+    THE COST, said plainly: ``job`` is an ATTENDED prefix, so a teammate's
+    ask waits with NO clock — and while it waits it holds its parent's
+    ``child_slot`` and the coordinator stays blocked on that delegation.
+    That is the right trade on a screen the user is watching; Stop on the
+    teammate (``cancel_session``) declines its open asks so a parked child
+    is never stranded. Never ``job:mission`` itself: ``GET /missions`` lists
+    by that exact origin, so a teammate would become an objective of its own.
+    """
+    from .team import MISSION_MEMBER_ORIGIN, is_mission_origin
+
+    for row in (parent, root):
+        if row is not None and is_mission_origin(getattr(row, "origin", None)):
+            return MISSION_MEMBER_ORIGIN
+    return None
 
 
 #: Default cap on how many children ONE delegating parent may run AT ONCE
@@ -277,6 +317,29 @@ async def child_slot(config, key: str) -> AsyncIterator[None]:
         slot.users -= 1
         if slot.users <= 0:
             _child_slots.pop(slot_key, None)
+
+
+def _completion_payload(session: Session, **extra: Any) -> dict:
+    """The ``session.completed`` payload, the SAME keys at every publish site
+    (success, ``_finalize_failed``, ``_finalize_cancelled``).
+
+    ``origin`` and ``project_id`` (v1.309.0) are additive and ALWAYS present
+    (``None`` when the run has none): the bell can only say "Objective
+    finished" if the event can tell a mission (``job:mission``) from a
+    teammate (``job:mission-member``) and from the hundreds of other runs that
+    finish every day — and a reader must never have to guess whether a key
+    was dropped or simply empty."""
+    return {
+        "status": session.status.value,
+        "summary": session.summary,
+        **extra,
+        "origin": getattr(session, "origin", None) or None,
+        "project_id": getattr(session, "project_id", None) or None,
+        # The ledger's verdict on the JOB (v1.309.0 integration): the bell
+        # says "Your objective is done" only for a completed outcome, and
+        # "needs you" when an ask went unanswered — the status alone cannot.
+        "outcome": getattr(session, "outcome", None) or None,
+    }
 
 
 def _stored_options(session: Session) -> dict:
@@ -884,7 +947,7 @@ class Orchestrator:
                 self._save(session)
                 await self.p.event_bus.publish(
                     EventType.SESSION_COMPLETED,
-                    {"status": session.status.value, "summary": session.summary},
+                    _completion_payload(session),
                     session_id=session.id,
                 )
             except asyncio.CancelledError:
@@ -995,7 +1058,7 @@ class Orchestrator:
         tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
         return tools, derive_outcome(result, status)
 
-    async def settle_child(self, child_session: Session, run: AgentRun) -> None:
+    async def settle_child(self, child_session: Session, run: AgentRun) -> bool:
         """Finalize a DELEGATED / SPAWNED child's row on its success path
         (v1.307.0) — the same settle ``run_session`` gives a solo run.
 
@@ -1008,7 +1071,28 @@ class Orchestrator:
         folder note was overwritten, and a result claiming a file nothing wrote
         went unchecked. One helper, both doors. Never raises past the save: a
         ledger hiccup costs the verdict, never the delegation.
+
+        A USER STOP IS KEPT (v1.309.0). ``POST /sessions/{child}/cancel`` on a
+        running teammate writes CANCELLED to its row (a child is never in
+        ``_running``, so there is no task to cancel) and the runtime ends the
+        run at its next step boundary (``runtime.RunStoppedByUser``). This
+        settle used to overwrite that row COMPLETED/FAILED from the run, so
+        the user's Stop read as a lie. Returns True when the child was
+        stopped by the user — finalized CANCELLED here, the caller tells the
+        coordinator — else False.
         """
+        if run.state is AgentState.CANCELLED or await asyncio.to_thread(
+            self._user_cancelled, child_session.id
+        ):
+            child_session.provider, child_session.model = run.provider, run.model
+            child_session.input_tokens = run.input_tokens
+            child_session.output_tokens = run.output_tokens
+            child_session.cost_usd = max(
+                float(getattr(child_session, "cost_usd", 0.0) or 0.0),
+                float(getattr(run, "cost_usd", 0.0) or 0.0),
+            )
+            await self._finalize_cancelled(child_session)
+            return True
         child_session.status = (
             SessionStatus.COMPLETED
             if run.state is AgentState.COMPLETED
@@ -1045,6 +1129,17 @@ class Orchestrator:
             log.exception("child settle failed for %s", child_session.id)
         child_session.finished_at = utcnow()
         self._save(child_session)
+        return False
+
+    def _user_cancelled(self, session_id: str) -> bool:
+        """Does the STORED row say the user cancelled ``session_id``?
+        BLOCKING (one read); never raises (an unreadable row is not a Stop)."""
+        try:
+            with session_scope(self.p.engine) as db:
+                row = db.get(Session, session_id)
+                return row is not None and row.status is SessionStatus.CANCELLED
+        except Exception:  # noqa: BLE001
+            return False
 
     def _post_run_learning(self, session: Session) -> None:
         """Post-run learning pipeline: score -> record outcome -> reflect.
@@ -1191,7 +1286,18 @@ class Orchestrator:
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
-        session the app can't see or recover."""
+        session the app can't see or recover.
+
+        A row the USER already cancelled stays CANCELLED (v1.309.0): a stopped
+        teammate whose run then raised (its provider call torn down, say) must
+        not be re-recorded as a crash over the user's Stop."""
+        try:
+            stopped = await asyncio.to_thread(self._user_cancelled, session.id)
+        except Exception:  # noqa: BLE001 — a failed read is not a Stop
+            stopped = False
+        if stopped:
+            await self._finalize_cancelled(session)
+            return
         session.status = SessionStatus.FAILED
         session.summary = _with_folder_note(
             session.summary,
@@ -1249,7 +1355,7 @@ class Orchestrator:
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
-                {"status": session.status.value, "summary": session.summary, "ok": False},
+                _completion_payload(session, ok=False),
                 session_id=session.id,
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
@@ -1322,7 +1428,7 @@ class Orchestrator:
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
-                {"status": session.status.value, "summary": session.summary},
+                _completion_payload(session),
                 session_id=session.id,
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
@@ -1395,9 +1501,35 @@ class Orchestrator:
             session.finished_at = utcnow()
             self._save(session)
         else:
+            # No task in ``_running``. A DELEGATED TEAMMATE lands here while
+            # it is running (v1.309.0): ``delegate``/``spawn_agent`` keep it
+            # out of ``_running`` on purpose (agents/team.py), so this branch
+            # used to write CANCELLED and nothing else — the teammate kept
+            # working, then ``settle_child`` overwrote the row COMPLETED. Now:
+            # the row first (the delegating door reads it to tell "the user
+            # stopped my teammate" from "I was cancelled"), then the child's
+            # OWN task is cancelled through ``team.stop_child`` — on its loop,
+            # mid-model-call if need be, so no further model call is made.
+            # The runtime's step-boundary row check is the belt for a child
+            # with no bound task, and ``settle_child`` keeps the CANCELLED.
             session.status = SessionStatus.CANCELLED
+            session.summary = _with_folder_note(
+                session.summary, _prose(session.summary) or "Session cancelled by the user."
+            )
             session.finished_at = utcnow()
             self._save(session)
+            from . import team as _team
+
+            _team.stop_child(session_id)
+            # A teammate parked on an ask waits with no clock (an attended
+            # origin): decline its open asks too, so nothing stays parked.
+            approvals = getattr(self.p, "approvals", None)
+            if approvals is not None:
+                try:
+                    for ask in approvals.pending_for(session_id):
+                        approvals.resolve(ask["approval_id"], "deny")
+                except Exception:  # noqa: BLE001 — the row write already stopped it
+                    log.exception("could not decline the open asks of %s", session_id)
         return self.get_session(session_id) or session
 
     async def rerun_session(self, session_id: str) -> Session:
@@ -1502,6 +1634,16 @@ class Orchestrator:
             f"{prev.task!r}. Prior result: {prev.summary or '(none)'} "
             f"The earlier workspace files are available in your workspace.]"
         )
+        options = _stored_options(prev)
+        if getattr(prev, "origin", None) == MISSION_ORIGIN:
+            # A MISSION'S FOLLOW-UP KEEPS THE USER'S OWN WORDS (v1.309.0). The
+            # recap above is MODEL-facing (it must carry the earlier task and
+            # result), and the mission screen used to show it verbatim as the
+            # objective — "[Continuing an earlier session. Original task: …]"
+            # where the user had typed one sentence. ``objective`` is the
+            # display text; ``task`` stays what the model reads. Only a
+            # mission's continuation is stamped: no other surface reads it.
+            options = {**options, "objective": message}
         session = Session(
             task=recap,
             agent_type=prev.agent_type,
@@ -1545,8 +1687,9 @@ class Orchestrator:
                 if _normalize_trust(getattr(prev, "trust", "")) == _TRUST_LOW
                 else ""
             ),
-            # …and the RUN OPTIONS (v1.299.0), the same inputs as a rerun's.
-            options_json=_json.dumps(_stored_options(prev), default=str),
+            # …and the RUN OPTIONS (v1.299.0), the same inputs as a rerun's
+            # (plus a mission's ``objective``, v1.309.0 — see above).
+            options_json=_json.dumps(options, default=str),
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the

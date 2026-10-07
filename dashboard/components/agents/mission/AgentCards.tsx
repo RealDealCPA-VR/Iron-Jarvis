@@ -9,10 +9,17 @@
 // (`progress.pct` — done, waiting, or a plan's finished steps). A member
 // working with no count behind it gets a moving stripe and its words
 // ("Working · step 3"), never a percentage that only means "time passed".
+//
+// v1.309.0: an expanded card names the model that teammate ran on, and a
+// teammate still at work can be STOPPED on its own (`POST /sessions/<its
+// id>/cancel` — the daemon ends that run between steps and the coordinator
+// is told the user stopped it; the rest of the team carries on). The list is
+// memoised: the screen re-renders on a real change only, never per token.
 
 import Link from "next/link";
-import { useState } from "react";
-import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { memo, useState } from "react";
+import { ChevronDown, ChevronRight, ExternalLink, Square } from "lucide-react";
+import { post } from "@/lib/api";
 import AgentFace, { type FaceMood } from "@/components/agents/AgentFace";
 import {
   baseName,
@@ -83,8 +90,56 @@ export function ProgressBar({
   );
 }
 
-function AgentCard({ m, open, onToggle }: { m: MissionMember; open: boolean; onToggle: () => void }) {
+/** A teammate that is still running (or parked on an ask) can be stopped. */
+const STOPPABLE: ReadonlySet<MemberStatus> = new Set(["queued", "working", "waiting_you"]);
+
+function StopTeammate({ m, onChanged }: { m: MissionMember; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  if (!m.session_id || !STOPPABLE.has(m.status)) return null;
+  const sid = m.session_id;
+  const stop = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await post(`/sessions/${encodeURIComponent(sid)}/cancel`, {});
+      setNote("Stopping — Jarvis carries on with the rest of the team.");
+      onChanged();
+    } catch (e) {
+      setNote(e instanceof Error && e.message ? e.message : "Could not stop it.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <button
+        type="button"
+        data-testid={`mission-card-stop-${m.agent}`}
+        disabled={busy}
+        onClick={() => void stop()}
+        className="btn-ghost px-2.5 py-1 text-[11.5px]"
+      >
+        <Square size={11} /> Stop {m.name}
+      </button>
+      {note && <div className="mt-1 text-[11.5px] text-zinc-400">{note}</div>}
+    </div>
+  );
+}
+
+function AgentCard({
+  m,
+  open,
+  onToggle,
+  onChanged,
+}: {
+  m: MissionMember;
+  open: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+}) {
   const key = m.session_id ?? m.agent;
+  const ranOn = [m.provider, m.model].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
   return (
     <li
       data-testid={`mission-card-${m.agent}`}
@@ -126,6 +181,11 @@ function AgentCard({ m, open, onToggle }: { m: MissionMember; open: boolean; onT
           className="space-y-2 border-t border-white/5 px-3 py-2.5 text-[12px] text-zinc-300"
         >
           {m.progress.label && <div className="text-zinc-400">{m.progress.label}</div>}
+          {ranOn && (
+            <div data-testid={`mission-card-model-${m.agent}`} className="text-[11.5px] text-zinc-500">
+              {m.provider === "mock" ? `Mock answer — no real model ran (${ranOn})` : `Ran on ${ranOn}`}
+            </div>
+          )}
           {m.task && (
             <div>
               <div className="text-[11px] uppercase tracking-wide text-zinc-500">Handed</div>
@@ -158,6 +218,7 @@ function AgentCard({ m, open, onToggle }: { m: MissionMember; open: boolean; onT
               ))}
             </div>
           )}
+          <StopTeammate m={m} onChanged={onChanged} />
           {m.session_id && (
             <Link
               href={`/sessions/${encodeURIComponent(m.session_id)}`}
@@ -172,7 +233,14 @@ function AgentCard({ m, open, onToggle }: { m: MissionMember; open: boolean; onT
   );
 }
 
-export function AgentCards({ members }: { members: MissionMember[] }) {
+export const AgentCards = memo(function AgentCards({
+  members,
+  onChanged = noop,
+}: {
+  members: MissionMember[];
+  /** Something on a card changed the mission (a teammate stopped) — reload. */
+  onChanged?: () => void;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   if (members.length === 0) {
     return (
@@ -183,12 +251,22 @@ export function AgentCards({ members }: { members: MissionMember[] }) {
   }
   return (
     <ul data-testid="mission-cards" className="space-y-2">
-      {members.map((m) => {
-        const key = m.session_id ?? m.agent;
+      {members.map((m, i) => {
+        // A remote teammate has no session; one asked twice is two rows with
+        // the same name, so its key carries its position (v1.309.0 review).
+        const key = m.session_id ?? `${m.agent}#${i}`;
         return (
-          <AgentCard key={key} m={m} open={open === key} onToggle={() => setOpen(open === key ? null : key)} />
+          <AgentCard
+            key={key}
+            m={m}
+            open={open === key}
+            onToggle={() => setOpen(open === key ? null : key)}
+            onChanged={onChanged}
+          />
         );
       })}
     </ul>
   );
-}
+});
+
+function noop() {}

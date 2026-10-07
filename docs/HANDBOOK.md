@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.308.0 (2026-10-04).*
+holds itself to. Current as of v1.309.0 (2026-10-04).*
 
 ---
 
@@ -229,6 +229,23 @@ objective with Allow once / Allow for this task / Decline, and nothing runs unti
 you answer. **Stop** ends the whole objective. Your recent objectives are listed
 under New task, and **Your projects** below them open a project's own screen.
 
+**When it finishes, the bell tells you (v1.309.0).** You don't have to watch
+the screen: when the team finishes, the notification bell (and a desktop
+notification, if you allowed them) says **"Your objective is done"**, and
+clicking it opens that objective's screen with the result. If the team could
+not finish, the bell says so instead; if it finished but a question of yours
+went unanswered, it says **"Your objective finished — something needs you"**,
+and if part of the work failed, **"Your objective finished, but part of it
+failed"** — the same verdict the objective's own screen shows. The bell says
+"is done" only when that verdict is in; without it the row reads plainly
+**"Your objective finished"** and the screen tells you the rest. Pressing Stop
+yourself rings nothing, and the individual
+teammates never ring. The bell's agent rows (an agent paused, near its
+allowance, blocked, or with a coach suggestion) open **that agent** on Your
+team. **Continue** on an objective a restart cut off opens the continued
+objective's screen, and a project's page has a **Team & objectives** link to
+its own screen.
+
 **A project's screen (v1.308.0).** Open a project (from Your projects, or by
 picking it when you start an objective) and the same screen belongs to it: its
 objectives run in the project's context and folder, and **only the project's
@@ -248,7 +265,8 @@ here: you give Jarvis an objective and it picks.
 
 **The round table is gone (v1.308.0).** Old links to a round-table conversation
 open it read-only, exactly as it was. To talk with one agent, @-mention it in
-chat (that works as before). "Ask the Guide" on the Help page puts your question
+chat (that works as before); the agents' replies stay in that chat — there is
+no separate page to open them on (v1.309.0). "Ask the Guide" on the Help page puts your question
 into chat as `@guide …`, ready to send.
 - **Custom agents**: author your own (name, prompt, tool list, pinned
   provider/model). **Remote agents**: register an agent running elsewhere

@@ -7,8 +7,10 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import re
 
 from dataclasses import asdict
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -27,7 +29,8 @@ from ..schemas import (
 
 #: The origin the mission door stamps (v1.307.0). Starts with "job", so it is
 #: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
-MISSION_ORIGIN = "job:mission"
+from ...agents.team import MISSION_ORIGIN  # noqa: E402  (one definition)
+
 #: How many recent missions ``GET /missions`` lists.
 _MISSIONS_LIMIT = 30
 
@@ -104,6 +107,135 @@ def _project_team(d, project_id: str) -> list[str]:
             return decode_team(getattr(row, "team_json", "")) if row is not None else []
     except Exception:  # noqa: BLE001 — no team readable = no restriction
         return []
+
+
+def _stamp_continuation(
+    d, new_id: str, parent_id: str, objective: str | None, *, resume: bool = False
+) -> str:
+    """Link a MISSION's continuation to the mission it continues (v1.309.0,
+    contract 5). A no-op unless the parent's origin is ``job:mission``: only
+    the mission view reads the link, and every other continuation keeps its
+    run options byte-identical (``test_schedule_knobs_v1299`` pins that a
+    continue carries exactly the parent's options).
+
+    Writes ``options["continued_from"] = parent_id`` on the NEW row — always
+    overwriting, because run options carry over (``_stored_options``), so a
+    continuation of a continuation would otherwise point at its grandparent.
+    ``mission.continued_as`` reads it back to say "Continued in → open".
+
+    ``objective`` (the display text, contract 3) is written only when the row
+    does not already carry an objective of its OWN: Track A's
+    ``continue_session`` stores the user's follow-up there, and this keeps
+    the same words whichever side lands first. A row whose ``objective`` is
+    merely the PARENT's (copied with the options) gets the new one.
+
+    ``resume`` (v1.309.0 review): the message is the APP's instruction ("pick
+    up where you left off" after a restart), not the user's follow-up — so
+    the parent's display objective is kept, overwriting the message Track A's
+    ``continue_session`` stored. The resumed round is listed by what the user
+    asked for, never by "Continue where you left off — Iron Jarvis
+    restarted…".
+
+    BLOCKING (one read + one write) — callers hop off the loop, and they do
+    it BEFORE the run is spawned, so the runtime's own fresh read of the row
+    (``run_session`` loads it by id) already carries the stamp. Returns the
+    new ``options_json`` ("" when nothing was written)."""
+    from ...agents.mission import session_options
+    from ...core.db import session_scope
+    from ...core.models import Session
+
+    with session_scope(d.platform.engine) as db:
+        row = db.get(Session, new_id)
+        parent = db.get(Session, parent_id)
+        if row is None or parent is None or getattr(parent, "origin", None) != MISSION_ORIGIN:
+            return ""
+        opts = session_options(row)
+        opts["continued_from"] = parent_id
+        if resume:
+            from ...agents.mission import display_objective
+
+            kept = display_objective(parent).strip()
+            if kept:
+                opts["objective"] = kept
+        elif objective:
+            inherited = session_options(parent).get("objective")
+            mine = opts.get("objective")
+            if not (isinstance(mine, str) and mine.strip()) or mine == inherited:
+                opts["objective"] = objective
+        row.options_json = json.dumps(opts, default=str)
+        db.add(row)
+        db.commit()
+        return row.options_json
+
+
+def _managed_reuse_path(d, prev) -> str:
+    """The folder a mission RETRY must reuse that ``rerun_session`` would not
+    (v1.309.0 review), or "" when the rerun already lands in the right place.
+
+    ``rerun_session`` keeps a project / user-folder mission in its folder,
+    but gives a mission that ran in a managed SCRATCH workspace a fresh,
+    empty one — so a retry could not see a single file the first run made.
+    That is the folder this returns, under ``continue_session``'s own rule:
+    never a git worktree (a review/reject can discard it out from under the
+    run), never a folder that is gone. BLOCKING (a stat)."""
+    from pathlib import Path
+
+    from ...agents.runtime import is_direct_workspace
+
+    ws = str(getattr(prev, "workspace_path", "") or "")
+    if not ws or is_direct_workspace(d.platform.config, ws):
+        return ""
+    if getattr(d.orchestrator, "_git_sessions", {}).get(prev.id) is not None:
+        return ""
+    try:
+        return ws if Path(ws).is_dir() else ""
+    except OSError:
+        return ""
+
+
+def _folder_busy(d, workspace: str) -> bool:
+    """A run is running or queued in ``workspace`` (``continue_session``'s
+    busy rule: QUEUED counts — a parked run still owns the folder).
+    BLOCKING."""
+    from sqlmodel import select
+
+    from ...core.db import session_scope
+    from ...core.models import Session, SessionStatus
+
+    with session_scope(d.platform.engine) as db:
+        return db.exec(
+            select(Session.id).where(
+                Session.workspace_path == workspace,
+                Session.status.in_(  # type: ignore[attr-defined]
+                    (SessionStatus.ACTIVE, SessionStatus.QUEUED)
+                ),
+            )
+        ).first() is not None
+
+
+def _move_into(d, new_id: str, workspace: str) -> None:
+    """Point a just-created (never started) run at ``workspace`` and drop the
+    empty scratch folder ``create_session`` made for it. Done before the run
+    is spawned, so ``run_session``'s fresh read of the row works there.
+    BLOCKING."""
+    from pathlib import Path
+
+    from ...core.db import session_scope
+    from ...core.models import Session
+
+    with session_scope(d.platform.engine) as db:
+        row = db.get(Session, new_id)
+        if row is None:
+            raise KeyError(new_id)
+        fresh = str(row.workspace_path or "")
+        row.workspace_path = workspace
+        db.add(row)
+        db.commit()
+    if fresh and fresh != workspace:
+        try:
+            Path(fresh).rmdir()  # only ever empty: nothing has run in it
+        except OSError:
+            pass
 
 
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:
@@ -282,11 +414,22 @@ def register(app: FastAPI, d) -> None:
     def list_missions(project_id: str = "") -> dict[str, Any]:
         """The most recent missions (v1.307.0), newest first — the rows the
         mission door made, by its origin stamp. Bounded. ``project_id``
-        (v1.308.0) narrows to one project's missions."""
+        (v1.308.0) narrows to one project's missions.
+
+        v1.309.0 (contract 6): ``objective`` is the user's own words
+        (``mission.display_objective`` — a follow-up is listed by the
+        follow-up, not by the model-facing recap), and ``waiting`` says the
+        mission — its coordinator or any member — is parked on an ask, so the
+        list stops saying "working" while the whole team waits on the user.
+        Only a running/queued row can be waiting; the check is one in-memory
+        registry plus at most one statement per delegation depth for every
+        row together (``mission.missions_waiting``)."""
         from sqlmodel import select
 
+        from ...agents.mission import display_objective, missions_waiting
         from ...core.db import session_scope
         from ...core.models import Session as SessionModel
+        from ...core.models import SessionStatus
 
         stmt = select(SessionModel).where(SessionModel.origin == MISSION_ORIGIN)
         if project_id.strip():
@@ -298,11 +441,19 @@ def register(app: FastAPI, d) -> None:
                     .limit(_MISSIONS_LIMIT)
                 )
             )
+            live = [
+                r.id for r in rows if r.status in (SessionStatus.ACTIVE, SessionStatus.QUEUED)
+            ]
+            try:
+                waiting = missions_waiting(d.platform, db, live)
+            except Exception:  # noqa: BLE001 — a listing never breaks on a hint
+                waiting = set()
         return {
             "missions": [
                 {
                     "id": r.id,
-                    "objective": r.task,
+                    "objective": display_objective(r),
+                    "waiting": r.id in waiting,
                     "status": r.status.value,
                     "outcome": getattr(r, "outcome", None) or None,
                     "project_id": r.project_id,
@@ -312,6 +463,120 @@ def register(app: FastAPI, d) -> None:
                 for r in rows
             ]
         }
+
+    @app.post("/missions/{session_id}/retry-failed", status_code=201)
+    async def retry_failed_mission(session_id: str) -> dict[str, Any]:
+        """Retry a mission's FAILED worklist items in ONE server-side step
+        (v1.309.0, contract 6, mission-dead-end-no-followup).
+
+        The session page's version is two requests (reset-failed, then
+        continue), and a page that dies between them leaves the items reset
+        with no run to take them. Here the new run is CREATED first, then the
+        failed items are re-opened, then the run is started — every refusal
+        happens before anything is written: 404 unknown (or not a mission),
+        409 while it is still running, 409 with no worklist, 409 with nothing
+        failed.
+
+        THE NEW RUN IS A RERUN OF THE MISSION, NOT A ``continue_session``
+        ROUND, on purpose. A worklist board is keyed by the job's TASK
+        (``worklist/store.board_for_root``), and a continuation's task is the
+        recap text — so a continuation lands on a DIFFERENT, empty board and
+        cannot see the items this door just re-opened (measured: the mission's
+        board ``job:dd10a76b…``, its continuation's ``job:ce656e83…``). A
+        rerun keeps the task, the project/folder, the posture, the grants,
+        the origin and the run options (the project's team, ``deliverable``),
+        so it lands on the SAME board, and the worklist's own rule — done
+        items are never handed out again, ``worklist_add`` re-adds nothing on
+        a repeated job (``supervisor.WORKLIST_PATTERN``) — makes it take
+        exactly the reset ones. It is linked as this mission's continuation
+        (``options.continued_from``) so the old screen says where the work
+        went on, and its objective names the retry in the user's terms.
+
+        …IN THE SAME FOLDER (v1.309.0 review). A plain rerun of a mission
+        that ran in a managed SCRATCH workspace got a fresh, empty one, so the
+        retry could not see a single file the first run made. Here it is
+        moved into the mission's own folder before it starts (the rule
+        ``continue_session`` uses: never a git worktree; 409 while another run
+        is working there, checked under the orchestrator's continue lock so a
+        concurrent /continue cannot share it). A project / user-folder
+        mission already reran in its folder. Answers the new session row,
+        flat, like every start door."""
+        from ...agents.mission import display_objective
+        from ...core.models import SessionStatus
+
+        prev = d.orchestrator.get_session(session_id)
+        if prev is None or getattr(prev, "origin", None) != MISSION_ORIGIN:
+            raise HTTPException(status_code=404, detail="mission not found")
+        if prev.status in (SessionStatus.ACTIVE, SessionStatus.QUEUED):
+            raise HTTPException(
+                status_code=409,
+                detail="this mission is still running — wait for it to finish before retrying",
+            )
+        store = getattr(d.platform, "worklist", None)
+        if store is None:  # pragma: no cover - a platform without the store
+            raise HTTPException(status_code=409, detail="this mission has no worklist")
+        board_id = await asyncio.to_thread(store.root_session_for, session_id)
+        summary = await asyncio.to_thread(store.summary, board_id)
+        if int(summary.get("total") or 0) == 0:
+            raise HTTPException(status_code=409, detail="this mission has no worklist")
+        failed = int(summary.get("failed") or 0)
+        if failed == 0:
+            raise HTTPException(status_code=409, detail="nothing failed in this mission")
+        reuse = await asyncio.to_thread(_managed_reuse_path, d, prev)
+        # The orchestrator's continue lock: a /continue and a retry can never
+        # both claim one folder (a double without one runs unserialised).
+        lock = getattr(d.orchestrator, "_continue_lock", None)
+        async with lock if lock is not None else contextlib.nullcontext():
+            if reuse and await asyncio.to_thread(_folder_busy, d, reuse):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "a follow-up of this mission is already running or "
+                        "queued — wait for it to finish before retrying"
+                    ),
+                )
+            try:
+                session = await d.orchestrator.rerun_session(session_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail="mission not found")
+            except (PermissionError, RuntimeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            if reuse and getattr(d.orchestrator, "_git_sessions", {}).get(session.id) is None:
+                try:
+                    await asyncio.to_thread(_move_into, d, session.id, reuse)
+                    session.workspace_path = reuse
+                except Exception as exc:  # noqa: BLE001 — never run it blind
+                    try:
+                        d.orchestrator.delete_session(session.id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"could not reuse the mission's folder: {exc}",
+                    )
+        try:
+            await asyncio.to_thread(store.reset_failed, board_id)
+        except Exception as exc:  # noqa: BLE001 — never leave a run with nothing to do
+            try:
+                d.orchestrator.delete_session(session.id)
+            except Exception:  # noqa: BLE001
+                pass
+            raise HTTPException(
+                status_code=500, detail=f"could not re-open the failed items: {exc}"
+            )
+        items = "item" if failed == 1 else "items"
+        # A retry of a retry names the ORIGINAL objective once (v1.309.0
+        # review): strip a previous "Retry the N failed item(s): " prefix.
+        base = re.sub(r"^(?:Retry the \d+ failed items?: )+", "", display_objective(prev))
+        objective = f"Retry the {failed} failed {items}: {base}"
+        session.options_json = await asyncio.to_thread(
+            _stamp_continuation, d, session.id, session_id, objective
+        ) or session.options_json
+        # Continuing the work answers a restart's prompt, as /continue does.
+        await asyncio.to_thread(_clear_interrupted, d, session_id)
+        if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+            session = d.orchestrator.get_session(session.id) or session
+        return _session_row(d, session)
 
     @app.post("/sessions/{session_id}/cancel")
     def cancel_session(session_id: str) -> dict[str, Any]:
@@ -356,6 +621,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
             raise HTTPException(status_code=409, detail=str(exc))
+        # v1.309.0 (contract 5): a MISSION's continuation is linked to it
+        # BEFORE it runs, so the old mission screen can say "Continued in →
+        # open", and the user's own follow-up becomes its display objective.
+        # Any other continuation is left exactly as continue_session made it.
+        session.options_json = await asyncio.to_thread(
+            _stamp_continuation, d, session.id, session_id, (body.message or "").strip(),
+            resume=bool(body.resume),
+        ) or session.options_json
         # v1.249.0 (R-02): this job is being picked up again, so it is no
         # longer a prompt. The tag is cleared on the ORIGINAL row — the
         # continuation is a new session, and the old one keeps its verdict.
@@ -521,16 +794,37 @@ def register(app: FastAPI, d) -> None:
         continuing or dismissing clears it. Bounded to the last 3 days and 20
         rows — an interrupted job nobody came back to stops being a prompt
         and stays in the session list like any other failed run.
+
+        ONLY THE MISSION ROOT IS OFFERED (v1.309.0, contract 7,
+        restart-orphans-children-no-mission-recovery). A restart mid-mission
+        tagged the coordinator AND every member it had delegated to, and each
+        member was offered Continue as if it were a job of its own — N+1
+        prompts, and continuing a member started a lone builder with no
+        coordinator to report to. A delegated child is excluded by EITHER
+        mark: its origin (``job:mission-member``, stamped at creation — the
+        one that survives a child killed before its AgentRun row was written)
+        or an ``AgentRun.parent_id`` link (a child from before the stamp, or
+        from a non-mission delegation). Continuing the root re-runs the team.
+        Each row also carries ``origin`` (so a mission's Continue can land on
+        the mission screen) and ``objective`` (the user's words, not the
+        recap) — additive.
         """
         from datetime import timedelta
 
+        from sqlalchemy import exists, or_
         from sqlmodel import select
 
+        from ...agents.mission import display_objective
+        from ...agents.team import MISSION_MEMBER_ORIGIN as MEMBER_ORIGIN
         from ...core.db import session_scope
         from ...core.ids import utcnow
-        from ...core.models import Session, SessionStatus
+        from ...core.models import AgentRun, Session, SessionStatus
 
         cutoff = utcnow() - timedelta(days=3)
+        delegated = exists().where(
+            AgentRun.session_id == Session.id,
+            AgentRun.parent_id.is_not(None),  # type: ignore[union-attr]
+        )
         with session_scope(d.platform.engine) as db:
             rows = list(
                 db.exec(
@@ -539,6 +833,8 @@ def register(app: FastAPI, d) -> None:
                         Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
                         Session.interrupted_at >= cutoff,  # type: ignore[operator]
                         Session.status == SessionStatus.FAILED,
+                        or_(Session.origin.is_(None), Session.origin != MEMBER_ORIGIN),  # type: ignore[union-attr]
+                        ~delegated,
                     )
                     .order_by(Session.interrupted_at.desc())  # type: ignore[union-attr]
                     .limit(20)
@@ -548,6 +844,8 @@ def register(app: FastAPI, d) -> None:
                 {
                     "id": s.id,
                     "task": (s.task or "")[:300],
+                    "objective": display_objective(s)[:300],
+                    "origin": s.origin,
                     "agent_type": getattr(s.agent_type, "value", str(s.agent_type)),
                     "project_id": s.project_id,
                     "interrupted_at": (
@@ -771,19 +1069,27 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/sessions/{session_id}/mission")
-    def session_mission(session_id: str) -> dict[str, Any]:
+    def session_mission(session_id: str, request: Request) -> Response:
         """The MISSION view of a coordinator session (v1.307.0): the team's
         members with honest progress, a plain-words activity log and the
         deliverable — composed from the ledger by ``agents/mission.py``.
         Sync on purpose (FastAPI's threadpool): SQLite reads only. An unknown
         id is ``found: false`` (200), like ``/team``, so a polling page never
-        turns a deleted mission into an error toast."""
+        turns a deleted mission into an error toast.
+
+        v1.309.0: served through ``_etagged_json`` (the ``/sessions``
+        pattern). The page polls this every 2 s; an unchanged tick is now a
+        bodiless 304, so neither the body nor a re-render crosses for
+        nothing. The view carries no clock-derived field (every time in it is
+        a stored timestamp), which is what makes the tag stable. The DB work
+        is made cheap in ``mission_view`` itself — a tag is a hash of the
+        built body, so it saves transfer, not the read."""
         from ...agents.mission import mission_view
 
         view = mission_view(d.platform, session_id)
         if view is None:
-            return {"found": False, "session_id": session_id}
-        return view
+            return _etagged_json({"found": False, "session_id": session_id}, request)
+        return _etagged_json(view, request)
 
     @app.get("/sessions/{session_id}/stream")
     async def stream_session(session_id: str, request: Request):

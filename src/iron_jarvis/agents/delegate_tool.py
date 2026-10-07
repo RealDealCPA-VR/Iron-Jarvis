@@ -3,9 +3,16 @@
 A coordinator (the Supervisor, and since v1.166.0 the Planner) uses this tool
 to hand a subtask to a freshly-spawned subagent.
 Each delegation gets its *own* session and runs the agent runtime to
-completion. The subagent operates independently, never contacts the user, and
-returns only a SUMMARIZED result back to the supervisor — everything flows
-through the supervisor.
+completion. The subagent operates independently and returns only a SUMMARIZED
+result back to the supervisor — the WORK flows through the supervisor.
+
+WHO A SUBAGENT MAY ASK changed in v1.309.0: a MISSION's teammate (its team
+root carries ``job:mission``) is stamped ``job:mission-member`` and its
+ask-tier calls WAIT for the user, under its own session id, on the mission
+screen, the bell and the desktop ask watcher
+(``orchestrator.inherited_origin``). Every other subagent still has no origin
+and takes the instant headless refusal. A teammate the user STOPS ends at its
+next step boundary, and the coordinator is told so in words and carries on.
 
 WHERE the child works changed in v1.193.0: a parent running DIRECTLY in the
 user's folder (a Projects in-folder task) hands that folder down, so the team
@@ -27,6 +34,7 @@ from typing import Any
 
 from ..core.db import session_scope
 from ..core.events import EventType
+from ..core.ids import new_id
 from ..core.models import AgentRun, AgentState, AgentType
 from ..tools.base import Tool, ToolContext, ToolResult
 from ..tools.registry import tool_deadline_expired
@@ -84,8 +92,14 @@ async def publish_delegation_started(
     child_session_id: str,
     target: str,
     task: str,
+    handoff_id: str | None = None,
 ) -> None:
-    """Announce a handoff on the PARENT's session (see ``EventType``)."""
+    """Announce a handoff on the PARENT's session (see ``EventType``).
+
+    ``handoff_id`` (v1.309.0) rides only on a REMOTE handoff, which opens no
+    child session: it is the key a reader groups that handoff's started and
+    completed events by, so two handoffs to one remote are two cards — never
+    one collapsed by agent name."""
     await platform.event_bus.publish(
         EventType.DELEGATION_STARTED,
         {
@@ -93,6 +107,7 @@ async def publish_delegation_started(
             "child_session_id": child_session_id,
             "agent": target,
             "task": _short(task),
+            **({"handoff_id": handoff_id} if handoff_id else {}),
         },
         session_id=session_id,
     )
@@ -108,6 +123,7 @@ async def publish_delegation_completed(
     target: str,
     ok: bool,
     result: str | None,
+    handoff_id: str | None = None,
 ) -> None:
     """Announce a handoff settling — including the crash path, where there is
     no child run id at all (the runtime raised before/while making one)."""
@@ -120,6 +136,7 @@ async def publish_delegation_completed(
             "agent": target,
             "ok": ok,
             "result": _short(result),
+            **({"handoff_id": handoff_id} if handoff_id else {}),
         },
         session_id=session_id,
     )
@@ -132,6 +149,40 @@ async def publish_delegation_completed(
 TIME_LIMIT_REASON = (
     "Stopped by the tool time limit before it finished (not by the user)."
 )
+
+
+async def user_stopped_child(orch, child_session_id: str) -> bool:
+    """Was the ``CancelledError`` a delegating door just caught the USER
+    stopping its child — and not a cancel of the door's OWN run (v1.309.0)?
+
+    The parent's own cancellation (Stop on the coordinator, a deadline)
+    raises its task's ``cancelling()`` count and must keep propagating: it is
+    never swallowed. Only with that count at zero does a stop mark
+    (``team.stop_child``) or the child's CANCELLED row — written BEFORE the
+    child's task is cancelled — make it the user's Stop on this teammate."""
+    from . import team as _team
+
+    me = asyncio.current_task()
+    if me is not None and me.cancelling():
+        _team.consume_stop(child_session_id)
+        return False
+    if _team.consume_stop(child_session_id):
+        return True
+    try:
+        return await asyncio.to_thread(orch._user_cancelled, child_session_id)
+    except Exception:  # noqa: BLE001 — unknown = not the user; propagate
+        return False
+
+
+def stopped_by_user_error(target: str) -> str:
+    """What the COORDINATOR reads when the user stopped one of its teammates
+    (v1.309.0). It names who stopped it and what to do next, because the
+    coordinator carries on: the rest of the mission is still its job."""
+    return (
+        f"'{target}' was stopped by the user before it finished — its part is "
+        "NOT done. Do not hand the same work to it again; carry on with the "
+        "rest, and say in your final message what was left undone."
+    )
 
 
 class DelegateTool(Tool):
@@ -164,19 +215,6 @@ class DelegateTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
 
-    def _caller_session(self, session_id: str | None):
-        """The calling session's row, detached, or None. BLOCKING (one read)."""
-        if not session_id:
-            return None
-        try:
-            from ..core.models import Session
-
-            with session_scope(self.platform.engine) as db:
-                row = db.get(Session, session_id)
-                return Session(**row.model_dump()) if row is not None else None
-        except Exception:  # noqa: BLE001 — an unreadable caller has no team
-            return None
-
     def _delegation_depth(self, agent_run_id: str | None) -> int:
         """How deep the CALLER already is in the delegation chain (root = 0), by
         walking AgentRun.parent_id. Bounds the exponential fan-out of a
@@ -202,6 +240,7 @@ class DelegateTool(Tool):
             child_fanout_key,
             child_slot,
             inherited_grants,
+            inherited_origin,
             inherited_trust,
             inherited_workspace_root,
         )
@@ -264,11 +303,16 @@ class DelegateTool(Tool):
 
         # A PROJECT MISSION'S TEAM (v1.308.0): the coordinator of a mission
         # started in a project may hand work only to that project's team —
-        # the user picked it. Read off the CALLER's run options (the snapshot
-        # ``POST /missions`` took); every other caller has no team and is
-        # unrestricted. Checked before any session exists, local or remote.
-        _caller = await asyncio.to_thread(self._caller_session, ctx.session_id)
-        _project_team = _team.mission_team(_caller) if _caller is not None else []
+        # the user picked it. Read off the mission ROOT's run options (the
+        # snapshot ``POST /missions`` took), reached by walking AgentRun.
+        # parent_id (v1.309.0): a teammate handing work on is held to the same
+        # team, and children never inherit options. Every other caller has no
+        # team and is unrestricted. Checked before any session exists, local
+        # or remote.
+        _root = await asyncio.to_thread(
+            _team.mission_root, self.platform.engine, ctx.session_id, ctx.agent_run_id
+        )
+        _project_team = _team.mission_team(_root) if _root is not None else []
         if _project_team:
             _who = entry.name if entry is not None else raw_type
             if not _team.on_team(_project_team, _who):
@@ -288,7 +332,7 @@ class DelegateTool(Tool):
                     "reached — do this subtask directly instead of delegating "
                     "further",
                 )
-            return await self._delegate_remote(entry, task)
+            return await self._handoff_remote(entry, task, ctx)
 
         # Local targets: a dynamic agent runs its OWN stored definition; a
         # builtin resolves to its canonical type; anything the roster does not
@@ -385,8 +429,11 @@ class DelegateTool(Tool):
         workspace_root = inherited_workspace_root(self.platform.config, parent)
         # …and the GRANTS (v1.288.0): the tools the user pre-approved on the
         # parent's job, so a Team worker can use the shell the user already
-        # allowed. Never the origin — see ``inherited_grants``.
+        # allowed — see ``inherited_grants``.
         allow_tools, approval_mode = inherited_grants(parent)
+        # …and, inside a MISSION only, the right to ASK (v1.309.0): the member
+        # origin, from the parent or the team root. Every other child: None.
+        origin = inherited_origin(parent, _root)
         _trust, _trust_reason = inherited_trust(parent)
         # The job card's posture and step budget apply when the caller states
         # none (v1.295.0); ``create_session`` normalises the posture.
@@ -425,6 +472,8 @@ class DelegateTool(Tool):
                 # low — trust only flows down (``inherited_trust``).
                 trust=_trust,
                 trust_reason=_trust_reason,
+                # A mission's teammate may ask the user (v1.309.0).
+                origin=origin,
             )
             await publish_delegation_started(
                 self.platform,
@@ -447,12 +496,46 @@ class DelegateTool(Tool):
                 with _team.working(
                     self.platform, child_session.id, ctx.session_id, target_name, task
                 ):
-                    run = await AgentRuntime(self.platform).run(
-                        child_session,
-                        definition or get_agent_definition(child_session.agent_type),
-                        parent_id=ctx.agent_run_id,
+                    # The child runs as its OWN task (v1.309.0) so Stop on
+                    # this one teammate can cancel exactly it
+                    # (``team.stop_child``); awaiting it keeps the old
+                    # semantics, and a cancel of THIS run still reaches it.
+                    child_task = asyncio.ensure_future(
+                        AgentRuntime(self.platform).run(
+                            child_session,
+                            definition or get_agent_definition(child_session.agent_type),
+                            parent_id=ctx.agent_run_id,
+                        )
                     )
+                    _team.bind_task(child_session.id, child_task)
+                    run = await child_task
             except asyncio.CancelledError:
+                if await user_stopped_child(orch, child_session.id):
+                    # THE USER STOPPED THIS TEAMMATE (v1.309.0), not the
+                    # coordinator: settle it CANCELLED, close the edge, and
+                    # hand the coordinator a result it can act on.
+                    await orch._finalize_cancelled(child_session)
+                    await publish_delegation_completed(
+                        self.platform,
+                        session_id=ctx.session_id,
+                        parent_run_id=ctx.agent_run_id,
+                        child_run_id=None,
+                        child_session_id=child_session.id,
+                        target=target_name,
+                        ok=False,
+                        result="stopped by the user",
+                    )
+                    return ToolResult(
+                        ok=False,
+                        output="",
+                        error=stopped_by_user_error(target_name),
+                        data={
+                            "child_session_id": child_session.id,
+                            "agent_type": child_session.agent_type.value,
+                            "target": target_name,
+                            "state": "cancelled",
+                        },
+                    )
                 # A DEADLINE IS NOT THE USER (v1.288.0): only when the
                 # registry's own deadline is what cancelled us do the words
                 # change; every other cancel keeps "cancelled by the user".
@@ -514,7 +597,33 @@ class DelegateTool(Tool):
             # Reflect the run's outcome onto the child session and persist it —
             # through the ONE child settle (v1.307.0): status, spend, the
             # worklist claims handed back, the honest outcome, the folder note.
-            await orch.settle_child(child_session, run)
+            # A teammate the USER stopped (v1.309.0) is settled CANCELLED there,
+            # and the coordinator is told in words — then carries on.
+            stopped = await orch.settle_child(child_session, run)
+            _team.consume_stop(child_session.id)
+            if stopped:
+                await publish_delegation_completed(
+                    self.platform,
+                    session_id=ctx.session_id,
+                    parent_run_id=ctx.agent_run_id,
+                    child_run_id=run.id,
+                    child_session_id=child_session.id,
+                    target=target_name,
+                    ok=False,
+                    result="stopped by the user",
+                )
+                return ToolResult(
+                    ok=False,
+                    output="",
+                    error=stopped_by_user_error(target_name),
+                    data={
+                        "child_run_id": run.id,
+                        "child_session_id": child_session.id,
+                        "agent_type": agent_type.value,
+                        "target": target_name,
+                        "state": "cancelled",
+                    },
+                )
 
             # Close the learning loop for the child: delegated work teaches the
             # system too (evaluate -> record outcome -> reflect). Best-effort so a
@@ -559,6 +668,61 @@ class DelegateTool(Tool):
                     "workspace": child_session.workspace_path,
                 },
             )
+
+    async def _handoff_remote(self, entry, task: str, ctx: ToolContext) -> ToolResult:
+        """``delegate``'s REMOTE branch, ANNOUNCED (v1.309.0).
+
+        A remote teammate opens no local session, so the mission view knows it
+        only from ``delegation.*`` events — and this branch published none, so
+        a remote doing a mission's work had no card, no counter and no line in
+        the activity log. Announced HERE, not inside :meth:`_delegate_remote`:
+        ``consult`` reuses that helper and a consult hands over no work.
+        ``child_session_id`` is empty (there is no session) and ``handoff_id``
+        keys this handoff's two events together. The settled ``result`` is a
+        shortening of the FENCED text only — never the raw reply, which is
+        attacker-reachable."""
+        handoff_id = new_id("handoff")
+        edge = dict(
+            session_id=ctx.session_id,
+            parent_run_id=ctx.agent_run_id,
+            child_session_id="",
+            target=entry.name,
+            handoff_id=handoff_id,
+        )
+        await publish_delegation_started(self.platform, task=task, **edge)
+        try:
+            res = await self._delegate_remote(entry, task)
+        except asyncio.CancelledError:
+            # Close the announced edge on the way out, as the local path does.
+            try:
+                await publish_delegation_completed(
+                    self.platform,
+                    child_run_id=None,
+                    ok=False,
+                    result=TIME_LIMIT_REASON if tool_deadline_expired() else "cancelled",
+                    **edge,
+                )
+            except Exception:  # noqa: BLE001 - never block the unwind
+                pass
+            raise
+        except Exception as exc:  # noqa: BLE001 — close the edge, then re-raise
+            await publish_delegation_completed(
+                self.platform,
+                child_run_id=None,
+                ok=False,
+                result=f"the remote call failed ({type(exc).__name__})",
+                **edge,
+            )
+            raise
+        await publish_delegation_completed(
+            self.platform,
+            child_run_id=None,
+            ok=bool(res.ok),
+            # Both are already fenced by ``_delegate_remote``.
+            result=res.output if res.ok else res.error,
+            **edge,
+        )
+        return res
 
     async def _delegate_remote(self, entry, task: str) -> ToolResult:
         """A roster-validated ``remote:<name>`` target: the existing

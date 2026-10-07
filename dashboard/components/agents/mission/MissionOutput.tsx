@@ -9,20 +9,45 @@
 // Report | Markdown | Preview: the same text rendered, the same text raw (copy
 // it anywhere), and the FILES the team made — read off the ledger, previewed
 // with the app's one document viewer.
+//
+// v1.309.0 (UX/speed wave 1) — the screen stops being a dead end and says
+// what it knows:
+// * WHAT'S NEXT. A finished / stopped / failed mission offers Ask for changes
+//   (a continuation carrying the user's words), Run it again (a stopped or
+//   failed one), Retry the N failed items (ONE server step — the reset and the
+//   continuation can never half-apply), and an interrupted one offers
+//   Continue; once continued it links forward instead. Each opens the NEW
+//   mission. None of them picks a model; a FAILED mission's Run it again
+//   starts fresh on the CURRENT default (`runAgainRequest`), so changing the
+//   default on Connections is a way out instead of the same dead provider.
+//   "Open the full run" reaches the coordinator's own session page.
+// * WHO DID THE WORK. A quiet receipt names the provider and model, worded by
+//   what happened (only a completed mission was "answered"), amber with a way
+//   to Connections when it was the mock, plus the daemon's own route note
+//   when a failover touched the mission (the TurnReceipt rule).
+// * EVERY ASK IS ANSWERABLE HERE. A teammate's ask gets the same card as the
+//   coordinator's, named for the teammate.
+// * THE LIVE TEXT COSTS WHAT CHANGED. Settled markdown is memoised and only
+//   the growing tail is re-parsed (the chat stream's split, lib/streamSplit),
+//   and the live text is read from the mission's store HERE, so a token flush
+//   re-renders this panel and nothing else on the screen.
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { FileText, Square } from "lucide-react";
+import { FileText, RotateCcw, Square } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
-import { MemoMarkdown, CopyIconButton } from "@/components/Markdown";
+import { Markdown, MemoMarkdown, CopyIconButton } from "@/components/Markdown";
 import { DocPreview } from "@/components/chat/DocPreview";
 import {
   MISSION_TERMINAL,
   baseName,
   missionHeadline,
+  missionPath,
   type MissionView,
   type WaitingOn,
 } from "@/lib/mission";
-import type { MissionLive } from "@/lib/useMission";
+import { settledSplit } from "@/lib/streamSplit";
+import { useMissionLive, type MissionLive, type MissionLiveStore } from "@/lib/useMission";
 
 export type OutputTab = "report" | "markdown" | "preview";
 
@@ -51,6 +76,9 @@ export function deliverableFor(view: MissionView | null, live: MissionLive): Del
 }
 
 function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: string; onAnswered: () => void }) {
+  // v1.309.0: also drawn for each TEAMMATE parked on an ask — the daemon files
+  // a teammate's ask under the teammate's own session, and the answer route
+  // takes the approval id alone, so the same three answers work for it.
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const answer = async (decision: "once" | "conversation" | "deny") => {
@@ -97,26 +125,183 @@ function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: s
   );
 }
 
+/** The streaming caret: an `::after` on the wrapper's last block, so it sits
+ *  inline with the running text. Kept as one string so the lock-step pin can
+ *  compare it with chat's. */
+const STREAMING_CARET_CLASS =
+  "[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-caret [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']";
+
+/** Markdown that is still being written. Everything before the last blank
+ *  line outside a code fence is settled and goes through MemoMarkdown (parsed
+ *  once); only the tail is re-parsed per flush.
+ *
+ *  A LOCK-STEP PAIR with chat's `StreamingText` (app/chat/page.tsx), which
+ *  lives in the chat page module and so cannot be imported from here: the
+ *  same split, the same two renderers, the same caret classes.
+ *  `__tests__/mission-live-markdown-lockstep-v1309.test.ts` fails when either
+ *  side changes alone. Lifting StreamingText into components/chat/ (the
+ *  finding's plan) is a later wave's job — chat/page.tsx is not this track's
+ *  file. */
+function LiveMarkdown({ content, caret }: { content: string; caret: boolean }) {
+  const cut = settledSplit(content);
+  return (
+    <div className={caret ? STREAMING_CARET_CLASS : undefined}>
+      {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
+      <Markdown content={cut > 0 ? content.slice(cut) : content} />
+    </div>
+  );
+}
+
+/** What a mission's Continue sends when the mission has no words of its own
+ *  to send (an older daemon's view with neither objective nor task). */
+export const CONTINUE_MESSAGE =
+  "Iron Jarvis stopped before this objective was finished. Pick up where the team left off and finish it.";
+
+/** The message an interrupted mission's Continue posts: the user's OWN
+ *  objective (v1.309.0 review). The daemon stores a mission continuation's
+ *  message as the new mission's display objective (orchestrator
+ *  `options["objective"]`, sessions `_stamp_continuation`), so a fixed
+ *  instruction here became "Your objective" and the Recent-list title of
+ *  the resumed mission — words the user never typed. The model is not left
+ *  without the instruction: the daemon wraps the message in its own recap
+ *  ("[Continuing an earlier session. Original task: … Prior result: … The
+ *  earlier workspace files are available …]"). */
+export function continueMessage(view: MissionView): string {
+  return (view.session.objective || view.session.task || "").trim() || CONTINUE_MESSAGE;
+}
+
+/** What "Run it again" posts (v1.309.0 review, mission-dead-end-when-model-down).
+ *
+ *  `/sessions/{id}/rerun` CLONES the run's stamped provider/model
+ *  (orchestrator `rerun_session`: `provider=prev.provider`), and the stamp is
+ *  the default AT CREATE. So after a mission failed because its model was
+ *  down, the screen's own advice ("choose another default on Connections")
+ *  followed by Run it again hit the same dead provider — the only way out was
+ *  New task and typing the objective again. A FAILED mission therefore
+ *  starts fresh through the door the composer uses, `POST /missions
+ *  {objective, project_id}`, which takes the CURRENT default. That is not an
+ *  auto-switch: the request names no model, exactly like Start (the
+ *  never-auto-switch rule — the default is the user's own choice).
+ *
+ *  Two cases keep the rerun:
+ *  * a STOPPED mission — the user stopped it, nothing was wrong with its
+ *    model, and the rerun keeps every input the run had;
+ *  * a failed CONTINUATION (its display objective differs from the task the
+ *    model read): the user's follow-up words alone ("make it shorter") are not
+ *    the job — the task carries the recap of the earlier work, and only the
+ *    rerun keeps that recap and the workspace it names. */
+export function runAgainRequest(view: MissionView): { path: string; body: Record<string, unknown> } {
+  const s = view.session;
+  const objective = (s.objective || "").trim();
+  const continuation = Boolean(objective) && objective !== (s.task || "").trim();
+  if (s.status === "failed" && objective && !continuation) {
+    return { path: "/missions", body: { objective, ...(s.project_id ? { project_id: s.project_id } : {}) } };
+  }
+  return { path: `/sessions/${encodeURIComponent(s.id)}/rerun?wait=false`, body: {} };
+}
+
+/** A session row from continue / rerun / retry-failed → its id + project. */
+function openedRow(row: unknown): { id: string; project: string } | null {
+  if (!row || typeof row !== "object") return null;
+  const o = row as Record<string, unknown>;
+  const id = typeof o.id === "string" ? o.id : "";
+  if (!id) return null;
+  return { id, project: typeof o.project_id === "string" ? o.project_id : "" };
+}
+
+function actionError(e: unknown, what: string): string {
+  if (e instanceof ApiError && e.status === 409) {
+    return what === "retry"
+      ? "Nothing is marked failed any more — the list may have changed."
+      : "This objective is already being worked on.";
+  }
+  if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+    return what === "retry"
+      ? "This daemon can't retry failed items yet — restart Iron Jarvis to update it."
+      : "This objective no longer exists.";
+  }
+  return e instanceof Error && e.message ? e.message : "Could not start it.";
+}
+
+/** The receipt's verb, by what the mission's status says actually happened
+ *  (v1.309.0 review). `session.provider/model` is the provider the
+ *  orchestrator STAMPED at create (`provider or default_provider`), not proof
+ *  that anything answered — so a mission refused because its default model
+ *  was down read "Could not finish" with "Answered by fleet-custom" under it.
+ *  Only a COMPLETED mission was answered; a running one is working on it; a
+ *  failed one tried it; a stopped (or restart-interrupted) one ran on it. */
+function receiptVerb(view: MissionView): string {
+  const status = view.session.status;
+  if (status === "completed") return "Answered by";
+  if (!MISSION_TERMINAL.has(status)) return "Working on";
+  if (status === "failed" && !view.session.interrupted) return "Tried";
+  return "Ran on";
+}
+
+/** Who did the work: provider · model, quiet; amber when the mock answered
+ *  (nothing real ran), with the daemon's route note when a failover touched
+ *  the mission. Renders nothing when the daemon said nothing. */
+function MissionReceipt({ view }: { view: MissionView }) {
+  const { provider, model, route_note: note } = view.session;
+  if (!provider && !model && !note) return null;
+  const mock = provider === "mock";
+  const pair = [provider, model].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
+  const answered = view.session.status === "completed";
+  return (
+    <div
+      data-testid="mission-receipt"
+      data-mock={mock ? "true" : undefined}
+      className={`border-t hairline px-5 py-2 text-[11.5px] ${mock ? "text-amber-300" : "text-zinc-500"}`}
+    >
+      {mock ? (
+        <span>
+          {answered ? "Mock answer — no real model ran." : "On the mock — no real model ran."}{" "}
+          <Link href="/connections" className="underline hover:text-amber-200">
+            Connect a model on Connections
+          </Link>
+        </span>
+      ) : pair ? (
+        <span>
+          {receiptVerb(view)} {pair}
+        </span>
+      ) : null}
+      {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-amber-300/90`}>{note}</div>}
+    </div>
+  );
+}
+
 export function MissionOutput({
   view,
-  live,
+  liveStore,
   objective,
   onChanged,
+  onOpen,
 }: {
   view: MissionView | null;
-  live: MissionLive;
+  /** The mission's live text — read HERE, so a flush re-renders this panel only. */
+  liveStore: MissionLiveStore;
   /** The request, shown before the first view arrives. */
   objective: string;
   onChanged: () => void;
+  /** Open another mission (a continuation, a re-run) — inside its project. */
+  onOpen: (id: string, projectId: string) => void;
 }) {
+  const live = useMissionLive(liveStore);
   const [tab, setTab] = useState<OutputTab>("report");
   const [picked, setPicked] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [stopNote, setStopNote] = useState<string | null>(null);
+  const [acting, setActing] = useState<string | null>(null);
+  const [actNote, setActNote] = useState<string | null>(null);
+  const [followup, setFollowup] = useState("");
   const out = deliverableFor(view, live);
   const docs = view?.deliverable.documents ?? [];
   const running = view !== null && !MISSION_TERMINAL.has(view.session.status);
+  const terminal = view !== null && MISSION_TERMINAL.has(view.session.status);
   const sid = view?.session.id ?? "";
+  const project = view?.session.project_id ?? "";
+  const continuedAs = view?.session.continued_as ?? null;
+  const failedItems = view?.deliverable.worklist?.failed ?? 0;
 
   // Keep a preview selection only while that file is still in the list.
   useEffect(() => {
@@ -137,7 +322,35 @@ export function MissionOutput({
     }
   };
 
+  // One press → one request → the NEW mission opens. `busy` is the button's
+  // own name so the right one says "Starting…".
+  const act = async (name: string, path: string, body: Record<string, unknown>) => {
+    if (!sid || acting) return;
+    setActing(name);
+    setActNote(null);
+    try {
+      const row = openedRow(await post<unknown>(path, body));
+      if (row) {
+        if (name === "followup") setFollowup("");
+        onOpen(row.id, row.project || project);
+      } else {
+        setActNote("The daemon did not say which mission it started.");
+        onChanged();
+      }
+    } catch (e) {
+      setActNote(actionError(e, name));
+    } finally {
+      setActing(null);
+    }
+  };
+  const enc = encodeURIComponent(sid);
+  const askForChanges = () => {
+    const text = followup.trim();
+    if (text) void act("followup", `/sessions/${enc}/continue`, { message: text, wait: false });
+  };
+
   const waiting = view?.coordinator.waiting_on ?? null;
+  const memberAsks = (view?.members ?? []).filter((m) => m.waiting_on);
   const tabs: { key: OutputTab; label: string }[] = [
     { key: "report", label: "Report" },
     { key: "markdown", label: "Markdown" },
@@ -150,8 +363,76 @@ export function MissionOutput({
         <div className="text-[11px] uppercase tracking-wide text-zinc-500">Your objective</div>
         <div className="mt-1 flex items-start justify-between gap-4">
           <p data-testid="mission-objective" className="whitespace-pre-wrap text-[15px] font-medium text-zinc-100">
-            {view?.session.task || objective}
+            {view?.session.objective || view?.session.task || objective}
           </p>
+          {terminal && (
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {continuedAs ? (
+                <a
+                  data-testid="mission-continued-as"
+                  href={missionPath(continuedAs, project)}
+                  onClick={(e) => {
+                    // An in-page move: the page's route is its own state, so
+                    // a full navigation would only reload the same screen.
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    e.preventDefault();
+                    onOpen(continuedAs, project);
+                  }}
+                  className="text-[12px] text-accent hover:underline"
+                >
+                  Continued in → open
+                </a>
+              ) : view?.session.interrupted ? (
+                <button
+                  type="button"
+                  data-testid="mission-continue"
+                  disabled={acting !== null}
+                  onClick={() =>
+                    view &&
+                    void act("continue", `/sessions/${enc}/continue`, {
+                      message: continueMessage(view),
+                      wait: false,
+                    })
+                  }
+                  className="btn-accent px-3 py-1 text-xs"
+                >
+                  <RotateCcw size={12} /> {acting === "continue" ? "Starting…" : "Continue"}
+                </button>
+              ) : view?.session.status === "failed" || view?.session.status === "cancelled" ? (
+                <button
+                  type="button"
+                  data-testid="mission-rerun"
+                  disabled={acting !== null}
+                  title={
+                    view && runAgainRequest(view).path === "/missions"
+                      ? "Starts this objective fresh on your current default model"
+                      : "Runs it again with the same model and settings"
+                  }
+                  onClick={() => {
+                    if (!view) return;
+                    const again = runAgainRequest(view);
+                    void act("rerun", again.path, again.body);
+                  }}
+                  className="btn-ghost px-3 py-1 text-xs"
+                >
+                  <RotateCcw size={12} /> {acting === "rerun" ? "Starting…" : "Run it again"}
+                </button>
+              ) : null}
+              {!continuedAs && failedItems > 0 && (
+                <button
+                  type="button"
+                  data-testid="mission-retry-failed"
+                  disabled={acting !== null}
+                  onClick={() => void act("retry", `/missions/${enc}/retry-failed`, {})}
+                  className="btn-ghost px-3 py-1 text-xs"
+                >
+                  {acting === "retry"
+                    ? "Starting…"
+                    : `Retry the ${failedItems} failed item${failedItems === 1 ? "" : "s"}`}
+                </button>
+              )}
+            </div>
+          )}
           {running && (
             <button
               type="button"
@@ -164,12 +445,36 @@ export function MissionOutput({
             </button>
           )}
         </div>
-        <div data-testid="mission-headline" className="mt-1.5 text-[12px] text-zinc-400">
-          {view ? missionHeadline(view) : "Starting…"}
-          {running && live.coordinatorPhase ? ` · ${live.coordinatorPhase}` : ""}
+        <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <div data-testid="mission-headline" className="text-[12px] text-zinc-400">
+            {view ? missionHeadline(view) : "Starting…"}
+            {running && (live.coordinatorPhase || live.coordinatorNarration)
+              ? ` · ${live.coordinatorPhase || live.coordinatorNarration}`
+              : ""}
+          </div>
+          {/* v1.309.0 review (mission-dead-end-no-followup): the coordinator's
+              own session page holds the full transcript and its export — the
+              cards link each teammate's run, and this is Jarvis's. */}
+          {sid && (
+            <Link
+              data-testid="mission-open-run"
+              href={`/sessions/${enc}`}
+              className="shrink-0 text-[11.5px] text-zinc-500 hover:text-zinc-300 hover:underline"
+            >
+              Open the full run
+            </Link>
+          )}
         </div>
         {stopNote && <div className="mt-1 text-[12px] text-rose-300">{stopNote}</div>}
+        {actNote && (
+          <div data-testid="mission-action-note" className="mt-1 text-[12px] text-rose-300">
+            {actNote}
+          </div>
+        )}
         {waiting && <ApprovalCard waiting={waiting} who={view?.coordinator.name ?? "Jarvis"} onAnswered={onChanged} />}
+        {memberAsks.map((m) => (
+          <ApprovalCard key={m.waiting_on!.approval_id} waiting={m.waiting_on!} who={m.name} onAnswered={onChanged} />
+        ))}
       </header>
 
       <div role="tablist" aria-label="Output views" className="flex items-center gap-1 border-b hairline px-4 pt-2">
@@ -204,9 +509,10 @@ export function MissionOutput({
         {tab === "report" &&
           (out.text ? (
             <div data-testid="mission-report" data-source={out.source} className="text-[14px] leading-relaxed text-zinc-200">
-              <MemoMarkdown content={out.text} />
-              {out.source !== "final" && running && (
-                <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-accent align-middle" />
+              {out.source === "final" ? (
+                <MemoMarkdown content={out.text} />
+              ) : (
+                <LiveMarkdown content={out.text} caret={running} />
               )}
             </div>
           ) : (
@@ -257,6 +563,37 @@ export function MissionOutput({
             </div>
           ))}
       </div>
+
+      {view && <MissionReceipt view={view} />}
+
+      {terminal && !continuedAs && (
+        <div data-testid="mission-followup" className="flex items-end gap-2 border-t hairline px-4 py-3">
+          <textarea
+            data-testid="mission-followup-input"
+            value={followup}
+            onChange={(e) => setFollowup(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                askForChanges();
+              }
+            }}
+            rows={1}
+            placeholder="Ask for changes — e.g. make it shorter, add a summary table"
+            aria-label="Ask for changes"
+            className="field min-h-[2.25rem] flex-1 resize-y text-[13px]"
+          />
+          <button
+            type="button"
+            data-testid="mission-followup-send"
+            disabled={acting !== null || !followup.trim()}
+            onClick={askForChanges}
+            className="btn-accent shrink-0 px-3 py-1.5 text-xs"
+          >
+            {acting === "followup" ? "Starting…" : "Ask for changes"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

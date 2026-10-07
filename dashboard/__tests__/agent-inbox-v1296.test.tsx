@@ -504,11 +504,13 @@ describe("toActivity maps the assignment events", () => {
     payload,
   });
 
-  it("assignment.blocked → /agents, OctagonAlert, the title and the reason", () => {
+  // v1.309.0: the agent's inbox lives in its detail on Your team; a requeue
+  // names no agent, so it opens Your team itself.
+  it("assignment.blocked → the assignee on Your team, OctagonAlert, the title and the reason", () => {
     expect(
       toActivity(ev("assignment.blocked", { id: "a1", assignee: "builder", title: "Rename files", blocked_reason: "needs a key" })),
     ).toMatchObject({
-      href: "/agents",
+      href: "/agents?view=team&agent=builder",
       icon: OctagonAlert,
       title: "Blocked: Rename files",
       body: "builder — needs a key",
@@ -529,9 +531,9 @@ describe("toActivity maps the assignment events", () => {
     ).toBeNull();
   });
 
-  it("assignment.requeued → /agents, RotateCcw, the count", () => {
+  it("assignment.requeued → Your team, RotateCcw, the count", () => {
     expect(toActivity(ev("assignment.requeued", { count: 2, ids: ["a", "b"] }))).toMatchObject({
-      href: "/agents",
+      href: "/agents?view=team",
       icon: RotateCcw,
       title: "2 assignments picked back up after a restart",
       body: "",

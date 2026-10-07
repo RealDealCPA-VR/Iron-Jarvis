@@ -24,12 +24,33 @@
 // one agent → chat's @-mentions (unchanged); giving one agent work → a New
 // task (Jarvis picks), or that agent's inbox on Your team; a project's world →
 // the project's mission screen (team, Board / Waiting on you / Completed).
+//
+// v1.309.0: Your team and the old-room transcript load ON DEMAND
+// (next/dynamic), and MissionScreen defers its result panel the same way.
+// The front door is New task, which needs none of them. What that moves off
+// the /agents first load is whatever the app-build-manifest A/B says, not
+// what this comment hopes: a module that something else on the route still
+// imports statically moves zero bytes (CLAUDE.md). Both are prefetched once
+// the page is idle — the Overlays.tsx pattern — so a press on the rail's
+// Agents row still lands on a module already in memory.
+// `?view=team&agent=<roster name>` opens Your team on that agent.
+//
+// THE ROUTE FOLLOWS NEXT'S SEARCH PARAMS, not only mount + popstate (v1.309.0
+// review). Next keeps this page MOUNTED when only the query changes (its
+// layout router keys a segment without the search params) and a Link push
+// dispatches no popstate — so a bell or palette link to `?view=team&agent=…`
+// or `?mission=<id>`, pressed while the user is already on /agents, changed
+// the URL and left the screen as it was. `useSearchParams` re-renders on
+// exactly that change; it needs a Suspense boundary under static export.
+// Until the URL is read the page shows the neutral skeleton, never the New
+// task composer: a deep link would flash the wrong screen and fire its
+// fetches for nothing.
 
-import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { PageShell } from "@/components/motion";
 import { MissionScreen } from "@/components/agents/mission/MissionScreen";
-import { TeamScreen } from "@/components/agents/mission/TeamScreen";
-import { RoomTranscript } from "@/components/agents/mission/RoomTranscript";
 import type { RailTarget } from "@/components/agents/mission/MissionRail";
 import {
   agentsPath,
@@ -38,6 +59,29 @@ import {
   parseAgentsRoute,
   type AgentsRoute,
 } from "@/lib/mission";
+
+/** What a deferred screen shows for the moment its module is loading. */
+function ScreenLoading() {
+  return (
+    <div
+      data-testid="agents-screen-loading"
+      aria-busy="true"
+      className="card-surface h-[calc(100vh-7rem)] min-h-[32rem] animate-pulse"
+    />
+  );
+}
+
+const loadTeamScreen = () => import("@/components/agents/mission/TeamScreen");
+const loadRoomTranscript = () => import("@/components/agents/mission/RoomTranscript");
+
+const TeamScreen = dynamic(() => loadTeamScreen().then((m) => ({ default: m.TeamScreen })), {
+  ssr: false,
+  loading: ScreenLoading,
+});
+const RoomTranscript = dynamic(() => loadRoomTranscript().then((m) => ({ default: m.RoomTranscript })), {
+  ssr: false,
+  loading: ScreenLoading,
+});
 
 function GuideHandoff({ ask }: { ask: string }) {
   const href = guideChatPath(ask);
@@ -59,13 +103,49 @@ function GuideHandoff({ ask }: { ask: string }) {
   );
 }
 
+/** Same screen, same props: keep the old object so nothing re-renders. */
+function sameRoute(a: AgentsRoute | null, b: AgentsRoute): boolean {
+  return a !== null && JSON.stringify(a) === JSON.stringify(b);
+}
+
 export default function AgentsPage() {
+  return (
+    <Suspense fallback={<ScreenLoading />}>
+      <AgentsRouter />
+    </Suspense>
+  );
+}
+
+function AgentsRouter() {
   const [route, setRoute] = useState<AgentsRoute | null>(null);
+  // Next's own record of the query: it changes on a Link push to this page
+  // (no remount, no popstate). `null` outside an app router (unit tests).
+  const searchKey = useSearchParams()?.toString() ?? "";
   useEffect(() => {
-    const read = () => setRoute(parseAgentsRoute(window.location.search));
+    const read = () => {
+      const next = parseAgentsRoute(window.location.search);
+      setRoute((prev) => (sameRoute(prev, next) ? prev : next));
+    };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
+  }, [searchKey]);
+  // Pull the deferred screens in once the page is quiet (never at import).
+  useEffect(() => {
+    const prefetch = () => {
+      void loadTeamScreen().catch(() => {});
+      void loadRoomTranscript().catch(() => {});
+    };
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof w.requestIdleCallback === "function") {
+      const id = w.requestIdleCallback(prefetch, { timeout: 4000 });
+      return () => w.cancelIdleCallback?.(id);
+    }
+    const t = window.setTimeout(prefetch, 2000);
+    return () => window.clearTimeout(t);
   }, []);
   const go = useCallback((path: string) => {
     try {
@@ -80,7 +160,7 @@ export default function AgentsPage() {
     [go],
   );
 
-  if (route === null) return null;
+  if (route === null) return <ScreenLoading />;
   return (
     <PageShell className="space-y-0">
       {route.kind === "mission" ? (
@@ -94,7 +174,7 @@ export default function AgentsPage() {
           onProject={(project) => go(missionPath("", project))}
         />
       ) : route.kind === "team" ? (
-        <TeamScreen onRail={onRail} />
+        <TeamScreen key={route.agent || "team"} onRail={onRail} agent={route.agent} />
       ) : route.kind === "room" ? (
         <RoomTranscript thread={route.thread} onRail={onRail} />
       ) : (

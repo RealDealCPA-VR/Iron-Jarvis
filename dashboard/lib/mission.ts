@@ -46,6 +46,10 @@ export interface MissionMember {
   files: string[];
   started_at: string | null;
   finished_at: string | null;
+  /** v1.309.0: the provider / model this teammate's run asked for ("" when
+   *  the daemon did not say — an older daemon, or the default route). */
+  provider: string;
+  model: string;
 }
 
 export type ActivityTone = "ok" | "warn" | "info" | "ask";
@@ -69,12 +73,25 @@ export interface WorklistSummary {
 export interface MissionView {
   session: {
     id: string;
+    /** The MODEL-FACING task (a continuation's carries the recap). */
     task: string;
+    /** v1.309.0: the user's OWN words — a continuation's follow-up, not the
+     *  recap wrapped around it. Falls back to `task` on an older daemon. */
+    objective: string;
     status: string;
     outcome: string | null;
     project_id: string | null;
     created_at: string | null;
     finished_at: string | null;
+    /** v1.309.0: the app stopped (an update, a crash) while this ran. */
+    interrupted: boolean;
+    /** v1.309.0: the newest session continuing this one, or null. */
+    continued_as: string | null;
+    provider: string;
+    model: string;
+    /** v1.309.0: one plain sentence when a failover / downgrade touched this
+     *  mission, else "". The daemon words it; the page only shows it. */
+    route_note: string;
   };
   coordinator: { name: string; status: MemberStatus; waiting_on: WaitingOn | null; steps: number };
   members: MissionMember[];
@@ -87,6 +104,8 @@ export interface MissionRow {
   id: string;
   objective: string;
   status: string;
+  /** v1.309.0: the mission or one of its teammates is parked on an ask. */
+  waiting: boolean;
   outcome: string | null;
   project_id: string | null;
   created_at: string | null;
@@ -151,6 +170,8 @@ function decodeMember(v: unknown): MissionMember | null {
     files: strList(o.files),
     started_at: strOrNull(o.started_at),
     finished_at: strOrNull(o.finished_at),
+    provider: str(o.provider),
+    model: str(o.model),
   };
 }
 
@@ -181,11 +202,17 @@ export function decodeMission(raw: unknown): MissionView | null {
     session: {
       id: str(s.id),
       task: str(s.task),
+      objective: str(s.objective) || str(s.task),
       status: str(s.status),
       outcome: strOrNull(s.outcome),
       project_id: strOrNull(s.project_id),
       created_at: strOrNull(s.created_at),
       finished_at: strOrNull(s.finished_at),
+      interrupted: s.interrupted === true,
+      continued_as: strOrNull(s.continued_as),
+      provider: str(s.provider),
+      model: str(s.model),
+      route_note: str(s.route_note),
     },
     coordinator: {
       name: str(c.name) || "Jarvis",
@@ -223,6 +250,7 @@ export function decodeMissions(raw: unknown): MissionRow[] {
       id,
       objective: str(o.objective),
       status: str(o.status),
+      waiting: o.waiting === true,
       outcome: strOrNull(o.outcome),
       project_id: strOrNull(o.project_id),
       created_at: strOrNull(o.created_at),
@@ -242,7 +270,8 @@ export function decodeMissions(raw: unknown): MissionRow[] {
  *            project and worked by its team.
  *   team     `?view=team` — "Your team": every agent, create / edit / faces /
  *            inbox / files / coach. `?world=general` (the old General rooms)
- *            lands here too.
+ *            lands here too. v1.309.0: `&agent=<roster name>` opens it with
+ *            that agent selected — where an agent's notifications land.
  *   room     `?thread=<id>` — a conversation from the old round table (or a
  *            chat @-mention panel), READ-ONLY. Every link that ever pointed
  *            at a room (the palette, chat's "open in Agents") still resolves.
@@ -251,7 +280,7 @@ export function decodeMissions(raw: unknown): MissionRow[] {
  */
 export type AgentsRoute =
   | { kind: "mission"; id: string; project: string }
-  | { kind: "team" }
+  | { kind: "team"; agent?: string }
   | { kind: "room"; thread: string }
   | { kind: "guide"; ask: string };
 
@@ -265,14 +294,18 @@ export function parseAgentsRoute(search: string): AgentsRoute {
   const v = (k: string) => (params.get(k) || "").trim();
   if (v("thread")) return { kind: "room", thread: v("thread") };
   if (v("talk") || v("ask")) return { kind: "guide", ask: v("ask") };
-  if (v("view") === "team" || v("world") === "general") return { kind: "team" };
+  if (v("view") === "team" || v("world") === "general") {
+    // The key is ABSENT for a bare team link (never `agent: ""`): the bare
+    // route is pinned as exactly `{kind: "team"}` since v1.307.0.
+    return v("agent") ? { kind: "team", agent: v("agent") } : { kind: "team" };
+  }
   return { kind: "mission", id: v("mission"), project: v("project") };
 }
 
 export function agentsPath(route: AgentsRoute): string {
   switch (route.kind) {
     case "team":
-      return "/agents?view=team";
+      return route.agent ? `/agents?view=team&agent=${encodeURIComponent(route.agent)}` : "/agents?view=team";
     case "room":
       return `/agents?thread=${encodeURIComponent(route.thread)}`;
     case "guide":
