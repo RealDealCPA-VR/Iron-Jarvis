@@ -2905,6 +2905,84 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The round table is GONE from the dashboard; missions are the only way
+  team work is given, and a project's TEAM is enforced** (v1.308.0). The
+  user, seeing v1.307.0: "the roundtable view I saw wasn't very user
+  friendly … this new method would be preferred" — and chose "replace it
+  everywhere". `app/agents/page.tsx` is a small router over FOUR screens
+  (`lib/mission.parseAgentsRoute`/`agentsPath`/`missionPath(id, project)`):
+  mission (`/agents`, `?mission=`, and a PROJECT's screen
+  `?project=<pid>[&mission=]` — header + back, `MissionComposer
+  fixedProject`, `ProjectWork` = Board / Waiting on you / Completed reusing
+  `world/WorldBoard|WaitingList|CompletedList` off `GET /projects/{id}/world`,
+  `ProjectTeamPanel` + `TeamEditor` in a Modal; the front door lists
+  `ProjectTeams` off `GET /agents/worlds`), team (`?view=team`, and the old
+  `?world=general` → `TeamScreen` = rail + `AgentsPanel`, the agents dialog's
+  body lifted out of `AgentsModal`, which now just wraps it; Talk / Give work
+  are not passed), room (`?thread=` → `RoomTranscript`, READ-ONLY, wins over
+  `?project=`), guide (`?talk=&ask=` → `guideChatPath` = `/chat?ask=@guide
+  …`; Help's Ask the Guide links there directly). DELETED: RoundTable,
+  ThreadRail, PanelPicker, JobPostCard, FaceStack, world/WorldView,
+  world/WorldTabs, world/NewTaskPanel, `AgentSeatModal`, the world route
+  helpers in `lib/agentWorlds` — and the 17 test files that only covered
+  them (mixed files lost only their round-table describes). KEPT: the backend
+  rooms (`agents/threads.py`, `/agents/threads*` — chat @-mentions, the phone
+  and remote inbound still use them), `TableSeats`/`RosterStrip` helpers.
+  THE TEAM IS REAL: `POST /missions` with a project snapshots
+  `Project.team_json` into run options `team` (none = unrestricted);
+  `agents/team.mission_team/on_team/off_team_refusal`; the runtime's roster
+  block is `roster_block(only=team)`; `delegate` AND `spawn_agent` refuse an
+  off-team target before any session exists (read off the CALLER's row via
+  `DelegateTool._caller_session`). `GET /missions?project_id=`. A remote on
+  the team "sees only the task Jarvis hands it" (`projects/world.REMOTE_SEES`
+  + `lib/agentWorlds.REMOTE_SEES`, lock-step wording). Pins:
+  `tests/test_agents_project_missions_v1308.py`,
+  `dashboard/__tests__/agents-mission-v1307.test.tsx` (v1.308.0 blocks).
+
+- **The Agents page is a MISSION screen: one objective, Jarvis runs the
+  team, the deliverable first** (v1.307.0). The user's spec: "the user does
+  not interact with each agent individually … one AI interface with a visible
+  workforce behind it". BACKEND: `POST /missions {objective, project_id?,
+  workspace_root?, provider?, model?, allow_tools?, approval_mode?,
+  max_steps?}` → a SUPERVISOR session, `origin="job:mission"` (an ATTENDED
+  origin: asks wait), run option `deliverable: true` → the runtime appends
+  `MISSION_DELIVERABLE` (the final message IS the work product; only that
+  door sets it; children never inherit options); `GET /missions` (newest 30
+  by origin); `GET /sessions/{id}/mission` → `agents/mission.py::
+  mission_view` (members from the `AgentRun.parent_id` walk + remote
+  delegations from events; per-member status/`progress {pct, label,
+  basis}`; a plain-words `activity` log from `ToolInvocation` (REDACTED
+  args, basenames only, `_QUIET_TOOLS` skipped) + persisted delegation/plan/
+  ask/completion events; `deliverable {text, documents, worklist}`). PROGRESS
+  IS COUNTED OR ABSENT: done 100, queued 0, a plan's finished steps, else
+  `pct: null` with words — never a clock-driven number (mutation-pinned).
+  LIVE TEXT: `StreamHub.link/unlink/root_of` mirrors a delegated child's
+  frames to its team ROOT as `{"event": "member", "data": {member, event,
+  data}}` — never under the child's own name, so a member's `done` cannot end
+  the root's SSE. `agents/team.py::working(...)` (a `with` block in BOTH
+  `delegate` and `spawn_agent`) links the stream AND puts the child in a
+  display-only live map the roster reads as busy — it grants no slot and no
+  cancel handle (the roster's old blind spot, closed; `test_roster_truth_v1193`
+  flipped with it). FIXES from the agents review ride along:
+  `supervisor.with_worklist` carried no `skills`/`reports_to` (a custom agent
+  on a bulk task, and every scheduled run with skills, lost both);
+  `Orchestrator.settle_child` is the ONE success-path settle for delegated/
+  spawned children (worklist claims released, `outcome` derived, folder note
+  kept, claimed-write note) — both doors used to copy fields by hand.
+  DASHBOARD: `/agents` = `MissionScreen` (left `MissionRail` — page-local,
+  the app drawer is untouched — centre `MissionOutput` with Report | Markdown
+  | Preview + inline approval + Stop, right `AgentCards` (compact, expand in
+  place, `ProgressBar` draws a number ONLY for a non-null pct), `LiveActivity`
+  below spanning centre+right); `?mission=<id>` one objective; the team
+  screens moved to `?view=team` (`lib/mission.agentsScreen`; every old key —
+  project/thread/world/talk/ask — still opens them, and `worldPath({kind:
+  "auto"})` is `/agents?view=team`); `lib/useMission.ts` polls the view every
+  2 s while running and reads the coordinator's ONE EventSource (member
+  frames included), flushing tokens to state every 120 ms. `/agents` joined
+  Simple mode's nav. Pins: `tests/test_agents_mission_v1307.py`,
+  `dashboard/__tests__/agents-mission-v1307.test.tsx` (the seven older
+  agents-page files now set `?view=team`).
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

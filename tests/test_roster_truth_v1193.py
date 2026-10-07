@@ -484,12 +484,13 @@ async def test_a_running_custom_agents_id_resolves_to_ITSELF_not_its_base_type(
 ):
     """NAME RESOLUTION for a live id — NOT end-to-end delegated-child liveness.
 
-    Read the ``_running[session.id] = object()`` line below literally: this test
-    HAND-INSERTS the child into a lane the production ``delegate`` path never
-    enters. ``delegate``/``spawn_agent`` call ``AgentRuntime.run`` directly, so a
-    real delegated child is in no ``_running``/``_governed``/``_queued`` set and
-    the roster cannot see it at all — the blind spot is asserted below and
-    documented in ``roster``'s LIVENESS BLIND SPOT section. What IS pinned here
+    v1.307.0 CLOSED THE BLIND SPOT this test used to assert: ``delegate`` /
+    ``spawn_agent`` still enter no ``_running``/``_governed``/``_queued`` set,
+    but the child joins ``agents/team.py``'s display-only map for the span of
+    its run, so the roster reports it busy BEFORE anything is hand-inserted
+    (``seen["before"]`` below) — see ``roster``'s DELEGATED CHILDREN section.
+    The ``_running[session.id] = object()`` line still pins the orchestrator
+    lane's resolution on top of that. What IS pinned here
     is the resolution rule that the orchestrator-managed and self-registered
     lanes DO exercise: a live session id belonging to a custom teammate must
     resolve to ``custom:tax-reader``, not to the ``builder`` it executes as —
@@ -502,9 +503,12 @@ async def test_a_running_custom_agents_id_resolves_to_ITSELF_not_its_base_type(
     from iron_jarvis.core.models import AgentRun, AgentState
 
     async def _run(self, session, agent_def, parent_id=None):
-        # THE BLIND SPOT, asserted rather than implied: mid-run, before anything
-        # is hand-inserted, the delegated child is invisible to liveness.
-        seen["before"] = _by_name(build_roster(team))["custom:tax-reader"].activity
+        # THE BLIND SPOT IS CLOSED (v1.307.0): mid-run, before anything is
+        # hand-inserted, the delegated child is ALREADY busy — through the
+        # display-only team map, and credited to ITSELF, not to builder.
+        _before = _by_name(build_roster(team))
+        seen["before"] = _before["custom:tax-reader"].activity
+        seen["before_builder"] = _before["builder"].activity
         # INSIDE the child run: this is what the roster sees while it works —
         # once something puts the id in a lane the roster reads.
         team.orchestrator._running[session.id] = object()
@@ -531,11 +535,11 @@ async def test_a_running_custom_agents_id_resolves_to_ITSELF_not_its_base_type(
         )
     ).ok
 
-    assert seen["before"] in ("unknown", "idle"), (
-        "a delegated child enters no orchestrator lane — if this ever reports "
-        "busy, the blind spot documented in roster.py has been closed and that "
-        "docstring must be rewritten"
+    assert seen["before"] == "busy", (
+        "v1.307.0: a delegated child is visibly busy for its whole run "
+        "(agents/team.py) — the roster must not lose it again"
     )
+    assert seen["before_builder"] != "busy", "the child is credited to itself, never its base type"
     assert seen["custom"] == "busy"
     # v1.296.0: "idle" (nothing running, nothing queued) — never "busy".
     assert seen["builder"] == "idle", "builder was never the one working"

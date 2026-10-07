@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { guideChatPath } from "@/lib/mission";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -91,7 +92,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/agents",
     title: "Agents",
     icon: Bot,
-    desc: "The built-in roles (builder, planner, reviewer, and more) plus any custom agents you define.",
+    desc: "Give Jarvis one objective and watch the team work it — the result first, the agents underneath. Your team: the built-in roles plus any custom agents you define.",
   },
   {
     href: "/workflows",
@@ -562,7 +563,7 @@ interface GuideStatus {
 }
 
 /** Ask the Iron Jarvis Guide (v1.224.0): one box that opens a Talk with the
- *  built-in Guide AGENT on the Agents page, the question prefilled (never
+ *  built-in Guide AGENT (since v1.308.0 in chat, as an @guide mention), the question prefilled (never
  *  auto-sent — the consent rule: side effects wait for Enter in the
  *  composer). The Guide answers grounded in the app's docs + this install's
  *  live catalogs and can search your own things in the app; the line under
@@ -573,7 +574,10 @@ function AskGuideCard() {
   const linkRef = useRef<HTMLAnchorElement>(null);
   const status = useApi<GuideStatus>("/guide/status");
   const s = status.data;
-  const href = `/agents?talk=guide${q.trim() ? `&ask=${encodeURIComponent(q.trim())}` : ""}`;
+  // v1.308.0: the round table is gone — the question goes to CHAT as an
+  // @guide mention (prefilled, never auto-sent), where the Guide answers
+  // with its docs lookup.
+  const href = guideChatPath(q);
   const knows =
     s
       ? `${s.docs.length} reference doc${s.docs.length === 1 ? "" : "s"} (${s.doc_sections} sections) plus ${s.live_sections} live catalogs of this install`
@@ -581,8 +585,8 @@ function AskGuideCard() {
   return (
     <Card title="Ask the Guide" icon={<Bot size={15} />}>
       <p className="text-[13px] text-zinc-400">
-        The Guide is a built-in agent on the Agents page — the expert on Iron Jarvis
-        itself. Ask how anything here works, or where something of yours is (a
+        The Guide is a built-in agent — the expert on Iron Jarvis itself — and it
+        answers in chat. Ask how anything here works, or where something of yours is (a
         project, a workflow, a schedule): it looks it up in the app’s own docs and in
         this install, and says when it doesn’t know.
       </p>

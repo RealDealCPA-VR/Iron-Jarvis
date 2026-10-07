@@ -163,7 +163,10 @@ def member_kind(name: str) -> str:
 #: What a REMOTE seat is shown in a project room (v1.304.0): the user's own
 #: lines and its own — never the local seats' project-grounded replies. The
 #: team/world rows carry it as ``sees`` so the UI can say so beside the face.
-REMOTE_SEES = "only your messages"
+#: v1.308.0: the round table is gone — a remote on the team is reached by a
+#: mission's coordinator through ``delegate``, which sends it the TASK TEXT
+#: and nothing else (no files, no other teammate's work).
+REMOTE_SEES = "only the task Jarvis hands it"
 
 
 def sees_for(name: str) -> str | None:
@@ -500,6 +503,11 @@ def suggestion_rows(
     for order, (key, slot) in enumerate(work.items()):
         entry = _match(entries, key)
         if entry is None or str(entry.name).casefold() in on_team:
+            continue
+        # v1.308.0: a team works a MISSION's parts, and a coordinator
+        # (supervisor, planner — anything carrying `delegate`) cannot be
+        # handed one; it ran here AS the coordinator, so it is not suggested.
+        if not bool(getattr(entry, "delegable", True)):
             continue
         if any(str(p[2].name) == str(entry.name) for p in picked):
             continue

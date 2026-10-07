@@ -130,6 +130,28 @@ class SessionCreate(BaseModel):
         return _clean_max_steps(v)
 
 
+class MissionCreate(BaseModel):
+    """One objective for the whole team (v1.307.0, the Agents page's mission
+    door). Becomes a SUPERVISOR session stamped ``origin="job:mission"`` (an
+    ATTENDED origin — its asks wait for the user) with the run option
+    ``deliverable: true``, so the coordinator's final message is the work
+    product itself."""
+
+    objective: str
+    project_id: str = ""
+    workspace_root: str = ""
+    provider: str | None = None
+    model: str | None = None
+    allow_tools: list[str] = []
+    approval_mode: str = ""
+    max_steps: int | None = None
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _validate_max_steps(cls, v: Any) -> int | None:
+        return _clean_max_steps(v)
+
+
 class DocEnhanceBody(BaseModel):
     """AI pass over a document draft BEFORE creation: better name + content."""
 

@@ -34,6 +34,9 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/chat", // Chat (hero — carries the whole Projects module)
   "/terminals", // Build (hero)
   "/projects", // Projects (hero — the context spine; Advanced-only would hide it)
+  "/agents", // Agents — since v1.307.0 the mission screen: ONE objective, the
+  //           whole team works it. The front door for team work can't be
+  //           Advanced-only (it used to be reachable only by ⌘K in Simple).
   // Sessions + Activity are Advanced-only: Overview's "Recent sessions" /
   // "While you were away" cards cover the everyday need and deep-link into
   // session detail (which carries session-scoped time-travel + undo). The

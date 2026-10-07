@@ -56,6 +56,35 @@ class StreamHub:
         # reader parked in q.get() on the main loop (it woke on the 15s
         # keepalive instead — every token arrived 15s late).
         self._queue_loops: dict[int, asyncio.AbstractEventLoop] = {}
+        #: THE TEAM MIRROR (v1.307.0): child session id -> (root session id,
+        #: member descriptor). A delegated/spawned child streams onto its OWN
+        #: session id; the mission view watches ONE stream — the coordinator's
+        #: — so every frame a linked child publishes is also delivered to the
+        #: root's subscribers, wrapped as ``member`` so the root's own
+        #: lifecycle frames (``done`` above all, which ends the SSE response)
+        #: can never be impersonated by a teammate's. In-memory like the rest.
+        self._mirror: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def link(self, child_session_id: str, parent_session_id: str, member: dict[str, Any]) -> str:
+        """Mirror ``child_session_id``'s frames to the ROOT of
+        ``parent_session_id`` (a grandchild mirrors to the same root its parent
+        does — one stream per team). Returns the root id. Never raises."""
+        child = str(child_session_id or "")
+        parent = str(parent_session_id or "")
+        if not child or not parent or child == parent:
+            return parent
+        root = self._mirror.get(parent, (parent, {}))[0]
+        if root == child:
+            return parent
+        self._mirror[child] = (root, {"session_id": child, **dict(member or {})})
+        return root
+
+    def unlink(self, child_session_id: str) -> None:
+        self._mirror.pop(str(child_session_id or ""), None)
+
+    def root_of(self, session_id: str) -> str:
+        """The team root a session mirrors to, or the id itself."""
+        return self._mirror.get(session_id, (session_id, {}))[0]
 
     def subscribe(self, session_id: str) -> "asyncio.Queue[dict[str, Any]]":
         """Register a subscriber for ``session_id``; the SSE endpoint drains the
@@ -82,7 +111,29 @@ class StreamHub:
 
     def publish(self, session_id: str, frame: dict[str, Any]) -> None:
         """SYNC, non-blocking. Deliver ``frame`` to every subscriber of
-        ``session_id`` (no-op when there are none). NEVER await this."""
+        ``session_id`` (no-op when there are none). NEVER await this.
+
+        A LINKED child's frame is delivered to its team root too, as
+        ``{"event": "member", "data": {"member": {...}, "event", "data"}}``
+        (v1.307.0) — never under the child's own event name."""
+        self._deliver(session_id, frame)
+        mirror = self._mirror.get(session_id)
+        if mirror is not None:
+            root, member = mirror
+            if root != session_id and self._subs.get(root):
+                self._deliver(
+                    root,
+                    {
+                        "event": "member",
+                        "data": {
+                            "member": member,
+                            "event": frame.get("event"),
+                            "data": frame.get("data"),
+                        },
+                    },
+                )
+
+    def _deliver(self, session_id: str, frame: dict[str, Any]) -> None:
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:

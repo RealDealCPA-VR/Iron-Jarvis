@@ -65,25 +65,21 @@ would have silently returned EVERY ``custom:*`` agent to "(no runs yet)" — the
 original defect, restored invisibly. Any change to that payload therefore
 belongs in the same change set as a change here.
 
-LIVENESS BLIND SPOT, STATED PLAINLY. ``activity`` sees only what the
-ORCHESTRATOR knows about: sessions it started under ``spawn_managed``, sessions
-parked in ``_queued``, and the ``run_session`` lane that self-registers into
-``_running``/``_governed``. ``delegate`` and ``spawn_agent`` call
-``AgentRuntime.run`` DIRECTLY — their children never enter any of those sets, so
-a delegated child is invisible to this signal for its entire life. That is the
-uncomfortable part: the fan-out saturation a busy marker would most help a
-supervisor avoid (one coordinator handing work to eight teammates at once) is
-precisely the case it CANNOT see. The two available fixes are both worse than
-the gap. Routing children through the governor deadlocks (the parent is blocked
-awaiting the child while holding a slot — ``orchestrator.child_slot`` works
-through the cycle in full), and registering them in ``_running`` for display
-only hands ``cancel_session`` and the slot-free promotion hook handles that do
-not belong to them. Reading ACTIVE ``Session`` rows instead was rejected too: it
-is an unindexed scan on the event loop inside prompt composition, and a run
-stranded ACTIVE by a crash would report its agent busy forever. So the limit
-stands, documented, rather than papered over — absence of a "busy" marker was
-never a claim that anyone is free, and for a delegated child it is not even
-evidence.
+DELEGATED CHILDREN (closed in v1.307.0). ``delegate`` and ``spawn_agent`` call
+``AgentRuntime.run`` DIRECTLY, so their children never enter the
+orchestrator's ``_running`` / ``_governed`` / ``_queued`` sets — until v1.307.0
+a delegated child was invisible to this signal for its whole life. The two
+obvious fixes stay rejected: routing children through the governor deadlocks
+(the parent is blocked awaiting the child while holding a slot —
+``orchestrator.child_slot`` works through the cycle in full), and registering
+them in ``_running`` hands ``cancel_session`` and the slot-free promotion hook
+handles that are not theirs. Reading ACTIVE ``Session`` rows was rejected too
+(an unindexed scan inside prompt composition; a crash-stranded row would read
+busy forever). The fix is a third, SEPARATE map that grants nothing:
+``agents/team.py`` — a child joins it for exactly the span of its run (a
+``with`` block in both doors, so every ending leaves it) and
+:func:`_live_session_ids` reads it as busy. In-memory, so a restart forgets it,
+which is the truth: nothing from the old process is running.
 
 DELEGABILITY (verified capability, never aspiration):
 
@@ -499,11 +495,21 @@ def resolve_roster_name(platform, session) -> str:
 
 
 def _live_session_ids(platform) -> tuple[list[str], list[str]]:
-    """``(busy_ids, queued_ids)`` from the orchestrator's in-memory state."""
+    """``(busy_ids, queued_ids)`` from the orchestrator's in-memory state,
+    plus (v1.307.0) the delegated children ``agents/team.py`` holds — the
+    blind spot the module docstring records, closed without granting them a
+    slot or a cancel handle."""
+    delegated: list[str] = []
+    try:
+        from .team import live_child_ids
+
+        delegated = [str(s) for s in live_child_ids()]
+    except Exception:  # noqa: BLE001 — presence is a bonus
+        delegated = []
     orch = getattr(platform, "orchestrator", None)
     if orch is None:
-        return [], []
-    busy: list[str] = []
+        return delegated, []
+    busy: list[str] = list(delegated)
     queued: list[str] = []
     try:
         # ``_running`` also holds non-session background work (workflow runs,
@@ -515,7 +521,7 @@ def _live_session_ids(platform) -> tuple[list[str], list[str]]:
         for sid in list(getattr(orch, "_governed", ()) or ()):
             busy.append(str(sid))
     except Exception:  # noqa: BLE001 — a poisoned orchestrator means "unknown"
-        return [], []
+        return delegated, []
     try:
         for entry in list(getattr(orch, "_queued", ()) or ()):
             try:
@@ -875,16 +881,24 @@ def _block_line(entry: RosterEntry) -> str:
     return f"{_clamp(_one_line(head), _BLOCK_LINE_CHARS - len(suffix) - 1)} {suffix}"
 
 
-def roster_block(platform, *, limit: int = 14) -> str:
+def roster_block(platform, *, limit: int = 14, only: list[str] | None = None) -> str:
     """Compact prompt block. Only healthy + delegable entries are listed;
     unhealthy remotes collapse into one trailing ``offline: ...`` note so
     the model knows they exist but won't pick them. Empty roster → ``""``.
+
+    ``only`` (v1.308.0): a project mission's TEAM — when given (non-empty),
+    the block lists just those roster names, so the coordinator is shown
+    exactly who it may hand work to (``delegate``/``spawn_agent`` refuse the
+    rest — ``agents/team.py``).
 
     A busy or queued agent is still LISTED (it can take the work, just not
     yet) and says so in its suffix — ``builder — … (busy, 87% over 23 runs)``
     — so a supervisor can choose someone else or wait instead of delegating
     blind into a saturated queue."""
     entries = build_roster(platform, with_health=False)
+    if only:
+        wanted = {_norm(n) for n in only}
+        entries = [e for e in entries if _norm(e.name) in wanted]
     main = [e for e in entries if e.delegable and e.healthy][: max(0, limit)]
     offline = [e.name for e in entries if e.kind == "remote" and not e.healthy]
     if not main and not offline:

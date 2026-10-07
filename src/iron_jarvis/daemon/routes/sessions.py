@@ -17,7 +17,19 @@ from fastapi.responses import StreamingResponse
 from typing import Any
 
 from ..app import _agent_type, _session_view
-from ..schemas import ContinueBody, FeedbackBody, SessionCreate, SessionsClearBody
+from ..schemas import (
+    ContinueBody,
+    FeedbackBody,
+    MissionCreate,
+    SessionCreate,
+    SessionsClearBody,
+)
+
+#: The origin the mission door stamps (v1.307.0). Starts with "job", so it is
+#: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
+MISSION_ORIGIN = "job:mission"
+#: How many recent missions ``GET /missions`` lists.
+_MISSIONS_LIMIT = 30
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -77,6 +89,21 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     if isinstance(_count, int) and not isinstance(_count, bool) and _count > 1:
         out["count"] = _count
     return out
+
+
+def _project_team(d, project_id: str) -> list[str]:
+    """A project's saved team (roster names), or ``[]`` for none / no such
+    project (v1.308.0). BLOCKING (one read) — callers hop off the loop."""
+    from ...core.db import session_scope
+    from ...core.models import Project
+    from ...projects.world import decode_team
+
+    try:
+        with session_scope(d.platform.engine) as db:
+            row = db.get(Project, project_id)
+            return decode_team(getattr(row, "team_json", "")) if row is not None else []
+    except Exception:  # noqa: BLE001 — no team readable = no restriction
+        return []
 
 
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:
@@ -193,6 +220,98 @@ def register(app: FastAPI, d) -> None:
             if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
                 session = d.orchestrator.get_session(session.id) or session
         return _session_row(d, session)
+
+    @app.post("/missions", status_code=201)
+    async def create_mission(body: MissionCreate) -> dict[str, Any]:
+        """ONE OBJECTIVE, THE WHOLE TEAM (v1.307.0). The Agents page's
+        mission door: the user does not address agents one by one — Jarvis
+        (a SUPERVISOR run) splits the objective and hands the parts to the
+        team. Same seams as ``POST /sessions`` with ``agent_type: supervisor``
+        (folder guard, posture, step budget, the governor via ``_spawn_bg``),
+        plus the run option ``deliverable`` so the coordinator's final message
+        is the work product. Always background: the page watches
+        ``/sessions/{id}/mission`` and the session's stream."""
+        from ...core.models import AgentType
+
+        objective = (body.objective or "").strip()
+        if not objective:
+            raise HTTPException(status_code=400, detail="an objective is required")
+        workspace_root = (body.workspace_root or "").strip() or None
+        if workspace_root:
+            from ...core.fs_policy import usable_workspace_root
+
+            if not await asyncio.to_thread(usable_workspace_root, workspace_root):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "workspace_root must be an existing, absolute, "
+                        "non-protected folder this app may write in "
+                        "(missing, protected, not a directory, or not "
+                        f"writable): {workspace_root} — pick a folder you can "
+                        "save files in"
+                    ),
+                )
+        options: dict[str, Any] = {"deliverable": True}
+        project_id = (body.project_id or "").strip()
+        if project_id:
+            # THE PROJECT'S TEAM (v1.308.0), snapshotted onto the run: the
+            # coordinator is shown only these agents and `delegate` /
+            # `spawn_agent` refuse the rest. A project with no team leaves
+            # the run unrestricted (Jarvis picks from everyone).
+            team = await asyncio.to_thread(_project_team, d, project_id)
+            if team:
+                options["team"] = team
+        session = await d.orchestrator.create_session(
+            objective,
+            AgentType.SUPERVISOR,
+            body.provider,
+            model=body.model,
+            project_id=project_id or None,
+            allow_tools=body.allow_tools or None,
+            workspace_root=workspace_root,
+            origin=MISSION_ORIGIN,
+            max_steps=body.max_steps,
+            approval_mode=body.approval_mode,
+            options=options,
+        )
+        if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+            session = d.orchestrator.get_session(session.id) or session
+        return _session_row(d, session)
+
+    @app.get("/missions")
+    def list_missions(project_id: str = "") -> dict[str, Any]:
+        """The most recent missions (v1.307.0), newest first — the rows the
+        mission door made, by its origin stamp. Bounded. ``project_id``
+        (v1.308.0) narrows to one project's missions."""
+        from sqlmodel import select
+
+        from ...core.db import session_scope
+        from ...core.models import Session as SessionModel
+
+        stmt = select(SessionModel).where(SessionModel.origin == MISSION_ORIGIN)
+        if project_id.strip():
+            stmt = stmt.where(SessionModel.project_id == project_id.strip())
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    stmt.order_by(SessionModel.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(_MISSIONS_LIMIT)
+                )
+            )
+        return {
+            "missions": [
+                {
+                    "id": r.id,
+                    "objective": r.task,
+                    "status": r.status.value,
+                    "outcome": getattr(r, "outcome", None) or None,
+                    "project_id": r.project_id,
+                    "created_at": r.created_at.isoformat(),
+                    "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                }
+                for r in rows
+            ]
+        }
 
     @app.post("/sessions/{session_id}/cancel")
     def cancel_session(session_id: str) -> dict[str, Any]:
@@ -650,6 +769,21 @@ def register(app: FastAPI, d) -> None:
             "children": children,
             "runs": runs_out,
         }
+
+    @app.get("/sessions/{session_id}/mission")
+    def session_mission(session_id: str) -> dict[str, Any]:
+        """The MISSION view of a coordinator session (v1.307.0): the team's
+        members with honest progress, a plain-words activity log and the
+        deliverable — composed from the ledger by ``agents/mission.py``.
+        Sync on purpose (FastAPI's threadpool): SQLite reads only. An unknown
+        id is ``found: false`` (200), like ``/team``, so a polling page never
+        turns a deleted mission into an error toast."""
+        from ...agents.mission import mission_view
+
+        view = mission_view(d.platform, session_id)
+        if view is None:
+            return {"found": False, "session_id": session_id}
+        return view
 
     @app.get("/sessions/{session_id}/stream")
     async def stream_session(session_id: str, request: Request):

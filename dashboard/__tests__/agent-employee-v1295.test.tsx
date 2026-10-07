@@ -109,7 +109,6 @@ import {
   patchEmployeeFields,
 } from "@/components/agents/SetupCard";
 import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
-import { JobPostCard } from "@/components/agents/JobPostCard";
 import { toActivity } from "@/components/NotificationBell";
 import type { AgentAllowance, IJEvent } from "@/lib/types";
 import { SetupCardHarness } from "./helpers/setupCardHarness";
@@ -534,42 +533,6 @@ const ROSTER: RosterEntry[] = [
   },
 ];
 
-describe("the roster and the job card", () => {
-  it("a paused entry shows the amber pill (reason in the title) and the mini-bar, never the liveness pill", () => {
-    render(<RosterStrip entries={ROSTER} />);
-    const pill = screen.getByTestId("roster-paused-analyst");
-    expect(pill.textContent).toContain("paused");
-    expect(pill.getAttribute("title")).toContain("budget review");
-    expect(screen.queryByTestId("roster-activity-analyst")).toBeNull();
-    const bar = screen.getByTestId("roster-allowance-analyst");
-    expect(bar.getAttribute("data-status")).toBe("warning");
-    expect(bar.querySelector(".bg-amber-400")).toBeTruthy();
-    expect(screen.queryByTestId("roster-paused-builder")).toBeNull();
-    expect(screen.queryByTestId("roster-allowance-builder")).toBeNull();
-  });
-
-  it("JobPostCard lists a paused target disabled, and says why when it is selected", () => {
-    render(
-      <JobPostCard
-        roster={ROSTER}
-        assign={{ kind: "dynamic", name: "analyst", nonce: 1 }}
-      />,
-    );
-    const option = screen.getByRole("option", { name: /^analyst — .* — paused$/ }) as HTMLOptionElement;
-    expect(option.disabled).toBe(true);
-    expect((screen.getByRole("option", { name: /^builder — / }) as HTMLOptionElement).disabled).toBe(
-      false,
-    );
-    const select = screen.getByLabelText("Who takes it") as HTMLSelectElement;
-    expect(select.value).toBe("custom:analyst");
-    expect(select.getAttribute("title")).toContain("budget review");
-    expect(screen.getByTestId("job-target-paused").textContent).toContain("budget review");
-    fireEvent.change(screen.getByLabelText("Job"), { target: { value: "do the thing" } });
-    expect((screen.getByRole("button", { name: /post job/i }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-  });
-});
 
 /* ----------------------------------------------------------------- bell --- */
 

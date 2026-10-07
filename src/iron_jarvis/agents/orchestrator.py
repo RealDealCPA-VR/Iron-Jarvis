@@ -995,6 +995,57 @@ class Orchestrator:
         tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
         return tools, derive_outcome(result, status)
 
+    async def settle_child(self, child_session: Session, run: AgentRun) -> None:
+        """Finalize a DELEGATED / SPAWNED child's row on its success path
+        (v1.307.0) — the same settle ``run_session`` gives a solo run.
+
+        ``delegate`` and ``spawn_agent`` await ``AgentRuntime.run`` directly
+        and used to copy status/tokens/summary onto the row by hand. That copy
+        skipped the finalize contract every other path keeps (v1.227.0, A5/A8):
+        the child's worklist claims stayed ``doing`` until the 15-minute stale
+        window (a team's next worker was told those items were "being worked
+        on right now"), no ``outcome`` verdict was derived, the create-time
+        folder note was overwritten, and a result claiming a file nothing wrote
+        went unchecked. One helper, both doors. Never raises past the save: a
+        ledger hiccup costs the verdict, never the delegation.
+        """
+        child_session.status = (
+            SessionStatus.COMPLETED
+            if run.state is AgentState.COMPLETED
+            else SessionStatus.FAILED
+        )
+        child_session.provider, child_session.model = run.provider, run.model
+        # The child's spend lands on ITS row (v1.295.0): the allowance ledger
+        # sums Session tokens by roster name, exactly as run_session stamps them.
+        child_session.input_tokens = run.input_tokens
+        child_session.output_tokens = run.output_tokens
+        # v1.300.0: and its DOLLARS — the runtime already added each step to the
+        # session object it ran with; the run's figure covers a row loaded
+        # separately. The larger of the two, never a sum (no double count).
+        child_session.cost_usd = max(
+            float(getattr(child_session, "cost_usd", 0.0) or 0.0),
+            float(getattr(run, "cost_usd", 0.0) or 0.0),
+        )
+        prior = child_session.summary
+        child_session.summary = _with_folder_note(prior, run.result)
+        try:
+            from ..daemon.chat_turn import _claimed_write_note
+
+            tools_used, outcome = await asyncio.to_thread(
+                self._settle_finished_run,
+                child_session,
+                getattr(run, "id", None),
+                child_session.status,
+            )
+            note = _claimed_write_note(run.result or "", tools_used)
+            if note:
+                child_session.summary = _with_folder_note(prior, f"{run.result}{note}")
+            child_session.outcome = outcome
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a delegation
+            log.exception("child settle failed for %s", child_session.id)
+        child_session.finished_at = utcnow()
+        self._save(child_session)
+
     def _post_run_learning(self, session: Session) -> None:
         """Post-run learning pipeline: score -> record outcome -> reflect.
 

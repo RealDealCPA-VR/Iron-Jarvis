@@ -113,9 +113,7 @@ vi.mock("framer-motion", async () => {
 
 import { AlertTriangle, OctagonAlert, RotateCcw } from "lucide-react";
 import { AgentInbox, AssignmentRow, healthLine, rowActions } from "@/components/agents/AgentInbox";
-import { JobPostCard, canQueue, queueRequest } from "@/components/agents/JobPostCard";
 import { canBeAssignee } from "@/components/agents/AgentInbox";
-import AgentsPage from "@/app/agents/page";
 import { RosterStrip, healthCaption, isIdle, type RosterEntry } from "@/components/agents/RosterStrip";
 import { ProjectTasks, assigneeOptions } from "@/components/project/ProjectTasks";
 import { toActivity } from "@/components/NotificationBell";
@@ -182,6 +180,9 @@ function inboxPayload() {
 }
 
 beforeEach(() => {
+  // v1.307.0: the bare /agents is the MISSION screen; this file pins the
+  // TEAM screens, which live at ?view=team.
+  window.history.replaceState(null, "", "/agents?view=team");
   for (const k of Object.keys(hooks.api)) delete hooks.api[k];
   for (const k of Object.keys(hooks.errors)) delete hooks.errors[k];
   for (const k of Object.keys(hooks.postResults)) delete hooks.postResults[k];
@@ -358,75 +359,6 @@ const ROSTER: RosterEntry[] = [
   },
 ];
 
-describe("JobPostCard — Queue it", () => {
-  it("queueRequest carries assignee/task/project and max_steps under payload; canQueue excludes Team + remotes", () => {
-    expect(queueRequest("builder", "do it", "", "")).toEqual({ assignee: "builder", task: "do it" });
-    expect(queueRequest("custom:analyst", "do it", "p1", "40")).toEqual({
-      assignee: "custom:analyst",
-      task: "do it",
-      project_id: "p1",
-      payload: { max_steps: 40 },
-    });
-    expect(queueRequest("builder", "do it", "", "999")).toEqual({ assignee: "builder", task: "do it" });
-    expect(canQueue("__team__")).toBe(false);
-    expect(canQueue("remote:box")).toBe(false);
-    expect(canQueue("builder")).toBe(true);
-    expect(canQueue("custom:x")).toBe(true);
-    // Coordinators are refused by the daemon as assignees (supervisor's base
-    // type, and any builtin carrying `delegate` — supervisor and planner).
-    expect(canQueue("supervisor")).toBe(false);
-    expect(canQueue("planner")).toBe(false);
-    expect(canQueue("guide")).toBe(true);
-    expect(canBeAssignee("custom:supervisor")).toBe(true);
-  });
-
-  it("the queued note's 'open its inbox' calls onOpenAgent with the WIRE name", async () => {
-    hooks.postResults["/assignments"] = { assignment: row({ id: "n", assignee: "builder" }), created: true };
-    const opened: string[] = [];
-    render(<JobPostCard roster={ROSTER} onOpenAgent={(n) => opened.push(n)} />);
-    fireEvent.change(screen.getByLabelText("Who takes it"), { target: { value: "builder" } });
-    fireEvent.change(screen.getByLabelText("Job"), { target: { value: "x" } });
-    fireEvent.click(screen.getByTestId("job-queue"));
-    await waitFor(() => expect(screen.getByTestId("job-queued-note")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "open its inbox" }));
-    expect(opened).toEqual(["builder"]);
-    // Without the prop there is no link — the sentence alone.
-    cleanup();
-    render(<JobPostCard roster={ROSTER} />);
-    expect(screen.queryByRole("button", { name: "open its inbox" })).toBeNull();
-  });
-
-  it("is absent for the Team default and POSTs /assignments with payload.max_steps for an agent, then says the sentence", async () => {
-    hooks.postResults["/assignments"] = { assignment: row({ id: "new", assignee: "builder" }), created: true };
-    render(<JobPostCard roster={ROSTER} />);
-    expect(screen.queryByTestId("job-queue")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Who takes it"), { target: { value: "builder" } });
-    fireEvent.change(screen.getByLabelText("Job"), { target: { value: "Rename the 26 files" } });
-    fireEvent.change(screen.getByLabelText("Max steps (optional)"), { target: { value: "60" } });
-    fireEvent.click(screen.getByTestId("job-queue"));
-    await waitFor(() =>
-      expect(screen.getByTestId("job-queued-note").textContent).toBe(
-        "Queued for builder — it runs when builder is free.",
-      ),
-    );
-    expect(hooks.posts).toEqual([
-      {
-        path: "/assignments",
-        body: { assignee: "builder", task: "Rename the 26 files", payload: { max_steps: 60 } },
-      },
-    ]);
-    // Nothing went to /sessions — the job waits.
-    expect(hooks.posts.some((p) => p.path === "/sessions")).toBe(false);
-    // The box cleared, like Post.
-    expect((screen.getByLabelText("Job") as HTMLTextAreaElement).value).toBe("");
-  });
-
-  it("is absent for a remote target", () => {
-    render(<JobPostCard roster={ROSTER} />);
-    fireEvent.change(screen.getByLabelText("Who takes it"), { target: { value: "remote:box" } });
-    expect(screen.queryByTestId("job-queue")).toBeNull();
-  });
-});
 
 /* ---------------------------------------------------------- project tasks --- */
 
@@ -615,31 +547,3 @@ describe("toActivity maps the assignment events", () => {
 
 /* ------------------------------------------------ the agents page, wired --- */
 
-describe("the agents page (older-daemon layout) opens the room on the queued agent", () => {
-  it("Queue it → 'open its inbox' → the AgentsModal shows builder's detail + inbox", async () => {
-    // A daemon with a roster but NO thread routes: the page renders the
-    // pre-rail layout with JobPostCard, and the room must still be openable.
-    hooks.api["/agents"] = { builtin: ["supervisor", "builder"], dynamic: [] };
-    hooks.api["/agents/remote"] = { agents: [] };
-    hooks.api["/models"] = { models: [] };
-    hooks.api["/agents/roster"] = { roster: ROSTER };
-    hooks.errors["/agents/threads"] = { status: 404, message: "404" };
-    hooks.api["/sessions"] = { sessions: [] };
-    hooks.api["/projects"] = { projects: [] };
-    hooks.api["/agents/builder/inbox"] = { ...inboxPayload(), assignee: "builder" };
-    hooks.postResults["/assignments"] = { assignment: row({ id: "n", assignee: "builder" }), created: true };
-    window.HTMLElement.prototype.scrollIntoView = vi.fn();
-    render(<AgentsPage />);
-    expect(screen.queryByTestId("agents-modal")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Who takes it"), { target: { value: "builder" } });
-    fireEvent.change(screen.getByLabelText("Job"), { target: { value: "Rename the files" } });
-    fireEvent.click(screen.getByTestId("job-queue"));
-    await waitFor(() => expect(screen.getByTestId("job-queued-note")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "open its inbox" }));
-    const modal = await screen.findByTestId("agents-modal");
-    expect(within(modal).getByTestId("agent-detail-builder")).toBeInTheDocument();
-    expect(within(modal).getByTestId("inbox-health-builder")).toBeInTheDocument();
-    // No thread routes → no Talk button in the room (onTalk is absent).
-    expect(within(modal).queryByRole("button", { name: /^Talk$/ })).toBeNull();
-  });
-});

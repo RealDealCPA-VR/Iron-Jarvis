@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.306.0 (2026-10-04).*
+holds itself to. Current as of v1.308.0 (2026-10-04).*
 
 ---
 
@@ -206,37 +206,50 @@ Chat is where most work happens, and it is wired into everything:
   "Completed · needs you") now keep their own case.
 
 ### Agents & jobs
-**Project worlds and the table (v1.304.0).** The Agents page opens on your
-**worlds**: one card per active project with its team's faces (a status dot on
-each: working, paused, offline, ready), what is waiting on you, what is running
-and what got done this week — plus **General** for rooms that belong to no
-project. Step into a project and its **round table** fills the screen: the team
-sits around a real table, each with a large portrait and a ring that shows what
-they are doing; whoever is speaking leans in. Click a seat to open that agent on
-a big portrait (give work, change the face, see its inbox — work given from
-there lands in this project). Beside the table: **Board** (this project's work),
-**Waiting on you** (questions a job is paused on, blocked work, work that stopped
-for your answer or was cut off by a restart), **Completed**, and **New task**
-(give it to one teammate, or to the whole team and let Jarvis decide). **Edit
-team** picks who sits at the table — Jarvis suggests agents that already worked
-on the project; saving the team re-seats the table. What a project room keeps
-private: the project's instructions and files reach only the agents at its own
-table; an agent on another computer sees only what you type there, never the
-project's files or the other agents' replies; an agent without its own model runs
-on the project's model when the project has one; and when the project runs on a
-local model, an agent set to a different provider is not given the project's files
-or the other agents' replies (its reply says so).
-- **Post a job** on the Agents page: default target **"Team"** runs a
-  supervisor that plans and delegates to specialist agents *in parallel*
-  (builder, researcher, reviewer, and your custom agents; a remote agent is
-  reached through an honest supervisor bridge). Origin-tagged `job:agents`.
-- **Roster**: who can take work, with measured success stats. "Give work"
-  posts a job at a specific agent; "Talk" opens a conversation instead.
-- **Round table**: persistent multi-agent conversation threads — panelists
-  answer in turn and see each other. A round is talk (no tools); **Give it to
-  builder** starts a real session, carries the thread's recent conversation
-  with the job, and shows the finished job's files under the receipt with
-  preview, open and download (v1.284.0).
+**One objective, the whole team (v1.307.0; the only way since v1.308.0).**
+The Agents page opens on **New task**: type one objective ("research our three
+competitors and write a strategy report"), optionally pick a project, and press
+Start. You don't pick agents — Jarvis splits the work and hands each part to the
+right teammate. The screen has three parts. In the **centre** is your objective
+and, under it, the **result** as it is written — **Report** (rendered),
+**Markdown** (the same text, raw, to copy) and **Preview** (the files the team
+created, opened in the document viewer). While the team works, the centre shows
+the draft being written right now and says whose it is; when the team finishes,
+it shows Jarvis's finished answer, which is the work product itself rather than
+a summary of who did what. On the **right**, one compact card per teammate shows
+its role, what it was handed, and its progress. Click a card for detail: its
+latest action, what it reported, its files, and a link to the full run. **A bar
+shows a percentage only when something is counted** (done is 100%, not started
+is 0%, a planned run counts its finished steps). A teammate working with nothing
+counted shows a moving stripe and what it is doing ("Working · step 3"), never an
+invented number. Below the result, **Live activity** is the team's work as a
+plain-words log ("Researcher read k1.pdf", "Jarvis gave Writer a task: draft the
+strategy"). If Jarvis needs your OK for a tool, the question appears under your
+objective with Allow once / Allow for this task / Decline, and nothing runs until
+you answer. **Stop** ends the whole objective. Your recent objectives are listed
+under New task, and **Your projects** below them open a project's own screen.
+
+**A project's screen (v1.308.0).** Open a project (from Your projects, or by
+picking it when you start an objective) and the same screen belongs to it: its
+objectives run in the project's context and folder, and **only the project's
+team does the work** — the right column lists the team, and **Edit team** (or
+**Pick a team**) chooses it; Jarvis suggests agents that already worked on the
+project. With no team picked, Jarvis chooses from all your agents. Under the
+composer: **Board** (the project's work), **Waiting on you** (questions a job is
+paused on, blocked work, work cut off by a restart) and **Completed**. An agent
+on another computer that is on the team receives only the task Jarvis hands it —
+never the project's files or the other agents' work.
+
+**Your team (v1.308.0).** The left rail's **Agents** row opens every agent you
+have — built-in, yours and remote — each with its portrait and face, its inbox,
+and (for agents you made) its folder and coach, plus **New & manage** to create
+an agent or connect one running on another computer. Work is not handed out
+here: you give Jarvis an objective and it picks.
+
+**The round table is gone (v1.308.0).** Old links to a round-table conversation
+open it read-only, exactly as it was. To talk with one agent, @-mention it in
+chat (that works as before). "Ask the Guide" on the Help page puts your question
+into chat as `@guide …`, ready to send.
 - **Custom agents**: author your own (name, prompt, tool list, pinned
   provider/model). **Remote agents**: register an agent running elsewhere
   (URL + bearer token, encrypted at rest; edits never eat the credential).
@@ -1134,8 +1147,8 @@ and Jarvis mints a token for that agent, shows it once with the address to
 post to, and from then on the agent's progress lines, questions, results and
 files arrive in the conversation it belongs to: as attributed lines in the
 chat (a quiet one-liner for progress, a normal reply for a question or a
-result, files in the Files rail with preview and download), on the Agents
-page's round table, and — when the conversation is one you are having from
+result, files in the Files rail with preview and download), and — when the
+conversation is one you are having from
 your phone — on your phone, named ("hermes: Done — 3 files."). **Rotate
 token** mints a new one and the old stops working; **Turn off message-back**
 forgets it, and disabling the agent silences it in both directions. One
@@ -1462,12 +1475,11 @@ now it stops while you are not looking and catches up the moment you come back.
 
 ## Ask the Guide
 
-The **Guide** is a built-in agent — it sits in the roster on the Agents page
-beside the builder, researcher and the rest — and it is the expert on Iron
-Jarvis itself. **Talk** to it there (or use the **Ask the Guide** box at the
-top of the Help page, which opens that conversation with your question ready
-to send), **Give work** to it for a longer lookup, or run a session as the
-*guide* agent. It starts every session knowing what the app is and how your
+The **Guide** is a built-in agent — it is on your team beside the builder,
+researcher and the rest — and it is the expert on Iron Jarvis itself. Ask it
+in chat with **@guide** (the **Ask the Guide** box at the top of the Help page
+puts your question into chat that way, ready to send), or run a session as the
+*guide* agent for a longer lookup. It starts every session knowing what the app is and how your
 install is set up, and it looks the rest up with its own tools: the reference
 (this Handbook, the other guides, the vocabulary and product reference, and
 live catalogs of your install — version, connected models, tools, skills, and
@@ -1661,7 +1673,7 @@ refuses in plain words — the Run button, a schedule, a teammate delegating to
 it, the Give-work card — rather than silently running it as a plain builder.
 **Pause** any agent yourself with a reason (a day off); **Resume** brings it
 back, and raising the allowance of an agent that was paused for running out
-brings it back on its own. The phone, the round table and a teammate's
+brings it back on its own. The phone, a chat @-mention and a teammate's
 `consult` all answer with the same sentence for a paused agent. Nothing else changes: a paused agent keeps its memory, its face and its
 history. When a run is served by the Claude CLI, the agent's remaining dollar
 allowance is also handed to the CLI as its own hard budget for that run. Re-
@@ -1671,8 +1683,8 @@ creating an agent with a name that exists is refused — edit its row instead.
 one of yours): it sits in that agent's **inbox** until the agent is free, not
 paused and within its allowance, then runs as a normal session you can watch
 on the Sessions page and the project Board. Queue one from the Agents page
-("Queue it" on the Give-work card, or the Assign box inside an agent's
-detail), from a project's Tasks tab ("Assign to" — the project folder rides
+(the Assign box in an agent's inbox, under the rail's Agents row), from a
+project's Tasks tab ("Assign to" — the project folder rides
 along), or let an agent hand work to a teammate with the new `assign_work`
 tool (a manager delegating down the chart; two levels deep at most, twenty
 waiting per agent). An agent works one assignment at a time, highest priority

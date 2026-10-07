@@ -79,18 +79,18 @@ afterEach(() => {
 });
 
 describe("Ask the Guide (v1.223.0)", () => {
-  it("lands on the Agents page talking to the Guide, the question prefilled, never sent", () => {
+  it("lands in CHAT addressed to @guide, the question prefilled, never sent (v1.308.0)", () => {
     hooks.responses["/guide/status"] = STATUS;
     hooks.responses["/helpdocs"] = { docs: [] };
     render(<HelpPage />);
     const link = screen.getByTestId("ask-guide-link");
-    expect(link).toHaveAttribute("href", "/agents?talk=guide");
+    expect(link).toHaveAttribute("href", "/chat?ask=%40guide");
     fireEvent.change(screen.getByLabelText("Ask the Guide"), {
       target: { value: "How do updates install?" },
     });
     expect(link).toHaveAttribute(
       "href",
-      "/agents?talk=guide&ask=How%20do%20updates%20install%3F",
+      "/chat?ask=%40guide%20How%20do%20updates%20install%3F",
     );
   });
 
@@ -107,7 +107,7 @@ describe("Ask the Guide (v1.223.0)", () => {
     const box = screen.getByLabelText("Ask the Guide");
     fireEvent.change(box, { target: { value: "what is a memory base" } });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect(clicked).toEqual(["/agents?talk=guide&ask=what%20is%20a%20memory%20base"]);
+    expect(clicked).toEqual(["/chat?ask=%40guide%20what%20is%20a%20memory%20base"]);
   });
 
   it("says what the Guide knows, and names a missing doc rather than hiding it", () => {

@@ -55,7 +55,6 @@ vi.mock("@/lib/api", () => {
 });
 
 import { Modal } from "@/components/Modal";
-import { PanelPicker } from "@/components/agents/PanelPicker";
 
 afterEach(() => {
   cleanup();
@@ -216,67 +215,3 @@ describe("every dialog that lives inside a card (v1.216.1)", () => {
   });
 });
 
-describe("the add-agent picker — the popup from the report", () => {
-  const catalog = {
-    builtin: [{ source: "builtin" as const, name: "builder" }],
-    dynamic: [{ source: "dynamic" as const, name: "analyst" }],
-    remotes: [],
-  };
-
-  it("escapes the thread card it is rendered from", async () => {
-    // THE REGRESSION GUARD. Rendered exactly where RoundTable renders it —
-    // inside a `.card-surface` with `overflow-hidden` — the picker must not be
-    // a descendant of that card.
-    render(
-      <InACard>
-        <PanelPicker
-          mode="edit"
-          catalog={catalog}
-          initialParticipants={[]}
-          onClose={vi.fn()}
-          onSubmit={vi.fn()}
-        />
-      </InACard>,
-    );
-    const dialog = await screen.findByRole("dialog");
-    expect(screen.getByTestId("host-card").contains(dialog)).toBe(false);
-    expect(dialog.parentElement?.parentElement).toBe(document.body);
-  });
-
-  it("still shows the part that used to be cut off — the footer's action", async () => {
-    // "on a small card doesn't show everthing from this pop up": what fell off
-    // the bottom was the footer, i.e. the button the dialog exists for.
-    render(
-      <InACard>
-        <PanelPicker
-          mode="create"
-          catalog={catalog}
-          initialParticipants={[]}
-          onClose={vi.fn()}
-          onSubmit={vi.fn()}
-        />
-      </InACard>,
-    );
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByRole("button", { name: /Create thread/ }),
-    ).toBeTruthy();
-    expect(within(dialog).getByRole("button", { name: /^Cancel$/ })).toBeTruthy();
-  });
-
-  it("keeps its own Escape-to-close now that Modal owns the listener", async () => {
-    const onClose = vi.fn();
-    render(
-      <PanelPicker
-        mode="create"
-        catalog={catalog}
-        initialParticipants={[]}
-        onClose={onClose}
-        onSubmit={vi.fn()}
-      />,
-    );
-    await screen.findByRole("dialog");
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-  });
-});

@@ -496,7 +496,8 @@ def test_suggestions_stop_at_six(client):
     for i, name in enumerate(names):
         _add_session(platform, pid, agent_type=name, created=_now() - timedelta(hours=i + 1))
     sugg = client.get(f"/projects/{pid}/team").json()["suggestions"]
-    assert [s["name"] for s in sugg] == names[:6]
+    # v1.308.0: a coordinator (planner) is never suggested for a team.
+    assert [s["name"] for s in sugg] == [n for n in names if n != "planner"][:6]
 
 
 # --------------------------------------------------------------------------- #
@@ -968,11 +969,11 @@ def test_an_ambiguous_bare_name_is_refused_naming_both(client):
     r = client.put(f"/projects/{pid}/team", json={"members": ["custom:hermes", "remote:hermes"]})
     assert r.status_code == 200, r.text
     rows = {t["name"]: t for t in r.json()["team"]}
-    assert rows["remote:hermes"]["sees"] == "only your messages"
+    assert rows["remote:hermes"]["sees"] == "only the task Jarvis hands it"
     assert rows["custom:hermes"]["sees"] is None
     faces = client.get("/agents/worlds").json()["worlds"][0]["team"]
     assert {f["name"]: f["sees"] for f in faces} == {
-        "custom:hermes": None, "remote:hermes": "only your messages",
+        "custom:hermes": None, "remote:hermes": "only the task Jarvis hands it",
     }
 
 

@@ -29,8 +29,7 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
-from ..core.ids import utcnow
-from ..core.models import AgentState, AgentType, SessionStatus
+from ..core.models import AgentState, AgentType
 from ..tools.base import Tool, ToolContext, ToolResult
 from .roster import canonical_roster_name
 from .types import _DEFINITIONS
@@ -264,6 +263,7 @@ class SpawnAgentTool(Tool):
             inherited_trust,
             inherited_workspace_root,
         )
+        from . import team as _team
         from .runtime import AgentRuntime
         from .types import get_agent_definition
 
@@ -303,6 +303,18 @@ class SpawnAgentTool(Tool):
         #
         # A dynamic agent BASED on the supervisor type counts as a supervisor
         # even when its own stored tool list is empty.
+        # A PROJECT MISSION'S TEAM (v1.308.0): the same rule `delegate`
+        # applies — spawn is the other door the coordinator holds.
+        _caller = await asyncio.to_thread(
+            DelegateTool(self.platform)._caller_session, ctx.session_id
+        )
+        _project_team = _team.mission_team(_caller) if _caller is not None else []
+        if _project_team:
+            _who = canonical_roster_name(self.platform, agent_name)
+            if not _team.on_team(_project_team, _who):
+                return ToolResult(
+                    ok=False, output="", error=_team.off_team_refusal(_project_team, _who)
+                )
         if base_type is AgentType.SUPERVISOR:
             return ToolResult(
                 ok=False,
@@ -412,9 +424,18 @@ class SpawnAgentTool(Tool):
             # carries on and nothing surfaces the wedge. It would also leave
             # `delegation.started` with no `delegation.completed`.
             try:
-                run = await AgentRuntime(self.platform).run(
-                    child_session, definition, parent_id=ctx.agent_run_id
-                )
+                # v1.307.0: visibly working for its team + streamed to the team
+                # root (display only — agents/team.py), exactly as `delegate`.
+                with _team.working(
+                    self.platform,
+                    child_session.id,
+                    ctx.session_id,
+                    canonical_roster_name(self.platform, agent_name),
+                    task,
+                ):
+                    run = await AgentRuntime(self.platform).run(
+                        child_session, definition, parent_id=ctx.agent_run_id
+                    )
             except asyncio.CancelledError:
                 # A deadline is not the user (v1.288.0) — as in `delegate`.
                 by_deadline = tool_deadline_expired()
@@ -464,28 +485,9 @@ class SpawnAgentTool(Tool):
                     },
                 )
 
-            # Reflect the run's outcome onto the child session and persist it.
-            child_session.status = (
-                SessionStatus.COMPLETED
-                if run.state is AgentState.COMPLETED
-                else SessionStatus.FAILED
-            )
-            child_session.provider, child_session.model = run.provider, run.model
-            # The child's spend lands on ITS row (v1.295.0): the allowance
-            # ledger sums Session tokens by roster name, exactly as the solo
-            # run_session path stamps them.
-            child_session.input_tokens = run.input_tokens
-            child_session.output_tokens = run.output_tokens
-            # v1.300.0: and its DOLLARS — the runtime already added each step to
-            # the session object it ran with; the run's figure covers a row
-            # loaded separately. The larger of the two, never a sum (no double count).
-            child_session.cost_usd = max(
-                float(getattr(child_session, "cost_usd", 0.0) or 0.0),
-                float(getattr(run, "cost_usd", 0.0) or 0.0),
-            )
-            child_session.summary = run.result
-            child_session.finished_at = utcnow()
-            orch._save(child_session)
+            # Reflect the run's outcome onto the child session and persist it —
+            # the ONE child settle `delegate` uses too (v1.307.0).
+            await orch.settle_child(child_session, run)
 
             # Close the learning loop for the child: spawned work teaches the system
             # too (evaluate -> record outcome -> reflect). Best-effort so a learning

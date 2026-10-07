@@ -193,6 +193,21 @@ def inherited_approval_mode(raw: object) -> str:
     return mode if mode in SESSION_APPROVAL_MODES else "approve_for_me"
 
 
+#: The mission door's instruction (v1.307.0), appended only when the run's
+#: options carry ``deliverable: true`` (``POST /missions``). The user gave ONE
+#: objective and reads the final message FIRST, in the centre of the screen.
+MISSION_DELIVERABLE = (
+    "THIS RUN IS A MISSION. The user gave you ONE objective and your team does "
+    "the work; the user watches the team underneath, but what they read first "
+    "is your FINAL MESSAGE, shown as the deliverable. So when the team is "
+    "done, make your final message the finished work product itself — the "
+    "report, plan, comparison, analysis or draft, complete and in clean "
+    "Markdown with headings — not a description of who did what. Name any "
+    "files the team created. If part of the objective could not be done, say "
+    "so plainly in a short note at the end; never fill a gap with invented "
+    "content."
+)
+
 PAUSE_TIMEOUT_REASON = (
     "the approval request timed out: paused for the user and not answered in"
     " time — this call was NOT run. Do not retry it; continue with what does"
@@ -1583,6 +1598,14 @@ class AgentRuntime:
                 f"\n\nYour manager is {reports_to}. When you are blocked or finished, "
                 f"say so plainly — {reports_to} and the user read your result."
             )
+        # THE MISSION (v1.307.0): a run started from the Agents page's mission
+        # door (``options.deliverable``) is read DELIVERABLE-FIRST — its final
+        # message is what the user sees in the centre of the screen, so it must
+        # BE the work product, not a summary of who did what. Only that door
+        # sets the option; every other Team job is unchanged, and a delegated
+        # child never inherits it (options are not forwarded to children).
+        if _run_options.get("deliverable") is True:
+            system_prompt += "\n\n" + MISSION_DELIVERABLE
         # LOW TRUST FROM THE DOOR (v1.298.0): ONE sentence, and only when the
         # row says low at the start. A run lowered MID-run appends nothing —
         # the refusal on its next kept-away call is its signal, and a prompt
@@ -1649,8 +1672,18 @@ class AgentRuntime:
         if agent_def.type in (AgentType.SUPERVISOR, AgentType.PLANNER):
             try:
                 from .roster import roster_block
+                from .team import mission_team
 
-                _roster = roster_block(self.p)
+                # v1.308.0: a project MISSION lists only the project's team.
+                # `only=` is PASSED ONLY WHEN SET (the reasoning-knob rule): a
+                # stand-in roster_block without the parameter must keep working
+                # for every run that has no team.
+                _team_names = mission_team(session)
+                _roster = (
+                    roster_block(self.p, only=_team_names)
+                    if _team_names
+                    else roster_block(self.p)
+                )
                 if _roster:
                     system_prompt += "\n\n" + _roster
             except Exception:  # noqa: BLE001 — the roster must never break a run

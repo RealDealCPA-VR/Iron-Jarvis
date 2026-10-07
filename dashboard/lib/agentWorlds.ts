@@ -108,53 +108,6 @@ export interface TeamResponse {
 
 /* ------------------------------------------------------------- the URL --- */
 
-/** Which world the URL asks for. `auto` = no say: the page decides (the grid
- *  when there are project worlds, else General). */
-export type WorldRoute =
-  | { kind: "auto" }
-  /** `thread`: a room opened BY ID (`?thread=`) — the page asks the daemon
-   *  whose room it is before deciding it is General. */
-  | { kind: "general"; thread?: string }
-  /** `thread`: a specific project room (an older one, from a deep link);
-   *  absent = the project's own (most recent) room. */
-  | { kind: "project"; id: string; thread?: string };
-
-/** The query keys that already meant "the General room" before worlds
- *  existed — `?thread=` (palette), `?talk=`/`?ask=` (Help's Ask the Guide).
- *  They keep opening General, never the grid. */
-const GENERAL_DEEP_LINKS = ["thread", "talk", "ask"] as const;
-
-export function parseWorldRoute(search: string): WorldRoute {
-  let params: URLSearchParams;
-  try {
-    params = new URLSearchParams(search);
-  } catch {
-    return { kind: "auto" };
-  }
-  const project = (params.get("project") || "").trim();
-  const thread = (params.get("thread") || "").trim();
-  if (project) return thread ? { kind: "project", id: project, thread } : { kind: "project", id: project };
-  if (thread) return { kind: "general", thread };
-  if ((params.get("world") || "").trim() === "general") return { kind: "general" };
-  for (const k of GENERAL_DEEP_LINKS) {
-    if ((params.get(k) || "").trim()) return { kind: "general" };
-  }
-  return { kind: "auto" };
-}
-
-/** The shareable path for a world. `auto` is the bare page (the grid). */
-export function worldPath(route: WorldRoute): string {
-  if (route.kind === "project")
-    return `/agents?project=${encodeURIComponent(route.id)}${
-      route.thread ? `&thread=${encodeURIComponent(route.thread)}` : ""
-    }`;
-  if (route.kind === "general")
-    return route.thread
-      ? `/agents?thread=${encodeURIComponent(route.thread)}`
-      : "/agents?world=general";
-  return "/agents";
-}
-
 /* ---------------------------------------------------------- the shapes --- */
 
 function count(v: unknown): number {
@@ -196,18 +149,11 @@ export function countsLine(c: WorldCounts): string {
   return parts.length ? parts.join(" · ") : "Quiet — nothing running";
 }
 
-/** A thread row / GET /agents/threads/{id} → the project it belongs to, or
- *  "" for a General room (or an answer without the field: an older daemon). */
-export function threadProjectId(row: unknown): string {
-  if (!row || typeof row !== "object") return "";
-  const v = (row as Record<string, unknown>).project_id;
-  return typeof v === "string" ? v.trim() : "";
-}
 
 /** What a REMOTE agent at a project's table is shown — said where the team
  *  is chosen. The daemon's `sees` wins when it sends one. */
 export const REMOTE_SEES =
-  "Remote agents see only what you type here — never the project's files or the other agents' replies";
+  "Remote agents see only the task Jarvis hands them — never the project's files or the other agents' work";
 
 /* ----------------------------------------------------------- the team --- */
 
@@ -241,32 +187,6 @@ export function memberAvatar(m: WorldMember): string | null {
  *  `assignments.store.resolve_assignee`: supervisor + delegate-carrying). */
 const COORDINATORS = new Set(["supervisor", "planner"]);
 
-/**
- * "New task" assignee options for a world: ONLY the team, and only the
- * members the queue accepts (no remotes, no coordinators). The "" option —
- * "Whole team — Jarvis decides" — is the caller's, and means NO assignee:
- * the plain project task flow.
- */
-export function teamAssigneeChoices(
-  team: WorldMember[],
-): Array<{ value: string; label: string }> {
-  const out: Array<{ value: string; label: string }> = [];
-  const seen = new Set<string>();
-  for (const m of team) {
-    if (!m || typeof m.name !== "string" || !m.name) continue;
-    const src = memberSource(m);
-    if (src === "remote") continue;
-    const wire = src === "dynamic" ? `custom:${bareMemberName(m.name)}` : m.name;
-    if (src === "builtin" && COORDINATORS.has(wire)) continue;
-    if (seen.has(wire)) continue;
-    seen.add(wire);
-    out.push({
-      value: wire,
-      label: src === "dynamic" ? `${bareMemberName(wire)} — yours` : wire,
-    });
-  }
-  return out;
-}
 
 /** The wire names a PUT /projects/{id}/team sends, de-duplicated in order. */
 export function teamWireNames(team: WorldMember[]): string[] {
@@ -277,17 +197,6 @@ export function teamWireNames(team: WorldMember[]): string[] {
   return out;
 }
 
-/** POST /projects/{id}/world/room's answer ({thread_id, thread}) → the room
- *  id. `thread_id` is the contract; `id`/`thread.id` are read defensively. */
-export function roomIdOf(resp: unknown): string | null {
-  if (!resp || typeof resp !== "object") return null;
-  const r = resp as Record<string, unknown>;
-  if (typeof r.thread_id === "string" && r.thread_id) return r.thread_id;
-  if (typeof r.id === "string" && r.id) return r.id;
-  const t = r.thread as Record<string, unknown> | undefined;
-  if (t && typeof t.id === "string" && t.id) return t.id;
-  return null;
-}
 
 /* --------------------------------------------------- waiting / completed --- */
 

@@ -1,0 +1,247 @@
+"use client";
+
+// THE MISSION SCREEN (v1.307.0; v1.308.0 the ONLY way team work is given) —
+// the Agents page's front door, and each project's own screen.
+//
+// "One AI interface with a visible workforce behind it, rather than six
+// separate AI chats." The user gives Jarvis ONE objective; Jarvis (a
+// supervisor run, `POST /missions`) splits it and hands the parts to the team.
+//
+//   ┌ rail ┐┌──────────── objective + live result ────────────┐┌ team ┐
+//   │ New  ││ Report | Markdown | Preview                      ││ card │
+//   │ Chat ││                                                  ││ card │
+//   │ …    │└──────────────────────────────────────────────────┘└──────┘
+//   │      │┌──────────────── live activity ────────────────────────────┐
+//   └──────┘└───────────────────────────────────────────────────────────┘
+//
+// IN A PROJECT (`projectId`, v1.308.0 — what the project "world" with its
+// round table used to be): the objective runs in the project's context and
+// folder and only the project's TEAM takes the work (the daemon enforces it);
+// the right column shows that team with Edit team; under the composer sit the
+// project's Board / Waiting on you / Completed.
+//
+// Everything is read from the daemon (`/sessions/{id}/mission` + the
+// coordinator's stream, `/projects/{id}/world`) — the page invents no progress
+// and no lines of its own.
+
+import { useMemo } from "react";
+import { ArrowLeft } from "lucide-react";
+import AgentFace from "@/components/agents/AgentFace";
+import { useApi, usePolledApi } from "@/lib/useApi";
+import { useMission } from "@/lib/useMission";
+import { MISSION_TERMINAL, statusWord } from "@/lib/mission";
+import type { WorldDetail } from "@/lib/agentWorlds";
+import { AgentCards, ProgressBar } from "./AgentCards";
+import { LiveActivity } from "./LiveActivity";
+import { MissionComposer } from "./MissionComposer";
+import { MissionOutput } from "./MissionOutput";
+import { MissionRail, type RailTarget } from "./MissionRail";
+import { ProjectTeamPanel } from "./ProjectTeamPanel";
+import { ProjectTeams } from "./ProjectTeams";
+import { ProjectWork } from "./ProjectWork";
+
+interface RosterRow {
+  name: string;
+  kind?: string;
+  description?: string;
+  delegable?: boolean;
+  healthy?: boolean;
+}
+
+/** The team Jarvis can call on — shown on the front door with no mission. */
+function AvailableTeam() {
+  const { data } = useApi<{ roster?: RosterRow[] }>("/agents/roster");
+  const rows = useMemo(
+    () =>
+      (data?.roster ?? []).filter(
+        (r): r is RosterRow => Boolean(r) && typeof r.name === "string" && r.delegable !== false && r.healthy !== false,
+      ),
+    [data],
+  );
+  return (
+    <div data-testid="mission-available-team" className="space-y-2">
+      <p className="text-[12px] text-zinc-400">
+        Jarvis picks from these teammates. You don&apos;t have to choose — just say what you need.
+      </p>
+      <ul className="space-y-1.5">
+        {rows.slice(0, 12).map((r) => {
+          const label = r.name.includes(":") ? r.name.split(":").slice(1).join(":") : r.name;
+          return (
+            <li key={r.name} className="flex items-center gap-2.5">
+              <AgentFace name={r.name} size={24} title="" />
+              <div className="min-w-0">
+                <div className="truncate text-[12.5px] font-medium capitalize text-zinc-200">{label}</div>
+                {r.description && <div className="truncate text-[11px] text-zinc-500">{r.description}</div>}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+export function MissionScreen({
+  missionId,
+  projectId = "",
+  onOpen,
+  onNew,
+  onTeam,
+  onProject,
+}: {
+  /** The coordinator session on screen; "" = the New task composer. */
+  missionId: string;
+  /** v1.308.0: a project's mission screen ("" = the front door). */
+  projectId?: string;
+  onOpen: (id: string, projectId: string) => void;
+  onNew: () => void;
+  onTeam: () => void;
+  /** Open a project's mission screen ("" = the front door). */
+  onProject: (projectId: string) => void;
+}) {
+  const m = useMission(missionId || null);
+  const view = m.view;
+  const running = view !== null && !MISSION_TERMINAL.has(view.session.status);
+  const world = usePolledApi<WorldDetail>(
+    projectId ? `/projects/${encodeURIComponent(projectId)}/world` : null,
+    10000,
+  );
+  const projectName = world.data?.project?.name || "";
+  const team = Array.isArray(world.data?.team) ? world.data!.team : [];
+  const waiting = Array.isArray(world.data?.waiting) ? world.data!.waiting : [];
+  const completed = Array.isArray(world.data?.completed) ? world.data!.completed : [];
+
+  const onRail = (target: RailTarget) => (target === "new" ? onNew() : onTeam());
+
+  return (
+    <div
+      data-testid="mission-screen"
+      data-project={projectId || undefined}
+      className="grid grid-cols-1 gap-3 lg:grid-cols-[12.5rem_minmax(0,1fr)_19rem] lg:items-start"
+    >
+      <div className="lg:sticky lg:top-3 lg:row-span-3">
+        <MissionRail active={missionId || projectId ? null : "new"} onAction={onRail} />
+      </div>
+
+      {projectId && (
+        <div data-testid="mission-project-header" className="flex flex-wrap items-center gap-3 lg:col-span-2">
+          <button
+            type="button"
+            data-testid="mission-back"
+            onClick={() => (missionId ? onProject(projectId) : onProject(""))}
+            className="btn-ghost px-2.5 py-1 text-xs"
+          >
+            <ArrowLeft size={12} /> {missionId ? "This project" : "All objectives"}
+          </button>
+          <h1 className="text-[15px] font-semibold text-zinc-100">
+            {projectName || (world.error ? "Project" : "…")}
+          </h1>
+          <span className="text-[12px] text-zinc-500">project team</span>
+        </div>
+      )}
+
+      <div className="min-w-0 space-y-3">
+        {projectId && world.error && world.error.status === 404 ? (
+          <section data-testid="mission-project-missing" className="card-surface px-5 py-6 text-[13px] text-zinc-400">
+            This project no longer exists.{" "}
+            <button type="button" className="text-accent hover:underline" onClick={() => onProject("")}>
+              Back to all objectives
+            </button>
+          </section>
+        ) : !missionId ? (
+          <>
+            <MissionComposer
+              onStarted={onOpen}
+              onOpen={onOpen}
+              fixedProject={projectId}
+              projectName={projectName}
+            />
+            {projectId ? (
+              <ProjectWork key={projectId} projectId={projectId} waiting={waiting} completed={completed} />
+            ) : (
+              <ProjectTeams onOpen={onProject} />
+            )}
+          </>
+        ) : m.missing ? (
+          <section data-testid="mission-missing" className="card-surface px-5 py-6 text-[13px] text-zinc-400">
+            This objective no longer exists.{" "}
+            <button type="button" className="text-accent hover:underline" onClick={onNew}>
+              Start a new one
+            </button>
+          </section>
+        ) : (
+          <MissionOutput view={view} live={m.live} objective="" onChanged={m.reload} />
+        )}
+        {m.error && missionId && (
+          <p className="text-[12px] text-amber-300">
+            Can&apos;t reach the daemon right now — showing the last known state.
+          </p>
+        )}
+      </div>
+
+      <aside data-testid="mission-team" className="card-surface p-0 lg:sticky lg:top-3">
+        <header className="flex items-center justify-between border-b hairline px-4 py-2.5">
+          <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">Team</h2>
+          {view && view.progress.total > 0 && (
+            <span data-testid="mission-team-count" className="text-[11px] text-zinc-400">
+              {view.progress.done} of {view.progress.total} done
+            </span>
+          )}
+        </header>
+        <div className="space-y-3 px-3 py-3">
+          {!missionId ? (
+            projectId ? (
+              <ProjectTeamPanel
+                projectId={projectId}
+                projectName={projectName}
+                team={team}
+                onSaved={world.reload}
+              />
+            ) : (
+              <AvailableTeam />
+            )
+          ) : view ? (
+            <>
+              <div data-testid="mission-coordinator" className="flex items-center gap-2.5 px-1">
+                <AgentFace name="jarvis" size={28} mood={running ? "work" : "done"} title="" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold text-zinc-100">{view.coordinator.name}</div>
+                  <div className="text-[11px] text-zinc-400">
+                    {running ? "Coordinating the team" : statusWord(view.coordinator.status)}
+                  </div>
+                </div>
+              </div>
+              {view.deliverable.worklist && (
+                <div className="px-1">
+                  <div className="mb-1 text-[11px] text-zinc-400">
+                    {view.deliverable.worklist.done} of {view.deliverable.worklist.total} items done
+                  </div>
+                  <ProgressBar
+                    status={running ? "working" : "done"}
+                    progress={{
+                      pct: Math.floor(
+                        ((view.deliverable.worklist.done + view.deliverable.worklist.failed) * 100) /
+                          Math.max(1, view.deliverable.worklist.total),
+                      ),
+                      label: "items",
+                      basis: "worklist",
+                    }}
+                  />
+                </div>
+              )}
+              <AgentCards members={view.members} />
+            </>
+          ) : (
+            <p className="px-1 text-[12px] text-zinc-500">Loading the team…</p>
+          )}
+        </div>
+      </aside>
+
+      {missionId && !m.missing && (
+        <div className="min-w-0 lg:col-span-2 lg:col-start-2">
+          <LiveActivity lines={view?.activity ?? []} running={running || (m.loading && !view)} />
+        </div>
+      )}
+    </div>
+  );
+}

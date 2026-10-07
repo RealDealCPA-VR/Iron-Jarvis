@@ -113,7 +113,45 @@ export function useFaces(): { faces: FaceMap; supported: boolean; reload: () => 
   return { faces, supported, reload };
 }
 
-export function AgentsModal({
+type AgentsPanelProps = {
+  roster: RosterEntry[];
+  dynamic: DynamicAgentFull[];
+  remotes: RemoteAgentInfo[];
+  models: ModelOption[];
+  /** Who the PAGE is working with (kind + BARE name), or nobody. */
+  selected: { kind: AgentSource; name: string } | null;
+  initialTab?: AgentsTab;
+  onSelect: (kind: AgentSource, name: string, canWork: boolean) => void;
+  onTalk?: (kind: AgentSource, name: string) => void;
+  onAssign?: (kind: AgentSource, name: string) => void;
+  onAgentsChanged: () => void;
+  onRemotesChanged: () => void;
+  /** Present → a close (X) control; absent → the panel is a page section. */
+  onClose?: () => void;
+};
+
+/** The room as a DIALOG — the panel below inside the app's one Modal. */
+export function AgentsModal(props: AgentsPanelProps & { onClose: () => void }) {
+  return (
+    <Modal
+      label="Agents — who exists, and how they look"
+      onClose={props.onClose}
+      className="h-[88vh] w-full max-w-5xl"
+      testId="agents-modal"
+    >
+      <AgentsPanel {...props} />
+    </Modal>
+  );
+}
+
+/**
+ * The room's CONTENT (v1.308.0: lifted out of the dialog). The Agents page's
+ * "Your team" screen renders it inline — every agent, its portrait, face,
+ * inbox, folder and coach, and the create / connect surfaces — and the dialog
+ * above wraps the very same panel, so the two can never show an agent
+ * differently.
+ */
+export function AgentsPanel({
   roster,
   dynamic,
   remotes,
@@ -144,7 +182,7 @@ export function AgentsModal({
   onAssign?: (kind: AgentSource, name: string) => void;
   onAgentsChanged: () => void;
   onRemotesChanged: () => void;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const [tab, setTab] = useState<AgentsTab>(initialTab);
   const { faces, supported: facesSupported, reload: reloadFaces } = useFaces();
@@ -187,28 +225,27 @@ export function AgentsModal({
   );
 
   return (
-    <Modal
-      label="Agents — who exists, and how they look"
-      onClose={onClose}
-      className="h-[88vh] w-full max-w-5xl"
-      testId="agents-modal"
-    >
+    <div data-testid="agents-panel" className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b hairline px-4 py-3">
         <Users size={16} className="text-accent-soft/80" aria-hidden />
-        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">Agents</h2>
+        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
+          {onClose ? "Agents" : "Your team"}
+        </h2>
         <div role="tablist" aria-label="Agents" className="ml-3 flex items-center gap-1">
           {tabBtn("agents", <Sparkles size={12} aria-hidden />, "Roster")}
           {tabBtn("manage", <Settings2 size={12} aria-hidden />, "New & manage")}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          title="Close"
-          className="ml-auto rounded-lg p-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-        >
-          <X size={15} />
-        </button>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+            className="ml-auto rounded-lg p-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+          >
+            <X size={15} />
+          </button>
+        )}
       </header>
 
       {tab === "agents" ? (
@@ -362,7 +399,7 @@ export function AgentsModal({
           </div>
         </div>
       )}
-    </Modal>
+    </div>
   );
 }
 
@@ -568,72 +605,6 @@ export function AgentDetail({
       {entry.kind === "dynamic" && <AgentFiles name={bare} />}
       {entry.kind === "dynamic" && <AgentCoach name={bare} />}
     </div>
-  );
-}
-
-/**
- * ONE AGENT, opened from its SEAT at the round table (v1.304.0).
- *
- * The table's seats are doors: a click opens that agent in full — the hero
- * portrait, its status, Give work, its inbox, its folder — without leaving
- * the room or switching the open thread (the page's own room dialog would
- * select the agent's 1:1 thread on the way, which is the opposite of what a
- * click on someone at THIS table means). It is the same `AgentDetail` the
- * room renders, so the two can never show an agent differently.
- */
-export function AgentSeatModal({
-  entry,
-  onAssign,
-  onAgentsChanged,
-  onClose,
-  projectId,
-}: {
-  entry: RosterEntry;
-  /** The room's project (a project world): the inbox's "Assign work"
-   *  defaults to it instead of "No project". */
-  projectId?: string;
-  /** Aim the room's own composer at this agent. */
-  onAssign?: (kind: AgentSource, name: string) => void;
-  /** A portrait/face write landed — the caller refetches its roster. */
-  onAgentsChanged: () => void;
-  onClose: () => void;
-}) {
-  const { faces, supported, reload } = useFaces();
-  return (
-    <Modal
-      label={`${bareName(entry.name)} — at the table`}
-      onClose={onClose}
-      className="max-h-[88vh] w-full max-w-3xl"
-      testId="agent-seat-modal"
-    >
-      <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-2.5">
-        <Users size={15} className="text-accent-soft/80" aria-hidden />
-        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
-          At the table
-        </h2>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          title="Close"
-          className="ml-auto rounded-lg p-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-        >
-          <X size={15} />
-        </button>
-      </header>
-      <div className="min-h-0 overflow-y-auto p-5">
-        <AgentDetail
-          key={entry.name}
-          entry={entry}
-          faces={faces}
-          facesSupported={supported}
-          onAssign={onAssign}
-          onAgentsChanged={onAgentsChanged}
-          onFaceChanged={reload}
-          projectId={projectId}
-        />
-      </div>
-    </Modal>
   );
 }
 

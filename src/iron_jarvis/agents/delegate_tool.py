@@ -27,8 +27,7 @@ from typing import Any
 
 from ..core.db import session_scope
 from ..core.events import EventType
-from ..core.ids import utcnow
-from ..core.models import AgentRun, AgentState, AgentType, SessionStatus
+from ..core.models import AgentRun, AgentState, AgentType
 from ..tools.base import Tool, ToolContext, ToolResult
 from ..tools.registry import tool_deadline_expired
 
@@ -165,6 +164,19 @@ class DelegateTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
 
+    def _caller_session(self, session_id: str | None):
+        """The calling session's row, detached, or None. BLOCKING (one read)."""
+        if not session_id:
+            return None
+        try:
+            from ..core.models import Session
+
+            with session_scope(self.platform.engine) as db:
+                row = db.get(Session, session_id)
+                return Session(**row.model_dump()) if row is not None else None
+        except Exception:  # noqa: BLE001 — an unreadable caller has no team
+            return None
+
     def _delegation_depth(self, agent_run_id: str | None) -> int:
         """How deep the CALLER already is in the delegation chain (root = 0), by
         walking AgentRun.parent_id. Bounds the exponential fan-out of a
@@ -193,6 +205,7 @@ class DelegateTool(Tool):
             inherited_trust,
             inherited_workspace_root,
         )
+        from . import team as _team
         from .runtime import AgentRuntime
         from .types import get_agent_definition
 
@@ -248,6 +261,20 @@ class DelegateTool(Tool):
                 "this work' roster, or a builtin specialist "
                 "(builder/researcher/reviewer)",
             )
+
+        # A PROJECT MISSION'S TEAM (v1.308.0): the coordinator of a mission
+        # started in a project may hand work only to that project's team —
+        # the user picked it. Read off the CALLER's run options (the snapshot
+        # ``POST /missions`` took); every other caller has no team and is
+        # unrestricted. Checked before any session exists, local or remote.
+        _caller = await asyncio.to_thread(self._caller_session, ctx.session_id)
+        _project_team = _team.mission_team(_caller) if _caller is not None else []
+        if _project_team:
+            _who = entry.name if entry is not None else raw_type
+            if not _team.on_team(_project_team, _who):
+                return ToolResult(
+                    ok=False, output="", error=_team.off_team_refusal(_project_team, _who)
+                )
 
         if entry is not None and entry.kind == "remote":
             # Remote target: no local session — the existing remote ask path.
@@ -414,11 +441,17 @@ class DelegateTool(Tool):
             # refusing per the v1.162.0 no-mock rule) — never finalized, never
             # learned from, lying on the kanban board.
             try:
-                run = await AgentRuntime(self.platform).run(
-                    child_session,
-                    definition or get_agent_definition(child_session.agent_type),
-                    parent_id=ctx.agent_run_id,
-                )
+                # v1.307.0: the child is VISIBLY working for its team (roster
+                # liveness, the mission view's cards) and its stream mirrors to
+                # the team root — display only, see agents/team.py.
+                with _team.working(
+                    self.platform, child_session.id, ctx.session_id, target_name, task
+                ):
+                    run = await AgentRuntime(self.platform).run(
+                        child_session,
+                        definition or get_agent_definition(child_session.agent_type),
+                        parent_id=ctx.agent_run_id,
+                    )
             except asyncio.CancelledError:
                 # A DEADLINE IS NOT THE USER (v1.288.0): only when the
                 # registry's own deadline is what cancelled us do the words
@@ -478,28 +511,10 @@ class DelegateTool(Tool):
                     },
                 )
 
-            # Reflect the run's outcome onto the child session and persist it.
-            child_session.status = (
-                SessionStatus.COMPLETED
-                if run.state is AgentState.COMPLETED
-                else SessionStatus.FAILED
-            )
-            child_session.provider, child_session.model = run.provider, run.model
-            # The child's spend lands on ITS row (v1.295.0): the allowance
-            # ledger sums Session tokens by roster name, exactly as the solo
-            # run_session path stamps them.
-            child_session.input_tokens = run.input_tokens
-            child_session.output_tokens = run.output_tokens
-            # v1.300.0: and its DOLLARS — the runtime already added each step to
-            # the session object it ran with; the run's figure covers a row
-            # loaded separately. The larger of the two, never a sum (no double count).
-            child_session.cost_usd = max(
-                float(getattr(child_session, "cost_usd", 0.0) or 0.0),
-                float(getattr(run, "cost_usd", 0.0) or 0.0),
-            )
-            child_session.summary = run.result
-            child_session.finished_at = utcnow()
-            orch._save(child_session)
+            # Reflect the run's outcome onto the child session and persist it —
+            # through the ONE child settle (v1.307.0): status, spend, the
+            # worklist claims handed back, the honest outcome, the folder note.
+            await orch.settle_child(child_session, run)
 
             # Close the learning loop for the child: delegated work teaches the
             # system too (evaluate -> record outcome -> reflect). Best-effort so a

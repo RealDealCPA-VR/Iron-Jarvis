@@ -79,7 +79,11 @@ export function TeamEditor({
     (s) => s && typeof s.name === "string" && !onTeam.has(s.name),
   );
   const suggested = new Set(suggestions.map((s) => s.name));
-  const others = roster.filter((e) => !onTeam.has(e.name) && !suggested.has(e.name));
+  // v1.308.0: coordinators (supervisor, planner) cannot take a mission's
+  // delegated parts, so they are not offered for a team.
+  const others = roster.filter(
+    (e) => !onTeam.has(e.name) && !suggested.has(e.name) && e.delegable !== false,
+  );
 
   function add(m: WorldMember) {
     setDraft((cur) => {
@@ -129,8 +133,8 @@ export function TeamEditor({
         </h2>
         <p className="text-sm text-zinc-500">
           {mode === "build"
-            ? `Pick who sits at ${projectName ? `${projectName}'s` : "this project's"} round table. Jarvis suggests the agents that already worked here; an agent can sit on several teams.`
-            : "Add or remove faces. The round table seats whoever is on the team."}
+            ? `Pick who works on ${projectName ? `${projectName}'s` : "this project's"} objectives. Jarvis suggests the agents that already worked here; an agent can be on several teams.`
+            : "Add or remove agents. Jarvis hands this project's work only to its team."}
         </p>
       </header>
 
@@ -257,7 +261,7 @@ export function TeamEditor({
                         <span className="block text-sm text-zinc-200">{bareMemberName(e.name)}</span>
                         {e.kind === "remote" && (
                           <span className="block truncate text-xs text-zinc-500" title={REMOTE_SEES}>
-                            Sees only what you type here
+                            Sees only the task Jarvis hands it
                           </span>
                         )}
                         {e.description && (
@@ -275,8 +279,8 @@ export function TeamEditor({
           </div>
 
           <p data-testid="team-reseat-note" className="text-xs text-zinc-500">
-            Saving re-seats the round table: everyone on the team gets a seat, and anyone seated
-            in the room who is not on the team is removed from it.
+            The team applies to the next objective you start in this project — Jarvis hands
+            that work only to these agents.
           </p>
 
           {saveError && <ErrorNote>{saveError}</ErrorNote>}
@@ -298,7 +302,7 @@ export function TeamEditor({
                 <LoaderInline label="Saving…" />
               ) : (
                 <>
-                  <Check size={13} /> {mode === "build" ? "Seat the team" : "Save team"}
+                  <Check size={13} /> {mode === "build" ? "Save the team" : "Save team"}
                 </>
               )}
             </button>

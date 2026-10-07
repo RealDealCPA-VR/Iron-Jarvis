@@ -117,11 +117,18 @@ def with_worklist(base: AgentDefinition) -> AgentDefinition:
     prompt = base.system_prompt
     if WORKLIST_MARKER not in prompt:
         prompt += WORKLIST_PATTERN
+    # v1.307.0: the JOB CARD rides the copy too. v1.295.0 added ``skills`` and
+    # ``reports_to`` to the definition and this copy never learned them, so a
+    # custom agent handed a bulk task — and every scheduled run carrying the
+    # ``skills`` knob (``with_skills`` → ``run_session`` → here) — silently ran
+    # without its skills and without its manager sentence.
     return AgentDefinition(
         type=base.type,
         system_prompt=prompt,
         tools=tools,
         permission_overrides=dict(base.permission_overrides),
+        skills=list(getattr(base, "skills", None) or []),
+        reports_to=str(getattr(base, "reports_to", "") or ""),
     )
 
 
