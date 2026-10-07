@@ -197,6 +197,7 @@ import {
   type ContextUsage,
   useLiveText,
   type UseChatStream,
+  type PrepStep,
 } from "@/lib/useChatStream";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
@@ -205,7 +206,8 @@ import {
   useComposer,
   type ComposerStore,
 } from "@/lib/composerStore";
-import { canRetryWithDefault } from "@/lib/providerFallback";
+import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
+import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
@@ -478,6 +480,7 @@ interface ChatRequestMessage {
 type ChatRequestBody = {
   messages: ChatRequestMessage[];
   turn_id?: string; // v1.278.0: names the turn so /chat/turns/{id}/steer can reach it
+  granted_tools?: string[]; // v1.312.0 (W4-2): "Allow for this conversation" grants
   provider?: string;
   model?: string;
   persona?: string;
@@ -907,6 +910,11 @@ interface ThreadSetup {
    *  default ("approve_for_me") — the daemon stores nothing for the default
    *  so a stray string never reloads as a posture nobody picked. */
   approval_mode?: string;
+  /** v1.312.0 (W4-2): tools the user said "Allow for this conversation" to.
+   *  A GRANT, not an arming: sent as `granted_tools` on every turn, and the
+   *  daemon honours a name only when that turn armed it by some other path.
+   *  Uncapped — it holds no arming slot. */
+  granted_tools?: string[];
 }
 
 /** The three approval postures (v1.188.0). Order = the dropdown's order,
@@ -2336,6 +2344,15 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
+/** What the bubble says while the daemon prepares a turn (v1.312.0, W4-3) —
+ *  one per stage of the daemon's `phase` frame, in the user's terms. */
+const PREP_WORDS: Record<PrepStep, string> = {
+  recalling: "Recalling what’s relevant…",
+  reading_files: "Reading your files…",
+  summarizing: "Summarizing earlier conversation…",
+  choosing_tools: "Choosing tools…",
+};
+
 /**
  * The live reply bubble (v1.250.0, S-03).
  *
@@ -2379,9 +2396,15 @@ function LiveReply({
           {/* v1.246.0: WHAT it is waiting on, and for how long — a working
               turn and a stuck one used to show the same pulsing word. */}
           <span className="animate-pulse">
-            {stream.phase === "preparing" && stream.withFiles
-              ? "Reading your files…"
-              : "Thinking…"}
+            {/* v1.312.0 (W4-3): a current daemon NAMES each preparation
+                stage (a `phase` frame) — that wins. An older one sends
+                nothing until it has prepared, so the v1.246.0 inference
+                stays for it. */}
+            {stream.prepStep
+              ? PREP_WORDS[stream.prepStep]
+              : stream.phase === "preparing" && stream.withFiles
+                ? "Reading your files…"
+                : "Thinking…"}
           </span>
           <TurnClock since={stream.startedAt ?? null} />
         </span>
@@ -2451,6 +2474,10 @@ export default function ChatPage() {
   // Live per-provider availability (v1.165.0) — drives the preflight note
   // above the composer. 5s default keeps it in step with the topbar switcher.
   const health = useProviderHealth();
+  // v1.312.0: what the failed-turn row needs to know about the provider the
+  // turn ran on (the pick, else the default) — known down, or cooling down.
+  // Facts only; which model to use instead is the user's call.
+  const trouble = providerTrouble(choice, health);
   // The app's shared /health poll names the DEFAULT model (v1.232.0, audit
   // U8): the footer used to say "default model" while the title bar said
   // "brain (RTX)" — two words for one thing. Read, never polled here.
@@ -3084,6 +3111,17 @@ export default function ChatPage() {
   // synchronously so a grant is visible before React re-renders.
   const selectedToolsRef = useRef<string[]>(selectedTools);
   selectedToolsRef.current = selectedTools;
+  // v1.312.0 (W4-2): the conversation's GRANTS ("Allow for this
+  // conversation"), kept apart from the armed set. Arming alone could not
+  // hold one at the 6-tool cap, so the card's "stops asking here" silently
+  // failed on a busy thread. A ref, not state: nothing renders the list, and
+  // a grant made mid-turn must ride that turn's own save (the
+  // selectedToolsRef lesson). Lives exactly as long as the armed set does.
+  const grantedToolsRef = useRef<string[]>([]);
+  // The plain-words note when a grant could not ALSO be armed (the cap):
+  // the tool name, or null. Cleared by the next send, a dismiss, or leaving
+  // the conversation.
+  const [grantCapNote, setGrantCapNote] = useState<string | null>(null);
   // THREAD SETUP persistence guard: saves include a `setup` snapshot only once
   // it was restored from the open thread or the user actually armed/changed
   // something — a plain reply on a thread whose setup wasn't restored (older
@@ -3837,6 +3875,9 @@ export default function ChatPage() {
       // turn queues, or the grant lives only in live state and is gone when
       // the thread is reopened.
       tools: selectedToolsRef.current.slice(0, MAX_TOOLS),
+      // v1.312.0 (W4-2): via the ref for the same reason — a grant made on a
+      // card mid-turn must ride the save that turn queues. Uncapped.
+      granted_tools: [...grantedToolsRef.current],
       connectors: selectedConnectors.slice(0, MAX_CONNECTORS),
       // Via the ref, not the closure: queueSave runs at turn COMPLETION inside
       // the send's stale closure, and the docs merged during the turn
@@ -3874,8 +3915,22 @@ export default function ChatPage() {
    *      `setup: null` forever and the grant is gone on reopen, breaking the
    *      card's own "stops asking here" promise. */
   function armFromApproval(tool: string) {
+    // v1.312.0 (W4-2): the GRANT is recorded first and always — uncapped,
+    // sent on every turn, persisted with the setup. It never arms anything
+    // by itself (the daemon honours it only for a tool armed some other way),
+    // so arming below is still what keeps the tool AVAILABLE next turn.
+    const granted = !grantedToolsRef.current.includes(tool);
+    if (granted) grantedToolsRef.current = [...grantedToolsRef.current, tool];
     const prev = selectedToolsRef.current;
-    if (prev.includes(tool) || prev.length >= MAX_TOOLS) return;
+    if (prev.includes(tool) || prev.length >= MAX_TOOLS) {
+      // Already armed, or the cap: the grant stands either way. At the cap
+      // the tool cannot also be armed — that used to be a silent no-op, so
+      // the next turn asked again right after the user said yes. Say what
+      // happened and what to do instead.
+      if (!prev.includes(tool)) setGrantCapNote(tool);
+      if (granted) markSetupChanged();
+      return;
+    }
     selectedToolsRef.current = [...prev, tool];
     setSelectedTools(selectedToolsRef.current);
     markSetupChanged();
@@ -4097,6 +4152,8 @@ export default function ChatPage() {
   function resetThreadSetup() {
     selectedToolsRef.current = [];
     setSelectedTools([]); // armed tools are per-conversation
+    grantedToolsRef.current = []; // so are "this conversation" grants (v1.312.0)
+    setGrantCapNote(null);
     setSelectedConnectors([]); // so are connector toggles
     setActiveSkill("");
     // New chat returns to the user's DEFAULT posture (the localStorage one),
@@ -4138,6 +4195,11 @@ export default function ChatPage() {
         : [];
       selectedToolsRef.current = tools;
       setSelectedTools(tools);
+      // v1.312.0 (W4-2): the conversation's grants come back with it — a
+      // reopened thread must not re-ask what the user allowed here.
+      grantedToolsRef.current = Array.isArray(setup.granted_tools)
+        ? [...new Set(setup.granted_tools.filter((x) => typeof x === "string" && x))]
+        : [];
       setSelectedConnectors(
         Array.isArray(setup.connectors)
           ? setup.connectors
@@ -5519,6 +5581,12 @@ export default function ChatPage() {
       // The reply's playbook + armed tool loop (both sticky across turns).
       ...(activeSkill ? { skill: activeSkill } : {}),
       ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
+      // v1.312.0 (W4-2): this conversation's grants, uncapped, every turn.
+      // Via the ref (sends fire from stale closures). A grant only lifts the
+      // ask for a tool this turn arms some other way — it never arms one.
+      ...(grantedToolsRef.current.length
+        ? { granted_tools: [...grantedToolsRef.current] }
+        : {}),
       // Connector toggles: MCP tool groups armed server-side + memory grounding.
       ...(selectedConnectors.length
         ? { connectors: selectedConnectors.slice(0, MAX_CONNECTORS) }
@@ -5897,6 +5965,7 @@ export default function ChatPage() {
     pinnedRef.current = true; // a fresh turn always scrolls into view
     setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
+    setGrantCapNote(null); // read by now; this turn carries the grant regardless
     setChatBusy(true);
     ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
     // Files the user GAVE this turn join the rail up front (v1.166.0): "made
@@ -6547,6 +6616,12 @@ export default function ChatPage() {
       // re-ask for the grant the user made seconds earlier. Read ABOVE the
       // branch (v1.232.0, A6): the continue sends it too.
       const armedNow = selectedToolsRef.current;
+      // v1.312.0 (W4-2): "Allow for this conversation" grants made at the
+      // arming cap live only in grantedToolsRef — they ride the escalation
+      // too, or the run re-asks for what the user already allowed. Same
+      // consent, same effect: a session grant only lifts an ask, it never
+      // gives the run a tool its own tool set lacks.
+      const extraGrants = grantedToolsRef.current.filter((t) => !armedNow.includes(t));
       // THE POSTURE RIDES THE ESCALATION (v1.232.0, A7) — the same idiom as
       // the chat body: only the non-default is sent. The daemon never
       // inherits "yolo" (it lands as approve-for-me), so a yolo chat's
@@ -6562,8 +6637,8 @@ export default function ChatPage() {
           // AFTER the opener reached no later turn — the daemon unions this
           // with the session's stored grant, so a continue can widen but
           // never narrow what the earlier run was allowed.
-          ...(armedNow.length
-            ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
+          ...(armedNow.length || extraGrants.length
+            ? { allow_tools: armedNow.slice(0, MAX_TOOLS).concat(extraGrants) }
             : {}),
           ...posture,
         });
@@ -6586,8 +6661,8 @@ export default function ChatPage() {
                 wait: false,
                 // GRANTS RIDE THE ESCALATION (v1.187.0) — see the POST
                 // /sessions branch below for why this is the same consent.
-                ...(armedNow.length
-                  ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
+                ...(armedNow.length || extraGrants.length
+                  ? { allow_tools: armedNow.slice(0, MAX_TOOLS).concat(extraGrants) }
                   : {}),
                 ...posture,
                 // THE FOLDER RIDES TOO (v1.189.0) — see below.
@@ -6620,8 +6695,8 @@ export default function ChatPage() {
               // A base `deny` still holds — session grants never lift it.
               // Read from the ref (`armedNow`) so a grant made on THIS turn's
               // approval card rides too, not just ones armed before it began.
-              ...(armedNow.length
-                ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
+              ...(armedNow.length || extraGrants.length
+                ? { allow_tools: armedNow.slice(0, MAX_TOOLS).concat(extraGrants) }
                 : {}),
               ...posture,
               // THE FOLDER RIDES THE ESCALATION (v1.189.0). Chat's own tools
@@ -6904,6 +6979,15 @@ export default function ChatPage() {
     // stream.run()'s throw lands in a torn-down completeChat (no POST fallback).
     if (chatBusy && stream.streaming) {
       chatGenRef.current += 1;
+      // v1.312.0 (W4-3): tell the daemon too, by the turn's name. The daemon
+      // now prepares a turn INSIDE the open stream (recall, reading files, a
+      // summary) and checks Stop between steps — dropping the fetch alone
+      // left that work running for nobody. Best-effort and silent: a 404 (the
+      // turn already ended) or a dead daemon changes nothing the user sees,
+      // because the local stop below has already happened either way.
+      const stopId = turnIdRef.current;
+      if (stopId)
+        post(`/chat/turns/${encodeURIComponent(stopId)}/stop`).catch(() => {});
       stream.abort();
       tts.cancel(); // stop reading a reply the user just cut off
       // v1.250.0 (S-03): the live text lives in the stream's store now, and
@@ -6979,6 +7063,8 @@ export default function ChatPage() {
     } else {
       setSelectedTools([]);
     }
+    grantedToolsRef.current = []; // grants are per-conversation (v1.312.0)
+    setGrantCapNote(null);
     setSelectedConnectors([]); // connector toggles are per-conversation
     // New chat returns to the user's DEFAULT posture (the localStorage one),
     // not the previous thread's — a YOLO grant is per-conversation consent and
@@ -8135,6 +8221,35 @@ export default function ChatPage() {
                 </div>
               )}
 
+              {/* v1.312.0 (W4-2): "Allow for this conversation" at the
+                  6-tool cap. The grant is kept and sent every turn, but the
+                  tool could not also be armed — say so, and say how to keep
+                  it on hand, instead of the old silent no-op. At the cap the
+                  + picker's rows are disabled, so the way forward names the
+                  real path (free a slot first), and "won't ask again" is
+                  scoped to when the tool is in use: a grant never arms. */}
+              {grantCapNote && (
+                <div
+                  data-testid="grant-cap-note"
+                  className="flex items-center gap-2 border-t hairline px-3 py-2 text-[12px] text-zinc-400"
+                >
+                  <span className="min-w-0 flex-1">
+                    Allowed for this conversation — {grantCapNote} won&apos;t ask
+                    again here when it&apos;s in use. All {MAX_TOOLS} tool slots
+                    are in use: remove one, then add it from + to keep it
+                    available.
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={() => setGrantCapNote(null)}
+                    className="btn-ghost shrink-0 py-1 text-[12px]"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
               {(error || steerBack || (failedTurn && !busy)) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline p-3">
                   {steerBack && (
@@ -8162,15 +8277,24 @@ export default function ChatPage() {
                       This didn&apos;t get a reply.
                     </div>
                   )}
+                  {/* v1.312.0: while the provider this turn ran on is cooling
+                      down, a press could only be refused with the same words —
+                      so Retry says when it will work and counts down. When that
+                      provider (the pick, else the default) is known down or
+                      cooling, the button also offers "Choose another model…",
+                      which opens the model menu and nothing else: the page
+                      names no model and switches nothing (v1.162.0). */}
                   {failedTurn && !busy && (
-                    <button
-                      type="button"
-                      onClick={retryTurn}
-                      title="Re-send the last message"
-                      className="btn-ghost shrink-0 py-1.5 text-[13px]"
-                    >
-                      <RefreshCw size={14} /> Retry
-                    </button>
+                    <RetryTurnButton
+                      cooldownS={trouble.cooldownS}
+                      onRetry={retryTurn}
+                      provider={trouble.provider}
+                      down={trouble.down}
+                      onChooseModel={() => {
+                        setModelSub(null);
+                        setModelMenuOpen(true);
+                      }}
+                    />
                   )}
                   {/* v1.275.0: the page already knows the explicit pick's
                       provider is down and the default is up — one press,

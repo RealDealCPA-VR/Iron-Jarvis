@@ -292,6 +292,16 @@ class ChatBody(BaseModel):
     #: the serving model offers one (``providers.reasoning``); the route
     #: object reports what was applied.
     reasoning: str = ""
+    #: v1.312.0: the tools the user allowed "for this conversation" on an
+    #: approval card — the page keeps them in the thread setup and sends them
+    #: on every turn. A GRANT, never an arming: a name here is honoured for
+    #: THIS turn only when the turn armed or ask-armed it by some other path
+    #: (``chat_turn._conversation_grants``), so it skips the card and nothing
+    #: more. Uncapped on purpose — the 6-tool limit is about what the model is
+    #: SHOWN, and a grant shows the model nothing. Before this field the only
+    #: way to keep that answer was to arm the tool, which did nothing at all
+    #: once six tools were already in the composer.
+    granted_tools: list[str] = []
 
 
 class ChatCompactBody(BaseModel):

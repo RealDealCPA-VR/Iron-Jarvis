@@ -46,9 +46,11 @@ USAGE::
     TURNS.stop(body.turn_id)
 
 ``stream_chat_turn`` is a coroutine returning an async iterator, not an async
-generator: the prep raises ``HTTPException`` (400 empty messages, 404 unknown
-skill) and those must land before any response has begun, exactly as they did
-when it was the route body.
+generator: its EAGER checks (``routes/chat._eager_checks`` — 400 empty
+messages, 404 unknown skill) raise ``HTTPException`` and must land before any
+response has begun. Since v1.312.0 everything else (grounding, attachments,
+compaction, tool choice) runs INSIDE the stream, behind ``phase`` frames and
+Stop checks, so the response opens at once.
 """
 
 from __future__ import annotations

@@ -31,6 +31,18 @@ from iron_jarvis.learning import preferences as prefs
 from iron_jarvis.learning.engine import LearningEngine
 from iron_jarvis.learning.models import LessonRecord, lesson_status
 from iron_jarvis.providers.adapters.base import LLMResponse
+
+
+@pytest.fixture(autouse=True)
+def _a_generous_lookback_budget(monkeypatch):
+    """The look-back's 2 s budget (``TURN_BUDGET_S``) is the PRODUCT's bound
+    on how long a reply may wait for a suggestion — an absolute wall-clock
+    threshold, so on the loaded release runner a correct look-back sometimes
+    missed it and these CORRECTNESS tests read ``suggestion: None`` (v1.311.1's
+    gate: test_a_build_pane_line_counts_as_evidence_for_the_main_chat). The
+    tests here pin WHAT is suggested, not how fast; the one test about the
+    budget sets its own tiny value, which overrides this."""
+    monkeypatch.setattr(prefs, "TURN_BUDGET_S", 60.0)
 from iron_jarvis.providers.router import RouteResult
 from tests.test_chat_turn_stop_v1241 import _drive_stream
 

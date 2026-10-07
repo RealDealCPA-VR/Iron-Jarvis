@@ -4,7 +4,8 @@
  * preload exposes `window.ironjarvis.isDesktop`; there the daemon is
  * supervised (restart ladder), so both offline surfaces — the OfflineHint
  * card and the app-wide DaemonBanner — say the service is restarting and
- * point at tray -> Quit and relaunch. A browser tab keeps the CLI line.
+ * point at the tray (v1.312.0: its Restart Iron Jarvis item, no longer Quit and
+ * relaunch). A browser tab keeps the CLI line.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -79,7 +80,8 @@ describe("offline copy inside the desktop shell (v1.226.0)", () => {
     setDesktop(true);
     render(<OfflineHint detail="settings" />);
     expect(screen.getByText(/restarting its local service/)).toBeInTheDocument();
-    expect(screen.getByText(/tray → Quit and relaunch/)).toBeInTheDocument();
+    // v1.312.0: the tray's own Restart item (offered once restarts stop), never Quit (wave 4).
+    expect(screen.getByText(/Restart Iron Jarvis option will appear in the tray menu/)).toBeInTheDocument();
     expect(screen.queryByText(/uv run ironjarvis serve/)).toBeNull();
     // The per-page detail still rides along.
     expect(screen.getByText(/— settings/)).toBeInTheDocument();

@@ -243,7 +243,9 @@ def _compaction_enabled(d) -> bool:
         return True
 
 
-async def _apply_compaction(d, body, system: str, provider: str, model: str):
+async def _apply_compaction(
+    d, body, system: str, provider: str, model: str, *, on_summarize=None,
+):
     """Fill-level report, and the compaction that follows from it.
 
     Returns ``(system, messages, report)``. The report is what the CLIENT reads
@@ -255,6 +257,12 @@ async def _apply_compaction(d, body, system: str, provider: str, model: str):
     the FINISHED system prompt, because a summary that later joins that prompt
     changes both sides of the ratio; then any existing summary is applied; then
     the report is recomputed so the gauge reflects what will actually be sent.
+
+    ``on_summarize`` (v1.312.0) — an optional no-argument callable, called the
+    moment the automatic summary's MODEL CALL starts, and only then (a cached
+    summary, a window below the ceiling or no real model never call it). The
+    stream lane uses it to say "Summarizing earlier conversation…" exactly
+    when that is what the turn is waiting on, never as a guess.
     """
     from ..context import compaction as _C
     from ..context.budget import estimate_tokens
@@ -322,6 +330,13 @@ async def _apply_compaction(d, body, system: str, provider: str, model: str):
             complete = factory(provider, model) if factory is not None else None
         except Exception:  # noqa: BLE001 — no real model -> keep the recap
             complete = None
+        if complete is not None and on_summarize is not None:
+            _model_call = complete
+
+            async def complete(*a, **kw):  # noqa: F811 — the same call, announced
+                on_summarize()
+                return await _model_call(*a, **kw)
+
         if complete is not None:
             out = await _C.compact_messages(pairs, complete=complete, trigger="auto")
             if out.ok:
@@ -1463,6 +1478,47 @@ def chat_grant_scopes(project_id: Any) -> list[tuple[str, str]]:
     if pid:
         scopes.append(("project", pid))
     return scopes
+
+
+def _conversation_grants(registry: Any, granted: Any, turn_tools: Any) -> set[str]:
+    """The conversation grants (``ChatBody.granted_tools``) that apply to THIS
+    turn — each granted name the turn armed or ask-armed by some OTHER path,
+    plus that tool's ``perm_key()`` (grouped tools authorize on it).
+
+    THE SILENT FAILURE THIS PREVENTS (v1.312.0): "Allow for this conversation"
+    that does nothing. The page used to keep that answer by ARMING the tool,
+    and arming stops at six tools — on a busy thread the next turn asked
+    again, right after the user said yes. The page now sends the grants on
+    every turn, and both lanes read them through this ONE helper so the two
+    can never disagree about what a grant covers.
+
+    A GRANT NEVER ARMS. A name the turn did not arm is dropped here, so it
+    never reaches ``armed_grant``/``card_grants`` — and the caller must never
+    feed the result into ``armed``, ``ask_armed``, the tool specs or
+    ``allowed_names``. The registry's armed-set gate is what refuses a call to
+    a tool the model was not shown, and that gate is unchanged ("arming is
+    granting" read backwards: granting must not be arming). Blank and unknown
+    names are dropped; ``None`` or an empty list grants nothing.
+    MIRROR NOTE (lock-step): ``run_chat_turn`` and ``routes/chat.chat_stream``
+    both call this — edit both or neither.
+    """
+    if not granted:
+        return set()
+    turn = {str(t) for t in (turn_tools or ())}
+    out: set[str] = set()
+    for raw in granted:
+        name = str(raw or "").strip()
+        if not name or name not in turn:
+            continue
+        tool = registry.get(name)
+        if tool is None:
+            continue
+        out.add(name)
+        try:
+            out.add(tool.perm_key())
+        except Exception:  # noqa: BLE001 — the name alone still matches
+            pass
+    return out
 
 
 def _grant_store(platform: Any) -> Any:
@@ -4520,6 +4576,19 @@ async def run_chat_turn(
     # a deny before it reads the grant, but a grant list that names a denied
     # tool is a lie on the ledger). Full trust: identical to the old set.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # CONVERSATION GRANTS (v1.312.0) — the page's "Allow for this
+    # conversation" answers, honoured only for tools this turn ARMED (a grant
+    # never arms; ``allowed_names`` below stays ``set(armed)``). In this lane
+    # every armed tool is already its own grant, so this changes nothing a
+    # caller can see today; it is here so the two lanes read the field the
+    # same way and neither silently drops it. A low-trust deny is never
+    # granted back. MIRROR NOTE (lock-step): routes/chat.chat_stream.
+    armed_grant |= {
+        g for g in _conversation_grants(
+            d.platform.registry, getattr(body, "granted_tools", None), set(armed)
+        )
+        if overrides.get(g) != "deny"
+    }
     # (provider_choice/model_choice were resolved above the attachments —
     # budgets needed them early; the values are identical.)
     # Accumulate token usage + completion count ACROSS the (up to 4) tool

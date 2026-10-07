@@ -96,6 +96,11 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     // Settings → Maintenance → "Open logs folder". Resolves { ok, path,
     // error? }, or null when the main process refuses the sender.
     openLogs: () => ipcRenderer.invoke("shell:openLogs"),
+    // Restart ONLY the daemon (v1.312.0) — the offline banner's way forward
+    // once the supervisor has stopped restarting it. Never the dashboard (that
+    // would reload this page). Resolves true when a (re)spawn started, false
+    // when there was nothing to restart, null when the sender is refused.
+    restartDaemon: () => ipcRenderer.invoke("shell:restartDaemon"),
   },
   // Pop-out windows (v1.283.0): a module in its own window — on another screen
   // when the desk has one. `isPopout`/`path` say whether THIS window is one.

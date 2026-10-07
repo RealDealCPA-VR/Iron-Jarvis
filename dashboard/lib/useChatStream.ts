@@ -9,6 +9,8 @@
 //   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
 //   round     {"round":n,"steer"?:text}                       (steer: v1.278.0)
+//   phase     {"phase":"recalling"|"reading_files"|"summarizing"|"choosing_tools"}
+//                                                              (v1.312.0)
 //   done      {"reply","provider","model","tools_used","denied_tools","usage",
 //              "adapted": {model,changes}|null, "unread_steers"?: [text],
 //              ...}                                   (unread_steers: v1.287.0)
@@ -71,6 +73,11 @@ export type SSEEvent =
     }
   | { type: "meta"; provider: string; model: string }
   | { type: "round"; round: number; steer?: string }
+  /** v1.312.0 (W4-1/W4-3): the daemon now opens the response at once and
+   *  prepares the turn INSIDE it, naming each stage as it starts — before
+   *  the first token. Only the four known stages decode; anything else is
+   *  dropped, so a newer daemon's stage can never show a wrong word. */
+  | { type: "phase"; phase: PrepStep }
   | {
       type: "done";
       reply: string;
@@ -248,6 +255,20 @@ export interface ContextUsage {
 
 // -------------------------------------------------------------- frame decoding
 
+/** What a PREPARING turn is doing (v1.312.0): the daemon's `phase` frame. */
+export type PrepStep = "recalling" | "reading_files" | "summarizing" | "choosing_tools";
+
+const PREP_STEPS: readonly PrepStep[] = [
+  "recalling",
+  "reading_files",
+  "summarizing",
+  "choosing_tools",
+];
+
+function isPrepStep(v: unknown): v is PrepStep {
+  return typeof v === "string" && (PREP_STEPS as readonly string[]).includes(v);
+}
+
 function str(v: unknown): string {
   return v === undefined || v === null ? "" : String(v);
 }
@@ -320,6 +341,10 @@ export function sseEventFrom(
       if (typeof data.steer === "string" && data.steer) ev.steer = data.steer;
       return ev;
     }
+    case "phase":
+      // v1.312.0: whitelisted — an unknown or missing stage is no frame at
+      // all, exactly as an older client treats the whole event.
+      return isPrepStep(data.phase) ? { type: "phase", phase: data.phase } : null;
     case "done": {
       const ev: Extract<SSEEvent, { type: "done" }> = {
         type: "done",
@@ -454,7 +479,14 @@ export const STREAM_STALL_MS = 60_000;
 
 /** The daemon prepares a turn (reads the attachments, arms the tools) BEFORE
  *  it answers the request, so no bytes flow then. Past this, the preparation
- *  is stuck rather than slow (v1.246.0). */
+ *  is stuck rather than slow (v1.246.0).
+ *
+ *  v1.312.0: a current daemon opens the response at once and prepares INSIDE
+ *  it, heartbeat and `phase` frames included — so from the first byte the
+ *  60 s stall rule governs preparation, and this bound only ever fires on an
+ *  OLDER daemon that still answers after preparing. It stays long on purpose:
+ *  lowering it to the stall value would cut off that daemon's slow-but-alive
+ *  OCR of a big scan, which sends nothing at all until it is done. */
 export const STREAM_PREP_MS = 10 * 60_000;
 
 export function stallDetail(ms: number): string {
@@ -768,6 +800,11 @@ export interface UseChatStream {
   /** The running turn's request carried attachments — so `preparing` can
    *  honestly say it is reading them. */
   withFiles: boolean;
+  /** v1.312.0: the preparation stage the daemon last announced (a `phase`
+   *  frame), or null — none announced, or the model has started (a round,
+   *  token, tool call or approval ends preparation). Optional so a caller's
+   *  hand-built stream (a test double) need not carry it. */
+  prepStep?: PrepStep | null;
   /** When the running turn started (ms epoch), or null. */
   startedAt: number | null;
   /** When the running turn last produced a real frame (ms epoch), or null.
@@ -851,6 +888,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [phase, setPhase] = useState<TurnPhase | null>(null);
   const [withFiles, setWithFiles] = useState(false);
+  const [prepStep, setPrepStep] = useState<PrepStep | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -881,6 +919,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       const t0 = Date.now();
       setPhase("preparing");
       setWithFiles(carriesFiles(body));
+      setPrepStep(null);
       setStartedAt(t0);
       setLastEventAt(t0);
       const watch: StreamWatch = {
@@ -909,6 +948,11 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         )) {
           // A real frame moved the turn (keepalives never reach here).
           if (ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
+          // v1.312.0: anything but a stage name means preparation is over —
+          // the bubble's stage words must not outlive it. (A `meta` frame is
+          // routing, not progress; it leaves the words alone.)
+          if (ev.type !== "phase" && ev.type !== "meta" && ev.type !== "approval_resolved")
+            setPrepStep(null);
           switch (ev.type) {
             case "token":
               committed = true;
@@ -965,6 +1009,12 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               break;
             case "round":
               if (ev.steer) steered.push(ev.steer);
+              break;
+            case "phase":
+              // v1.312.0: the preparation stage the bubble names. Not work
+              // (nothing is billed before the model starts), so not
+              // `committed`: a turn that failed here may still fall back.
+              setPrepStep(ev.phase);
               break;
             case "done":
               done = {
@@ -1023,6 +1073,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         setApproval(null);
         if (!superseded) {
           setPhase(null);
+          setPrepStep(null);
           setStartedAt(null);
           setLastEventAt(null);
         }
@@ -1043,6 +1094,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     approval,
     phase,
     withFiles,
+    prepStep,
     startedAt,
     lastEventAt,
     run,

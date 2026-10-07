@@ -166,9 +166,9 @@ export function useRunStream(opts: UseRunStreamOptions = {}): UseRunStream {
         if (ev?.type === "tool_call") setTools((prev) => upsertTool(prev, ev));
       });
       // v1.149.0 — the run says what it is doing. Decoded here rather than via
-      // sseEventFrom: that decoder is SHARED with the chat lane, which has no
-      // phases, and widening its union for one consumer would make every chat
-      // switch carry a case it can never hit.
+      // sseEventFrom: an agent run's phases are its own vocabulary, distinct
+      // from the chat lane's preparation phases (v1.312.0, decoded by
+      // useChatStream), so this listener keeps its own shape.
       es.addEventListener("phase", (e) => {
         try {
           const d = JSON.parse((e as MessageEvent).data) as Record<string, unknown>;

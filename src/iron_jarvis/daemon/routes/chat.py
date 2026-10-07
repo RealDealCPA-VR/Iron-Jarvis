@@ -65,6 +65,7 @@ from ..chat_turn import (
     _low_trust_args,
     _low_trust_invoke_kwargs,
     chat_grant_scopes,
+    _conversation_grants,
     _grant_invoke_kwargs,
     _grant_covers,
     _can_always,
@@ -359,6 +360,10 @@ async def _bounded_frames(router, *, timeout_s: "float | None", **kwargs):
             pump.exception()  # retrieved: an error on the way out is not news
 
 
+#: What a preparation stage returns when Stop won its race (v1.312.0) — see
+#: ``chat_stream._prep_step``. Never a value any stage could return.
+_PREP_STOPPED = object()
+
 #: The frame :func:`_frames_until_stop` yields when Stop wins the race. It is
 #: never sent to anyone: the lane's per-frame stop check reads the handle's
 #: flag and ends the turn before any frame kind is looked at.
@@ -598,8 +603,10 @@ def _clean_setup(raw: Any) -> str:
     """Validate + compact a thread ``setup`` payload into its stored JSON.
 
     Keeps ONLY the known keys ({tools, connectors, documents, skill,
-    workspace_dir, provider, model}), correctly typed (the lists: strings,
-    capped at their live-turn maxima; the rest: strings); unknown keys and
+    workspace_dir, provider, model, approval_mode, reasoning,
+    granted_tools}), correctly typed (the lists: strings, capped at their
+    live-turn maxima — except granted_tools, which is uncapped; the rest:
+    strings); unknown keys and
     mistyped values are dropped rather than erroring. Returns "" when nothing
     valid remains, so ``has_setup`` stays an honest flag. ``documents`` are
     the conversation's generated files — persisted so their previews survive
@@ -645,6 +652,22 @@ def _clean_setup(raw: Any) -> str:
         level = normalize_level(level)
         if level:
             out["reasoning"] = level
+    # The conversation's GRANTS persist with the thread (v1.312.0). The page
+    # records "Allow for this conversation" here and sends it back as
+    # `ChatBody.granted_tools` on every turn; without this branch the
+    # whitelist dropped it (the v1.279.0 "reasoning" bug class) and the card
+    # asked again after a reopen. NOT capped at _MAX_ARMED_TOOLS: a grant is
+    # not an arming — the page records grants past the arming cap on purpose,
+    # and the server honours one only for a tool the turn armed some other
+    # way (`chat_turn._conversation_grants`). De-duplicated, order kept.
+    granted = raw.get("granted_tools")
+    if isinstance(granted, list):
+        kept: list[str] = []
+        for g in granted:
+            if isinstance(g, str) and g.strip() and g.strip() not in kept:
+                kept.append(g.strip())
+        if kept:
+            out["granted_tools"] = kept
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -1868,12 +1891,30 @@ async def stream_chat_turn(
     surface built on this may imply that it is.
 
     RETURNS an async iterator of SSE strings. It is a COROUTINE returning the
-    iterator, not an async generator, deliberately: the prep raises
-    ``HTTPException`` (400 empty messages, 404 unknown skill) and those must
-    land before any response has begun, exactly as they did when this was the
-    route body. An async generator would defer them until the first frame and
-    turn a clean 400 into a broken stream.
+    iterator, not an async generator, deliberately: the two EAGER checks
+    (:func:`_eager_checks` — 400 empty messages, 404 unknown skill) raise
+    ``HTTPException`` and those must land before any response has begun. An
+    async generator would defer them until the first frame and turn a clean
+    400 into a broken stream.
+
+    EVERYTHING ELSE RUNS INSIDE THE STREAM (v1.312.0). Grounding, reading the
+    attachments, an automatic compaction and choosing tools used to run here,
+    before the iterator was handed back, so nothing at all — no headers, no
+    heartbeat, no frame — reached the client until all of it was done, and
+    Stop could not reach any of it. The page waited up to ten minutes on a
+    wedged memory base, and a Stop pressed during a scanned PDF's OCR changed
+    nothing the daemon did. Now the iterator comes back after the eager
+    checks; the response (and its heartbeat) opens at once; each preparation
+    stage announces itself with an additive ``event: phase`` frame
+    (``recalling`` / ``reading_files`` / ``summarizing`` / ``choosing_tools``,
+    each only when that stage really runs); and a Stop ends the turn between
+    stages exactly as a round-top Stop ends it: no frame, no model call,
+    nothing billed. A NAMED turn's Stop (``POST /chat/turns/{id}/stop``, the
+    side panel's button) also abandons the slow stage it lands in — grounding,
+    the attachments' OCR, the automatic summary — instead of waiting it out;
+    a dropped connection cancels the stream wherever it is, as it always did.
     """
+    _eager_checks(platform, body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -1882,40 +1923,89 @@ async def stream_chat_turn(
         # it. The sidebar keeps passing its own socket-backed source.
         def steer_source() -> str:  # type: ignore[no-redef]
             return "\n".join(handle.take_steers())
+    # v1.312.0: chat_stream is an async GENERATOR now — calling it runs
+    # nothing, so it cannot raise here; the eager checks above already did,
+    # BEFORE the id was registered, so a refused turn never holds one.
+    inner = _honest_failures(chat_stream(
+        platform, personas, body, should_stop=should_stop,
+        steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
+        arm_family=arm_family, trust=trust, trust_reason=trust_reason,
+        suggest_preferences=suggest_preferences,
+    ))
     if handle is None:
-        # NO turn_id: byte-identical to the pre-v1.241.0 path — nothing
-        # registered, nothing to release, the generator handed back bare.
-        return await chat_stream(
-            platform, personas, body, should_stop=should_stop,
-            steer_source=steer_source, handle=None, tool_ceiling=tool_ceiling,
-            arm_family=arm_family, trust=trust, trust_reason=trust_reason,
-            suggest_preferences=suggest_preferences,
-        )
-    try:
-        inner = await chat_stream(
-            platform, personas, body, should_stop=should_stop,
-            steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
-            arm_family=arm_family, trust=trust, trust_reason=trust_reason,
-            suggest_preferences=suggest_preferences,
-        )
-    except BaseException:
-        # Prep can raise (400/404) before there is any generator to release
-        # it. A registered id whose turn never ran would stay "stoppable"
-        # forever and answer 200 to a stop that stopped nothing.
-        TURNS.release(turn_id, handle)
-        raise
+        # NO turn_id: nothing registered, nothing to release, the generator
+        # handed back bare — as before v1.241.0.
+        return inner
 
     async def _tracked():
         """The runner owns the pop: release in a ``finally``, so a stop
         arriving after the last frame is honestly a 404 rather than a success
-        against a turn that has moved on."""
+        against a turn that has moved on. Registered BEFORE the first frame,
+        so a Stop pressed during preparation finds the turn (v1.312.0)."""
         try:
-            async for chunk in inner:
-                yield chunk
+            async with contextlib.aclosing(inner):
+                async for chunk in inner:
+                    yield chunk
         finally:
             TURNS.release(turn_id, handle)
 
     return _tracked()
+
+
+def _eager_checks(platform, body) -> None:
+    """The two refusals that must land as STATUS CODES (v1.312.0).
+
+    Everything else the streaming lane prepares runs inside the stream, after
+    the response has opened (:func:`stream_chat_turn`). These two stay before
+    it because each is a request the turn cannot start from at all — and a
+    400/404 is the honest answer, where a 200 followed by an error frame would
+    tell an HTTP client the request was accepted. Both are cheap: a length and
+    a dictionary lookup, nothing that can wedge.
+    """
+    if not body.messages:
+        raise HTTPException(status_code=400, detail="messages is required")
+    _skill = (getattr(body, "skill", "") or "").strip()
+    if _skill and platform.skills.get(_skill) is None:
+        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+
+
+#: How a failure that escapes the lane BEFORE the answer started is worded
+#: (v1.312.0). Preparation reads, recalls and chooses; it never answers.
+_PREP_FAILED = (
+    "Iron Jarvis could not get ready to answer ({detail}). No answer was"
+    " started. Send your message again to retry."
+)
+
+
+async def _honest_failures(frames):
+    """``frames``, with a failure that escapes them turned into ONE ``error``
+    frame instead of a cut stream (v1.312.0).
+
+    Preparation used to run before the response opened, so a fault in it was
+    an ordinary HTTP 500. It now runs inside the stream
+    (:func:`stream_chat_turn`), where an exception would cut the connection
+    mid-body — the page's bare "stream error", the v1.246.0 rule broken (a
+    chat turn never ends empty). The loop's own failures were already error
+    frames; this catches what is left, and words a failure before the first
+    ``round`` as what it is — the answer never started. Stop and a dropped
+    connection are BaseException-shaped and pass through untouched.
+    """
+    started = False
+    try:
+        async with contextlib.aclosing(frames):
+            async for chunk in frames:
+                if not started and chunk.startswith("event: round" + chr(10)):
+                    started = True
+                yield chunk
+    except HTTPException as exc:
+        yield _sse("error", {"detail": str(exc.detail)})
+    except Exception as exc:  # noqa: BLE001 — an honest error, never a cut stream
+        log.warning("chat turn failed inside its stream", exc_info=True)
+        detail = _error_detail(exc)
+        yield _sse(
+            "error",
+            {"detail": detail if started else _PREP_FAILED.format(detail=detail)},
+        )
 
 
 async def chat_stream(
@@ -1935,8 +2025,15 @@ async def chat_stream(
     "the ``/chat/stream`` mirror in ``routes/chat.py``". The thin ASGI handler
     above is now ``chat_stream_route`` — it is a route, and this is the lane.
 
-    Callers use :func:`stream_chat_turn`, which owns the turn registry;
-    see it for the contract, the stop semantics and their honest limits.
+    Callers use :func:`stream_chat_turn`, which owns the turn registry and
+    runs the two eager checks; see it for the contract, the stop semantics and
+    their honest limits.
+
+    AN ASYNC GENERATOR SINCE v1.312.0. The preparation below used to run when
+    this was AWAITED, before any byte of the response existed; it now runs as
+    the stream's first frames, announcing each stage with a ``phase`` frame
+    and checking Stop between stages (see :func:`stream_chat_turn`). The prep
+    is still lexically HERE, in this function — the lock-step pins parse it.
     """
     from ...providers.adapters.base import LLMMessage
     from ...personas import PersonaStore
@@ -1951,8 +2048,8 @@ async def chat_stream(
     # attachments is part of what the user waited for).
     turn_started = _utcnow()
 
-    if not body.messages:
-        raise HTTPException(status_code=400, detail="messages is required")
+    # (The 400 for empty messages is `_eager_checks`, run by
+    # `stream_chat_turn` before this generator exists — v1.312.0.)
 
     async def _stop() -> bool:
         """Should this turn stop NOW? (v1.241.0.)
@@ -2010,9 +2107,60 @@ async def chat_stream(
             res = await res
         return str(res or "")
 
+    async def _prep_step(aw):
+        """Run ONE preparation stage, abandoned the moment the named turn is
+        stopped (v1.312.0). Returns the stage's result, or
+        :data:`_PREP_STOPPED` when Stop won.
+
+        THE SILENT FAILURE THIS PREVENTS: a Stop that waits for the slow part
+        to finish. Checking Stop BETWEEN stages ends the turn before the next
+        one starts, but the stages that take time — a remote memory base, the
+        page-by-page OCR of a scanned PDF through the vision model, the
+        automatic summary's model call — would each still run to the end.
+        Raced against :meth:`TurnHandle.wait_stopped` (the same race
+        :func:`_frames_until_stop` runs for the model's stream), the stage is
+        CANCELLED: an OCR stops between pages, a model call's stream closes.
+        Work already handed to a worker thread finishes on that thread and is
+        dropped (v1.228.0 — a cancelled await does not cancel the thread);
+        nothing it produced reaches the turn.
+
+        No handle (no ``turn_id``): nothing can name the turn, so the stage is
+        awaited in this task exactly as before; a dropped connection still
+        cancels it, because Starlette cancels the response on disconnect.
+        """
+        if handle is None:
+            return await aw
+        task = asyncio.ensure_future(aw)
+        stopped = asyncio.ensure_future(handle.wait_stopped())
+        try:
+            await asyncio.wait({task, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            task.cancel()
+            stopped.cancel()
+            raise
+        stopped.cancel()
+        if task.done():
+            # Finished first (or in the same tick as the Stop): its result is
+            # real; the caller's `_stop()` check right after decides.
+            return task.result()
+        task.cancel()
+        await asyncio.wait({task})
+        if not task.cancelled():
+            task.exception()  # retrieved: a failure on the way out is not news
+        return _PREP_STOPPED
+
     # ------------------------------------------------------------------ #
     # PREP — verbatim from chat_complete (kept in lock-step deliberately).
+    # Since v1.312.0 it runs INSIDE the stream: the response is already open
+    # (and its heartbeat running) while it works, each stage is announced
+    # with an additive `phase` frame, and a Stop ends the turn between
+    # stages exactly as the round-top check does — no frame, no model call,
+    # nothing billed (`_persist_once` has no completions to write).
     # ------------------------------------------------------------------ #
+    # FIRST, before any await: the client learns at once that the turn is
+    # alive and what it is doing. "recalling" covers the project, the memory
+    # fabric, lessons, connector memory and the roster (the grounding below).
+    yield _sse("phase", {"phase": "recalling"})
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
     # composed so short follow-ups inherit the conversation's subject (rule
@@ -2072,9 +2220,16 @@ async def chat_stream(
     # roster + saved workflows after the attachments and the "/" skill). THIS
     # is the lane the dashboard watches, so it is the lane whose "Thinking…"
     # the serial chain lengthened. MIRROR NOTE (lock-step): chat_turn.
-    _grounding = await _gather_grounding(
-        d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
-    )
+    # v1.312.0: raced against Stop (`_prep_step`) — a wedged remote memory
+    # base no longer holds a stopped turn.
+    async def _ground():
+        return await _gather_grounding(
+            d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+        )
+
+    _grounding = await _prep_step(_ground())
+    if _grounding is _PREP_STOPPED or await _stop():
+        return
     system += _grounding.before_attachments()
     conn_tools = _grounding.conn_tools
 
@@ -2099,7 +2254,13 @@ async def chat_stream(
     # indexed sections", half of a real tax folder — had to be fixed in
     # both; the copy in THIS lane is the one the dashboard runs, so a
     # single-lane fix is a fix the user never sees. Do not re-inline it.
-    images, attach_block = await _prepare_attachments(
+    # v1.312.0: "reading_files" ONLY when the turn carries attachments — the
+    # page says "Reading your files…" from this frame, and saying it on a
+    # plain "hello" would be the bubble lying about what the daemon does.
+    # Raced against Stop: a scanned PDF's OCR stops between pages.
+    if getattr(body, "attachments", None):
+        yield _sse("phase", {"phase": "reading_files"})
+    _attached = await _prep_step(_prepare_attachments(
         d, body,
         inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
         provider_choice=provider_choice, model_choice=model_choice,
@@ -2111,14 +2272,21 @@ async def chat_stream(
         project_root=(
             (resolved_proj.root or "") if resolved_proj is not None else ""
         ),
-    )
+    ))
+    if _attached is _PREP_STOPPED or await _stop():
+        return
+    images, attach_block = _attached
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
 
     if (body.skill or "").strip():
         sk = d.platform.skills.get(body.skill.strip())
         if sk is None:
-            raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+            # The 404 is `_eager_checks` (v1.312.0); a skill that vanished
+            # between that check and here (the registry repopulates in place)
+            # is said in the stream, in the same words.
+            yield _sse("error", {"detail": f"no such skill: {body.skill}"})
+            return
         # v1.298.0: an external-root or agent/proposal-made skill is SCANNED
         # (skills/framework.guarded_instructions — the inject rule); the
         # user's own and builtin skills ride verbatim. MIRROR NOTE (lock-step).
@@ -2174,9 +2342,58 @@ async def chat_stream(
 
     # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
     # copy of chat_turn's. MIRROR NOTE: edit both or neither.
-    system, _ctx_messages, context_report = await _apply_compaction(
-        d, body, system, provider_choice, model_choice
+    # v1.312.0: Stop is checked BEFORE the compaction — its automatic summary
+    # is a paid model call, the one a Stop pressed during grounding must
+    # never let start — and raced against it while it runs. "summarizing" is
+    # announced from INSIDE `_apply_compaction` (`on_summarize`), the moment
+    # the summary's model call starts and only then: a cached summary or a
+    # window below the ceiling says nothing.
+    if await _stop():
+        return
+    _summarizing = asyncio.Event()
+    _compaction = asyncio.ensure_future(_apply_compaction(
+        d, body, system, provider_choice, model_choice,
+        on_summarize=_summarizing.set,
+    ))
+    _said_summarizing = False
+    _summary_started = asyncio.ensure_future(_summarizing.wait())
+    _stop_wait = (
+        asyncio.ensure_future(handle.wait_stopped()) if handle is not None else None
     )
+    try:
+        while not _compaction.done():
+            _waits = {_compaction}
+            if not _summary_started.done():
+                _waits.add(_summary_started)
+            if _stop_wait is not None:
+                _waits.add(_stop_wait)
+            await asyncio.wait(_waits, return_when=asyncio.FIRST_COMPLETED)
+            if _stop_wait is not None and _stop_wait.done() and not _compaction.done():
+                # Stop during the summary: its model call is cancelled (the
+                # adapter closes its stream / kills a CLI) and nothing it
+                # wrote is cached or used.
+                _compaction.cancel()
+                await asyncio.wait({_compaction})
+                if not _compaction.cancelled():
+                    _compaction.exception()
+                return
+            if _summarizing.is_set() and not _said_summarizing:
+                _said_summarizing = True
+                yield _sse("phase", {"phase": "summarizing"})
+    except BaseException:
+        _compaction.cancel()
+        raise
+    finally:
+        for _w in (_summary_started, _stop_wait):
+            if _w is not None and not _w.done():
+                _w.cancel()
+    if _summarizing.is_set() and not _said_summarizing:
+        # A summary that ran and finished inside one wake-up: still said, in
+        # order, before "choosing_tools".
+        yield _sse("phase", {"phase": "summarizing"})
+    system, _ctx_messages, context_report = _compaction.result()
+    if await _stop():
+        return
     plan = _plan_context(
         d, body, system, provider_choice, model_choice, messages=_ctx_messages
     )
@@ -2240,6 +2457,9 @@ async def chat_stream(
         armed, auto_armed, ask_armed = [], [], []
         tool_specs = []
     else:
+        # v1.312.0: the last preparation stage — said, then done. A text-only
+        # pick arms nothing and so says nothing.
+        yield _sse("phase", {"phase": "choosing_tools"})
         # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
         # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
         # about a weak model facing a wide menu; explicit user tool picks
@@ -2581,6 +2801,26 @@ async def chat_stream(
         system += "\n\n" + LOW_TRUST_PROMPT
     # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # CONVERSATION GRANTS (v1.312.0) — "Allow for this conversation", sent by
+    # the page on every turn (`body.granted_tools`). Honoured ONLY for a tool
+    # this turn armed or ask-armed by another path, through the ONE helper
+    # both lanes call. It joins BOTH grant sets: `armed_grant`, so an
+    # ask-tier tool (shell) runs without its card, and `card_grants`, so
+    # strict mode does not re-card a write the user already allowed here.
+    # It NEVER joins `armed`/`ask_armed`/`tool_specs`/the registry's
+    # `allowed_names` — a granted tool nothing armed is still refused by the
+    # armed-set gate and never shown to the model. A low-trust deny is never
+    # granted back. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    _conv_grants = {
+        g for g in _conversation_grants(
+            d.platform.registry,
+            getattr(body, "granted_tools", None),
+            {*armed, *ask_armed},
+        )
+        if overrides.get(g) != "deny"
+    }
+    armed_grant |= _conv_grants
+    card_grants |= _conv_grants
     # (provider_choice/model_choice were resolved above the attachments.)
 
     # ------------------------------------------------------------------ #
@@ -3142,10 +3382,19 @@ async def chat_stream(
                         if _decision == "once":
                             _grant_extra = {tc.name, _perm_name}
                         elif _decision == "conversation":
-                            # Rest of THIS turn's rounds; the client
-                            # persists it for later turns by arming the
-                            # tool (the existing "+"-menu machinery — not
-                            # a second grant store). IN-PLACE update, not
+                            # Rest of THIS turn's rounds. For later turns
+                            # the client does TWO things (v1.312.0): it
+                            # arms the tool when the arming cap has room
+                            # (so it stays available) AND records the name
+                            # in the thread setup's `granted_tools`, which
+                            # it sends back as `body.granted_tools` — the
+                            # server honours that through
+                            # `_conversation_grants` for a tool the turn
+                            # armed some other way (a grant never arms).
+                            # Do not drop the field as redundant: arming
+                            # alone cannot stop strict mode re-carding, and
+                            # past the cap there is no arming at all.
+                            # IN-PLACE update, not
                             # `|=`: an augmented assignment would bind
                             # `armed_grant` as a LOCAL of this generator
                             # and unbind every earlier read of the
@@ -3682,6 +3931,9 @@ async def chat_stream(
             done_frame["unread_steers"] = unread_steers
         yield _sse("done", done_frame)
 
-    # The prep ran EAGERLY above (so a 400/404 still lands as a status code,
-    # not as a broken stream); the frames start when the caller iterates.
-    return gen()
+    # v1.312.0: the prep above ran AS the stream's first frames (the 400/404
+    # are `_eager_checks`, before the stream exists); the loop's frames follow
+    # here, and the loop is closed promptly however the caller leaves.
+    async with contextlib.aclosing(gen()) as _loop:
+        async for _chunk in _loop:
+            yield _chunk

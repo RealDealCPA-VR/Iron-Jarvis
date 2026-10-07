@@ -704,7 +704,7 @@ const RESTART_CAP_WINDOW_MS = 15 * 60 * 1000;
 // forever with no toast (audit D3): a second window counts deaths in a day.
 const DEATHS_DAY_MS = 24 * 60 * 60 * 1000;
 const DEATHS_DAY_TOAST_AT = 3;
-const _services = {}; // label -> { spawnFn, restarts, lastStart, fastDeaths, restartTimes, deaths, capped, restartTimer, restartSeq }
+const _services = {}; // label -> { spawnFn, restarts, lastStart, fastDeaths, restartTimes, deaths, capped, restartTimer, restartSeq, lastExit, damaged, cappedCrashes, cappedWindowMin, stalled }
 
 // Tray tooltip truth (audit D4): notifyCrashLoop/notifyWatchdogExhausted
 // wrote "restarting repeatedly" and nothing ever wrote "running" back. Each
@@ -734,6 +734,19 @@ function startService(label, spawnFn) {
   rec.spawnFn = spawnFn;
   rec.lastStart = Date.now();
   rec.adopted = false; // a child of our own is (being) started
+  // v1.312.0 review: `stalled` describes the CHILD the watchdog gave up on.
+  // A new spawn (the exit ladder respawning a stalled daemon that died on its
+  // own, or any restart) is not that child — left set, the banner said
+  // "automatic restarts are paused" over a daemon that WAS being restarted,
+  // and its Restart button would have killed the booting child.
+  if (rec.stalled) {
+    rec.stalled = false;
+    try {
+      refreshTrayMenu();
+    } catch {
+      /* the tray may not exist yet at first boot */
+    }
+  }
   const child = spawnFn();
   if (label === "daemon") daemonProc = child;
   else if (label === "dashboard") {
@@ -785,6 +798,10 @@ function startService(label, spawnFn) {
       startService(label, rec.spawnFn);
       return;
     }
+    // v1.312.0: the exit code of the last UNEXPECTED death, for the window's
+    // offline banner (`shellState().services`). Shutdown exits, exit 75 and a
+    // requested restart returned above — none of them is a crash.
+    rec.lastExit = code === undefined ? null : code;
     const uptime = now - rec.lastStart;
     if (uptime > 5 * 60 * 1000) {
       rec.restarts = 0; // ran healthy — reset the ladder
@@ -800,6 +817,10 @@ function startService(label, spawnFn) {
       const integrityResult = verifyInstallIntegrity();
       if (!integrityResult.ok) {
         fileLogger(label)(`[main] ${new Date(now).toISOString()} died ${rec.fastDeaths}x within ${FAST_DEATH_MS}ms of spawn and the install is damaged — offering repair\n`);
+        // v1.312.0: reported to the window, but DEFENSIVE only — the repair
+        // dialog below is modal (showMessageBoxSync) and quits on every
+        // button, so no page normally gets to read it.
+        rec.damaged = true;
         handleCorruptInstall(integrityResult);
         return;
       }
@@ -809,6 +830,11 @@ function startService(label, spawnFn) {
     if (rec.restartTimes.length >= RESTART_CAP_MAX) {
       rec.capped = true;
       const minutes = Math.round(RESTART_CAP_WINDOW_MS / 60000);
+      // v1.312.0: the numbers the toast below says, kept for the window's
+      // banner. Never rec.restarts: that resets after any run over 5 minutes
+      // while this window counts on, so it could say "stopped after 2 crashes".
+      rec.cappedCrashes = rec.restartTimes.length;
+      rec.cappedWindowMin = minutes;
       desktopLog("error", `[${label}] ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"`);
       fileLogger(label)(`[main] ${new Date(now).toISOString()} ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"\n`);
       notifyCrashLoop(label, `The ${label} crashed ${rec.restartTimes.length} times in ${minutes} minutes and is no longer being restarted. Use the tray's "Restart Iron Jarvis" to try again.`);
@@ -855,6 +881,7 @@ function restartServicesFromTray() {
     rec.fastDeaths = 0;
     rec.restartTimes = [];
     rec.capped = false;
+    rec.stalled = false;
     rec.swept = false;
     rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending: we spawn now instead
     if (rec.restartTimer) clearTimeout(rec.restartTimer);
@@ -869,7 +896,57 @@ function restartServicesFromTray() {
       startService(label, rec.spawnFn);
     }
   }
+  // v1.312.0: the user asked for a fresh start, so the watchdog's breaker
+  // (which also offers this item) starts over too — or a daemon that stalls
+  // again would never be killed and restarted.
+  _dwKills = [];
+  _dwBreakerTripped = false;
   refreshTrayMenu();
+}
+
+// The window's "Restart Iron Jarvis" (v1.312.0, wave 4
+// desktop-offline-banner-lies-when-capped): the DAEMON's ladder only. It must
+// never reuse restartServicesFromTray, which also kills and respawns a live
+// dashboard — the very page the user pressed the button on would reload under
+// them. Same steps as the tray for the one record: reset the counters, cancel a
+// pending backoff (or two daemons race for :8787), respawn a dead or capped
+// daemon, restart a live one on purpose. Returns true when it started a
+// (re)spawn, false when there is nothing here to restart (no record yet, or an
+// adopted daemon the watchdog owns) — and then it changes NOTHING (review
+// round): clearing `capped` first used to drop the tray's Restart item that
+// the banner's "could not restart" note then sent the user to.
+// It also clears the watchdog's breaker: the button is offered for a daemon
+// that is up but stopped answering (`stalled`) too, and a breaker left open
+// would never kill the next hang.
+function restartDaemonFromShell() {
+  const rec = _services.daemon;
+  if (!rec || !rec.spawnFn) return false;
+  const alive = !!daemonProc && daemonProc.exitCode === null && daemonProc.signalCode === null;
+  if (!alive && rec.adopted) return false;
+  rec.restarts = 0;
+  rec.fastDeaths = 0;
+  rec.restartTimes = [];
+  rec.capped = false;
+  rec.stalled = false;
+  rec.swept = false;
+  rec.damaged = false; // the next verdict comes from the next deaths, if any
+  rec.cappedCrashes = null;
+  rec.cappedWindowMin = null;
+  rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending: we spawn now instead
+  if (rec.restartTimer) clearTimeout(rec.restartTimer);
+  rec.restartTimer = null;
+  _dwKills = [];
+  _dwBreakerTripped = false;
+  markTrayHealthy("daemon");
+  fileLogger("daemon")(`[main] ${new Date().toISOString()} restarting on request from the window\n`);
+  if (alive) {
+    rec.manualRestart = true;
+    killChild(daemonProc, "daemon", "restart"); // onGone respawns at once
+  } else {
+    startService("daemon", rec.spawnFn);
+  }
+  refreshTrayMenu(); // the tray's Restart item goes once nothing is capped or stalled
+  return true;
 }
 
 function notifyCrashLoop(label, body) {
@@ -1430,6 +1507,12 @@ function daemonWatchdogTick() {
       _dwMissed = 0;
       _dwBooting = false;
       markTrayHealthy("daemon"); // audit D4: the next healthy /health says so on the tray
+      // v1.312.0: it recovered on its own — no longer "stalled", and the
+      // tray's Restart item goes (the breaker itself stays as it was).
+      if (rec && rec.stalled) {
+        rec.stalled = false;
+        refreshTrayMenu();
+      }
       return;
     }
     if (_dwBooting && rec && Date.now() - rec.lastStart < STARTUP_TIMEOUT_MS) return; // still booting
@@ -1456,6 +1539,14 @@ function daemonWatchdogTick() {
     const now = Date.now();
     _dwKills = _dwKills.filter((t) => now - t < DAEMON_WATCHDOG_BREAKER_WINDOW_MS);
     if (_dwKills.length >= DAEMON_WATCHDOG_BREAKER_MAX) {
+      // v1.312.0 (wave 4 review): the second way the supervisor gives up. The
+      // window's banner kept saying "restarting" here while nothing was, and
+      // the tray offered no Restart. `stalled` on the record is what
+      // shellState() reports and what puts the tray's Restart item back.
+      if (rec && !rec.stalled) {
+        rec.stalled = true;
+        refreshTrayMenu();
+      }
       if (!_dwBreakerTripped) {
         _dwBreakerTripped = true;
         desktopLog("error", `[daemon] watchdog: ${_dwKills.length} restarts in ${Math.round(DAEMON_WATCHDOG_BREAKER_WINDOW_MS / 60000)} minutes are not converging — breaker open, not killing again`);
@@ -1465,6 +1556,10 @@ function daemonWatchdogTick() {
       return;
     }
     _dwBreakerTripped = false;
+    if (rec && rec.stalled) {
+      rec.stalled = false; // killing again: the exit ladder restarts it
+      refreshTrayMenu();
+    }
     _dwKills.push(now);
     const detail = `/health missed ${DAEMON_WATCHDOG_MISS_LIMIT}x (~${Math.round((DAEMON_WATCHDOG_MS * DAEMON_WATCHDOG_MISS_LIMIT) / 1000)}s) while pid=${daemonProc.pid} was alive — killed for restart`;
     desktopLog("error", `[daemon] watchdog: ${detail}`);
@@ -1476,11 +1571,13 @@ function daemonWatchdogTick() {
 
 function notifyWatchdogExhausted() {
   const logsDir = path.join(userDataDir || "", "logs");
-  markTrayDegraded("daemon", "Iron Jarvis — the daemon keeps stalling (check logs)");
+  markTrayDegraded("daemon", "Iron Jarvis — the daemon keeps stalling (Restart from the tray)");
   try {
     new Notification({
       title: "Iron Jarvis — problem",
-      body: `The daemon stopped answering repeatedly and automatic restarts are paused. Quit and relaunch. Logs: ${logsDir}`,
+      // v1.312.0: the tray offers "Restart Iron Jarvis" in this state now (so
+      // does the window's offline banner) — the short way back, not a Quit.
+      body: `The daemon stopped answering repeatedly and automatic restarts are paused. Use "Restart Iron Jarvis" in the tray menu to start it again. Logs: ${logsDir}`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -2284,6 +2381,14 @@ function installSpotlightIpc() {
     if (!isTrustedDashboardSender(event)) return null;
     return openLogsFolder();
   });
+  // Restart the DAEMON from the window's offline banner (v1.312.0). Sender-
+  // checked like every privileged handler (it spawns a process); resolves null
+  // when refused. Daemon only — never the tray's whole restart, which would
+  // reload the page the user pressed it on.
+  ipcMain.handle("shell:restartDaemon", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return restartDaemonFromShell();
+  });
   // POP-OUT WINDOWS (v1.283.0). Sender-checked like every privileged handler:
   // a page that is not the dashboard must not open windows on the user's desk.
   ipcMain.handle("popout:open", (event, rawPath) => {
@@ -2367,9 +2472,10 @@ function buildTrayContextMenu() {
     // daemon). Discoverable here because a frozen window can't show its own
     // menus — the tray keeps working even when the renderer doesn't.
     { label: "Reload UI", click: () => reloadUI() },
-    // Shown only once the ladder has given up on a child (audit D1) — the
-    // user's way back without a Quit + relaunch.
-    ...(Object.values(_services).some((r) => r.capped)
+    // Shown only once the ladder has given up on a child (audit D1), or the
+    // watchdog's breaker has stopped restarting a daemon that hangs (`stalled`,
+    // v1.312.0) — the user's way back without a Quit + relaunch.
+    ...(Object.values(_services).some((r) => r.capped || r.stalled)
       ? [{ label: "Restart Iron Jarvis", click: () => restartServicesFromTray() }]
       : []),
     // Where the daemon/dashboard/desktop logs live (v1.229.0, audit D8): the
@@ -3618,6 +3724,45 @@ function accelLabel(accel) {
   return String(accel).replace("CommandOrControl", process.platform === "darwin" ? "Cmd" : "Ctrl");
 }
 
+/** A supervised service as the window may see it (v1.312.0): numbers and flags
+ *  read off the ladder's record — never a path, a log line or a pid.
+ *  `restarts` is the ladder counter, which is NOT cleared while the child
+ *  stays up — so the page may only say "restart attempt N" when `restarting`
+ *  is true: a backoff is pending, or the child it spawned is still inside its
+ *  boot allowance (the same STARTUP_TIMEOUT_MS the watchdog grants). Once
+ *  capped, `cappedCrashes`/`cappedWindowMin` are the toast's own numbers. */
+function serviceState(label) {
+  const rec = _services[label];
+  if (!rec) {
+    return {
+      capped: false, restarts: 0, lastExit: null, damaged: false,
+      restarting: false, cappedCrashes: null, cappedWindowMin: null, stalled: false,
+    };
+  }
+  const child = label === "daemon" ? daemonProc : dashboardProc;
+  const alive = !!child && child.exitCode === null && child.signalCode === null;
+  // `stalled` (wave 4 review): up, not answering, and the watchdog's breaker
+  // has stopped killing it. Only the daemon has a watchdog.
+  const stalled = label === "daemon" && !!rec.stalled && alive;
+  // A capped, damaged or stalled service is, by definition, not being
+  // restarted (and the check short-circuits before reading the clock).
+  const restarting =
+    !rec.capped &&
+    !rec.damaged &&
+    !stalled &&
+    (!!rec.restartTimer || (alive && Date.now() - (rec.lastStart || 0) < STARTUP_TIMEOUT_MS));
+  return {
+    capped: !!rec.capped,
+    restarts: rec.restarts || 0,
+    lastExit: rec.lastExit === undefined ? null : rec.lastExit,
+    damaged: !!rec.damaged,
+    restarting,
+    cappedCrashes: rec.capped && typeof rec.cappedCrashes === "number" ? rec.cappedCrashes : null,
+    cappedWindowMin: rec.capped && typeof rec.cappedWindowMin === "number" ? rec.cappedWindowMin : null,
+    stalled,
+  };
+}
+
 /** What the dashboard is told (`shell:getState`): labels, never the internal accelerator strings. */
 function shellState() {
   return {
@@ -3628,6 +3773,9 @@ function shellState() {
     },
     // The preferred keys, so a page can say WHICH one was taken.
     preferred: { window: accelLabel(HOTKEY), spotlight: accelLabel(SPOTLIGHT_HOTKEY) },
+    // v1.312.0: what the supervisor knows about the daemon, so the offline
+    // banner can tell "restarting (attempt N)" from "stopped after N crashes".
+    services: { daemon: serviceState("daemon") },
   };
 }
 

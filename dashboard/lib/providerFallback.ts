@@ -33,3 +33,34 @@ export function canRetryWithDefault(choice: string, health: FallbackHealth): boo
   if (health.byProvider[picked] !== false) return false; // not KNOWN down
   return health.byProvider[dflt] === true; // and the default KNOWN up
 }
+
+/** What the failed turn's own provider is going through (v1.312.0). */
+export interface ProviderTrouble {
+  /** The effective provider: the explicit pick, else the default ("" = none known). */
+  provider: string;
+  /** KNOWN down — `/health` said so. Unknown is never down. */
+  down: boolean;
+  /** Seconds left on a cooldown; 0 when there is none. */
+  cooldownS: number;
+}
+
+/**
+ * The failed-turn row's facts, and nothing more (v1.312.0). Retry used to
+ * stay pressable while the provider was cooling down — refused at once with
+ * the same words — and a turn whose DEFAULT was down offered only that Retry.
+ * The page now says "Retry in Ns" through a cooldown and offers the model
+ * menu when the provider is known down. This only REPORTS: it names no other
+ * provider, because which model to use instead is the user's call (v1.162.0).
+ */
+export function providerTrouble(
+  choice: string,
+  health: FallbackHealth & { cooldownByProvider?: Record<string, number> },
+): ProviderTrouble {
+  const provider = providerOf(choice) || health.defaultProvider || "";
+  if (!provider) return { provider: "", down: false, cooldownS: 0 };
+  // Optional-chained like the page's other reads (v1.232.0): the cooldown map
+  // is newer than the hook's other fields.
+  const raw = health.cooldownByProvider?.[provider];
+  const cooldownS = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.ceil(raw) : 0;
+  return { provider, down: health.byProvider[provider] === false, cooldownS };
+}

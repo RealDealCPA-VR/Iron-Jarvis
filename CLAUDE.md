@@ -2905,6 +2905,48 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **When something goes wrong, the user sees what happened and has a way
+  forward** (v1.312.0, /goal adoption wave 4 — the last 4 findings).
+  PREPARATION IS VISIBLE AND STOPPABLE: `/chat/stream` answers at once after
+  `routes/chat._eager_checks` (400 empty / 404 unknown skill stay status
+  codes); grounding, attachments, compaction and tool choice run INSIDE the
+  stream, each raced against the named turn's Stop (`_prep_step`), with
+  additive `event: phase` frames (`recalling` | `reading_files` only when the
+  turn carries files | `summarizing` only when a compaction runs |
+  `choosing_tools`); a Stop in preparation ends the turn exactly like a Stop
+  today, with no model call and nothing billed; a preparation fault is ONE
+  plain error frame. `useChatStream` decodes `phase` in both reducers and the
+  bubble says it in words; the page's Stop also POSTs
+  `/chat/turns/{id}/stop`; the old prep bound stays for a daemon that sends
+  nothing. A GRANT IS NOT AN ARMING: `ChatBody.granted_tools` (uncapped,
+  persisted in thread setup — `_clean_setup` keeps it) is the conversation's
+  "Allow for this conversation" list; BOTH lanes add a granted name to
+  `armed_grant`/`card_grants` (`chat_turn._conversation_grants`) ONLY when the
+  turn armed it some other way — it never reaches `armed`/`ask_armed`/
+  `allowed_names` (AST-pinned); the page still arms when the cap has room and
+  SAYS so when it does not. RETRY: during a provider cooldown Retry reads
+  "Retry in Ns" and is disabled; when the effective provider is known down a
+  "Choose another model…" button opens the picker — the page suggests nothing
+  and never switches. DESKTOP: `shellState().services.daemon` carries
+  `{capped, restarts, lastExit, damaged, restarting, stalled}`;
+  `shell:restartDaemon` (sender-checked) respawns ONLY the daemon, never the
+  dashboard the user is looking at; `DaemonBanner` tells restarting / capped /
+  stalled apart with Restart + Open logs, and points at the tray's Restart,
+  not Quit. `stalled` belongs to the CHILD the watchdog gave up on —
+  `startService` clears it on any respawn. v1.311.1 (test-only, the same
+  day): the Release gate went red on `preferences-v1305` — the test pressed
+  Forget while the section's busy guard was still up (it waited for the PATCH
+  to be recorded, not for the edit to finish); reproduced by delaying the
+  mocked PATCH. v1.311.1's own Release gate then went red on
+  `test_preferences_v1305` — the look-back's `TURN_BUDGET_S` (2 s) is an
+  absolute wall-clock bound, and on the loaded runner a CORRECT look-back
+  missed it (`suggestion: None`); the file now sets a generous budget in an
+  autouse fixture (the budget test still sets its own tiny one), reproduced by
+  starving the budget. Pins: `tests/test_wave4_chat_recovery_v1312.py`,
+  `test_wave4_prep_race_v1312.py`, `test_chat_setup_granted_tools_v1312.py`,
+  `test_desktop_offline_banner_v1312.py`,
+  `dashboard/__tests__/{chat-recovery,chat-recovery-phase,chat-recovery-followups,daemon-banner}-v1312.test.tsx`.
+
 - **Fast where people wait: the turn, the boot, the poll** (v1.311.0, /goal
   adoption wave 3 — 17 speed findings). CHAT LANES (both, lock-step):
   `chat_turn._gather_grounding` runs every independent grounding hop
