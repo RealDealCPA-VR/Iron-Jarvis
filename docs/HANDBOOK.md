@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.305.1 (2026-10-04).*
+holds itself to. Current as of v1.306.0 (2026-10-04).*
 
 ---
 
@@ -414,6 +414,39 @@ with the request typed in.
   reads only the messages YOU typed in your newest sessions (never the
   replies or tool output), only when you press it, and nothing leaves this
   PC; it says how many sessions it read and how many suggestions it made.
+- **Share my profile with Build** (v1.306.0; the idea comes from
+  agent-personalizer, MIT). A Build pane runs Claude Code or Codex, which
+  never see Jarvis's own prompts, so your profile stopped at the pane's edge.
+  At the foot of the **What Jarvis knows about you** card, **Share with
+  Build** has one switch for each of those CLIs found on this PC — "Share my
+  profile with Claude Code in Build" and "… with Codex" — and both are off
+  until you turn them on. When on, Jarvis keeps a marked block in that CLI's
+  own instructions file: Claude Code's `CLAUDE.md` in its config folder
+  (`CLAUDE_CONFIG_DIR`, else `~/.claude`), Codex's `AGENTS.md` in its home
+  (`CODEX_HOME`, else `~/.codex` — if an `AGENTS.override.md` with text in it
+  sits there, Codex reads that one instead, so the block goes there). While
+  Iron-Proxy is on, the same file in every Iron-Proxy account folder for that
+  CLI gets the block too (an account that is this PC's own login is the same
+  file, written once); turning Iron-Proxy off takes the block back out of
+  those folders unless you edited it there. The block holds your profile and the preferences you said or kept
+  — nothing else Jarvis remembers: no task notes, feedback notes, project
+  knowledge or memory. It is checked for planted instructions (a flagged
+  preference is left out), anything that looks like a key is masked, a path
+  on this PC is replaced with "(a path on this PC)", and it stays under
+  4,000 characters. The sentence under each switch names the files and says
+  that Anthropic or OpenAI sees the block when that CLI runs. Nothing outside
+  the block is ever changed, and before Jarvis first writes into a file you
+  already had, a copy of it goes to Iron Jarvis's trash folder. A file that
+  is a link to another file is left alone (the card says so), and Jarvis
+  reads the file once more just before it writes and backs off if you saved
+  it in the meantime. Change your
+  profile or a preference and the block follows a moment later. Edit or
+  delete the block yourself and Jarvis stops writing that file; the card
+  says so, with **Overwrite** (put Jarvis's block back) and **Keep yours**
+  (leave your version — that file is no longer updated). Turning a switch off
+  takes the block out (an edited one is copied to the trash first) and
+  deletes a file Jarvis created that holds nothing else; a file it could not
+  change is still named on the card after the switch is off.
 - **Memory steward**: a scheduled curator that proposes memory changes for
   your approval — it never silently rewrites what the app knows about you.
 - **The 3D memory graph**, lessons, and a "What I can remember" index the

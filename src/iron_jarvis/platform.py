@@ -295,6 +295,9 @@ class Platform:
     #: Iron-Proxy and hands out its client (``iron_proxy.service``). Also
     #: reachable as ``iron_proxy.service.current()`` for the adapters.
     iron_proxy: "object | None" = None
+    #: Share my profile with Build (v1.306.0): keeps the generated profile
+    #: block in a switched-on CLI's instruction files (``profile/share.py``).
+    profile_share: "object | None" = None
 
 
 
@@ -1212,6 +1215,11 @@ def build_platform(
     # Provider availability asks it (CACHED snapshot, never a call): a
     # signed-out default login must not hide a usable Iron-Proxy account.
     platform.providers.iron_proxy_usable = platform.iron_proxy.has_usable_account
+    # Share my profile with Build (v1.306.0): constructed always (no disk, no
+    # thread); it writes nothing until a switch is on.
+    from .profile.share import ProfileShare as _ProfileShare
+
+    platform.profile_share = _ProfileShare(config, platform.engine, platform.iron_proxy)
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))

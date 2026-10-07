@@ -1283,6 +1283,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 )
             )
 
+        # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
+        # its block up to date — on a timer THREAD (poke returns at once), so
+        # boot never waits on a file write.
+        _profile_share = getattr(platform, "profile_share", None)
+        if _profile_share is not None:
+            _profile_share.poke()
+
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
         # Comm thread appends can happen from sync route threads — hand the
@@ -1519,6 +1526,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _curator_stop.set()
             for task in bg_tasks.values():
                 task.cancel()
+            # Share my profile with Build (v1.306.0): no re-render after
+            # shutdown, and a write already running finishes (off the loop,
+            # bounded) — a daemon thread killed at exit could strand a temp
+            # file beside the user's CLAUDE.md / AGENTS.md.
+            _share_svc = getattr(platform, "profile_share", None)
+            if _share_svc is not None:
+                try:
+                    _share_svc.close()
+                    await asyncio.wait_for(asyncio.to_thread(_share_svc.wait_idle, 5.0), timeout=6.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             # Iron-Proxy (v1.301.0): stop the child WE started (an Iron-Proxy
             # the user runs — tray, `iron-proxy serve` — is never touched).
             # Off the loop: the tree kill shells out to taskkill.
@@ -2831,6 +2849,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import preferences as _preferences_routes
 
     _preferences_routes.register(app, d)
+    # Share my profile with Build (v1.306.0): the per-CLI switches on the
+    # Memory page's "What Jarvis knows about you" card.
+    from .routes import profile_share as _profile_share_routes
+
+    _profile_share_routes.register(app, d)
     # Iron-Proxy (v1.301.0): shared subscription accounts on Connections.
     from .routes import iron_proxy as _iron_proxy_routes
 

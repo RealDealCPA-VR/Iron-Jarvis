@@ -270,7 +270,9 @@ def keep(engine, pref_id: str, text: Any = None) -> LessonRecord:
         row.decided_at = utcnow()
         db.add(row)
         db.commit()
-        return _detached(db, row)
+        out = _detached(db, row)
+    _shared_changed()
+    return out
 
 
 def decline(engine, pref_id: str) -> LessonRecord:
@@ -307,7 +309,9 @@ def edit(engine, pref_id: str, text: Any) -> LessonRecord:
         row.text = new_text
         db.add(row)
         db.commit()
-        return _detached(db, row)
+        out = _detached(db, row)
+    _shared_changed()
+    return out
 
 
 def forget(engine, pref_id: str) -> str:
@@ -320,7 +324,16 @@ def forget(engine, pref_id: str) -> str:
             )
         db.delete(row)
         db.commit()
+    _shared_changed()
     return pref_id
+
+
+def _shared_changed() -> None:
+    """v1.306.0: a confirmed preference changed — a switched-on "share with
+    Build" re-renders its block (debounced, off the loop; never raises)."""
+    from ..profile.share import notify_changed
+
+    notify_changed()
 
 
 # --------------------------------------------------------------------------- #

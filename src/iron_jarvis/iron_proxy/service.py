@@ -395,6 +395,11 @@ class IronProxyService:
         self._refresh_at: dict[str, float] = {}
         self._refresh_futures: dict[str, concurrent.futures.Future] = {}
         self._refresh_pool: concurrent.futures.ThreadPoolExecutor | None = None
+        #: v1.306.0: called (no arguments, must not block) when the set of
+        #: account HOMES changes or the switch flips — the profile share
+        #: re-renders into the new homes. ``None`` = never read yet.
+        self._accounts_listeners: list[Any] = []
+        self._homes_seen: frozenset[tuple[str, str]] | None = None
         self._refresh_bundle_facts()
         if register:
             _set_current(self)
@@ -415,6 +420,21 @@ class IronProxyService:
             self._usable = {}
             self._accounts_cache = None
             self._providers_seen = set()
+            self._homes_seen = None
+        self._notify_accounts_changed()
+
+    # ------------------------------------- v1.306.0: account-home listeners
+    def add_accounts_listener(self, fn: Any) -> None:
+        """Call ``fn()`` when the account homes change or the switch flips.
+        ``fn`` must return at once (the profile share only arms a timer)."""
+        self._accounts_listeners.append(fn)
+
+    def _notify_accounts_changed(self) -> None:
+        for fn in list(self._accounts_listeners):
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 — a listener never breaks a read
+                log.debug("iron-proxy accounts listener failed", exc_info=True)
 
     def data_dir(self) -> Path:
         override = os.environ.get("IRON_PROXY_DATA_DIR", "").strip()
@@ -976,6 +996,15 @@ class IronProxyService:
                 for p in profiles
                 if isinstance(p, dict) and (p.get("lane") or "cli") == "cli"
             }
+            homes = frozenset(
+                (str(p.get("provider")), str((p.get("cli") or {}).get("home") or ""))
+                for p in profiles
+                if isinstance(p, dict) and (p.get("lane") or "cli") == "cli"
+                and isinstance(p.get("cli"), dict)
+            )
+            if homes != self._homes_seen:
+                self._homes_seen = homes
+                self._notify_accounts_changed()
 
     def refresh_accounts(self) -> None:
         """Re-read the accounts for :meth:`has_usable_account`. Blocking; never

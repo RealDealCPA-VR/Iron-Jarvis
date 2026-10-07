@@ -2827,6 +2827,84 @@ does not need a bump, stop and bump it.
   Reproduced locally by delaying the mocked read 150 ms (old shape: CI's exact
   error; new: green).
 
+- **The profile reaches a Build pane ONLY through a switched-on, generated
+  block in the CLI's own instructions file — outside text byte-identical,
+  a hand edit never overwritten** (v1.306.0; idea from agent-personalizer,
+  MIT — no code taken). VERIFIED on this PC, not guessed: Claude Code 2.1.290
+  reads `<CLAUDE_CONFIG_DIR or ~/.claude>/CLAUDE.md` as its "User"
+  instructions (binary: `case"User":return Ve(we(),"CLAUDE.md")`, `we =
+  CLAUDE_CONFIG_DIR ?? homedir/.claude`; LIVE with a throwaway
+  CLAUDE_CONFIG_DIR and a throwaway USERPROFILE — the session record carried
+  the file as an `instructions` attachment even with no login, and the
+  `<!-- -->` marker lines were dropped from what the model reads); Codex
+  0.157.0 reads `<CODEX_HOME or ~/.codex>/AGENTS.override.md` when it holds
+  non-whitespace, else `AGENTS.md` (`codex debug prompt-input` with a
+  throwaway CODEX_HOME — no model call; Codex ignores a USERPROFILE override
+  for its default home, so `~/.codex` is from the binary/docs). The
+  user's real `~/.codex/AGENTS.md` exists and is EMPTY — a file we did not
+  create is never deleted. `profile/share.py` (`ProfileShare`, built in
+  `build_platform`, `platform.profile_share`): content = `LEAD` +
+  `profile.render` + `# Preferences they approved` from
+  `confirmed_preferences` (`source == "preference"`, user scope,
+  `confirmed_clause()` — feedback/distilled/reflection/project rows never;
+  the v1.305.0 raw-select grep pin lists `profile/share.py`), each line
+  `promptguard.scan_context` (a flagged preference DROPPED, not
+  placeholder'd), `redact.mask`, `scrub_paths`, ≤ 280 per line,
+  `MAX_SHARE_CHARS` 4,000 (`omitted` counted), marker words neutralised and `<!--`/`-->` broken up (the CLI drops
+  HTML comments, so a typed opener would hide the rest); an
+  empty render writes nothing. The REGION is the start marker through the
+  end marker plus ONE newline, inserted right after any BOM at the top,
+  replaced in place, or cut out — so outside bytes are identical after
+  write, rewrite and removal (CRLF/BOM/no-trailing-newline/empty fixtures);
+  newline style follows the file; a non-UTF-8 file, damaged markers, or a
+  SYMLINKED / HARD-LINKED file are left alone (`os.replace` would turn the
+  user's dotfiles link into a plain file — `LINK_ERROR` on the row). State `<IJ home>/profile-share.json` per file: sha256 of the
+  normalised region (`hash`), `created`, `backed_up`, `held`, `written_at`.
+  DRIFT = region differs from `hash`, or the block/file we wrote is gone →
+  never written until `POST /profile/share/{cli}/overwrite {path?}`;
+  `POST /profile/share/{cli}/keep {path?}` sets `held` (frozen until
+  Overwrite, even if the text matches again). First write to an existing
+  file copies it to `<IJ home>/trash/<stamp>/profile-share/<drive>/<path>`
+  (once per file); writes are temp + `os.replace`, and the file is read
+  AGAIN right before the replace (`_atomic_write(expect=)`, `FileChanged`):
+  a save that landed after Jarvis's read wins and the write is abandoned
+  (the window left is the re-read-to-replace gap, not the whole write).
+  Off removes every tracked block (an edited one copied to trash first) and
+  deletes a file WE created that is blank after; a file whose block could
+  not come out (locked, a link, damaged markers) stays listed and the row
+  still says so with the switch off. HOMES: the default (env var else
+  `~/.<cli>`) + every Iron-Proxy CLI account `cli.home` for that provider
+  from the CACHED snapshot (never a call); `is_default_home` / same path =
+  one file; Iron-Proxy OFF = default only (UNEDITED account blocks taken back);
+  Iron-Proxy on but unread (`cached_accounts() is None`) = account files
+  left alone. `IronProxyService.add_accounts_listener` fires on
+  `set_enabled` and when the snapshot's account-home set changes. TRIGGERS:
+  `notify_changed()` after the commit in `ProfileStore.save`,
+  `preferences.keep/edit/forget`, `LearningEngine.note_preference`,
+  `POST/DELETE /lessons`, the memory graph's lesson delete
+  (`POST /memory/graph/node/delete`), plus a boot `poke()` in the lifespan
+  — `poke` only arms a `DEBOUNCE_S` (1.5 s) `threading.Timer` named
+  `profile-share`, so nothing runs on the loop and boot never waits; at
+  shutdown `close()` cancels a pending timer and the lifespan waits (off
+  the loop, ≤ 5 s) for a write already running.
+  SETTING: `Config.profile_share_claude_code` / `profile_share_codex`,
+  persisted by `PUT /profile/share` ONLY (not in `_SETTINGS_KEYS`, the
+  `iron_proxy_enabled` reason: a settings write would flip the flag
+  without writing or removing anything). Routes (`routes/profile_share.py`,
+  all file work in `to_thread`): `GET /profile/share` → `{clis: [{cli,
+  label, vendor, available, on, file_name, files: [{path, account, exists,
+  last_written, drift, held, created, error}], targets: [{path, account}],
+  last_written, drift, accounts_known, chars, omitted}], limit}`; `PUT
+  {cli, on}` (404 unknown cli, 409 not installed) → the view after the
+  write/removal. DASHBOARD: `components/memory/ProfileShareRow.tsx` at the
+  foot of KnowsAboutYou ("Share with Build"; `#profile-share-<cli>`; a CLI
+  not found = no switch; 404/failed read = no row), words in
+  `lib/profileShare.ts` (`shareSentence` names the files and the vendor
+  who sees it; `fileLine` for edited/removed/broken/held/error). Pins:
+  `tests/test_profile_share_v1306.py` (real temp homes via
+  USERPROFILE/HOME; a teardown check that the REAL files are untouched),
+  `dashboard/__tests__/profile-share-v1306.test.tsx`.
+
 - **An agent's run ends honestly** (v1.288.0, deep review wave 3). (1) Shell
   and custom-tool output is captured as BYTES and decoded ONLY by
   `sandbox/native._as_text`: strict UTF-8, else the OEM or ANSI page, chosen by

@@ -78,7 +78,12 @@ class ProfileStore:
             db.add(row)
             db.commit()
             db.refresh(row)
-            return UserProfileRecord(**row.model_dump())
+            saved = UserProfileRecord(**row.model_dump())
+        # v1.306.0: a switched-on "share with Build" re-renders (debounced).
+        from .share import notify_changed
+
+        notify_changed()
+        return saved
 
     def apply_accessibility(self, name: str) -> UserProfileRecord:
         """Turn on an accessibility mode AND seed its editable companion fields.

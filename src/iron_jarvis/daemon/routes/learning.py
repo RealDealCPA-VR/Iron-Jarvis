@@ -87,7 +87,11 @@ def register(app: FastAPI, d) -> None:
             db.add(rec)
             db.commit()
             db.refresh(rec)
-            return {"id": rec.id, "text": rec.text}
+            out = {"id": rec.id, "text": rec.text}
+        from ...profile.share import notify_changed
+
+        notify_changed()  # v1.306.0: a shared block re-renders (debounced)
+        return out
 
     @app.post("/memory")
     def memory_write(body: MemoryWrite) -> dict[str, Any]:
@@ -131,6 +135,9 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(status_code=404, detail="no such lesson")
             db.delete(r)
             db.commit()
+        from ...profile.share import notify_changed
+
+        notify_changed()  # v1.306.0: a shared block re-renders (debounced)
         return {"deleted": lesson_id}
 
     @app.get("/improvement")
@@ -552,6 +559,12 @@ def register(app: FastAPI, d) -> None:
                     db.delete(r)
                     db.commit()
                     deleted = True
+            if deleted:
+                from ...profile.share import notify_changed
+
+                # v1.306.0: a preference deleted from the graph leaves the
+                # shared Build block too (debounced, off the loop).
+                notify_changed()
         elif node_id.startswith("wm:"):
             parts = node_id.split(":", 3)
             if len(parts) != 4:

@@ -19,6 +19,10 @@
 // repeated, with their own words as evidence) and Never ask again — plus the
 // opt-in look through Claude Code / Codex sessions (PreferenceSections). An
 // older daemon (404) or any unreadable answer keeps exactly today's list.
+//
+// v1.306.0: a quiet "Share with Build" row at the foot (ProfileShareRow) —
+// one switch per Claude Code / Codex found on this PC, OFF by default, that
+// keeps the profile + kept preferences in that CLI's own instructions file.
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { BrainCircuit, UserRound } from "lucide-react";
@@ -26,6 +30,7 @@ import { get } from "@/lib/api";
 import { Card } from "@/components/ui";
 import { decodePreferences, type PreferencesView } from "@/lib/preferences";
 import { PreferenceSections } from "./PreferenceSections";
+import { ProfileShareRow } from "./ProfileShareRow";
 
 export interface MemoryOverview {
   profile: {
@@ -191,6 +196,9 @@ export function KnowsAboutYou() {
         )}
 
         {counts && <p className="text-[11.5px] text-zinc-500">{counts}</p>}
+
+        {/* v1.306.0: the profile follows the user into Build panes — opt-in. */}
+        <ProfileShareRow />
       </div>
     </Card>
   );

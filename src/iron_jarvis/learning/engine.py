@@ -124,10 +124,15 @@ class LearningEngine:
         from .corrections import signature
 
         clean = (text or "").strip()
-        return self._add_lesson(
+        row = self._add_lesson(
             clean, scope="user", source="preference", weight=5,
             status=STATUS_CONFIRMED, origin="said", signature=signature(clean) or None,
         )
+        # v1.306.0: a switched-on "share with Build" re-renders (debounced).
+        from ..profile.share import notify_changed
+
+        notify_changed()
+        return row
 
     # -- reflection ---------------------------------------------------------
     def reflect(

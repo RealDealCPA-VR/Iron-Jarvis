@@ -245,9 +245,15 @@ def test_every_lessons_reader_in_src_is_known():
         "daemon/routes/learning.py",
         "improvement/engine.py",
     }, callers
-    assert raw == {"learning/engine.py", "learning/preferences.py", "improvement/engine.py"}, raw
+    # v1.306.0: profile/share.py reads the CONFIRMED preference sentences for
+    # the block it shares with Claude Code / Codex (confirmed_clause, pinned below).
+    assert raw == {
+        "learning/engine.py", "learning/preferences.py", "improvement/engine.py", "profile/share.py",
+    }, raw
     imp = (SRC / "improvement/engine.py").read_text(encoding="utf-8")
     assert "select(LessonRecord).where(confirmed_clause())" in imp
+    shared = (SRC / "profile/share.py").read_text(encoding="utf-8")
+    assert ".where(confirmed_clause())" in shared
 
 
 # --------------------------------------------------------------------------- #

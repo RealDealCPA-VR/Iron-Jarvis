@@ -608,6 +608,14 @@ class Config(BaseModel):
     # _SETTINGS_KEYS: a settings-page write would flip the flag without
     # starting or stopping anything.
     iron_proxy_enabled: bool = False
+    # SHARE MY PROFILE WITH BUILD (v1.306.0) — one switch per vendor CLI, OFF
+    # by default: when on, Iron Jarvis keeps a generated block (the profile +
+    # confirmed preferences) in that CLI's user-level instruction file
+    # (profile/share.py). Persisted by PUT /profile/share ONLY, like
+    # iron_proxy_enabled and for the same reason: a settings-page write would
+    # flip the flag without writing or removing anything.
+    profile_share_claude_code: bool = False
+    profile_share_codex: bool = False
 
     @field_validator("autonomy_level")
     @classmethod
