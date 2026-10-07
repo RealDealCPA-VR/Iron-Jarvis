@@ -2905,6 +2905,52 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The first answer is REAL, the wizard tells the truth, and the first
+  screen leads somewhere** (v1.310.0, /goal adoption wave 2 — 8 first-run
+  findings + wave-1 carry-overs). THE MOCK TRAP: a user signed in to Claude
+  Code/Codex (or running Ollama) is not first-run, so the wizard never opened
+  while `default_provider` stayed "mock" and every first reply was the
+  scripted mock. `POST /onboarding/use-model {provider}` (routes/settings.py)
+  is THE one explicit press — wizard doors, the Overview card, the chat empty
+  state all call it (`lib/onboarding.useModel` = `chooseForAnswers`); it
+  promotes ONLY over the untouched mock default (else 200 `{promoted: null,
+  reason}`), a CLI door with no stored key promotes the INHERITED API name (the
+  dial keeps working) and a stored key never gets billed for a CLI press, an
+  unknown/unavailable provider is a 409 sentence. Nothing promotes silently —
+  not boot, not rescan. `GET /onboarding` carries `model {default_provider,
+  default_model, is_mock, usable[{provider, label, local}]}` from CACHED
+  availability (never `doctor(platform)` — integrity scan + probes), drops the
+  dev-toolchain rows (`readiness.DEV_TOOLCHAIN_CHECKS`; the `ironjarvis doctor`
+  CLI keeps them) and gives each row `level` + a plain `label`. /health's
+  claude-cli/codex-cli rows carry `installed`, `signed_in` (null = unknown,
+  never "signed out") and `sign_in_fix`. Checklist: step 1 is done only when a
+  REAL model answers (Auto counts when something is connected), never "the
+  offline model works"; "Teach it your style" counts confirmed non-reflection
+  lessons or feedback only; `provider_label` names a keyless API name by its
+  sign-in. WIZARD (FirstRunWizard + `components/onboarding/ConnectDoors`,
+  `AnswerPress`): step 3 never runs on mock, names the model it asks, and
+  celebrates by the provider that ACTUALLY answered (mock = amber "no model
+  ran"); the subscription door has three honest states (not installed → the
+  vendor page, signed out → a Build-pane sign-in with the CLI's own hint,
+  signed in → the press); the chat empty state shows the doors while replies
+  are a demo. OVERVIEW: `FirstRunStrip` sits under the header while
+  `next_step != null` — welcome card, one "Ask Jarvis anything" box →
+  `/chat?ask=` (suggest, never act), the Try-it-now cards — and is LATCHED for
+  the visit so the press that ticks the last step keeps its "Done — X now
+  answers your questions"; required failures inline, recommended ones folded
+  into "Optional extras (n)". DESKTOP: Start-with-Windows is never asked on the
+  first launch (a day later, parented to the shown main window, the flag
+  written only when answered; a tray/menu toggle is an answer —
+  `setStartAtLoginFromMenu`). CARRY-OVERS: `/chat/approvals/pending` rows carry
+  `mission_id`/`project_id` (bell → "Open the mission"); a retry-failed run's
+  system prompt gets `runtime.mission_retry_note` (keyed to the row's own id —
+  a rerun or follow-up of a retry never inherits it; `_stamp_continuation`
+  pops `retry_failed`); a teammate's model line follows its status; the retry
+  409 is shown in plain words. Pins: `tests/test_wave2_onboarding_v1310.py`,
+  `test_wave2_onboarding_review_v1310.py`, `test_wave2_followups_v1310.py`,
+  `test_desktop_startwithwindows_v1310.py`,
+  `dashboard/__tests__/{wizard-wave2,chat-connect-doors,overview-wave2,mission-followups}-v1310.test.tsx`.
+
 - **A mission's teammates can ASK, can be STOPPED, are VISIBLE when remote,
   and a mission is never a dead end** (v1.309.0, /goal adoption wave 1 — 25
   verified findings from the 2026-10-07 theory audit). TEAMMATES: a child of

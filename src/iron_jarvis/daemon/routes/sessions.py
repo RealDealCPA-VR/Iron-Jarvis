@@ -110,7 +110,13 @@ def _project_team(d, project_id: str) -> list[str]:
 
 
 def _stamp_continuation(
-    d, new_id: str, parent_id: str, objective: str | None, *, resume: bool = False
+    d,
+    new_id: str,
+    parent_id: str,
+    objective: str | None,
+    *,
+    resume: bool = False,
+    retry_failed: int = 0,
 ) -> str:
     """Link a MISSION's continuation to the mission it continues (v1.309.0,
     contract 5). A no-op unless the parent's origin is ``job:mission``: only
@@ -136,6 +142,14 @@ def _stamp_continuation(
     asked for, never by "Continue where you left off — Iron Jarvis
     restarted…".
 
+    ``retry_failed`` (v1.310.0): the retry-failed door's count. The rerun keeps
+    the task byte-identical (it is the worklist board's key), so nothing told
+    the MODEL that only the failed items remain; this stamps
+    ``options.retry_failed = {"session": new_id, "count": N}`` and the runtime
+    turns it into one model-facing sentence (``runtime.mission_retry_note``).
+    Bound to the NEW row's id, so a later continuation that inherits the
+    options never repeats it.
+
     BLOCKING (one read + one write) — callers hop off the loop, and they do
     it BEFORE the run is spawned, so the runtime's own fresh read of the row
     (``run_session`` loads it by id) already carries the stamp. Returns the
@@ -151,6 +165,10 @@ def _stamp_continuation(
             return ""
         opts = session_options(row)
         opts["continued_from"] = parent_id
+        if retry_failed > 0:
+            opts["retry_failed"] = {"session": new_id, "count": int(retry_failed)}
+        else:
+            opts.pop("retry_failed", None)  # a retry's options carried over
         if resume:
             from ...agents.mission import display_objective
 
@@ -570,7 +588,7 @@ def register(app: FastAPI, d) -> None:
         base = re.sub(r"^(?:Retry the \d+ failed items?: )+", "", display_objective(prev))
         objective = f"Retry the {failed} failed {items}: {base}"
         session.options_json = await asyncio.to_thread(
-            _stamp_continuation, d, session.id, session_id, objective
+            _stamp_continuation, d, session.id, session_id, objective, retry_failed=failed
         ) or session.options_json
         # Continuing the work answers a restart's prompt, as /continue does.
         await asyncio.to_thread(_clear_interrupted, d, session_id)

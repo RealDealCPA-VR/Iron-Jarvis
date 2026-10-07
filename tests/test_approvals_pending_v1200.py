@@ -38,7 +38,9 @@ def _client(tmp_path) -> TestClient:
 #: tests below so a future edit adding args (or anything else riding the
 #: event payload) goes red instead of silently widening the broadcast.
 # v1.247.0: + the wait (a number) — still never args.
-ALLOWED_KEYS = {"id", "tool", "session_id", "requested_at", "timeout_s"}
+# v1.310.0 (W2-5): + mission_id / project_id (ids, null when none) so the bell
+# can open the mission — still never args.
+ALLOWED_KEYS = {"id", "tool", "session_id", "requested_at", "timeout_s", "mission_id", "project_id"}
 
 
 def test_no_pending_approvals_is_an_honest_empty_list(tmp_path):

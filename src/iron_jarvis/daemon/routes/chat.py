@@ -741,7 +741,50 @@ def register(app: FastAPI, d) -> None:
         # mislabel the user's own question as an agent run and double-surface
         # it on every page. The runtime lane always publishes the event, so a
         # real agent ask can never be dropped by this filter.
-        return {"approvals": [meta[a] for a in ids if a in meta]}
+        listed = [meta[a] for a in ids if a in meta]
+        # WHERE THE ASK LIVES (v1.310.0, W2-5): additive ``mission_id`` (the
+        # mission ROOT when the asking session is a mission coordinator or one
+        # of its teammates — a teammate is never a mission of its own) and
+        # ``project_id`` (the asking session's, else its mission root's), both
+        # present on EVERY row, null when there is none — so the bell can say
+        # "Open the mission" and the user answers the ask IN CONTEXT. Ids
+        # only; the never-args rule above is untouched.
+        def _places(session_ids: set[str]) -> dict[str, tuple[str | None, str | None]]:
+            # BLOCKING (one row read + one parent walk per distinct asking
+            # session — a handful) — hopped off the loop below. Never raises:
+            # an unreadable chain is "no mission", never a broken listing.
+            from ...agents.team import MISSION_ORIGIN, mission_root
+            from ...core.models import Session
+
+            out: dict[str, tuple[str | None, str | None]] = {}
+            for sid in session_ids:
+                if not sid:
+                    continue
+                try:
+                    with session_scope(d.platform.engine) as db:
+                        row = db.get(Session, sid)
+                        own_project = getattr(row, "project_id", None) if row else None
+                    root = mission_root(d.platform.engine, sid)
+                    # Only a coordinator-origin ROOT is a mission: a plain job
+                    # is its own root and never invents one.
+                    is_mission = (
+                        root is not None and getattr(root, "origin", None) == MISSION_ORIGIN
+                    )
+                    mission_id = root.id if is_mission else None
+                    project_id = own_project or (
+                        getattr(root, "project_id", None) if is_mission else None
+                    )
+                    out[sid] = (mission_id, project_id or None)
+                except Exception:  # noqa: BLE001
+                    out[sid] = (None, None)
+            return out
+
+        places = await asyncio.to_thread(_places, {row["session_id"] for row in listed})
+        for row in listed:
+            mission_id, project_id = places.get(row["session_id"], (None, None))
+            row["mission_id"] = mission_id
+            row["project_id"] = project_id
+        return {"approvals": listed}
 
     @app.get("/chat/threads")
     def chat_threads(project_id: str = "") -> dict[str, Any]:

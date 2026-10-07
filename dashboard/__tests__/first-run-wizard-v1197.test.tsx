@@ -349,8 +349,16 @@ describe("the finale — finishing lands on /chat", () => {
     // A completed run is already waiting at the polled endpoint, so reaching
     // step 3 and starting a task lands directly on the celebration panel.
     hooks.api["/sessions/s-1"] = {
-      session: { status: "completed", summary: "All good" },
+      // v1.310.0: the row names who answered — the verdict reads it.
+      session: { status: "completed", summary: "All good", provider: "anthropic" },
       transcript: { tools: [] },
+    };
+    // v1.310.0: step 3 offers the task box only with a real model ready (with
+    // none it shows the connect doors — wizard-wave2-v1310 pins that gate).
+    hooks.api["health"] = {
+      status: "ok",
+      version: "1.197.0",
+      providers: [{ provider: "anthropic", available: true, class: "api" }],
     };
     render(<FirstRunWizard />);
     fireEvent.click(screen.getByRole("button", { name: /First task/ }));

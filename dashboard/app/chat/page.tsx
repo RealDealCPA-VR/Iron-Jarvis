@@ -137,6 +137,7 @@ import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import { useDaemon } from "@/lib/daemon";
+import { needsConnect } from "@/lib/onboarding";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
 import { turnUsageFrom } from "@/lib/types";
@@ -294,6 +295,17 @@ const GoalBirth = dynamic(
   () =>
     import("@/components/chat/GoalContractCard").then((m) => ({
       default: m.GoalBirth,
+    })),
+  { ssr: false },
+);
+/* v1.310.0 (wave 2, demo-mode-chat-nonsense): the shared connect doors, shown
+ * in the EMPTY state only while no real model answers (or the default is still
+ * the offline demo). Deferred like the panels above: once a model is chosen the
+ * gate is false on every open, so the route need not carry the doors. */
+const ConnectDoors = dynamic(
+  () =>
+    import("@/components/onboarding/ConnectDoors").then((m) => ({
+      default: m.ConnectDoors,
     })),
   { ssr: false },
 );
@@ -2352,6 +2364,10 @@ export default function ChatPage() {
   // U8): the footer used to say "default model" while the title bar said
   // "brain (RTX)" — two words for one thing. Read, never polled here.
   const defaultModelName = useDaemon().health?.default_model ?? "";
+  // v1.310.0: the empty state leads with the connect doors while no real
+  // model answers (or the default is still the offline demo) — read off the
+  // same /health, never a second poll.
+  const showConnectDoors = needsConnect(useDaemon().health);
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
   const [persona, setPersona] = useState("assistant");
   // PERSONA EDITOR: a collapsible panel that edits the SELECTED persona (or a
@@ -7534,6 +7550,20 @@ export default function ChatPage() {
                       need — quick answers come straight back, and real work
                       just gets done.
                     </Empty>
+                    {/* v1.310.0: the way forward comes BEFORE the demo
+                        prompts. Every chip answered by the offline demo is
+                        the same scripted sentence, so a first-timer must see
+                        how to get a real answer first (finding
+                        demo-mode-chat-nonsense; the scripted-reply half of
+                        that proposal was dropped by the verifier). */}
+                    {showConnectDoors && (
+                      <div className="w-full max-w-md rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                        <p className="mb-2 text-sm font-semibold text-zinc-100">
+                          Connect a model for real answers
+                        </p>
+                        <ConnectDoors />
+                      </div>
+                    )}
                     <div className="flex flex-wrap justify-center gap-2">
                       {examples.map((ex) => (
                         <button

@@ -19,10 +19,6 @@ import {
   PlugZap,
   HeartPulse,
   Rocket,
-  FolderSearch,
-  Sparkles,
-  ScrollText,
-  Mail,
   History,
   LayoutGrid,
   Play,
@@ -38,7 +34,7 @@ import { usePolledApi, useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { post, ApiError } from "@/lib/api";
-import type { Health, Metrics, VaultProvider, SessionView, IJEvent } from "@/lib/types";
+import type { Health, Metrics, VaultProvider, SessionView, IJEvent, Onboarding } from "@/lib/types";
 import {
   Card,
   Stat,
@@ -60,6 +56,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
+import { FirstRunStrip, FIRST_WIN_TASKS } from "@/components/onboarding/FirstRunStrip";
 import { PowerTips } from "@/components/PowerTips";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { sessionHref } from "@/lib/missionLinks";
@@ -116,40 +113,6 @@ interface Template {
   created_at: string;
 }
 
-/** One-click, broadly-safe starter tasks that take a first-time user straight to
- *  a real result. Clicking POSTs /sessions (wait:false) and opens the live run. */
-const FIRST_WIN_TASKS: {
-  key: string;
-  title: string;
-  task: string;
-  icon: ReactNode;
-}[] = [
-  {
-    key: "downloads",
-    title: "Tidy my Downloads",
-    task: "List the largest files in my Downloads folder and suggest what's safe to delete",
-    icon: <FolderSearch size={18} />,
-  },
-  {
-    key: "examples",
-    title: "What can you do?",
-    task: "Give me 5 example tasks you can do for me right now",
-    icon: <Sparkles size={18} />,
-  },
-  {
-    key: "recap",
-    title: "Recap today",
-    task: "Summarize today: what sessions ran and what happened",
-    icon: <ScrollText size={18} />,
-  },
-  {
-    key: "email",
-    title: "Draft a follow-up",
-    task: "Draft a polite follow-up email to a client who hasn't replied",
-    icon: <Mail size={18} />,
-  },
-];
-
 /** Event types that describe an agent starting or finishing a run. */
 const LIVE_EVENT_TYPES = new Set(["agent.started", "agent.completed"]);
 
@@ -164,6 +127,12 @@ type ReflexRuleLite = {
 
 /** The truthful state of a live-activity row. */
 type LiveState = "running" | "completed" | "failed";
+
+/** v1.310.0: the default is still the untouched offline demo — "mock", or
+ *  empty (W2-1 treats both as "nobody chose yet"). */
+function noModelChosen(provider: string | undefined | null): boolean {
+  return !provider || provider === "mock";
+}
 
 /** Short, human-ish label for a live activity row. */
 function eventLabel(e: IJEvent): string {
@@ -259,6 +228,7 @@ function ReactorHero({
   version,
   activeProject,
   model,
+  modelChosen = true,
   runningCount,
   freeDisk,
   failures,
@@ -269,6 +239,9 @@ function ReactorHero({
   version?: string;
   activeProject?: ActiveProject | null;
   model?: string;
+  /** v1.310.0: false while the default is the offline demo — `model` is then
+   *  a plain sentence, not an id, so it is not set in a code font. */
+  modelChosen?: boolean;
   runningCount: number;
   freeDisk?: number;
   failures: number;
@@ -342,7 +315,9 @@ function ReactorHero({
               label="Model"
               icon={<Cpu size={12} />}
               tone="accent"
-              value={model ? <span className="font-mono">{model}</span> : "—"}
+              value={
+                model ? <span className={modelChosen ? "font-mono" : undefined}>{model}</span> : "—"
+              }
               title={model}
             />
             <HeroStat
@@ -536,6 +511,25 @@ export default function OverviewPage() {
 
   const router = useRouter();
   const templates = useApi<{ templates: Template[] }>("/templates");
+  // v1.310.0 (wave 2, overview-buries-first-action): ONE read of /onboarding
+  // for the whole page — the strip's gate and the welcome card share it, so
+  // the Overview never fetches the doctor twice per load.
+  const onboarding = useApi<Onboarding>("/onboarding");
+  // The gate is next_step ALONE (never sessions/threads, which arrive on a
+  // different poll and would make the strip flicker): while a getting-started
+  // step is still open, the first-run strip leads the page. `!= null` so an
+  // older/partial payload with no next_step key reads as "nothing to lead".
+  const firstRunOpen = onboarding.data?.next_step != null;
+  // LATCHED for this visit (v1.310.0 review): pressing "Use … for answers"
+  // ticks the last open step, the shared re-read turns next_step null, and
+  // an unlatched gate unmounted the strip — taking the press's own "Done — X
+  // now answers your questions" with it. Once shown, the strip stays until the
+  // user leaves the page; the next visit reads next_step fresh.
+  const [firstRunLatched, setFirstRunLatched] = useState(false);
+  useEffect(() => {
+    if (firstRunOpen) setFirstRunLatched(true);
+  }, [firstRunOpen]);
+  const showFirstRun = firstRunOpen || firstRunLatched;
   // Ambient Operator: the enabled reflex rules (signal→action bindings) so the
   // Overview shows what Iron Jarvis will do on its own, and recent fires.
   const reflexes = usePolledApi<{ rules: ReflexRuleLite[] }>("/reflex/rules", 15000);
@@ -719,7 +713,7 @@ export default function OverviewPage() {
       <Reveal>
         <PageHeader
           title="Overview"
-          subtitle="Health, metrics, and live activity for the Iron Jarvis daemon."
+          subtitle="Your starting point: what Iron Jarvis is doing right now, how it is running, and where to go next."
           actions={
             health.data ? (
               <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
@@ -742,6 +736,17 @@ export default function OverviewPage() {
         <ProviderDowngradeBanner />
       </Reveal>
 
+      {/* v1.310.0 (wave 2): the FIRST-RUN STRIP — while setup is unfinished,
+          the first thing under the title is the way to a first real answer
+          (the checklist, one "Ask Jarvis anything" box, the Try-it-now
+          starters), not daemon metrics and thirty tiles. Once next_step is
+          null it is gone and the page below is exactly as before. */}
+      {showFirstRun && (
+        <Reveal>
+          <FirstRunStrip onboarding={onboarding} />
+        </Reveal>
+      )}
+
       {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
       <Reveal>
         <ReactorHero
@@ -750,8 +755,18 @@ export default function OverviewPage() {
           version={health.data?.version}
           activeProject={activeProject}
           model={
-            health.data ? `${health.data.default_provider}/${health.data.default_model}` : undefined
+            // v1.310.0 (mock-default-trap-cli-ollama, d): a fresh install's
+            // default is the offline demo, and "mock/claude-opus-4-8" read as
+            // a real Claude model answering. Say what is true instead. An
+            // EMPTY default is untouched too (the W2-1 contract treats it so),
+            // and would otherwise render "/claude-opus-4-8".
+            health.data
+              ? noModelChosen(health.data.default_provider)
+                ? "No model chosen yet"
+                : `${health.data.default_provider}/${health.data.default_model}`
+              : undefined
           }
+          modelChosen={!!health.data && !noModelChosen(health.data.default_provider)}
           runningCount={runningCount}
           freeDisk={freeDisk}
           failures={failures}
@@ -821,10 +836,14 @@ export default function OverviewPage() {
         <HealthCard metrics={m ?? null} loading={metrics.loading} />
       </Reveal>
 
-      {/* First-run welcome + getting-started checklist */}
-      <Reveal>
-        <OnboardingWelcome />
-      </Reveal>
+      {/* First-run welcome + getting-started checklist — here only while the
+          strip is NOT up (the strip carries it at the top; one card, never
+          two). It still nudges for a failing check after setup is done. */}
+      {!showFirstRun && (
+        <Reveal>
+          <OnboardingWelcome state={onboarding} />
+        </Reveal>
+      )}
 
       {/* Power tips (v1.198.0): the shortcuts the README teaches, surfaced
           in-app for packaged users who never see GitHub. One-shot dismiss —
@@ -860,7 +879,10 @@ export default function OverviewPage() {
           }
         >
           <div className="space-y-5">
-      {/* First-win: one click → a real result. */}
+      {/* First-win: one click → a real result. While the first-run strip is
+          up these starters live THERE (pointing at Chat); once setup is done
+          they come back here unchanged, still starting a run. */}
+        {!showFirstRun && (
         <PanelSection
           title="Try it now"
           icon={<Rocket size={15} />}
@@ -909,6 +931,7 @@ export default function OverviewPage() {
             })}
           </div>
         </PanelSection>
+        )}
 
       {/* Ambient operator — the reflexes that act on their own + recent fires. */}
         <PanelSection

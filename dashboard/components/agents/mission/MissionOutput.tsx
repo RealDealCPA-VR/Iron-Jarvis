@@ -48,6 +48,7 @@ import {
 } from "@/lib/mission";
 import { settledSplit } from "@/lib/streamSplit";
 import { useMissionLive, type MissionLive, type MissionLiveStore } from "@/lib/useMission";
+import { receiptVerbFor } from "./receipt";
 
 export type OutputTab = "report" | "markdown" | "preview";
 
@@ -209,11 +210,29 @@ function openedRow(row: unknown): { id: string; project: string } | null {
   return { id, project: typeof o.project_id === "string" ? o.project_id : "" };
 }
 
+/** A refused retry, in the user's words (v1.310.0). The route has three 409
+ *  sentences and they mean different things — "still running" and "a
+ *  follow-up is already running" are WAIT, "nothing failed" is DONE — so the
+ *  old one canned line ("Nothing is marked failed any more") told a user
+ *  whose follow-up was still working that their failures had vanished. The
+ *  daemon's own sentence is shown, capitalised and ended like a sentence;
+ *  only the nothing-failed / no-list cases keep words of our own, and a
+ *  reply that is not a plain sentence (a bare status line, JSON) never
+ *  reaches the screen. */
+function retryRefusal(message: string): string {
+  const said = message.trim();
+  if (/nothing failed/i.test(said)) return "Nothing is marked failed any more — the list may have changed.";
+  if (/no worklist/i.test(said)) return "This mission kept no list of items, so there is nothing to retry.";
+  if (!said || /^\d{3}\b|[{}\[\]]|\bdetail\b/i.test(said)) {
+    return "Iron Jarvis could not retry this right now — try again in a moment.";
+  }
+  const sentence = said[0].toUpperCase() + said.slice(1);
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
 function actionError(e: unknown, what: string): string {
   if (e instanceof ApiError && e.status === 409) {
-    return what === "retry"
-      ? "Nothing is marked failed any more — the list may have changed."
-      : "This objective is already being worked on.";
+    return what === "retry" ? retryRefusal(e.message) : "This objective is already being worked on.";
   }
   if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
     return what === "retry"
@@ -232,10 +251,10 @@ function actionError(e: unknown, what: string): string {
  *  failed one tried it; a stopped (or restart-interrupted) one ran on it. */
 function receiptVerb(view: MissionView): string {
   const status = view.session.status;
-  if (status === "completed") return "Answered by";
+  // v1.310.0: the rule lives in ./receipt (shared with every teammate card);
+  // any non-terminal session status — active, queued — is still at it.
   if (!MISSION_TERMINAL.has(status)) return "Working on";
-  if (status === "failed" && !view.session.interrupted) return "Tried";
-  return "Ran on";
+  return receiptVerbFor(status, view.session.interrupted);
 }
 
 /** Who did the work: provider · model, quiet; amber when the mock answered

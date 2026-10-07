@@ -226,17 +226,17 @@ def test_windows_tells_us_the_session_is_ending_through_both_doors():
 
 def test_start_with_windows_is_offered_once_and_never_again():
     """The other half of R-04: start-at-login exists, ships OFF, and nobody
-    finds it. Asked once, with Yes pre-selected — and the asked-flag is
-    written BEFORE the dialog, so a crash mid-answer cannot ask forever."""
+    finds it. Asked once, with Yes pre-selected.
+
+    v1.310.0: the asked-flag is now written only once the dialog is ANSWERED
+    (and never on the first launch) — the write-before-dialog pin is gone; the
+    timing and answer rules live in test_desktop_startwithwindows_v1310.py."""
     src = _src()
     fn = _lift("function maybeOfferStartWithWindows", "function maybeOfferStartWithWindows")
     assert "IS_PACKAGED" in fn and 'process.platform !== "win32"' in fn, (
         "a dev run or a non-Windows box would be asked"
     )
     assert "START_HIDDEN" in fn, "a tray-only login start would be asked at every login"
-    assert fn.index('writeDesktopSetting("startWithWindowsAsked", true)') < fn.index(
-        "showMessageBox"
-    ), "the asked-flag is written after the dialog: a crash would re-ask forever"
     assert "if (getStartAtLogin()) return;" in fn, "it offers what is already on"
     assert '"Yes, start with Windows"' in fn and "defaultId: 0" in fn
     assert "setStartAtLogin(true);" in fn

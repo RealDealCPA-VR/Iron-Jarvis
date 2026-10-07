@@ -429,46 +429,92 @@ function setStartAtLogin(enabled) {
   refreshMenus();
 }
 
+/** The tray / app-menu toggle (v1.310.0 review): flipping the switch IS the
+ *  user's answer, so the later one-time question must never ask it again —
+ *  the asked-flag is no longer written at first launch, so the toggle writes
+ *  it. */
+function setStartAtLoginFromMenu(enabled) {
+  writeDesktopSetting("startWithWindowsAsked", true);
+  setStartAtLogin(enabled);
+}
+
+//: v1.310.0: how long after the FIRST launch before the question may come.
+//: The first launch belongs to the first-run wizard; a day later the user has
+//: something (a schedule, a goal, a phone channel) worth keeping alive.
+const START_WITH_WINDOWS_AFTER_MS = 24 * 60 * 60 * 1000;
+
 // One question, asked once (v1.249.0, R-04). A Windows Update restart at 03:29
 // on 2026-09-09 left Iron Jarvis closed for ~18 hours — schedules, Slack and
 // webhooks all off, and nothing on the machine would have brought it back.
 // Start-at-login already exists (tray + app menu) but ships OFF and nobody
-// finds it, so ASK, with Yes pre-selected, and never ask again either way.
+// finds it, so ASK, with Yes pre-selected, and never ask again once answered.
+//
+// v1.310.0 (wave 2, the first five minutes): NOT on the first launch. The
+// dialog used to pop up in the same tick as the main window — over the
+// first-run wizard, asking about "schedules, messages and jobs" the user had
+// not heard of — and the asked-flag was written BEFORE it showed, so a
+// reflexive close meant it never came back. Now the first launch only stamps
+// firstLaunchAt; a launch a day or more later asks, as a sheet of the main
+// window (never a free-floating box over the splash), and the flag is written
+// only once the dialog is ANSWERED. A dialog left open simply asks again.
 function maybeOfferStartWithWindows() {
   if (!IS_PACKAGED || process.platform !== "win32" || START_HIDDEN) return;
-  let asked = false;
+  let raw = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
-    asked = !!(raw && raw.startWithWindowsAsked);
+    raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
   } catch {
-    /* no settings file yet -> never asked */
+    /* no settings file yet -> never asked, never launched */
   }
-  if (asked) return;
-  writeDesktopSetting("startWithWindowsAsked", true); // asked; the answer is optional
+  if (raw && raw.startWithWindowsAsked) return;
+  const firstLaunchAt = raw && Number(raw.firstLaunchAt);
+  if (!firstLaunchAt || !Number.isFinite(firstLaunchAt)) {
+    // The first launch (or a pre-1.310 install that was never asked): start
+    // the clock and leave the first click to the wizard.
+    writeDesktopSetting("firstLaunchAt", Date.now());
+    return;
+  }
+  if (Date.now() - firstLaunchAt < START_WITH_WINDOWS_AFTER_MS) return; // too soon
   if (getStartAtLogin()) return; // already on — nothing to offer
-  try {
-    dialog
-      .showMessageBox({
-        type: "question",
-        buttons: ["Yes, start with Windows", "Not now"],
-        defaultId: 0,
-        cancelId: 1,
-        noLink: true,
-        title: "Iron Jarvis",
-        message: "Start Iron Jarvis with Windows (in the tray)?",
-        detail:
-          "Then schedules, messages and jobs waiting for you keep working after Windows " +
-          "restarts — an overnight update no longer leaves Iron Jarvis closed. It starts " +
-          "quietly in the tray, and you can turn this off any time from the tray menu.",
-      })
-      .then(({ response }) => {
-        if (response === 0) setStartAtLogin(true);
-      })
-      .catch(() => {
-        /* dialog unavailable — the tray toggle still works */
-      });
-  } catch {
-    /* never block boot on a dialog */
+  const opts = {
+    type: "question",
+    buttons: ["Yes, start with Windows", "Not now"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: "Iron Jarvis",
+    message: "Start Iron Jarvis with Windows (in the tray)?",
+    detail:
+      "Then schedules, messages and jobs waiting for you keep working after Windows " +
+      "restarts — an overnight update no longer leaves Iron Jarvis closed. It starts " +
+      "quietly in the tray, and you can turn this off any time from the tray menu.",
+  };
+  // Parented when there is a live window (a sheet the user sees in context);
+  // free-standing only if the window is already gone.
+  const parent = mainWin && !mainWin.isDestroyed() ? mainWin : null;
+  const ask = () => {
+    try {
+      const owner = parent && !parent.isDestroyed() ? parent : null;
+      (owner ? dialog.showMessageBox(owner, opts) : dialog.showMessageBox(opts))
+        .then(({ response }) => {
+          writeDesktopSetting("startWithWindowsAsked", true); // answered, either way
+          if (response === 0) setStartAtLogin(true);
+        })
+        .catch(() => {
+          /* dialog unavailable — the tray toggle still works, and we ask next launch */
+        });
+    } catch {
+      /* never block boot on a dialog */
+    }
+  };
+  // Boot calls this in the same tick as createMainWindow(), and the window is
+  // built hidden (show:false, shown on 'ready-to-show'). Asking now would put
+  // the question over the splash, owned by a window nobody can see yet — so
+  // wait for the window to actually appear. A window that never shows leaves
+  // the flag unwritten, and the next launch asks.
+  if (parent && typeof parent.isVisible === "function" && !parent.isVisible()) {
+    parent.once("show", ask);
+  } else {
+    ask();
   }
 }
 
@@ -2348,7 +2394,7 @@ function buildTrayContextMenu() {
       label: "Start at login",
       type: "checkbox",
       checked: getStartAtLogin(),
-      click: (item) => setStartAtLogin(item.checked),
+      click: (item) => setStartAtLoginFromMenu(item.checked),
     });
   }
   template.push(
@@ -3155,7 +3201,7 @@ function buildMenu() {
                 label: "Start at login (hidden in tray)",
                 type: "checkbox",
                 checked: getStartAtLogin(),
-                click: (item) => setStartAtLogin(item.checked),
+                click: (item) => setStartAtLoginFromMenu(item.checked),
               },
             ]
           : []),
@@ -3410,7 +3456,7 @@ async function startup() {
   showWindowWhenReady = false;
   installDaemonWatchdog(); // v1.226.0: a daemon that is up but not answering gets restarted
   installAskWatcher(); // v1.249.0 (R-03): waiting jobs reach a closed window
-  maybeOfferStartWithWindows(); // v1.249.0 (R-04): asked once
+  maybeOfferStartWithWindows(); // v1.249.0 (R-04); v1.310.0: a day after the first launch
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);

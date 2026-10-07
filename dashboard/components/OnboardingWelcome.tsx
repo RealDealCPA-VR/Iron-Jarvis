@@ -12,9 +12,16 @@ import {
   Rocket,
   Wrench,
   TriangleAlert,
+  ChevronRight,
+  Bot,
 } from "lucide-react";
-import { useApi } from "@/lib/useApi";
-import type { Onboarding, OnboardingStep } from "@/lib/types";
+import { useApi, type ApiState } from "@/lib/useApi";
+import { ApiError } from "@/lib/api";
+// W2-6 (track B): `chooseForAnswers` is `useModel` under a name the hooks
+// lint rule does not mistake for a hook (it is called from a click handler).
+import { chooseForAnswers, decodeOnboardingModel } from "@/lib/onboarding";
+import { useDaemon } from "@/lib/daemon";
+import type { DoctorCheck, Onboarding, OnboardingStep } from "@/lib/types";
 
 const DISMISS_KEY = "ij_onboarding_dismissed";
 
@@ -40,9 +47,109 @@ function stepLink(step: OnboardingStep) {
   return STEP_LINK[step.key] ?? { href: "/sessions", cta: "Get started" };
 }
 
-export function OnboardingWelcome() {
-  const { data } = useApi<Onboarding>("/onboarding");
+/** v1.310.0 (W2-2): a check row may carry a plain `label` beside its mono name. */
+type WelcomeCheck = DoctorCheck & { label?: string };
+
+/** v1.310.0 (welcome-env-checks-dev-tools): the developer toolchain is the
+ *  `ironjarvis doctor` CLI's business, never this card's — a packaged install
+ *  needs none of it, and the uv row's fix was a remote-script paste. The
+ *  daemon already drops these from /onboarding; this is the belt to that
+ *  brace for a daemon that still sends them. */
+const DEV_TOOLCHAIN = new Set(["python", "uv", "git", "node", "pnpm"]);
+
+/** A failing REQUIRED row shows inline; anything else is an optional extra.
+ *  A row with no level (a very old daemon) is treated as required — the
+ *  card would rather show one row too many than hide a real problem. */
+function isRecommended(c: WelcomeCheck): boolean {
+  return (c.level ?? "required") === "recommended";
+}
+
+/** v1.310.0 (review): where a usable model's words go, from the daemon's own
+ *  `local` flag on each W2-2 `usable` row. Track B's decoder keeps only
+ *  provider + label, so the flag is read off the raw block here; an older
+ *  daemon that sends no flag falls back to the providers that run on the
+ *  user's own machine. */
+const LOCAL_FALLBACK = new Set(["ollama", "custom"]);
+
+function localFlags(raw: unknown): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  const rows = (raw as { usable?: unknown } | null | undefined)?.usable;
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const { provider, local } = row as Record<string, unknown>;
+    if (typeof provider === "string" && typeof local === "boolean") out.set(provider, local);
+  }
+  return out;
+}
+
+/** A label as it reads mid-sentence: "Your own model server" becomes "your
+ *  own model server" ("…sent to your own model server…"); a name like
+ *  "Claude" keeps its capital. */
+function midSentence(label: string): string {
+  return /^(Your|The|A|An)\b/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+}
+
+/** The sentence said BEFORE a press — the privacy decision the user is
+ *  making. Cloud vs local is theirs to choose, so it is said for every row. */
+function whereItGoes(provider: string, label: string, local: boolean): string {
+  if (!local) return `Your questions will be sent to ${midSentence(label)} to be answered.`;
+  if (provider === "ollama") return "It runs on this PC, so your questions stay here.";
+  // v1.310.0 (review): a custom address can point at a HOSTED OpenAI-
+  // compatible service, so this card does not promise "no AI company sees
+  // them" — it says only what is known: the words go to the server the user
+  // set up.
+  return "It runs on the model server you set up, so your questions go only there.";
+}
+
+/** v1.310.0 (review): a CLI promoted to itself answers on its own sign-in and
+ *  comes back as model "subscription" (settings.py's `_CLI_INHERITS` branch
+ *  when the user also holds their own API key) — that is not a model id, and
+ *  "Done — subscription now answers" was nonsense at the most important
+ *  moment of the first five minutes. Only a real id is shown in the code
+ *  font. */
+const NOT_A_MODEL_ID = new Set(["", "subscription", "default"]);
+
+function isRealModelId(model: string): boolean {
+  return !NOT_A_MODEL_ID.has(model.trim().toLowerCase());
+}
+
+/** Who answers now, in the confirmation: the pressed offer's label, else a
+ *  real model id, else plain words — never "subscription". */
+function answeredBy(o: { label: string; model: string }): string {
+  if (o.label) return o.label;
+  return isRealModelId(o.model) ? o.model : "The model you chose";
+}
+
+/** What the "use this for answers" press came back with (kept locally so the
+ *  sentence survives the /onboarding re-read that follows it). `label` is the
+ *  PRESSED offer's own name, so the confirmation names what the user chose. */
+type PressOutcome =
+  | { kind: "promoted"; provider: string; model: string; label: string }
+  | { kind: "declined"; reason: string }
+  | { kind: "error"; message: string };
+
+/**
+ * The getting-started card.
+ *
+ * v1.310.0 (wave 2): the page may hand in its own `/onboarding` read (`state`)
+ * so the Overview fetches it ONCE for both the first-run strip's gate and this
+ * card; on its own (the wizard-less surfaces, tests) it reads it itself.
+ */
+export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = {}) {
+  const own = useApi<Onboarding>(state ? null : "/onboarding");
+  const api = state ?? own;
+  const { data } = api;
+  // The press refreshes the shared /health read so the topbar and every other
+  // reader follow the new default at once (W2-6). Outside a DaemonProvider
+  // this is a no-op.
+  const { refresh: refreshHealth } = useDaemon();
   const [dismissed, setDismissed] = useState(true); // assume dismissed until we read storage
+  const [extrasOpen, setExtrasOpen] = useState(false);
+  // The provider whose press is in flight ("" = none). Every press is
+  // disabled while one runs; only the pressed one says "Switching…".
+  const [pressing, setPressing] = useState("");
+  const [outcome, setOutcome] = useState<PressOutcome | null>(null);
 
   useEffect(() => {
     setDismissed(localStorage.getItem(DISMISS_KEY) === "1");
@@ -59,15 +166,156 @@ export function OnboardingWelcome() {
 
   if (!data) return null;
 
-  const failingChecks = (data.doctor?.checks ?? []).filter((c) => !c.ok);
-  const relevant = data.first_run || data.next_step !== null || !data.doctor?.ok;
+  // v1.310.0 (W2-2): `model` is absent on an older daemon — then no card.
+  const model = decodeOnboardingModel((data as unknown as { model?: unknown }).model);
+
+  const failing = ((data.doctor?.checks ?? []) as WelcomeCheck[]).filter(
+    (c) => !c.ok && !DEV_TOOLCHAIN.has(c.name),
+  );
+  const requiredFailing = failing.filter((c) => !isRecommended(c));
+  const extras = failing.filter(isRecommended);
+  // v1.310.0 (mock-default-trap-cli-ollama): the offline demo answering is
+  // itself a reason to show the card, whatever the checklist says.
+  const relevant =
+    data.first_run || data.next_step != null || !data.doctor?.ok || !!model?.is_mock || !!outcome;
 
   // Everything is set up — nothing to nudge.
   if (!relevant) return null;
 
+  // v1.310.0: the ONE explicit "use this for answers" press (W2-1 via W2-6).
+  // The daemon promotes ONLY over the untouched demo default and says so in
+  // a sentence when it does not; this card repeats that sentence verbatim and
+  // never claims a switch the daemon did not make.
+  async function pressForAnswers(provider: string, label: string) {
+    if (pressing) return;
+    setPressing(provider);
+    try {
+      const res = await chooseForAnswers(provider, refreshHealth);
+      if (res?.promoted) {
+        setOutcome({
+          kind: "promoted",
+          provider: res.promoted.provider,
+          model: res.promoted.model,
+          label,
+        });
+      } else {
+        setOutcome({
+          kind: "declined",
+          reason: res?.reason || "Nothing changed — a model was already chosen for answers.",
+        });
+      }
+      // The checklist's "Connect your AI" row and the card itself read the
+      // new default from here.
+      api.reload();
+    } catch (err) {
+      setOutcome({
+        kind: "error",
+        message: err instanceof ApiError || err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setPressing("");
+    }
+  }
+
+  // v1.310.0 (review): EVERY usable model gets its own press. The daemon
+  // orders the list CLIs first, so offering only the first hid a local
+  // Ollama behind a cloud sign-in — the card made the cloud-vs-local choice
+  // for the user by leaving the alternative out.
+  const offers = model?.usable ?? [];
+  const local = localFlags((data as unknown as { model?: unknown }).model);
+  const isLocal = (provider: string) => local.get(provider) ?? LOCAL_FALLBACK.has(provider);
+  const showModelCard = !!model?.is_mock || !!outcome;
+
+  /* v1.310.0 (mock-default-trap-cli-ollama): which model answers, said
+     plainly. While the default is the offline demo every reply is a
+     scripted sample — a user who is signed in to Claude or runs Ollama
+     used to get those with every screen saying "connected". One press
+     fixes it, and it is the USER's press: cloud-vs-local is their
+     privacy decision, so nothing here switches on its own. */
+  const modelCard = showModelCard ? (
+    <div
+      data-testid="welcome-model"
+      className="mt-5 rounded-xl border border-accent/25 bg-ink-950/40 p-3.5"
+    >
+      <div className="flex items-start gap-2.5">
+        <Bot size={16} className="mt-0.5 shrink-0 text-accent-soft" />
+        <div className="min-w-0 flex-1 text-sm">
+          {outcome?.kind === "promoted" ? (
+            // Named by what the user PRESSED; the model id rides along
+            // only when it is one (never the bare word "subscription").
+            <p role="status" className="text-zinc-200">
+              Done — {answeredBy(outcome)} now answers your questions
+              {isRealModelId(outcome.model) && outcome.label && (
+                <>
+                  {" "}
+                  (<span className="font-mono text-accent-soft">{outcome.model}</span>)
+                </>
+              )}
+              . Try asking something in Chat.
+            </p>
+          ) : outcome?.kind === "declined" ? (
+            <p role="status" className="text-zinc-300">
+              {outcome.reason}
+            </p>
+          ) : offers.length > 0 ? (
+            <p className="text-zinc-200">
+              Replies are a scripted demo right now — no model has been chosen to answer
+              yet.{" "}
+              {offers.length === 1
+                ? `${offers[0].label} is ready to answer.`
+                : "These are ready — choose the one that should answer:"}
+            </p>
+          ) : (
+            <p className="text-zinc-200">
+              Replies are a scripted demo until you connect a model — what you ask won’t
+              get a real answer yet.{" "}
+              <Link
+                href="/connections"
+                className="font-medium text-accent-soft underline-offset-2 hover:underline"
+              >
+                Connect a model
+              </Link>
+            </p>
+          )}
+
+          {outcome?.kind === "error" && (
+            <p role="alert" className="mt-2 text-xs text-amber-200">
+              {outcome.message}
+            </p>
+          )}
+
+          {/* One press per usable model, each with where the words go
+              said BEFORE the press. The presses stay offered until one
+              worked or the daemon said why it will not (a 409 changed
+              nothing, so try again). */}
+          {offers.length > 0 && outcome?.kind !== "promoted" && outcome?.kind !== "declined" && (
+            <ul className="mt-3 space-y-2.5">
+              {offers.map((o) => (
+                <li key={o.provider}>
+                  <button
+                    type="button"
+                    disabled={!!pressing}
+                    onClick={() => pressForAnswers(o.provider, o.label)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:opacity-60"
+                  >
+                    {pressing === o.provider ? "Switching…" : `Use ${o.label} for answers`}
+                    {pressing !== o.provider && <ArrowRight size={13} />}
+                  </button>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {whereItGoes(o.provider, o.label, isLocal(o.provider))}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // Collapsed: a small "Setup" re-open affordance.
   if (dismissed) {
-    return (
+    const chip = (
       <button
         onClick={reopen}
         className="inline-flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.07] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.12]"
@@ -78,6 +326,19 @@ export function OnboardingWelcome() {
         )}
       </button>
     );
+    // v1.310.0 (review): a dismissal stored by an EARLIER version survives
+    // the upgrade, and the checklist is what the user put away — not the
+    // one-press fix for a demo default with a real model ready. That stays
+    // beside the chip (the press, or the answer it got) until it is spent.
+    if ((model?.is_mock && offers.length > 0) || outcome) {
+      return (
+        <div>
+          {chip}
+          {modelCard}
+        </div>
+      );
+    }
+    return chip;
   }
 
   return (
@@ -101,18 +362,22 @@ export function OnboardingWelcome() {
                 {data.first_run ? "Welcome to Iron Jarvis" : "Finish setting up"}
               </h2>
               <p className="text-sm text-zinc-400">
-                A few quick steps to get the most out of your local AI operating system.
+                A few quick steps and Jarvis is ready to help with real work.
               </p>
             </div>
           </div>
           <button
             onClick={dismiss}
             title="Dismiss"
+            aria-label="Dismiss"
             className="rounded-lg p-1 text-zinc-500 transition-colors hover:bg-white/[0.05] hover:text-zinc-300"
           >
             <X size={16} />
           </button>
         </div>
+
+        {/* The model card (built above, so a dismissed card can still show it). */}
+        {modelCard}
 
         {/* Checklist */}
         <ol className="mt-5 space-y-2">
@@ -178,24 +443,58 @@ export function OnboardingWelcome() {
           })}
         </ol>
 
-        {/* Doctor: surface failing checks with their fix. */}
-        {failingChecks.length > 0 && (
+        {/* v1.310.0 (welcome-env-checks-dev-tools): only a REQUIRED failure is
+            worth amber on a new user's first screen — it is something that
+            actually stops the app working, so it shows with its fix. */}
+        {requiredFailing.length > 0 && (
           <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-3.5">
             <div className="mb-2 flex items-center gap-2 text-xs font-medium text-amber-200">
-              <Wrench size={13} /> Environment checks
+              <Wrench size={13} /> Needs your attention
             </div>
             <ul className="space-y-2">
-              {failingChecks.map((c) => (
+              {requiredFailing.map((c) => (
                 <li key={c.name} className="flex items-start gap-2.5 text-xs">
                   <TriangleAlert size={13} className="mt-0.5 shrink-0 text-amber-300" />
                   <div className="min-w-0">
-                    <span className="font-mono text-amber-100/90">{c.name}</span>
+                    <span className="font-medium text-amber-100/90">{c.label || c.name}</span>
                     <span className="text-zinc-500"> — {c.detail}</span>
                     {c.fix && <div className="mt-0.5 text-zinc-500">{c.fix}</div>}
                   </div>
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+
+        {/* ...and everything RECOMMENDED folds into one quiet line, named in
+            plain words ("Reading old .doc files", not `antiword`). Nothing is
+            broken when one of these is missing; a feature is just unavailable
+            until it is added. The rows are not rendered while folded. */}
+        {extras.length > 0 && (
+          <div className="mt-4">
+            <button
+              type="button"
+              aria-expanded={extrasOpen}
+              onClick={() => setExtrasOpen((o) => !o)}
+              className="inline-flex items-center gap-1.5 text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+            >
+              <ChevronRight
+                size={13}
+                className={`transition-transform ${extrasOpen ? "rotate-90" : ""}`}
+              />
+              Optional extras ({extras.length})
+            </button>
+            {extrasOpen && (
+              <ul className="mt-2 space-y-1.5 pl-5">
+                {extras.map((c) => (
+                  <li key={c.name} className="text-xs">
+                    <span className="text-zinc-300">{c.label || c.name}</span>
+                    <span className="text-zinc-500"> — {c.detail}</span>
+                    {c.fix && <div className="mt-0.5 text-zinc-500">{c.fix}</div>}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>

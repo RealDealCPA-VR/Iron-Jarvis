@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.309.0 (2026-10-04).*
+holds itself to. Current as of v1.310.0 (2026-10-04).*
 
 ---
 
@@ -42,6 +42,58 @@ later; nothing is wrong with your install, and the direct installer link on the
 release page always works. While the window is hidden or minimised the dashboard
 stops polling the daemon (the daemon check itself slows to every 30 s) and
 refreshes everything the moment you bring it back.
+
+---
+
+## Getting started — your first five minutes
+
+*(v1.310.0)* The aim of the first five minutes is one real answer to one real
+question. Here is what you will see and what each part means.
+
+**1. Connect a model.** On a brand-new install a setup window opens with three
+doors: **I already pay for Claude or ChatGPT** (uses the Claude Code or Codex
+sign-in already on this PC), **Free & private on this PC** (Ollama — nothing
+leaves your computer), and **I have an API key**. You can skip it; everything
+it does is also on the Connections page.
+
+**2. Choose which model answers — one press, always yours.** Until you choose,
+the app answers with a built-in offline sample, so replies are a **scripted
+demo**, not real answers (every such reply is marked in amber under it). When
+a real model is ready — you are signed in to Claude or ChatGPT, or Ollama is
+running — the welcome card on the Overview (and the setup window, and an empty
+Chat) offers one button named for it, for example **Use Claude (your Claude Code sign-in)
+for answers**.
+When more than one is ready (say, a Claude sign-in and Ollama), each gets its
+own button, and under each the card says where your questions would go —
+"It runs on this PC, so your questions stay here" or "Your questions will be
+sent to Claude (your Claude Code sign-in) to be answered" — before you press anything.
+Press it and the card says which model now answers. Nothing switches on its own: whether your
+questions go to a cloud service or stay on this PC is your decision, so the
+app only changes the answering model when you press, and only over the demo —
+never over a model you already picked (then it tells you so and changes
+nothing). If no real model is connected yet, the card says replies are a
+scripted demo and links to Connections.
+
+**3. Ask something.** While setup is unfinished, the top of the Overview —
+right under the title, above everything else — holds your getting-started
+checklist, one **Ask Jarvis anything** box, and a few **Try it now** starters
+("Tidy my Downloads", "Draft a follow-up", …). Typing in the box, or pressing a
+starter, opens Chat with the question already written in; nothing runs until
+you press send there. Once every step is done, that strip goes away and the
+Overview is the usual dashboard (the starters move back under **Systems &
+admin**, where they start a run with one click).
+
+**4. The checklist.** *Connect your AI*, *Give it your first task*, *Work with
+a document* and *Teach it your style* (say something lasting in Chat, such as
+"From now on, keep answers short" — the reply shows **Remembered: …** when it
+kept it). Voice is optional.
+
+**5. Optional extras.** Some features need a helper program — reading old
+`.doc` files, reading scanned pages, and similar. If one is missing, the
+welcome card folds it into a single quiet **Optional extras (n)** line; open
+it to see each one in plain words and what to add. Nothing is broken while
+they are missing — only that one feature waits. Anything that really stops the
+app working is shown on its own, in amber, with its fix.
 
 ---
 

@@ -215,6 +215,40 @@ MISSION_DELIVERABLE = (
     "content."
 )
 
+
+def mission_retry_note(session: object, options: dict) -> str:
+    """The MODEL-facing line a mission retry carries (v1.310.0), or "".
+
+    ``POST /missions/{id}/retry-failed`` reruns the mission with the SAME task
+    on purpose (the worklist board is keyed by it), so the model was handed
+    the whole original job again with no word that most of it is done. The
+    route stamps ``options.retry_failed = {"session": <the new run's id>,
+    "count": N}``; this turns it into one sentence. The user-facing objective
+    ("Retry the N failed items: ...") and the task are untouched.
+
+    BOUND TO ITS OWN ROW: run options carry over on a rerun / continue, so a
+    later continuation of the retry would inherit the key — and a
+    continuation has a different task, a different board and no "failed items"
+    at all. The note speaks only when the stamped id IS this session's id.
+    Never raises."""
+    try:
+        raw = options.get("retry_failed")
+        if not isinstance(raw, dict) or raw.get("session") != getattr(session, "id", None):
+            return ""
+        count = int(raw.get("count") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    if count <= 0:
+        return ""
+    items = "item" if count == 1 else "items"
+    return (
+        f"THIS RUN IS A RETRY. An earlier run of this same job already finished "
+        f"the rest; only the {count} failed {items} remain, re-opened on the "
+        "worklist. Take just those (`worklist_status` / `worklist_next`), never "
+        "redo an item that is already done, and report on the retried items."
+    )
+
+
 PAUSE_TIMEOUT_REASON = (
     "the approval request timed out: paused for the user and not answered in"
     " time — this call was NOT run. Do not retry it; continue with what does"
@@ -1676,6 +1710,11 @@ class AgentRuntime:
         # child never inherits it (options are not forwarded to children).
         if _run_options.get("deliverable") is True:
             system_prompt += "\n\n" + MISSION_DELIVERABLE
+        # A MISSION RETRY (v1.310.0) says, to the model, that only the failed
+        # items remain — see ``mission_retry_note`` (bound to its own row).
+        _retry_note = mission_retry_note(session, _run_options)
+        if _retry_note:
+            system_prompt += "\n\n" + _retry_note
         # LOW TRUST FROM THE DOOR (v1.298.0): ONE sentence, and only when the
         # row says low at the start. A run lowered MID-run appends nothing —
         # the refusal on its next kept-away call is its signal, and a prompt

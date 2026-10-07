@@ -8,7 +8,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  KeyRound,
+  CircleAlert,
   Loader2,
   Mic,
   Play,
@@ -17,61 +17,27 @@ import {
   SkipForward,
   Wand2,
 } from "lucide-react";
-import { post, put } from "@/lib/api";
+import { post } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { useDictation } from "@/lib/useDictation";
-import type {
-  ConnectionTestResult,
-  Onboarding,
-  OnboardingStep,
-  SessionDetail,
-  SessionView,
-} from "@/lib/types";
+import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
+import { AnswerPressNote, useAnswerPress } from "@/components/onboarding/AnswerPress";
+import {
+  availableRows,
+  candidateFor,
+  firstTaskProvider,
+  friendlyProvider,
+  isDemoDefault,
+} from "@/lib/onboarding";
+import type { Onboarding, OnboardingStep, SessionDetail, SessionView } from "@/lib/types";
 
 /** One-shot choice: "done" (finished the flow) or "demo" (opted into mock). */
 const CHOICE_KEY = "ij_first_run_choice";
 
-/** Inherited CLI providers we celebrate as an instant "no setup needed" path. */
-const INHERITED = new Set(["claude-cli", "codex-cli", "grok-cli", "ollama"]);
-
-type KeyProvider = "anthropic" | "openai" | "custom";
-
-const KEY_PROVIDERS: { id: KeyProvider; label: string; placeholder: string }[] = [
-  { id: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
-  { id: "openai", label: "OpenAI", placeholder: "sk-…" },
-  { id: "custom", label: "Custom endpoint", placeholder: "sk-… (optional)" },
-];
-
-/**
- * Step-1 doors (v1.197.0). The old step 1 led with "CLIs", "rescan" and an
- * API-key form — vocabulary that assumes the user already knows what those
- * are. A non-technical first-runner's real question is "which of these am I?",
- * so the not-yet-connected branch now opens with three plain-language doors
- * and only reveals the mechanics of the one they picked. NOTE: Google Gemini
- * is deliberately NOT a key door — its connection is OAuth-only (the daemon
- * 400s a posted key), so it appears as a pointer to the Connections page
- * inside the key door instead of a form that could never work.
- */
-type Door = "subscription" | "local" | "key";
-
-const DOORS: { id: Door; label: string; hint: string }[] = [
-  {
-    id: "subscription",
-    label: "I already pay for Claude or ChatGPT",
-    hint: "Use the login you already have on this PC",
-  },
-  {
-    id: "local",
-    label: "Free & private on this PC",
-    hint: "Run a local model with Ollama — nothing leaves the machine",
-  },
-  {
-    id: "key",
-    label: "I have an API key",
-    hint: "Paste it here — about 30 seconds",
-  },
-];
+/* The three connect doors (v1.197.0) live in components/onboarding/
+   ConnectDoors.tsx since v1.310.0 — shared with the chat empty state, so the
+   wizard's step 1, its gated step 3 and chat all offer the SAME way forward. */
 
 /** One-tap magic tasks — small, fast, and unmistakably real when they run. */
 const SUGGESTIONS = [
@@ -88,6 +54,26 @@ interface VoiceStatus {
 }
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+
+/** The slice of `GET /sessions/{id}/result` the finale reads (the ledger's
+ *  own file lists — agents/outcome.session_result). Read here instead of
+ *  importing SessionFiles: that module brings the whole ArtifactsRail, and the
+ *  wizard is mounted on every page. */
+interface FirstTaskResult {
+  found?: boolean;
+  files_created?: unknown;
+  files_changed?: unknown;
+}
+
+/** The names of the files a run wrote, created then changed, de-duplicated
+ *  (a basename — the full path is one click away on the session page). */
+function writtenFiles(result: FirstTaskResult | null): string[] {
+  if (!result?.found) return [];
+  const all = [result.files_created, result.files_changed].flatMap((l) =>
+    Array.isArray(l) ? l.filter((x): x is string => typeof x === "string" && x !== "") : [],
+  );
+  return Array.from(new Set(all.map((p) => p.split(/[\\/]/).pop() || p)));
+}
 
 /** The arc-reactor brand mark (mirrors the sidebar's, sized for the hero). */
 function ArcMark() {
@@ -147,15 +133,25 @@ function ArcMark() {
  * states match OnboardingWelcome exactly (no hardcoded drift):
  *  1. Connect a model INLINE. Since v1.197.0 the not-yet-connected branch is
  *     three plain-language DOORS — "I already pay for Claude or ChatGPT"
- *     (inherit the signed-in CLI), "Free & private on this PC" (Ollama), and
- *     "I have an API key" (the compact anthropic / openai / custom form) —
- *     because the old copy led with jargon a first-runner may not know.
- *     Gemini is OAuth-only, so it is a link to /connections, never a key form.
+ *     (Claude Code / Codex signed in on this PC), "Free & private on this PC"
+ *     (Ollama), and "I have an API key" (the compact anthropic / openai /
+ *     custom form) — because the old copy led with jargon a first-runner may
+ *     not know. Gemini is OAuth-only, so it is a link to /connections, never
+ *     a key form. Since v1.310.0 the doors are the shared ConnectDoors, and
+ *     they stay up (with the explicit "Use it for answers" press on top)
+ *     while the default is still the offline demo.
  *  2. Optional VOICE — test the mic through useDictation (greens on a non-empty
  *     transcript) or skip; voice NEVER blocks.
  *  3. First MAGIC task — one-tap suggestions or free text; the streaming
- *     transcript + final result render in the modal, ending on an honest
- *     "it works" celebration. Real errors are shown, never fabricated.
+ *     transcript + final result render in the modal. v1.310.0: with no real
+ *     model ready the step shows the doors instead (it never runs on the
+ *     demo); the task names its provider while the default is the demo; and
+ *     the verdict reads the provider that ACTUALLY answered (the session
+ *     row) — the mock is an amber "offline demo — no model ran", a real run
+ *     names its model and lists the files it wrote (or says it wrote none).
+ *     A real answer on a demo DEFAULT is not yet "chat works": the finale
+ *     then offers the explicit "Use <it> for answers" press (W2-1) beside
+ *     "Start using Iron Jarvis" — never automatic, never navigating.
  *     "Start using Iron Jarvis" finishes AND navigates to /chat (v1.197.0) —
  *     the hero surface — rather than closing onto an arbitrary page.
  */
@@ -193,94 +189,25 @@ export function FirstRunWizard() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // --- Step 1: connect a model -------------------------------------------
-  const availableProviders = (health?.providers ?? []).filter((p) => p.available);
+  /* v1.310.0: "ready" (a real provider answers) and "the demo still answers by
+     default" are DIFFERENT facts. A signed-in Claude Code or a reachable
+     Ollama is ready, but every chat turn still goes to the default — the
+     offline demo on a fresh install — until the user presses "Use it for
+     answers" (W2-1). Step 1 therefore stays on the doors (with that press on
+     top) until the default is the user's own; it never says "answers are
+     real" over the demo (finding mock-default-trap-cli-ollama). */
+  const availableProviders = availableRows(health);
   const providerReady = availableProviders.length > 0;
-  const inheritedReady = availableProviders.filter((p) => INHERITED.has(p.provider));
+  const demoDefault = isDemoDefault(health);
 
-  /* Which door is open. Local state ONLY (v1.197.0): remembering it would
-     resurrect a stale pick on the next visit, and re-picking costs one click. */
-  const [door, setDoor] = useState<Door | null>(null);
+  /* The provider the user just enabled through a door: the first task names
+     it explicitly so a demo default cannot answer it. */
+  const [justEnabled, setJustEnabled] = useState<string | null>(null);
 
-  const [keyProvider, setKeyProvider] = useState<KeyProvider>("anthropic");
-  const [keyValue, setKeyValue] = useState("");
-  const [customBaseUrl, setCustomBaseUrl] = useState("");
-  const [customModel, setCustomModel] = useState("");
-  const [keyBusy, setKeyBusy] = useState(false);
-  const [keyResult, setKeyResult] = useState<ConnectionTestResult | null>(null);
-  const [keyError, setKeyError] = useState<string | null>(null);
-  const [rescanBusy, setRescanBusy] = useState(false);
-
-  async function rescan() {
-    setRescanBusy(true);
-    try {
-      await post("/providers/rescan");
-    } catch {
-      /* ignore — refreshAll surfaces the real state either way */
-    } finally {
-      refreshAll();
-      setRescanBusy(false);
-    }
-  }
-
-  /* Ollama door (v1.197.0). Rescan does NOT detect Ollama: POST
-     /providers/rescan only enumerates CLIs, and the provider only reports
-     available once `ollama_base_url` is CONFIGURED — nothing configures it
-     from detection. Without this button the door was a dead end: install,
-     pull, rescan… and stay red forever. Saving the default local URL is the
-     real mechanism — the daemon normalizes any host form to its
-     /v1/chat/completions endpoint (providers/manager._normalize_ollama_url)
-     and PUT /settings live-reconfigures the manager. Availability still
-     requires the server to actually be REACHABLE, so this cannot fake a
-     green. */
-  const [ollamaBusy, setOllamaBusy] = useState(false);
-  const [ollamaSaved, setOllamaSaved] = useState(false);
-  const [ollamaError, setOllamaError] = useState<string | null>(null);
-
-  async function connectOllama() {
-    setOllamaBusy(true);
-    setOllamaError(null);
-    try {
-      await put("/settings", { values: { ollama_base_url: "http://localhost:11434" } });
-      setOllamaSaved(true);
-      refreshAll(); // immediate re-check — don't wait for the 5s health poll
-    } catch (e) {
-      setOllamaError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setOllamaBusy(false);
-    }
-  }
-
-  async function connectKey() {
-    const isCustom = keyProvider === "custom";
-    if (isCustom ? !customBaseUrl.trim() : !keyValue.trim()) return;
-    setKeyBusy(true);
-    setKeyError(null);
-    setKeyResult(null);
-    try {
-      if (isCustom) {
-        // Save the endpoint FIRST so a key-less local server (LM Studio, etc.)
-        // still sticks, then optionally attach a key.
-        await put("/settings", {
-          values: { custom_base_url: customBaseUrl.trim(), custom_model: customModel.trim() },
-        });
-        if (keyValue.trim()) {
-          await post(`/connections/custom/key`, { key: keyValue.trim() });
-        }
-        const result = await post<ConnectionTestResult>(`/connections/custom/test`);
-        setKeyResult(result);
-      } else {
-        await post(`/connections/${keyProvider}/key`, { key: keyValue.trim() });
-        const result = await post<ConnectionTestResult>(`/connections/${keyProvider}/test`);
-        setKeyResult(result);
-      }
-      setKeyValue("");
-      refreshAll(); // immediate green — don't wait for the 5s health poll
-    } catch (e) {
-      setKeyError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setKeyBusy(false);
-    }
-  }
+  /* "Sign in" opens a Build pane the user must SEE to type /login, so the
+     wizard steps aside (minimised to a pill) instead of covering it — the
+     latch still holds; nothing is finished. */
+  const [minimized, setMinimized] = useState(false);
 
   // --- Step 2: optional voice --------------------------------------------
   const dictation = useDictation();
@@ -333,6 +260,35 @@ export function FirstRunWizard() {
   const runStatus = detail?.session.status ?? null;
   const runResult = detail?.session.summary ?? "";
   const runTools = detail?.transcript.tools ?? [];
+  /* Who ACTUALLY answered (the session row, v1.310.0). "mock" = the demo. */
+  const runProvider = detail?.session.provider ?? "";
+  const runModel = detail?.session.model ?? "";
+  const ranOnDemo = runProvider === "mock";
+  /* The run's files, from the ledger — read once the run has finished. */
+  const { data: runResultFiles } = useApi<FirstTaskResult>(
+    sessionId && runDone && runStatus === "completed" && !ranOnDemo
+      ? `/sessions/${sessionId}/result`
+      : null,
+  );
+  const runFiles = runResultFiles ? writtenFiles(runResultFiles) : null;
+
+  /* The finale's press (review, v1.310.0). The first task named its model, so
+     it answered for real — but every chat turn after the wizard still goes to
+     the DEFAULT, which is still the offline demo. "It worked" followed by a
+     chat full of scripted replies is the mock-default trap by another door,
+     so while the demo is the default the finale offers the explicit W2-1
+     press for the model that just answered. A click, never automatic (cloud
+     vs local is the user's call), and it never navigates: the user reads
+     what happened and then chooses "Start using Iron Jarvis". */
+  const finalePress = useAnswerPress(refreshAll);
+  /* Kept on screen after a press so its answer stays readable once /health
+     follows the new default (the press itself then goes away). */
+  const finaleCandidate =
+    runStatus === "completed" && !ranOnDemo && (demoDefault || finalePress.note !== null)
+      ? candidateFor(health, runProvider)
+      : null;
+  /* Which model the pinned first task will use, said BEFORE it runs. */
+  const pinnedFor = demoDefault ? candidateFor(health, firstTaskProvider(health, justEnabled) ?? "") : null;
 
   useEffect(() => {
     if (runStatus && TERMINAL.has(runStatus)) {
@@ -344,17 +300,23 @@ export function FirstRunWizard() {
 
   async function runFirstTask(preset?: string) {
     const trimmed = (preset ?? task).trim();
-    if (!trimmed || submitting) return;
+    if (!trimmed || submitting || !providerReady) return;
     if (preset) setTask(preset);
     setSubmitting(true);
     setSubmitError(null);
     setSessionId(null);
     setRunDone(false);
     try {
+      /* v1.310.0: name the provider explicitly while the default is still
+         the demo (finding wizard-first-task-claims-real-on-mock) — the
+         inherited API name for a signed-in CLI so the quality dial applies.
+         A real default the user chose is never overridden: no pin then. */
+      const provider = firstTaskProvider(health, justEnabled);
       const s = await post<SessionView>("/sessions", {
         task: trimmed,
         agent_type: "builder",
         wait: false,
+        ...(provider ? { provider } : {}),
       });
       setSessionId(s.id);
     } catch (e) {
@@ -380,14 +342,36 @@ export function FirstRunWizard() {
   const steps = [
     { n: 1 as const, label: "Connect", title: connectStep?.title ?? "Connect a model", done: providerReady },
     { n: 2 as const, label: "Voice", title: voiceStep?.title ?? "Set up voice (optional)", done: voiceDone },
-    { n: 3 as const, label: "First task", title: sessionStep?.title ?? "Run your first task", done: runStatus === "completed" },
+    {
+      n: 3 as const,
+      label: "First task",
+      title: sessionStep?.title ?? "Run your first task",
+      // The demo's "completed" is not a first task done (v1.310.0).
+      done: runStatus === "completed" && !ranOnDemo,
+    },
   ];
 
-  /* Latched open; only finish() (or the skip link) closes it — see above. */
-  const show = open && choice === "";
+  /* Latched open; only finish() (or the skip link) closes it — see above.
+     Minimised (v1.310.0) is NOT closed: the user stepped out to a Build pane
+     to sign in, and the pill brings the wizard back where they left it. */
+  const latched = open && choice === "";
+  const show = latched && !minimized;
 
   return (
     <AnimatePresence>
+      {latched && minimized && (
+        <button
+          key="first-run-pill"
+          type="button"
+          onClick={() => {
+            setMinimized(false);
+            refreshAll();
+          }}
+          className="fixed bottom-4 right-4 z-[80] inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-ink-950 px-4 py-2 text-xs font-semibold text-accent-soft shadow-glow-sm transition-colors hover:bg-accent/[0.08]"
+        >
+          <Sparkles size={13} aria-hidden="true" /> Back to setting up Iron Jarvis
+        </button>
+      )}
       {show && (
         <m.div
           key="first-run"
@@ -483,251 +467,26 @@ export function FirstRunWizard() {
                       </button>
                     </div>
 
-                    {providerReady ? (
+                    {providerReady && !demoDefault ? (
+                      /* The default is the user's own real choice: say WHICH
+                         model answers — the one claim worth making here. */
                       <div className="mt-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3">
                         <div className="flex items-center gap-2 text-sm font-medium text-emerald-200">
                           <CheckCircle2 size={16} className="text-emerald-400" />
-                          {inheritedReady.length > 0
-                            ? "Detected — ready to use"
-                            : "Connected — ready to use"}
+                          Connected — ready to use
                         </div>
                         <p className="mt-1 text-xs text-emerald-300/80">
-                          {availableProviders.map((p) => p.provider).join(", ")} — answers are real.
+                          Answers come from {friendlyProvider(health?.default_provider ?? "")}
+                          {health?.default_model ? ` (${health.default_model})` : ""}.
                         </p>
                       </div>
                     ) : (
-                      <>
-                        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-                          Until a real model is connected, replies come from an offline demo
-                          that makes things up. Pick whichever sounds like you:
-                        </p>
-
-                        {/* The three doors (v1.197.0) — plain-language first, mechanics
-                            revealed only for the picked one. */}
-                        <div className="mt-3 grid gap-1.5">
-                          {DOORS.map((d) => {
-                            const active = door === d.id;
-                            return (
-                              <button
-                                key={d.id}
-                                onClick={() => setDoor(d.id)}
-                                aria-pressed={active}
-                                className={`rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
-                                  active
-                                    ? "border-accent/40 bg-accent/[0.08]"
-                                    : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
-                                }`}
-                              >
-                                <span
-                                  className={`block text-xs font-semibold ${
-                                    active ? "text-accent-soft" : "text-zinc-200"
-                                  }`}
-                                >
-                                  {d.label}
-                                </span>
-                                <span className="mt-0.5 block text-[11px] text-zinc-500">
-                                  {d.hint}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {/* Door: inherit an existing Claude / ChatGPT login.
-                            The rescan claim is TRUE here — claude/codex
-                            presence is a live per-poll /health check. */}
-                        {door === "subscription" && (
-                          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                            <p className="text-xs leading-relaxed text-zinc-400">
-                              If the Claude app/CLI (
-                              <code className="font-mono text-zinc-300">claude</code>) or the
-                              Codex CLI (
-                              <code className="font-mono text-zinc-300">codex</code>) is signed
-                              in on this PC, Iron Jarvis inherits that login automatically —
-                              nothing to paste, and it never logs in for you.
-                            </p>
-                            <button
-                              onClick={rescan}
-                              disabled={rescanBusy}
-                              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
-                            >
-                              {rescanBusy ? (
-                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-                              ) : (
-                                <RefreshCw size={13} aria-hidden="true" />
-                              )}
-                              Rescan now
-                            </button>
-                            <p className="mt-2 text-[11px] text-zinc-600">
-                              Iron Jarvis also re-checks by itself every few seconds — this
-                              step turns green on its own once it finds a signed-in CLI.
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Door: free local model via Ollama. Deliberately NO
-                            rescan button here (v1.197.0): rescan only
-                            enumerates CLIs and cannot detect Ollama — the
-                            honest mechanism is the Connect button above,
-                            which configures the URL and lets the health poll
-                            prove reachability. */}
-                        {door === "local" && (
-                          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                            <ol className="space-y-2 text-xs leading-relaxed text-zinc-400">
-                              <li>
-                                1.{" "}
-                                <a
-                                  href="https://ollama.com/download"
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
-                                >
-                                  Download Ollama
-                                </a>{" "}
-                                and install it.
-                              </li>
-                              <li>
-                                2. Pull a model — copy this into a terminal:
-                                <code className="mt-1 block w-fit rounded-lg border border-white/[0.06] bg-black/30 px-2.5 py-1 font-mono text-xs text-zinc-300">
-                                  ollama pull llama3.2
-                                </code>
-                              </li>
-                              <li>3. Tell Iron Jarvis to use it:</li>
-                            </ol>
-                            <button
-                              onClick={() => void connectOllama()}
-                              disabled={ollamaBusy}
-                              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {ollamaBusy && (
-                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-                              )}
-                              Connect to Ollama on this PC
-                            </button>
-                            {ollamaError && (
-                              <p role="alert" className="mt-2 text-xs text-rose-300">
-                                {ollamaError}
-                              </p>
-                            )}
-                            {ollamaSaved && !ollamaError && (
-                              <p className="mt-2 text-[11px] text-zinc-600">
-                                Iron Jarvis re-checks by itself every few seconds — this step
-                                turns green on its own once Ollama is reachable. If it stays
-                                grey, check that Ollama is actually running.
-                              </p>
-                            )}
-                            <p className="mt-2.5 text-[11px] leading-relaxed text-zinc-500">
-                              Honest note: a small local model is less capable than a frontier
-                              one — but it costs nothing and nothing leaves this machine.
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Door: paste an API key (the pre-v1.197.0 form, unchanged) */}
-                        {door === "key" && (
-                        <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                          <div className="mb-2.5 flex items-center gap-1.5 text-xs font-medium text-zinc-300">
-                            <KeyRound size={13} className="text-accent-soft" /> Paste an API key
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {KEY_PROVIDERS.map((p) => (
-                              <button
-                                key={p.id}
-                                onClick={() => {
-                                  setKeyProvider(p.id);
-                                  setKeyResult(null);
-                                  setKeyError(null);
-                                }}
-                                className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
-                                  keyProvider === p.id
-                                    ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
-                                    : "border-white/10 text-zinc-400 hover:bg-white/[0.04]"
-                                }`}
-                              >
-                                {p.label}
-                              </button>
-                            ))}
-                          </div>
-
-                          {keyProvider === "custom" && (
-                            <div className="mt-2.5 space-y-2">
-                              <input
-                                value={customBaseUrl}
-                                onChange={(e) => setCustomBaseUrl(e.target.value)}
-                                placeholder="Base URL (e.g. http://localhost:1234/v1)"
-                                className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
-                              />
-                              <input
-                                value={customModel}
-                                onChange={(e) => setCustomModel(e.target.value)}
-                                placeholder="Model id (optional)"
-                                className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
-                              />
-                            </div>
-                          )}
-
-                          <form
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void connectKey();
-                            }}
-                            className="mt-2.5 flex items-center gap-2"
-                          >
-                            <input
-                              type="password"
-                              value={keyValue}
-                              onChange={(e) => setKeyValue(e.target.value)}
-                              placeholder={
-                                KEY_PROVIDERS.find((p) => p.id === keyProvider)?.placeholder ?? "key"
-                              }
-                              className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
-                            />
-                            <button
-                              type="submit"
-                              disabled={
-                                keyBusy ||
-                                (keyProvider === "custom" ? !customBaseUrl.trim() : !keyValue.trim())
-                              }
-                              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {keyBusy && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
-                              Connect
-                            </button>
-                          </form>
-
-                          {keyResult && (
-                            <p
-                              role="status"
-                              className={`mt-2 text-xs ${
-                                keyResult.ok ? "text-emerald-300" : "text-rose-300"
-                              }`}
-                            >
-                              {keyResult.ok ? "Connected — " : "Not connected — "}
-                              {keyResult.detail}
-                            </p>
-                          )}
-                          {keyError && (
-                            <p role="alert" className="mt-2 text-xs text-rose-300">
-                              {keyError}
-                            </p>
-                          )}
-
-                          {/* Gemini is OAuth-only — POSTing a key to the google
-                              connection 400s — so it is a POINTER, never a form
-                              entry here (v1.197.0). */}
-                          <p className="mt-2.5 text-[11px] text-zinc-500">
-                            Google Gemini connects with account login on the{" "}
-                            <Link
-                              href="/connections"
-                              className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
-                            >
-                              Connections page
-                            </Link>
-                            .
-                          </p>
-                        </div>
-                        )}
-                      </>
+                      <ConnectDoors
+                        className="mt-2"
+                        onChanged={refreshAll}
+                        onEnabled={setJustEnabled}
+                        onOpenPane={() => setMinimized(true)}
+                      />
                     )}
                   </div>
                 )}
@@ -827,11 +586,31 @@ export function FirstRunWizard() {
                     <h2 className="text-sm font-semibold text-zinc-100">
                       {sessionStep?.title ?? "Run your first task"}
                     </h2>
-                    <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-                      Give the agent something small and watch it work end to end — right here.
-                    </p>
+                    {/* v1.310.0: no real model ready → the doors, never a task
+                       box that would run on the offline demo (however the
+                       user got here: Continue or a jump on the stepper). */}
+                    {!sessionId && !providerReady ? (
+                      <>
+                        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                          First, connect a model — your first task deserves a real answer.
+                        </p>
+                        <ConnectDoors
+                          className="mt-2"
+                          onChanged={refreshAll}
+                          onEnabled={setJustEnabled}
+                          onOpenPane={() => setMinimized(true)}
+                        />
+                      </>
+                    ) : (
+                      <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                        Give the agent something small and watch it work end to end — right here.
+                        {!sessionId && pinnedFor
+                          ? ` This test asks ${pinnedFor.label} by name; chat keeps the offline demo until you choose what answers you.`
+                          : ""}
+                      </p>
+                    )}
 
-                    {!sessionId && (
+                    {!sessionId && providerReady && (
                       <>
                         <div className="mt-3 flex flex-wrap gap-1.5">
                           {SUGGESTIONS.map((s) => (
@@ -882,22 +661,39 @@ export function FirstRunWizard() {
                     {/* Live transcript + result */}
                     {sessionId && (
                       <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                        <div className="flex items-center gap-2 text-xs font-medium">
-                          {runStatus === "completed" ? (
-                            <CheckCircle2 size={14} className="text-emerald-400" />
+                        {/* THE VERDICT reads the provider that ACTUALLY answered
+                            (the session row), never the health list (v1.310.0):
+                            a pin the daemon could not honour, or a demo
+                            default, shows up HERE as provider "mock". */}
+                        <div
+                          data-testid="first-task-verdict"
+                          className={`flex items-start gap-2 text-xs font-medium ${
+                            ranOnDemo ? "text-amber-200" : "text-zinc-300"
+                          }`}
+                        >
+                          {ranOnDemo ? (
+                            <CircleAlert size={14} className="mt-px shrink-0 text-amber-400" />
+                          ) : runStatus === "completed" ? (
+                            <CheckCircle2 size={14} className="mt-px shrink-0 text-emerald-400" />
                           ) : runStatus && TERMINAL.has(runStatus) ? (
-                            <Wand2 size={14} className="text-rose-400" />
+                            <Wand2 size={14} className="mt-px shrink-0 text-rose-400" />
                           ) : (
-                            <Loader2 size={14} className="animate-spin text-accent-soft" aria-hidden="true" />
+                            <Loader2 size={14} className="mt-px shrink-0 animate-spin text-accent-soft" aria-hidden="true" />
                           )}
-                          <span className="text-zinc-300">
-                            {runStatus === "completed"
-                              ? "It works — output is real"
-                              : runStatus === "failed"
-                                ? "The task failed"
-                                : runStatus === "cancelled"
-                                  ? "The task was cancelled"
-                                  : "Working…"}
+                          <span>
+                            {ranOnDemo
+                              ? "That was the offline demo — no model ran. Its reply below is a script, not an answer."
+                              : runStatus === "completed"
+                                ? runProvider
+                                  ? `It worked — answered by ${friendlyProvider(runProvider)} (${runProvider}${
+                                      runModel ? ` · ${runModel}` : ""
+                                    }).`
+                                  : "Finished."
+                                : runStatus === "failed"
+                                  ? "The task failed"
+                                  : runStatus === "cancelled"
+                                    ? "The task was cancelled"
+                                    : "Working…"}
                           </span>
                         </div>
 
@@ -918,12 +714,90 @@ export function FirstRunWizard() {
 
                         {runDone && runResult && (
                           <div className="mt-3 rounded-lg border border-white/[0.06] bg-black/30 p-3">
-                            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-accent-soft">
-                              <Sparkles size={12} /> Result
+                            <div
+                              className={`mb-1 flex items-center gap-1.5 text-[11px] font-medium ${
+                                ranOnDemo ? "text-amber-300/80" : "text-accent-soft"
+                              }`}
+                            >
+                              <Sparkles size={12} /> {ranOnDemo ? "What the demo said" : "Result"}
                             </div>
                             <p className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
                               {runResult}
                             </p>
+                          </div>
+                        )}
+
+                        {/* The handover (the SessionFiles rule): what a REAL run
+                            wrote, by name — the answer often lives in a file the
+                            summary never mentions — or a plain "none". The demo's
+                            files are part of its script, so they are not listed. */}
+                        {runStatus === "completed" && !ranOnDemo && runFiles && (
+                          <div className="mt-2 text-[11px] leading-relaxed text-zinc-400">
+                            {runFiles.length === 0 ? (
+                              <p>It didn&apos;t write any files — the answer is all above.</p>
+                            ) : (
+                              <>
+                                <p>
+                                  It wrote {runFiles.length === 1 ? "1 file" : `${runFiles.length} files`} — open
+                                  the full session to see or download {runFiles.length === 1 ? "it" : "them"}:
+                                </p>
+                                <ul className="mt-1 space-y-0.5">
+                                  {runFiles.slice(0, 8).map((f) => (
+                                    <li key={f} className="font-mono text-zinc-300">
+                                      {f}
+                                    </li>
+                                  ))}
+                                  {runFiles.length > 8 && (
+                                    <li className="text-zinc-500">…and {runFiles.length - 8} more</li>
+                                  )}
+                                </ul>
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {ranOnDemo && (
+                          <button
+                            onClick={() => {
+                              setSessionId(null);
+                              setRunDone(false);
+                              setStep(1);
+                            }}
+                            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-1.5 text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/[0.1]"
+                          >
+                            Connect a model for real answers
+                          </button>
+                        )}
+
+                        {finaleCandidate && (
+                          <div
+                            data-testid="first-task-use-for-answers"
+                            className="mt-3 rounded-lg border border-accent/25 bg-accent/[0.05] px-3 py-2.5"
+                          >
+                            {demoDefault && (
+                              <>
+                                <p className="text-[11px] leading-relaxed text-zinc-300">
+                                  This test asked {finaleCandidate.label} by name. Chat doesn&apos;t use it yet:
+                                  until you choose, chat replies are a script, not real answers —
+                                  nothing switches on its own.
+                                  {finaleCandidate.where
+                                    ? ` With ${finaleCandidate.label}, what you type ${finaleCandidate.where}.`
+                                    : ""}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => void finalePress.press(finaleCandidate)}
+                                  disabled={finalePress.busy !== null}
+                                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  {finalePress.busy !== null && (
+                                    <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                                  )}
+                                  Use {finaleCandidate.label} for answers
+                                </button>
+                              </>
+                            )}
+                            <AnswerPressNote note={finalePress.note} />
                           </div>
                         )}
 

@@ -1751,11 +1751,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
         "in cooldown, retry in N s" BEFORE the user types, the same words
         the refusal uses. Additive; never fails the health answer."""
         rows = [p for p in platform.providers.health() if p.get("provider") != "mock"]
+        from ..providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX
+
         for row in rows:
             try:
                 row["circuit"] = platform.router.health.circuit(str(row.get("provider") or ""))
             except Exception:  # noqa: BLE001 — health must never fail
                 pass
+            # v1.310.0 (W2-3): a subscription-CLI row also carries the remedy
+            # in the user's words, so the wizard's "I already pay" door can
+            # say how to sign in (or that the tool isn't installed) instead
+            # of "Rescan" forever. Static text -- nothing is spawned here;
+            # installed/signed_in come from the cached probe in health().
+            binary = CLI_BINARIES.get(str(row.get("provider") or ""))
+            if binary:
+                row["sign_in_fix"] = SIGN_IN_FIX.get(binary, "")
+                row.setdefault("installed", False)
+                row.setdefault("signed_in", None)
         return rows
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------

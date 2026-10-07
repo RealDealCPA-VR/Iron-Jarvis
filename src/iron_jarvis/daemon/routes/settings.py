@@ -6,8 +6,11 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import threading
+
 from fastapi import FastAPI, HTTPException
 from pathlib import Path
+from pydantic import BaseModel, Field
 from typing import Any
 
 from .. import app as _app
@@ -16,6 +19,111 @@ from ...core.config import capture_config_undo, persist_config_values
 from ...core.logging import get_logger
 
 log = get_logger("daemon.maintenance")
+
+
+class UseModelBody(BaseModel):
+    """``POST /onboarding/use-model`` (v1.310.0, W2-1)."""
+
+    provider: str = Field(..., max_length=64)
+
+
+#: v1.310.0 (W2-1): a subscription CLI is promoted to the INHERITED API name
+#: the "Make default" path uses, so the quality dial (which knows anthropic /
+#: openai model ids) keeps working; the router serves it through the CLI.
+_CLI_INHERITS = {"claude-cli": "anthropic", "codex-cli": "openai"}
+
+
+def _use_model_refusal(d, name: str) -> str | None:
+    """One plain sentence saying why *name* can't answer right now, or None
+    when it can. Reads cached availability only (no CLI is spawned)."""
+    from ...onboarding.checklist import provider_label
+    from ...onboarding.readiness import USE_MODEL_CLIS, USE_MODEL_LOCAL
+    from ...providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX
+    from ...providers.manager import API_PROVIDERS
+
+    pm = d.platform.providers
+    cfg = d.platform.config
+    known = set(API_PROVIDERS) | set(USE_MODEL_CLIS) | set(USE_MODEL_LOCAL)
+    try:
+        registered = name in pm._factories  # noqa: SLF001
+    except Exception:  # noqa: BLE001 — be conservative: unknown
+        registered = False
+    if not registered:
+        shown = name or "that"
+        return (
+            f"I don't know a model called “{shown}”, so nothing changed. "
+            "Pick one from the Connections page."
+        )
+    if name not in known:
+        # v1.310.0 (review): a REAL registered model this one press can't
+        # choose (a Grok / OpenCode sign-in, a fleet node, the offline demo)
+        # -- say so, and where it CAN be chosen; "I don't know it" was false.
+        return (
+            f"{provider_label(d.platform, name)} can't be chosen with this "
+            "button, so nothing changed. Choose it on the Connections page."
+        )
+    try:
+        if pm.available(name):
+            return None
+    except Exception:  # noqa: BLE001 — a probe fault reads as "not right now"
+        pass
+    label = provider_label(d.platform, name)
+    if name in USE_MODEL_CLIS:
+        binary = CLI_BINARIES[name]
+        try:
+            status = pm.cli_login_status(name)
+        except Exception:  # noqa: BLE001
+            status = {}
+        if not status.get("installed"):
+            tool = "Claude Code" if binary == "claude" else "Codex"
+            return (
+                f"{tool} isn't installed on this PC, so it can't answer for you "
+                "yet. A subscription you use in the web or desktop app can't be "
+                "shared with Iron Jarvis — only the command-line tool can."
+            )
+        return SIGN_IN_FIX[binary]
+    if name == "ollama":
+        if not (getattr(cfg, "ollama_base_url", None) or "").strip():
+            return "Ollama isn't set up yet. Add its address on the Connections page first."
+        return "Ollama isn't answering right now. Make sure it's running, then try again."
+    if name == "custom":
+        if not (getattr(cfg, "custom_base_url", None) or "").strip():
+            return (
+                "Your own model server (custom) isn't set up yet. Add its address "
+                "on the Connections page first."
+            )
+        return (
+            "Your own model server (custom) isn't answering right now. Make sure "
+            "it's running, then try again."
+        )
+    return f"{label} isn't connected yet. Add its key on the Connections page first."
+
+
+def _first_local_model(d, name: str) -> str:
+    """The FIRST model a configured local endpoint lists ('' when none).
+
+    Not ``config.ollama_model``: that defaults to 'llama3.1' while the wizard
+    tells the user to ``ollama pull llama3.2`` -- promoting a model the
+    server doesn't have would trade the demo for an error. Discovery is
+    cached (~10 min) and may hit the endpoint once: the route is sync, so
+    it runs on the threadpool, never on the event loop."""
+    from ...providers.discovery import discover_models
+
+    cfg = d.platform.config
+    base = (cfg.ollama_base_url if name == "ollama" else cfg.custom_base_url) or ""
+    try:
+        live = discover_models(
+            name,
+            lambda: d.platform.providers._cred(name),  # noqa: SLF001
+            base_url=base,
+        )
+    except Exception:  # noqa: BLE001 — discovery degrades to "nothing learned"
+        live = []
+    if live:
+        return str(live[0])
+    if name == "custom":
+        return str(getattr(cfg, "custom_model", "") or "")
+    return ""
 
 
 def _record_settings_undo(platform, prior: "dict[str, Any]") -> None:
@@ -468,6 +576,86 @@ def register(app: FastAPI, d) -> None:
         from ...onboarding import readiness
 
         return readiness(d.platform)
+
+    # Serialises the check-then-write below: two quick presses (wizard + the
+    # Overview card) must not both read "still mock" and race the write.
+    use_model_lock = threading.Lock()
+
+    @app.post("/onboarding/use-model")
+    def onboarding_use_model(body: UseModelBody) -> dict[str, Any]:
+        """The ONE explicit "use this for answers" press (v1.310.0, W2-1).
+
+        THE TRAP IT CLEARS: a signed-in Claude Code / Codex user (or a fresh
+        Ollama) is "connected", so the wizard never opens -- but the default
+        never left the offline ``mock``, and their first answer was the
+        scripted "Done. Wrote RESULT.md". Boot and rescan must NOT promote
+        silently (cloud-vs-local is the user's privacy decision), so the
+        wizard doors, the Overview card and the chat empty state all call
+        this one route when the user presses.
+
+        It replaces ONLY the untouched ``mock`` (or blank) default -- a
+        user's own choice is never overwritten: that answers 200 with
+        ``promoted: null`` and a sentence naming the choice. Unknown or
+        unusable -> 409 with one plain sentence. A success is persisted
+        exactly like ``POST /connections/{p}/default`` (config.toml + the
+        default_provider/default_model /health reports). Sync on purpose:
+        a local endpoint's model listing may touch the network, and the
+        threadpool keeps that off the event loop.
+        """
+        from ...onboarding.checklist import default_is_mock, provider_label
+
+        name = (body.provider or "").strip().lower()
+        refusal = _use_model_refusal(d, name)
+        if refusal is not None:
+            raise HTTPException(status_code=409, detail=refusal)
+
+        if name in _CLI_INHERITS:
+            target = _CLI_INHERITS[name]
+            # v1.310.0 (review): promote to the API name ONLY while that name
+            # is SERVED THROUGH this sign-in. ``available(target)`` is also
+            # true when the user has their own Anthropic/OpenAI key (env var
+            # or vault) -- and a stored key always wins over the CLI, so the
+            # door labelled "your Claude Code sign-in" would bill every answer
+            # to the pay-per-use key. Otherwise (a key present, or inheritance
+            # turned off) the CLI itself answers on its own subscription model
+            # (the rescan rows' name).
+            if d.platform.providers.inherited_from(target) == name:
+                model = d._PROMOTE_DEFAULT_MODEL[target]
+            else:
+                target, model = name, "subscription"
+        elif name in ("ollama", "custom"):
+            target, model = name, _first_local_model(d, name)
+            if not model:
+                hint = " (for example `ollama pull llama3.2`)" if name == "ollama" else ""
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{provider_label(d.platform, name)} is set up, but I "
+                        f"couldn't find a model on it yet. Add one{hint}, then "
+                        "try again."
+                    ),
+                )
+        else:
+            target = name
+            model = d._PROMOTE_DEFAULT_MODEL.get(name, d.platform.config.default_model)
+
+        cfg = d.platform.config
+        with use_model_lock:
+            if not default_is_mock(d.platform):
+                current = str(cfg.default_provider)
+                return {
+                    "promoted": None,
+                    "reason": (
+                        f"You already chose {provider_label(d.platform, current)} "
+                        "for answers, so nothing changed. You can switch any "
+                        "time on the Connections page."
+                    ),
+                }
+            cfg.default_provider = target
+            cfg.default_model = model
+            d._persist_config(["default_provider", "default_model"])
+        log.info("default model chosen by the user's press: %s/%s", target, model)
+        return {"promoted": {"provider": target, "model": model}, "reason": ""}
 
     @app.get("/doctor")
     def doctor_ep() -> dict[str, Any]:

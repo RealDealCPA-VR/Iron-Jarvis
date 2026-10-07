@@ -28,6 +28,7 @@ import {
   type MissionMember,
   type MissionProgress,
 } from "@/lib/mission";
+import { receiptVerbFor } from "./receipt";
 
 function moodFor(s: MemberStatus): FaceMood {
   if (s === "working") return "work";
@@ -183,7 +184,12 @@ function AgentCard({
           {m.progress.label && <div className="text-zinc-400">{m.progress.label}</div>}
           {ranOn && (
             <div data-testid={`mission-card-model-${m.agent}`} className="text-[11.5px] text-zinc-500">
-              {m.provider === "mock" ? `Mock answer — no real model ran (${ranOn})` : `Ran on ${ranOn}`}
+              {/* v1.310.0: the coordinator receipt's tense, by THIS
+                  teammate's status (./receipt) — a failed teammate "tried"
+                  its model, it was never "answered by" it. */}
+              {m.provider === "mock"
+                ? `${m.status === "done" ? "Mock answer" : "On the mock"} — no real model ran (${ranOn})`
+                : `${receiptVerbFor(m.status)} ${ranOn}`}
             </div>
           )}
           {m.task && (

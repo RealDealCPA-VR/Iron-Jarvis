@@ -571,6 +571,12 @@ interface PendingAgentApproval {
   /** v1.299.0: the daemon offers "always" — this call AND exactly these
    *  arguments in the run's scope for 30 days. Absent = not offered. */
   canAlways?: boolean;
+  /** v1.310.0 (W2-5): the mission ROOT this ask belongs to (a coordinator's
+   *  own ask or a teammate's), and the project its screen lives in — so the
+   *  row can open the mission and the user answers IN CONTEXT. Absent for a
+   *  plain job and on an older daemon (no key). */
+  missionId?: string;
+  projectId?: string;
 }
 
 /** Parse one /chat/approvals/pending row (null = not a usable row). */
@@ -587,6 +593,8 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     count: typeof r.count === "number" && r.count > 1 ? r.count : 1,
     ...(typeof r.timeout_s === "number" ? { timeoutS: r.timeout_s } : {}),
     ...(r.can_always === true ? { canAlways: true } : {}),
+    ...(typeof r.mission_id === "string" && r.mission_id ? { missionId: r.mission_id } : {}),
+    ...(typeof r.project_id === "string" && r.project_id ? { projectId: r.project_id } : {}),
   };
 }
 
@@ -693,6 +701,19 @@ function AgentApprovalRow({
             </button>
           </div>
           {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          {ask.missionId ? (
+            // v1.310.0: a mission's ask opens its mission screen — the
+            // objective, the team and this same question inline — so the
+            // user can see WHY it asks before answering. The buttons above
+            // still answer from here.
+            <Link
+              data-testid="bell-approval-mission"
+              href={missionPath(ask.missionId, ask.projectId ?? "")}
+              className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
+            >
+              Open the mission →
+            </Link>
+          ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600">
             {ask.sessionId ? (
               <Link
