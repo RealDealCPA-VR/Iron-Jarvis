@@ -1,11 +1,11 @@
-# Calm UI Redesign — Phase 2 REPORT (in progress)
+# Calm UI Redesign — Phase 2 REPORT
 
 ## Test files edited (non-negotiable 7: path/route updates only)
 
 | File | Edit | Why |
 |---|---|---|
 | `tests/test_browser_settings_v1235.py` | `test_browser_is_named_in_the_live_rearm_groups` reads `settings/writer.py` (`_REARM_GROUPS`) instead of `routes/settings.py` | S2 moved the live re-arm table into the one settings writer (path update for relocated code; the assertion is unchanged: `browser` is a re-armed group) |
-| `tests/test_roster_coverage_v1178.py` | **Contract extension (not a path update — flagged for VR):** the five settings tools (S3/S4) and the eight record tools (S5) added to `_OFF_ROSTER_BY_DESIGN` with the reason | The test's own instruction for a new chat-only tool ("add it ... WITH the reason it is deliberately unreachable"); the settings tools are chat-only by design, like the browser tools beside them. No assertion was weakened. |
+| `tests/test_roster_coverage_v1178.py` | **Contract extension (not a path update — flagged for VR):** the five settings tools (S3/S4), the record tools (S5, S5b) and `config_undo` added to `_OFF_ROSTER_BY_DESIGN` with the reason | The test's own instruction for a new chat-only tool ("add it ... WITH the reason it is deliberately unreachable"); the settings tools are chat-only by design, like the browser tools beside them. No assertion was weakened. |
 | `dashboard/__tests__/home-simple-v1318.test.tsx` | **Removed (APPROVED Q18)** | Pinned the retired Simple home; replaced by T1 coverage (`sidebar-v1321`, e2e T1) |
 | `dashboard/__tests__/settings-simple-v1319.test.tsx` | **Removed (APPROVED Q18)** | Pinned the retired short Settings view and `AdvancedOnly`; Settings is one form (S10 regroups it) |
 | `dashboard/__tests__/ux-wave1-shell-v1313.test.tsx` | **Removed one Simple-mode block (APPROVED Q18)**: "CONTROL: the drawer still opens on ij:toggle-nav and lists the nav", which asserted the seven Simple places and the Advanced switch | The drawer's opening and its four items are pinned by `sidebar-v1321.test.tsx` |
@@ -23,19 +23,64 @@
 | S1 | a1c3739 | ONE settings schema (`settings/schema.py`), `GET /settings/schema` | `test_settings_schema_v1321.py` |
 | S2 | cefea51 | ONE writer (`settings/writer.py`): validation all-or-nothing, side effects, ledger row + undo; every settings route converted; per-device store | `test_settings_writer_v1321.py` (10 tests, 7 mutations all red) |
 | S3+S4 | 68e9cfb | Chat settings tools generated from the schema (`config_list/set/change/change_protected/secret`), per-key tiers enforced in the tool, protected changes carded even in Auto-approve and never "Always"; "Setting changed: old → new [Undo]" cards in both chat lanes; credential card posting straight to `POST /config/secret` (names-only ledger, encrypted undo backup); composer secret-paste guard (Q9); `secret_set` armed in chat is swapped for the card; the chat sends its device id | backend `test_settings_chat_tools_v1321.py` (12 tests; 9 mutations all red), dashboard `chat-config-cards-v1321.test.tsx` (12 tests; 10 mutations all red) |
-
 | S5 | 1482198 | The user's RECORDS from chat with an Undo (`settings/records.py`): `schedule_update/delete`, `workflow_update/delete/schedule`, `channel_toggle`, `channel_connect`, `app_connect` (ask tier, chat-only, low trust denies them); `schedule_create`/`workflow_create` gain an Undo; a `record_restore` undo kind; "Schedule changed / Workflow removed … [Undo]" cards; a channel's or app's token arrives through the secure card (`app.<id>` resolves to the vault name the pack launches with, and saving it loads the pack) | backend `test_settings_records_v1321.py` (11 tests incl. T5 "schedule"; 15 mutations all red), dashboard record-card tests (3; 4 mutations all red) |
 | S6 | 84d6af6 | ONE surface manifest (`lib/surfaces.ts`: every route, its Everything column, the sidebar's four items, pins ≤ 3); the `/everything` page (Work, Automations, Knowledge, System, Setup; filter; pin); the palette reads the manifest (the Directory and Everything were not reachable from it) and gains a row per setting plus a "do it in chat" row that only types the request | `everything-v1321.test.tsx` (8 tests; 7 mutations all red) |
 | S7 | 1d284bd | The persistent sidebar (`components/AppSidebar.tsx`): New chat, the four items (Build, Projects, Everything, Settings) from the manifest, pins (≤ 3) under them, Chats and Projects, and a footer with the status dot (→ Everything › Status), the mood orb and the Help menu (Q17). On the chat surface the CHATS space is the chat page's own thread rail, portaled in (Q5, layout only); on a phone the same body is the ☰ drawer. Retired (Q2): the Simple/Advanced switch (`lib/uiMode.ts`), the seven hubs (`lib/hubs.ts`), the tab row (`HubTabs`), `AdvancedOnly`, the Simple home (`HomeStart`) and the short Settings view; the theme left the title bar (Settings › Appearance, palette, phone drawer); the ☰ is phone-only | `sidebar-v1321.test.tsx` (12) + `chat-sidebar-rail-v1321.test.tsx` (4); 10 mutations all red |
 | S8 | 9544b98 | Home = a new chat: `app/page.tsx` renders the chat surface (composer focused; no dashboard, tiles or grid). The Overview moved whole to `components/overview/StatusOverview.tsx` and is **Everything › Status** (`/everything#status`, a tab; the sidebar's status dot and the palette's "Everything → Status" open it). ONE conditional line above the composer (`components/chat/HomeLine.tsx`, AUDIT R2: interrupted jobs › failing background work › running/waiting, "+N more", Open → Status) reads one new endpoint, `GET /ui/status-line` (numbers only; the interrupted query is now shared with `/sessions/interrupted`). The mock-downgrade banner moved to the shell (every page). The nav catalogue's "/" row is "Home" | `home-v1321.test.tsx` (6), Status-tab tests in `everything-v1321` (2), `test_ui_status_line_v1321.py` (2); 12 mutations all red |
 | S9 | be16f7f | First run with no blocking screen (Q7): the first-run wizard is no longer mounted (`Overlays`); a model this PC already has is offered in the composer with ONE tap (`components/chat/ModelSuggestChip.tsx`, through the same `POST /onboarding/use-model` door — never a silent pick; absent while the empty state's connect doors make the same offer). One model selector (Q3): the title-bar chip is retired; `ModelMenuBridge` sends "Switch model" / "Choose a model" from any page to the composer's menu (`/?model=1`), which gains "Make this my default" (PUT /settings → the writer, ledger + Undo) | `chat-firstrun-v1321.test.tsx` (7); 8 mutations all red |
 | S10 | 7afc4b8 | Settings in the seven schema groups (`components/settings/SettingsHome.tsx`): every row drawn from `GET /settings/schema` (the declaration the chat tools come from) and saved through the writer (`PUT /settings/values`: config, device and profile in one validated, journaled, undoable save; `GET /settings/values` reads them); search across all groups and sections; `?focus=<key>` and `?section=<group>[-<sub>]`; a sticky save bar with Undo; the **"Changed here or in chat"** ledger (`GET /config/ledger`, each row with its Undo). The relocated pages are sections, embedded whole (a page inside `EmbeddedPage` titles itself with an h2): Accounts & keys, Apps & tools (Directory), Notifications, Browser, Keys & secrets; Your profile, Train; Tools & permissions, Standing grants; Updates, Maintenance, Access token. Old routes redirect with their query (Q8, `lib/relocated.ts`); `/kanban` is Sessions' Board view (Q4a). A daemon with no schema (404) gets the previous form (`LegacySettingsForm`) | `settings-home-v1321.test.tsx` (9), `test_settings_values_v1321.py` (4); 22 mutations red, 1 equivalent (the route's unknown-key guard duplicates the writer's own refusal) |
-| S11 | (this commit) | Visual system (AUDIT §8): the type scale gains `title-sm` 16/24, `title` 20/28 and `display` 28/36; the empty chat leads with a calm greeting in `display` (the same sentence below it); the conversation reads in a centred 760 px column; Settings content is held to 720 px and, on a phone, the groups are a drill-down list ("All settings" back); one solid primary per view — the composer's Send (only once there is something to send), the sidebar's New chat, Settings' Save while unsaved. The 390 px no-pan probe runs in the browser (S12, e2e) | `one-primary-v1321.test.tsx` (3), drill-down tests in `settings-home-v1321` (2); 5 mutations all red |
+| S11 | 8bb0c69 | Visual system (AUDIT §8): the type scale gains `title-sm` 16/24, `title` 20/28 and `display` 28/36; the empty chat leads with a calm greeting in `display` (the same sentence below it); the conversation reads in a centred 760 px column; Settings content is held to 720 px and, on a phone, the groups are a drill-down list ("All settings" back); one solid primary per view — the composer's Send (only once there is something to send), the sidebar's New chat, Settings' Save while unsaved. The 390 px no-pan probe runs in the browser (S12, e2e) | `one-primary-v1321.test.tsx` (3), drill-down tests in `settings-home-v1321` (2); 5 mutations all red |
+| S12 | 2e93da9 | Playwright (`dashboard/e2e`, Edge, a scratch daemon on 8807 with a FRESH home, Next on 8808 into `.next-e2e`): T1, T2 (all 36 manifest surfaces, palette and ≤ 2 clicks), T3, the 390 px no-pan probe; after screenshots; the lint gate (`scripts/lint_redesign.py`: ruff E9+F and ESLint next/core-web-vitals on touched files) | `pnpm e2e`: 42 passed |
+| S5b | 8d23840 | The rest of AUDIT §6.3 from chat, each with Undo: `webhook_update/delete`, `sentinel_update/delete`, `goal_update/delete`, `reflex_create/update/delete`, `grant_revoke`; `webhook_add`/`sentinel_add`/`goal_add` gain an Undo; **`config_undo` — "undo that"** (the newest undoable change, or a named one, through `perform_undo`, the `POST /undo` route's own body) | `test_settings_records_more_v1321.py` (27); 30 mutations by the implementing agent + 4 independent spot mutations, all red (2 of the spot mutations first survived and were closed with a new test) |
+| Docs | 54b53e2 | Handbook: Getting started for a chat home, "The calm layout", "Change settings by asking"; CLAUDE.md: the redesign's invariants | Handbook pins green |
 
-## Commands run (latest)
+## Commands run (final, on 8d23840)
 
 | Command | Exit | Result |
 |---|---|---|
-| `DOCKER_HOST=tcp://127.0.0.1:1 uv run --no-sync pytest -q --no-header -n 8 -p no:cacheprovider` | 0 | 11099 passed, 4 skipped |
-| `npx vitest run` (dashboard) | 0 | 259 files, 3745 tests passed |
-| `npx tsc --noEmit -p .` (dashboard) | 2 | 0 errors in tracked files; the only errors are in the untracked review scratch dirs `__review_20260922__/` (pre-existing, not part of the repo) |
+| `DOCKER_HOST=tcp://127.0.0.1:1 uv run --no-sync pytest -q --no-header -n 8 -p no:cacheprovider` | 0 | 11126 passed, 4 skipped (8 min 03 s) |
+| `npx vitest run` (dashboard) | 0 | 260 files, 3750 tests passed |
+| `npx tsc --noEmit -p .` (dashboard) | — | 0 errors in tracked files; the only errors are in the untracked review scratch dir `__review_20260922__/` (pre-existing, not part of the repo) |
+| `pnpm build` (dashboard) | 0 | "Generating static pages (44/44)" — 43 before plus `/everything`; the ten relocated routes are server redirects (ƒ) |
+| `IJ_E2E_SHOTS=../docs/redesign/screens/after npx playwright test` (dashboard) | 0 | 42 passed (T3, T1, 36 × T2, 3 × 390 px, screenshots) in 3.8 min |
+| `uv run --no-sync python scripts/lint_redesign.py` | 0 | ruff: all checks passed (touched .py); ESLint: 0 errors, 9 warnings (pre-existing hook-dependency patterns) on 61 touched files |
+
+## Definition of Done
+
+| Item (BRIEF.md) | Status | Evidence |
+|---|---|---|
+| Home shows only the composer (with inline model selector), recent conversations/projects, and at most one entry to Build | **Pass** | `/` renders the chat (S8); the sidebar holds New chat, Build/Projects/Everything/Settings, Chats, Projects (S7); e2e **T1**; `home-v1321`, `sidebar-v1321`; `screens/after/home-*.png` |
+| Every relocated feature reachable within 2 clicks or via the palette (T2) | **Pass** | e2e **T2**: all 36 surfaces of `lib/surfaces.ts`, each through the palette AND within 2 clicks; `everything-v1321` (the manifest covers every route) |
+| Every Settings UI setting can be changed through chat, with a ledger entry and Undo (T4, T5) | **Pass** | **T4** `test_t4_every_schema_key_has_a_chat_tool_for_its_tier`; **T5** bool / enum / string (`test_settings_chat_tools_v1321`), schedule (`test_t5_schedule_*` in `test_settings_records_v1321`), connection (`test_t6_a_credential_from_chat_…`: a connection key with Undo; `channel_connect`, `app_connect`) |
+| A fresh profile reaches a working chat with no required setup screen (T3) | **Pass** | e2e **T3** (fresh empty home, no modal, the mock answers); the wizard is unmounted (S9) |
+| No capability removed without VR's approval | **Pass** | Retired only what APPROVED Q1/Q2/Q3/Q7 name (the Overview dashboard → Status, Simple/Advanced, hubs, tab row, short Settings view, title-bar chip, blocking wizard); every page moved whole and its old route redirects (Q8) |
+| Visual style: whitespace, one accent, consistent type, one primary per view, works at 390 px | **Pass** | S11; `one-primary-v1321`; the e2e 390 px probe (`/`, `/settings`, `/everything`); `screens/after/*-phone.png` |
+| T6 secret handling | **Pass** | `test_t6_*` (transcript, ledger, undo journal, events and logs scanned for the value); secure cards; the composer paste guard (`chat-config-cards-v1321`) |
+| T7 regression: all pre-existing Chat and Build tests pass | **Pass** | full backend and dashboard suites green; pre-existing tests edited only as listed above |
+| Build, typecheck and lint pass | **Pass** | see Commands |
+| Before/after screenshots (home, Settings, palette; 1440 and 390) | **Pass** | `docs/redesign/screens/before/*` (6), `docs/redesign/screens/after/*` (6) |
+
+## Natural-language examples (BRIEF.md)
+
+| Example | Path |
+|---|---|
+| "connect my Notion" | `app_connect` → the pack's config saved + a secure card for its token; saving it loads the pack; Undo disconnects |
+| "run this workflow every weekday at 7am" | `workflow_schedule` (cron), with Undo |
+| "turn on Telegram notifications" | `channel_connect` (token by card) / `channel_toggle` (two-way), with Undo |
+| "use the local Qwen model for coding tasks" | `config_list` → `config_set` / `config_change` on the model-role settings |
+| "undo that" | `config_undo` |
+
+These are proven with scripted model calls through the real lanes, gate and undo route. Whether a given real model picks the right tool from the words is not something an offline test can prove.
+
+## Unfinished / flagged for VR
+
+- **Contract extensions (not path updates):** `tests/test_roster_coverage_v1178.py` (the chat-only settings and record tools added to `_OFF_ROSTER_BY_DESIGN`) and `tests/test_chat_turn_service.py` (`config_cards` added to the response-key registry). Both follow the files' own instructions for a new chat-only tool and a new response key.
+- **The old settings form's tests** (path-updated to `components/settings/pages/LegacySettingsForm.tsx`) now exercise a form that renders only for a daemon without `/settings/schema`. Converting them to the schema form is beyond a path update.
+- **AppGrid and the rest of the Overview** still render inside Everything › Status: pre-existing tests pin them inside the Overview. So Q1's "retire the tile grid" is done for the home, but the grid remains on the Status tab. Removing it needs approval to remove those pins.
+- **The first-run wizard component** remains in the tree, unmounted, because its own tests render it. Deleting it needs the same approval.
+- **The title-bar brand link** is still labelled "Iron Jarvis — Overview" (a pinned test); it now opens the chat home.
+- **The Tools split (Q4d)** is partial: Tools is one section (Settings › Permissions & ledger › Tools & permissions) holding per-tool approval and extensions, and the Directory sits under Connections › Apps & tools. The Tools page itself was not split.
+- **Inline setup cards beyond the model:** the mic stays disabled with its reason when no speech engine exists (no new inline card). "Email this" with no mail channel and the document-tool arm chip keep their existing behaviour.
+- **Store limits:** from chat, sentinels can only be paused or resumed (the store has no edit), and a dropped goal is marked `abandoned` (the engine keeps no delete).
+- **E2E in CI:** `pnpm e2e` is a local gate (Edge on this PC). It is not wired into the release workflow.
+- **Not shipped:** everything is on `redesign/calm-ui`. It is not merged to master and not pushed, and the version is not bumped (the next would be v1.321.0).

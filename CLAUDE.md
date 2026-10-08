@@ -9,7 +9,7 @@ runs the PACKAGED desktop app daily — treat every change as production.
 | Process | What | Port | Source |
 |---|---|---|---|
 | Daemon | FastAPI, all state + agents + tools | 127.0.0.1:8787 | `src/iron_jarvis/` |
-| Dashboard | Next.js 15 (43 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
+| Dashboard | Next.js 15 (44 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
 | Desktop | Electron: spawns both, tray, updates, Spotlight | — | `desktop/main.js` |
 
 Packaged layout: PyInstaller-frozen daemon (`packaging/ironjarvis.spec`) +
@@ -27,7 +27,7 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 # Serial ~16min; -n auto runs one worker per core (~4.5min) and is what CI
 # uses. Measured parallel-safe over three runs — identical pass counts.
 uv run pytest -q --no-header -n auto
-# Dashboard build (must show "Generating static pages (43/43)")
+# Dashboard build (must show "Generating static pages (44/44)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
