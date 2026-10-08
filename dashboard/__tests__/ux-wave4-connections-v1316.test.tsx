@@ -167,9 +167,9 @@ vi.mock("@/components/BrandGlyph", () => ({
   BrandGlyph: () => null,
 }));
 
-import ConnectionsPage from "@/app/connections/page";
-import MarketplacePage from "@/app/marketplace/page";
-import ToolsPage from "@/app/tools/page";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
+import MarketplacePage from "@/components/settings/pages/DirectoryPage";
+import ToolsPage from "@/components/settings/pages/ToolsPage";
 import { StatusChip } from "@/components/tools/chips";
 
 const DASH = join(__dirname, "..");

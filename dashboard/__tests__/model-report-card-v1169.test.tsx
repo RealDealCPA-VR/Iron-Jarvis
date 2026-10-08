@@ -139,7 +139,7 @@ vi.mock("@/components/BrandGlyph", () => ({
   ProviderMark: () => null,
 }));
 
-import ConnectionsPage from "@/app/connections/page";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 
 afterEach(() => {

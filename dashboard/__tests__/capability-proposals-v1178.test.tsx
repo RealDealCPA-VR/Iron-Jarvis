@@ -385,7 +385,7 @@ describe("an empty queue is calm, and an old daemon has no card", () => {
     // have left this whole file green. The page is too heavy to mount here —
     // same technique as the v1.172.0 connector-status suite.
     const pageSrc = readFileSync(
-      join(__dirname, "..", "app", "tools", "page.tsx"),
+      join(__dirname, "..", "components", "settings", "pages", "ToolsPage.tsx"),
       "utf8",
     );
     expect(pageSrc).toMatch(

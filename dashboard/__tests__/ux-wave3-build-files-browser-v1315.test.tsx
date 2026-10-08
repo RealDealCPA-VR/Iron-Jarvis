@@ -101,7 +101,7 @@ vi.mock("@/components/motion", () => ({
 }));
 
 const { YourBrowserCard } = await import("@/components/browser/YourBrowserCard");
-const BrowserPage = (await import("@/app/computeruse/page")).default;
+const BrowserPage = (await import("@/components/settings/pages/BrowserPage")).default;
 
 const base: Record<string, unknown> = {
   connected: false,

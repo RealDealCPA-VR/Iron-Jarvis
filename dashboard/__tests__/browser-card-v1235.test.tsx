@@ -140,7 +140,7 @@ vi.mock("@/components/motion", () => ({
 }));
 
 const { YourBrowserCard } = await import("@/components/browser/YourBrowserCard");
-const BrowserPage = (await import("@/app/computeruse/page")).default;
+const BrowserPage = (await import("@/components/settings/pages/BrowserPage")).default;
 
 /* -------------------------------------------------------------------------- */
 /*  Status fixtures — one per state of the card                                */

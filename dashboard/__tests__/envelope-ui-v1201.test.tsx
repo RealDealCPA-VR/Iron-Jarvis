@@ -161,7 +161,7 @@ vi.mock("@/components/BrandGlyph", () => ({
   ProviderMark: () => null,
 }));
 
-import ConnectionsPage from "@/app/connections/page";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 import { envelopeUrl, EnvelopeRowControls } from "@/components/connections/EnvelopeCard";
 import { get, post, ApiError } from "@/lib/api";
 

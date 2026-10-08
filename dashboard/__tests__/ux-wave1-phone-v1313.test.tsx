@@ -74,22 +74,22 @@ const T4_FILES = [
   "app/schedules/page.tsx",
   "app/sessions/page.tsx",
   "app/skills/page.tsx",
-  "app/settings/page.tsx",
+  "components/settings/pages/LegacySettingsForm.tsx",
   "app/documents/page.tsx",
-  "app/secrets/page.tsx",
+  "components/settings/pages/SecretsPage.tsx",
   "app/workflows/page.tsx",
   "app/usage/page.tsx",
   "app/projects/page.tsx",
-  "app/marketplace/page.tsx",
-  "app/tools/page.tsx",
+  "components/settings/pages/DirectoryPage.tsx",
+  "components/settings/pages/ToolsPage.tsx",
   "components/chat/DraftCard.tsx",
   "components/memory/LongTerm.tsx",
   // v1.314.0 (wave 2): the carry-over pages joined the ratchet.
   "app/templates/page.tsx",
   "app/autonomy/page.tsx",
-  "app/channels/page.tsx",
-  "app/computeruse/page.tsx",
-  "app/updates/page.tsx",
+  "components/settings/pages/NotificationsPage.tsx",
+  "components/settings/pages/BrowserPage.tsx",
+  "components/settings/pages/UpdatesPage.tsx",
   "app/self-dev/page.tsx",
 ];
 
@@ -198,8 +198,8 @@ describe("no page grid in a T4 file can widen the page on a phone", () => {
     ["app/schedules/page.tsx", 3, 1],
     ["app/sessions/page.tsx", 3, 1],
     ["app/skills/page.tsx", 3, 1],
-    ["app/settings/page.tsx", 3, 1],
-    ["app/secrets/page.tsx", 3, 1],
+    ["components/settings/pages/LegacySettingsForm.tsx", 3, 1],
+    ["components/settings/pages/SecretsPage.tsx", 3, 1],
     ["app/documents/page.tsx", 2, 1],
     ["components/memory/LongTerm.tsx", 3, 2],
   ];
@@ -217,8 +217,8 @@ describe("no page grid in a T4 file can widen the page on a phone", () => {
       "app/schedules/page.tsx": 2,
       "app/sessions/page.tsx": 2,
       "app/skills/page.tsx": 2,
-      "app/settings/page.tsx": 2,
-      "app/secrets/page.tsx": 2,
+      "components/settings/pages/LegacySettingsForm.tsx": 2,
+      "components/settings/pages/SecretsPage.tsx": 2,
       "app/documents/page.tsx": 0,
       "components/memory/LongTerm.tsx": 4,
     };
@@ -256,7 +256,7 @@ function leadingFieldIcons(text: string): { icon: string; wrapper: string; at: n
 describe("search-field icons are visible (the verifier's isolate + z-[1])", () => {
   const FILES: [string, number][] = [
     ["app/projects/page.tsx", 1],
-    ["app/marketplace/page.tsx", 1],
+    ["components/settings/pages/DirectoryPage.tsx", 1],
     ["app/documents/page.tsx", 2],
     ["components/memory/LongTerm.tsx", 2],
     // NOT T4-owned — see the report: the coordinator must assign it.
@@ -284,8 +284,8 @@ describe("search-field icons are visible (the verifier's isolate + z-[1])", () =
   it("each field keeps its label and placeholder", () => {
     expect(src("app/projects/page.tsx")).toContain('aria-label="Filter projects by name"');
     expect(src("app/projects/page.tsx")).toContain('placeholder="Filter projects by name…"');
-    expect(src("app/marketplace/page.tsx")).toContain('aria-label="Search connectors"');
-    expect(src("app/marketplace/page.tsx")).toContain('placeholder="Search connectors…"');
+    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('aria-label="Search connectors"');
+    expect(src("components/settings/pages/DirectoryPage.tsx")).toContain('placeholder="Search connectors…"');
   });
 
   it("FilterBar renders the magnifier above its input, and the input is unchanged", () => {

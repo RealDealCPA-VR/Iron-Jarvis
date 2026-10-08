@@ -143,7 +143,7 @@ vi.mock("framer-motion", async () => {
 });
 
 import SessionsPage from "@/app/sessions/page";
-import KanbanPage from "@/app/kanban/page";
+import KanbanPage from "@/components/sessions/SessionBoard";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { NewSessionForm } from "@/components/NewSessionForm";

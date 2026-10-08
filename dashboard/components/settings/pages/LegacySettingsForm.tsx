@@ -1,0 +1,1489 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  SlidersHorizontal,
+  Save,
+  Trash2,
+  RotateCcw,
+  Wrench,
+  DatabaseBackup,
+  Cpu,
+  Gauge,
+  Palette,
+} from "lucide-react";
+import { get, put, post, ApiError } from "@/lib/api";
+import {
+  Card,
+  OfflineHint,
+  SkeletonRows,
+  ErrorNote,
+  SuccessNote,
+  SectionLabel,
+  LoaderInline,
+  ConfirmButton,
+} from "@/components/ui";
+import { PageHeader } from "@/components/PageHeader";
+import { PageShell, Reveal } from "@/components/motion";
+import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
+import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
+import { useDaemon } from "@/lib/daemon";
+import { PageGrid } from "@/components/PageGrid";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { ThemeMaker } from "@/components/ThemeMaker";
+import { providerDisplay } from "@/lib/onboarding";
+import { useModels } from "@/lib/useModels";
+
+type FieldType = "text" | "number" | "boolean" | "select";
+type Value = string | number | boolean;
+type SectionId = "models" | "local" | "automation" | "advanced";
+
+interface FieldDef {
+  key: string;
+  label: string;
+  type: FieldType;
+  section: SectionId;
+  hint?: string;
+  placeholder?: string;
+  options?: string[];
+  /** v1.298.0: plain words for an option's value in the <select>; the VALUE
+   *  stays the daemon's token. An option without a label shows its value. */
+  optionLabels?: Record<string, string>;
+  /** v1.314.0: the rest of a long hint, one click away behind "More" — the
+   *  row shows one sentence, nothing the old hint said is lost. */
+  more?: string;
+  /** Marks settings that only fully apply after a daemon restart. */
+  restart?: boolean;
+}
+
+interface SectionDef {
+  id: SectionId;
+  title: string;
+  /** v1.316.0: the short word in the jump index at the top of the form. Never
+   *  exactly "Advanced" — that string is the section's own heading (pinned by
+   *  getByText in ux-wave2-system-memory). */
+  jump: string;
+  description: string;
+  /** Advanced sections render collapsed inside a <details>. */
+  advanced?: boolean;
+}
+
+// Friendly, plain-language grouping. Each section gets a heading + one-liner.
+const SECTIONS: SectionDef[] = [
+  {
+    id: "models",
+    title: "Models & routing",
+    jump: "Models",
+    description:
+      "Which AI answers by default, and how much history Iron Jarvis keeps. Add providers and API keys on the Connections page.",
+  },
+  {
+    id: "local",
+    title: "Local & custom models",
+    jump: "Local models",
+    description:
+      "Run against a local Ollama server or any OpenAI-compatible endpoint. Leave blank to turn these off.",
+  },
+  {
+    id: "automation",
+    title: "Automation & autonomy",
+    jump: "Automation",
+    description:
+      "Advanced, and off by default. Lets Iron Jarvis act on your goals — always within the caps you set here. Manage goals on the Autonomy page.",
+  },
+  {
+    id: "advanced",
+    title: "Advanced",
+    jump: "Advanced options",
+    description: "Power-user options. Leave these alone unless you know you need them.",
+    advanced: true,
+  },
+];
+
+/**
+ * v1.318.0 (the calm first experience): the settings Simple mode shows —
+ * which AI answers, and how. Everything else (local endpoints, routing
+ * policy, automation caps, sandbox, self-development…) is one press away
+ * under "Show all settings", and always shown in Advanced.
+ */
+const BASIC_KEYS = new Set(["default_provider", "default_model", "default_persona"]);
+
+// Mirrors the daemon's whitelist (`_SETTINGS_KEYS`), grouped into friendly
+// sections with plain-language labels + descriptions.
+const FIELDS: FieldDef[] = [
+  // --- Models & routing ---------------------------------------------------
+  {
+    // Rendered as a <select>; its options are injected at render time from the
+    // shared /health poll (only providers reporting available are offered).
+    key: "default_provider",
+    label: "Default provider",
+    type: "select",
+    section: "models",
+    placeholder: "anthropic",
+    hint: "The AI service used when a chat doesn't pick one. Only providers currently available are listed — manage providers + keys on Connections.",
+  },
+  {
+    // v1.314.0: rendered as a <select> of the chosen provider's models (the
+    // /models catalogue), with "Other…" keeping free-text entry — see
+    // DefaultModelControl. The saved value is always the model id.
+    key: "default_model",
+    label: "Default model",
+    type: "text",
+    section: "models",
+    placeholder: "claude-opus-4-8",
+    hint: "The model that answers by default. The list shows what the provider above offers; pick “Other…” to type a model id.",
+  },
+  {
+    // Rendered as a <select>; its options are injected at render time from a
+    // best-effort GET /chat/personas (falls back to just "assistant"). FieldRow
+    // keeps an unknown saved value — e.g. a free-text persona — selectable.
+    key: "default_persona",
+    label: "Default persona",
+    type: "select",
+    section: "models",
+    hint: "Used whenever a chat doesn't pick one — including from your phone.",
+  },
+  {
+    key: "strict_model_pin",
+    label: "Strict model pin",
+    type: "boolean",
+    section: "models",
+    hint:
+      "When ON, a chat or session that explicitly picks a model must be answered by THAT model — " +
+      "never silently substituted (no failover, no capability reroute, no demo model). If your pick " +
+      "can't take the turn you get an honest error instead of another provider's answer. Applies only " +
+      "to explicit picks; the default/auto route still fails over.",
+  },
+  {
+    key: "local_primary_policy",
+    label: "If my local model answers with an error",
+    type: "select",
+    section: "models",
+    options: ["refuse", "failover"],
+    // v1.314.0: words for the two daemon tokens; the value saved stays
+    // "refuse" / "failover". The hint is one sentence; the detail it used to
+    // spell out with the raw tokens in quotes sits behind "More".
+    optionLabels: {
+      refuse: "Stop and tell me (default)",
+      failover: "Let another model answer",
+    },
+    hint: "When the model running on your own machine replies with an error: stop (the chat stays on this PC), or let another connected model answer.",
+    more:
+      "This covers a model on YOUR machine — Ollama, a custom endpoint, a fleet node — that replies with an " +
+      "error (429, 500, model not found). Stop and tell me: the turn fails honestly, naming the model, and " +
+      "nothing stands in — the conversation never leaves this machine. Let another model answer: " +
+      "another connected provider takes the turn, and the receipt under the reply says who and why. A local " +
+      "endpoint that never answered at all always stops; Auto is the one route that may substitute.",
+  },
+  {
+    key: "event_retention_days",
+    label: "Keep activity history",
+    type: "number",
+    section: "models",
+    restart: true,
+    hint: "How long the activity log is kept, in days. Use 0 to keep everything forever.",
+  },
+
+  // --- Local & custom models ----------------------------------------------
+  {
+    key: "ollama_base_url",
+    label: "Ollama server URL",
+    type: "text",
+    section: "local",
+    placeholder: "http://127.0.0.1:11434",
+    hint: "Point at a local Ollama server. Leave blank to disable local models.",
+  },
+  {
+    key: "ollama_model",
+    label: "Ollama model",
+    type: "text",
+    section: "local",
+    placeholder: "llama3.1",
+    hint: "Default model to use on that Ollama server.",
+  },
+  {
+    key: "custom_base_url",
+    label: "Custom endpoint URL",
+    type: "text",
+    section: "local",
+    placeholder: "https://ollama.com",
+    hint: "Any OpenAI-compatible endpoint — Ollama Cloud, LM Studio, vLLM, or a private gateway. Add its API key under Connections.",
+  },
+  {
+    key: "custom_model",
+    label: "Custom endpoint model",
+    type: "text",
+    section: "local",
+    placeholder: "qwen3-coder",
+    hint: "Default model id for that custom endpoint.",
+  },
+  // --- Local-first routing (v1.148.0) --------------------------------------
+  // These four shipped in v1.89–v1.132 and had NO control anywhere: the only
+  // way to turn local-first on was to hand-edit config.toml.
+  {
+    key: "prefer_local_when_capable",
+    label: "Prefer my own hardware",
+    type: "boolean",
+    section: "local",
+    hint:
+      "Route work to your own machines first, and reach for a cloud model only when a local one can't do it — it lacks a needed capability, it fails, or the conversation outgrows its context window. A model is only preferred once it has actually done that kind of work well (see the two settings below), so this changes nothing until there's evidence.",
+  },
+  {
+    key: "local_quality_bar",
+    label: "Quality bar for local models",
+    type: "number",
+    section: "local",
+    hint: "0–1. Average score a local model must average on a kind of work before it's preferred for it. 0.75 is a sensible default.",
+  },
+  {
+    key: "local_quality_min_samples",
+    label: "Evidence needed first",
+    type: "number",
+    section: "local",
+    hint: "How many scored sessions a local model needs before that average is trusted at all. Below this it's never preferred.",
+  },
+  {
+    key: "decompose_local_tasks",
+    label: "Break big tasks into steps for local models",
+    type: "boolean",
+    section: "local",
+    hint: "A smaller local model loses the thread over a long single run, so a multi-step task is split into plan → do → check. Native tool-callers and simple tasks are unaffected.",
+  },
+  {
+    key: "voice_transcribe_base_url",
+    label: "Voice: speech-to-text endpoint",
+    type: "text",
+    section: "local",
+    placeholder: "http://localhost:8000/v1",
+    hint: "Optional dedicated whisper server for voice dictation (faster-whisper-server, Speaches, LocalAI, Groq…). Leave blank to use your OpenAI key or custom endpoint — but a plain LLM endpoint like Ollama can't transcribe. Its API key goes under Connections (voice_transcribe_key).",
+  },
+  {
+    key: "voice_transcribe_model",
+    label: "Voice: speech-to-text model",
+    type: "text",
+    section: "local",
+    placeholder: "whisper-1 / Systran/faster-whisper-large-v3",
+    hint: "Exact transcription model your server serves. Leave blank to auto-discover (the daemon queries the endpoint's model list and tries the common whisper names).",
+  },
+
+  // --- Automation & autonomy ----------------------------------------------
+  {
+    key: "max_agent_steps",
+    label: "Max steps per run",
+    type: "number",
+    section: "automation",
+    hint: "Safety ceiling on how many tool/loop steps a single agent run may take.",
+  },
+  {
+    key: "tool_call_timeout_s",
+    label: "Tool call deadline (seconds)",
+    type: "number",
+    section: "automation",
+    hint: "How long one tool call inside an agent run may take before it is stopped and recorded as failed; the run then continues. 0 = no deadline.",
+  },
+  {
+    // v1.298.0: the trust posture of a run nobody is watching. "low" (the
+    // default) keeps an inbound-started run away from memory, settings,
+    // agents and skills; the session wears a "low trust" chip either way
+    // when it read flagged content mid-run.
+    key: "comm_trust",
+    label: "Runs started from inbound messages (phone, Slack, email)",
+    type: "select",
+    section: "automation",
+    options: ["low", "full"],
+    optionLabels: {
+      low: "Low trust (default) — cannot change memory, settings, agents or skills",
+      full: "Full trust",
+    },
+    hint:
+      "A message that arrives while you are away starts a run on its own. Under low trust that run can read and " +
+      "answer but cannot change your memory, settings, agents or skills — the session page says so. Full trust " +
+      "lets it do everything a run you started can.",
+  },
+  {
+    key: "autonomy_enabled",
+    label: "Autonomy (the pulse)",
+    type: "boolean",
+    section: "automation",
+    hint: "Let Iron Jarvis deliberate on your goals and propose (or, within budget, act). Off by default; takes effect immediately.",
+  },
+  {
+    key: "autonomy_level",
+    label: "Autonomy ceiling",
+    type: "select",
+    section: "automation",
+    options: ["suggest", "act_low", "act_all"],
+    // v1.314.0: words for the daemon's dial tokens (the value saved is
+    // unchanged). From motivation/engine.py _DIAL_AUTOEXEC: act_low runs
+    // low-risk actions, act_all low + medium; high risk is never automatic.
+    optionLabels: {
+      suggest: "Suggest only — never acts on its own",
+      act_low: "Act on low-risk steps",
+      act_all: "Act on low- and medium-risk steps",
+    },
+    hint: "How far it may go. Suggest only always proposes and never acts by itself; the others let it act, up to the caps below. High-risk steps are never done automatically.",
+  },
+  {
+    key: "autonomy_dry_run",
+    label: "Dry-run mode",
+    type: "boolean",
+    section: "automation",
+    hint: "Log/propose what it WOULD do, without executing anything.",
+  },
+  {
+    key: "autonomy_kill_switch",
+    label: "Emergency stop",
+    type: "boolean",
+    section: "automation",
+    hint: "Immediately blocks every self-initiated action, regardless of the settings above.",
+  },
+  {
+    key: "autonomy_tick_seconds",
+    label: "Think every (seconds)",
+    type: "number",
+    section: "automation",
+    hint: "How often the background loop wakes up to deliberate. Applies immediately.",
+  },
+  {
+    key: "autonomy_max_actions_per_day",
+    label: "Max actions / day",
+    type: "number",
+    section: "automation",
+    hint: "Global rolling cap on self-initiated actions.",
+  },
+  {
+    key: "autonomy_max_tokens_per_day",
+    label: "Max tokens / day",
+    type: "number",
+    section: "automation",
+    hint: "Global rolling token budget for self-initiated work.",
+  },
+  {
+    key: "sentinels_enabled",
+    label: "Sentinels (watchers)",
+    type: "boolean",
+    section: "automation",
+    hint: "Always-on watchers that notice changes and add suggestions to the Autonomy backlog (they never act on their own). Off by default; takes effect immediately.",
+  },
+  {
+    key: "sentinels_tick_seconds",
+    label: "Watch every (seconds)",
+    type: "number",
+    section: "automation",
+    hint: "How often the watchers check for changes. Applies immediately.",
+  },
+
+  // --- Advanced -----------------------------------------------------------
+  {
+    key: "git_native",
+    label: "Git-native workspaces",
+    type: "boolean",
+    section: "advanced",
+    hint: "Run each session on its own real git worktree/branch.",
+  },
+  {
+    key: "self_dev_enabled",
+    label: "Self-development",
+    type: "boolean",
+    section: "advanced",
+    restart: true,
+    hint: "Allow Iron Jarvis to edit its own source code (still review-gated — never auto-merged).",
+  },
+  {
+    key: "self_dev_root",
+    label: "Self-development repo root",
+    type: "text",
+    section: "advanced",
+    restart: true,
+    placeholder: "C:\\path\\to\\Iron-Jarvis",
+    hint: "Path to the Iron Jarvis repo. Only needed when running from an installed package.",
+  },
+  {
+    key: "sandbox_runtime",
+    label: "Sandbox runtime",
+    type: "select",
+    section: "advanced",
+    options: ["native", "docker"],
+    // v1.314.0: words; the value saved stays "native" / "docker".
+    optionLabels: {
+      native: "On this PC (no container)",
+      docker: "Inside Docker",
+    },
+    restart: true,
+    hint: "How tool execution is isolated. Inside Docker needs Docker installed.",
+  },
+];
+
+/** Coerce a raw API value into the editor value for a field. */
+function toValue(def: FieldDef, raw: unknown): Value {
+  if (def.type === "boolean") return Boolean(raw);
+  if (def.type === "number") return raw === null || raw === undefined ? 0 : Number(raw);
+  return raw === null || raw === undefined ? "" : String(raw);
+}
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${
+        checked
+          ? "border-accent/40 bg-accent/30"
+          : "border-white/10 bg-white/[0.05]"
+      }`}
+    >
+      <span
+        className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full transition-all ${
+          checked ? "left-[1.6rem] bg-accent shadow-glow-sm" : "left-1 bg-zinc-400"
+        }`}
+      />
+    </button>
+  );
+}
+
+/** One editable setting row: friendly label + description on the left, control on the right. */
+function FieldRow({
+  def,
+  value,
+  onChange,
+  control: customControl,
+}: {
+  def: FieldDef;
+  value: Value;
+  onChange: (v: Value) => void;
+  /** v1.314.0: a row whose control is not one of the four plain types
+   *  (Default model's scoped picker) passes it here. */
+  control?: React.ReactNode;
+}) {
+  let control;
+  if (customControl) {
+    control = customControl;
+  } else if (def.type === "boolean") {
+    control = (
+      <Toggle checked={Boolean(value)} onChange={(v) => onChange(v)} label={def.label} />
+    );
+  } else if (def.type === "select") {
+    const opts = def.options ?? [];
+    const cur = String(value ?? "");
+    // Keep the current value selectable even if it's not a known option.
+    const allOpts = cur && !opts.includes(cur) ? [...opts, cur] : opts;
+    control = (
+      <select
+        value={cur}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={def.label}
+        className="field"
+      >
+        {allOpts.map((opt) => (
+          <option key={opt} value={opt}>
+            {def.optionLabels?.[opt] ?? opt}
+          </option>
+        ))}
+      </select>
+    );
+  } else if (def.type === "number") {
+    control = (
+      <input
+        type="number"
+        value={Number(value ?? 0)}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label={def.label}
+        className="field"
+      />
+    );
+  } else {
+    control = (
+      <input
+        type="text"
+        value={String(value ?? "")}
+        placeholder={def.placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={def.label}
+        className="field font-mono text-[13px]"
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-b border-white/[0.04] pb-4 last:border-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+      <div className="min-w-0 sm:max-w-[16rem]">
+        <label className="flex items-center gap-1.5 text-sm font-medium text-zinc-200">
+          {def.label}
+          {def.restart && (
+            <span
+              title="Takes full effect after a daemon restart"
+              className="rounded border border-amber-500/25 bg-amber-500/[0.08] px-1 py-px text-[9px] font-medium uppercase tracking-wide text-amber-300/90"
+            >
+              restart
+            </span>
+          )}
+        </label>
+        {def.hint && (
+          <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">{def.hint}</p>
+        )}
+        {def.more && (
+          <details className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+            <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-200">
+              More
+            </summary>
+            <p className="mt-1">{def.more}</p>
+          </details>
+        )}
+      </div>
+      <div className="w-full sm:max-w-[18rem]">{control}</div>
+    </div>
+  );
+}
+
+/** The "Other…" option's value: never a real model id. */
+const OTHER_MODEL = "__other_model__";
+
+/**
+ * v1.314.0 (UX wave 2): Default model as a picker. The user used to need the
+ * exact model id by heart; now the list is the chosen provider's models from
+ * the one catalogue (`useModels` — the same /models the title-bar switcher
+ * reads), re-scoped when the provider above changes. "Other…" reveals the old
+ * free-text box, so any id the catalogue does not list can still be saved,
+ * and a saved model the catalogue does not list stays shown and selected —
+ * never silently replaced. The value saved is always the model id.
+ */
+function DefaultModelControl({
+  provider,
+  value,
+  onChange,
+}: {
+  provider: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { models } = useModels();
+  const [other, setOther] = useState(false);
+  const scoped = useMemo(
+    () => models.filter((m) => m.provider === provider),
+    [models, provider],
+  );
+  const known = scoped.some((m) => m.model === value);
+  return (
+    <div className="space-y-2">
+      <select
+        value={other ? OTHER_MODEL : value}
+        onChange={(e) => {
+          if (e.target.value === OTHER_MODEL) {
+            setOther(true);
+            return;
+          }
+          setOther(false);
+          onChange(e.target.value);
+        }}
+        aria-label="Default model"
+        className="field"
+      >
+        {/* The saved id stays visible even when this provider's list lacks it. */}
+        {!other && !known && <option value={value}>{value || "Not set"}</option>}
+        {scoped.map((m) => (
+          <option key={m.model} value={m.model}>
+            {m.name && m.name !== m.model ? `${m.name} (${m.model})` : m.model}
+            {m.available === false ? " — not connected" : ""}
+          </option>
+        ))}
+        <option value={OTHER_MODEL}>Other… (type a model id)</option>
+      </select>
+      {other && (
+        <input
+          type="text"
+          value={value}
+          placeholder="claude-opus-4-8"
+          onChange={(e) => onChange(e.target.value)}
+          aria-label="Default model id"
+          spellCheck={false}
+          autoFocus
+          className="field font-mono text-[13px]"
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---- Local model capabilities (verify-all) -------------------------------- */
+
+interface VerifyAllRow {
+  id: string;
+  label: string;
+  provider: string;
+  base_url: string;
+  routable: boolean;
+  tool_use: boolean | null;
+  vision: boolean | null;
+  error?: string;
+}
+
+/** Plain-language cost of each capability this model DOESN'T have. */
+function blockedList(r: VerifyAllRow): string[] {
+  const out: string[] = [];
+  if (r.tool_use !== true)
+    out.push(
+      "tools (web search & page fetch, file/document work, PII redaction, MCP integrations)" +
+        (r.tool_use === null ? " — unverified" : ""),
+    );
+  if (r.vision !== true)
+    out.push(
+      "vision (image analysis, scanned-PDF OCR)" +
+        (r.vision === null ? " — unverified" : ""),
+    );
+  return out;
+}
+
+function CapChip({ label, state }: { label: string; state: boolean | null }) {
+  const cls =
+    state === true
+      ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300/90"
+      : state === false
+        ? "border-amber-400/25 bg-amber-400/[0.08] text-amber-200/90"
+        : "border-white/10 text-zinc-500";
+  return (
+    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${cls}`}>
+      {label} {state === true ? "✓" : state === false ? "✗" : "?"}
+    </span>
+  );
+}
+
+/** One button probes EVERY local endpoint (user-added + the Ollama/custom
+ *  slots) for tool + vision capability, and lists what each model CAN'T do —
+ *  so "which of my local models covers which tools" is one click, not a
+ *  per-endpoint hunt. Results are also recorded on the endpoints, so routing
+ *  and the Connections chips pick them up immediately. */
+/**
+ * Context windows (v1.156.0).
+ *
+ * A model that does not ADVERTISE its window is assumed to have
+ * DEFAULT_WINDOW (32k) — and until now there was nowhere in the app to correct
+ * that. Reported by a user running a 1M-context local model: every turn was
+ * being budgeted at 32k, so history was trimmed roughly 30x earlier than it
+ * needed to be, compaction offered at ~22k instead of ~700k, and attachment
+ * budgets stayed conservative. `model_context_windows` existed in config and
+ * had zero UI.
+ *
+ * The card is deliberately explicit about PROVENANCE: a pinned 32k and an
+ * assumed 32k look identical in every other surface, and the difference is the
+ * whole reason someone comes here.
+ */
+export function ContextWindowsCard({
+  defaultProvider,
+  defaultModel,
+}: {
+  defaultProvider: string;
+  defaultModel: string;
+}) {
+  const [pins, setPins] = useState<Record<string, number> | null>(null);
+  const [key, setKey] = useState("");
+  const [tokens, setTokens] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    get<{ settings: Record<string, unknown> }>("/settings")
+      .then((r) => {
+        if (!alive) return;
+        const raw = r.settings?.model_context_windows;
+        setPins(
+          raw && typeof raw === "object" ? (raw as Record<string, number>) : {},
+        );
+      })
+      .catch(() => alive && setPins({}));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Most-specific key first — the same order the daemon resolves in. */
+  const activeKey = useMemo(() => {
+    if (!pins) return null;
+    for (const k of [
+      `${defaultProvider}::${defaultModel}`,
+      defaultModel,
+      defaultProvider,
+    ]) {
+      if (k && k in pins) return k;
+    }
+    return null;
+  }, [pins, defaultProvider, defaultModel]);
+
+  async function save(next: Record<string, number>) {
+    setBusy(true);
+    setErr(null);
+    setSaved(null);
+    try {
+      await put("/settings", { values: { model_context_windows: next } });
+      setPins(next);
+      setSaved("Saved — it applies to the next turn.");
+      window.setTimeout(() => setSaved(null), 2500);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function add() {
+    const k = key.trim();
+    const n = Number(tokens.replace(/[_,\s]/g, ""));
+    if (!k) return setErr("Name the model (or provider) this applies to.");
+    if (!Number.isFinite(n) || n < 1000)
+      return setErr("Give the window in TOKENS — e.g. 1000000 for a 1M model.");
+    void save({ ...(pins ?? {}), [k]: Math.round(n) });
+    setKey("");
+    setTokens("");
+  }
+
+  const entries = Object.entries(pins ?? {});
+  const fmt = (n: number) =>
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`
+      : n >= 1000
+        ? `${Math.round(n / 1000)}k`
+        : String(n);
+
+  return (
+    <Card title="Context windows" icon={<Gauge size={15} />}>
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        How much the model can actually read. Endpoints that don&apos;t report
+        their window are assumed to be <strong>32k</strong>, which silently
+        trims long conversations far earlier than a big-context model needs.
+        Pin the real number here.
+      </p>
+
+      {/* What the DEFAULT route resolves to — the number that matters most and
+          the one nothing else in the app tells you. */}
+      <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-[12px]">
+          <span className="text-zinc-500">Your default route</span>
+          {/* v1.314.0: the provider in words (never "mock"); the raw pin key
+              form stays in the title, since pins below are keyed on it. */}
+          <span
+            className="text-zinc-300"
+            title={defaultProvider ? `${defaultProvider}::${defaultModel}` : undefined}
+          >
+            {providerDisplay(defaultProvider) || "—"} /{" "}
+            <span className="font-mono">{defaultModel || "—"}</span>
+          </span>
+          <span className="ml-auto">
+            {activeKey ? (
+              <span className="text-emerald-300">
+                {fmt(pins?.[activeKey] ?? 0)} pinned
+              </span>
+            ) : (
+              <span className="text-amber-300">32k assumed</span>
+            )}
+          </span>
+        </div>
+        {!activeKey && defaultModel && (
+          <button
+            type="button"
+            onClick={() => {
+              setKey(defaultModel);
+              setTokens("1000000");
+            }}
+            className="mt-1.5 text-[11px] text-accent-soft underline-offset-2 hover:underline"
+          >
+            Set a window for {defaultModel}
+          </button>
+        )}
+      </div>
+
+      {entries.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {entries.map(([k, v]) => (
+            <div
+              key={k}
+              className="flex items-center gap-2 rounded-lg border border-white/[0.06] px-2.5 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-zinc-300">
+                {k}
+              </span>
+              <span className="shrink-0 text-[11.5px] tabular-nums text-zinc-400">
+                {fmt(v)}
+              </span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const next = { ...(pins ?? {}) };
+                  delete next[k];
+                  void save(next);
+                }}
+                aria-label={`Remove the ${k} pin`}
+                className="shrink-0 text-zinc-600 transition-colors hover:text-rose-300 disabled:opacity-50"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={defaultModel || "model name"}
+          spellCheck={false}
+          className="field min-w-0 flex-1 py-1.5 font-mono text-[12px]"
+        />
+        <input
+          value={tokens}
+          onChange={(e) => setTokens(e.target.value)}
+          placeholder="tokens, e.g. 1000000"
+          inputMode="numeric"
+          className="field w-44 py-1.5 text-[12px]"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={busy}
+          className="btn-accent shrink-0 py-1.5 text-xs"
+        >
+          <Save size={13} /> Pin
+        </button>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+        Matched most-specific first: <code>provider::model</code>, then{" "}
+        <code>model</code>, then <code>provider</code>. So{" "}
+        <code>{defaultModel || "fleet"}</code> covers that model on any
+        provider.
+      </p>
+
+      {err && (
+        <div className="mt-3">
+          <ErrorNote>{err}</ErrorNote>
+        </div>
+      )}
+      {saved && (
+        <div className="mt-3">
+          <SuccessNote>{saved}</SuccessNote>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function LocalCapabilitiesCard() {
+  const [rows, setRows] = useState<VerifyAllRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function runAll() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const d = await post<{ results: VerifyAllRow[] }>("/fleet/verify-all");
+      setRows(d.results ?? []);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Local model capabilities" icon={<Cpu size={15} />}>
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        Probe every local endpoint (your added endpoints plus the Ollama/custom
+        slots) with a live tool call and a vision check, and see exactly what
+        each model can — and can&apos;t — do. Results are saved, so routing and
+        the Connections page reflect them immediately.
+      </p>
+      <button
+        type="button"
+        onClick={() => void runAll()}
+        disabled={busy}
+        className="btn-accent mt-3 w-full justify-center py-1.5 text-xs"
+      >
+        {busy ? (
+          <LoaderInline label="Probing endpoints… (a sleeping box can take a minute)" />
+        ) : (
+          <>
+            <Cpu size={14} /> Verify all local models
+          </>
+        )}
+      </button>
+      {err && (
+        <div className="mt-3">
+          <ErrorNote>{err}</ErrorNote>
+        </div>
+      )}
+      {rows !== null && !busy && (
+        <div className="mt-4 space-y-2">
+          {rows.length === 0 ? (
+            <p className="text-[12px] text-zinc-500">
+              No local endpoints found — add one on the Connections page.
+            </p>
+          ) : (
+            rows.map((r) => (
+              <div
+                key={r.id}
+                className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="min-w-0 truncate text-[12px] font-medium text-zinc-200"
+                    title={r.base_url}
+                  >
+                    {r.label}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <CapChip label="tools" state={r.tool_use} />
+                    <CapChip label="vision" state={r.vision} />
+                  </span>
+                </div>
+                {r.error ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-amber-300/90">
+                    {r.error}
+                  </p>
+                ) : blockedList(r).length > 0 ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                    Not available on this model: {blockedList(r).join("; ")}.
+                    Turns needing these run on another provider (or fail
+                    honestly with the strict pin on).
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] leading-relaxed text-emerald-300/80">
+                    Full capability — tools and vision turns can stay on this
+                    model.
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export default function SettingsPage() {
+  // Calm UI redesign S7 (AUDIT Q2): the short Simple view is retired — the
+  // whole form, always (S10 regroups it from the one schema).
+  const full = true;
+  const [original, setOriginal] = useState<Record<string, Value> | null>(null);
+  const [form, setForm] = useState<Record<string, Value>>({});
+  const [loadError, setLoadError] = useState<ApiError | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [busy, setBusy] = useState(false);
+  const [ok, setOk] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Maintenance actions (backup / restart) + provider options for the
+  // default_provider dropdown, both off the shared /health poll.
+  const { refresh, health } = useDaemon();
+  const [backupBusy, setBackupBusy] = useState(false);
+  // v1.249.0 (R-05): bumped after "Back up now" so the backup-copy status
+  // line under it re-reads the outcome of the copy that backup just made.
+  const [backupsVersion, setBackupsVersion] = useState(0);
+  const [restarting, setRestarting] = useState(false);
+  const [maintOk, setMaintOk] = useState<string | null>(null);
+  const [maintErr, setMaintErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await get<{ settings: Record<string, unknown> }>("/settings");
+        if (cancelled) return;
+        const init: Record<string, Value> = {};
+        for (const f of FIELDS) init[f.key] = toValue(f, data.settings?.[f.key]);
+        setOriginal(init);
+        setForm(init);
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError(err instanceof ApiError ? err : new ApiError(String(err), 0));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const offline = loadError && loadError.status === 0;
+
+  // Persona names for the default_persona dropdown — best-effort: if the fetch
+  // fails the field still renders with "assistant" (and FieldRow's allOpts
+  // keeps whatever value is currently saved selectable regardless).
+  const [personaOptions, setPersonaOptions] = useState<string[]>(["assistant"]);
+  useEffect(() => {
+    let cancelled = false;
+    get<{ personas: { name: string }[] }>("/chat/personas")
+      .then((d) => {
+        if (cancelled) return;
+        const names = (d.personas ?? []).map((p) => p.name).filter(Boolean);
+        if (names.length > 0) setPersonaOptions(names);
+      })
+      .catch(() => {
+        /* keep the fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Providers the daemon reports as available right now (from /health). The
+  // FieldRow <select> itself keeps the currently-saved value selectable even
+  // if it isn't in this list, so an existing choice is never silently lost.
+  const providerOptions = useMemo<string[]>(
+    () =>
+      (health?.providers ?? [])
+        .filter((p) => p.available)
+        .map((p) => p.provider),
+    [health],
+  );
+
+  // v1.314.0: the words the provider <select> shows — built at render time,
+  // because the options arrive from /health and the saved value (FieldRow
+  // keeps it even when unavailable, "auto" included) may not be among them.
+  // The option VALUE stays the provider id the daemon saves.
+  const savedProvider = String(form.default_provider ?? "");
+  const providerLabels = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const id of [...providerOptions, savedProvider]) if (id) out[id] = providerDisplay(id);
+    return out;
+  }, [providerOptions, savedProvider]);
+
+  // v1.314.0: /settings?focus=advanced (the house ?focus= convention, read
+  // from window.location — see lib/useFocusRef.ts for why not
+  // useSearchParams) opens the collapsed Advanced section and brings it into
+  // view: the Self-development page sends people here to turn its switch on.
+  // The form renders only after /settings loads, so this waits for that
+  // rather than running once on mount (useFocusRef's mount-only effect would
+  // miss the <details>). It opens it once; the user can close it again.
+  const advancedRef = useRef<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    let wanted: string | null = null;
+    try {
+      wanted = new URLSearchParams(window.location.search).get("focus");
+    } catch {
+      return;
+    }
+    const el = advancedRef.current;
+    if (wanted !== "advanced" || !el) return;
+    el.open = true;
+    try {
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+    } catch {
+      /* jsdom / older engines: opening it is the part that matters */
+    }
+  }, [loading]);
+
+  const changed = useMemo(() => {
+    if (!original) return {} as Record<string, Value>;
+    const diff: Record<string, Value> = {};
+    for (const f of FIELDS) {
+      if (form[f.key] !== original[f.key]) diff[f.key] = form[f.key];
+    }
+    return diff;
+  }, [form, original]);
+
+  const changedKeys = Object.keys(changed);
+  const dirty = changedKeys.length > 0;
+
+  function update(key: string, value: Value) {
+    setForm((f) => ({ ...f, [key]: value }));
+    setOk(null);
+    setError(null);
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!dirty) return;
+    setBusy(true);
+    setOk(null);
+    setError(null);
+    try {
+      await put("/settings", { values: changed });
+      setOriginal((prev) => ({ ...(prev ?? {}), ...changed }));
+      setOk(`Saved ${changedKeys.length} setting${changedKeys.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function reset() {
+    if (original) setForm(original);
+    setOk(null);
+    setError(null);
+  }
+
+  // v1.316.0: the jump index. The Preferences form runs past 2,400px, so the
+  // index at its top reaches each section in one press. The Advanced section
+  // is a collapsed <details>, so its link OPENS it first — scrolling to a
+  // closed summary would show a heading and none of the switches the person
+  // came for. The scroll is done here (not by the browser's hash jump) so the
+  // URL stays /settings and the ?focus= deep link keeps working; jsdom and
+  // older engines lack smooth scrollIntoView, so it is best-effort.
+  function jumpTo(e: React.MouseEvent<HTMLAnchorElement>, id: SectionId) {
+    const el = document.getElementById(`settings-${id}`);
+    if (!el) return;
+    e.preventDefault();
+    if (el instanceof HTMLDetailsElement) el.open = true;
+    try {
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+    } catch {
+      /* opening it is the part that matters */
+    }
+  }
+
+  async function backupNow() {
+    setMaintOk(null);
+    setMaintErr(null);
+    setBackupBusy(true);
+    try {
+      const r = await post<{
+        action: string;
+        ok: boolean;
+        result: string;
+        mirror?: { configured?: boolean; dir?: string; last?: { ok?: boolean } | null };
+      }>("/diagnostics/repair", { action: "backup_now" });
+      if (r.ok) {
+        // v1.249.0 (R-05): say whether the second-drive copy was made too.
+        const m = r.mirror;
+        const copy = m?.configured
+          ? m.last?.ok
+            ? ` — and copied to ${m.dir}`
+            : ` — but the copy to ${m.dir} did not complete (see below)`
+          : "";
+        setMaintOk(`Backup written to ${r.result}${copy}`);
+        setBackupsVersion((v) => v + 1);
+      } else setMaintErr("The daemon reported the backup did not complete.");
+    } catch (err) {
+      setMaintErr(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function restartDaemon() {
+    setMaintOk(null);
+    setMaintErr(null);
+    setRestarting(true);
+    try {
+      await post("/shutdown");
+    } catch {
+      // The connection may reset as the daemon stops — that's expected here.
+    }
+    // The desktop app relaunches the daemon within ~2s; give it a beat, then
+    // let the shared /health poll pick the new process back up.
+    await new Promise((r) => setTimeout(r, 2500));
+    refresh();
+    setRestarting(false);
+    setMaintOk("Restart requested — reconnecting. Watch the status dot in the sidebar.");
+  }
+
+  // A restore (Maintenance → Restore from backup…) stops the daemon itself;
+  // this is the same reconnect beat restartDaemon() takes after /shutdown.
+  async function reconnectAfterRestore(note: string) {
+    setMaintOk(null);
+    setMaintErr(null);
+    setRestarting(true);
+    await new Promise((r) => setTimeout(r, 2500));
+    refresh();
+    setRestarting(false);
+    setMaintOk(note);
+  }
+
+  const restartTouched = changedKeys.some((k) => FIELDS.find((f) => f.key === k)?.restart);
+
+  return (
+    <PageShell>
+      <Reveal>
+        <PageHeader
+          title="Settings"
+          subtitle={
+            full
+              ? "Tune how Iron Jarvis behaves. Changes are written to config.toml so they survive a restart; a few settings (marked “restart”) only take full effect once the daemon restarts."
+              : "Choose which AI answers and how the app looks. Everything else is under “Show all settings”."
+          }
+        />
+      </Reveal>
+
+      {offline && (
+        <Reveal>
+          <OfflineHint />
+        </Reveal>
+      )}
+
+      <Reveal>
+        <PageGrid cols={3}>
+          {/* Settings form */}
+          <div className="lg:col-span-2">
+            <Card title="Preferences" icon={<SlidersHorizontal size={15} />}>
+              {loading ? (
+                <SkeletonRows rows={8} />
+              ) : (
+                <form onSubmit={save} className="space-y-8">
+                  {/* v1.316.0: jump index — one press to any section. */}
+                  {full && (
+                  <nav
+                    aria-label="Settings sections"
+                    className="-mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
+                  >
+                    <span className="mr-1 text-zinc-500">Jump to</span>
+                    {SECTIONS.map((section) => (
+                      <a
+                        key={section.id}
+                        href={`#settings-${section.id}`}
+                        onClick={(e) => jumpTo(e, section.id)}
+                        className="rounded-full border border-white/[0.08] px-2.5 py-1 text-zinc-300 transition-colors hover:border-white/[0.16] hover:text-zinc-100"
+                      >
+                        {section.jump}
+                      </a>
+                    ))}
+                  </nav>
+                  )}
+                  {SECTIONS.map((section) => {
+                    const fields = FIELDS.filter(
+                      (f) => f.section === section.id && (full || BASIC_KEYS.has(f.key)),
+                    );
+                    if (fields.length === 0) return null;
+
+                    const rows = (
+                      <div className="space-y-4">
+                        {fields.map((f) => (
+                          <FieldRow
+                            key={f.key}
+                            def={
+                              f.key === "default_provider"
+                                ? { ...f, options: providerOptions, optionLabels: providerLabels }
+                                : f.key === "default_persona"
+                                  ? { ...f, options: personaOptions }
+                                  : f
+                            }
+                            value={form[f.key]}
+                            onChange={(v) => update(f.key, v)}
+                            control={
+                              f.key === "default_model" ? (
+                                <DefaultModelControl
+                                  provider={savedProvider}
+                                  value={String(form.default_model ?? "")}
+                                  onChange={(v) => update("default_model", v)}
+                                />
+                              ) : undefined
+                            }
+                          />
+                        ))}
+                      </div>
+                    );
+
+                    if (section.advanced) {
+                      return (
+                        <details
+                          key={section.id}
+                          id={`settings-${section.id}`}
+                          ref={advancedRef}
+                          className="group scroll-mt-4 rounded-xl border border-white/[0.05] bg-white/[0.015] px-4 py-3.5"
+                        >
+                          <summary className="cursor-pointer list-none">
+                            <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent-soft/80">
+                              {section.title}
+                            </span>
+                            <span className="ml-2 text-[11px] text-zinc-500 group-open:hidden">
+                              (click to expand)
+                            </span>
+                            <p className="mt-0.5 text-[11px] text-zinc-500">
+                              {section.description}
+                            </p>
+                          </summary>
+                          <div className="mt-4">{rows}</div>
+                        </details>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={section.id}
+                        id={`settings-${section.id}`}
+                        className="scroll-mt-4 space-y-4"
+                      >
+                        <div>
+                          <h3 className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent-soft/80">
+                            {full ? section.title : "Which AI answers"}
+                          </h3>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+                            {full
+                              ? section.description
+                              : "The AI that answers when a chat doesn't pick one. Connect accounts and keys on the Connections page."}
+                          </p>
+                        </div>
+                        {rows}
+                      </div>
+                    );
+                  })}
+
+
+                  {restartTouched && dirty && (
+                    <p className="text-[11px] text-amber-300/80">
+                      One or more changed settings need a daemon restart to fully apply — use
+                      “Restart daemon” under Maintenance after saving.
+                    </p>
+                  )}
+
+                  {/* v1.316.0: the Save row is ALWAYS here (disabled while clean),
+                      and while there are unsaved changes it pins itself to the
+                      bottom of the window — a change made at the top of this
+                      long form no longer leaves Save 2,000px away. Same single
+                      Save, same Reset, same count; only where it sits changes.
+                      It bleeds to the card's edges (-mx-4 against the card's
+                      p-4) and is a mostly OPAQUE card colour, because the card
+                      already blurs what is behind it and a second, nested
+                      backdrop-filter is unreliable — fields scrolling under a
+                      see-through bar would read as a mess. The border is
+                      always there (transparent while clean) so turning sticky
+                      does not shift the row. No ancestor up to <main> may
+                      carry overflow-*, or sticky silently stops sticking. */}
+                  <div
+                    data-testid="settings-save-bar"
+                    className={`-mx-4 flex flex-wrap items-center gap-2 border-t px-4 py-2 ${
+                      dirty
+                        ? "sticky bottom-0 z-10 rounded-b-2xl border-white/[0.08] bg-ink-850/95 shadow-[0_-10px_24px_-14px_rgb(0_0_0/0.55)]"
+                        : "border-transparent"
+                    }`}
+                  >
+                    <button type="submit" disabled={busy || !dirty} className="btn-accent">
+                      {busy ? (
+                        <LoaderInline label="Saving…" />
+                      ) : (
+                        <>
+                          <Save size={14} /> Save changes
+                        </>
+                      )}
+                    </button>
+                    {dirty && (
+                      <button type="button" onClick={reset} className="btn-ghost">
+                        <RotateCcw size={14} /> Reset
+                      </button>
+                    )}
+                    {dirty && (
+                      <span className="text-[11px] text-zinc-500">
+                        {changedKeys.length} unsaved change{changedKeys.length === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                  {ok && <SuccessNote>{ok}</SuccessNote>}
+                  {error && <ErrorNote>{error}</ErrorNote>}
+                </form>
+              )}
+            </Card>
+
+            {full && <LocalCapabilitiesCard />}
+
+            {full && (
+              <ContextWindowsCard
+                defaultProvider={String(form.default_provider ?? "")}
+                defaultModel={String(form.default_model ?? "")}
+              />
+            )}
+          </div>
+
+          {/* Sidebar: appearance + maintenance + access token */}
+          <div className="space-y-6 lg:col-span-1">
+            {/* v1.314.0 (UX wave 2): Appearance — the same theme choice as the
+                title bar's dots and the phone drawer, through the SAME store
+                (lib/theme.ts: <html data-theme> + localStorage), so all of
+                them stay in step. It applies at once and is kept per device;
+                it sits outside the Preferences form on purpose, so Save
+                changes never carries it to the daemon. */}
+            <div data-testid="settings-appearance" id="appearance" className="scroll-mt-20">
+              <Card title="Appearance" icon={<Palette size={15} />}>
+                <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">
+                  Pick a theme, or make your own below. It changes right away and is remembered
+                  on this PC — no need to save.
+                </p>
+                <ThemeSwitcher variant="drawer" />
+                <ThemeMaker />
+              </Card>
+            </div>
+
+            {/* Maintenance */}
+            <Card title="Maintenance" icon={<Wrench size={15} />}>
+              <div className="space-y-4">
+                <div>
+                  <SectionLabel>Back up now</SectionLabel>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+                    Save a snapshot of your database and settings right now. Backups also run
+                    automatically in the background.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={backupNow}
+                    disabled={backupBusy || restarting}
+                    className="btn-accent mt-2.5 w-full justify-center py-1.5 text-xs"
+                  >
+                    {backupBusy ? (
+                      <LoaderInline label="Backing up…" />
+                    ) : (
+                      <>
+                        <DatabaseBackup size={14} /> Back up now
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <MaintenanceTools
+                  disabled={backupBusy || restarting}
+                  onRestartRequested={reconnectAfterRestore}
+                  refreshKey={backupsVersion}
+                />
+
+                <div className="border-t hairline pt-4">
+                  <SectionLabel>Restart daemon</SectionLabel>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+                    Applies “restart” settings and clears a stuck state. It briefly interrupts
+                    Iron Jarvis; the desktop app brings it right back.
+                  </p>
+                  <div className="mt-2.5">
+                    <ConfirmButton
+                      onConfirm={restartDaemon}
+                      label="Restart daemon"
+                      confirmLabel={restarting ? "Restarting…" : "Confirm restart"}
+                      className="w-full justify-center border-amber-500/30 py-1.5 text-amber-200 hover:border-amber-500/50 hover:text-amber-100"
+                      title="Gracefully stops the daemon; the desktop app restarts it within ~2s."
+                    />
+                  </div>
+                  {restarting && (
+                    <p className="mt-2 text-[11px] text-amber-300/80">
+                      Restarting… reconnecting.
+                    </p>
+                  )}
+                </div>
+
+                {maintOk && <SuccessNote>{maintOk}</SuccessNote>}
+                {maintErr && <ErrorNote>{maintErr}</ErrorNote>}
+              </div>
+            </Card>
+
+            {/* Daemon access token (v1.232.0: read-only inside the desktop
+                app, which seeds it; the paste box is for a browser without
+                the bridge). */}
+            {full && <DaemonTokenCard />}
+          </div>
+        </PageGrid>
+      </Reveal>
+    </PageShell>
+  );
+}

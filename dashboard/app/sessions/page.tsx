@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import SessionBoard from "@/components/sessions/SessionBoard";
 import Link from "next/link";
 import {
   Boxes,
@@ -65,7 +66,7 @@ function focusTaskBox() {
   el.focus();
 }
 
-export default function SessionsPage() {
+function SessionsList() {
   // Toolbar state. `query`/`statusFilter`/`agentFilter` filter the fetched list
   // client-side; `projectFilter` is server-SCOPED — it changes the fetch path.
   const [query, setQuery] = useState("");
@@ -627,5 +628,58 @@ export default function SessionsPage() {
         </PageGrid>
       </Reveal>
     </PageShell>
+  );
+}
+
+/**
+ * Sessions as a LIST or a BOARD (calm UI redesign S10, AUDIT Q4a): the
+ * Session board was its own page (/kanban, which now redirects here with
+ * ?view=board). Same sessions, two views, one place.
+ */
+export default function SessionsPage() {
+  const [view, setView] = useState<"list" | "board">("list");
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("view") === "board") setView("board");
+    } catch {
+      /* no location (tests) */
+    }
+  }, []);
+  function choose(next: "list" | "board") {
+    setView(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next === "board") url.searchParams.set("view", "board");
+      else url.searchParams.delete("view");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {
+      /* no history (tests) */
+    }
+  }
+  return (
+    <div>
+      <div role="tablist" aria-label="Sessions view" className="mb-3 flex gap-1" data-testid="sessions-view">
+        {(
+          [
+            ["list", "List"],
+            ["board", "Board"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => choose(key)}
+            className={`rounded-lg px-3 py-1.5 text-[13px] ${
+              view === key ? "bg-accent/[0.08] text-accent-soft" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === "board" ? <SessionBoard /> : <SessionsList />}
+    </div>
   );
 }

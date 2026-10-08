@@ -153,7 +153,7 @@ import { CardInner } from "@/components/kanban/SessionCard";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { TurnReceipt, blockedRows } from "@/components/chat/TurnReceipt";
 import { toActivity } from "@/components/NotificationBell";
-import SettingsPage from "@/app/settings/page";
+import SettingsPage from "@/components/settings/pages/LegacySettingsForm";
 import type { SessionView } from "@/lib/types";
 
 afterEach(() => {

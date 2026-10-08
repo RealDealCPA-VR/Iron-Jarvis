@@ -217,8 +217,8 @@ import { LongTerm } from "@/components/memory/LongTerm";
 import { KnowsAboutYou } from "@/components/memory/KnowsAboutYou";
 import { PreferenceSections } from "@/components/memory/PreferenceSections";
 import { curatorHeadline } from "@/components/skills/SkillCurator";
-import YouPage from "@/app/you/page";
-import TrainPage from "@/app/train/page";
+import YouPage from "@/components/settings/pages/YouPage";
+import TrainPage from "@/components/settings/pages/TrainPage";
 import SkillsPage from "@/app/skills/page";
 import { NAV_ENTRIES, labelForPath } from "@/lib/nav";
 import type { PreferencesView } from "@/lib/preferences";
@@ -443,7 +443,7 @@ describe("memory deep links land on their section (memory-deeplinks-land-on-same
     expect(labelForPath("/ltm")).toBe("Memory");
     expect(labelForPath("/lessons")).toBe("Memory");
     expect(NAV_ENTRIES.find((e) => e.href === "/train")?.label).toBe("Train Jarvis on me");
-    expect(src("app/train/page.tsx")).toMatch(/title="Train Jarvis on me"/);
+    expect(src("components/settings/pages/TrainPage.tsx")).toMatch(/title="Train Jarvis on me"/);
   });
 });
 

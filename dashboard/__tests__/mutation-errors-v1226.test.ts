@@ -46,7 +46,7 @@ describe("Lessons forget() reloads on failure and surfaces non-0 (F-F-5)", () =>
 });
 
 describe("tools: auto-approve grant failure keeps the dialog open (F-F-8)", () => {
-  const src = read("app/tools/page.tsx");
+  const src = read("components/settings/pages/ToolsPage.tsx");
   it("sets the pending error and returns before setPending(null)", () => {
     const at = src.indexOf("Connected, but auto-approve could not be saved:");
     expect(at).toBeGreaterThan(-1);

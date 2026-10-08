@@ -62,7 +62,7 @@ describe("DaemonTokenCard (v1.232.0)", () => {
 
 describe("Settings page wiring", () => {
   it("mounts the card and no longer carries its own token box", () => {
-    const src = readFileSync(join(process.cwd(), "app", "settings", "page.tsx"), "utf8");
+    const src = readFileSync(join(process.cwd(), "components", "settings", "pages", "LegacySettingsForm.tsx"), "utf8");
     expect(src).toContain('import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";');
     expect(src).toContain("<DaemonTokenCard />");
     expect(src).not.toContain("Local installs usually need no token");

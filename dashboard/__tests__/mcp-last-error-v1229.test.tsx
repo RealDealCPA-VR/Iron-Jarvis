@@ -109,7 +109,7 @@ vi.mock("@/components/motion", () => ({
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
-const ToolsPage = (await import("@/app/tools/page")).default;
+const ToolsPage = (await import("@/components/settings/pages/ToolsPage")).default;
 const OverviewPage = (await import("@/components/overview/StatusOverview")).default;
 
 const failedRow = {

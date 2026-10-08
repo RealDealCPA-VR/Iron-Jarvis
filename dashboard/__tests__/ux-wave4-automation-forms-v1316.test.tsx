@@ -126,7 +126,7 @@ import SentinelsPage from "@/app/sentinels/page";
 import WebhooksPage from "@/app/webhooks/page";
 import SchedulesPage from "@/app/schedules/page";
 import TemplatesPage from "@/app/templates/page";
-import ChannelsPage from "@/app/channels/page";
+import ChannelsPage from "@/components/settings/pages/NotificationsPage";
 import { Field } from "@/components/ui";
 
 /** Every element scrollIntoView was called on (jsdom has none of its own). */

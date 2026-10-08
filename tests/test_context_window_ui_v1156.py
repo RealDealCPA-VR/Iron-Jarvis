@@ -101,7 +101,7 @@ def test_removing_a_pin_returns_to_unknown(tmp_path):
 def _settings_src() -> str:
     return (
         Path(__file__).resolve().parents[1]
-        / "dashboard" / "app" / "settings" / "page.tsx"
+        / "dashboard" / "components" / "settings" / "pages" / "LegacySettingsForm.tsx"
     ).read_text(encoding="utf-8")
 
 

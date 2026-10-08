@@ -109,7 +109,7 @@ vi.mock("next/navigation", () => ({
 
 // Imported AFTER the mocks so the page binds to the fakes. The whole PAGE is
 // mounted, which is what makes "the hint is WIRED IN" testable at all.
-const YouPage = (await import("@/app/you/page")).default;
+const YouPage = (await import("@/components/settings/pages/YouPage")).default;
 
 const ABOUT_PLACEHOLDER = /I run a small CPA firm\./;
 

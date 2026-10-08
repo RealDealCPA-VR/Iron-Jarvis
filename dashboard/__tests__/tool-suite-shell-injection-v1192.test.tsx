@@ -76,7 +76,7 @@ vi.mock("@/components/PageHeader", () => ({
 // Imported AFTER the mocks so the page binds to the fakes. A Next page file may
 // export nothing beyond its default, so the gallery is read back off the DOM
 // (`data-suite-tool` / `data-argv` carry the exact argv the Add button posts).
-const ToolsPage = (await import("@/app/tools/page")).default;
+const ToolsPage = (await import("@/components/settings/pages/ToolsPage")).default;
 
 /* -------------------------------------------------------------------------- */
 /*  The invariant, spelled out here rather than imported                       */

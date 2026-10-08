@@ -29,7 +29,7 @@ def test_every_whitelisted_key_is_in_the_schema():
 
 
 def test_every_settings_page_field_is_in_the_schema():
-    src = (ROOT / "dashboard" / "app" / "settings" / "page.tsx").read_text(encoding="utf-8")
+    src = (ROOT / "dashboard" / "components" / "settings" / "pages" / "LegacySettingsForm.tsx").read_text(encoding="utf-8")
     keys = set(re.findall(r'^\s+key: "([a-z_]+)",', src, re.M))
     assert len(keys) > 25, "anti-vacuity: the page's FIELDS were found"
     assert sorted(keys - set(schema.BY_KEY)) == []

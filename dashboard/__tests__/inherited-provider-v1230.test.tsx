@@ -134,7 +134,7 @@ vi.mock("@/components/BrandGlyph", () => ({
   ProviderMark: () => null,
 }));
 
-import ConnectionsPage from "@/app/connections/page";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 
 function conn(provider: string, over: Record<string, unknown> = {}) {
   return {

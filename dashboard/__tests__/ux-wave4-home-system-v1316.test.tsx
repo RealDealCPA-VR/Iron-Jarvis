@@ -206,8 +206,8 @@ vi.mock("@/components/TimeTravelFeed", () => ({
   },
 }));
 
-import SettingsPage from "@/app/settings/page";
-import UpdatesPage from "@/app/updates/page";
+import SettingsPage from "@/components/settings/pages/LegacySettingsForm";
+import UpdatesPage from "@/components/settings/pages/UpdatesPage";
 import HelpPage from "@/app/help/page";
 import UsagePage from "@/app/usage/page";
 import ActivityPage from "@/app/activity/page";

@@ -111,7 +111,7 @@ describe("U7 — Updates without the desktop bridge", () => {
       reason: "not a source checkout (installed package)",
     };
     delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
-    const { default: UpdatesPage } = await import("@/app/updates/page");
+    const { default: UpdatesPage } = await import("@/components/settings/pages/UpdatesPage");
     render(<UpdatesPage />);
     expect(
       screen.getByText(/Updates install from the desktop app on your PC \(tray → Restart to update\)/),

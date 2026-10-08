@@ -145,7 +145,7 @@ def test_the_ui_has_no_unsaved_form_field_left():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1] / "dashboard"
-    page = (root / "app" / "tools" / "page.tsx").read_text(encoding="utf-8")
+    page = (root / "components" / "settings" / "pages" / "ToolsPage.tsx").read_text(encoding="utf-8")
     assert "/mcp/settings" in page
     # The GLOBAL switch is fed the global flag, not the roll-up.
     assert "globalOn={mcpData?.auto_approve_global ?? false}" in page

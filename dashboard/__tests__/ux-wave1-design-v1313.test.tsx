@@ -768,13 +768,13 @@ describe("F. surfaces follow the theme (black is not remapped)", () => {
   });
 
   it("updates and webhooks: commands and URLs sit on a theme code chip, not bg-black", () => {
-    for (const p of [["app", "updates", "page.tsx"], ["app", "webhooks", "page.tsx"]]) {
+    for (const p of [["components", "settings", "pages", "UpdatesPage.tsx"], ["app", "webhooks", "page.tsx"]]) {
       const src = read(...p);
       expect(blackSlabs(src), p.join("/")).toEqual([]);
       expect(src, p.join("/")).toMatch(/code-inline|<Code\b/);
     }
     // Anti-vacuity: the copyable commands themselves are unchanged.
-    const upd = read("app", "updates", "page.tsx");
+    const upd = read("components", "settings", "pages", "UpdatesPage.tsx");
     for (const cmd of ["git pull --ff-only", "uv sync", "pnpm build"]) expect(upd).toContain(cmd);
     expect(read("app", "webhooks", "page.tsx")).toContain("/webhooks/{slug.trim()}");
   });
@@ -1172,7 +1172,7 @@ describe("J. hints that explain what to do are readable", () => {
   });
 
   it("Computer use: 'No domains allowed yet.' and 'No trace recorded…' read in zinc-500", () => {
-    const src = read("app", "computeruse", "page.tsx");
+    const src = read("components", "settings", "pages", "BrowserPage.tsx");
     for (const needle of ["No domains allowed yet.", "No trace recorded for this run."]) {
       const cls = classBefore(src, needle, 160);
       expect(cls, needle).toContain("text-zinc-500");

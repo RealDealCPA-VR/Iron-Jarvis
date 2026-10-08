@@ -308,7 +308,7 @@ def test_the_connections_page_lists_seeded_endpoints():
 
     page = (
         Path(__file__).resolve().parents[1]
-        / "dashboard" / "app" / "connections" / "page.tsx"
+        / "dashboard" / "components" / "settings" / "pages" / "ConnectionsPage.tsx"
     )
     text = page.read_text(encoding="utf-8")
     assert 'n.source === "user" || n.source === "config"' in text

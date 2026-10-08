@@ -175,13 +175,13 @@ vi.mock("@/components/BrandGlyph", async (orig) => ({
 
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { CommandPalette } from "@/components/CommandPalette";
-import SettingsPage from "@/app/settings/page";
+import SettingsPage from "@/components/settings/pages/LegacySettingsForm";
 import SelfDevPage from "@/app/self-dev/page";
-import UpdatesPage from "@/app/updates/page";
+import UpdatesPage from "@/components/settings/pages/UpdatesPage";
 import FleetPage from "@/app/fleet/page";
 import ActivityPage from "@/app/activity/page";
-import SecretsPage from "@/app/secrets/page";
-import ConnectionsPage from "@/app/connections/page";
+import SecretsPage from "@/components/settings/pages/SecretsPage";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 import { Lessons } from "@/components/memory/Lessons";
 import { RestHookups } from "@/components/connections/RestHookups";
 import {
@@ -663,7 +663,7 @@ describe("Updates — a FAILED check is not 'local changes' (coordinator, v1.314
 
 describe("PageGrid carry-over — /updates and /self-dev", () => {
   it.each([
-    ["app/updates/page.tsx", 2],
+    ["components/settings/pages/UpdatesPage.tsx", 2],
     ["app/self-dev/page.tsx", 2],
   ])("%s lays out with <PageGrid cols={3}> and keeps its desktop spans", (rel, spans) => {
     const text = src(rel);
@@ -676,7 +676,7 @@ describe("PageGrid carry-over — /updates and /self-dev", () => {
 
 describe("Tools — no 'fleet' word in the scope line", () => {
   it("says 'available to all your agents'", () => {
-    const text = src("app/tools/page.tsx");
+    const text = src("components/settings/pages/ToolsPage.tsx");
     expect(text).not.toMatch(/available to every agent in this fleet/);
     expect(text).toMatch(/available to all your agents/);
   });

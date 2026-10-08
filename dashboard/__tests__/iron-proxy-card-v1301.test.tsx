@@ -129,7 +129,7 @@ vi.mock("@/components/connections/RestHookups", () => ({ RestHookups: () => null
 vi.mock("@/components/BrandGlyph", () => ({ ProviderMark: () => null }));
 
 import { IronProxyCard } from "@/components/connections/IronProxyCard";
-import ConnectionsPage from "@/app/connections/page";
+import ConnectionsPage from "@/components/settings/pages/ConnectionsPage";
 
 /* ------------------------------------------------------------------ fixtures */
 

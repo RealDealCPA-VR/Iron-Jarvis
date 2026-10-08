@@ -75,7 +75,7 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
   // pre-understood; MCP stays in a parenthetical because it is the wire, not
   // the noun. See VOCABULARY.md for the canon entry.
   it("the tools page presents extensions", () => {
-    const s = read("app/tools/page.tsx");
+    const s = read("components/settings/pages/ToolsPage.tsx");
     expect(s).toContain("title={`Extensions${");
     expect(s).not.toContain('title="Plug-ins (MCP)"');
     expect(s).not.toContain("Tool pack ");
@@ -92,7 +92,7 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
   it("the Connections directory tile agrees", () => {
     // The directory the user explicitly asked to keep (v1.101.0) — its words
     // teach the taxonomy harder than any other card.
-    const s = read("app/connections/page.tsx");
+    const s = read("components/settings/pages/ConnectionsPage.tsx");
     expect(s).toContain('title: "Extensions (MCP)"');
     expect(s).not.toContain("Tool packs");
   });
@@ -101,15 +101,15 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
     // words for one thing, which is the exact failure this file exists to
     // prevent. Comments and aliases are allowed; rendered strings are not.
     for (const f of [
-      "app/tools/page.tsx",
-      "app/connections/page.tsx",
+      "components/settings/pages/ToolsPage.tsx",
+      "components/settings/pages/ConnectionsPage.tsx",
       "app/chat/page.tsx",
       "lib/nav.ts",
       // v1.314.0 (UX wave 2): the automation pages are scanned too.
       "app/templates/page.tsx",
       "app/reflex/page.tsx",
       "app/autonomy/page.tsx",
-      "app/channels/page.tsx",
+      "components/settings/pages/NotificationsPage.tsx",
       // v1.316.0 (UX wave 4): the rest of the automation pages.
       "app/webhooks/page.tsx",
       "app/sentinels/page.tsx",
@@ -125,20 +125,20 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
 
 describe("alerts live under 'Notifications'", () => {
   it("the page renamed", () => {
-    const s = read("app/channels/page.tsx");
+    const s = read("components/settings/pages/NotificationsPage.tsx");
     expect(s).toContain('title="Notifications"');
     expect(s).not.toContain('title="Channels"');
     expect(s).not.toContain("Add a channel");
   });
   it("the list card says Destinations, not channels (v1.118.0)", () => {
-    const s = read("app/channels/page.tsx");
+    const s = read("components/settings/pages/NotificationsPage.tsx");
     expect(s).toContain("`Destinations${");
     expect(s).not.toContain("Configured channels");
   });
   it("but Slack's own 'channel' concept is still allowed to be called one", () => {
     // "a bot token + a channel" is SLACK's channel — their word, correct
     // usage. The ban is on OUR concept wearing that name.
-    expect(read("app/channels/page.tsx")).toContain("a bot token + a channel");
+    expect(read("components/settings/pages/NotificationsPage.tsx")).toContain("a bot token + a channel");
   });
   it("our concept is a destination on every automation page (v1.314.0)", () => {
     // "Channels" was OUR word for a destination; it is retired on the pages
@@ -153,14 +153,14 @@ describe("alerts live under 'Notifications'", () => {
     expect(reflex).not.toMatch(/Channels page|\bEmail channel\b/);
     const autonomy = code("app/autonomy/page.tsx");
     expect(autonomy).not.toMatch(/to channels|connected channels|comm channel/i);
-    const channels = code("app/channels/page.tsx");
+    const channels = code("components/settings/pages/NotificationsPage.tsx");
     expect(channels).not.toMatch(/All channels|No channel responses|aria-label="Channel"/);
     expect(channels).not.toMatch(/^\s*Channel\s*$/m);
     for (const f of [
       "app/templates/page.tsx",
       "app/reflex/page.tsx",
       "app/autonomy/page.tsx",
-      "app/channels/page.tsx",
+      "components/settings/pages/NotificationsPage.tsx",
       // v1.316.0 (UX wave 4): the rest of the automation pages.
       "app/webhooks/page.tsx",
       "app/sentinels/page.tsx",
@@ -183,7 +183,7 @@ describe("alerts live under 'Notifications'", () => {
 
 describe("the marketplace decision is finally reflected", () => {
   it("the page is a Directory (consume, don't compete — decided 2026-07-25)", () => {
-    const s = read("app/marketplace/page.tsx");
+    const s = read("components/settings/pages/DirectoryPage.tsx");
     expect(s).toContain('title="Directory"');
     expect(s).not.toContain('title="Marketplace"');
   });
@@ -198,8 +198,8 @@ describe("the wire is untouched", () => {
     // exact strings must still exist because the daemon still speaks them.
     expect(read("components/memory/LongTerm.tsx")).toContain("/ltm/sources");
     expect(read("app/chat/page.tsx")).toContain("connectors");
-    expect(read("app/tools/page.tsx")).toContain("/mcp/servers");
-    expect(read("app/channels/page.tsx")).toContain("/comm/channels");
+    expect(read("components/settings/pages/ToolsPage.tsx")).toContain("/mcp/servers");
+    expect(read("components/settings/pages/NotificationsPage.tsx")).toContain("/comm/channels");
   });
 });
 

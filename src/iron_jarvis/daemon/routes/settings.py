@@ -196,6 +196,110 @@ def register(app: FastAPI, d) -> None:
             undone = bool(getattr(inv, "undone_at", None)) if inv is not None else False
             return {"action_id": row.action_id, "undone": undone}
 
+    @app.get("/settings/values")
+    def get_settings_values(device_id: str = "") -> dict[str, Any]:
+        """Every setting's current value, read through THE writer (calm UI
+        redesign S10): config, this device's preferences and the profile —
+        the one store the Settings page and the chat tools share. Family keys
+        (per-tool permissions) and credentials are not values."""
+        from ...settings import schema as _schema
+
+        w = config_writer(d)
+        out: dict[str, Any] = {}
+        for s in _schema.SETTINGS:
+            if s.pattern:
+                continue
+            try:
+                out[s.key] = w.current(s.key, device_id=device_id)
+            except Exception:  # noqa: BLE001 — an unreadable value reads as unset
+                out[s.key] = None
+        return {"device_id": device_id, "values": out}
+
+    @app.put("/settings/values")
+    def put_settings_values(body: dict[str, Any]) -> dict[str, Any]:
+        """Save any settings — config, device, profile — through THE writer
+        (redesign S10): validated all-or-nothing, side effects run, one ledger
+        row with Undo. The same path a chat change takes, so a change made
+        here is in the ledger panel beside the ones made in chat."""
+        from ...settings import schema as _schema
+        from ...settings.writer import SettingError
+
+        values = body.get("values")
+        if not isinstance(values, dict) or not values:
+            raise HTTPException(status_code=400, detail="values must be an object of setting keys")
+        unknown = []
+        for k in values:
+            try:
+                _schema.get(str(k))
+            except KeyError:
+                unknown.append(str(k))
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"unknown setting(s): {', '.join(sorted(unknown))}")
+        device_id = str(body.get("device_id") or "")
+        try:
+            change = config_writer(d).apply(values, actor="settings_page", device_id=device_id)
+        except SettingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return change.as_dict()
+
+    @app.get("/config/ledger")
+    def config_ledger(limit: int = 30) -> dict[str, Any]:
+        """The record of configuration changes, newest first (redesign S10,
+        the Settings page's "Changed here or in chat" panel): settings,
+        records and credentials, made on a page or in chat, each with its
+        Undo when one is still possible. Names and summaries only — a
+        credential's row never carries a value."""
+        import json
+
+        from sqlmodel import select as _select
+
+        from ...core.db import session_scope
+        from ...core.models import ToolInvocation, UndoJournal
+        from ...settings.records import RECORD_CARD_TOOLS
+
+        tools = {"update_settings", "set_secret", "config_set", "config_change", "config_change_protected", *RECORD_CARD_TOOLS}
+        limit = max(1, min(int(limit or 30), 100))
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    _select(ToolInvocation)
+                    .where(ToolInvocation.tool.in_(tools))  # type: ignore[attr-defined]
+                    .where(ToolInvocation.ok == True)  # noqa: E712
+                    .where(ToolInvocation.undo_of == None)  # noqa: E711
+                    .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(limit)
+                )
+            )
+            ids = [r.id for r in rows]
+            undoable = (
+                {
+                    j.action_id
+                    for j in db.exec(_select(UndoJournal).where(UndoJournal.action_id.in_(ids)))  # type: ignore[attr-defined]
+                    if j.reversible
+                }
+                if ids
+                else set()
+            )
+            out = []
+            for r in rows:
+                actor = ""
+                try:
+                    actor = str((json.loads(r.args_json or "{}") or {}).get("actor") or "")
+                except (TypeError, ValueError):
+                    pass
+                out.append(
+                    {
+                        "action_id": r.id,
+                        "tool": r.tool,
+                        "summary": (r.output or "")[:200],
+                        "where": "chat" if r.session_id == "chat" or actor == "chat" else "here",
+                        "at": r.created_at.isoformat() if r.created_at else None,
+                        "undoable": r.id in undoable and not r.undone_at,
+                        "undone": bool(r.undone_at),
+                    }
+                )
+        return {"changes": out}
+
     @app.get("/settings/device")
     def get_device_settings(device_id: str = "") -> dict[str, Any]:
         """This device's preferences (theme, approvals, persona…), kept by the

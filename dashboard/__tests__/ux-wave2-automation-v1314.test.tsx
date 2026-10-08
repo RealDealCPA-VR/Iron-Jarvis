@@ -138,8 +138,8 @@ import WebhooksPage from "@/app/webhooks/page";
 import SchedulesPage from "@/app/schedules/page";
 import TemplatesPage from "@/app/templates/page";
 import AutonomyPage from "@/app/autonomy/page";
-import ChannelsPage from "@/app/channels/page";
-import BrowserPage from "@/app/computeruse/page";
+import ChannelsPage from "@/components/settings/pages/NotificationsPage";
+import BrowserPage from "@/components/settings/pages/BrowserPage";
 import { StandingGrants } from "@/components/StandingGrants";
 
 const writeText = vi.fn(async (_t: string) => {});
@@ -959,7 +959,7 @@ describe("G Vocabulary: Notifications/destination, extension — on the automati
   });
 
   it("the Notifications test picker says destination; Slack's own 'channel' is still allowed", () => {
-    const s = code("app/channels/page.tsx");
+    const s = code("components/settings/pages/NotificationsPage.tsx");
     expect(s).not.toMatch(/All channels/);
     expect(s).not.toMatch(/^\s*Channel\s*$/m);
     expect(s).not.toContain('aria-label="Channel"');
@@ -974,7 +974,7 @@ describe("G Vocabulary: Notifications/destination, extension — on the automati
       "app/templates/page.tsx",
       "app/reflex/page.tsx",
       "app/autonomy/page.tsx",
-      "app/channels/page.tsx",
+      "components/settings/pages/NotificationsPage.tsx",
     ]) {
       expect(code(f), f).not.toMatch(/Plug-ins?|plug-ins?/);
     }
@@ -982,7 +982,7 @@ describe("G Vocabulary: Notifications/destination, extension — on the automati
 
   it("vocabulary.test.ts now scans these pages (the canon's own ratchet)", () => {
     const v = src("__tests__/vocabulary.test.ts");
-    for (const f of ["app/templates/page.tsx", "app/reflex/page.tsx", "app/autonomy/page.tsx", "app/channels/page.tsx"]) {
+    for (const f of ["app/templates/page.tsx", "app/reflex/page.tsx", "app/autonomy/page.tsx", "components/settings/pages/NotificationsPage.tsx"]) {
       expect(v, `vocabulary.test.ts should scan ${f}`).toContain(`"${f}"`);
     }
   });
@@ -1015,8 +1015,8 @@ describe("H PageGrid carry-over on templates / autonomy / channels / computeruse
   const GRIDS: [string, 2 | 3, number][] = [
     ["app/templates/page.tsx", 3, 2],
     ["app/autonomy/page.tsx", 2, 0],
-    ["app/channels/page.tsx", 2, 0],
-    ["app/computeruse/page.tsx", 2, 0],
+    ["components/settings/pages/NotificationsPage.tsx", 2, 0],
+    ["components/settings/pages/BrowserPage.tsx", 2, 0],
   ];
 
   it("the detector is real (anti-vacuity)", () => {
@@ -1039,9 +1039,9 @@ describe("H PageGrid carry-over on templates / autonomy / channels / computeruse
     for (const f of [
       "app/templates/page.tsx",
       "app/autonomy/page.tsx",
-      "app/channels/page.tsx",
-      "app/computeruse/page.tsx",
-      "app/updates/page.tsx",
+      "components/settings/pages/NotificationsPage.tsx",
+      "components/settings/pages/BrowserPage.tsx",
+      "components/settings/pages/UpdatesPage.tsx",
       "app/self-dev/page.tsx",
     ]) {
       expect(list, `T4_FILES should list ${f}`).toContain(`"${f}"`);
@@ -1117,7 +1117,7 @@ describe("Review fix: the briefing note names destinations in plain words", () =
 
 describe("Review fix: Browser action hints claim no more than the policy does", () => {
   it("no 'always ask' (personal details are a heuristic) and no 'list below' (the list is beside/above)", () => {
-    const s = code("app/computeruse/page.tsx");
+    const s = code("components/settings/pages/BrowserPage.tsx");
     expect(s).not.toMatch(/always ask you first/i);
     expect(s).not.toMatch(/on your list below/i);
   });

@@ -161,7 +161,7 @@ vi.mock("framer-motion", async () => {
 });
 
 import SessionsPage from "@/app/sessions/page";
-import KanbanPage from "@/app/kanban/page";
+import KanbanPage from "@/components/sessions/SessionBoard";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { KanbanColumn } from "@/components/kanban/KanbanColumn";
@@ -415,7 +415,7 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
     expect(screen.getByRole("heading", { level: 1, name: "Session board" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 1, name: /Kanban/ })).toBeNull();
     // and the source agrees (the crumb rule in ux-wave1-shell reads PageHeader's title)
-    expect(src("app", "kanban", "page.tsx")).toMatch(/<PageHeader\s+title="Session board"/);
+    expect(src("components", "sessions", "SessionBoard.tsx")).toMatch(/<PageHeader\s+title="Session board"/);
   });
 
   it("the Completed lane says 'Finished', never git's 'Merged & done'", () => {

@@ -69,7 +69,7 @@ vi.mock("@/components/PageHeader", () => ({
   ),
 }));
 
-import ChannelsPage from "@/app/channels/page";
+import ChannelsPage from "@/components/settings/pages/NotificationsPage";
 
 afterEach(() => {
   cleanup();

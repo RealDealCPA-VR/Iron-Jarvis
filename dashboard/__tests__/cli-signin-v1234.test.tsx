@@ -48,7 +48,7 @@ describe("PreflightNote (v1.234.0)", () => {
 });
 
 describe("Connections CLI row (v1.234.0)", () => {
-  const page = read("app/connections/page.tsx");
+  const page = read("components/settings/pages/ConnectionsPage.tsx");
 
   it("renders the third state with the remedy, not 'Not detected'", () => {
     expect(page).toMatch(/Installed — not signed in/);

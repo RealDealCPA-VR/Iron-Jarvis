@@ -46,6 +46,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { m } from "framer-motion"; // v1.250.0 (S-08)
 import { Info } from "lucide-react";
+import { useEmbeddedPage } from "./EmbeddedPage";
 
 export function ModuleTitle({
   title,
@@ -63,6 +64,11 @@ export function ModuleTitle({
   const tipId = useId();
   const [open, setOpen] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
+  // Redesign S10: a page embedded in another (a Settings section) names
+  // itself with a section heading — the host keeps the one h1.
+  const embedded = useEmbeddedPage();
+  const Heading = embedded ? "h2" : "h1";
+  const headingClass = embedded ? "text-lg font-semibold tracking-tight text-zinc-50" : className;
 
   // Escape closes, and so does a click anywhere else — the popover is opened
   // by a click on touch, and a thing you opened by tapping has to be closable
@@ -86,7 +92,7 @@ export function ModuleTitle({
 
   return (
     <div ref={hostRef} className="relative">
-      <h1 className={className}>
+      <Heading className={headingClass}>
         {hint ? (
           <span
             // Focusable so Tab reaches it, `role="button"` because clicking
@@ -127,7 +133,7 @@ export function ModuleTitle({
         ) : (
           title
         )}
-      </h1>
+      </Heading>
       {hint && (
         <p
           id={tipId}

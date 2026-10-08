@@ -29,7 +29,7 @@ describe("PageHeader hint popover never widens a phone page", () => {
 
 describe("/updates apply sentence flows inline", () => {
   it("wraps the text and <Code> chips in ONE span inside the flex row", () => {
-    const s = read("app/updates/page.tsx");
+    const s = read("components/settings/pages/UpdatesPage.tsx");
     const i = s.indexOf("Applying runs");
     expect(i).toBeGreaterThan(0);
     const before = s.slice(s.lastIndexOf("<p", i), i);

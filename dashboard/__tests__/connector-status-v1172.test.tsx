@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const pageSrc = readFileSync(
-  join(__dirname, "..", "app", "connections", "page.tsx"),
+  join(__dirname, "..", "components", "settings", "pages", "ConnectionsPage.tsx"),
   "utf8",
 );
 

@@ -142,5 +142,5 @@ def test_the_ui_says_it_affects_every_connected_extension():
     # Per-extension grants are still a toggle, now named by extension.
     assert "Asks first" in panel and "Allowed" in panel
     # The page itself no longer prints the essay beside the catalog.
-    page = (root / "app" / "tools" / "page.tsx").read_text(encoding="utf-8")
+    page = (root / "components" / "settings" / "pages" / "ToolsPage.tsx").read_text(encoding="utf-8")
     assert "coarse" not in page
