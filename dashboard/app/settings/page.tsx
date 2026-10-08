@@ -27,6 +27,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
+import { PageGrid } from "@/components/PageGrid";
 
 type FieldType = "text" | "number" | "boolean" | "select";
 type Value = string | number | boolean;
@@ -1028,7 +1029,7 @@ export default function SettingsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           {/* Settings form */}
           <div className="lg:col-span-2">
             <Card title="Preferences" icon={<SlidersHorizontal size={15} />}>
@@ -1203,7 +1204,7 @@ export default function SettingsPage() {
                 the bridge). */}
             <DaemonTokenCard />
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

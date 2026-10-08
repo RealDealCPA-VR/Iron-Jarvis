@@ -33,15 +33,18 @@ function Figure({
   value,
   sub,
   loading,
+  hint,
 }: {
   icon: React.ReactNode;
   label: string;
   value: React.ReactNode;
   sub?: string;
   loading?: boolean;
+  /** v1.313.0: the metric's raw name + meaning on hover; the label is plain words. */
+  hint?: string;
 }) {
   return (
-    <div className="flex-1 px-4 py-3.5">
+    <div className="flex-1 px-4 py-3.5" title={hint}>
       <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.12em] text-zinc-500">
         <span className="text-zinc-600">{icon}</span>
         {label}
@@ -81,14 +84,16 @@ export function HealthCard({
       <div className="flex flex-col divide-y divide-white/[0.05] sm:flex-row sm:divide-x sm:divide-y-0">
         <Figure
           icon={<Activity size={12} />}
-          label="Sessions evaluated"
+          label="Tasks reviewed"
+          hint="Sessions evaluated — finished tasks Iron Jarvis has scored"
           value={m ? Number(m.sessions_evaluated ?? 0).toLocaleString() : "—"}
           sub={m ? `${Number(m.event_count ?? 0).toLocaleString()} events` : undefined}
           loading={loading && !m}
         />
         <Figure
           icon={<Gauge size={12} />}
-          label="Avg completion"
+          label="Finished"
+          hint="Avg completion — how much of each reviewed task got done"
           value={m ? pct(m.avg_completion) : "—"}
           sub={
             m
@@ -103,7 +108,8 @@ export function HealthCard({
         />
         <Figure
           icon={<Wrench size={12} />}
-          label="Tool success"
+          label="Tools worked"
+          hint="Tool success — share of tool calls that succeeded"
           value={m ? pct(m.avg_tool_success_rate) : "—"}
           sub={
             m
@@ -116,7 +122,8 @@ export function HealthCard({
         />
         <Figure
           icon={<Timer size={12} />}
-          label="Avg latency"
+          label="Typical reply time"
+          hint="Avg latency — average time per completed run"
           value={m ? secs(m.avg_latency_s) : "—"}
           sub="per completed run"
           loading={loading && !m}

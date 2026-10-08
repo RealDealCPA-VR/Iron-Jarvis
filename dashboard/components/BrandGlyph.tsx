@@ -75,10 +75,19 @@ export function hasBrandMark(id: string): boolean {
   return id in BRAND;
 }
 
+/** Sentinel for a brand colour too dark to draw as-is. */
+const THEME_INK = "currentColor";
+
 /**
  * A brand color too dark to read on the dark UI (GitHub #181717, Notion #000000,
- * Anthropic #191919, Ollama #000000, …) is rendered near-white instead; brighter
- * brand colors render as-is.
+ * Anthropic #191919, Ollama #000000, …) draws in the THEME's strongest text ink
+ * instead; brighter brand colors render as-is.
+ *
+ * v1.313.0: that ink used to be a literal near-white (#e8e8ea), which was
+ * invisible on Daylight and Liquid Glass's white tiles. It is now
+ * `currentColor` under `text-zinc-100` set ON THE SVG ITSELF (so an accent
+ * button around it cannot recolour the mark), and the zinc scale inverts per
+ * Mark: near-white on the dark themes, near-black on the light ones.
  */
 function displayFill(hex: string): string {
   const h = hex.replace("#", "");
@@ -86,7 +95,7 @@ function displayFill(hex: string): string {
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  return Number.isNaN(lum) || lum < 0.4 ? "#e8e8ea" : `#${h}`;
+  return Number.isNaN(lum) || lum < 0.4 ? THEME_INK : `#${h}`;
 }
 
 /** The raw brand SVG in its (legibility-adjusted) color. */
@@ -99,6 +108,7 @@ function BrandSvg({ brand, size }: { brand: BrandIcon; size: number }) {
       width={size}
       height={size}
       fill={fill}
+      className={fill === THEME_INK ? "text-zinc-100" : undefined}
       aria-label={`${brand.title} logo`}
     >
       <path d={brand.path} />
@@ -155,7 +165,10 @@ export function BrandGlyph({
     >
       <span
         className="absolute inset-0 rounded-2xl blur-[10px]"
-        style={{ backgroundColor: fill, opacity: 0.16 }}
+        style={{
+          backgroundColor: fill === THEME_INK ? "rgb(var(--zinc-100))" : fill,
+          opacity: 0.16,
+        }}
       />
       <span className="relative grid h-12 w-12 place-items-center rounded-2xl border border-white/[0.1] bg-white/[0.04]">
         <BrandSvg brand={brand} size={24} />

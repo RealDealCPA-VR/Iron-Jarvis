@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.312.0 (2026-10-04).*
+holds itself to. Current as of v1.313.0 (2026-10-04).*
 
 ---
 
@@ -1702,11 +1702,11 @@ edge opens that module in its own window instead, with your arrangement
 left as it was.
 **v1.293.0:** the Overview's modules are three screens of ten instead of
 one wall of thirty: **Office** (Chat, Build, Projects, Creative, Documents,
-File Search, Memory, You, Train on me, Templates), **Operations** (Agents,
+File Search, Memory, You, Train Jarvis on me, Templates), **Operations** (Agents,
 Workflows, Schedules, Tools, Skills, Autonomy, Sentinels, Reflexes,
 Webhooks, Browser) and **System** (Sessions, Activity, Artifacts, Usage,
 Connections, Local fleet, Secrets, Notifications, Settings,
-Self-improvement). Change screens with the group tabs above the tiles
+Self-development). Change screens with the group tabs above the tiles
 (each has its own icon), the arrows at either side, a swipe across the
 background, a sideways trackpad/wheel gesture, or the arrow keys once the
 strip has focus; the desktop reopens on the screen you left. Everything

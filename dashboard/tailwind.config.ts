@@ -56,6 +56,31 @@ const config: Config = {
           900: "rgb(var(--zinc-900) / <alpha-value>)",
           950: "rgb(var(--zinc-950) / <alpha-value>)",
         },
+        // TONE TOKENS (v1.313.0): one colour per MEANING, re-inked per theme in
+        // globals.css (pale on the dark Marks, deep -800 ink on the light
+        // ones). Namespaced under `tone` ON PURPOSE: a top-level `violet` or
+        // `success` group would SHADOW Tailwind's own palette and break every
+        // bg-violet-500/10 already in the app. Use `text-tone-danger`,
+        // `bg-tone-success/10`, `border-tone-info/25`…
+        tone: {
+          success: "rgb(var(--tone-success) / <alpha-value>)",
+          danger: "rgb(var(--tone-danger) / <alpha-value>)",
+          warn: "rgb(var(--tone-warn) / <alpha-value>)",
+          info: "rgb(var(--tone-info) / <alpha-value>)",
+          violet: "rgb(var(--tone-violet) / <alpha-value>)",
+        },
+      },
+      // A NAMED TYPE SCALE (v1.313.0), so new code stops inventing 10.5/11.5px
+      // sizes (408 half-pixel sizes today, held by a ratchet). `meta` (12px) is
+      // the step for helper and description paragraphs — the "what do I do
+      // here" text that sat at 11px and below AA. Dense rows, chips and the
+      // title bar keep their tuned sizes; only helper paragraphs move.
+      fontSize: {
+        micro: ["10px", "14px"],
+        caption: ["11px", "16px"],
+        meta: ["12px", "18px"],
+        body: ["13px", "20px"],
+        "body-lg": ["14px", "22px"],
       },
       fontFamily: {
         sans: [

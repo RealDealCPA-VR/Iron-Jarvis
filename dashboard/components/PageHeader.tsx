@@ -146,7 +146,7 @@ export function ModuleTitle({
           // driven in a real browser the card behind it read THROUGH the
           // words. `z-40` for the same reason: it has to clear what it
           // overlaps, and inside a 17rem rail it overlaps the conversation.
-          className={`absolute left-0 top-full z-40 mt-2 w-max max-w-md rounded-xl border border-white/10 bg-ink-850 px-3 py-2 text-sm leading-relaxed text-zinc-200 shadow-card-hover transition-opacity duration-150 ${
+          className={`absolute left-0 top-full z-40 mt-2 w-max max-w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-white/10 bg-ink-850 px-3 py-2 text-sm leading-relaxed text-zinc-200 shadow-card-hover transition-opacity duration-150 ${
             open ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
         >

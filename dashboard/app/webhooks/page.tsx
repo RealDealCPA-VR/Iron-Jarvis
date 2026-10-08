@@ -22,6 +22,7 @@ import {
   SuccessNote,
   LoaderInline,
   ConfirmButton,
+  Code,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -222,9 +223,10 @@ export default function WebhooksPage() {
               {direction === "inbound" && slug.trim() && (
                 <div className="text-[11px] text-zinc-500">
                   Trigger URL:{" "}
-                  <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-accent-soft">
+                  {/* <Code> (v1.313.0): a theme-true chip, not a literal black one. */}
+                  <Code className="text-accent-soft">
                     POST {API_BASE}/webhooks/{slug.trim()}
-                  </code>
+                  </Code>
                 </div>
               )}
 
@@ -255,9 +257,9 @@ export default function WebhooksPage() {
         <Card>
           <div className="text-sm text-zinc-400">
             Inbound webhooks accept events at{" "}
-            <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs text-accent-soft">
+            <Code className="text-accent-soft">
               POST {API_BASE}/webhooks/&#123;slug&#125;
-            </code>
+            </Code>
             . Outbound webhooks POST registered events to their target URL.
           </div>
         </Card>

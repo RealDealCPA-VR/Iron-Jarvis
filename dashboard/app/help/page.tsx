@@ -153,7 +153,7 @@ const SUBSYSTEMS: Subsystem[] = [
 /** Inline monospace snippet, matching the daemon-offline hint styling. */
 function Code({ children }: { children: ReactNode }) {
   return (
-    <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-accent-soft/90">
+    <code className="rounded bg-ink-900/80 px-1.5 py-0.5 font-mono text-[11px] text-accent-soft/90">
       {children}
     </code>
   );

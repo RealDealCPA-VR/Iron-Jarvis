@@ -167,15 +167,19 @@ export default function SelfDevPage() {
                       ? data.reason
                       : "Self-development needs the daemon to report its status."}
                   </p>
-                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-4 py-3 text-[13px] leading-relaxed text-amber-100/80">
+                  {/* The shared warning notice (v1.313.0): its border, tint, body
+                      ink and code chip are themed for the light Marks, where the
+                      hand-rolled amber-100 text + black chips were dark text
+                      on a muddy slab. Same words, same link. */}
+                  <div className="notice-warn notice-warn-body rounded-xl border px-4 py-3 text-[13px] leading-relaxed">
                     To turn this on, enable{" "}
-                    <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-100/90">
+                    <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-[12px]">
                       self_dev_enabled
                     </code>{" "}
                     {data && data.enabled && !data.repo_root ? (
                       <>
                         and point{" "}
-                        <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[11px] text-amber-100/90">
+                        <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-[12px]">
                           self_dev_root
                         </code>{" "}
                         at a checkout of this repo

@@ -2905,6 +2905,50 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The shell never claims a model during a demo; colour lives in TONE
+  tokens; a phone page never pans sideways** (v1.313.0, /goal UX & aesthetic
+  wave 1 — 51 findings from a screenshot audit of every view: fresh install,
+  lived-in desk, whole page, phone, Daylight). SHELL: `lib/onboarding.
+  noModelChosen` is THE demo rule (ModelSwitcher, SimulatedBanner and the
+  Overview import it): while replies are scripted the chip says "Demo
+  replies" (lg+) / an amber dot (every width) and NEVER a model id; the demo
+  strip also shows when a model is connected but none chosen, and its
+  "Choose a model" opens the model menu in place. The phone title bar has no
+  overlapping control (36 px controls below sm, icon search, brand dot);
+  the theme row lives in the nav drawer on a phone; theme dots use a deeper
+  `onLight` shade on light themes (≥ 3:1); the mood orb rests as dot+ring.
+  Crumbs = the page's own title: `lib/nav.CRUMB_LABELS` (NOT nav rows —
+  nav.test pins the sidebar) covers /kanban, /marketplace ("Directory"),
+  /ltm + /lessons ("Memory") and /fleet ("Fleet"); sidebar words are
+  "Self-development" and "Train Jarvis on me", the old words kept as
+  aliases. DESIGN SYSTEM: `--tone-success|danger|warn|info|violet` RGB vars
+  (dark = the old -300 tints, mark1/mark8 = deep inks), exposed only as
+  `tone-*`; a GENERATED block between `/* light-tone-overrides:start|end */`
+  in globals.css re-inks every pale hue utility the code uses on the light
+  themes — `uv run python scripts/gen_light_tones.py` regenerates it and the
+  coverage test fails on any new pale class without a rule, so RE-RUN IT
+  after adding one (sort key ends on the class name, so a re-run is
+  byte-stable). `ui.tsx` adds `<Code>`/`.code-inline` (theme-true code
+  chips — never `bg-black/NN`) and `<Button>`; `<Modal>` traps and restores
+  focus and takes a `z` prop; reduced motion is honoured in MotionProvider.
+  FIRST RUN: Overview hero says "Checking in…" until /health answers (only
+  under the real DaemonProvider), the model card keeps a quiet "Other ways to
+  connect →" link, HealthCard speaks plainly ("Tasks reviewed", "Finished",
+  "Tools worked", "Typical reply time" — the metric's raw name in `title`),
+  and a door's count is a "10 modules" caption, never a corner bubble that
+  reads as unread. PHONE: `components/PageGrid.tsx` is the one page grid
+  (`grid-cols-[minmax(0,1fr)]` below lg + `[&>*]:min-w-0`); a leading icon
+  over a `.field` is `z-[1]` in an `isolate` wrapper (it painted UNDER the
+  field); PageHeader's always-rendered hint popover is capped
+  `max-w-[min(28rem,calc(100vw-2rem))]` — at `max-w-md` its invisible box
+  widened <main> to 460 px and most pages panned 70 px sideways on a phone.
+  Carry-overs (later waves): raw `grid lg:grid-cols-3` on templates/updates/
+  self-dev/autonomy/channels/computeruse → PageGrid; palette "Theme:"
+  commands + a Settings Appearance row; EmailComposeDialog/LongTerm/Creative
+  lightbox/FilesPanel onto `<Modal>`; the model menu panel opaque. Pins:
+  `dashboard/__tests__/ux-wave1-{shell,design,firstrun,phone,phone-pages,
+  phone-canvas,coordinator}-v1313.test.tsx`.
+
 - **When something goes wrong, the user sees what happened and has a way
   forward** (v1.312.0, /goal adoption wave 4 — the last 4 findings).
   PREPARATION IS VISIBLE AND STOPPABLE: `/chat/stream` answers at once after

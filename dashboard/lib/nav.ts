@@ -278,9 +278,18 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/self-dev",
-        label: "Self-improvement",
+        // v1.313.0: one name everywhere — the page title, Settings' toggle and
+        // Help all say "Self-development"; the old word stays findable.
+        label: "Self-development",
         icon: GitBranch,
-        aliases: ["improve itself", "edit its own code", "fix itself", "source", "repo"],
+        aliases: [
+          "self-improvement",
+          "improve itself",
+          "edit its own code",
+          "fix itself",
+          "source",
+          "repo",
+        ],
         blurb: "Let Iron Jarvis improve its own source — every change review-gated.",
       },
     ],
@@ -322,11 +331,12 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/train",
-        label: "Train on me",
+        // v1.313.0: the page's own title, so the crumb and the row agree.
+        label: "Train Jarvis on me",
         icon: GraduationCap,
         // Nobody types "onboarding". They type what they want to hand over.
         aliases: [
-          "train jarvis on me",
+          "train on me",
           "learn my style",
           "writing samples",
           "my voice",
@@ -536,12 +546,39 @@ export const NAV_ENTRIES: NavEntry[] = NAV.flatMap((s) => s.items);
  */
 export function labelForPath(pathname: string | null | undefined): string | null {
   if (!pathname || pathname === "/") return null;
-  let best: NavEntry | null = null;
+  const covers = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  let best: { href: string; label: string } | null = null;
   for (const entry of NAV_ENTRIES) {
     if (entry.href === "/") continue; // matches everything; never a useful label
-    const hit = pathname === entry.href || pathname.startsWith(`${entry.href}/`);
-    if (!hit) continue;
+    if (!covers(entry.href)) continue;
     if (!best || entry.href.length > best.href.length) best = entry;
+  }
+  // v1.313.0: a crumb override wins over a nav row of the SAME or a shorter
+  // href, so "/fleet" reads "Fleet" (its page title) while the sidebar keeps
+  // its longer "Local fleet", and the deep-link routes get a crumb at all.
+  for (const [href, label] of Object.entries(CRUMB_LABELS)) {
+    if (!covers(href)) continue;
+    if (!best || href.length >= best.href.length) best = { href, label };
   }
   return best?.label ?? null;
 }
+
+/**
+ * v1.313.0 — crumb names that are NOT sidebar rows. The title bar's "/ Page"
+ * crumb must name a page the way the page names itself (its PageHeader
+ * title), and every route that renders a page must have one. Two kinds live
+ * here, deliberately OUTSIDE `NAV` (nav.test pins the sidebar's structure,
+ * and these must never appear as rows, palette entries or tiles):
+ *  - deep-link routes with no rail row of their own: /kanban, /marketplace
+ *    (its page is titled "Directory"), and /ltm + /lessons, which render the
+ *    Memory surface and so ARE the Memory page;
+ *  - a route whose sidebar word is longer than its page title (/fleet).
+ * /integrations is a server redirect to /connections and needs no entry.
+ */
+const CRUMB_LABELS: Readonly<Record<string, string>> = {
+  "/kanban": "Kanban",
+  "/marketplace": "Directory",
+  "/ltm": "Memory",
+  "/lessons": "Memory",
+  "/fleet": "Fleet",
+};

@@ -223,12 +223,17 @@ function GroupDoor({ group, onOpen }: { group: TileGroup; onOpen: () => void }) 
     >
       <span className="relative flex h-40 w-40 items-center justify-center rounded-[2.5rem] border border-white/[0.08] bg-white/[0.04] text-zinc-200 shadow-sm transition-all duration-200 group-hover/door:border-accent/30 group-hover/door:bg-accent/[0.08] group-hover/door:text-accent-soft group-hover/door:shadow-glow-sm">
         <Icon size={64} strokeWidth={1.4} />
-        <span className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-zinc-900 px-2 py-0.5 text-[11px] tabular-nums text-zinc-400 ring-2 ring-ink-950">
-          {group.tiles.length}
-        </span>
       </span>
-      <span className="text-[17px] font-medium text-zinc-200 transition-colors group-hover/door:text-zinc-50">
-        {group.group.label}
+      {/* v1.313.0 (door-count-reads-as-unread): the count is a caption under
+          the name, as the opened group already says it — a corner bubble
+          read as N unread things waiting. */}
+      <span className="flex flex-col items-center gap-0.5">
+        <span className="text-[17px] font-medium text-zinc-200 transition-colors group-hover/door:text-zinc-50">
+          {group.group.label}
+        </span>
+        <span className="text-[11px] tabular-nums text-zinc-500">
+          {group.tiles.length} module{group.tiles.length === 1 ? "" : "s"}
+        </span>
       </span>
       <span className="max-w-[18rem] text-center text-[12.5px] leading-relaxed text-zinc-500">
         {group.group.hint}

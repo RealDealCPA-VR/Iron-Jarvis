@@ -495,10 +495,14 @@ export default function ProjectsPage() {
                   className={`transition-transform ${creatorOpen ? "rotate-45" : ""}`}
                 />
               </button>
-              <div className="relative min-w-0 flex-1">
+              {/* v1.313.0: `isolate` + `z-[1]`: the .field input has a backdrop blur,
+                  which painted over the magnifier and left an empty gap. And a
+                  12rem floor, so on a phone the filter keeps a readable width
+                  and the other controls wrap to the next line instead. */}
+              <div className="relative isolate min-w-[12rem] flex-1">
                 <Search
                   size={14}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+                  className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
                 />
                 <input
                   value={filter}

@@ -141,7 +141,7 @@ export function ApprovalCard({
         <ShieldQuestion size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
         <p className="text-[12.5px] font-medium text-amber-100">
           The assistant wants to run{" "}
-          <code className="rounded bg-black/30 px-1 font-mono text-[11.5px]">
+          <code className="rounded bg-ink-900/80 px-1 font-mono text-[11.5px]">
             {approval.tool}
           </code>
           {batch ? (

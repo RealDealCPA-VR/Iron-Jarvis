@@ -43,6 +43,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { FilePickerModal } from "@/components/FilePickerModal";
+import { PageGrid } from "@/components/PageGrid";
 
 /* -------------------------------------------------------------------------- */
 /*  File-type detection (from the path/filename suffix)                        */
@@ -670,7 +671,7 @@ export default function DocumentsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-2">
+        <PageGrid cols={2}>
           {/* ---- Read / extract -------------------------------------------- */}
           <Card title="Read & extract" icon={<FileDown size={15} />}>
             <form onSubmit={extract} className="space-y-3.5">
@@ -733,9 +734,13 @@ export default function DocumentsPage() {
                 <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   File path
                 </label>
-                <div className="flex items-stretch gap-2">
-                  <div className="relative flex-1">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-accent-soft/70">
+                {/* v1.313.0: on a phone the path shrank to ~70px beside two
+                    buttons. The row wraps now: the path takes its own line
+                    below sm and the buttons sit under it. `isolate` + `z-[1]`
+                    keep the icon above the .field's blurred background. */}
+                <div className="flex flex-wrap items-stretch gap-2">
+                  <div className="relative isolate min-w-[12rem] flex-1 basis-full sm:basis-auto">
+                    <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-accent-soft/70">
                       <ReadIcon size={15} />
                     </span>
                     <input
@@ -848,8 +853,8 @@ export default function DocumentsPage() {
                   File name
                 </label>
                 <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-accent-soft/70">
+                  <div className="relative isolate flex-1">
+                    <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-accent-soft/70">
                       <writeType.Icon size={15} />
                     </span>
                     <input
@@ -996,7 +1001,7 @@ export default function DocumentsPage() {
               </div>
             </form>
           </Card>
-        </div>
+        </PageGrid>
       </Reveal>
 
       {/* ---- Redact PII --------------------------------------------------- */}
@@ -1014,14 +1019,20 @@ export default function DocumentsPage() {
             <form onSubmit={runRedactScan} className="space-y-3.5">
               <div className="space-y-1.5">
                 <label className="text-xs text-zinc-400">Document</label>
-                <div className="flex gap-2">
-                  <input
-                    value={redPath}
-                    onChange={(e) => setRedPath(e.target.value)}
-                    placeholder="C:\Clients\Alvarez\organizer.docx"
-                    className="field flex-1"
-                    aria-label="Document to redact"
-                  />
+                {/* v1.313.0: wraps like the Read row, so the path stays
+                    readable on a phone. The sizing sits on a wrapper because
+                    .field is width:100%, which on the input itself would
+                    make `sm:basis-auto` a full line on desktop too. */}
+                <div className="flex flex-wrap gap-2">
+                  <div className="min-w-[12rem] flex-1 basis-full sm:basis-auto">
+                    <input
+                      value={redPath}
+                      onChange={(e) => setRedPath(e.target.value)}
+                      placeholder="C:\Clients\Alvarez\organizer.docx"
+                      className="field"
+                      aria-label="Document to redact"
+                    />
+                  </div>
                   <button
                     type="button"
                     onClick={() => setRedBrowse(true)}

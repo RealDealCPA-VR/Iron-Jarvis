@@ -269,7 +269,8 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
     await within(strip).findByText("Finish setting up");
     expect(screen.getAllByText("Finish setting up")).toHaveLength(1);
 
-    const hero = screen.getByText("All systems nominal");
+    // v1.313.0: the healthy hero line (a real default here) is plain words.
+    const hero = screen.getByText("All good — ready when you are");
     const grid = screen.getByTestId("app-desk");
     const title = screen.getByRole("heading", { name: "Overview" });
     expect(before(title, strip)).toBe(true);
@@ -379,7 +380,7 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
     expect(screen.queryByTestId("first-run-strip")).toBeNull();
     expect(screen.queryByRole("textbox", { name: /ask jarvis anything/i })).toBeNull();
     // The page is as before: hero, then grid; the card still runs a session.
-    expect(before(screen.getByText("All systems nominal"), screen.getByTestId("app-desk"))).toBe(true);
+    expect(before(screen.getByText("All good — ready when you are"), screen.getByTestId("app-desk"))).toBe(true);
     fireEvent.click(card.closest("button")!);
     await waitFor(() => expect(W.push).toHaveBeenCalledWith("/sessions/s-new"));
     expect(W.posts.find((p) => p.path === "/sessions")?.body).toMatchObject({ task: FIRST_WIN.task });
@@ -623,7 +624,9 @@ describe("OnboardingWelcome: every usable model is offered, each saying where th
     expect(useModelPosts()).toEqual([{ path: "/onboarding/use-model", body: { provider: "ollama" } }]);
   });
 
-  it("the privacy line is said BEFORE the press, per row: Ollama stays here, Claude is sent to Claude", async () => {
+  // v1.313.0: the cloud line names the COMPANY the words go to instead of
+  // repeating the press's own label right under it.
+  it("the privacy line is said BEFORE the press, per row: Ollama stays here, Claude's words go to Anthropic", async () => {
     W.responses["/onboarding"] = onboarding({ model: BOTH });
     render(<OnboardingWelcome />);
     await screen.findByTestId("welcome-model");
@@ -633,7 +636,7 @@ describe("OnboardingWelcome: every usable model is offered, each saying where th
     expect(local.textContent ?? "").not.toMatch(/sent to/i);
 
     const cloud = rowOf(/use claude \(your claude code sign-in\) for answers/i);
-    expect(cloud).toHaveTextContent(/sent to Claude \(your Claude Code sign-in\)/);
+    expect(cloud).toHaveTextContent(/What you type goes to Anthropic\./);
     expect(cloud.textContent ?? "").not.toMatch(/stays? here|stay with you/i);
     expect(useModelPosts()).toEqual([]);
   });

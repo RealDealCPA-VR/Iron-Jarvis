@@ -119,11 +119,16 @@ describe("Overview names a failing background loop (v1.229.0)", () => {
     expect(screen.queryByText(/All systems nominal/)).toBeNull();
   });
 
-  it("no failing loop: no note, hero says nominal", async () => {
+  // v1.313.0: the healthy hero no longer says "nominal". This file renders
+  // without a DaemonProvider, so /health is unknown to the hero and it shows
+  // the plain healthy line (the demo-default line is pinned in
+  // ux-wave1-firstrun-v1313).
+  it("no failing loop: no note, hero shows the plain healthy line", async () => {
     diagRef.current = { background_loops: { scheduler: { ok: true } } };
     render(<OverviewPage />);
     await waitFor(() => expect(getMock).toHaveBeenCalledWith("/diagnostics"));
-    await screen.findByText("All systems nominal");
+    await screen.findByText("All good — ready when you are");
+    expect(screen.queryByText(/nominal/)).toBeNull();
     expect(screen.queryByTestId("loop-failing-note")).toBeNull();
   });
 

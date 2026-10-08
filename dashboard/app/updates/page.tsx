@@ -23,6 +23,7 @@ import {
   SuccessNote,
   SectionLabel,
   LoaderInline,
+  Code,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -348,19 +349,19 @@ export default function UpdatesPage() {
                 <div className="space-y-4">
                   <p className="flex items-start gap-2 text-[13px] leading-relaxed text-zinc-400">
                     <TriangleAlert size={15} className="mt-0.5 shrink-0 text-amber-300/80" />
-                    Applying runs{" "}
-                    <code className="rounded bg-black/40 px-1 py-px font-mono text-[11px] text-zinc-300">
-                      git pull --ff-only
-                    </code>{" "}
-                    →{" "}
-                    <code className="rounded bg-black/40 px-1 py-px font-mono text-[11px] text-zinc-300">
-                      uv sync
-                    </code>{" "}
-                    →{" "}
-                    <code className="rounded bg-black/40 px-1 py-px font-mono text-[11px] text-zinc-300">
-                      pnpm build
-                    </code>
-                    . It refuses if the working tree has uncommitted changes.
+                    {/* v1.313.0: <Code> chips (theme-true) instead of literal black chips,
+                        which read as dark text on a muddy slab in Daylight. One <span>
+                        so the sentence flows inline — bare text nodes in this flex row
+                        each became a flex item and stacked the chips on a phone. */}
+                    <span>
+                      Applying runs{" "}
+                      <Code>git pull --ff-only</Code>{" "}
+                      →{" "}
+                      <Code>uv sync</Code>{" "}
+                      →{" "}
+                      <Code>pnpm build</Code>
+                      . It refuses if the working tree has uncommitted changes.
+                    </span>
                   </p>
 
                   <button
@@ -403,9 +404,7 @@ export default function UpdatesPage() {
                               The files on disk are updated, but the daemon (and the
                               dashboard you&apos;re viewing) are still running the old
                               code. Restart{" "}
-                              <code className="rounded bg-black/40 px-1 py-px font-mono text-[11px]">
-                                ironjarvis serve
-                              </code>{" "}
+                              <Code>ironjarvis serve</Code>{" "}
                               (and the dashboard) to load it.
                             </div>
                           </div>
@@ -415,7 +414,7 @@ export default function UpdatesPage() {
                       {result.log && result.log.length > 0 && (
                         <div className="space-y-1.5">
                           <SectionLabel>Build log</SectionLabel>
-                          <div className="space-y-2 rounded-xl border border-white/[0.06] bg-black/40 p-3 font-mono text-[11px]">
+                          <div className="space-y-2 rounded-xl border border-white/[0.06] bg-ink-900/70 p-3 font-mono text-[11px]">
                             {result.log.map((e, i) => (
                               <div key={i} className="space-y-1">
                                 <div

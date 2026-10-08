@@ -2811,7 +2811,7 @@ function StudioView({
             {session.command && (
               <code
                 title={session.command}
-                className="hidden min-w-0 max-w-[18rem] shrink truncate rounded-md border border-white/10 bg-black/30 px-2 py-0.5 font-mono text-[11px] text-zinc-500 sm:block"
+                className="hidden min-w-0 max-w-[18rem] shrink truncate rounded-md border border-white/10 bg-ink-900/80 px-2 py-0.5 font-mono text-[11px] text-zinc-500 sm:block"
               >
                 $ {session.command}
               </code>
@@ -3353,7 +3353,7 @@ function StudioView({
             {launchPreview && (
               <code
                 title={launchPreview}
-                className="block truncate rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-500"
+                className="block truncate rounded-lg border border-white/10 bg-ink-900/80 px-2.5 py-1.5 font-mono text-[11px] text-zinc-500"
               >
                 $ {launchPreview}
               </code>

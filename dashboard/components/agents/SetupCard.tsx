@@ -2065,7 +2065,7 @@ function RemoteRow({
             {agent.name} can message back now. Copy the token — it is shown once.
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <code className="min-w-0 truncate rounded-md bg-black/30 px-2 py-1 font-mono text-[11px] text-emerald-50">
+            <code className="min-w-0 truncate rounded-md bg-ink-900/80 px-2 py-1 font-mono text-[11px] text-emerald-50">
               {minted.token}
             </code>
             <button

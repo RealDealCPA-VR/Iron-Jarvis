@@ -349,7 +349,7 @@ export function ProposalsCard() {
                   {p.runs_under && (
                     <p className="mt-2 text-[11.5px] leading-relaxed text-zinc-500">
                       If approved it runs as{" "}
-                      <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">
+                      <code className="rounded bg-ink-900/80 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">
                         {p.runs_under}
                       </code>{" "}
                       and asks you every time.

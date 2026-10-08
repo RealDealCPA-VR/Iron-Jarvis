@@ -61,7 +61,7 @@ describe("HealthCard with a partial /metrics payload (v1.226.0)", () => {
       <HealthCard metrics={{} as unknown as OverviewMetrics} loading={false} />,
     );
     const txt = container.textContent || "";
-    expect(txt).toContain("Sessions evaluated");
+    expect(txt).toContain("Tasks reviewed");
     expect(txt).toContain("0 events");
     expect(txt).toContain("0 tool calls");
   });

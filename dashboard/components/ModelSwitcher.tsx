@@ -8,6 +8,7 @@ import { useDaemon } from "@/lib/daemon";
 import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
+import { noModelChosen } from "@/lib/onboarding";
 
 /** Quality tiers, plainly labelled so users pick outcome over model IDs. */
 type Tier = "fast" | "balanced" | "best";
@@ -270,6 +271,13 @@ export function ModelSwitcher() {
   // Auto is ON when the active provider is the "auto" sentinel.
   const autoOn = activeProvider === "auto";
 
+  // v1.313.0 (U1-1): no model has been chosen to answer, so every reply is the
+  // scripted demo. The chip used to print the stored `default_model` here
+  // ("claude-opus-4-8") while the same screen said "scripted demo" — a model
+  // name on the chip is a claim that model answers. Read off the OPTIMISTIC
+  // provider so a pick flips the chip at once.
+  const demo = !!h && noModelChosen(activeProvider);
+
   // PREFLIGHT: is the CURRENTLY-SELECTED provider known-unreachable? Strictly
   // `=== false` — a provider /health doesn't list (e.g. the "auto" sentinel, or
   // before the poll lands) is unknown, not offline, and must not raise a false
@@ -392,7 +400,8 @@ export function ModelSwitcher() {
     if (!open) setShowOffline(false);
   }, [open]);
   const activeEntry = useMemo<ModelOption | null>(() => {
-    if (autoOn || !activeProvider) return null;
+    // The demo has no "active model" to pin: the stored id is not answering.
+    if (autoOn || !activeProvider || noModelChosen(activeProvider)) return null;
     const found = models.find(
       (m) => m.provider === activeProvider && m.model === activeModel,
     );
@@ -540,21 +549,50 @@ export function ModelSwitcher() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/20"
+        // v1.313.0: the bar's one control height (TitleBar's BAR_CONTROL_H).
+        // In the demo state the chip wears MockChip's amber, so "no model is
+        // answering" reads the same here as under a reply.
+        className={`flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors sm:h-8 ${
+          demo
+            ? "border-amber-500/25 bg-amber-500/[0.1] text-amber-300 hover:border-amber-500/40"
+            : "border-white/10 bg-white/[0.03] text-zinc-300 hover:border-white/20"
+        }`}
         title={
           autoOn
             ? `Auto — smart routing${rv?.routing_model ? ` · via ${rv.routing_model}` : ""}`
-            : "Switch the active model"
+            : demo
+              ? "No model chosen — replies are a scripted demo. Click to choose one."
+              : "Switch the active model"
         }
-        aria-label={autoOn ? "Auto — smart routing" : "Switch the active model"}
+        aria-label={
+          autoOn
+            ? "Auto — smart routing"
+            : demo
+              ? "Demo replies — no model chosen yet. Choose a model"
+              : "Switch the active model"
+        }
       >
         {autoOn ? (
           <Sparkles size={13} className="text-accent-soft" />
+        ) : demo ? (
+          // Visible at EVERY width: below sm the words hide, and this dot is
+          // then the only thing on a phone saying the replies are not real.
+          <span
+            data-testid="ij-model-demo-dot"
+            aria-hidden="true"
+            className="h-2 w-2 shrink-0 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.7)]"
+          />
         ) : (
           <Cpu size={13} className="text-accent-soft" />
         )}
-        {autoOn ? (
-          <span className="hidden items-baseline gap-1 sm:inline-flex">
+        {/* v1.313.0: the words show from lg. Between sm and lg the bar also
+            carries the theme row, the crumb and a full search box, and a
+            150px model name was what pushed them over each other; there the
+            icon (or the amber dot) speaks and the name is one click away. */}
+        {demo ? (
+          <span className="hidden text-[11px] font-medium lg:inline">Demo replies</span>
+        ) : autoOn ? (
+          <span className="hidden items-baseline gap-1 lg:inline-flex">
             <span className="text-[11px] font-medium text-accent-soft">Auto</span>
             {rmShort && (
               <span className="max-w-[110px] truncate font-mono text-[10px] text-zinc-500">
@@ -563,7 +601,7 @@ export function ModelSwitcher() {
             )}
           </span>
         ) : (
-          <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
+          <span className="hidden max-w-[150px] truncate font-mono text-[11px] lg:inline">
             {activeEntry?.label ? modelText(activeEntry) : activeModel}
           </span>
         )}
@@ -580,7 +618,11 @@ export function ModelSwitcher() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-1.5 w-80 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
+        // v1.313.0: on a phone the chip sits mid-bar, so a 320px panel hung
+        // off its right edge ran off the left of the screen. Below sm the
+        // panel spans the bar (8px gutters); from sm it hangs off the chip.
+        // Either way it never runs past the bottom of the window.
+        <div className="fixed inset-x-2 top-11 z-50 max-h-[calc(100vh-3.5rem)] overflow-y-auto rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-1.5 sm:w-80">
           {/* Auto — smart routing: a COLLAPSIBLE disclosure. Compact by default so
               it never sits fully-expanded over the model list; expands on hover
               (or click, for touch/keyboard) to configure, and collapses to a
@@ -800,9 +842,22 @@ export function ModelSwitcher() {
               </div>
             </div>
           )}
-          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
-            Active model
-          </div>
+          {demo ? (
+            // v1.313.0: say what the chip means, then let the very next click
+            // be the fix — every model is listed right below.
+            <div className="px-2 pb-1 pt-1.5">
+              <div className="text-[10px] uppercase tracking-wider text-zinc-400">
+                Choose a model
+              </div>
+              <p className="mt-0.5 text-[11px] leading-snug text-amber-300">
+                Replies are a scripted demo until you pick a model below.
+              </p>
+            </div>
+          ) : (
+            <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
+              Active model
+            </div>
+          )}
           {autoOn && (
             <div className="px-2 pb-1 text-[10px] text-zinc-500">
               Pick a model to turn Auto off.

@@ -13,14 +13,18 @@
  * no origin, so an explicit "user" chip would be a guess, not a fact.
  */
 
+// Kinds read through the shared TONE TOKENS (v1.313.0) instead of a private
+// palette, so each chip is pale on the dark Marks (as before) and a deep,
+// readable ink on Daylight / Liquid Glass. Workflow keeps fuchsia (no token
+// means "workflow"); the light override block in globals.css inks it.
 const KIND_STYLES: Record<string, string> = {
-  schedule: "border-sky-400/30 bg-sky-400/10 text-sky-300",
-  comm: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
+  schedule: "border-tone-info/30 bg-tone-info/10 text-tone-info",
+  comm: "border-tone-success/30 bg-tone-success/10 text-tone-success",
   job: "border-accent/40 bg-accent/10 text-accent-soft",
-  autonomy: "border-amber-400/30 bg-amber-400/10 text-amber-300",
-  reflex: "border-violet-400/30 bg-violet-400/10 text-violet-300",
+  autonomy: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
+  reflex: "border-tone-violet/30 bg-tone-violet/10 text-tone-violet",
   workflow: "border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-300",
-  self_dev: "border-rose-400/30 bg-rose-400/10 text-rose-300",
+  self_dev: "border-tone-danger/30 bg-tone-danger/10 text-tone-danger",
   "memory-review": "border-zinc-400/30 bg-zinc-400/10 text-zinc-300",
   continuation: "border-zinc-400/30 bg-zinc-400/10 text-zinc-300",
   rerun: "border-zinc-400/30 bg-zinc-400/10 text-zinc-300",

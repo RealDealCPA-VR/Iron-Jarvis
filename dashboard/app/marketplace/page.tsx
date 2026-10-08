@@ -694,10 +694,12 @@ export default function MarketplacePage() {
       {/* Search + category filter */}
       <Reveal>
         <div className="space-y-3">
-          <div className="relative">
+          {/* v1.313.0: `isolate` + `z-[1]`: the .field input has a backdrop blur,
+              which painted over the magnifier and left an empty gap. */}
+          <div className="relative isolate">
             <Search
               size={15}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
               aria-hidden="true"
             />
             <input

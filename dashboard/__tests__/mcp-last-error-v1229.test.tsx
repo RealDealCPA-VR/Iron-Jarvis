@@ -196,13 +196,18 @@ describe("Overview hero degrades over a failed pack (v1.229.0)", () => {
     expect(screen.queryByText(/All systems nominal/)).toBeNull();
   });
 
-  it("no failed pack: hero stays nominal and there is no note", async () => {
+  // v1.313.0: the healthy hero no longer says "nominal". This file renders
+  // without a DaemonProvider, so /health is unknown to the hero and it shows
+  // the plain healthy line (the demo-default line is pinned in
+  // ux-wave1-firstrun-v1313).
+  it("no failed pack: hero shows the plain healthy line and there is no note", async () => {
     api.diag = {
       background_loops: { scheduler: { ok: true } },
       mcp_servers: [{ name: "filesystem", tools_loaded: 3, last_error: null }],
     };
     render(<OverviewPage />);
-    await screen.findByText("All systems nominal");
+    await screen.findByText("All good — ready when you are");
+    expect(screen.queryByText(/nominal/)).toBeNull();
     expect(screen.queryByTestId("pack-failing-note")).toBeNull();
   });
 });

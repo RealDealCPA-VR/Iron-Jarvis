@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { m } from "framer-motion"; // v1.250.0 (S-08)
 import {
@@ -19,7 +19,7 @@ import { useApi, type ApiState } from "@/lib/useApi";
 import { ApiError } from "@/lib/api";
 // W2-6 (track B): `chooseForAnswers` is `useModel` under a name the hooks
 // lint rule does not mistake for a hook (it is called from a click handler).
-import { chooseForAnswers, decodeOnboardingModel } from "@/lib/onboarding";
+import { candidateFor, chooseForAnswers, decodeOnboardingModel } from "@/lib/onboarding";
 import { useDaemon } from "@/lib/daemon";
 import type { DoctorCheck, Onboarding, OnboardingStep } from "@/lib/types";
 
@@ -90,10 +90,26 @@ function midSentence(label: string): string {
   return /^(Your|The|A|An)\b/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
 }
 
+/** v1.313.0 (first-run-connect-step-wrong-cta): where a CLOUD provider's
+ *  words go, in lib/onboarding's own WHERE words ("goes to Anthropic") — the
+ *  same words the chat empty state prints, so the two surfaces never say it
+ *  two ways. `candidateFor` with no /health falls straight through to that
+ *  table; "" when the table has no entry (a custom server). */
+function whereWords(provider: string): string {
+  return candidateFor(null, provider)?.where ?? "";
+}
+
 /** The sentence said BEFORE a press — the privacy decision the user is
- *  making. Cloud vs local is theirs to choose, so it is said for every row. */
+ *  making. Cloud vs local is theirs to choose, so it is said for every row.
+ *  v1.313.0: a cloud row names the COMPANY the words go to ("What you type
+ *  goes to Anthropic.") instead of repeating the press's own label right
+ *  under it; a row the WHERE table does not know keeps its old sentence. */
 function whereItGoes(provider: string, label: string, local: boolean): string {
-  if (!local) return `Your questions will be sent to ${midSentence(label)} to be answered.`;
+  if (!local) {
+    const where = whereWords(provider);
+    if (where) return `What you type ${where}.`;
+    return `Your questions will be sent to ${midSentence(label)} to be answered.`;
+  }
   if (provider === "ollama") return "It runs on this PC, so your questions stay here.";
   // v1.310.0 (review): a custom address can point at a HOSTED OpenAI-
   // compatible service, so this card does not promise "no AI company sees
@@ -150,6 +166,9 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
   // disabled while one runs; only the pressed one says "Switching…".
   const [pressing, setPressing] = useState("");
   const [outcome, setOutcome] = useState<PressOutcome | null>(null);
+  // v1.313.0: the connect_ai row's "Choose it for answers" brings the user to
+  // the model choices instead of leaving for /connections.
+  const modelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setDismissed(localStorage.getItem(DISMISS_KEY) === "1");
@@ -225,6 +244,26 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
   const local = localFlags((data as unknown as { model?: unknown }).model);
   const isLocal = (provider: string) => local.get(provider) ?? LOCAL_FALLBACK.has(provider);
   const showModelCard = !!model?.is_mock || !!outcome;
+  // The presses stay offered until one worked or the daemon said why it will
+  // not (a 409 changed nothing, so try again).
+  const pressesOnScreen =
+    showModelCard && offers.length > 0 && outcome?.kind !== "promoted" && outcome?.kind !== "declined";
+
+  /* v1.313.0 (first-run-connect-step-wrong-cta, overview-setup-says-it-twice):
+     the daemon marks the connect_ai row "Choose it for answers" exactly when a
+     real model is ready for one press (checklist.py). Its control then BRINGS
+     the user to the presses above — scroll + focus — instead of sending them
+     to /connections. It never presses for them: which model answers (cloud
+     or this PC) stays the user's call. Any other state keeps STEP_LINK. */
+  const onePressRow = (step: OnboardingStep) =>
+    step.key === "connect_ai" && step.action === "Choose it for answers" && pressesOnScreen;
+
+  function showChoices() {
+    const card = modelRef.current;
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.focus({ preventScroll: true });
+  }
 
   /* v1.310.0 (mock-default-trap-cli-ollama): which model answers, said
      plainly. While the default is the offline demo every reply is a
@@ -234,8 +273,12 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
      privacy decision, so nothing here switches on its own. */
   const modelCard = showModelCard ? (
     <div
+      ref={modelRef}
+      // Focusable only by script (the row's "Choose it for answers"), so the
+      // choices are announced and ringed when the user is brought here.
+      tabIndex={-1}
       data-testid="welcome-model"
-      className="mt-5 rounded-xl border border-accent/25 bg-ink-950/40 p-3.5"
+      className="mt-5 scroll-mt-24 rounded-xl border border-accent/25 bg-ink-950/40 p-3.5 outline-none transition-shadow focus:ring-2 focus:ring-accent/40"
     >
       <div className="flex items-start gap-2.5">
         <Bot size={16} className="mt-0.5 shrink-0 text-accent-soft" />
@@ -285,10 +328,12 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
           )}
 
           {/* One press per usable model, each with where the words go
-              said BEFORE the press. The presses stay offered until one
-              worked or the daemon said why it will not (a 409 changed
-              nothing, so try again). */}
-          {offers.length > 0 && outcome?.kind !== "promoted" && outcome?.kind !== "declined" && (
+              said BEFORE the press. v1.313.0: every offer wears the SAME
+              outlined style — a solid first offer read as a recommendation,
+              and cloud vs local is the user's choice, not the list order's.
+              The page's one solid button is the checklist row that leads
+              here. */}
+          {pressesOnScreen && (
             <ul className="mt-3 space-y-2.5">
               {offers.map((o) => (
                 <li key={o.provider}>
@@ -296,7 +341,7 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
                     type="button"
                     disabled={!!pressing}
                     onClick={() => pressForAnswers(o.provider, o.label)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-accent/35 bg-accent/[0.08] px-3 py-1.5 text-left text-xs font-medium text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14] disabled:opacity-60"
                   >
                     {pressing === o.provider ? "Switching…" : `Use ${o.label} for answers`}
                     {pressing !== o.provider && <ArrowRight size={13} />}
@@ -307,6 +352,22 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
                 </li>
               ))}
             </ul>
+          )}
+          {/* v1.313.0 (review): with the one-press choices on screen the
+              checklist row scrolls HERE instead of linking to Connections,
+              so this quiet link keeps Connections one click from the
+              Overview — for an API key, OpenCode, Grok, or anything the
+              presses above don't offer. A text link, not a button: the
+              page keeps its one solid primary. */}
+          {pressesOnScreen && (
+            <p className="mt-3 text-xs">
+              <Link
+                href="/connections"
+                className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+              >
+                Other ways to connect →
+              </Link>
+            </p>
           )}
         </div>
       </div>
@@ -384,10 +445,22 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
           {(data.checklist ?? []).map((step) => {
             const isNext = data.next_step?.key === step.key;
             const link = stepLink(step);
+            const leadsToChoices = onePressRow(step);
+            // v1.313.0 (phone-checklist-rows-cramped): below sm the action
+            // drops under the text (the text claims the row's width, the
+            // control wraps and lines up under it), so a narrow screen never
+            // squeezes the step into a six-line column beside its button.
+            const ctaLayout = "ml-[30px] mt-0.5 sm:ml-0";
+            const ctaTone = step.done
+              ? "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300"
+              : isNext || leadsToChoices
+                ? "bg-accent text-ink-950 shadow-glow-sm hover:bg-accent-soft"
+                : "border border-white/10 text-zinc-300 hover:bg-white/[0.05]";
+            const ctaClass = `${ctaLayout} inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${ctaTone}`;
             return (
               <li
                 key={step.key}
-                className={`flex items-start gap-3 rounded-xl border px-3.5 py-3 transition-colors ${
+                className={`flex flex-wrap items-start gap-3 rounded-xl border px-3.5 py-3 transition-colors sm:flex-nowrap ${
                   isNext
                     ? "border-accent/30 bg-accent/[0.07]"
                     : "border-white/[0.05] bg-white/[0.02]"
@@ -400,8 +473,8 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
                     <Circle size={18} className={isNext ? "text-accent-soft" : "text-zinc-600"} />
                   )}
                 </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1 basis-[calc(100%-30px)] sm:basis-0">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span
                       className={`text-sm font-medium ${
                         step.done ? "text-zinc-400 line-through decoration-zinc-600" : "text-zinc-100"
@@ -420,24 +493,30 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">{step.detail}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">
+                    {/* v1.313.0 (overview-setup-says-it-twice): with the
+                        choices on screen the card above already says replies
+                        are a demo, so the row points at them instead of
+                        saying it a second time. The daemon's own sentence is
+                        kept for every other state. */}
+                    {leadsToChoices
+                      ? "Your choices are just above — pick the one that should answer you."
+                      : step.detail}
+                  </p>
                 </div>
                 {/* Always clickable — a completed step still links to its page
                     (e.g. "Connect your AI" done -> open Connections to manage
                     it). A done row previously rendered NO control at all, which
                     read as a broken button. */}
-                <Link
-                  href={link.href}
-                  className={`mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                    step.done
-                      ? "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300"
-                      : isNext
-                        ? "bg-accent text-ink-950 shadow-glow-sm hover:bg-accent-soft"
-                        : "border border-white/10 text-zinc-300 hover:bg-white/[0.05]"
-                  }`}
-                >
-                  {step.done ? "Open" : link.cta} <ArrowRight size={13} />
-                </Link>
+                {leadsToChoices ? (
+                  <button type="button" onClick={showChoices} className={ctaClass}>
+                    {step.action} <ArrowRight size={13} className="-rotate-90" />
+                  </button>
+                ) : (
+                  <Link href={link.href} className={ctaClass}>
+                    {step.done ? "Open" : link.cta} <ArrowRight size={13} />
+                  </Link>
+                )}
               </li>
             );
           })}

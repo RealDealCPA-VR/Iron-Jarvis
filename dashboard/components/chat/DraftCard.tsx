@@ -525,10 +525,14 @@ export function DraftCard({
         {children}
       </div>
 
-      <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-3 py-1.5">
+      {/* v1.313.0: the row WRAPS. On a phone Copy (the main way to use a
+          draft) was clipped by the card's edge. The note now takes its own
+          line below sm, and on wider screens `sm:mr-auto` pushes the three
+          buttons together on the right instead of spreading them out. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-white/[0.06] px-3 py-1.5">
         <span
           data-testid="draft-note"
-          className={`truncate text-[11px] ${mailed ? "text-emerald-400" : "text-zinc-500"}`}
+          className={`min-w-0 basis-full truncate text-[11px] sm:mr-auto sm:basis-auto ${mailed ? "text-emerald-400" : "text-zinc-500"}`}
         >
           {mailed
             ? mailed

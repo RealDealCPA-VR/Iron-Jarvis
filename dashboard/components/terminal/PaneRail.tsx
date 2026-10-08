@@ -350,7 +350,7 @@ export function PaneRail({
       className="flex h-full flex-col gap-2 overflow-hidden"
     >
       <div className="flex shrink-0 items-center justify-between px-1">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
           Panes
         </span>
         {blocked.length > 0 ? (
@@ -367,13 +367,17 @@ export function PaneRail({
             {blocked.length} needs you
           </button>
         ) : (
-          <span className="text-[10px] text-zinc-700">{panes.length}</span>
+          // zinc-500, not zinc-700 (v1.313.0): the count is information, and
+          // zinc-700 measured ~1.6:1 on the rail in every theme.
+          <span className="text-[10px] text-zinc-500">{panes.length}</span>
         )}
       </div>
 
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
         {panes.length === 0 ? (
-          <p className="px-1 py-3 text-[11.5px] leading-relaxed text-zinc-600">
+          // A helper paragraph, so the 12px `meta` step in zinc-500 (v1.313.0;
+          // it was 11.5px zinc-600, under AA). Dense rail rows keep their size.
+          <p className="px-1 py-3 text-meta text-zinc-500">
             No panes yet. Open one and it appears here with whatever is running
             inside it.
           </p>

@@ -25,6 +25,14 @@ export function tripletToHex(triplet: string): string | null {
 }
 
 /**
+ * v1.313.0 — every control in the bar is ONE height. A phone gets 36px tap
+ * targets (h-9), a pointer 32px (sm:h-8); the bar itself stays h-10. The
+ * ModelSwitcher trigger, the MoodOrb and the NotificationBell trigger carry
+ * the same pair, so the row reads as one calm line instead of four sizes.
+ */
+export const BAR_CONTROL_H = "h-9 sm:h-8";
+
+/**
  * The app's own top strip (v1.111.0 frontier chrome).
  *
  * In the desktop app the Electron window is created with
@@ -169,9 +177,13 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
           // becomes immovable; forget `no-drag` here and the button is DEAD —
           // clicks are swallowed by the drag region before React sees them.
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+          // v1.313.0: an unlabelled 28px icon was the ONLY visible way to ~38
+          // pages on a desktop. From md up it says "Menu" in words; on a
+          // phone it stays a square icon (the bar has no room for the word).
+          className={`flex ${BAR_CONTROL_H} min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 sm:min-w-8 md:px-2`}
         >
           <Menu size={16} strokeWidth={2} />
+          <span className="hidden text-[12px] font-medium md:inline">Menu</span>
         </button>
 
         {/* Brand. Intentionally self-contained (a dot, not Sidebar's private
@@ -181,25 +193,32 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
         <Link
           href="/"
           title="Iron Jarvis — Overview"
+          // v1.313.0: below sm the words hide (the 390px bar had them printed
+          // under the search box) and only the dot remains — CSS `hidden`
+          // drops them from the accessible name too, so the link names itself.
+          aria-label="Iron Jarvis — Overview"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          className="flex shrink-0 items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-white/[0.04]"
+          className="flex h-9 shrink-0 items-center gap-2 rounded-lg px-1.5 transition-colors hover:bg-white/[0.04] sm:h-8 sm:px-1"
         >
           <span className="relative grid h-3.5 w-3.5 place-items-center">
             <span className="absolute inset-0 rounded-full bg-accent/25 blur-[3px]" />
             <span className="relative h-2 w-2 rounded-full bg-accent shadow-[0_0_6px_rgb(var(--accent-rgb)/0.7)]" />
           </span>
-          <span className="text-[13px] font-medium tracking-tight text-zinc-100">
+          <span className="hidden text-[13px] font-medium tracking-tight text-zinc-100 sm:inline">
             Iron Jarvis
           </span>
         </Link>
 
         {pageLabel && (
-          <>
+          // v1.313.0: the crumb hides below sm — on a phone the page's own h1
+          // names the page one line down, and the crumb was being painted over
+          // the search box. Still in the DOM (a pop-out's title reads it too).
+          <span className="hidden min-w-0 items-center gap-2 sm:flex">
             <span aria-hidden className="text-zinc-700">
               /
             </span>
             <span className="truncate text-[13px] text-zinc-500">{pageLabel}</span>
-          </>
+          </span>
         )}
         {isPopout && (
           // v1.283.0: this module lives in its own window. Said on the strip so
@@ -214,7 +233,13 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
         )}
 
         {/* SEARCH — the front door. */}
-        <div className="flex min-w-0 flex-1 justify-center px-2">
+        {/* v1.313.0: on a phone the box collapses to its magnifier — still
+            visible, still the same button (one door, one name), but with no
+            200px floor to push it over the brand and the right-hand chrome.
+            No `min-w-0` here on purpose: the slot's floor IS the button's
+            floor, so when space runs out the crumb truncates instead of the
+            box sliding under its neighbours. */}
+        <div className="flex flex-1 justify-end px-1 sm:justify-center sm:px-2">
           <button
             type="button"
             onClick={openPalette}
@@ -231,11 +256,11 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             // exist". The box is the discoverable front door; the chip TEACHES
             // the shortcut so the box eventually stops being needed.
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            className="flex h-7 w-full min-w-[200px] max-w-sm items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 text-left text-zinc-500 transition-colors hover:border-white/20 hover:bg-white/[0.06] hover:text-zinc-300"
+            className={`flex ${BAR_CONTROL_H} w-9 max-w-sm shrink-0 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] text-left text-zinc-500 transition-colors hover:border-white/20 hover:bg-white/[0.06] hover:text-zinc-300 sm:w-full sm:min-w-[8rem] sm:justify-start sm:px-2.5 lg:min-w-[200px]`}
           >
-            <Search size={13} strokeWidth={2} className="shrink-0" />
-            <span className="truncate text-[12px]">Search</span>
-            <kbd className="ml-auto shrink-0 rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
+            <Search size={14} strokeWidth={2} className="shrink-0" />
+            <span className="hidden truncate text-[12px] sm:inline">Search</span>
+            <kbd className="ml-auto hidden shrink-0 rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500 sm:inline">
               Ctrl K
             </kbd>
           </button>
@@ -253,7 +278,7 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             aria-label={`Open ${pageLabel ?? "this page"} in a new window`}
             title={`Open ${pageLabel ?? "this page"} in a new window — work in two modules at once`}
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+            className={`grid ${BAR_CONTROL_H} w-9 shrink-0 place-items-center rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 sm:w-8`}
           >
             <AppWindow size={14} strokeWidth={2} />
           </button>
@@ -264,7 +289,7 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
         {right && (
           <div
             style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-            className="flex shrink-0 items-center gap-2"
+            className="flex shrink-0 items-center gap-1.5 sm:gap-2"
           >
             {right}
           </div>

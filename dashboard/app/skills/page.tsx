@@ -92,6 +92,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { PageGrid } from "@/components/PageGrid";
 
 export default function SkillsPage() {
   const { data, error, loading, reload } = useApi<{
@@ -330,7 +331,7 @@ export default function SkillsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           <div className="space-y-6 lg:col-span-1">
             {showForm && (
               <Card title="New skill" icon={<Plus size={15} />}>
@@ -605,7 +606,7 @@ export default function SkillsPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

@@ -34,6 +34,7 @@ import { NewSessionForm } from "@/components/NewSessionForm";
 import OriginChip, { originKind } from "@/components/sessions/OriginChip";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { PageShell, Reveal } from "@/components/motion";
+import { PageGrid } from "@/components/PageGrid";
 import { timeAgo, shortId } from "@/lib/format";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
@@ -260,7 +261,7 @@ export default function SessionsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           <div className="lg:col-span-1">
             <Card title="New session" icon={<Plus size={15} />}>
               <NewSessionForm onCreated={reload} />
@@ -552,7 +553,7 @@ export default function SessionsPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

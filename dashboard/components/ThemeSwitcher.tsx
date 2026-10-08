@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 
 /**
@@ -9,6 +10,17 @@ import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
  * variables — see globals.css + tailwind.config). Engaging one pops a brief
  * arc-reactor "suit up" HUD and morphs the colors. The choice persists to
  * localStorage; a tiny inline script in the layout applies it before paint.
+ *
+ * v1.313.0 — legible and reachable everywhere:
+ *  - On the LIGHT Marks (Daylight, Liquid Glass) each reactor is drawn in a
+ *    deeper `onLight` shade of its colour at full opacity. The pale accents
+ *    (Arc Cyan, Gold, Silver at 55% opacity) were smudges on a white bar —
+ *    Silver measured 1.23:1. Every dot now clears 3:1 on both light bars.
+ *  - Every instance watches `data-theme` on <html>, so the bar's row and the
+ *    nav drawer's row (the phone's way in — the bar hides its row below sm)
+ *    never disagree about which Mark is on.
+ *  - The suit-up reveal is portalled to <body>: inside the drawer it would
+ *    otherwise be trapped in the drawer's transformed box.
  */
 
 interface Mark {
@@ -17,6 +29,9 @@ interface Mark {
   name: string;
   flavor: string;
   accent: string; // preview color (each reactor shows ITS theme's color)
+  /** The same hue, deep enough to read on a LIGHT bar (>= 3:1 on the light
+   *  Marks' --ink-950). Only used while a light Mark is on. */
+  onLight: string;
 }
 
 const THEMES: Mark[] = [
@@ -26,6 +41,7 @@ const THEMES: Mark[] = [
     name: "Daylight",
     flavor: "Dark work on a bright canvas — full light mode.",
     accent: "#0891b2",
+    onLight: "#155e75",
   },
   {
     id: "mark2",
@@ -33,6 +49,7 @@ const THEMES: Mark[] = [
     name: "Arc Cyan",
     flavor: "The signature reactor glow. Balanced and cool.",
     accent: "#22d3ee",
+    onLight: "#0e7490",
   },
   {
     id: "mark8",
@@ -40,6 +57,7 @@ const THEMES: Mark[] = [
     name: "Liquid Glass",
     flavor: "Frosted glass on silver light — clean, airy, unmistakably modern.",
     accent: "#0a84ff",
+    onLight: "#0062cc",
   },
   {
     id: "mark23",
@@ -47,6 +65,7 @@ const THEMES: Mark[] = [
     name: "Gold & Red",
     flavor: "The classic hero colors — powered up.",
     accent: "#f5b731",
+    onLight: "#92600a",
   },
   {
     id: "mark29",
@@ -54,11 +73,14 @@ const THEMES: Mark[] = [
     name: "Silver & Red",
     flavor: "Sleek chrome with a red-line edge.",
     accent: "#bfc8d6",
+    onLight: "#5b6576",
   },
 ];
 
 const STORAGE_KEY = "ij_theme";
 const DEFAULT = "mark2";
+/** The Marks that paint a light bar (globals.css). */
+const LIGHT_MARKS = new Set(["mark1", "mark8"]);
 
 function hexA(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -185,14 +207,32 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
   );
 }
 
-export function ThemeSwitcher() {
+/**
+ * `variant="drawer"` (v1.313.0) is the same row inside the nav drawer, with
+ * a visible "Theme · <name>" line: on a phone the drawer is the only place
+ * the row is reachable, and there is no hover there to read a tooltip.
+ */
+export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" } = {}) {
   const [active, setActive] = useState<string>(DEFAULT);
   const [reveal, setReveal] = useState<Mark | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The reveal is portalled to <body>; render the portal only after mount so
+  // the server render and the first client render agree.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
+  // Follow <html data-theme> — whoever changed it (this row, the drawer's
+  // row, the pre-paint restore script). A second switcher that only read the
+  // attribute on mount kept highlighting the old Mark after the first was
+  // pressed; observing the attribute keeps every instance in step.
   useEffect(() => {
-    setActive(document.documentElement.dataset.theme || DEFAULT);
+    const html = document.documentElement;
+    const sync = () => setActive(html.dataset.theme || DEFAULT);
+    sync();
+    const mo = new MutationObserver(sync);
+    mo.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
   }, []);
 
   useEffect(
@@ -227,111 +267,141 @@ export function ThemeSwitcher() {
     return () => window.removeEventListener("keydown", onKey);
   }, [reveal]);
 
+  const light = LIGHT_MARKS.has(active);
+  const activeMark = THEMES.find((t) => t.id === active);
+  const drawer = variant === "drawer";
+
+  const row = (
+    <div
+      className={`flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] ${
+        drawer ? "justify-between p-1" : "h-8 px-0.5"
+      }`}
+      role="group"
+      aria-label="App theme (arc reactor)"
+    >
+      {THEMES.map((m) => {
+        const on = active === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => apply(m)}
+            title={`${m.mark} — ${m.name}: ${m.flavor}`}
+            aria-label={`${m.mark} — ${m.name}`}
+            aria-pressed={on}
+            style={{ color: light ? m.onLight : m.accent }}
+            // On a light Mark nothing is dimmed: a 55% dot on white is a
+            // smudge. The pressed one still stands out by its fill and ring.
+            className={`grid place-items-center rounded-md transition-all ${
+              drawer ? "h-9 w-9" : "h-7 w-7"
+            } ${
+              on
+                ? "bg-white/[0.08] ring-1 ring-white/15"
+                : light
+                  ? "hover:bg-white/[0.05]"
+                  : "opacity-55 hover:opacity-100 hover:bg-white/[0.05]"
+            }`}
+          >
+            <Reactor size={drawer ? 20 : 18} glow={on} />
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <>
-      <div
-        className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] px-1 py-1"
-        role="group"
-        aria-label="App theme (arc reactor)"
-      >
-        {THEMES.map((m) => {
-          const on = active === m.id;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => apply(m)}
-              title={`${m.mark} — ${m.name}`}
-              aria-label={`${m.mark} — ${m.name}`}
-              aria-pressed={on}
-              style={{ color: m.accent }}
-              className={`grid h-7 w-7 place-items-center rounded-md transition-all ${
-                on
-                  ? "bg-white/[0.08] ring-1 ring-white/15"
-                  : "opacity-55 hover:opacity-100 hover:bg-white/[0.05]"
-              }`}
-            >
-              <Reactor size={18} glow={on} />
-            </button>
-          );
-        })}
-      </div>
+      {drawer ? (
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between px-1 text-[11px]">
+            <span className="font-medium uppercase tracking-wider text-zinc-500">Theme</span>
+            {activeMark && <span className="text-zinc-400">{activeMark.name}</span>}
+          </div>
+          {row}
+        </div>
+      ) : (
+        row
+      )}
 
-      <AnimatePresence>
-        {reveal && (
-          <m.div
-            key="theme-reveal"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.22 }}
-            onClick={() => setReveal(null)}
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Theme changed to ${reveal.mark}, ${reveal.name}`}
-            className="fixed inset-0 z-[100] grid place-items-center bg-black/75 backdrop-blur-sm"
-          >
-            <m.div
-              initial={{ scale: 0.92, y: 10, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.96, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 24 }}
-              onClick={(e) => e.stopPropagation()}
-              className="card-surface relative flex w-[min(88vw,320px)] flex-col items-center gap-3.5 px-10 py-9 text-center"
-            >
-              {/* HUD corner brackets */}
-              {[
-                "left-2 top-2 border-l-2 border-t-2",
-                "right-2 top-2 border-r-2 border-t-2",
-                "left-2 bottom-2 border-l-2 border-b-2",
-                "right-2 bottom-2 border-r-2 border-b-2",
-              ].map((c) => (
-                <span
-                  key={c}
-                  aria-hidden="true"
-                  className={`pointer-events-none absolute h-4 w-4 rounded-[3px] ${c}`}
-                  style={{ borderColor: hexA(reveal.accent, 0.55) }}
-                />
-              ))}
-
-              <BigReactor color={reveal.accent} />
-
-              <div>
-                <div className="font-mono text-[10px] font-medium uppercase tracking-[0.34em] text-zinc-500">
-                  {reveal.mark}
-                </div>
-                <div className="mt-1 text-xl font-semibold tracking-tight text-zinc-50">
-                  {reveal.name}
-                </div>
-              </div>
-
-              <div
-                className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.22em]"
-                style={{ color: reveal.accent }}
-              >
-                <span
-                  className="h-1.5 w-1.5 rounded-full"
-                  style={{ background: reveal.accent, boxShadow: `0 0 8px ${reveal.accent}` }}
-                />
-                reactor online
-              </div>
-
-              <p className="max-w-[15rem] text-[13px] leading-relaxed text-zinc-400">
-                {reveal.flavor}
-              </p>
-
-              <button
-                type="button"
-                autoFocus
+      {mounted &&
+        createPortal(
+          <AnimatePresence>
+            {reveal && (
+              <m.div
+                key="theme-reveal"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.22 }}
                 onClick={() => setReveal(null)}
-                className="btn-accent mt-0.5 px-5 py-1.5 text-xs"
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Theme changed to ${reveal.mark}, ${reveal.name}`}
+                className="fixed inset-0 z-[100] grid place-items-center bg-black/75 backdrop-blur-sm"
               >
-                Suit up
-              </button>
-            </m.div>
-          </m.div>
+                <m.div
+                  initial={{ scale: 0.92, y: 10, opacity: 0 }}
+                  animate={{ scale: 1, y: 0, opacity: 1 }}
+                  exit={{ scale: 0.96, opacity: 0 }}
+                  transition={{ type: "spring", stiffness: 300, damping: 24 }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="card-surface relative flex w-[min(88vw,320px)] flex-col items-center gap-3.5 px-10 py-9 text-center"
+                >
+                  {/* HUD corner brackets */}
+                  {[
+                    "left-2 top-2 border-l-2 border-t-2",
+                    "right-2 top-2 border-r-2 border-t-2",
+                    "left-2 bottom-2 border-l-2 border-b-2",
+                    "right-2 bottom-2 border-r-2 border-b-2",
+                  ].map((c) => (
+                    <span
+                      key={c}
+                      aria-hidden="true"
+                      className={`pointer-events-none absolute h-4 w-4 rounded-[3px] ${c}`}
+                      style={{ borderColor: hexA(reveal.accent, 0.55) }}
+                    />
+                  ))}
+
+                  <BigReactor color={reveal.accent} />
+
+                  <div>
+                    <div className="font-mono text-[10px] font-medium uppercase tracking-[0.34em] text-zinc-500">
+                      {reveal.mark}
+                    </div>
+                    <div className="mt-1 text-xl font-semibold tracking-tight text-zinc-50">
+                      {reveal.name}
+                    </div>
+                  </div>
+
+                  <div
+                    className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.22em]"
+                    style={{ color: reveal.accent }}
+                  >
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ background: reveal.accent, boxShadow: `0 0 8px ${reveal.accent}` }}
+                    />
+                    reactor online
+                  </div>
+
+                  <p className="max-w-[15rem] text-[13px] leading-relaxed text-zinc-400">
+                    {reveal.flavor}
+                  </p>
+
+                  <button
+                    type="button"
+                    autoFocus
+                    onClick={() => setReveal(null)}
+                    className="btn-accent mt-0.5 px-5 py-1.5 text-xs"
+                  >
+                    Suit up
+                  </button>
+                </m.div>
+              </m.div>
+            )}
+          </AnimatePresence>,
+          document.body,
         )}
-      </AnimatePresence>
     </>
   );
 }

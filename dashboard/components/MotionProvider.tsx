@@ -1,6 +1,6 @@
 "use client";
 
-import { LazyMotion, domAnimation } from "framer-motion";
+import { LazyMotion, MotionConfig, domAnimation } from "framer-motion";
 import type { ReactNode } from "react";
 
 /**
@@ -22,7 +22,18 @@ import type { ReactNode } from "react";
  * It is a plain (non-lazy) features import on purpose: the features are small,
  * and `strict` is off, so a stray `motion.*` left anywhere keeps working
  * instead of throwing in the user's face.
+ *
+ * REDUCED MOTION (v1.313.0). `reducedMotion="user"` makes every `m.*` below
+ * honour the OS "reduce motion" setting: transforms and layout moves are
+ * skipped, opacity still fades. The CSS side (spinners, the liquid layer)
+ * already stopped under `prefers-reduced-motion`; framer's own animations —
+ * page enters, the Overview doors, slide-ins — did not, so a user who asked
+ * their OS for less motion still got it here.
  */
 export function MotionProvider({ children }: { children: ReactNode }) {
-  return <LazyMotion features={domAnimation}>{children}</LazyMotion>;
+  return (
+    <LazyMotion features={domAnimation}>
+      <MotionConfig reducedMotion="user">{children}</MotionConfig>
+    </LazyMotion>
+  );
 }

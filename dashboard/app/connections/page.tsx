@@ -1011,7 +1011,7 @@ function ConnectionCard({
               {needsSecrets && (
                 <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-100/90">
                   No OAuth client configured. Set{" "}
-                  <code className="rounded bg-black/40 px-1 font-mono text-amber-200">
+                  <code className="rounded bg-ink-900/80 px-1 font-mono text-amber-200">
                     {conn.provider}_oauth_client_id
                   </code>{" "}
                   in{" "}

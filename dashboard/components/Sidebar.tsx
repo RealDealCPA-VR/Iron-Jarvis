@@ -17,6 +17,7 @@ import { recordOpen } from "@/lib/appTiles";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { useDaemon } from "@/lib/daemon";
 import { NAV, type NavEntry as NavItem, type NavSectionDef as NavSection } from "@/lib/nav";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 
 // NAV lives in lib/nav.ts now (v1.111.0). The global search needs the same
 // catalogue (plus aliases + blurbs), and two copies WOULD drift — the
@@ -46,7 +47,7 @@ const ESSENTIAL_HREFS = new Set<string>([
   //               to Simple-mode (the default) users; a module nobody can find
   //               might as well not exist (v1.170.0).
   "/you", // You — the profile every prompt carries (never Advanced-only)
-  "/train", // Train on me — the on-ramp for everything above; useless if hidden
+  "/train", // Train Jarvis on me — the on-ramp for everything above; useless if hidden
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections
   "/settings", // Settings
@@ -451,6 +452,14 @@ export function NavDrawer() {
                 />
               </nav>
               <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
+              {/* v1.313.0: the theme row lives here too. The title bar hides
+                  its row below sm (no room at 390px), so on a phone this was
+                  the only way to change the look — and there was none. Same
+                  switcher, same apply (data-theme + ij_theme), kept in step
+                  with the bar's row by watching data-theme. */}
+              <div className="border-t border-white/[0.06] px-5 py-3">
+                <ThemeSwitcher variant="drawer" />
+              </div>
               <SidebarFooter />
             </m.aside>
           </>

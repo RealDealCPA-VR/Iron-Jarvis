@@ -106,11 +106,11 @@ export function FilterBar({
 
   return (
     <div className="space-y-2.5" data-testid="tool-filters">
-      <div className="relative">
+      <div className="relative isolate">
         <Search
           size={14}
           aria-hidden
-          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+          className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
         />
         <input
           value={value.q}

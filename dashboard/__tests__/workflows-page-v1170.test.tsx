@@ -462,11 +462,13 @@ describe("RunHistory (via the page)", () => {
 
     const resuming = await screen.findByText("resuming");
     expect(resuming.closest("span")?.className).toContain("text-accent-soft");
+    // v1.313.0: the Badge reads through the tone tokens (warn / success),
+    // which stay amber / emerald on the dark Marks and deepen on the light ones.
     expect(screen.getByText("waiting").closest("span")?.className).toContain(
-      "text-amber-300",
+      "text-tone-warn",
     );
     expect(screen.getByText("completed").closest("span")?.className).toContain(
-      "text-emerald-300",
+      "text-tone-success",
     );
   });
 

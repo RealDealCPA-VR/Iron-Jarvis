@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 import {
@@ -114,21 +119,26 @@ export function Stat({
 
 export type Tone = "green" | "amber" | "red" | "cyan" | "slate" | "violet";
 
+/* The status scale reads through the TONE TOKENS (v1.313.0): pale on the dark
+   Marks exactly as before, deep ink on Daylight and Liquid Glass, where the old
+   raw emerald/rose/violet tints measured under 2:1 and a "Failed" pill read as
+   blank. Tints stay at /10 so the ink keeps >= 4.5:1 on its own pill. Running
+   (cyan) stays the accent and idle (slate) stays neutral. */
 const TONE_BADGE: Record<Tone, string> = {
-  green: "bg-emerald-500/10 text-emerald-300 border-emerald-500/25",
-  amber: "bg-amber-500/10 text-amber-300 border-amber-500/25",
-  red: "bg-rose-500/10 text-rose-300 border-rose-500/25",
+  green: "bg-tone-success/10 text-tone-success border-tone-success/25",
+  amber: "bg-tone-warn/10 text-tone-warn border-tone-warn/25",
+  red: "bg-tone-danger/10 text-tone-danger border-tone-danger/25",
   cyan: "bg-accent/10 text-accent-soft border-accent/30",
-  violet: "bg-violet-500/10 text-violet-300 border-violet-500/25",
+  violet: "bg-tone-violet/10 text-tone-violet border-tone-violet/25",
   slate: "bg-zinc-500/10 text-zinc-300 border-zinc-500/25",
 };
 
 const TONE_DOT: Record<Tone, string> = {
-  green: "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]",
-  amber: "bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.5)]",
-  red: "bg-rose-400 shadow-[0_0_8px_2px_rgba(251,113,133,0.5)]",
+  green: "bg-tone-success shadow-[0_0_8px_2px_rgb(var(--tone-success)/0.45)]",
+  amber: "bg-tone-warn shadow-[0_0_8px_2px_rgb(var(--tone-warn)/0.45)]",
+  red: "bg-tone-danger shadow-[0_0_8px_2px_rgb(var(--tone-danger)/0.45)]",
   cyan: "bg-accent shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]",
-  violet: "bg-violet-400 shadow-[0_0_8px_2px_rgba(167,139,250,0.5)]",
+  violet: "bg-tone-violet shadow-[0_0_8px_2px_rgb(var(--tone-violet)/0.45)]",
   slate: "bg-zinc-500",
 };
 
@@ -218,7 +228,7 @@ export function Dot({ on }: { on: boolean }) {
     <span
       className={`inline-block h-2.5 w-2.5 rounded-full ${
         on
-          ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
+          ? "bg-tone-success shadow-[0_0_8px_2px_rgb(var(--tone-success)/0.45)] animate-pulse-glow"
           : "bg-zinc-600"
       }`}
     />
@@ -228,14 +238,14 @@ export function Dot({ on }: { on: boolean }) {
 export function StatusIcon({ status, size = 14 }: { status?: string; size?: number }) {
   const v = (status ?? "").toLowerCase();
   if (["completed", "ok", "succeeded", "success"].includes(v))
-    return <CircleCheck size={size} className="text-emerald-400" />;
+    return <CircleCheck size={size} className="text-tone-success" />;
   if (["failed", "error", "rejected", "denied"].includes(v))
-    return <CircleX size={size} className="text-rose-400" />;
-  // Amber, not accent (v1.99.0): this is a SEMANTIC scale and the other two
-  // rungs are already semantic (emerald / rose). Borrowing the brand colour for
-  // one rung made status read as branding and branding read as status.
+    return <CircleX size={size} className="text-tone-danger" />;
+  // Warn, not accent (v1.99.0): this is a SEMANTIC scale and the other two
+  // rungs are already semantic (success / danger). Borrowing the brand colour
+  // for one rung made status read as branding and branding read as status.
   if (["active", "running", "pending"].includes(v))
-    return <Clock size={size} className="text-amber-400" />;
+    return <Clock size={size} className="text-tone-warn" />;
   return <CircleDot size={size} className="text-zinc-500" />;
 }
 
@@ -318,11 +328,13 @@ export function Empty({
   );
 }
 
-/** A small amber chip marking sessions that ran on the built-in offline model. */
+/** A small warn-tone chip marking sessions that ran on the built-in offline
+ *  model. The words and the title are the disclosure; the tone (v1.313.0)
+ *  only makes sure it can be READ on every Mark. */
 export function MockChip({ className = "" }: { className?: string }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.1] px-2 py-0.5 text-[10px] font-medium text-amber-300 ${className}`}
+      className={`inline-flex items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2 py-0.5 text-[10px] font-medium text-tone-warn ${className}`}
       title="Ran on the built-in offline mock model"
     >
       <MoonStar size={10} /> offline mock
@@ -364,7 +376,7 @@ export function ErrorNote({ children }: { children: ReactNode }) {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-sm text-rose-200"
+      className="flex items-start gap-2.5 rounded-xl border border-tone-danger/25 bg-tone-danger/[0.07] px-3 py-2.5 text-sm text-tone-danger"
     >
       <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span>{children}</span>
@@ -400,7 +412,7 @@ export function SuccessNote({ children }: { children: ReactNode }) {
     <div
       role="status"
       aria-live="polite"
-      className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2.5 text-sm text-emerald-200"
+      className="flex items-start gap-2.5 rounded-xl border border-tone-success/25 bg-tone-success/[0.07] px-3 py-2.5 text-sm text-tone-success"
     >
       <CircleCheck size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span>{children}</span>
@@ -462,11 +474,63 @@ export function ConfirmButton({
       title={title}
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
         armed
-          ? "border-rose-500/50 bg-rose-500/15 text-rose-200"
-          : "border-white/10 text-zinc-400 hover:border-rose-500/30 hover:text-rose-300"
+          ? "border-tone-danger/50 bg-tone-danger/[0.12] text-tone-danger"
+          : "border-white/10 text-zinc-400 hover:border-tone-danger/30 hover:text-tone-danger"
       } ${className}`}
     >
       {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : label}
     </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Code chip + Button (v1.313.0, U1-3)                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An inline code chip: a command, a URL, a setting name. One theme-true class
+ * (`.code-inline` in globals.css) instead of hand-rolled `bg-black/40` chips.
+ * Black is the one neutral the themes do not remap, so on Daylight those read
+ * as dark text on a muddy grey slab.
+ */
+export function Code({ children, className = "" }: { children?: ReactNode; className?: string }) {
+  return <code className={`code-inline ${className}`.trim()}>{children}</code>;
+}
+
+export type ButtonVariant = "primary" | "secondary" | "soft" | "danger";
+export type ButtonSize = "sm" | "md";
+
+const BUTTON_VARIANT: Record<ButtonVariant, string> = {
+  primary: "btn-accent",
+  secondary: "btn-ghost",
+  soft: "btn-soft",
+  danger: "btn-danger",
+};
+
+/**
+ * The one button for NEW code (v1.313.0). `variant` picks the look and `size`
+ * the height: page-header actions are `md`, card and row actions `sm`, and a
+ * view keeps at most one `primary`. Every other prop (onClick, disabled,
+ * aria-*, title) passes straight through to the <button>. It defaults to
+ * `type="button"`, because a bare <button> inside a <form> submits it. A
+ * destructive action that needs two presses still uses `ConfirmButton`;
+ * `danger` here is only the look.
+ */
+export function Button({
+  variant = "secondary",
+  size = "md",
+  type = "button",
+  className = "",
+  ...rest
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type={type}
+      className={`${BUTTON_VARIANT[variant]} btn-${size} ${className}`.trim()}
+      {...rest}
+    />
   );
 }

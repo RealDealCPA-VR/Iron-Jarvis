@@ -375,7 +375,7 @@ function RunDetailView({ runId }: { runId: string }) {
       </div>
     );
   if (trace.length === 0)
-    return <div className="py-1 text-xs text-zinc-600">No trace recorded for this run.</div>;
+    return <div className="py-1 text-xs text-zinc-500">No trace recorded for this run.</div>;
 
   return (
     <ol className="max-h-64 space-y-0.5 overflow-y-auto pr-1 font-mono text-[11px]">
@@ -743,7 +743,7 @@ export default function ComputerUsePage() {
 
             <div className="mt-3 flex flex-wrap gap-2">
               {domains.length === 0 ? (
-                <span className="text-xs text-zinc-600">No domains allowed yet.</span>
+                <span className="text-xs text-zinc-500">No domains allowed yet.</span>
               ) : (
                 domains.map((d) => (
                   <span

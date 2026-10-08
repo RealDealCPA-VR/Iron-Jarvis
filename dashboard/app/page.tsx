@@ -58,6 +58,9 @@ import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { FirstRunStrip, FIRST_WIN_TASKS } from "@/components/onboarding/FirstRunStrip";
+// v1.313.0 (U1-1): `noModelChosen` is the ONE "replies are a scripted demo"
+// rule (lib/onboarding); this page used to keep its own copy.
+import { isDemoDefault, noModelChosen } from "@/lib/onboarding";
 import { PowerTips } from "@/components/PowerTips";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { sessionHref } from "@/lib/missionLinks";
@@ -129,11 +132,6 @@ type ReflexRuleLite = {
 /** The truthful state of a live-activity row. */
 type LiveState = "running" | "completed" | "failed";
 
-/** v1.310.0: the default is still the untouched offline demo — "mock", or
- *  empty (W2-1 treats both as "nobody chose yet"). */
-function noModelChosen(provider: string | undefined | null): boolean {
-  return !provider || provider === "mock";
-}
 
 /** Short, human-ish label for a live activity row. */
 function eventLabel(e: IJEvent): string {
@@ -167,17 +165,24 @@ function HeroStat({
   icon,
   tone = "neutral",
   title,
+  hint,
 }: {
   label: string;
   value: ReactNode;
   icon: ReactNode;
   tone?: "neutral" | "accent" | "bad";
   title?: string;
+  /** v1.313.0: the tile's exact meaning (and the metric's raw name) on hover,
+   *  so the label itself can stay plain words. */
+  hint?: string;
 }) {
   const tint =
     tone === "bad" ? "text-rose-300" : tone === "accent" ? "text-accent-soft" : "text-zinc-100";
   return (
-    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 backdrop-blur-sm">
+    <div
+      title={hint}
+      className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 backdrop-blur-sm"
+    >
       <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
         <span className="text-accent-soft/70">{icon}</span>
         {label}
@@ -226,7 +231,6 @@ function HealthItem({
 function ReactorHero({
   statusLine,
   connected,
-  version,
   activeProject,
   model,
   modelChosen = true,
@@ -237,7 +241,6 @@ function ReactorHero({
 }: {
   statusLine: string;
   connected: boolean;
-  version?: string;
   activeProject?: ActiveProject | null;
   model?: string;
   /** v1.310.0: false while the default is the offline demo — `model` is then
@@ -285,20 +288,21 @@ function ReactorHero({
           <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-accent-soft/70">
             Iron Jarvis
           </div>
-          <h1 className="text-gradient mt-2 text-3xl font-semibold leading-tight tracking-tight sm:text-[2.6rem]">
+          {/* v1.313.0 (hero-status-contradicts-demo): a live status line, not
+              a second <h1> — PageHeader owns the page's one heading. */}
+          <p
+            role="status"
+            className="text-gradient mt-2 text-3xl font-semibold leading-tight tracking-tight sm:text-[2.6rem]"
+          >
             {statusLine}
-          </h1>
+          </p>
           <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-2 text-xs text-zinc-500 lg:justify-start">
             <span className="inline-flex items-center gap-1.5">
               <Dot on={connected} />
               {connected ? "live" : "stream offline"}
             </span>
-            {version && (
-              <>
-                <span className="text-zinc-700">·</span>
-                <span>v{version}</span>
-              </>
-            )}
+            {/* v1.313.0: no version here — the header chip already says it,
+                and saying it twice made the hero read like a console. */}
             {activeProject && (
               <Link
                 href={`/projects/${encodeURIComponent(activeProject.id)}`}
@@ -328,14 +332,16 @@ function ReactorHero({
               value={String(runningCount)}
             />
             <HeroStat
-              label="Free disk"
+              label="Disk space free"
+              hint="Free disk — space left on the drive Iron Jarvis keeps its data on"
               icon={<HardDrive size={12} />}
               value={
                 freeDisk != null ? fmtBytes(freeDisk) : diskLoading ? <Skeleton className="h-4 w-16" /> : "—"
               }
             />
             <HeroStat
-              label="Failures 24h"
+              label="Problems today"
+              hint="Failures 24h — model calls that failed in the last 24 hours"
               icon={<AlertTriangle size={12} />}
               tone={failures > 0 ? "bad" : "neutral"}
               value={String(failures)}
@@ -698,7 +704,21 @@ export default function OverviewPage() {
           ? `${failedPacks.length} thing${failedPacks.length === 1 ? "" : "s"} need${failedPacks.length === 1 ? "s" : ""} attention`
           : failures > 0
             ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
-            : "All systems nominal";
+            : // v1.313.0 (hero-status-contradicts-demo): the biggest words on
+              // the page never call it "nominal" while every reply is the
+              // scripted demo. Everything above still ranks first — a dead
+              // loop or a running task is the more urgent truth.
+              // v1.313.0 (review): until /health has answered, the page
+              // does not yet know whether replies are the demo, so it says
+              // neither — a demo install used to flash "All good" first.
+              // Only under the real provider: outside one (bare test
+              // renders) nothing will ever answer, and the line stays as
+              // it always was.
+              daemon.provided && !health.data
+              ? "Checking in…"
+              : health.data && isDemoDefault(health.data)
+                ? "Ready — choose a model to get real answers"
+                : "All good — ready when you are";
 
   // Compact connections summary.
   const realProviders = (health.data?.providers ?? []).filter(
@@ -758,7 +778,6 @@ export default function OverviewPage() {
         <ReactorHero
           statusLine={statusLine}
           connected={connected}
-          version={health.data?.version}
           activeProject={activeProject}
           model={
             // v1.310.0 (mock-default-trap-cli-ollama, d): a fresh install's

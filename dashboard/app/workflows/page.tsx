@@ -337,7 +337,9 @@ function StarterTemplates() {
               press Save.
             </p>
           )}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/* v1.313.0: a base minmax(0,1fr) track (grid-cols-1) so a long starter
+              name can never widen the page on a phone. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {STARTERS.map((s) => (
               <div
                 key={s.name}

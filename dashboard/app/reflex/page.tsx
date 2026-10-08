@@ -206,7 +206,7 @@ function Toggle({
 
 function chip(t: string) {
   return (
-    <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[12px] text-accent-soft">
+    <code className="rounded bg-ink-900/80 px-1.5 py-0.5 font-mono text-[12px] text-accent-soft">
       {t}
     </code>
   );

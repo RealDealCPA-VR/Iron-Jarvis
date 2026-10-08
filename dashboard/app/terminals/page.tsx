@@ -973,9 +973,13 @@ export default function TerminalsPage() {
             ) : (
               <div
                 ref={canvasRef}
-                className="relative w-full overflow-hidden rounded-2xl border border-white/[0.05] bg-black/20"
+                className="relative w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
                 style={{ height: "calc(100vh - 12rem)", minHeight: 480 }}
               >
+                {/* v1.313.0: the stage is a recessed THEME panel (ink-900), not
+                    bg-black — black is the one neutral the themes do not remap,
+                    so on Daylight it was a grey slab. The panes' own terminal
+                    colours are untouched. */}
                 {terminals.length === 0 ? (
                   <div className="grid h-full place-items-center text-sm text-zinc-500">
                     No terminals yet — hit New terminal.

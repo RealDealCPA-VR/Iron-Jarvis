@@ -56,6 +56,7 @@ import {
 import { Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
+import { PageGrid } from "@/components/PageGrid";
 
 const DEFAULT_SOURCES = ["brain", "obsidian", "notion"];
 
@@ -557,10 +558,11 @@ export function LongTerm() {
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 Query
               </label>
-              <div className="relative">
+              {/* v1.313.0: `isolate` + `z-[1]` keep the icon above the .field blur. */}
+              <div className="relative isolate">
                 <Search
                   size={15}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600"
+                  className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-600"
                 />
                 <input
                   value={q}
@@ -719,7 +721,7 @@ export function LongTerm() {
       </Reveal>
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           <div className="lg:col-span-2">
             <Card title={`Results${results ? ` · ${results.length}` : ""}`} icon={<Database size={15} />}>
               {results === null ? (
@@ -811,7 +813,7 @@ export function LongTerm() {
               </form>
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
 
       {/* Custom memory sources ------------------------------------------------ */}
@@ -877,7 +879,7 @@ export function LongTerm() {
               </div>
             </div>
           )}
-          <div className="grid gap-6 lg:grid-cols-3">
+          <PageGrid cols={3}>
             <div ref={addBaseFocusRef} className="lg:col-span-1">
               <Card title="Add a memory base" icon={<FolderPlus size={15} />}>
                 <form onSubmit={addSource} className="space-y-3.5">
@@ -1182,10 +1184,10 @@ export function LongTerm() {
                         <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                           Endpoint URL
                         </label>
-                        <div className="relative">
+                        <div className="relative isolate">
                           <Globe
                             size={14}
-                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600"
+                            className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-600"
                           />
                           <input
                             value={srcEndpoint}
@@ -1393,7 +1395,7 @@ export function LongTerm() {
                 )}
               </Card>
             </div>
-          </div>
+          </PageGrid>
         </div>
       </Reveal>
 

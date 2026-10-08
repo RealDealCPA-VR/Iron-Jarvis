@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   BarChart3,
   Coins,
@@ -112,8 +113,44 @@ const HEAT_LEVELS: readonly string[] = [
   "bg-accent/90",
 ];
 
-/** Column pitch in px: 11px cell + 3px gap. */
-const HEAT_PITCH = 14;
+/** Gap between cells, px. The cell itself is sized by CSS (see heatVars). */
+const HEAT_GAP = 3;
+
+/** Width of the Mon/Wed/Fri label column plus its gap, px. */
+const HEAT_LABEL_COL = 34;
+
+/**
+ * Fade the scroller's left edge only while older weeks are hidden there.
+ * Written straight to a data attribute so scrolling never re-renders the
+ * 365-cell grid.
+ */
+function markHeatFade(node: HTMLElement): void {
+  node.dataset.fade = node.scrollLeft > 2 ? "on" : "off";
+}
+
+/** Row labels, Sun→Sat; only every other row is named, like GitHub's. */
+const HEAT_DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""] as const;
+
+/**
+ * The heatmap's sizing, as CSS variables (v1.313.0).
+ *
+ * The cell used to be a fixed 11px, so on a laptop the year filled about half
+ * the card and left a void on the right. Now the cell follows the card's width
+ * through container query units: 11px at the smallest (a phone keeps today's
+ * size and scrolls), 22px at the largest, which fills a 1440px window. It is
+ * right on the FIRST paint, with no measuring script and no jump after load
+ * (so the open-on-latest pin below lands where it should). The width is
+ * measured on a
+ * `container-type: inline-size` wrapper and these variables are declared on a
+ * child of it, so `cqw` reads that wrapper.
+ */
+function heatVars(weeks: number): CSSProperties {
+  const n = Math.max(1, weeks);
+  return {
+    "--heat-cell": `clamp(11px, calc((100cqw - ${HEAT_LABEL_COL}px + ${HEAT_GAP}px) / ${n} - ${HEAT_GAP}px), 22px)`,
+    "--heat-pitch": `calc(var(--heat-cell) + ${HEAT_GAP}px)`,
+  } as CSSProperties;
+}
 
 interface HeatDay {
   iso: string;
@@ -273,6 +310,20 @@ export default function UsagePage() {
   );
   const heat = useMemo(() => buildHeatmap(yearData?.by_day ?? []), [yearData]);
 
+  // v1.313.0: the heatmap opens on the LATEST weeks. It used to open on the
+  // oldest, so on a phone it showed Oct to Mar, all empty ("you've done
+  // nothing"), while the real activity sat off-screen to the right. Pinned
+  // ONCE, when the scroller first appears: a refresh or a range change must
+  // never pull back someone who scrolled to look at older weeks. A stable
+  // callback (empty deps), so React does not call it again on every render.
+  const heatPinned = useRef(false);
+  const heatScrollerRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node || heatPinned.current) return;
+    heatPinned.current = true;
+    node.scrollLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+    markHeatFade(node);
+  }, []);
+
   const totalTokens =
     (totals?.input_tokens ?? 0) + (totals?.output_tokens ?? 0);
   const hasData =
@@ -396,46 +447,68 @@ export default function UsagePage() {
           {yearLoading && !yearData ? (
             <SkeletonRows rows={4} />
           ) : (
-            <div>
-              <div className="overflow-x-auto pb-1">
-                <div className="inline-block">
-                  {/* Month labels along the top */}
-                  <div
-                    className="relative mb-1.5 h-4 text-[10px] text-zinc-500"
-                    style={{ width: heat.weeks.length * HEAT_PITCH }}
-                  >
-                    {heat.months.map((m) => (
-                      <span
-                        key={`${m.week}-${m.label}`}
-                        className="absolute top-0"
-                        style={{ left: m.week * HEAT_PITCH }}
-                      >
-                        {m.label}
-                      </span>
-                    ))}
-                  </div>
-                  {/* Week columns, rows Sun→Sat */}
-                  <div className="flex gap-[3px]">
-                    {heat.weeks.map((week, wi) => (
-                      <div key={wi} className="flex flex-col gap-[3px]">
-                        {week.map((cell, di) =>
-                          cell ? (
-                            <div
-                              key={cell.iso}
-                              title={cell.title}
-                              className={`h-[11px] w-[11px] rounded-sm ${
-                                HEAT_LEVELS[cell.level] ?? HEAT_LEVELS[0]
-                              }`}
-                            />
-                          ) : (
-                            <div
-                              key={`pad-${wi}-${di}`}
-                              className="h-[11px] w-[11px]"
-                            />
-                          ),
-                        )}
-                      </div>
-                    ))}
+            <div className="[container-type:inline-size]">
+              <div className="flex gap-2" style={heatVars(heat.weeks.length)}>
+                {/* Day names stay put while the weeks scroll beside them. */}
+                <div
+                  aria-hidden="true"
+                  className="flex shrink-0 flex-col gap-[3px] pt-[22px] text-[10px] leading-none text-zinc-500"
+                  style={{ width: HEAT_LABEL_COL - 8 }}
+                >
+                  {HEAT_DAY_LABELS.map((d, i) => (
+                    <span key={i} className="flex h-[var(--heat-cell)] items-center">
+                      {d}
+                    </span>
+                  ))}
+                </div>
+                {/* The left edge fades once there are older weeks to scroll
+                    back to. A MASK, not a painted gradient: it changes only
+                    alpha, so it reads the same in every theme. */}
+                <div
+                  ref={heatScrollerRef}
+                  data-testid="usage-heatmap-scroller"
+                  onScroll={(e) => markHeatFade(e.currentTarget)}
+                  className="min-w-0 flex-1 overflow-x-auto pb-1 data-[fade=on]:[-webkit-mask-image:linear-gradient(to_right,transparent,#000_28px)] data-[fade=on]:[mask-image:linear-gradient(to_right,transparent,#000_28px)]"
+                >
+                  <div className="inline-block">
+                    {/* Month labels along the top */}
+                    <div
+                      className="relative mb-1.5 h-4 text-[10px] text-zinc-500"
+                      style={{ width: `calc(var(--heat-pitch) * ${heat.weeks.length})` }}
+                    >
+                      {heat.months.map((m) => (
+                        <span
+                          key={`${m.week}-${m.label}`}
+                          className="absolute top-0"
+                          style={{ left: `calc(var(--heat-pitch) * ${m.week})` }}
+                        >
+                          {m.label}
+                        </span>
+                      ))}
+                    </div>
+                    {/* Week columns, rows Sun→Sat */}
+                    <div className="flex gap-[3px]">
+                      {heat.weeks.map((week, wi) => (
+                        <div key={wi} className="flex flex-col gap-[3px]">
+                          {week.map((cell, di) =>
+                            cell ? (
+                              <div
+                                key={cell.iso}
+                                title={cell.title}
+                                className={`h-[var(--heat-cell)] w-[var(--heat-cell)] rounded-sm ${
+                                  HEAT_LEVELS[cell.level] ?? HEAT_LEVELS[0]
+                                }`}
+                              />
+                            ) : (
+                              <div
+                                key={`pad-${wi}-${di}`}
+                                className="h-[var(--heat-cell)] w-[var(--heat-cell)]"
+                              />
+                            ),
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>

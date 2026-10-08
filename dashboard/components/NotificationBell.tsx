@@ -1056,7 +1056,9 @@ export function NotificationBell() {
         type="button"
         onClick={toggleOpen}
         aria-label={count ? `${count} notifications` : "Notifications"}
-        className={`relative grid h-9 w-9 place-items-center rounded-xl border transition-colors ${
+        // v1.313.0: the bar's one control height (TitleBar's BAR_CONTROL_H) —
+        // 36px tap target on a phone, 32px with a pointer, same radius.
+        className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition-colors sm:h-8 sm:w-8 ${
           open
             ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
             : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-100"

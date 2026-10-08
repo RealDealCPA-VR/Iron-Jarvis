@@ -16,6 +16,12 @@ import type { IJEvent } from "@/lib/types";
  * an effect, so the first client render matches) and adds no new dependencies —
  * pure inline SVG + the existing Tailwind keyframes (animate-spin-slow,
  * animate-pulse-glow). Decorative: announced via aria-label / title only.
+ *
+ * v1.313.0: at rest it is a DOT AND A RING. Eight spokes around a circle is a
+ * settings cog — users read the idle orb as a Settings button and clicked a
+ * thing that does nothing. The spokes now appear only while thinking (where
+ * they spin, so they read as motion, not a gear). Its box is the bar's one
+ * control height (TitleBar's BAR_CONTROL_H).
  */
 
 type Mood = "idle" | "thinking" | "alert";
@@ -91,7 +97,7 @@ export function MoodOrb() {
 
   return (
     <span
-      className="relative grid h-9 w-9 place-items-center"
+      className="relative grid h-9 w-9 shrink-0 place-items-center sm:h-8 sm:w-8"
       title={`${LABEL[mood]}${connected ? "" : " · stream offline"}`}
       aria-label={LABEL[mood]}
       role="img"
@@ -105,37 +111,40 @@ export function MoodOrb() {
       />
       <svg
         viewBox="0 0 24 24"
-        className="relative h-7 w-7"
+        className="relative h-6 w-6"
         fill="none"
         stroke={color}
         style={{ transition: "stroke 500ms ease" }}
       >
-        {/* rotating spoke ring — only spins while thinking */}
-        <g
-          className={thinking ? "animate-spin-slow" : ""}
-          style={{ transformOrigin: "12px 12px" }}
-          opacity={dim ? 0.5 : 0.85}
-        >
-          {Array.from({ length: 8 }).map((_, i) => {
-            const a = (i * Math.PI) / 4;
-            const x1 = 12 + Math.cos(a) * 4.4;
-            const y1 = 12 + Math.sin(a) * 4.4;
-            const x2 = 12 + Math.cos(a) * 7.4;
-            const y2 = 12 + Math.sin(a) * 7.4;
-            return (
-              <line
-                key={i}
-                x1={x1}
-                y1={y1}
-                x2={x2}
-                y2={y2}
-                strokeWidth="1.1"
-                strokeLinecap="round"
-              />
-            );
-          })}
-        </g>
-        <circle cx="12" cy="12" r="8.4" strokeWidth="1" opacity={dim ? 0.3 : 0.5} />
+        {/* rotating spoke ring — drawn ONLY while thinking (at rest the
+            spokes made the orb read as a settings gear) */}
+        {thinking && (
+          <g
+            className="animate-spin-slow"
+            style={{ transformOrigin: "12px 12px" }}
+            opacity={0.85}
+          >
+            {Array.from({ length: 8 }).map((_, i) => {
+              const a = (i * Math.PI) / 4;
+              const x1 = 12 + Math.cos(a) * 4.4;
+              const y1 = 12 + Math.sin(a) * 4.4;
+              const x2 = 12 + Math.cos(a) * 7.4;
+              const y2 = 12 + Math.sin(a) * 7.4;
+              return (
+                <line
+                  key={i}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  strokeWidth="1.1"
+                  strokeLinecap="round"
+                />
+              );
+            })}
+          </g>
+        )}
+        <circle cx="12" cy="12" r="8.4" strokeWidth="1.1" opacity={dim ? 0.45 : 0.5} />
         {/* core — pulses on alert */}
         <circle
           cx="12"

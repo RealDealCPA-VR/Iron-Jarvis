@@ -137,11 +137,25 @@ export function decodeOnboardingModel(raw: unknown): OnboardingModel | null {
  *  shared lib/types.ts, which this track does not own. */
 export type HealthRow = ProviderHealth & { sign_in_fix?: string };
 
-/** The default every chat turn uses is still the offline demo ("mock", or
- *  unset). An explicit "auto" or any real name is the USER's choice. */
-export function isDemoDefault(health: Health | null | undefined): boolean {
-  const dp = (health?.default_provider ?? "").trim();
+/**
+ * v1.313.0 (contract U1-1): THE one truth for "replies are a scripted demo".
+ * True when no model has been chosen to answer — the provider is unset, blank
+ * or the offline "mock". An explicit "auto" or any real name is the USER's
+ * choice and answers false. The title-bar chip, the simulated-mode strip, the
+ * Overview and the wizard all ask this one function, so they can never
+ * disagree about whether the user is talking to a real model (the chip used
+ * to name `claude-opus-4-8` while the same screen said "scripted demo").
+ */
+export function noModelChosen(provider: string | null | undefined): boolean {
+  const dp = (provider ?? "").trim();
   return dp === "" || dp === "mock";
+}
+
+/** The default every chat turn uses is still the offline demo ("mock", or
+ *  unset). An explicit "auto" or any real name is the USER's choice.
+ *  One rule, not two: this is `noModelChosen` read off /health. */
+export function isDemoDefault(health: Health | null | undefined): boolean {
+  return noModelChosen(health?.default_provider);
 }
 
 /** Real providers that answer right now (the demo itself never counts). */

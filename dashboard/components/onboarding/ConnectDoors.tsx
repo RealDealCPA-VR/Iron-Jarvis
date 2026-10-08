@@ -33,6 +33,16 @@
  *    is ready (a real choice stays the user's), and it says what happened:
  *    the new default, the daemon's "you already chose X", or its 409 sentence.
  *  - The Ollama door ends in the same press once Ollama answers.
+ *  - v1.313.0 (opencode-press-no-privacy-line-raw-id): a press is offered
+ *    ONLY for what that press can choose. POST /onboarding/use-model takes
+ *    claude-cli, codex-cli, ollama, custom and the API providers; anything
+ *    else (an OpenCode or Grok sign-in, a fleet node) answered 409 "can't be
+ *    chosen with this button" — a press that could only fail, printed under
+ *    its raw id with no line about where the words go. Those are now named in
+ *    plain words beside a link to Connections, where they CAN be chosen.
+ *    Every press that remains says where the words go, and the two sign-ins
+ *    use the daemon's own names (checklist.py's _PROVIDER_LABELS), so Chat
+ *    and the Overview call the same choice the same thing.
  *
  * The key door keeps the pre-v1.197.0 mechanics byte-for-byte.
  */
@@ -46,8 +56,10 @@ import {
   SUBSCRIPTION_CLIS,
   answerCandidates,
   cliDoorState,
+  friendlyProvider,
   healthRow,
   isDemoDefault,
+  type AnswerCandidate,
   type SubscriptionCli,
 } from "@/lib/onboarding";
 import type { ConnectionTestResult } from "@/lib/types";
@@ -83,6 +95,57 @@ const KEY_PROVIDERS: { id: KeyProvider; label: string; placeholder: string }[] =
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** What POST /onboarding/use-model can choose: readiness.USE_MODEL_CLIS +
+ *  USE_MODEL_LOCAL + providers.manager.API_PROVIDERS. Keep in step with the
+ *  daemon — a name outside this set is answered 409, so it gets no press. */
+const ONE_PRESS = new Set([
+  "claude-cli",
+  "codex-cli",
+  "ollama",
+  "custom",
+  "anthropic",
+  "openai",
+  "google",
+  "xai",
+  "openrouter",
+]);
+
+/** The press names, in checklist.py's _PROVIDER_LABELS words (the Overview's
+ *  card reads them off /onboarding), so one choice has one name everywhere.
+ *  The sign-in in brackets tells a Claude Code sign-in apart from a pasted
+ *  Anthropic key. */
+const PRESS_LABELS: Record<string, string> = {
+  "claude-cli": "Claude (your Claude Code sign-in)",
+  "codex-cli": "ChatGPT (your Codex sign-in)",
+  ollama: "Ollama (free, runs on this PC)",
+  custom: "Your own model server",
+};
+
+/** Where the words go when lib/onboarding's WHERE table has no entry — never
+ *  an empty line beside a press. */
+const WHERE_FALLBACK: Record<string, string> = {
+  custom: "goes only to the model server you set up",
+};
+
+/** Plain names for what is connected but chosen on Connections, never a raw
+ *  id like "opencode-cli". */
+const OTHER_NAMES: Record<string, string> = {
+  "opencode-cli": "OpenCode",
+  "grok-cli": "Grok",
+  fleet: "Your model fleet",
+};
+
+/** A label as it reads mid-sentence ("With your own model server, …"). */
+function midSentence(label: string): string {
+  return /^(Your|The|A|An)\b/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+}
+
+/** "OpenCode", "OpenCode and Grok", "A, B and C". */
+function andList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 /** A sentence with `backticked` words to type, drawn as code. */
 function withCode(text: string) {
   return text.split(/`([^`]+)`/).map((part, i) =>
@@ -116,7 +179,20 @@ export function ConnectDoors({
   const { health, refresh } = useDaemon();
   const after = onChanged ?? refresh;
   const demo = isDemoDefault(health);
-  const candidates = answerCandidates(health);
+  const ready = answerCandidates(health);
+  // v1.313.0: a press only for what the one-press route can choose, named and
+  // with its where-line as the Overview says it.
+  const candidates: AnswerCandidate[] = ready
+    .filter((c) => ONE_PRESS.has(c.provider))
+    .map((c) => ({
+      ...c,
+      label: PRESS_LABELS[c.provider] ?? c.label,
+      where: c.where || WHERE_FALLBACK[c.provider] || "goes to the service you connected",
+    }));
+  // ...and what is connected but can only be chosen on Connections.
+  const elsewhere = ready
+    .filter((c) => !ONE_PRESS.has(c.provider))
+    .map((c) => OTHER_NAMES[c.provider] ?? friendlyProvider(c.provider));
 
   /* Which door is open. Local state ONLY (v1.197.0): remembering it would
      resurrect a stale pick on the next visit, and re-picking costs one click. */
@@ -247,20 +323,25 @@ export function ConnectDoors({
         <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3">
           <div className="flex items-center gap-2 text-sm font-medium text-emerald-200">
             <CheckCircle2 size={16} className="text-emerald-400" />
-            Ready on this PC: {candidates.map((c) => c.label).join(", ")}
+            {/* v1.313.0: the presses below name each one in full; the heading
+                no longer repeats every long name before them. */}
+            Ready on this PC — choose what answers you
           </div>
           <p className="mt-1 text-xs leading-relaxed text-emerald-300/80">
             Replies still come from the offline demo until you choose what answers you —
             nothing switches on its own.
           </p>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {/* v1.313.0: every offer in the SAME outlined style — a solid
+                first button read as a recommendation, and which model
+                answers (cloud or this PC) is the user's call. */}
             {candidates.map((c) => (
               <button
                 key={c.provider}
                 type="button"
                 onClick={() => void press(c, onEnabled)}
                 disabled={pressBusy !== null}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/35 bg-accent/[0.08] px-3 py-1.5 text-left text-xs font-semibold text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {pressBusy === c.provider && (
                   <Loader2 size={13} className="animate-spin" aria-hidden="true" />
@@ -273,7 +354,7 @@ export function ConnectDoors({
             <p className="mt-2 text-[11px] leading-relaxed text-emerald-300/60">
               {candidates
                 .filter((c) => c.where)
-                .map((c) => `With ${c.label}, what you type ${c.where}.`)
+                .map((c) => `With ${midSentence(c.label)}, what you type ${c.where}.`)
                 .join(" ")}
             </p>
           )}
@@ -283,6 +364,26 @@ export function ConnectDoors({
           {demo
             ? "Until a model is connected, replies come from an offline demo — a script, not a real answer. Pick whichever sounds like you:"
             : "No model is answering right now. Pick whichever sounds like you:"}
+        </p>
+      )}
+
+      {/* v1.313.0: connected, but not choosable with one press here — said
+          in plain words, with the way to choose it in the same sentence.
+          "too" only when a one-press offer sits above it; when this is the
+          ONLY connected model, "too" has nothing to refer to and reads as if
+          the demo line above were wrong. */}
+      {demo && elsewhere.length > 0 && (
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+          {andList(elsewhere)} {elsewhere.length === 1 ? "is" : "are"} connected
+          {showPress ? " too" : ""} — choose {elsewhere.length === 1 ? "it" : "one"} to answer on
+          the{" "}
+          <Link
+            href="/connections"
+            className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+          >
+            Connections page
+          </Link>
+          .
         </p>
       )}
 

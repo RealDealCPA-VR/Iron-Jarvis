@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { PageGrid } from "@/components/PageGrid";
 import { timeAgo } from "@/lib/format";
 
 const KINDS = ["api_key", "oauth", "token", "password", "generic"];
@@ -86,7 +87,7 @@ export default function SecretsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           <div className="lg:col-span-1">
             <Card title="Add secret" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
@@ -219,7 +220,7 @@ export default function SecretsPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

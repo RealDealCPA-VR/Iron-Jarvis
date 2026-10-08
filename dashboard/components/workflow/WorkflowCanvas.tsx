@@ -67,6 +67,7 @@ import { StepNode } from "./StepNode";
 import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
 import { TriggerInspector } from "./TriggerInspector";
+import { useCanvasColorMode } from "./useCanvasColorMode";
 import {
   announceWorkflowsChanged,
   WORKFLOWS_LIST_EVENT,
@@ -86,6 +87,18 @@ const defaultEdgeOptions: DefaultEdgeOptions = {
   animated: true,
   style: { stroke: "#22d3ee", strokeWidth: 2 },
   markerEnd: { type: MarkerType.ArrowClosed, color: "#22d3ee", width: 18, height: 18 },
+};
+/* v1.313.0: the light Marks draw the wires in a deep cyan (cyan-700, ~5:1 on
+   the light canvas) — #22d3ee is 1.8:1 there and the arrows all but vanished.
+   React Flow merges these options into every edge AT RENDER, so swapping the
+   object re-inks the edges already on the canvas. Literal hex on purpose: the
+   marker's colour becomes part of its SVG id, and a var() would put spaces and
+   parentheses into an id. */
+const LIGHT_EDGE_INK = "#0e7490";
+const lightEdgeOptions: DefaultEdgeOptions = {
+  animated: true,
+  style: { stroke: LIGHT_EDGE_INK, strokeWidth: 2 },
+  markerEnd: { type: MarkerType.ArrowClosed, color: LIGHT_EDGE_INK, width: 18, height: 18 },
 };
 
 /* ---- Seed: Trigger → Gather → Draft → Review ----------------------------- */
@@ -1285,10 +1298,17 @@ function Canvas() {
   // (PATCH), with fork-a-copy still available explicitly.
   const renamePending = !!loadedName && !!name.trim() && name.trim() !== loadedName;
 
-  const miniColor = useCallback((node: Node) => {
-    if (node.type === "trigger") return "#22d3ee";
-    return agentMeta(String((node.data as StepNodeData).agent)).hex;
-  }, []);
+  // Follows the theme LIVE (v1.313.0): a light canvas on Daylight / Liquid
+  // Glass instead of a black slab, flipped by the switcher without a reload.
+  const colorMode = useCanvasColorMode();
+
+  const miniColor = useCallback(
+    (node: Node) => {
+      if (node.type === "trigger") return colorMode === "light" ? LIGHT_EDGE_INK : "#22d3ee";
+      return agentMeta(String((node.data as StepNodeData).agent)).hex;
+    },
+    [colorMode],
+  );
 
   return (
     <div className="card-surface flex h-[calc(100vh-12.5rem)] min-h-[560px] flex-col overflow-hidden">
@@ -1309,7 +1329,12 @@ function Canvas() {
             {stepCount} step{stepCount === 1 ? "" : "s"}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        {/* v1.313.0 (UX wave 1, phone): the actions WRAP and take their own
+            full-width line below sm. With no wrap, a 390px screen sliced the
+            fourth button and pushed Add step and Run workflow outside the
+            card's overflow-hidden, where they could not be seen or tapped.
+            Every label stays; Run workflow gets the wide tap target. */}
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {/* Load ▾ — saved & agent-authored workflows */}
           <div ref={loadRef} className="relative">
             <button
@@ -1332,7 +1357,7 @@ function Canvas() {
             </button>
 
             {loadOpen && (
-              <div className="card-surface absolute right-0 top-[calc(100%+8px)] z-30 w-72 origin-top-right overflow-hidden">
+              <div className="card-surface absolute left-0 top-[calc(100%+8px)] z-30 w-72 origin-top-left overflow-hidden sm:left-auto sm:right-0 sm:origin-top-right">
                 <div className="flex items-center justify-between gap-2 border-b hairline px-3 py-2">
                   <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     {defsLoading
@@ -1449,7 +1474,7 @@ function Canvas() {
           <button type="button" onClick={addStep} className="btn-ghost">
             <Plus size={15} /> Add step
           </button>
-          <button type="button" onClick={run} disabled={busy} className="btn-accent">
+          <button type="button" onClick={run} disabled={busy} className="btn-accent flex-1 sm:flex-none">
             {busy ? <LoaderInline label="Running…" /> : (<><Play size={14} /> Run workflow</>)}
           </button>
         </div>
@@ -1467,8 +1492,8 @@ function Canvas() {
           onPaneClick={onPaneClick}
           onNodesDelete={onNodesDelete}
           nodeTypes={nodeTypes}
-          defaultEdgeOptions={defaultEdgeOptions}
-          colorMode="dark"
+          defaultEdgeOptions={colorMode === "light" ? lightEdgeOptions : defaultEdgeOptions}
+          colorMode={colorMode}
           fitView
           fitViewOptions={{ padding: 0.25 }}
           minZoom={0.3}
@@ -1479,20 +1504,22 @@ function Canvas() {
             variant={BackgroundVariant.Dots}
             gap={22}
             size={1}
-            color="rgba(148,163,184,0.14)"
+            color="rgb(var(--zinc-500) / 0.18)"
           />
           <Controls
             showInteractive={false}
-            className="!rounded-xl !border !border-white/[0.07] !shadow-card"
+            className="!rounded-xl !border !border-white/[0.09] !shadow-card"
           />
           <MiniMap
             pannable
             zoomable
             nodeStrokeWidth={2}
             nodeColor={miniColor}
-            maskColor="rgba(7,8,9,0.72)"
-            className="!rounded-xl !border !border-white/[0.07]"
-            style={{ backgroundColor: "rgba(11,13,17,0.92)" }}
+            // Theme variables, not literal near-black (v1.313.0): every Mark
+            // re-skins the minimap, light ones included.
+            maskColor="rgb(var(--ink-950) / 0.72)"
+            className="!rounded-xl !border !border-white/[0.09]"
+            style={{ backgroundColor: "rgb(var(--ink-900) / 0.92)" }}
           />
         </ReactFlow>
 

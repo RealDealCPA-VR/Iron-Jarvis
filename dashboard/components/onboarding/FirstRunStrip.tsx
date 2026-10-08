@@ -106,9 +106,13 @@ export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding>
               className="w-full rounded-xl border border-white/10 bg-white/[0.03] py-2.5 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
           </div>
+          {/* v1.313.0: outlined, not solid. The strip is up only while a
+              setup step is next, and that step's button in the card above is
+              the page's ONE solid primary — two bright buttons for two
+              different "first" actions left a new user guessing. */}
           <button
             type="submit"
-            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft"
+            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-accent/35 bg-accent/[0.08] px-4 py-2.5 text-sm font-medium text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14]"
           >
             Ask <ArrowRight size={14} />
           </button>

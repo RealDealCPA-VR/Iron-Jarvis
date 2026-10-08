@@ -38,6 +38,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { ChooserTiles } from "@/components/ChooserTiles";
 import { useFocusRef } from "@/lib/useFocusRef";
 import AgentFace from "@/components/agents/AgentFace";
+import { PageGrid } from "@/components/PageGrid";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
@@ -525,7 +526,7 @@ export default function SchedulesPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           <div className="lg:col-span-1">
             <div ref={addFocusRef}>
             <Card title="Add schedule" icon={<Plus size={15} />}>
@@ -957,7 +958,7 @@ export default function SchedulesPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
       {editing && (
         <ScheduleEditor
