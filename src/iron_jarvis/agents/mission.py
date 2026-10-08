@@ -580,7 +580,14 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                     EventRecord.session_id.in_(team_ids),  # type: ignore[attr-defined, union-attr]
                     EventRecord.type.in_(_EVENT_TYPES),  # type: ignore[attr-defined]
                 )
-                .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
+                # Ties on created_at break on rowid (insertion order): a
+                # remote's started + completed events land in one 15.6 ms
+                # Windows tick, and read completion-first they made TWO
+                # cards (v1.317.0; the v1.286.0 same-tick rule).
+                .order_by(
+                    EventRecord.created_at.desc(),  # type: ignore[attr-defined]
+                    literal_column("eventrecord.rowid").desc(),
+                )
                 .limit(_SCAN_ROWS)
             )
         )
@@ -601,7 +608,10 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                     ToolInvocation.created_at,
                 )
                 .where(ToolInvocation.session_id.in_(team_ids))  # type: ignore[attr-defined]
-                .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
+                .order_by(
+                    ToolInvocation.created_at.desc(),  # type: ignore[attr-defined]
+                    literal_column("toolinvocation.rowid").desc(),
+                )
                 .limit(_SCAN_ROWS)
             )
         )

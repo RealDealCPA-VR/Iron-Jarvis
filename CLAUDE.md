@@ -2905,6 +2905,43 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Light is a SCHEME, and a theme can be the user's own** (v1.317.0).
+  `<html data-scheme="light|dark">` answers "is this a light theme" — every
+  light re-ink in globals.css (the generated tone block, the amber block,
+  .notice-warn) is keyed on `:root[data-scheme="light"]`, never on Mark ids
+  (`scripts/gen_light_tones.py` emits it; re-run it as before). A Mark's
+  scheme comes from `LIGHT_MARKS` (`currentScheme()` trusts the Mark for a
+  Mark id — a stale attribute cannot flip it); a palette's from its mode.
+  `lib/themePalette.ts` (NOT `lib/palette.ts` — that is the Ctrl K ranking
+  brain) turns picks {accent, second?, surface neutral|cool|warm|tinted,
+  mode dark|light|system} into BOTH versions: the ink/zinc ramps keep the
+  vetted bases' LIGHTNESS (`BASE_DARK` = `:root`, `BASE_LIGHT` = Daylight,
+  pinned value-for-value to globals.css) and take the chosen hue in OKLCH
+  (`lib/color.ts`); accent, accent-soft, zinc-500/600 are moved by
+  `fitLightness` until >= 4.6:1 on page/panel/card (the button label is
+  ink-950, so one check covers it); the second colour is `accent-deep`
+  (glows only, never text). Palettes live in localStorage `ij_palettes`
+  WITH their computed vars (`PALETTE_VERSION` recomputes older ones), so
+  the layout's `PRE_PAINT_SCRIPT` (in lib/theme.ts — the layout imports it)
+  applies them before the first frame, validating each var name and `r g b`
+  value. `applyTheme` sets vars inline + `data-scheme` + `data-theme=<id>`
+  (vars FIRST — observers read them in their callback) and clears every
+  inline var when going back to a Mark; "Match Windows" listens to
+  `prefers-color-scheme` only while such a palette is on. Readers follow:
+  ThemeSwitcher (`useThemeList`, Marks + up to 3 palettes on the bar, all
+  in the drawer), Ctrl K (`themeItems()` read on open + "Make your own
+  theme" → /settings#appearance), TitleBar's overlay push (observes
+  data-scheme + style too), the workflow canvas (`useCanvasColors`: wires
+  in the theme's accent), and desktop `titlebar:set-overlay` themes the
+  SENDER's window (pop-outs stayed dark). UI: `components/ThemeMaker.tsx`
+  in Settings → Appearance. The terminal panes stay dark on purpose. Pins:
+  `dashboard/__tests__/theme-maker-v1317.test.tsx` (36 hues x 4 feels x both
+  versions measured with the test's OWN contrast helpers; mutation-checked).
+  SAME RELEASE: `mission_view` read events and invocations ORDER BY
+  created_at alone, so a remote's started + completed in one tick read
+  completion-first made TWO cards (the full suite went red under load) —
+  ties now break on rowid; `tests/test_mission_same_tick_v1317.py` writes
+  both rows with one timestamp (mutant reproduces "2 == 1").
 - **Labels are tied, names read as names, a capped canvas, an estimate is
   never spend** (v1.316.0, /goal UX & aesthetic wave 4 — the last: 25
   findings + 5 carry-overs over home & system, automation, memory & self,

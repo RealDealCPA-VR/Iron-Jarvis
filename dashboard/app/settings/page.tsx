@@ -30,6 +30,7 @@ import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
 import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { ThemeMaker } from "@/components/ThemeMaker";
 import { providerDisplay } from "@/lib/onboarding";
 import { useModels } from "@/lib/useModels";
 
@@ -1383,13 +1384,14 @@ export default function SettingsPage() {
                 them stay in step. It applies at once and is kept per device;
                 it sits outside the Preferences form on purpose, so Save
                 changes never carries it to the daemon. */}
-            <div data-testid="settings-appearance">
+            <div data-testid="settings-appearance" id="appearance" className="scroll-mt-20">
               <Card title="Appearance" icon={<Palette size={15} />}>
                 <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">
-                  Pick a theme for this window. It changes right away and is remembered on this
-                  PC — no need to save.
+                  Pick a theme, or make your own below. It changes right away and is remembered
+                  on this PC — no need to save.
                 </p>
                 <ThemeSwitcher variant="drawer" />
+                <ThemeMaker />
               </Card>
             </div>
 

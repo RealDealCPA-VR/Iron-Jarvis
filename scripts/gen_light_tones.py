@@ -3,7 +3,7 @@
 Scans app/, components/, lib/ exactly like __tests__/ux-wave1-design-v1313.test.tsx
 (pale text <= 400 always; border/ring 300-500 alpha <= .5; bg 300-500 alpha < .5)
 and also emits the hover:/group-hover: variants in use, so a hover that changes
-the hue still changes it on the light Marks.
+the hue still changes it on every light theme.
 
 Usage (from the repo root): uv run python scripts/gen_light_tones.py
 It rewrites ONLY the text between the light-tone-overrides markers, keeps the
@@ -32,7 +32,14 @@ def over(fg, a, bg):
     return tuple(fg[i] * a + bg[i] * (1 - a) for i in range(3))
 
 
+# v1.317.0: one selector for EVERY light theme — the light Marks and a light
+# palette of the user's own (lib/palette.ts) — keyed on the scheme attribute
+# lib/theme.ts sets, never on a list of theme ids.
+LIGHT = ':root[data-scheme="light"]'
+
 # The light Marks' surfaces (page, recessed panel, card) from globals.css.
+# A custom light palette keeps Daylight's surface LIGHTNESS (lib/palette.ts),
+# so these bound it too; ux-wave1-design-v1313 measures generated palettes.
 SURF = {
     "mark1": {"ink-950": (237, 240, 245), "ink-900": (244, 246, 250), "ink-850": (252, 253, 255)},
     "mark8": {"ink-950": (235, 240, 248), "ink-900": (245, 248, 252), "ink-850": (252, 254, 255)},
@@ -142,8 +149,7 @@ def main(root):
         kind, hue, shade, a = base[cls]
         d, (rgb, na) = decl(kind, hue, a if a is not None else 1)
         sel = esc(cls)
-        lines.append(f':root[data-theme="mark1"] .{sel},')
-        lines.append(f':root[data-theme="mark8"] .{sel} {{ {d} }}')
+        lines.append(f'{LIGHT} .{sel} {{ {d} }}')
         if kind == "text":
             for th in ("mark1", "mark8"):
                 for s in SURF[th].values():
@@ -155,13 +161,10 @@ def main(root):
         d, _ = decl(kind, hue, a if a is not None else 1)
         vcls = esc(f"{variant}:{cls}")
         if variant == "hover":
-            sel1 = f':root[data-theme="mark1"] .{vcls}:hover'
-            sel8 = f':root[data-theme="mark8"] .{vcls}:hover'
+            sel = f"{LIGHT} .{vcls}:hover"
         else:
-            sel1 = f':root[data-theme="mark1"] .group:hover .{vcls}'
-            sel8 = f':root[data-theme="mark8"] .group:hover .{vcls}'
-        lines.append(sel1 + ",")
-        lines.append(f"{sel8} {{ {d} }}")
+            sel = f"{LIGHT} .group:hover .{vcls}"
+        lines.append(f"{sel} {{ {d} }}")
 
     worst.sort()
     print("classes:", len(base), "variants:", len(variants), "lowest text contrasts:", worst[:4])

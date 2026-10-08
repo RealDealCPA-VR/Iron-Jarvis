@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.316.0 (2026-10-04).*
+holds itself to. Current as of v1.317.0 (2026-10-04).*
 
 ---
 
@@ -1433,6 +1433,20 @@ nothing was taken away.
   **Settings → Appearance**, from the menu drawer on a phone, or by typing
   "Theme" in the Ctrl+K search — all four change the same setting. The light
   themes now draw status colours and chips in deeper inks you can read.
+- **Make your own theme** (v1.317.0). In **Settings → Appearance**, press
+  **Make your own**: pick a main colour (or start from one of the built-in
+  themes), optionally a second colour for the background glows, how the
+  background should feel (Neutral, Cool, Warm, or Tinted with your colour),
+  and whether to show the **Dark** version, the **Light** version, or
+  **Match Windows** (it follows your Windows light/dark setting by itself).
+  Both versions are made for you and previewed side by side, and every word
+  is kept readable: if a colour would be hard to read on a dark or a light
+  background it is made a little brighter or deeper, and the panel says so.
+  **Save and use** applies it at once; your themes also appear as dots in
+  the title bar and as "Theme: <name>" in Ctrl+K, and you can edit or
+  delete them later (up to 12, kept on this PC like the theme choice). The
+  workflow canvas's wires now take the theme's main colour, and pop-out
+  windows' minimise/close buttons follow a light theme too.
 - **Phones.** Pages no longer slide sideways, the title bar's buttons no
   longer overlap, and search icons sit inside their boxes.
 - **Plain words.** Sessions say who started them in words ("Schedule ·

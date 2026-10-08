@@ -10,6 +10,7 @@ import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
+import { PRE_PAINT_SCRIPT } from "@/lib/theme";
 // ONE /events socket per window (v1.230.0, FP6): every useEvents hook in
 // the tree fans out of this provider instead of opening its own.
 import { EventsProvider } from "@/lib/useEvents";
@@ -58,14 +59,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Apply the saved arc-reactor theme BEFORE paint (no flash of the
-            default palette). The ThemeSwitcher writes localStorage.ij_theme. */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "try{var t=localStorage.getItem('ij_theme');if(t)document.documentElement.dataset.theme=t}catch(e){}",
-          }}
-        />
+        {/* Apply the saved theme BEFORE paint (no flash of the default
+            palette): the Mark or the user's own palette, its variables, and
+            its light/dark scheme. The script lives in lib/theme.ts beside the
+            setter it mirrors (v1.317.0). */}
+        <script dangerouslySetInnerHTML={{ __html: PRE_PAINT_SCRIPT }} />
       </head>
       <body>
         {/* Skip past the ~34 sidebar nav links straight to page content (WCAG 2.4.1).

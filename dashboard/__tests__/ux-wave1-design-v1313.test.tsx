@@ -387,9 +387,13 @@ function parseOverrideBlock(block: string): Map<string, Decl> {
       a: d[5] === undefined ? 1 : Number(d[5]),
     };
     for (const raw of sels.split(",")) {
-      const sm = raw.trim().match(/^:root\[data-theme="(mark1|mark8)"\] \.(\S+)$/);
+      // v1.317.0: ONE rule per class, keyed on the light SCHEME, applies to
+      // both light Marks (and to a light palette of the user's own) — so it
+      // is recorded for each light Mark and measured against each one's
+      // surfaces below, exactly as the two copies were.
+      const sm = raw.trim().match(/^:root\[data-scheme="light"\] \.(\S+)$/);
       if (!sm) continue;
-      out.set(`${sm[1]} ${sm[2].replace(/\\(.)/g, "$1")}`, parsed);
+      for (const th of ["mark1", "mark8"]) out.set(`${th} ${sm[1].replace(/\\(.)/g, "$1")}`, parsed);
     }
   }
   return out;
@@ -461,10 +465,10 @@ describe("B. raw pale hues read on the light Marks (generated block)", () => {
     expect(fails).toEqual([]);
   });
 
-  it("is scoped to the light Marks only and leaves amber to its own block (one system per hue)", () => {
+  it("is scoped to the light themes only and leaves amber to its own block (one system per hue)", () => {
     expect(lightBlock.length).toBeGreaterThan(0);
     for (const line of lightBlock.split("\n")) {
-      if (line.includes("{")) expect(line.startsWith(':root[data-theme="mark'), line).toBe(true);
+      if (line.includes("{")) expect(line.startsWith(':root[data-scheme="light"] '), line).toBe(true);
     }
     expect(lightBlock).not.toMatch(/-(amber|orange|yellow)-\d/);
   });

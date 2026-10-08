@@ -3,7 +3,35 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
-import { THEMES, DEFAULT_THEME as DEFAULT, LIGHT_MARKS, applyTheme, type Mark } from "@/lib/theme";
+import { THEMES, DEFAULT_THEME as DEFAULT, allThemes, applyTheme, currentScheme, isCustomTheme, type Mark } from "@/lib/theme";
+import { PALETTES_EVENT, PALETTES_KEY } from "@/lib/themePalette";
+
+/** How many of the user's own palettes the title bar shows beside the Marks
+ *  (the drawer and Settings show them all; the active one always shows). */
+const BAR_CUSTOM = 3;
+
+/**
+ * Every theme this device offers — the Marks, then the user's own palettes
+ * (v1.317.0) — kept live: the theme maker announces a save or a delete on
+ * `PALETTES_EVENT`, another window's on `storage`.
+ */
+export function useThemeList(): Mark[] {
+  const [list, setList] = useState<Mark[]>(THEMES);
+  useEffect(() => {
+    const sync = () => setList(allThemes());
+    sync();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === PALETTES_KEY) sync();
+    };
+    window.addEventListener(PALETTES_EVENT, sync);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(PALETTES_EVENT, sync);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+  return list;
+}
 
 /**
  * Arc-reactor theme switcher. Four "Mark" reactors in the top bar re-skin the
@@ -161,6 +189,10 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
 export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" } = {}) {
   const [active, setActive] = useState<string>(DEFAULT);
   const [reveal, setReveal] = useState<Mark | null>(null);
+  // The bar is light when the DOCUMENT is (v1.317.0: a light palette of the
+  // user's own counts), not when the active id is on a list.
+  const [light, setLight] = useState(false);
+  const themes = useThemeList();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The reveal is portalled to <body>; render the portal only after mount so
   // the server render and the first client render agree.
@@ -173,10 +205,13 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
   // pressed; observing the attribute keeps every instance in step.
   useEffect(() => {
     const html = document.documentElement;
-    const sync = () => setActive(html.dataset.theme || DEFAULT);
+    const sync = () => {
+      setActive(html.dataset.theme || DEFAULT);
+      setLight(currentScheme() === "light");
+    };
     sync();
     const mo = new MutationObserver(sync);
-    mo.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
+    mo.observe(html, { attributes: true, attributeFilter: ["data-theme", "data-scheme"] });
     return () => mo.disconnect();
   }, []);
 
@@ -190,6 +225,7 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
   function apply(m: Mark) {
     applyTheme(m.id); // the one setter (lib/theme.ts) — every row follows
     setActive(m.id);
+    setLight(currentScheme() === "light"); // now, not on the observer's tick
     setReveal(m);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setReveal(null), 2100);
@@ -202,19 +238,26 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
     return () => window.removeEventListener("keydown", onKey);
   }, [reveal]);
 
-  const light = LIGHT_MARKS.has(active);
-  const activeMark = THEMES.find((t) => t.id === active);
+  const activeMark = themes.find((t) => t.id === active);
   const drawer = variant === "drawer";
+  // The bar keeps its width: the Marks, a few of the user's own, and the
+  // active one even when it is further down the list.
+  const shown = drawer
+    ? themes
+    : themes.filter((t, i) => {
+        if (!isCustomTheme(t.id) || t.id === active) return true;
+        return i - THEMES.length < BAR_CUSTOM;
+      });
 
   const row = (
     <div
       className={`flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] ${
-        drawer ? "justify-between p-1" : "h-8 px-0.5"
+        drawer ? (shown.length > THEMES.length ? "flex-wrap p-1" : "justify-between p-1") : "h-8 px-0.5"
       }`}
       role="group"
       aria-label="App theme (arc reactor)"
     >
-      {THEMES.map((m) => {
+      {shown.map((m) => {
         const on = active === m.id;
         return (
           <button

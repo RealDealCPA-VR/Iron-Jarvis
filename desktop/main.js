@@ -2348,12 +2348,21 @@ function installSpotlightIpc() {
       const symbolColor = String(opts?.symbolColor ?? "");
       if (!/^#[0-9a-f]{6}$/i.test(color) || !/^#[0-9a-f]{6}$/i.test(symbolColor))
         return false;
+      // v1.317.0: the window that ASKED — a pop-out themes its own buttons
+      // (they stayed dark on a light theme, because only mainWin was set).
+      let target = null;
+      try {
+        target = _e && _e.sender ? BrowserWindow.fromWebContents(_e.sender) : null;
+      } catch {
+        target = null;
+      }
+      if (!target || target.isDestroyed()) target = mainWin;
       if (
-        mainWin &&
-        !mainWin.isDestroyed() &&
-        typeof mainWin.setTitleBarOverlay === "function"
+        target &&
+        !target.isDestroyed() &&
+        typeof target.setTitleBarOverlay === "function"
       ) {
-        mainWin.setTitleBarOverlay({ color, symbolColor, height: 40 });
+        target.setTitleBarOverlay({ color, symbolColor, height: 40 });
         return true;
       }
     } catch {

@@ -39,7 +39,7 @@ import { normalizeIso } from "@/lib/format";
 import { recordOpen } from "@/lib/appTiles";
 import { useDaemon } from "@/lib/daemon";
 import { DocPreview } from "@/components/chat/DocPreview";
-import { THEMES, LIGHT_MARKS, applyTheme } from "@/lib/theme";
+import { allThemes, applyTheme, isLightTheme } from "@/lib/theme";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -284,25 +284,40 @@ const ACTION_ITEMS: PaletteRow[] = [
 // A `run` row, not a link: it applies in place through the one setter, so the
 // bar's dots, the drawer and Settings → Appearance all follow, and the user
 // stays on the page they were on.
-const THEME_ITEMS: PaletteRow[] = THEMES.map((t) => ({
-  id: `theme:${t.id}`,
-  kind: "action" as const,
-  label: `Theme: ${t.name}`,
-  blurb: t.flavor,
-  aliases: [
-    "theme",
-    "appearance",
-    "colors",
-    "colours",
-    "look",
-    LIGHT_MARKS.has(t.id) ? "light mode" : "dark mode",
-    t.mark,
-  ],
-  icon: Palette,
-  run: () => {
-    applyTheme(t.id);
-  },
-}));
+/** One "Theme: <name>" row per theme — the Marks and, since v1.317.0, the
+ *  user's own palettes (read when the palette opens, so a palette saved a
+ *  moment ago is offered) — plus the door to the theme maker. */
+function themeItems(): PaletteRow[] {
+  const rows: PaletteRow[] = allThemes().map((t) => ({
+    id: `theme:${t.id}`,
+    kind: "action" as const,
+    label: `Theme: ${t.name}`,
+    blurb: t.flavor,
+    aliases: [
+      "theme",
+      "appearance",
+      "colors",
+      "colours",
+      "look",
+      isLightTheme(t.id) ? "light mode" : "dark mode",
+      t.mark,
+    ],
+    icon: Palette,
+    run: () => {
+      applyTheme(t.id);
+    },
+  }));
+  rows.push({
+    id: "theme:make-your-own",
+    kind: "page" as const,
+    label: "Make your own theme",
+    blurb: "Pick your colours — you get a dark and a light version.",
+    aliases: ["custom theme", "palette", "colours", "colors", "theme maker", "dark mode", "light mode"],
+    icon: Palette,
+    href: "/settings#appearance",
+  });
+  return rows;
+}
 
 /** GET /skills → `{skills: [...]}`. */
 interface SkillRow {
@@ -942,12 +957,13 @@ export function CommandPalette() {
       ...PAGE_ITEMS,
       ...DEEP_LINK_ITEMS,
       ...ACTION_ITEMS,
-      ...THEME_ITEMS,
+      ...themeItems(),
       ...skillItems,
       ...threadItems,
       ...projectItems,
     ],
-    [skillItems, threadItems, projectItems],
+    // `open`: theme rows are re-read each time the palette opens (v1.317.0).
+    [skillItems, threadItems, projectItems, open],
   );
 
   /** id → row, so the pure scorer can hand back plain items and we can still

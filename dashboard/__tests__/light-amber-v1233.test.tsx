@@ -3,7 +3,9 @@
  * mode the popups and certain boxes / text that appear in yellow are
  * impossible to see". The remap lives in globals.css as one generated block;
  * this test keeps it complete: any amber/orange/yellow TEXT, BORDER or RING
- * utility used anywhere in the dashboard must have a Mark 1 + Mark 8 rule.
+ * utility used anywhere in the dashboard must have a light-theme rule.
+ * v1.317.0: one `:root[data-scheme="light"]` rule now covers Mark 1, Mark 8
+ * AND a light palette of the user's own (lib/theme.ts sets the scheme).
  * (Source is read with line endings normalised — the CI runner checks out
  * with CRLF.)
  */
@@ -47,7 +49,7 @@ describe("amber utilities read on the light Marks", () => {
   it("covers every amber/orange/yellow text, border and ring utility in use", () => {
     const missing = [...used].filter((c) => {
       const esc = "." + c.replace("/", "\\/");
-      return !block.includes(':root[data-theme="mark1"] ' + esc) || !block.includes(':root[data-theme="mark8"] ' + esc);
+      return !block.includes(':root[data-scheme="light"] ' + esc);
     });
     expect(missing, "add these to the light-amber block in globals.css").toEqual([]);
     expect(used.size).toBeGreaterThan(20);
@@ -64,7 +66,7 @@ describe("amber utilities read on the light Marks", () => {
 
   it("leaves the dark Marks alone (no unscoped amber overrides)", () => {
     for (const line of block.split("\n")) {
-      if (line.includes("{")) expect(line.startsWith(':root[data-theme="mark')).toBe(true);
+      if (line.includes("{")) expect(line.startsWith(':root[data-scheme="light"] ')).toBe(true);
     }
   });
 });

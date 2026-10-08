@@ -77,7 +77,9 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
     const mo = new MutationObserver(push);
     mo.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme"],
+      // v1.317.0: a palette of the user's own changes the inline variables
+      // (`style`) and the scheme; re-saving the active one keeps its id.
+      attributeFilter: ["data-theme", "data-scheme", "style"],
     });
     return () => mo.disconnect();
   }, []);

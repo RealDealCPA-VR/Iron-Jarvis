@@ -7,7 +7,7 @@
 // toolbar adds/edits/deletes steps and runs the workflow against the daemon's
 // POST /workflows/run, serializing nodes in topological order.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -68,7 +68,7 @@ import { StepNode } from "./StepNode";
 import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
 import { TriggerInspector } from "./TriggerInspector";
-import { useCanvasColorMode } from "./useCanvasColorMode";
+import { useCanvasColors } from "./useCanvasColorMode";
 import {
   announceWorkflowsChanged,
   WORKFLOWS_LIST_EVENT,
@@ -84,23 +84,21 @@ import {
 /* nodeTypes / edge defaults must be stable references (defined at module scope). */
 const nodeTypes = { trigger: TriggerNode, step: StepNode };
 
-const defaultEdgeOptions: DefaultEdgeOptions = {
-  animated: true,
-  style: { stroke: "#22d3ee", strokeWidth: 2 },
-  markerEnd: { type: MarkerType.ArrowClosed, color: "#22d3ee", width: 18, height: 18 },
-};
-/* v1.313.0: the light Marks draw the wires in a deep cyan (cyan-700, ~5:1 on
-   the light canvas) — #22d3ee is 1.8:1 there and the arrows all but vanished.
-   React Flow merges these options into every edge AT RENDER, so swapping the
-   object re-inks the edges already on the canvas. Literal hex on purpose: the
-   marker's colour becomes part of its SVG id, and a var() would put spaces and
-   parentheses into an id. */
-const LIGHT_EDGE_INK = "#0e7490";
-const lightEdgeOptions: DefaultEdgeOptions = {
-  animated: true,
-  style: { stroke: LIGHT_EDGE_INK, strokeWidth: 2 },
-  markerEnd: { type: MarkerType.ArrowClosed, color: LIGHT_EDGE_INK, width: 18, height: 18 },
-};
+/* The wires take the theme's own main colour (v1.317.0; they were always
+   cyan). v1.313.0 found #22d3ee at 1.8:1 on the light canvas — the light
+   themes' main colour is a deep ink by construction (>= 4.5:1, lib/
+   themePalette.ts and the theme tests), so it reads there too. React Flow
+   merges these options into every edge AT RENDER, so a new object re-inks the
+   edges already on the canvas. Literal hex on purpose: the marker's colour
+   becomes part of its SVG id, and a var() would put spaces and parentheses
+   into an id. */
+function edgeOptionsFor(ink: string): DefaultEdgeOptions {
+  return {
+    animated: true,
+    style: { stroke: ink, strokeWidth: 2 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: ink, width: 18, height: 18 },
+  };
+}
 
 /* ---- Seed: Trigger → Gather → Draft → Review ----------------------------- */
 
@@ -1326,14 +1324,15 @@ function Canvas() {
 
   // Follows the theme LIVE (v1.313.0): a light canvas on Daylight / Liquid
   // Glass instead of a black slab, flipped by the switcher without a reload.
-  const colorMode = useCanvasColorMode();
+  const { mode: colorMode, accent: wireInk } = useCanvasColors();
+  const edgeOptions = useMemo(() => edgeOptionsFor(wireInk), [wireInk]);
 
   const miniColor = useCallback(
     (node: Node) => {
-      if (node.type === "trigger") return colorMode === "light" ? LIGHT_EDGE_INK : "#22d3ee";
+      if (node.type === "trigger") return wireInk;
       return agentMeta(String((node.data as StepNodeData).agent)).hex;
     },
-    [colorMode],
+    [wireInk],
   );
 
   return (
@@ -1545,7 +1544,7 @@ function Canvas() {
           onPaneClick={onPaneClick}
           onNodesDelete={onNodesDelete}
           nodeTypes={nodeTypes}
-          defaultEdgeOptions={colorMode === "light" ? lightEdgeOptions : defaultEdgeOptions}
+          defaultEdgeOptions={edgeOptions}
           colorMode={colorMode}
           fitView
           fitViewOptions={{ padding: 0.25 }}
