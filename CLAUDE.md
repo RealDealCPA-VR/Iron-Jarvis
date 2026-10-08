@@ -2905,6 +2905,22 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Settings in Simple is the everyday three** (v1.319.0). `BASIC_KEYS`
+  (default_provider, default_model, default_persona) are the only FIELDS
+  rendered while `full = advanced || showAll` is false; the section heading
+  reads "Which AI answers", the jump index, LocalCapabilities, ContextWindows
+  and the DaemonToken card wait for `full`; "Show all settings"
+  (`#settings-show-all`) sets showAll. A link INTO the form (`?focus=…` or
+  `#settings-…`) sets showAll on mount — the strict-pin hint and other
+  pages deep-link to settings the short view hides. Save/Reset/dirty are
+  unchanged (one form, one PUT `{values}`). Tests that pin the whole form
+  set Advanced (ux-wave4-home-system, ux-wave2-system-memory,
+  trust-posture). Pins: `dashboard/__tests__/settings-simple-v1319.test.tsx`
+  (4 mutations, all red). Everyday starter wording: FirstRunWizard
+  SUGGESTIONS and components/chat/examples.ts (no "markdown", "chatbot",
+  "IRS" or "client"). The title bar's ThemeSwitcher is wrapped in
+  `components/AdvancedOnly.tsx` (Simple keeps the theme in the drawer,
+  Settings and Ctrl K).
 - **Simple mode is a different SHAPE, not a filtered list** (v1.318.0, the
   calm first experience, part 1). `lib/uiMode.ts` is the ONE Simple/Advanced
   store (`ij_nav_advanced`, "1" = Advanced; Simple is the default) — the

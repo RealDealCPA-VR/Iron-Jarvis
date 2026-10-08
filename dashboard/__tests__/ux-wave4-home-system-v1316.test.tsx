@@ -367,6 +367,9 @@ describe("Settings — the Save row follows the user while there are unsaved cha
 });
 
 describe("Settings — a jump index reaches every section", () => {
+  // v1.319.0: the whole Settings form is the ADVANCED view (or "Show all
+  // settings"); Simple opens on the everyday settings (settings-simple-v1319).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   const IDS = ["models", "local", "automation", "advanced"];
 
   it("links to an anchor for each section, and each anchor exists", async () => {

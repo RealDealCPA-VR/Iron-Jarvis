@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
+import { useAdvancedMode } from "@/lib/uiMode";
 import { useDaemon } from "@/lib/daemon";
 import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -99,6 +100,14 @@ const SECTIONS: SectionDef[] = [
     advanced: true,
   },
 ];
+
+/**
+ * v1.318.0 (the calm first experience): the settings Simple mode shows —
+ * which AI answers, and how. Everything else (local endpoints, routing
+ * policy, automation caps, sandbox, self-development…) is one press away
+ * under "Show all settings", and always shown in Advanced.
+ */
+const BASIC_KEYS = new Set(["default_provider", "default_model", "default_persona"]);
 
 // Mirrors the daemon's whitelist (`_SETTINGS_KEYS`), grouped into friendly
 // sections with plain-language labels + descriptions.
@@ -966,6 +975,21 @@ function LocalCapabilitiesCard() {
 }
 
 export default function SettingsPage() {
+  // v1.318.0: Simple mode opens on the everyday settings; "Show all
+  // settings" (or Advanced) shows the whole form, unchanged.
+  const [advanced] = useAdvancedMode();
+  const [showAll, setShowAll] = useState(false);
+  const full = advanced || showAll;
+  // A link that points INTO the form (?focus=…, #settings-…) is asking for a
+  // setting the short view may not show: open the whole form for it.
+  useEffect(() => {
+    try {
+      const { search, hash } = window.location;
+      if (new URLSearchParams(search).has("focus") || hash.startsWith("#settings-")) setShowAll(true);
+    } catch {
+      /* no location (tests without one) — the short view stays */
+    }
+  }, []);
   const [original, setOriginal] = useState<Record<string, Value> | null>(null);
   const [form, setForm] = useState<Record<string, Value>>({});
   const [loadError, setLoadError] = useState<ApiError | null>(null);
@@ -1203,7 +1227,11 @@ export default function SettingsPage() {
       <Reveal>
         <PageHeader
           title="Settings"
-          subtitle="Tune how Iron Jarvis behaves. Changes are written to config.toml so they survive a restart; a few settings (marked “restart”) only take full effect once the daemon restarts."
+          subtitle={
+            full
+              ? "Tune how Iron Jarvis behaves. Changes are written to config.toml so they survive a restart; a few settings (marked “restart”) only take full effect once the daemon restarts."
+              : "Choose which AI answers and how the app looks. Everything else is under “Show all settings”."
+          }
         />
       </Reveal>
 
@@ -1223,6 +1251,7 @@ export default function SettingsPage() {
               ) : (
                 <form onSubmit={save} className="space-y-8">
                   {/* v1.316.0: jump index — one press to any section. */}
+                  {full && (
                   <nav
                     aria-label="Settings sections"
                     className="-mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
@@ -1239,8 +1268,11 @@ export default function SettingsPage() {
                       </a>
                     ))}
                   </nav>
+                  )}
                   {SECTIONS.map((section) => {
-                    const fields = FIELDS.filter((f) => f.section === section.id);
+                    const fields = FIELDS.filter(
+                      (f) => f.section === section.id && (full || BASIC_KEYS.has(f.key)),
+                    );
                     if (fields.length === 0) return null;
 
                     const rows = (
@@ -1303,16 +1335,37 @@ export default function SettingsPage() {
                       >
                         <div>
                           <h3 className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent-soft/80">
-                            {section.title}
+                            {full ? section.title : "Which AI answers"}
                           </h3>
                           <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
-                            {section.description}
+                            {full
+                              ? section.description
+                              : "The AI that answers when a chat doesn't pick one. Connect accounts and keys on the Connections page."}
                           </p>
                         </div>
                         {rows}
                       </div>
                     );
                   })}
+
+                  {!full && (
+                    <div
+                      data-testid="settings-show-all"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3"
+                    >
+                      <p className="text-[12px] leading-relaxed text-zinc-400">
+                        More settings: local models, automation limits, history and power-user
+                        options.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowAll(true)}
+                        className="rounded-lg border border-white/10 px-3 py-1.5 text-[12px] text-zinc-200 hover:border-white/20"
+                      >
+                        Show all settings
+                      </button>
+                    </div>
+                  )}
 
                   {restartTouched && dirty && (
                     <p className="text-[11px] text-amber-300/80">
@@ -1368,12 +1421,14 @@ export default function SettingsPage() {
               )}
             </Card>
 
-            <LocalCapabilitiesCard />
+            {full && <LocalCapabilitiesCard />}
 
-            <ContextWindowsCard
-              defaultProvider={String(form.default_provider ?? "")}
-              defaultModel={String(form.default_model ?? "")}
-            />
+            {full && (
+              <ContextWindowsCard
+                defaultProvider={String(form.default_provider ?? "")}
+                defaultModel={String(form.default_model ?? "")}
+              />
+            )}
           </div>
 
           {/* Sidebar: appearance + maintenance + access token */}
@@ -1456,7 +1511,7 @@ export default function SettingsPage() {
             {/* Daemon access token (v1.232.0: read-only inside the desktop
                 app, which seeds it; the paste box is for a browser without
                 the bridge). */}
-            <DaemonTokenCard />
+            {full && <DaemonTokenCard />}
           </div>
         </PageGrid>
       </Reveal>

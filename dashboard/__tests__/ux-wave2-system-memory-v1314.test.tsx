@@ -283,6 +283,9 @@ function seedSettings(values: Record<string, unknown>) {
 }
 
 describe("Settings — the provider list speaks in names; the saved value stays the id", () => {
+  // v1.319.0: the whole Settings form is the ADVANCED view (or "Show all
+  // settings"); Simple opens on the everyday settings (settings-simple-v1319).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("Default provider options read 'Claude Code' / 'Demo model (scripted)' with raw values", async () => {
     seedSettings({ default_provider: "mock", default_model: "mock-1" });
     render(<SettingsPage />);
@@ -434,6 +437,9 @@ describe("Settings — Appearance row and the title bar share ONE theme store", 
 });
 
 describe("Settings — /settings?focus=advanced opens the Advanced section", () => {
+  // v1.319.0: the whole Settings form is the ADVANCED view (or "Show all
+  // settings"); Simple opens on the everyday settings (settings-simple-v1319).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("opens the collapsed Advanced <details> when the deep link asks for it", async () => {
     seedSettings({ default_provider: "claude-cli" });
     window.history.replaceState(null, "", "/settings?focus=advanced");

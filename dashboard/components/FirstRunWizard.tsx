@@ -43,8 +43,9 @@ const CHOICE_KEY = "ij_first_run_choice";
 const SUGGESTIONS = [
   "Summarize what you can do for me in 5 bullets",
   "Write a short haiku about an iron AI assistant",
-  "Make a markdown checklist for launching a product",
-  "Explain what makes you different from a plain chatbot",
+  // v1.319.0: everyday tasks, not developer ones ("markdown", "chatbot").
+  "Make a packing checklist for a weekend trip",
+  "Suggest three ways you could save me time this week",
 ];
 
 interface VoiceStatus {

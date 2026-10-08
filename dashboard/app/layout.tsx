@@ -7,6 +7,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { MoodOrb } from "@/components/MoodOrb";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { AdvancedOnly } from "@/components/AdvancedOnly";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
@@ -90,10 +91,14 @@ export default function RootLayout({
             <TitleBar
               right={
                 <>
-                  {/* Arc-reactor theme switcher (the "Marks"). */}
-                  <div className="hidden sm:block">
-                    <ThemeSwitcher />
-                  </div>
+                  {/* Arc-reactor theme switcher (the "Marks"). v1.319.0: on
+                      the bar in Advanced only — Simple keeps it in the menu
+                      drawer, Settings → Appearance and Ctrl K. */}
+                  <AdvancedOnly>
+                    <div className="hidden sm:block">
+                      <ThemeSwitcher />
+                    </div>
+                  </AdvancedOnly>
                   {/* One-click switcher for the active provider/model. */}
                   <ModelSwitcher />
                   {/* Live "mood" orb — reflects idle / thinking / alert. */}

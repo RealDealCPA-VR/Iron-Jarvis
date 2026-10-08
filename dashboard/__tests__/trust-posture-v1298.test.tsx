@@ -10,7 +10,7 @@
  * anti-vacuity half of each test is the one that keeps a "trust" badge
  * from landing on every card.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 
@@ -517,6 +517,9 @@ describe("the bell maps trust.lowered and context.blocked", () => {
 /* ------------------------------------------------- settings: comm_trust */
 
 describe("Settings — runs started from inbound messages (comm_trust)", () => {
+  // v1.319.0: the whole Settings form is the ADVANCED view (or "Show all
+  // settings"); Simple opens on the everyday settings (settings-simple-v1319).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   const LABEL = "Runs started from inbound messages (phone, Slack, email)";
 
   async function renderSettings(comm_trust: string) {

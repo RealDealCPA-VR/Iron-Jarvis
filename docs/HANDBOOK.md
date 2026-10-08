@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.318.0 (2026-10-04).*
+holds itself to. Current as of v1.319.0 (2026-10-04).*
 
 ---
 
@@ -1433,6 +1433,16 @@ nothing was taken away.
   **Settings → Appearance**, from the menu drawer on a phone, or by typing
   "Theme" in the Ctrl+K search — all four change the same setting. The light
   themes now draw status colours and chips in deeper inks you can read.
+- **Settings opens short** (v1.319.0). In Simple mode, **Settings** shows
+  the everyday choices — which AI answers, its model, and the default
+  persona — plus Appearance and Maintenance. **Show all settings** opens the
+  whole form (local models, automation limits, history, power-user options),
+  and a link to a particular setting from elsewhere in the app opens it too.
+  Advanced shows the whole form as before. The examples in Chat and in the
+  setup window's first task are everyday tasks now (a packing list, the
+  weekend's weather, a follow-up email). The title bar's theme dots show
+  in Advanced; in Simple mode the theme is in the menu drawer, Settings →
+  Appearance and Ctrl+K.
 - **A calmer start: Simple mode's home and menu** (v1.318.0). Simple mode
   is the default (the **Advanced** switch at the bottom of the menu turns it
   off, and Advanced looks exactly as before). In Simple mode:

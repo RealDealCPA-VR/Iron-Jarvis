@@ -14,9 +14,8 @@ describe("CHAT_EXAMPLES curation", () => {
 
   it("keeps the differentiator prompts (redaction + web search)", () => {
     expect(CHAT_EXAMPLES).toContain("Redact the personal info in a document");
-    expect(CHAT_EXAMPLES).toContain(
-      "Search the web for today's IRS mileage rate",
-    );
+    // v1.319.0: everyday wording (the web search itself is the point).
+    expect(CHAT_EXAMPLES).toContain("Search the web for this weekend's weather");
   });
 
   it("anchors on the honest first question", () => {

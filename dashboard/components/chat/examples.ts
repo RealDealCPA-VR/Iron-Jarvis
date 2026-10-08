@@ -22,10 +22,10 @@ export const CHAT_EXAMPLES: string[] = [
   "Summarize the files in a folder",
   "Read this PDF and pull out the key numbers",
   "Redact the personal info in a document",
-  "Draft a follow-up email to a client",
-  "Search the web for today's IRS mileage rate",
+  "Draft a follow-up email to someone who hasn't replied",
+  "Search the web for this weekend's weather",
   "Turn my notes into a clean Word document",
-  "Make a markdown checklist for onboarding a new client",
+  "Make a checklist for planning a party",
 ];
 
 /**
