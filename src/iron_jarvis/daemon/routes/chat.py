@@ -57,9 +57,11 @@ from ...core.trust import (
 # The module itself, for the knobs read at CALL time (tests shrink
 # ``_FINAL_ANSWER_TIMEOUT_S``; a copied constant would not follow).
 from .. import chat_turn as _chat_turn
+from ...settings.tools import ALWAYS_CARD_TOOLS
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
+    config_card_from_result,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
@@ -2574,6 +2576,16 @@ async def chat_stream(
                 t for t in select_ask_tools(_last_user_text(body.messages))
                 if t not in armed
             ]
+            # SETTINGS FROM CHAT (redesign S3): the ask-tier change tools,
+            # VISIBLE but never granted — a call renders the ordinary card.
+            # Stream lane only (a card needs someone to answer it).
+            from ...settings.tools import ASK_CONFIG_TOOLS, wants_settings
+
+            if wants_settings(_last_user_text(body.messages)):
+                ask_armed += [
+                    t for t in ASK_CONFIG_TOOLS
+                    if t not in armed and t not in ask_armed and d.platform.registry.get(t)
+                ]
             # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
             # Build pane) is a coding surface — `shell` joins the ask tier
             # so the model can propose a command without the user typing
@@ -2680,6 +2692,8 @@ async def chat_stream(
             # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
             # resolver; "" for the chat page (the ask stays a queue row).
             turn_id=str(getattr(body, "turn_id", "") or ""),
+            # Redesign S3 — lock-step: per-device settings land on this device.
+            device_id=str(getattr(body, "device_id", "") or ""),
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
             # v1.200.0: resolved-project tag for artifact sinks. MIRROR
@@ -2861,6 +2875,7 @@ async def chat_stream(
         _tally = UsageTally()
         tools_used: list[str] = []          # ONLY tools that actually executed
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
+        config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
         denied_tools: list[str] = []        # armed tools refused this turn
         _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
@@ -3123,7 +3138,10 @@ async def chat_stream(
                         return ""
 
                 def _would_card(_c) -> str:
-                    if approval_mode == "yolo" or _c.name not in {*armed, *ask_armed}:
+                    # A PROTECTED setting is carded even in Auto-approve
+                    # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
+                    # per-call branch below repeats this rule.
+                    if (approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS) or _c.name not in {*armed, *ask_armed}:
                         return ""
                     _ct = d.platform.registry.get(_c.name)
                     _cp = _ct.perm_key() if _ct is not None else _c.name
@@ -3238,7 +3256,7 @@ async def chat_stream(
                     # MIRROR NOTE (lock-step): chat_turn.py passes its
                     # armed set the same way — edit both or neither.
                     _unarmed = tc.name not in _turn_tools
-                    if approval_mode == "yolo":
+                    if approval_mode == "yolo" and tc.name not in ALWAYS_CARD_TOOLS:
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
                         _needs_card = False
@@ -3572,6 +3590,11 @@ async def chat_stream(
                             _kept = remembered_from_result(tc.name, result)
                             if _kept:
                                 remembered.append(_kept)
+                            # SETTINGS CARDS (redesign S3/S4). MIRROR NOTE
+                            # (lock-step): chat_turn.py carries the same.
+                            _cfg_card = config_card_from_result(tc.name, result)
+                            if _cfg_card:
+                                config_cards.append(_cfg_card)
                             # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                             # SUCCESSFUL workflow_run's {run_id, workflow}
                             # rides the done frame as `workflow_run` so the
@@ -3904,6 +3927,9 @@ async def chat_stream(
             # REMEMBERED (v1.282.0) — MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "remembered": remembered,
+            # SETTINGS CARDS (redesign S3/S4) — MIRROR NOTE (lock-step):
+            # chat_turn.py's response carries the identical key.
+            "config_cards": config_cards,
             # SUGGESTION (v1.305.0): {id, text, count, quotes, since} or
             # null — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.

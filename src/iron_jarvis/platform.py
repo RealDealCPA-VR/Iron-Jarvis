@@ -620,6 +620,19 @@ async def load_deferred_mcp(platform: "Platform") -> dict[str, Any]:
     return await finish_deferred_mcp(platform, start_deferred_mcp(platform))
 
 
+class _LazyPlatform:
+    """Forwards attribute reads to the platform once it exists (the settings
+    tools are registered before the Platform object is assembled)."""
+
+    def __init__(self, holder: list) -> None:
+        self._holder = holder
+
+    def __getattr__(self, name: str):
+        if not self._holder:
+            raise AttributeError(name)
+        return getattr(self._holder[0], name)
+
+
 def build_platform(
     project_root: str,
     ask_resolver: AskResolver | None = None,
@@ -1351,6 +1364,15 @@ def build_platform(
     # get injected into every future agent prompt (gets better each interaction).
     learning = LearningEngine(engine)
     for tool in learning_tools(learning):
+        registry.register(tool)
+
+    # Calm UI redesign S3/S4: chat's settings tools, generated from the one
+    # settings schema. They reach `platform.config_writer`, which the daemon
+    # attaches (a CLI-built platform has none, and the tools say so).
+    from .settings.tools import config_tools
+
+    _config_tools_platform: list = []
+    for tool in config_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
@@ -2221,4 +2243,5 @@ def build_platform(
         config.home, skills, platform.skill_learning, config=config
     )
 
+    _config_tools_platform.append(platform)  # the settings tools' forwarder (S3)
     return platform

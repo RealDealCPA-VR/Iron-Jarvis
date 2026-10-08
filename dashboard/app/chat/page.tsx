@@ -118,6 +118,16 @@ import {
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
+import { ConfigCards } from "@/components/chat/ConfigCards";
+import { SecretPasteNotice } from "@/components/chat/SecretPasteNotice";
+import {
+  applySettledCards,
+  cardId,
+  decodeConfigCards,
+  looksLikeSecret,
+  type ConfigCard,
+} from "@/lib/configCards";
+import { getDeviceId } from "@/lib/device";
 import {
   applySettled,
   decodeSuggestion,
@@ -371,6 +381,10 @@ interface ChatMessage {
    *  line under the receipt. `state` records the user's answer, so a reload
    *  renders "Remembered: …" (or "won't suggest again"), never the ask. */
   suggestion?: ChatSuggestion;
+  /** Calm UI redesign S3/S4: "Setting changed … [Undo]" and secure credential
+   *  cards from this turn. A card's state (undone, saved) is stored here, so a
+   *  reopened chat shows what happened, never the ask again. */
+  configCards?: ConfigCard[];
   /** v1.298.0: the turn's trust posture ("low" when it ran under low trust),
    *  the daemon's reason and its note — the receipt's quiet line. Absent on
    *  full-trust turns and on messages from before the field existed. */
@@ -484,6 +498,7 @@ interface ChatRequestMessage {
 type ChatRequestBody = {
   messages: ChatRequestMessage[];
   turn_id?: string; // v1.278.0: names the turn so /chat/turns/{id}/steer can reach it
+  device_id?: string; // redesign S3: a per-device setting changed in chat lands on THIS device
   granted_tools?: string[]; // v1.312.0 (W4-2): "Allow for this conversation" grants
   provider?: string;
   model?: string;
@@ -509,6 +524,8 @@ interface ChatResponse {
   /** v1.305.0: null or {id, text, count, quotes, since} — decoded through
    *  decodeSuggestion (the stream lane's whitelist), never trusted raw. */
   suggestion?: unknown;
+  /** Redesign S3/S4: settings cards — decoded through decodeConfigCards. */
+  config_cards?: unknown;
   /** v1.298.0: trust posture of the turn (optional on the wire). */
   trust?: string;
   trust_reason?: string;
@@ -2106,6 +2123,9 @@ export interface RowHandlers {
   /** v1.305.0: the user answered the suggestion under reply `index` — store
    *  the answer on that message and save it. */
   settleSuggestion: (index: number, next: ChatSuggestion) => void;
+  /** Redesign S3/S4: a settings card under reply `index` changed (Undo
+   *  pressed, credential saved) — store it on the message and save. */
+  settleConfigCard: (index: number, cardIndex: number, next: ConfigCard) => void;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
   crystallize: (threadId: string) => void;
@@ -2330,6 +2350,7 @@ const MessageRow = memo(function MessageRow({
       </div>
     );
   const suggestion = decodeSuggestion(m.suggestion);
+  const configCards = decodeConfigCards(m.configCards);
   return (
     <div className="group/msg">
       <Bubble role="assistant">
@@ -2384,6 +2405,10 @@ const MessageRow = memo(function MessageRow({
           />
         </div>
       )}
+      {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
+          Undo, and the secure card a credential is pasted into. Decoded again
+          here because a reopened thread hands back whatever the disk held. */}
+      <ConfigCards cards={configCards} onSettle={(ci, next) => h.settleConfigCard(i, ci, next)} />
       {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
           SERVER-derived from the tools that executed ok (files excluded; the
           ArtifactsRail owns files). Rides the message, so live and persisted
@@ -3247,6 +3272,12 @@ export default function ChatPage() {
   // each save through it, so a turn that began BEFORE the press (its history
   // still holds the open ask) can never put the question back on disk.
   const settledSuggestionsRef = useRef<Map<string, ChatSuggestion>>(new Map());
+  // Redesign S3/S4: settings cards settled in this window (same reason).
+  const settledCardsRef = useRef<Map<string, ConfigCard>>(new Map());
+  // Redesign S4 (AUDIT Q9): a message held because it looks like a key or
+  // token; `secretSendOkRef` lets "Send anyway" through the guard once.
+  const [heldSecret, setHeldSecret] = useState<string | null>(null);
+  const secretSendOkRef = useRef(false);
   // Latest thread-doc list (v1.166.0). A turn's async closure spans awaits, so
   // by completion its captured `threadDocs` is stale — a second merge in the
   // same turn (attachments up front, made-docs at the end) would silently drop
@@ -4171,6 +4202,7 @@ export default function ChatPage() {
   ) {
     if (msgs.length === 0) return;
     msgs = applySettled(msgs, settledSuggestionsRef.current);
+    msgs = applySettledCards(msgs, settledCardsRef.current);
     // MESSAGING threads (owner === "daemon") are the server's to write: the
     // daemon has already persisted every message, and PUT would 409. The next
     // chat.thread_updated refetch reconciles the view instead.
@@ -5748,6 +5780,9 @@ export default function ChatPage() {
     return {
       // Full conversation every turn — the backend is stateless here.
       messages: toRequestMessages(history),
+      // Redesign S3: which device asked, so a per-device setting changed in
+      // chat (the theme) lands here and not on every screen.
+      device_id: getDeviceId(),
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       ...(personaValue ? { persona: personaValue } : {}),
@@ -6191,6 +6226,7 @@ export default function ChatPage() {
           deniedTools,
           remembered,
           suggestion,
+          configCards,
           trust,
           trustReason,
           trustNote,
@@ -6256,6 +6292,8 @@ export default function ChatPage() {
           ...(remembered?.length ? { remembered } : {}),
           // Suggestion (v1.305.0): already whitelisted by the done-frame decode.
           ...(suggestion ? { suggestion } : {}),
+          // Settings cards (redesign S3/S4): whitelisted by the same decode.
+          ...(configCards?.length ? { configCards } : {}),
           // Trust (v1.298.0): only a LOW posture lands on the message — a
           // "full" would be noise on every reply, and absent is today's look.
           ...(trust === "low"
@@ -6404,12 +6442,15 @@ export default function ChatPage() {
       // Suggestion (v1.305.0) — the POST lane's copy of the stream lane's
       // whitelist decode. MIRROR NOTE: keep in step with the stream path.
       const suggestionPost = decodeSuggestion(res.suggestion);
+      // Settings cards (redesign S3/S4) — MIRROR NOTE: keep in step.
+      const configCardsPost = decodeConfigCards(res.config_cards);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.remembered?.length ? { remembered: res.remembered } : {}),
         ...(suggestionPost ? { suggestion: suggestionPost } : {}),
+        ...(configCardsPost.length ? { configCards: configCardsPost } : {}),
         // Trust (v1.298.0) — the POST lane's copy of the stream lane's rule.
         ...(res.trust === "low"
             ? {
@@ -6965,6 +7006,15 @@ export default function ChatPage() {
     // `busy` is React state (lags a frame); `sendingRef` flips synchronously so
     // two Enter keydowns in the same tick can't both start a turn.
     if ((!message && !hasFiles) || busy || sendingRef.current) return;
+    // A KEY PASTED INTO THE BOX IS HELD (redesign S4, AUDIT Q9): sent, it
+    // would sit in the transcript and every later turn's context. The notice
+    // offers the vault instead; "Send anyway" passes this guard once.
+    if (message && looksLikeSecret(message) && !secretSendOkRef.current) {
+      setHeldSecret(message);
+      return;
+    }
+    secretSendOkRef.current = false;
+    setHeldSecret(null);
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
@@ -7530,6 +7580,19 @@ export default function ChatPage() {
       // save now would race that turn's start save for the same thread.
       if (!busy) queueSave(updated);
     },
+    settleConfigCard: (index, cardIndex, next) => {
+      // Like settleSuggestion: remembered for every later save, so a turn
+      // that began before the press cannot write the unsettled card back.
+      settledCardsRef.current.set(cardId(next), next);
+      const cur = messagesRef.current;
+      const target = cur[index];
+      if (!target?.configCards?.[cardIndex]) return;
+      const cards = target.configCards.map((c, k) => (k === cardIndex ? next : c));
+      const updated = cur.map((m, j) => (j === index ? { ...m, configCards: cards } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      if (!busy) queueSave(updated);
+    },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -7547,6 +7610,8 @@ export default function ChatPage() {
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
+      settleConfigCard: (index, cardIndex, next) =>
+        rowImplRef.current.settleConfigCard(index, cardIndex, next),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),
@@ -8866,6 +8931,23 @@ export default function ChatPage() {
               {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
                   conversation stays with builder: plain follow-ups go to the
                   panel, and this strip says so — with the way back. */}
+              {heldSecret !== null && (
+                <SecretPasteNotice
+                  message={heldSecret}
+                  onSaved={(rest) => {
+                    setHeldSecret(null);
+                    composer.setText(rest);
+                    inputRef.current?.focus();
+                  }}
+                  onSendAnyway={() => {
+                    const text = heldSecret;
+                    secretSendOkRef.current = true;
+                    setHeldSecret(null);
+                    send(text);
+                  }}
+                  onCancel={() => setHeldSecret(null)}
+                />
+              )}
               {addressee.length > 0 && !commMeta && (
                 <div
                   data-testid="addressee-strip"

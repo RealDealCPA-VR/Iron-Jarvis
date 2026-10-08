@@ -90,6 +90,9 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
     #     multi-step flow would re-ask, and a user clicking through five
     #     identical cards is a user who has stopped reading them.
     {
+        # Calm UI redesign S3: protected settings (AUDIT §6 ask-floor) —
+        # never raised to allow by an agent definition.
+        "config_change_protected",
         "shell",
         "browser_use",
         "web_action",

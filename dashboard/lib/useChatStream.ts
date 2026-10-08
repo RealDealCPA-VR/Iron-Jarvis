@@ -25,6 +25,7 @@ import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
 import { decodeSuggestion, type ChatSuggestion } from "./preferences";
+import { decodeConfigCards, type ConfigCard } from "./configCards";
 
 // ------------------------------------------------------------------ wire types
 
@@ -104,6 +105,9 @@ export type SSEEvent =
        *  standing preference. The daemon sends the key on every turn (null
        *  when it has nothing to ask); the decode keeps only a valid shape. */
       suggestion?: ChatSuggestion;
+      /** Calm UI redesign S3/S4: "Setting changed" and secure credential
+       *  cards. The daemon sends the key on every turn (possibly []). */
+      config_cards?: ConfigCard[];
       /** v1.298.0: the turn's trust posture ("full" | "low"), the daemon's
        *  reason, and its one-line note ("low trust: 4 tools kept away").
        *  All optional on the wire; absent on older daemons. */
@@ -167,6 +171,8 @@ export interface ChatStreamResult {
   remembered?: string[];
   /** v1.305.0: the one suggestion this turn carries (absent when none). */
   suggestion?: ChatSuggestion;
+  /** Calm UI redesign S3/S4: the turn's settings cards (absent when none). */
+  configCards?: ConfigCard[];
   /** v1.298.0: trust posture of the turn — see the done-frame fields. */
   trust?: string;
   trustReason?: string;
@@ -371,6 +377,12 @@ export function sseEventFrom(
       {
         const sug = decodeSuggestion(data.suggestion);
         if (sug) ev.suggestion = sug;
+      }
+      // Settings cards (redesign S3/S4): whitelisted — a card with no
+      // change_id / request_id dies here, and a secret card never has a value.
+      {
+        const cards = decodeConfigCards(data.config_cards);
+        if (cards.length) ev.config_cards = cards;
       }
       // Trust (v1.298.0): the posture, its reason and its note — strings
       // only, each absent when the daemon sent none (whitelist, like
@@ -1023,6 +1035,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 deniedTools: ev.denied_tools,
                 remembered: ev.remembered,
                 ...(ev.suggestion ? { suggestion: ev.suggestion } : {}),
+                ...(ev.config_cards?.length ? { configCards: ev.config_cards } : {}),
                 trust: ev.trust,
                 trustReason: ev.trust_reason,
                 trustNote: ev.trust_note,

@@ -294,6 +294,17 @@ def register(app: FastAPI, d) -> None:
         # (a config.toml rewrite + an endpoint re-point: off the loop).
         if journal_kind == "setting_restore":
             result_output = await asyncio.to_thread(_restore_settings, desc)
+        elif journal_kind == "secret_restore":
+            # Calm UI redesign S4: a credential set from a chat card — put the
+            # backed-up value back (or remove a new one). Names only, never a
+            # value, in the result.
+            from ...settings.credentials import CredentialStore
+
+            try:
+                _sec = json.loads(desc.get("pre_inline") or "{}")
+            except (TypeError, ValueError):
+                _sec = {}
+            result_output = await asyncio.to_thread(CredentialStore(d).restore, _sec if isinstance(_sec, dict) else {})
         else:
             # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
             tool = platform.registry.get(tool_name)

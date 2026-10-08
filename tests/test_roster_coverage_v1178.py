@@ -182,6 +182,14 @@ _OFF_ROSTER_BY_DESIGN = {
     # 3am has nobody to ask, which is exactly why none of these is on a roster.
     "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
     "browser_click", "browser_type", "browser_press_key", "browser_navigate",
+    # SETTINGS FROM CHAT (calm UI redesign S3/S4) — the same reasoning as the
+    # browser: they change the user's own configuration and ask for their
+    # credentials, so they belong to the surface where the user is present to
+    # see the "Setting changed [Undo]" card and paste into the secure card. A
+    # background agent run must never change settings off its task text.
+    # Chat arms them (settings.tools.wants_settings); pinned by
+    # tests/test_settings_chat_tools_v1321.py.
+    "config_list", "config_set", "config_change", "config_change_protected", "config_secret",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

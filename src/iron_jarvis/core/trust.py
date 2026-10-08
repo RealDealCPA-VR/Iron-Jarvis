@@ -37,6 +37,12 @@ TRUST_LOW = "low"
 #: grant lifts).
 LOW_TRUST_DENY: frozenset[str] = frozenset(
     {
+        # Calm UI redesign S3/S4: a run started by an inbound message never
+        # changes a setting or asks for a credential.
+        "config_set",
+        "config_change",
+        "config_change_protected",
+        "config_secret",
         "create_agent",
         "remember_preference",
         "skill_create",

@@ -229,6 +229,16 @@ def default_permissions() -> dict[str, str]:
         "skill_create": "ask",
         # Self-correcting learning loop.
         "remember_preference": "allow",
+        # Calm UI redesign S3/S4: chat's settings tools. The TIER of a change
+        # is chosen by which tool it must go through (settings.tools): allow
+        # settings apply at once, the other two ask on the ordinary card;
+        # config_secret only shows a credential card (the value never passes
+        # through the model).
+        "config_list": "allow",
+        "config_set": "allow",
+        "config_change": "ask",
+        "config_change_protected": "ask",
+        "config_secret": "allow",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

@@ -430,6 +430,12 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
         "route", "doors", "adapted", "remembered",
         "trust", "trust_reason", "trust_note", "usage", "suggestion",
+        # Calm UI redesign S3/S4: one more — "config_cards" ([{kind:
+        # "change"|"secret", ...}], always present): the settings a turn
+        # changed (with their Undo handle) and the credential cards it asked
+        # for. Same key in the SSE done frame; semantics pinned by
+        # tests/test_settings_chat_tools_v1321.py.
+        "config_cards",
     }
     assert body["remembered"] == []
     assert body["suggestion"] is None

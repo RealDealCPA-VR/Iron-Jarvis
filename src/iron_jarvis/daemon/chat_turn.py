@@ -1559,6 +1559,10 @@ def _can_always(platform: Any, scopes: list[tuple[str, str]], state: dict[str, A
         return False
     if _quarantined(platform, name):
         return False  # a standing grant could not lift it anyway (review fix)
+    from ..settings.tools import ALWAYS_CARD_TOOLS
+
+    if name in ALWAYS_CARD_TOOLS:
+        return False  # a protected setting asks every time (AUDIT §6 ask-floor)
     return True
 
 
@@ -1801,6 +1805,14 @@ def _resolve_armed_tools(
     explicit = [
         t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
     ]
+    # CREDENTIALS NEVER RIDE A TOOL ARGUMENT IN CHAT (calm UI redesign S4).
+    # `secret_set` takes the value as an argument the MODEL writes, so in a
+    # chat turn it is swapped for `config_secret`, which shows the secure card
+    # instead. Agent runs keep `secret_set` (no card surface there).
+    if "secret_set" in explicit:
+        explicit = [t for t in explicit if t != "secret_set"]
+        if "config_secret" not in explicit and d.platform.registry.get("config_secret"):
+            explicit.append("config_secret")
     # The envelope ceiling bounds EVERY auto pass below (skill playbook,
     # sentence, attachment type) — capping only the `select_auto_tools` call
     # would leave two of the three fill paths uncapped. Floored at
@@ -1869,6 +1881,20 @@ def _resolve_armed_tools(
                 )
                 if d.platform.registry.get(t)
             ]
+            # SETTINGS FROM CHAT (calm UI redesign S3): a message about a
+            # setting arms the read + allow-tier tools (and the credential
+            # card). The ask-tier change tools are armed by the stream lane
+            # only, where a card can be answered. Chat-only: agent runs never
+            # arm these off their task text.
+            from ..settings.tools import wants_settings
+
+            if wants_settings(last_user):
+                free = ceiling - len(explicit) - len(auto)
+                auto += [
+                    t
+                    for t in ("config_list", "config_set", "config_secret")
+                    if t not in explicit and t not in auto and d.platform.registry.get(t)
+                ][: max(0, free)]
         _fill_attachment_pass(auto, ceiling)
         _fill_workspace_pass(auto, ceiling)
         return auto
@@ -2740,6 +2766,33 @@ def remembered_from_result(name: str, result: Any) -> str:
         return text[:_REMEMBERED_MAX_CHARS]
     except Exception:  # noqa: BLE001 — a receipt line never breaks a turn
         return ""
+
+
+def config_card_from_result(name: str, result: Any) -> dict[str, Any] | None:
+    """The card a successful settings tool asks the page to show (calm UI
+    redesign S3/S4): ``{"kind": "change", key, label, old, new, restart,
+    change_id}`` for config_set/config_change/config_change_protected, or
+    ``{"kind": "secret", name, label, help, why, request_id}`` for
+    config_secret. ``None`` otherwise; never raises. A secret's VALUE is
+    never in either shape — config_secret never receives one. MIRROR NOTE
+    (lock-step): both lanes append this inside their ``if ran:`` block."""
+    try:
+        if not getattr(result, "ok", False):
+            return None
+        data = getattr(result, "data", None)
+        if not isinstance(data, dict):
+            return None
+        if name in ("config_set", "config_change", "config_change_protected"):
+            c = data.get("config_change")
+            if isinstance(c, dict) and c.get("key"):
+                return {"kind": "change", **{k: c.get(k) for k in ("key", "label", "old", "new", "restart", "change_id")}}
+        if name == "config_secret":
+            r = data.get("secret_request")
+            if isinstance(r, dict) and r.get("name"):
+                return {"kind": "secret", **{k: r.get(k) for k in ("name", "label", "help", "why", "request_id")}}
+    except Exception:  # noqa: BLE001 — a card never breaks a turn
+        return None
+    return None
 
 
 def preference_block(armed_names) -> str:
@@ -4400,6 +4453,7 @@ async def run_chat_turn(
         ]
     tools_used: list[str] = []          # ONLY tools that actually executed
     remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
+    config_cards: list[dict[str, Any]] = []  # redesign S3/S4: settings changed / credentials asked
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
     denied_tools: list[str] = []
     _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn        # armed tools the engine refused this turn
@@ -4446,6 +4500,8 @@ async def run_chat_turn(
             # v1.276.0 — lock-step: the sidebar's turn id, for the risk door's
             # resolver; "" for the chat page (the ask stays a queue row).
             turn_id=str(getattr(body, "turn_id", "") or ""),
+            # Redesign S3 — lock-step: per-device settings land on this device.
+            device_id=str(getattr(body, "device_id", "") or ""),
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
             # v1.200.0: only a RESOLVED project tags artifacts — a bogus id in
@@ -4829,6 +4885,11 @@ async def run_chat_turn(
                         _kept = remembered_from_result(tc.name, result)
                         if _kept:
                             remembered.append(_kept)
+                        # SETTINGS CARDS (redesign S3/S4) — same gate. MIRROR
+                        # NOTE (lock-step): routes/chat.py carries the same.
+                        _cfg_card = config_card_from_result(tc.name, result)
+                        if _cfg_card:
+                            config_cards.append(_cfg_card)
                         # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                         # SUCCESSFUL workflow_run's {run_id, workflow} rides
                         # the response as `workflow_run` so the client can
@@ -5052,6 +5113,10 @@ async def run_chat_turn(
         # on absence. MIRROR NOTE (lock-step): the stream done-frame carries
         # the identical key — edit both or neither.
         "remembered": remembered,
+        # SETTINGS CARDS (redesign S3/S4): [{kind: "change"|"secret", ...}] —
+        # ALWAYS present. MIRROR NOTE (lock-step): the stream done-frame
+        # carries the identical key — edit both or neither.
+        "config_cards": config_cards,
         # SUGGESTION (v1.305.0): {id, text, count, quotes, since} or null —
         # ALWAYS present, like `remembered`. MIRROR NOTE (lock-step): the
         # stream done-frame carries the identical key — edit both or neither.

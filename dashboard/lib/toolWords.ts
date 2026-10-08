@@ -30,6 +30,11 @@ const WORDS: Record<string, string> = {
   // nothing opens on the user's screen, so "read", not "open".
   web_fetch: "read a web page",
   web_search: "search the web",
+  // Calm UI redesign S3: the chat's settings tools (settings/tools.py). Only
+  // the two ask-tier ones ever reach a card; both change one setting, and
+  // the card's own arguments name which one.
+  config_change: "change a setting",
+  config_change_protected: "change a protected setting",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

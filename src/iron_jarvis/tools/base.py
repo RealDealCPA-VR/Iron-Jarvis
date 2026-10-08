@@ -38,6 +38,10 @@ class ToolContext:
     #: to the approval resolver, which answers only for ITS OWN turn: a card
     #: for a chat-page click must never land in the sidebar.
     turn_id: str = ""
+    #: The device the chat turn came from (calm UI redesign S3): per-device
+    #: settings (theme, approval default…) changed from chat land on THIS
+    #: device. "" when the caller sent none (headless, an older client).
+    device_id: str = ""
 
 
 @dataclass

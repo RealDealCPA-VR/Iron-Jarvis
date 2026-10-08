@@ -287,6 +287,10 @@ class ChatBody(BaseModel):
     #: the ordinary install bearer like every other ``/chat/*`` route, and an
     #: unknown or finished id is a 404, never a silent success.
     turn_id: str | None = None
+    # Calm UI redesign S3: the dashboard's device id (localStorage
+    # ``ij_device_id``) so a per-device setting changed from chat lands on
+    # the device that asked.
+    device_id: str | None = None
     #: v1.263.0: the reasoning level the user picked for this turn — "low" /
     #: "medium" / "high", or "" for the model's own default. Applied only when
     #: the serving model offers one (``providers.reasoning``); the route

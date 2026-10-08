@@ -6,9 +6,11 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
+
 import threading
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Any
@@ -145,6 +147,86 @@ def config_writer(d):
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+    @app.post("/config/secret")
+    async def config_secret(request: Request) -> dict[str, Any]:
+        """The secure credential card posts here (calm UI redesign S4).
+
+        The value goes straight into the encrypted vault through the same
+        paths the Connections / Secrets / Notifications pages use; the reply,
+        the ledger and every log say only ``stored`` / ``replaced``. The body
+        is read raw on purpose: a FastAPI validation error echoes the input,
+        and this input is a secret."""
+        from ...settings.credentials import CredentialError, CredentialStore
+
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="send {name, value}")
+        if not isinstance(body, dict) or not isinstance(body.get("name"), str) or not isinstance(body.get("value"), str):
+            raise HTTPException(status_code=400, detail="send {name, value}")
+        try:
+            return await asyncio.to_thread(CredentialStore(d).store, body["name"], body["value"])
+        except CredentialError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/config/changes/{change_id}")
+    def config_change_lookup(change_id: str) -> dict[str, Any]:
+        """Which ledger action a chat card's change is, so its Undo can call
+        ``POST /undo/{action_id}`` (the id is minted at capture time, before
+        the registry writes the row)."""
+        import re as _re
+
+        from sqlmodel import select as _select
+
+        from ...core.db import session_scope
+        from ...core.models import ToolInvocation, UndoJournal
+
+        if not _re.match(r"^[A-Za-z0-9_]{4,64}$", change_id):
+            raise HTTPException(status_code=404, detail="no such change")
+        with session_scope(d.platform.engine) as db:
+            row = db.exec(
+                _select(UndoJournal).where(
+                    UndoJournal.kind.in_(("setting_restore", "secret_restore")),  # type: ignore[attr-defined]
+                    UndoJournal.pre_inline.contains(f'"change_id": "{change_id}"'),  # type: ignore[union-attr]
+                )
+            ).first()
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such change")
+            inv = db.get(ToolInvocation, row.action_id)
+            undone = bool(getattr(inv, "undone_at", None)) if inv is not None else False
+            return {"action_id": row.action_id, "undone": undone}
+
+    @app.get("/settings/device")
+    def get_device_settings(device_id: str = "") -> dict[str, Any]:
+        """This device's preferences (theme, approvals, persona…), kept by the
+        daemon so chat can set them too (AUDIT Q6)."""
+        from ...settings import schema as _schema
+
+        w = config_writer(d)
+        keys = [s.key for s in _schema.SETTINGS if s.store == "device"]
+        return {"device_id": device_id, "values": {k: w.current(k, device_id=device_id) for k in keys}}
+
+    @app.put("/settings/device")
+    def put_device_settings(body: dict[str, Any]) -> dict[str, Any]:
+        from ...settings import schema as _schema
+        from ...settings.writer import SettingError
+
+        device_id = str(body.get("device_id") or "")
+        values = body.get("values") if isinstance(body.get("values"), dict) else {}
+        values = {k: v for k, v in values.items() if k.startswith("device.")}
+        try:
+            change = config_writer(d).apply(values, actor="settings_page", device_id=device_id)
+        except (SettingError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        keys = [s.key for s in _schema.SETTINGS if s.store == "device"]
+        w = config_writer(d)
+        return {
+            "device_id": device_id,
+            "values": {k: w.current(k, device_id=device_id) for k in keys},
+            "changed": change.changed,
+            "action_id": change.action_id,
+        }
+
     @app.get("/settings/schema")
     def get_settings_schema() -> dict[str, Any]:
         """The ONE settings schema (calm UI redesign S1): groups, every setting
