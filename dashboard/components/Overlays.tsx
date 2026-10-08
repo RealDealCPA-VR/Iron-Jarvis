@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 
 /**
- * The three app-wide overlays, loaded on demand (v1.250.0, S-08).
+ * The app-wide overlays, loaded on demand (v1.250.0, S-08) — the drawer and
+ * the palette (the first-run wizard is no longer mounted: redesign S9).
  *
  * The drawer, the command palette and the first-run wizard are all mounted by
  * the root layout and all render nothing until something opens them — yet their
@@ -34,19 +35,11 @@ const CommandPalette = dynamic(
     })),
   { ssr: false },
 );
-const FirstRunWizard = dynamic(
-  () =>
-    import("@/components/FirstRunWizard").then((m) => ({
-      default: m.FirstRunWizard,
-    })),
-  { ssr: false },
-);
 
 /** Pull the overlay chunks in while the page is idle. */
 function prefetchOverlays(): void {
   void import("@/components/Sidebar");
   void import("@/components/CommandPalette");
-  void import("@/components/FirstRunWizard");
 }
 
 export function Overlays() {
@@ -73,7 +66,10 @@ export function Overlays() {
     <>
       <NavDrawer />
       <CommandPalette />
-      <FirstRunWizard />
+      {/* Calm UI redesign S9 (AUDIT Q7): no blocking first-run screen. The
+          wizard is no longer mounted; a detected model is offered in the
+          composer with one tap, and the setup checklist lives in
+          Everything › Status. */}
     </>
   );
 }

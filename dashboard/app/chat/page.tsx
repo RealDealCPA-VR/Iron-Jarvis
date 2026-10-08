@@ -145,6 +145,7 @@ import {
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { HomeLine } from "@/components/chat/HomeLine";
+import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
 import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
@@ -2637,6 +2638,8 @@ export default function ChatPage() {
   // model answers (or the default is still the offline demo) — read off the
   // same /health, never a second poll.
   const showConnectDoors = needsConnect(useDaemon().health);
+  // Redesign S9: "Make this my default" re-reads /health so every reader follows.
+  const daemonRefresh = useDaemon().refresh;
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
   const [persona, setPersona] = useState("assistant");
   // PERSONA EDITOR: a collapsible panel that edits the SELECTED persona (or a
@@ -3149,8 +3152,38 @@ export default function ChatPage() {
     () => matchModels(models, modelFilter, MODEL_FILTER_MAX),
     [models, modelFilter],
   );
+  // Calm UI redesign S9 (AUDIT Q3): the composer's menu IS the model
+  // selector — the title-bar chip is retired, so the app-wide door
+  // ("Switch model" in Ctrl K, "Choose a model" on the demo strip) opens it.
+  useEffect(() => {
+    const onOpen = () => {
+      setModelMenuOpen(true);
+      setModelSub(null);
+    };
+    window.addEventListener("ij:open-switcher", onOpen);
+    return () => window.removeEventListener("ij:open-switcher", onOpen);
+  }, []);
+  // "Make this my default": the conversation's pick becomes the saved default
+  // through the one settings writer (ledger + Undo, like any setting).
+  const [defaultNote, setDefaultNote] = useState("");
+  async function makeDefault() {
+    const { provider, model } = splitChoice(choice);
+    if (!provider) return;
+    try {
+      await put("/settings", { values: { default_provider: provider, default_model: model || "" } });
+      setDefaultNote("Saved as your default.");
+      try {
+        daemonRefresh();
+      } catch {
+        /* the next poll catches up */
+      }
+    } catch (err) {
+      setDefaultNote((err as { message?: string })?.message || "Couldn't save the default.");
+    }
+  }
   /** The ONE way a menu row picks: the choice, the thread setup, the menu, the memory. */
   function pickModel(v: string) {
+    setDefaultNote("");
     setChoice(v);
     markSetupChanged();
     setModelMenuOpen(false);
@@ -3558,6 +3591,9 @@ export default function ChatPage() {
       // Redesign S7: the sidebar's "New chat" from another page lands here —
       // a fresh conversation, so the last one is not reopened.
       const fresh = params.get("new") === "1";
+      // Redesign S9: "Switch model" from another page lands here, menu open.
+      const openModels = params.get("model") === "1";
+      if (openModels) setModelMenuOpen(true);
       if (wantPersona) selectPersonaLocal(wantPersona);
       if (ask) {
         composer.setText(ask);
@@ -3580,7 +3616,7 @@ export default function ChatPage() {
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona || fresh) {
+      if (ask || skill || thread || wantPersona || fresh || openModels) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -3589,6 +3625,7 @@ export default function ChatPage() {
         url.searchParams.delete("thread");
         url.searchParams.delete("persona");
         url.searchParams.delete("new");
+        url.searchParams.delete("model");
         window.history.replaceState(null, "", url.toString());
       }
     } catch {
@@ -9731,6 +9768,18 @@ export default function ChatPage() {
                     a permanent meter is the kind of chrome that gets ignored
                     exactly when it starts mattering. */}
                 <ContextMeter usage={contextUsage} />
+                {/* Redesign S9 (Q7): a detected model, one tap — never picked
+                    silently. Silent once a real model answers, and absent
+                    while the empty state's connect doors make the same offer
+                    (one offer on screen at a time). */}
+                {messages.length > 0 && (
+                  <ModelSuggestChip
+                    onOther={() => {
+                      setModelMenuOpen(true);
+                      setModelSub(null);
+                    }}
+                  />
+                )}
                 {/* v1.263.0: the reasoning level, ONLY for a model that offers
                     one (the daemon's catalog says which). A control that does
                     nothing for the picked model is not drawn at all. */}
@@ -9950,6 +9999,23 @@ export default function ChatPage() {
                         </div>
                       ))}
                         </>
+                      )}
+                      {splitChoice(choice).provider && (
+                        <div className="mt-1 border-t border-white/[0.06] pt-1">
+                          <button
+                            type="button"
+                            data-testid="model-make-default"
+                            onClick={() => void makeDefault()}
+                            className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+                          >
+                            Make this my default
+                          </button>
+                          {defaultNote && (
+                            <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
+                              {defaultNote}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

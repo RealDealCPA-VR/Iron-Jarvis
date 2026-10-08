@@ -6,7 +6,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { NotificationBell } from "@/components/NotificationBell";
-import { ModelSwitcher } from "@/components/ModelSwitcher";
+import { ModelMenuBridge } from "@/components/ModelMenuBridge";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MainContent } from "@/components/MainContent";
@@ -94,8 +94,9 @@ export default function RootLayout({
                   {/* Calm UI redesign S7: the theme lives in Settings ›
                       Appearance, the palette and the phone drawer; the mood
                       orb sits in the sidebar's footer by the status dot. */}
-                  {/* One-click switcher for the active provider/model. */}
-                  <ModelSwitcher />
+                  {/* Redesign S9 (Q3): the model is chosen in the composer;
+                      the title-bar chip is retired (ModelMenuBridge sends
+                      "Switch model" from any page to that menu). */}
                   <NotificationBell />
                 </>
               }
@@ -132,6 +133,7 @@ export default function RootLayout({
           <DesktopNotifyBridge />
           {/* Redesign S0: one POST /ui/visit per page change (usage counts). */}
           <RouteVisitBeacon />
+          <ModelMenuBridge />
           </MotionProvider>
           </FaceStylesProvider>
           </EventsProvider>
