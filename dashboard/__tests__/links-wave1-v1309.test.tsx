@@ -562,6 +562,9 @@ function hrefsFor(text: string): string[] {
 }
 
 describe("Overview opens a mission on its mission screen", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("Recent sessions: a mission row -> /agents?mission=m1&project=p1; a plain row -> /sessions/<id>", async () => {
     W1.responses = {
       "/sessions?limit=50": { sessions: [MISSION_ROW, PLAIN_ROW] },

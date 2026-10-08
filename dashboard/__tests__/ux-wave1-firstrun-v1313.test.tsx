@@ -493,6 +493,9 @@ describe("phone: a checklist row's action drops under its text below sm", () => 
 // ======================================= 4. the Overview hero tells the truth
 
 describe("Overview hero: never 'nominal' while the demo answers", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("demo default, nothing ranked ahead -> a status line that says to choose a model; never 'nominal'", async () => {
     overviewResponses({ ...onePress(), next_step: null });
     renderOverview();

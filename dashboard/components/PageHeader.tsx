@@ -46,6 +46,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { m } from "framer-motion"; // v1.250.0 (S-08)
 import { Info } from "lucide-react";
+import { HubTabs } from "./HubTabs";
 
 export function ModuleTitle({
   title,
@@ -169,14 +170,19 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <m.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-      className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
-    >
-      <ModuleTitle title={title} hint={subtitle} />
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
-    </m.div>
+    <>
+      {/* v1.318.0: in Simple mode, the other pages of this page's place
+          ("Automations: Workflows · Schedules"); nothing in Advanced. */}
+      <HubTabs />
+      <m.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+        className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
+      >
+        <ModuleTitle title={title} hint={subtitle} />
+        {actions && <div className="flex items-center gap-2">{actions}</div>}
+      </m.div>
+    </>
   );
 }

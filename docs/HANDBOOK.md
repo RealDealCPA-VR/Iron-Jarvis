@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.317.0 (2026-10-04).*
+holds itself to. Current as of v1.318.0 (2026-10-04).*
 
 ---
 
@@ -1433,6 +1433,28 @@ nothing was taken away.
   **Settings → Appearance**, from the menu drawer on a phone, or by typing
   "Theme" in the Ctrl+K search — all four change the same setting. The light
   themes now draw status colours and chips in deeper inks you can read.
+- **A calmer start: Simple mode's home and menu** (v1.318.0). Simple mode
+  is the default (the **Advanced** switch at the bottom of the menu turns it
+  off, and Advanced looks exactly as before). In Simple mode:
+  - The menu lists seven places by what you came to do: **Home**, **Work**
+    (Chat, Projects, Agents, Creative, Build), **Files** (Documents, File
+    Search), **Automations** (Workflows, Schedules), **About me** (You,
+    Train Jarvis on me, Memory), **Apps & settings** (Connections, Directory,
+    Notifications, Settings, Updates) and **Help**. The place you are in
+    opens to show its pages.
+  - Pages show their place's other pages as tabs above the title
+    ("Automations: Workflows · Schedules"), so the next page is one press
+    away without opening the menu.
+  - **Home** (the first page) leads with one "Ask Jarvis anything" box and a
+    few everyday starters, then **Pick up where you left off** (your last
+    three chats) and **Where to go** (the places above, each with one line
+    about what it is for). **All modules** shows every module; Ctrl+K finds
+    any page by name. Status figures, the module grid, the run-quality card
+    and "Systems & admin" are on the Advanced Overview.
+  - Where did a page go? Nowhere — every page keeps its address and is in
+    Ctrl+K. Pages for power users (Reflexes, Sentinels, Webhooks, Secrets,
+    Tools, Sessions, Activity, Usage, Local fleet, Self-development) appear
+    in the menu with **Advanced** on, and as a tab while you are on them.
 - **Make your own theme** (v1.317.0). In **Settings → Appearance**, press
   **Make your own**: pick a main colour (or start from one of the built-in
   themes), optionally a second colour for the background glows, how the

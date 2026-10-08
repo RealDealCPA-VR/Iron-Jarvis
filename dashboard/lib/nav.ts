@@ -79,11 +79,10 @@ export const NAV: NavSectionDef[] = [
         label: "Overview",
         icon: LayoutDashboard,
         aliases: ["home", "dashboard", "status", "health", "start", "main page"],
-        blurb: "Health, metrics, and live activity for the Iron Jarvis daemon.",
+        blurb: "Start here: ask for something, pick up where you left off, see what is running.",
       },
-      // Projects is NOT a nav destination anymore: the module lives inside
-      // Chat (composer toggle + right-rail workspace); the wide surfaces
-      // (board/media/tasks) open from there. The routes stay alive.
+      // Projects has its own row (below, since v1.151.1) AND lives inside
+      // Chat (composer toggle + right-rail workspace).
       {
         href: "/chat",
         label: "Chat",
@@ -99,7 +98,7 @@ export const NAV: NavSectionDef[] = [
         icon: SquareTerminal,
         // Nobody types "Build" when they want a shell — they type "terminal".
         aliases: ["terminal", "shell", "command line", "console", "code", "cli"],
-        blurb: "Live terminals on a free-form canvas, opened in any project folder.",
+        blurb: "Command-line windows for coding tools like Claude Code, opened in any project folder.",
       },
       {
         // v1.151.1: Projects was MISSING from this catalogue entirely — no rail
@@ -124,7 +123,7 @@ export const NAV: NavSectionDef[] = [
           "kanban",
         ],
         blurb:
-          "The context spine: a brief, instructions, a real folder and knowledge that every chat, task and run inside it inherits.",
+          "Keep each piece of work together — a brief, its folder and files — so every chat and task about it knows the background.",
       },
       {
         href: "/sessions",

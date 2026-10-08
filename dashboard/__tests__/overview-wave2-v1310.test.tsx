@@ -260,6 +260,9 @@ afterEach(() => cleanup());
 // ============================================== 1. the first-run strip
 
 describe("Overview: a first-run strip leads while setup is unfinished", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("sits under the header, ABOVE the reactor hero and the module grid, holding the welcome card", async () => {
     overviewResponses(onboarding());
     render(<OverviewPage />);
@@ -411,6 +414,9 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
 // ============================================== 2. plain words in the subtitle
 
 describe("Overview subtitle speaks plainly", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("the header description no longer says 'daemon'", async () => {
     overviewResponses(onboarding({ next_step: null }));
     render(<OverviewPage />);
@@ -742,6 +748,9 @@ describe("OnboardingWelcome: the developer toolchain never reaches this card", (
 });
 
 describe("Overview hero: the offline demo is not named as a model", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("default_provider 'mock' -> 'No model chosen yet', never 'mock/<model>'", async () => {
     overviewResponses(onboarding({ next_step: null }), {
       "/health": { status: "ok", version: "1.310.0", providers: [], default_provider: "mock", default_model: "claude-opus-4-8" },

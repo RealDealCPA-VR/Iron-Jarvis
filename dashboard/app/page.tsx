@@ -69,6 +69,8 @@ import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
 import { AppGrid } from "@/components/overview/AppGrid";
 import { HealthCard } from "@/components/overview/HealthCard";
+import { HomeStart } from "@/components/overview/HomeStart";
+import { useAdvancedMode } from "@/lib/uiMode";
 import { pct, num, timeAgo, clockTime, shortId } from "@/lib/format";
 
 type Diagnostics = {
@@ -547,16 +549,12 @@ export default function OverviewPage() {
   // whole Overview for nothing.
   const { events, connected } = useEvents(40, { types: OVERVIEW_EVENT_TYPES });
 
-  // Respect the Sidebar's Simple/Advanced mode (seeded Simple for stable SSR,
-  // hydrated from localStorage). Advanced reveals the deeper telemetry sections.
-  const [advanced, setAdvanced] = useState(false);
-  useEffect(() => {
-    try {
-      setAdvanced(localStorage.getItem("ij_nav_advanced") === "1");
-    } catch {
-      /* localStorage unavailable — stay in Simple mode. */
-    }
-  }, []);
+  // The Simple/Advanced switch (lib/uiMode.ts — live: a flip in the menu
+  // re-renders this page at once). Simple (the default) is the calm home,
+  // v1.318.0; Advanced is the full Overview, unchanged.
+  const [advanced] = useAdvancedMode();
+  // Simple mode: the full module grid waits behind "Show all modules".
+  const [allModules, setAllModules] = useState(false);
 
   const offline = !daemon.checking && !daemon.online;
   const m = metrics.data;
@@ -738,8 +736,12 @@ export default function OverviewPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Overview"
-          subtitle="Your starting point: what Iron Jarvis is doing right now, how it is running, and where to go next."
+          title={advanced ? "Overview" : "Home"}
+          subtitle={
+            advanced
+              ? "Your starting point: what Iron Jarvis is doing right now, how it is running, and where to go next."
+              : "Ask for something, pick up where you left off, or choose where to go."
+          }
           actions={
             health.data ? (
               <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
@@ -773,7 +775,24 @@ export default function OverviewPage() {
         </Reveal>
       )}
 
+      {/* v1.318.0 — SIMPLE MODE: the calm home (components/overview/
+          HomeStart.tsx) in place of the hero, the grid, the run-quality and
+          shortcuts cards and "Systems & admin". Every notice above and below
+          (offline, downgrade, interrupted work, failing loops and packs, the
+          setup nudge, live goals) shows in BOTH modes. */}
+      {!advanced && (
+        <Reveal>
+          <HomeStart
+            statusLine={statusLine}
+            healthy={!offline && failingLoops.length === 0}
+            showAsk={!showFirstRun}
+            onShowAll={() => setAllModules(true)}
+          />
+        </Reveal>
+      )}
+
       {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
+      {advanced && (
       <Reveal>
         <ReactorHero
           statusLine={statusLine}
@@ -798,6 +817,7 @@ export default function OverviewPage() {
           diskLoading={reliability.loading}
         />
       </Reveal>
+      )}
 
       {/* v1.249.0 (R-02): work a restart cut off, on the page the user lands
           on afterwards — with the Continue that used to exist only on the
@@ -850,16 +870,20 @@ export default function OverviewPage() {
           is asked, and it used to be answered only by the collapsed rail.
           Since v1.294.0 it is three doors — Office, Operations, System —
           each opening in place onto its ten modules; see lib/appTiles.ts. */}
-      <Reveal>
-        <AppGrid />
-      </Reveal>
+      {(advanced || allModules) && (
+        <Reveal>
+          <AppGrid />
+        </Reveal>
+      )}
 
       {/* One card, four numbers (v1.151.0) — was four separate Stat tiles,
           which gave "avg latency" the same visual weight as a whole module.
           Shown in both modes now: run quality is not an advanced concern. */}
-      <Reveal>
-        <HealthCard metrics={m ?? null} loading={metrics.loading} />
-      </Reveal>
+      {advanced && (
+        <Reveal>
+          <HealthCard metrics={m ?? null} loading={metrics.loading} />
+        </Reveal>
+      )}
 
       {/* First-run welcome + getting-started checklist — here only while the
           strip is NOT up (the strip carries it at the top; one card, never
@@ -873,9 +897,11 @@ export default function OverviewPage() {
       {/* Power tips (v1.198.0): the shortcuts the README teaches, surfaced
           in-app for packaged users who never see GitHub. One-shot dismiss —
           Help carries the same info permanently. */}
-      <Reveal>
-        <PowerTips />
-      </Reveal>
+      {advanced && (
+        <Reveal>
+          <PowerTips />
+        </Reveal>
+      )}
 
       {/* Goals strip (v1.208.0): the forgotten-goal killer — every live goal
           visible from the page the user lands on, linking to /autonomy.
@@ -892,6 +918,7 @@ export default function OverviewPage() {
           they were; the rest now rests behind a single title that behaves like
           the cards it replaced. Collapsed by default: this is the part of the
           page you go looking for, not the part you land on. */}
+      {advanced && (
       <Reveal>
         <CollapsibleCard
           title="Systems & admin"
@@ -1381,6 +1408,7 @@ export default function OverviewPage() {
           </div>
         </CollapsibleCard>
       </Reveal>
+      )}
 
       {advanced && (
         <Reveal>

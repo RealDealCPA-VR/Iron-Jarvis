@@ -17,6 +17,8 @@ import { recordOpen } from "@/lib/appTiles";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { useDaemon } from "@/lib/daemon";
 import { NAV, type NavEntry as NavItem, type NavSectionDef as NavSection } from "@/lib/nav";
+import { HUBS, hubFor, tabLabel, visibleTabs } from "@/lib/hubs";
+import { useAdvancedMode } from "@/lib/uiMode";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 
 // NAV lives in lib/nav.ts now (v1.111.0). The global search needs the same
@@ -30,59 +32,19 @@ import { ThemeSwitcher } from "@/components/ThemeSwitcher";
  * else in NAV is revealed only when the "Advanced" toggle is on. Keyed by href
  * so labels can be de-jargoned freely without breaking the filter.
  */
-const ESSENTIAL_HREFS = new Set<string>([
-  "/", // Overview
-  "/chat", // Chat (hero — carries the whole Projects module)
-  "/terminals", // Build (hero)
-  "/projects", // Projects (hero — the context spine; Advanced-only would hide it)
-  "/agents", // Agents — since v1.307.0 the mission screen: ONE objective, the
-  //           whole team works it. The front door for team work can't be
-  //           Advanced-only (it used to be reachable only by ⌘K in Simple).
-  // Sessions + Activity are Advanced-only: Overview's "Recent sessions" /
-  // "While you were away" cards cover the everyday need and deep-link into
-  // session detail (which carries session-scoped time-travel + undo). The
-  // global Activity surface stays reachable via ⌘K.
-  "/creative", // Creative — see what Iron Jarvis makes
-  "/workflows", // Workflows — hidden-by-default made the whole module invisible
-  //               to Simple-mode (the default) users; a module nobody can find
-  //               might as well not exist (v1.170.0).
-  "/you", // You — the profile every prompt carries (never Advanced-only)
-  "/train", // Train Jarvis on me — the on-ramp for everything above; useless if hidden
-  "/memory", // Memory (the one unified surface)
-  "/connections", // Connections
-  "/settings", // Settings
-  "/help", // Help
-]);
+// v1.318.0: Simple mode lists the seven places in lib/hubs.ts (Home, Work,
+// Files, Automations, About me, Apps & settings, Help) instead of a filtered
+// copy of this menu; the old essentials list is gone with it. Advanced still
+// renders NAV in full.
 
 /**
- * Persisted Simple/Advanced nav mode. Seeded to Simple (false) for a stable SSR
- * render, then hydrated from localStorage in an effect to avoid a mismatch.
- * Persists on change. Each rail (desktop / mobile) owns its own copy; only one
- * is ever visible at a given breakpoint, so they don't need live cross-sync.
+ * The Simple/Advanced switch, through the ONE store every reader shares
+ * (lib/uiMode.ts, v1.318.0) — the Overview and the page headers follow a
+ * flip here at once instead of on the next reload.
  */
 function useNavMode(): [boolean, () => void] {
-  const [advanced, setAdvanced] = useState(false);
-
-  useEffect(() => {
-    try {
-      setAdvanced(localStorage.getItem("ij_nav_advanced") === "1");
-    } catch {
-      /* localStorage unavailable — stay in Simple mode. */
-    }
-  }, []);
-
-  const toggle = () =>
-    setAdvanced((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("ij_nav_advanced", next ? "1" : "0");
-      } catch {
-        /* ignore persistence failures */
-      }
-      return next;
-    });
-
-  return [advanced, toggle];
+  const [advanced, setAdvanced] = useAdvancedMode();
+  return [advanced, () => setAdvanced(!advanced)];
 }
 
 /** The arc-reactor brand mark. `big` = the dominant collapsed-rail reactor. */
@@ -166,12 +128,15 @@ function NavLinks({
     const b = popoutBridge();
     setPopout(b && !b.isPopout ? b : null);
   }, []);
+  if (!advanced) {
+    return (
+      <SimpleNavLinks layoutId={layoutId} collapsed={collapsed} onNavigate={onNavigate} popout={popout} />
+    );
+  }
   return (
     <>
       {NAV.map((section) => {
-        const items = advanced
-          ? section.items
-          : section.items.filter((item) => ESSENTIAL_HREFS.has(item.href));
+        const items = section.items;
         if (items.length === 0) return null;
         return (
         <div key={section.label} className="space-y-1 pb-2">
@@ -250,6 +215,116 @@ function NavLinks({
 }
 
 /**
+ * Simple mode's menu (v1.318.0): the seven places, by the job a person came
+ * to do. The place you are in opens to show its pages underneath, so the menu
+ * says where you are and what is next to it. Every page is still in Ctrl K,
+ * and the Advanced switch below still shows the full list.
+ */
+function SimpleNavLinks({
+  layoutId,
+  collapsed,
+  onNavigate,
+  popout,
+}: {
+  layoutId: string;
+  collapsed: boolean;
+  onNavigate?: () => void;
+  /** The desktop's pop-out bridge (null in a browser or inside a pop-out). */
+  popout: PopoutBridge | null;
+}) {
+  const pathname = usePathname() ?? "";
+  const here = hubFor(pathname);
+  // The same "open in its own window" door the full menu's rows carry.
+  const door = (href: string, label: string) =>
+    popout && !collapsed && href !== "/" ? (
+      <button
+        type="button"
+        data-testid={`popout-row-${href.slice(1)}`}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void popout.open(href);
+          onNavigate?.();
+        }}
+        aria-label={`Open ${label} in a new window`}
+        title={`Open ${label} in a new window`}
+        className="absolute right-2 top-1/2 z-20 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.08] hover:text-zinc-100 focus:opacity-100 group-hover/row:opacity-100"
+      >
+        <AppWindow size={13} strokeWidth={2} />
+      </button>
+    ) : null;
+  return (
+    <div className="space-y-1 pb-2" data-testid="simple-nav">
+      {HUBS.map((hub) => {
+        const active = here?.hub.key === hub.key;
+        const Icon = hub.icon;
+        const subs = active && !collapsed ? visibleTabs(hub, pathname) : [];
+        return (
+          <div key={hub.key}>
+            <div className="group/row relative">
+            <Link
+              href={hub.href}
+              onClick={() => {
+                recordOpen(hub.href);
+                onNavigate?.();
+              }}
+              title={collapsed ? hub.label : hub.blurb}
+              data-hub={hub.key}
+              className={`group relative flex items-center rounded-xl py-2.5 text-sm transition-colors ${
+                collapsed ? "justify-center px-0" : "gap-3 px-3"
+              } ${active ? "text-accent-soft" : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"}`}
+            >
+              {active && (
+                <m.span
+                  layoutId={layoutId}
+                  className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgb(var(--accent-rgb)/0.06)]"
+                  transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                />
+              )}
+              <span
+                className={`relative z-10 transition-colors ${
+                  active ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
+                }`}
+              >
+                <Icon size={17} strokeWidth={2} />
+              </span>
+              {!collapsed && <span className="relative z-10 font-medium">{hub.label}</span>}
+            </Link>
+            {door(hub.href, hub.label)}
+            </div>
+            {subs.length > 1 && (
+              <div className="ml-6 mt-1 space-y-0.5 border-l border-white/[0.06] pl-3">
+                {subs.map((tab) => {
+                  const on = tab.href === here?.tab.href;
+                  return (
+                    <div key={tab.href} className="group/row relative">
+                    <Link
+                      href={tab.href}
+                      aria-current={on ? "page" : undefined}
+                      onClick={() => {
+                        recordOpen(tab.href);
+                        onNavigate?.();
+                      }}
+                      className={`block rounded-lg px-2.5 py-1.5 text-[13px] transition-colors ${
+                        on ? "text-accent-soft" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
+                      }`}
+                    >
+                      {tabLabel(tab.href)}
+                    </Link>
+                    {door(tab.href, tabLabel(tab.href))}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * The Simple/Advanced switch. Sits at the bottom of the nav (above the footer)
  * in both rails. Subtle, arc-reactor-cyan when active, with a "showing
  * essentials" hint while in Simple mode.
@@ -310,7 +385,7 @@ function NavModeToggle({
 }
 
 /** Shared daemon-status footer (version + connection dot + API host + deploy). */
-function SidebarFooter() {
+function SidebarFooter({ advanced = true }: { advanced?: boolean } = {}) {
   const { online: connected, health } = useDaemon();
   const version = health?.version;
   // v1.198.0: the shortcut keycap used to hardcode "⌘K" — a Mac key shown to
@@ -347,18 +422,28 @@ function SidebarFooter() {
           }`}
         />
         <span className={connected ? "text-emerald-300/90" : "text-zinc-500"}>
-          {connected ? "daemon connected" : "daemon offline"}
+          {advanced
+            ? connected
+              ? "daemon connected"
+              : "daemon offline"
+            : // v1.318.0: Simple mode says it in plain words.
+              connected
+              ? "Running"
+              : "Not running — reopen Iron Jarvis"}
         </span>
       </div>
-      <div className="truncate font-mono text-[11px] text-zinc-600" title={API_BASE}>
-        {API_BASE.replace(/^https?:\/\//, "")}
-      </div>
+      {advanced && (
+        <div className="truncate font-mono text-[11px] text-zinc-600" title={API_BASE}>
+          {API_BASE.replace(/^https?:\/\//, "")}
+        </div>
+      )}
       <div className="flex items-center gap-1.5 pt-0.5 text-[11px] text-zinc-600">
         <kbd className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
           {cmdLabel}
         </kbd>
         <span>commands</span>
       </div>
+      {advanced && (
       <a
         href="https://github.com/RealDealCPA-VR/Iron-Jarvis/blob/master/DEPLOY.md"
         target="_blank"
@@ -367,6 +452,7 @@ function SidebarFooter() {
       >
         Deploy to a server <MoveUpRight size={11} />
       </a>
+      )}
     </div>
   );
 }
@@ -460,7 +546,7 @@ export function NavDrawer() {
               <div className="border-t border-white/[0.06] px-5 py-3">
                 <ThemeSwitcher variant="drawer" />
               </div>
-              <SidebarFooter />
+              <SidebarFooter advanced={advanced} />
             </m.aside>
           </>
         )}

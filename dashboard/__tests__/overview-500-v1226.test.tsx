@@ -6,7 +6,7 @@
  * Now the sessions panels render the DataError note carrying the daemon's
  * message; the OfflineHint stays reserved for status 0.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
@@ -71,6 +71,9 @@ import OverviewPage from "@/app/page";
 afterEach(() => cleanup());
 
 describe("Overview on a 500 from /sessions (v1.226.0)", () => {
+  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
+  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
+  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
   it("shows the daemon's error instead of the 'No sessions yet' empty copy", async () => {
     localStorage.setItem("ij_ov_admin", "1"); // expand "Systems & admin" (collapsed by default)
     render(<OverviewPage />);

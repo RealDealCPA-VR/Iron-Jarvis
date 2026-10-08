@@ -445,9 +445,13 @@ describe("desktop nav is discoverable", () => {
       window.dispatchEvent(new CustomEvent("ij:toggle-nav"));
     });
     const drawer = await screen.findByRole("dialog", { name: "Navigation" });
+    // v1.318.0: Simple (the default) lists the seven places…
+    expect(within(drawer).getByRole("link", { name: /^Work$/ })).toBeInTheDocument();
+    expect(within(drawer).getByRole("link", { name: /^Apps & settings$/ })).toBeInTheDocument();
+    // …and Advanced is today's full menu.
+    fireEvent.click(within(drawer).getByRole("button", { name: /Advanced/i }));
     expect(within(drawer).getByRole("link", { name: /^Chat$/ })).toBeInTheDocument();
     expect(within(drawer).getByRole("link", { name: /^Settings$/ })).toBeInTheDocument();
-    expect(within(drawer).getByRole("button", { name: /Advanced/i })).toBeInTheDocument();
   });
 });
 

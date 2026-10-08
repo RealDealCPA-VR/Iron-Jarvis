@@ -2905,6 +2905,31 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Simple mode is a different SHAPE, not a filtered list** (v1.318.0, the
+  calm first experience, part 1). `lib/uiMode.ts` is the ONE Simple/Advanced
+  store (`ij_nav_advanced`, "1" = Advanced; Simple is the default) — the
+  menu, the Overview and the page headers read `useAdvancedMode()` and a flip
+  is live (`UI_MODE_EVENT` in-window, `storage` across windows); never read
+  the key directly again. `lib/hubs.ts` holds the seven places (Home, Work,
+  Files, Automations, About me, Apps & settings, Help) as sets of EXISTING
+  pages — every page in NAV + NON_RAIL_ENTRIES (+ /marketplace) belongs to
+  exactly one (pinned); a tab's words are `labelForPath` (the page's own
+  title). Simple's menu is `SimpleNavLinks` (the hubs, the active one opened
+  to its `visibleTabs`, pop-out doors kept); Advanced renders NAV exactly as
+  before (ESSENTIAL_HREFS is gone). `components/HubTabs.tsx` sits inside
+  PageHeader, Simple only, and reads `window.location.pathname` after mount
+  — NOT `usePathname`: ~70 page tests mock next/navigation without it, and
+  the full-height screens (chat, agents, terminals) have no PageHeader so
+  their height math is untouched. The Overview in Simple is "Home":
+  `components/overview/HomeStart.tsx` (status line once setup is done, the
+  SAME `AskAndStart` box the first-run strip uses — never two boxes, the
+  last 3 chats, the five places + an "All modules" tile that reveals
+  AppGrid); hero, AppGrid, HealthCard, PowerTips and Systems & admin are
+  Advanced-only. Every notice (offline, downgrade, interrupted, failing
+  loops/packs, the setup nudge, goals) shows in BOTH modes. Tests that pin
+  the full Overview set Advanced in a `beforeEach` (overview-wave2-v1310,
+  ux-wave1-firstrun-v1313, links-wave1-v1309, overview-500-v1226). Pins:
+  `dashboard/__tests__/home-simple-v1318.test.tsx` (9 mutations, all red).
 - **Light is a SCHEME, and a theme can be the user's own** (v1.317.0).
   `<html data-scheme="light|dark">` answers "is this a light theme" — every
   light re-ink in globals.css (the generated tone block, the amber block,

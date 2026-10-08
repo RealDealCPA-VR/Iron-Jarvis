@@ -58,13 +58,13 @@ export const FIRST_WIN_TASKS: {
   {
     key: "recap",
     title: "Recap today",
-    task: "Summarize today: what sessions ran and what happened",
+    task: "Summarize what you did for me today",
     icon: <ScrollText size={18} />,
   },
   {
     key: "email",
     title: "Draft a follow-up",
-    task: "Draft a polite follow-up email to a client who hasn't replied",
+    task: "Draft a polite follow-up email to someone who hasn't replied",
     icon: <Mail size={18} />,
   },
 ];
@@ -75,6 +75,20 @@ export function chatAskHref(text: string): string {
 }
 
 export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding> }) {
+  return (
+    <section data-testid="first-run-strip" aria-label="Get started" className="space-y-4">
+      <OnboardingWelcome state={onboarding} />
+      <AskAndStart />
+    </section>
+  );
+}
+
+/**
+ * The one "Ask Jarvis anything" box and the Try-it-now starters (v1.318.0:
+ * lifted out so the Simple home, components/overview/HomeStart.tsx, offers
+ * the SAME box once setup is done — never a second copy that could drift).
+ */
+export function AskAndStart({ starters = true }: { starters?: boolean } = {}) {
   const router = useRouter();
   const [text, setText] = useState("");
 
@@ -87,40 +101,38 @@ export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding>
   }
 
   return (
-    <section data-testid="first-run-strip" aria-label="Get started" className="space-y-4">
-      <OnboardingWelcome state={onboarding} />
-
-      <div className="card-surface p-5">
-        <form onSubmit={ask} className="flex flex-col gap-2 sm:flex-row">
-          <div className="relative min-w-0 flex-1">
-            <MessageSquare
-              size={16}
-              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-accent-soft/80"
-            />
-            <input
-              type="text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              aria-label="Ask Jarvis anything"
-              placeholder="Ask Jarvis anything — “summarize this PDF”, “draft a reply to…”"
-              className="w-full rounded-xl border border-white/10 bg-white/[0.03] py-2.5 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/20"
-            />
-          </div>
-          {/* v1.313.0: outlined, not solid. The strip is up only while a
-              setup step is next, and that step's button in the card above is
-              the page's ONE solid primary — two bright buttons for two
-              different "first" actions left a new user guessing. */}
-          <button
-            type="submit"
-            className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-accent/35 bg-accent/[0.08] px-4 py-2.5 text-sm font-medium text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14]"
-          >
-            Ask <ArrowRight size={14} />
-          </button>
-        </form>
-        <p className="mt-2 text-xs text-zinc-500">
-          Opens Chat with your question ready to go. Nothing runs until you press send.
-        </p>
-
+    <div className="card-surface p-5" data-testid="ask-and-start">
+      <form onSubmit={ask} className="flex flex-col gap-2 sm:flex-row">
+        <div className="relative min-w-0 flex-1">
+          <MessageSquare
+            size={16}
+            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-accent-soft/80"
+          />
+          <input
+            type="text"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            aria-label="Ask Jarvis anything"
+            placeholder="Ask Jarvis anything — “summarize this PDF”, “draft a reply to…”"
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] py-2.5 pl-10 pr-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-accent/40 focus:outline-none focus:ring-2 focus:ring-accent/20"
+          />
+        </div>
+        {/* v1.313.0: outlined, not solid. The strip is up only while a
+            setup step is next, and that step's button in the card above is
+            the page's ONE solid primary — two bright buttons for two
+            different "first" actions left a new user guessing. */}
+        <button
+          type="submit"
+          className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-accent/35 bg-accent/[0.08] px-4 py-2.5 text-sm font-medium text-accent-soft transition-colors hover:border-accent/50 hover:bg-accent/[0.14]"
+        >
+          Ask <ArrowRight size={14} />
+        </button>
+      </form>
+      <p className="mt-2 text-xs text-zinc-500">
+        Opens Chat with your question ready to go. Nothing runs until you press send.
+      </p>
+      {starters && (
+        <>
         <div className="mt-5 mb-2 text-[12.5px] font-semibold tracking-wide text-zinc-300">
           Try it now
           <span className="ml-2 text-xs font-normal text-zinc-500">or start with one of these</span>
@@ -146,7 +158,8 @@ export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding>
             </Link>
           ))}
         </div>
-      </div>
-    </section>
+        </>
+      )}
+    </div>
   );
 }
