@@ -320,12 +320,21 @@ describe("AgentInbox", () => {
   });
 
   it("healthLine: never ran / needs you / failed with the error", () => {
+    // v1.320.1: the clock is frozen at NOW. `ago()` measures from NOW (taken
+    // when this file loaded) while healthLine reads the clock when it runs,
+    // so on a loaded release runner "30s ago" rounded to "31s ago".
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
     expect(healthLine(null)).toEqual({ text: "never ran", tone: "slate" });
     expect(healthLine({ last_run_at: null, last_outcome: null, last_error: null, last_wake_at: null, queued: 0, running: 0, blocked: 0 }).tone).toBe("slate");
     expect(healthLine({ last_run_at: ago(3_600_000), last_outcome: "needs_you", last_error: null, last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 1h ago — needs you", tone: "amber" });
     expect(healthLine({ last_run_at: ago(30_000), last_outcome: "failed", last_error: "disk full", last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 30s ago — failed: disk full", tone: "red" });
     expect(rowActions("claimed")).toEqual({ cancel: true, unblock: false, retry: false });
     expect(rowActions("cancelled")).toEqual({ cancel: false, unblock: false, retry: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("AssignmentRow with showAssignee names the agent on the row", () => {
