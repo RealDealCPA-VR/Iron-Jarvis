@@ -2768,6 +2768,40 @@ def remembered_from_result(name: str, result: Any) -> str:
         return ""
 
 
+def config_cards_from_result(name: str, result: Any) -> list[dict[str, Any]]:
+    """Every card a successful tool asks the page to show (redesign S3-S5):
+    the settings change or credential card of :func:`config_card_from_result`,
+    a record tool's ``record_change`` ("Schedule changed … [Undo]", kind
+    ``change`` with a ``title``), and the secure cards its
+    ``secret_requests`` name (channel_connect, app_connect). Never raises; a
+    secret's value is in none of them. MIRROR NOTE (lock-step): both lanes
+    extend ``config_cards`` with this inside their ``if ran:`` block."""
+    out: list[dict[str, Any]] = []
+    try:
+        one = config_card_from_result(name, result)
+        if one:
+            out.append(one)
+        if not getattr(result, "ok", False):
+            return out
+        data = getattr(result, "data", None)
+        if not isinstance(data, dict):
+            return out
+        from ..settings.records import RECORD_CARD_TOOLS
+
+        rc = data.get("record_change") if name in RECORD_CARD_TOOLS else None
+        if isinstance(rc, dict) and rc.get("key") and rc.get("change_id"):
+            out.append(
+                {"kind": "change", "restart": False, **{k: rc.get(k) for k in ("title", "key", "label", "old", "new", "change_id")}}
+            )
+        reqs = data.get("secret_requests") if name in RECORD_CARD_TOOLS else None
+        for r in reqs if isinstance(reqs, list) else []:
+            if isinstance(r, dict) and r.get("name") and r.get("request_id"):
+                out.append({"kind": "secret", **{k: r.get(k) for k in ("name", "label", "help", "why", "request_id")}})
+    except Exception:  # noqa: BLE001 — a card never breaks a turn
+        return out
+    return out
+
+
 def config_card_from_result(name: str, result: Any) -> dict[str, Any] | None:
     """The card a successful settings tool asks the page to show (calm UI
     redesign S3/S4): ``{"kind": "change", key, label, old, new, restart,
@@ -4887,9 +4921,7 @@ async def run_chat_turn(
                             remembered.append(_kept)
                         # SETTINGS CARDS (redesign S3/S4) — same gate. MIRROR
                         # NOTE (lock-step): routes/chat.py carries the same.
-                        _cfg_card = config_card_from_result(tc.name, result)
-                        if _cfg_card:
-                            config_cards.append(_cfg_card)
+                        config_cards.extend(config_cards_from_result(tc.name, result))
                         # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                         # SUCCESSFUL workflow_run's {run_id, workflow} rides
                         # the response as `workflow_run` so the client can

@@ -11,6 +11,9 @@
 
 export interface ConfigChangeCard {
   kind: "change";
+  /** Redesign S5: a RECORD's change names itself ("Schedule changed",
+   *  "Workflow removed"); absent on a setting's card ("Setting changed"). */
+  title?: string;
   key: string;
   label: string;
   old: unknown;
@@ -49,6 +52,7 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
     if (r.kind === "change" && str(r.key) && str(r.change_id)) {
       out.push({
         kind: "change",
+        ...(str(r.title) ? { title: str(r.title).slice(0, 60) } : {}),
         key: str(r.key),
         label: str(r.label) || str(r.key),
         old: r.old,

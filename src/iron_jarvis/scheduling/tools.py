@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 
 
 class ScheduleCreateTool(Tool):
@@ -26,6 +26,9 @@ class ScheduleCreateTool(Tool):
         "created task name and its next run time."
     )
     permission_key = "schedule_create"
+    # Calm UI redesign S5: a schedule made from chat has an Undo (it removes
+    # the schedule) — settings.records holds the snapshot/restore.
+    reversibility = Reversibility.REVERSIBLE
     input_schema = {
         "type": "object",
         "properties": {
@@ -41,6 +44,11 @@ class ScheduleCreateTool(Tool):
 
     def __init__(self, platform) -> None:
         self.platform = platform
+
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        from ..settings.records import capture_create_undo
+
+        return await capture_create_undo(self.platform, "schedule", str(args.get("name") or ""))
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         import asyncio
@@ -82,16 +90,29 @@ class ScheduleCreateTool(Tool):
             return ToolResult(ok=False, error=str(exc))
 
         next_run = rec.next_run.isoformat() if rec.next_run is not None else None
+        data: dict[str, Any] = {
+            "name": rec.name,
+            "trigger_type": rec.trigger_type,
+            "kind": rec.kind,
+            "next_run": next_run,
+        }
+        card = _created_card(rec.name)
+        if card:
+            data["record_change"] = card
         return ToolResult(
             ok=True,
             output=f"scheduled task '{rec.name}' (next run: {next_run})",
-            data={
-                "name": rec.name,
-                "trigger_type": rec.trigger_type,
-                "kind": rec.kind,
-                "next_run": next_run,
-            },
+            data=data,
         )
+
+
+def _created_card(name: str) -> dict[str, Any] | None:
+    try:
+        from ..settings.records import create_card
+
+        return create_card("schedule", name, "created")
+    except Exception:  # noqa: BLE001 — a card never fails the tool
+        return None
 
 
 def schedule_tools(platform) -> list[Tool]:

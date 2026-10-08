@@ -88,8 +88,13 @@ def test_t4_every_schema_key_has_a_chat_tool_for_its_tier(tmp_path):
     assert reg.get("config_list") is not None and reg.get("config_secret") is not None
     # Every credential kind resolves to a vault name the card can write.
     for s in schema.SECRETS:
-        name = s.name.replace("{provider}", "openai").replace("{name}", "telegram")
+        # An app token resolves only for a real Directory app (S5: it is the
+        # vault name that app's pack launches with).
+        arg = "notion" if s.name.startswith("app.") else "telegram"
+        name = s.name.replace("{provider}", "openai").replace("{name}", arg)
         assert resolve_secret(name)[2]
+    assert resolve_secret("app.notion")[2] == "conn_notion_notion_token"
+    assert resolve_secret("app.box__BOX_CLIENT_SECRET")[2] == "conn_box_box_client_secret"
 
 
 def test_t4_config_list_finds_settings_by_words(tmp_path):

@@ -46,6 +46,9 @@ class WorkflowCreateTool(Tool):
         "workflow name and step count."
     )
     permission_key = "workflow_create"
+    # Calm UI redesign S5: Undo removes a new workflow, or restores the steps a
+    # re-save replaced (settings.records).
+    reversibility = Reversibility.REVERSIBLE
     input_schema = {
         "type": "object",
         "properties": {
@@ -76,6 +79,11 @@ class WorkflowCreateTool(Tool):
 
     def __init__(self, platform) -> None:
         self.platform = platform
+
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        from ..settings.records import capture_create_undo
+
+        return await capture_create_undo(self.platform, "workflow", str(args.get("name") or ""))
 
     def _own_project(self, ctx: ToolContext) -> str | None:
         """The producing task's project: ``ctx.project_id`` when the caller
@@ -142,10 +150,22 @@ class WorkflowCreateTool(Tool):
         # pid=None flows through as KEEP (v1.200.0 store semantics): a fresh
         # def simply stays unpinned, and a re-save of an already-pinned def by
         # a project-less caller no longer silently unpins it.
-        rec = WorkflowStore(self.platform.engine).save(
+        _store = WorkflowStore(self.platform.engine)
+        existed = _store.get(name) is not None
+        rec = _store.save(
             name, steps, args.get("description", ""), project_id=pid
         )
         data: dict[str, Any] = {"name": rec.name, "steps": len(steps), "id": rec.id}
+        try:
+            from ..settings.records import create_card
+
+            _card = create_card(
+                "workflow", rec.name, f"{len(steps)} step{'s' if len(steps) != 1 else ''}", existed=existed
+            )
+            if _card:
+                data["record_change"] = _card
+        except Exception:  # noqa: BLE001 — a card never fails the tool
+            pass
         note = ""
         if pid:
             data["project_id"] = pid

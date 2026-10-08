@@ -305,6 +305,20 @@ def register(app: FastAPI, d) -> None:
             except (TypeError, ValueError):
                 _sec = {}
             result_output = await asyncio.to_thread(CredentialStore(d).restore, _sec if isinstance(_sec, dict) else {})
+        elif journal_kind == "record_restore":
+            # Calm UI redesign S5: a schedule / workflow / channel / app
+            # changed from chat — put the snapshot back (a created record is
+            # removed, a removed one recreated). No tool permission is asked:
+            # an Undo restores what the user had.
+            from ...settings import records as _records
+
+            try:
+                _rec = json.loads(desc.get("pre_inline") or "{}")
+                result_output = await asyncio.to_thread(
+                    _records.restore, platform, _rec if isinstance(_rec, dict) else {}
+                )
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=f"undo failed: {exc}")
         else:
             # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
             tool = platform.registry.get(tool_name)

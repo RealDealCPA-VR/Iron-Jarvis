@@ -1374,6 +1374,12 @@ def build_platform(
     _config_tools_platform: list = []
     for tool in config_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # Calm UI redesign S5: the user's RECORDS from chat (schedules, workflows,
+    # channels, apps), each change with a ledger row and an Undo.
+    from .settings.records import record_tools
+
+    for tool in record_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

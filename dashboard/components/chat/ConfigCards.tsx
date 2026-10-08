@@ -43,7 +43,9 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
     return (
       <div data-testid="config-card-undone" className="text-[12px] text-zinc-500">
         <RotateCcw size={11} className="mr-1 inline align-[-1px]" aria-hidden />
-        Undone — {card.label} is {showValue(card.old)} again.
+        {card.title
+          ? `Undone — ${card.label} is back to how it was.`
+          : `Undone — ${card.label} is ${showValue(card.old)} again.`}
       </div>
     );
   }
@@ -53,13 +55,21 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
       className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-[13px]"
     >
       <span className="inline-flex items-center gap-1.5 font-medium text-tone-success">
-        <Check size={13} aria-hidden /> Setting changed
+        <Check size={13} aria-hidden /> {card.title || "Setting changed"}
       </span>
       <span className="text-zinc-200" title={card.key}>
         {card.label}
       </span>
       <span className="text-zinc-400">
-        {showValue(card.old)} → <span className="text-zinc-100">{showValue(card.new)}</span>
+        {card.title && (card.old === null || card.old === undefined) ? (
+          <span className="text-zinc-100">{showValue(card.new)}</span>
+        ) : card.title && (card.new === null || card.new === undefined) ? (
+          <>was {showValue(card.old)}</>
+        ) : (
+          <>
+            {showValue(card.old)} → <span className="text-zinc-100">{showValue(card.new)}</span>
+          </>
+        )}
       </span>
       {card.restart && <span className="text-[12px] text-tone-warn">Takes full effect after a restart.</span>}
       <span className="ml-auto inline-flex items-center gap-2">

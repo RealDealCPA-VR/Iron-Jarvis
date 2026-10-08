@@ -42,6 +42,8 @@ class CredentialError(ValueError):
 def resolve_secret(name: str) -> tuple[schema.SecretDef, str, str]:
     """``channel.telegram`` → (its def, the argument ``telegram``, the vault
     name ``channel_telegram_token``). Refuses anything not in the schema."""
+    if name.startswith("app."):
+        return _resolve_app(name)
     for s in schema.SECRETS:
         if s.pattern:
             prefix = s.name.split("{", 1)[0]
@@ -57,6 +59,29 @@ def resolve_secret(name: str) -> tuple[schema.SecretDef, str, str]:
         elif name == s.name:
             return s, "", s.vault_key
     raise CredentialError(f"There is no credential called {name!r}.")
+
+
+def _resolve_app(name: str) -> tuple[schema.SecretDef, str, str]:
+    """``app.<connector>`` (its one token) or ``app.<connector>__<FIELD>``
+    (one of several) → the vault name the connector's MCP config reads
+    (``conn_<id>_<field>``, connectors.service) — so a token saved on the card
+    is the token the pack launches with (redesign S5)."""
+    from ..connectors.catalog import get_connector
+    from ..connectors.service import _secret_name
+
+    sdef = next(s for s in schema.SECRETS if s.name == "app.{name}")
+    arg = name[len("app."):]
+    if not _ARG.match(arg):
+        raise CredentialError(f"There is no credential called {name!r}.")
+    cid, _, field = arg.partition("__")
+    conn = get_connector(cid)
+    secrets = [f for f in (conn.fields if conn else []) if f.kind == "secret"]
+    if not secrets:
+        raise CredentialError(f"There is no app called {cid!r} that takes a token.")
+    chosen = next((f for f in secrets if f.name == field), None) if field else secrets[0]
+    if chosen is None:
+        raise CredentialError(f"{conn.name} has no credential called {field!r}.")
+    return sdef, cid, _secret_name(cid, chosen.name)
 
 
 class CredentialStore:
@@ -93,6 +118,11 @@ class CredentialStore:
                 secrets.set(vault, value, kind="api_key" if "key" in vault else "password")
             status = "replaced" if prior else "stored"
             action_id = self._journal(name, vault, backup, bool(prior), status, actor, change_id)
+        if name.startswith("app."):
+            # A pack saved by app_connect waits for this token: load it now.
+            from .records import reload_app_after_secret
+
+            reload_app_after_secret(self.platform, arg)
         return {"secret": name, "label": sdef.label, "status": status, "action_id": action_id}
 
     def restore(self, desc: dict[str, Any]) -> str:

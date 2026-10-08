@@ -190,6 +190,13 @@ _OFF_ROSTER_BY_DESIGN = {
     # Chat arms them (settings.tools.wants_settings); pinned by
     # tests/test_settings_chat_tools_v1321.py.
     "config_list", "config_set", "config_change", "config_change_protected", "config_secret",
+    # RECORDS FROM CHAT (redesign S5) — the same reasoning: changing or
+    # removing the user's schedules and workflows, a channel's two-way switch,
+    # connecting a channel or an app each asks on a card with an Undo where the
+    # user is present. Chat arms them (settings.records.record_tools_for);
+    # pinned by tests/test_settings_records_v1321.py.
+    "schedule_update", "schedule_delete", "workflow_update", "workflow_delete",
+    "workflow_schedule", "channel_toggle", "channel_connect", "app_connect",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

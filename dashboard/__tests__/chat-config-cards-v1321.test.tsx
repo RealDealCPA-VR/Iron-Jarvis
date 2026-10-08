@@ -110,7 +110,7 @@ vi.mock("react-markdown", () => ({ default: ({ children }: { children?: string }
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import ChatPage from "@/app/chat/page";
-import { CredentialCard } from "@/components/chat/ConfigCards";
+import { ConfigCards, CredentialCard } from "@/components/chat/ConfigCards";
 import { decodeConfigCards, looksLikeSecret, type ConfigCard, type SecretRequestCard } from "@/lib/configCards";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -352,5 +352,48 @@ data: ${JSON.stringify({ reply: "ok", config_cards: [CHANGE, { kind: "x" }] })}
     expect(src).toContain("...(configCards?.length ? { configCards } : {}),");
     expect(src).toContain("const configCardsPost = decodeConfigCards(res.config_cards);");
     expect(src).toContain("...(configCardsPost.length ? { configCards: configCardsPost } : {}),");
+  });
+});
+
+describe("record cards (redesign S5)", () => {
+  it("a record's card names itself and its change; its Undo says it is back", async () => {
+    H.api.getResponses["/config/changes/rec_1"] = { action_id: "tool_7", undone: false };
+    const onSettle = vi.fn();
+    const card: ConfigCard = {
+      kind: "change",
+      title: "Schedule removed",
+      key: "schedule.weekly",
+      label: "Schedule “weekly”",
+      old: "cron 0 9 * * 1",
+      new: null,
+      change_id: "rec_1",
+    };
+    const { rerender } = render(<ConfigCards cards={[card]} onSettle={onSettle} />);
+    const el = screen.getByTestId("config-card-change");
+    expect(el.textContent).toContain("Schedule removed");
+    expect(el.textContent).toContain("was cron 0 9 * * 1");
+    expect(el.textContent).not.toContain("Setting changed");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onSettle).toHaveBeenCalled());
+    expect(H.api.posts.map((p) => p.path)).toContain("/undo/tool_7");
+    rerender(<ConfigCards cards={[onSettle.mock.calls[0][1]]} onSettle={onSettle} />);
+    expect(screen.getByTestId("config-card-undone").textContent).toBe("Undone — Schedule “weekly” is back to how it was.");
+  });
+
+  it("a created record shows what it is, not '(not set) →'", () => {
+    render(
+      <ConfigCards
+        cards={[{ kind: "change", title: "Schedule created", key: "schedule.s", label: "Schedule “s”", old: null, new: "created", change_id: "rec_2" }]}
+        onSettle={() => {}}
+      />,
+    );
+    const el = screen.getByTestId("config-card-change");
+    expect(el.textContent).toContain("Schedule created");
+    expect(el.textContent).not.toContain("(not set)");
+  });
+
+  it("the decode keeps a record card's title", () => {
+    const [c] = decodeConfigCards([{ kind: "change", title: "Workflow changed", key: "workflow.w", change_id: "rec_3", old: "a", new: "b" }]);
+    expect(c).toMatchObject({ title: "Workflow changed" });
   });
 });

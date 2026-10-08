@@ -61,7 +61,7 @@ from ...settings.tools import ALWAYS_CARD_TOOLS
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
-    config_card_from_result,
+    config_cards_from_result,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
@@ -2586,6 +2586,15 @@ async def chat_stream(
                     t for t in ASK_CONFIG_TOOLS
                     if t not in armed and t not in ask_armed and d.platform.registry.get(t)
                 ]
+            # RECORDS FROM CHAT (redesign S5): changing or removing a
+            # schedule / workflow, a channel's two-way switch, connecting a
+            # channel or an app — ask tier, visible, never granted.
+            from ...settings.records import record_tools_for
+
+            ask_armed += [
+                t for t in record_tools_for(_last_user_text(body.messages))
+                if t not in armed and t not in ask_armed and d.platform.registry.get(t)
+            ]
             # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
             # Build pane) is a coding surface — `shell` joins the ask tier
             # so the model can propose a command without the user typing
@@ -3592,9 +3601,7 @@ async def chat_stream(
                                 remembered.append(_kept)
                             # SETTINGS CARDS (redesign S3/S4). MIRROR NOTE
                             # (lock-step): chat_turn.py carries the same.
-                            _cfg_card = config_card_from_result(tc.name, result)
-                            if _cfg_card:
-                                config_cards.append(_cfg_card)
+                            config_cards.extend(config_cards_from_result(tc.name, result))
                             # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                             # SUCCESSFUL workflow_run's {run_id, workflow}
                             # rides the done frame as `workflow_run` so the

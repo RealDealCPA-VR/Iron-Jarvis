@@ -239,6 +239,16 @@ def default_permissions() -> dict[str, str]:
         "config_change": "ask",
         "config_change_protected": "ask",
         "config_secret": "allow",
+        # Calm UI redesign S5: the user's records from chat (settings.records).
+        # Each asks on the ordinary card and has an Undo.
+        "schedule_update": "ask",
+        "schedule_delete": "ask",
+        "workflow_update": "ask",
+        "workflow_delete": "ask",
+        "workflow_schedule": "ask",
+        "channel_toggle": "ask",
+        "channel_connect": "ask",
+        "app_connect": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

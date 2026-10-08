@@ -35,6 +35,16 @@ const WORDS: Record<string, string> = {
   // the card's own arguments name which one.
   config_change: "change a setting",
   config_change_protected: "change a protected setting",
+  // Redesign S5: the user's records from chat (settings/records.py); each
+  // has an Undo on the reply.
+  schedule_update: "change a schedule",
+  schedule_delete: "remove a schedule",
+  workflow_update: "change a saved workflow",
+  workflow_delete: "remove a saved workflow",
+  workflow_schedule: "put a saved workflow on a schedule",
+  channel_toggle: "turn a channel's two-way messages on or off",
+  channel_connect: "add a notification channel",
+  app_connect: "connect an app",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

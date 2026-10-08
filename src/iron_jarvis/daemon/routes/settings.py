@@ -186,7 +186,7 @@ def register(app: FastAPI, d) -> None:
         with session_scope(d.platform.engine) as db:
             row = db.exec(
                 _select(UndoJournal).where(
-                    UndoJournal.kind.in_(("setting_restore", "secret_restore")),  # type: ignore[attr-defined]
+                    UndoJournal.kind.in_(("setting_restore", "secret_restore", "record_restore")),  # type: ignore[attr-defined]
                     UndoJournal.pre_inline.contains(f'"change_id": "{change_id}"'),  # type: ignore[union-attr]
                 )
             ).first()
