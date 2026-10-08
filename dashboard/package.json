@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "shot": "node scripts/shot.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -30,6 +31,8 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@playwright/test": "^1.64.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -39,6 +42,8 @@
     "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.4.20",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.19",
     "jsdom": "^29.1.1",
     "postcss": "^8.4.49",
     "puppeteer-core": "^23.11.1",

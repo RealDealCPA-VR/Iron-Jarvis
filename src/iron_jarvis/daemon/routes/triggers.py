@@ -126,7 +126,6 @@ def register(app: FastAPI, d) -> None:
         calendar poll loop through ``_live_rearm["calendar"]`` if the coordinator
         wired it. The ICS URL, when provided, is stored in the ENCRYPTED vault and
         is never echoed back."""
-        cfg = d.platform.config
         lead = body.lead_minutes
         if lead is not None and lead < 0:
             raise HTTPException(status_code=400, detail="lead_minutes must be >= 0")

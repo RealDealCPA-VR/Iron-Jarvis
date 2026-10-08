@@ -7,7 +7,7 @@ inside a ``ToolContext`` scoped to a session's isolated workspace (§15).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any

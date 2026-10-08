@@ -5,3 +5,7 @@
 next-env.d.ts
 *.tsbuildinfo
 .DS_Store
+/.next-e2e
+/e2e/.home
+/test-results
+/playwright-report
