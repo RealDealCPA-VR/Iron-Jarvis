@@ -47,55 +47,112 @@ refreshes everything the moment you bring it back.
 
 ## Getting started — your first five minutes
 
-*(v1.310.0)* The aim of the first five minutes is one real answer to one real
-question. Here is what you will see and what each part means.
+*(v1.321.0, the calm layout)* The aim of the first five minutes is one real
+answer to one real question. There is no setup screen: Iron Jarvis opens on a
+new chat with the box ready to type in.
 
-**1. Connect a model.** On a brand-new install a setup window opens with three
-doors: **I already pay for Claude or ChatGPT** (uses the Claude Code or Codex
-sign-in already on this PC), **Free & private on this PC** (Ollama — nothing
-leaves your computer), and **I have an API key**. You can skip it; everything
-it does is also on the Connections page.
+**1. Ask something.** The home **is** a chat. Type a question and press
+Enter. Until you choose a model, replies come from a built-in offline sample —
+a **scripted demo**, not real answers (each such reply is marked in amber, and
+an amber strip at the top says so).
 
-**2. Choose which model answers — one press, always yours.** Until you choose,
-the app answers with a built-in offline sample, so replies are a **scripted
-demo**, not real answers (every such reply is marked in amber under it). When
-a real model is ready — you are signed in to Claude or ChatGPT, or Ollama is
-running — the welcome card on the Overview (and the setup window, and an empty
-Chat) offers one button named for it, for example **Use Claude (your Claude Code sign-in)
-for answers**.
-When more than one is ready (say, a Claude sign-in and Ollama), each gets its
-own button, and under each the card says where your questions would go —
-"It runs on this PC, so your questions stay here" or "Your questions will be
-sent to Claude (your Claude Code sign-in) to be answered" — before you press anything.
-Press it and the card says which model now answers. Nothing switches on its own: whether your
-questions go to a cloud service or stay on this PC is your decision, so the
-app only changes the answering model when you press, and only over the demo —
-never over a model you already picked (then it tells you so and changes
-nothing). If no real model is connected yet, the card says replies are a
-scripted demo and links to Connections.
+**2. Choose which model answers — one press, always yours.** If this PC
+already has a real model — you are signed in to Claude Code or Codex, or
+Ollama is running — the empty chat shows a **Connect a model for real
+answers** card with one button named for it (for example **Use Claude (your
+Claude Code sign-in) for answers**), and once you have started chatting the
+same offer sits beside the composer as a single **Use … for answers · one
+tap**. Under each choice the app says where your questions would go — "stays
+on this PC" or "goes to Anthropic" — before you press anything. Nothing
+switches on its own: whether your questions go to a cloud service or stay on
+this PC is your decision. No model at all? The card's three doors — **I
+already pay for Claude or ChatGPT**, **Free & private on this PC**, **I have
+an API key** — walk you through it.
 
-**3. Ask something.** While setup is unfinished, the top of the Overview —
-right under the title, above everything else — holds your getting-started
-checklist, one **Ask Jarvis anything** box, and a few **Try it now** starters
-("Tidy my Downloads", "Draft a follow-up", …). Typing in the box, or pressing a
-starter, opens Chat with the question already written in; nothing runs until
-you press send there. Once every step is done, that strip goes away and the
-Overview is the usual dashboard (the starters move back under **Systems &
-admin**, where they start a run with one click).
+**3. Pick a model any time.** The model is chosen in the composer (the small
+model name under the box). Its menu lists every model; type to find one.
+**Make this my default** saves the conversation's pick as the default — with
+an Undo, like every setting. "Switch model" in Ctrl+K opens the same menu from
+any page.
 
-**4. The checklist.** *Connect your AI*, *Give it your first task*, *Work with
-a document* and *Teach it your style* (say something lasting in Chat, such as
-"From now on, keep answers short" — the reply shows **Remembered: …** when it
-kept it). Voice is optional.
+**4. Everything else is one or two clicks away.** The sidebar holds **New
+chat**, four places — **Build**, **Projects**, **Everything**, **Settings** —
+your recent chats and your projects. **Everything** lists every other part of
+the app with one line each; **Ctrl+K** finds any page, any setting, any chat.
 
-**5. Optional extras.** Some features need a helper program — reading old
-`.doc` files, reading scanned pages, and similar. If one is missing, the
-welcome card folds it into a single quiet **Optional extras (n)** line; open
-it to see each one in plain words and what to add. Nothing is broken while
-they are missing — only that one feature waits. Anything that really stops the
-app working is shown on its own, in amber, with its fix.
+**5. The checklist and status.** *Connect your AI*, *Give it your first task*,
+*Work with a document* and *Teach it your style* live in **Everything →
+Status**, with what is running and how the app is doing. While setup is
+unfinished, the top of Status holds that checklist, an **Ask Jarvis anything**
+box (it opens a chat with your question written in — nothing runs until you
+press send) and a few starters. Some features need a helper program — reading
+old `.doc` files or scanned pages, and similar; a missing one is folded into a
+single quiet **Optional extras (n)** line there, in plain words. When
+something needs you — work cut off by a restart, a background task failing, a
+job waiting for an answer — one quiet line appears above the chat box, with
+**Open**.
 
 ---
+
+## The calm layout (v1.321.0)
+
+Iron Jarvis now looks like the chat apps you already know: the conversation
+is the product and everything else is found when you need it. Nothing was
+taken away — every feature moved to a place you can reach in two clicks or by
+searching.
+
+- **The sidebar.** New chat; **Build** (the terminals), **Projects**,
+  **Everything**, **Settings**; then **Chats** (by day — on the chat screen
+  this is the chat's own list, with search, rename, pin, move and delete) and
+  **Projects**. At the bottom: whether Iron Jarvis is running and its version
+  (press it for Status), and **Help** (the guides, *Ask the Guide*, and
+  what's new). Collapse it to icons with the arrows at the top. On a phone it
+  is the ☰ menu.
+- **Pins.** On **Everything**, press the pin beside any entry to put it
+  under the four places in the sidebar (up to three).
+- **Everything.** Four columns — **Work** (Agents, Creative, Templates,
+  Documents, File Search), **Automations** (Workflows, Schedules, Reflexes,
+  Sentinels, Autonomy, Webhooks), **Knowledge** (Memory, Skills, Artifacts,
+  You, Train), **System** (Sessions, Activity, Usage, Fleet, Self-development,
+  Updates, Help) — plus **Setup**, and a **Status** tab: what was the Overview
+  (running work, health, failing background tasks, recent events, the
+  getting-started checklist).
+- **Settings, in seven groups.** **Models**, **Connections**, **Agents &
+  automation**, **Memory & you**, **Permissions & ledger**, **Appearance**,
+  **System**. Search finds any setting by what you would call it. Pages that
+  used to stand alone are sections now: Connections, the Directory of apps,
+  Notifications, Browser and Secrets under **Connections**; your profile and
+  Train under **Memory & you**; Tools and standing grants under
+  **Permissions & ledger**; Updates and maintenance under **System**. Old
+  links still work — they open the right section. Save shows how many changes
+  you are saving and offers **Undo**.
+- **Changed here or in chat.** Under **Permissions & ledger**, every change
+  to a setting, a schedule, a workflow, a channel, an app or a saved key —
+  made on a page or in chat — is listed with where it was made and its
+  **Undo**.
+- **The Session board** is the **Board** view of Sessions.
+
+### Change settings by asking
+
+Anything on the Settings page can be changed in chat, in your own words —
+"turn on dry run for autonomy", "use the local Qwen model for coding tasks",
+"run this workflow every weekday at 7am", "turn on Telegram notifications",
+"connect my Notion", "undo that".
+
+- **Every change is shown and can be undone.** The reply carries a card —
+  **Setting changed: old → new [Undo]** (or *Schedule changed*, *Workflow
+  removed*, …). Undo puts it back exactly.
+- **What needs your OK still asks.** Safe preferences (the theme, the default
+  model) change at once. Bigger ones ask on the usual approval card first.
+  Protected ones — autonomy, the sandbox, tool permissions, turning a safety
+  off — ask **every time**, even in Auto-approve, and are never offered
+  "Always".
+- **Keys and tokens never go in the chat.** When something needs a key or a
+  token, the reply shows a **secure card**: paste it there and it goes
+  straight into the encrypted vault — the model never sees it, and it is not
+  written to the conversation, the history or any log. If you paste something
+  that looks like a key into the chat box, Iron Jarvis holds the message and
+  offers to **Save it securely** instead (or **Send anyway**).
 
 ## The surfaces, in the order you'll use them
 
@@ -437,7 +494,7 @@ with the request typed in.
   failing halfway through a job. The Diagnostics page shows which of the two
   is available on this PC.
 
-### Settings → Maintenance
+### Settings → System → Maintenance
 - **What the app is keeping on your disk** (v1.256.0): Maintenance now lists
   everything Iron Jarvis stores here — generated pictures and video, backups,
   undo history, the scan-text cache, code workspaces and the database — largest

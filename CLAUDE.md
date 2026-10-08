@@ -2905,6 +2905,70 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The calm UI: ONE settings schema, ONE writer, chat changes with Undo, a
+  four-item sidebar** (v1.321.0, the calm UI redesign — docs/redesign/BRIEF.md,
+  AUDIT.md, APPROVED.md, REPORT.md). SETTINGS: `settings/schema.py` declares
+  every setting once (key, label, group of seven, type, tier allow|ask|
+  ask-floor with per-VALUE `tier_for`, store config|device|profile, aliases)
+  and three things read it: `GET /settings/schema` (the Settings page draws
+  every row from it — `components/settings/SettingsHome.tsx`), the daemon's
+  `PUT /settings` whitelist (`daemon_keys()`), and the chat tools.
+  `settings/writer.py` (`ConfigWriter`, on `platform.config_writer`) is the
+  ONE write path — every settings route (iron-proxy, profile share, autonomy
+  kill, routing, triggers, skill learning, fleet, MCP, computer use) and
+  `PUT /settings/values` (any store, one validated all-or-nothing save) go
+  through it: side effects, persistence, ONE `update_settings` ledger row with
+  a `setting_restore` Undo, `config.changed`. A new setting is a schema row,
+  never a hand-written field. CHAT: `settings/tools.py` — `config_list`,
+  `config_set` (allow), `config_change` (ask), `config_change_protected`
+  (ask; on the deny floor; carded even in yolo and never offered "Always" —
+  `ALWAYS_CARD_TOOLS`), `config_secret`; a call through the wrong tier's tool
+  is refused naming the right one. `settings/records.py` — schedules,
+  workflows, channels, apps (+ the §6.3 records) as REVERSIBLE tools whose
+  `capture_undo` snapshots the record into `record_restore`; the create tools
+  gained the same Undo (a card only when an Undo was captured, so direct
+  `execute` keeps its old data). All chat-only (`wants_settings` /
+  `record_tools_for` arm them; the POST lane never arms an ask tier), denied
+  under low trust, exempt from the roster pin. Both chat lanes put
+  `config_cards` on every turn (`chat_turn.config_cards_from_result`, LOCK-
+  STEP), the page renders "Setting changed: old → new [Undo]" (Undo =
+  `GET /config/changes/{change_id}` → `POST /undo/{id}`), and
+  `GET /config/ledger` is the "Changed here or in chat" panel. SECRETS never
+  ride a tool argument in chat: `config_secret` / `channel_connect` /
+  `app_connect` return a secure card that posts straight to
+  `POST /config/secret` (`settings/credentials.py`: names-only ledger, the old
+  value kept encrypted under `__undo__<id>` for Undo; `app.<id>` resolves to
+  the vault name the pack launches with and saving it loads the pack); a
+  `secret_set` armed in chat is swapped for the card; a key pasted into the
+  composer is HELD (`lib/configCards.looksLikeSecret`). The chat sends
+  `device_id` (`lib/device.ts`) so a device setting lands on that device.
+  SHELL: `lib/surfaces.ts` is the one surface manifest (every route, its
+  Everything column, `SIDEBAR_HREFS` = the four items; pins ≤ 3) read by the
+  sidebar, `/everything`, the palette and the T2 test — an unlisted route
+  fails `everything-v1321`. `components/AppSidebar.tsx` is the persistent
+  sidebar (the phone drawer, `components/Sidebar.tsx`, shares its body); on
+  the chat surface (`CHAT_PATHS` = `/` and `/chat`) its Chats space is the
+  chat page's OWN thread rail, portaled in (`lib/sidebarSlot.ts`) — layout
+  only, never a second list. `/` renders the chat page; the old Overview is
+  `components/overview/StatusOverview.tsx`, shown as Everything › Status
+  (`/everything#status`); the home's one conditional line reads ONE endpoint,
+  `GET /ui/status-line` (the chat page must never poll `/sessions/…`, a test
+  pins it). Relocated pages live in `components/settings/pages/*` and render
+  as Settings sections inside `EmbeddedPage` (their PageHeader becomes an h2);
+  their old routes redirect WITH their query (`lib/relocated.ts`); `/kanban`
+  is Sessions' Board view. The title-bar model chip and the first-run wizard
+  are retired: the composer's model menu is the one selector
+  (`ModelMenuBridge` sends "Switch model" there; "Make this my default"),
+  and a detected model is a one-tap suggestion (`ModelSuggestChip`), never a
+  silent pick. GATES: `dashboard/e2e` (Playwright on Edge; daemon 8807 with a
+  FRESH home, Next 8808 into `.next-e2e`) runs T1/T2/T3 and the 390 px no-pan
+  probe — `pnpm e2e`; `scripts/lint_redesign.py` runs ruff (E9 + F) and
+  ESLint (next/core-web-vitals) on touched files. Pins:
+  `tests/test_settings_{schema,writer,chat_tools,records,values}_v1321.py`,
+  `tests/test_ui_{visits,status_line}_v1321.py`, `dashboard/__tests__/
+  {chat-config-cards,everything,sidebar,chat-sidebar-rail,home,chat-firstrun,
+  settings-home,one-primary,route-visit}-v1321.test.tsx`.
+
 - **A chat reply can be rated; "Teach it your style" names what to do**
   (v1.320.0, a user report: the step said "rate a finished session", the
   rating lived only on session detail, and the step's button opened a blank
@@ -3602,8 +3666,9 @@ does not need a bump, stop and bump it.
   since v1.243.0 its xterm and socket live in `components/terminal/
   paneHost.ts` and are parked, not destroyed (see the hard rule).
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
-  (`ui.tsx` primitives, `Sidebar.tsx` nav incl. Simple/Advanced mode,
-  `ModelSwitcher.tsx` quality dial) and `dashboard/lib/` (`api.ts` fetch+auth,
+  (`ui.tsx` primitives, `AppSidebar.tsx` the persistent sidebar +
+  `Sidebar.tsx` its phone drawer (v1.321.0; Simple/Advanced is retired),
+  `ModelSwitcher.tsx` quality dial — no longer mounted in the title bar) and `dashboard/lib/` (`api.ts` fetch+auth,
   `useEvents.ts` one socket per window (EventsProvider), `types.ts`). Canvas editors: `components/workflow/`
   (agents.ts lives HERE, not lib/). Terminals page = free-form react-rnd
   canvas; pane header class `ij-term-drag` is the drag handle.
