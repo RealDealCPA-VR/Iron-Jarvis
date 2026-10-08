@@ -2928,6 +2928,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
     _routes.triggers.register(app, d)
+    _routes.ui.register(app, d)
     _routes.audit.register(app, d)
     _routes.undo.register(app, d)
     _routes.fleet.register(app, d)

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
+import { RouteVisitBeacon } from "@/components/RouteVisitBeacon";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -128,6 +129,8 @@ export default function RootLayout({
           {/* "This PC" notifications: comm.desktop events → native OS toast
               via the Electron preload (no-op in a plain browser). */}
           <DesktopNotifyBridge />
+          {/* Redesign S0: one POST /ui/visit per page change (usage counts). */}
+          <RouteVisitBeacon />
           </MotionProvider>
           </FaceStylesProvider>
           </EventsProvider>

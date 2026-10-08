@@ -20,6 +20,7 @@
 
 import { Briefcase, Cog, Cpu, Layers, type LucideIcon } from "lucide-react";
 import { NAV, type NavEntry } from "./nav";
+import { markNavPress } from "./visitVia";
 
 const USE_KEY = "ironjarvis.overview.usage";
 const ORDER_KEY = "ironjarvis.overview.order";
@@ -57,6 +58,8 @@ function writeJson(key: string, value: unknown): void {
 
 /** Record that a module was opened. Called from the nav, once per navigation. */
 export function recordOpen(href: string): void {
+  // Redesign S0: every nav press also tags the coming page visit as "nav".
+  markNavPress();
   if (!href || NOT_APPS.has(href)) return;
   const counts = readJson<Record<string, number>>(USE_KEY, {});
   counts[href] = (counts[href] ?? 0) + 1;

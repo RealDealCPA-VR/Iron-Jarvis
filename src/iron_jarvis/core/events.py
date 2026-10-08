@@ -181,6 +181,10 @@ class EventType:
     PREFERENCE_SUGGESTED = "preference.suggested"
     PREFERENCE_KEPT = "preference.kept"
     PREFERENCE_DECLINED = "preference.declined"
+    # Calm UI redesign S0 (v1.321.0): the dashboard tells the daemon which
+    # page was opened ({route, via}) so usage of each surface is countable
+    # over time. Route = the first path segment only; no ids, no query.
+    UI_PAGE_OPENED = "ui.page_opened"
     # Messaging surfaces (v1.136.0): the DAEMON appended a message to a chat
     # thread (comm/threads.py — inbound phone message or the daemon's reply),
     # so an open dashboard thread can live-refresh. {thread_id, messages} —

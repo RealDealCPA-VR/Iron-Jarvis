@@ -39,6 +39,7 @@ from . import (  # noqa: F401
     system,
     terminals,
     triggers,
+    ui,
     undo,
     voice,
     workflows,
