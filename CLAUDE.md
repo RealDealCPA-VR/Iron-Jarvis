@@ -2933,6 +2933,13 @@ does not need a bump, stop and bump it.
   PUT it since v1.298.0 and the daemon silently dropped it (found by the
   redesign audit). A key the UI renders MUST be in the whitelist; pin:
   `tests/test_comm_trust_setting_v13202.py`.
+  v1.320.3 (test-only): two more release-gate flakes on a loaded runner.
+  `test_search_index` fairness: its limit now also takes 1.5x the run's own
+  UNCONTENDED max (the gate saw alone max 576 ms, contended p95 583 vs 500);
+  re-adding the lock inversion still hangs it to the 300 s timeout.
+  `ux-wave4-automation-flows` waited for the Simple goals HEADING (drawn
+  before /autonomy/goals answers) then looked the goal up — now findByText
+  on the goal (a 300 ms GET delay reproduces CI's exact error).
 - **Settings in Simple is the everyday three** (v1.319.0). `BASIC_KEYS`
   (default_provider, default_model, default_persona) are the only FIELDS
   rendered while `full = advanced || showAll` is false; the section heading

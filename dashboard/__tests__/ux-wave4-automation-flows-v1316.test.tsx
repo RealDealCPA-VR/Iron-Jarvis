@@ -326,7 +326,9 @@ describe("T3-A2 Autonomy: one name per kind of goal, and the words say which is 
     // title must not promise these goals only suggest.
     expect(h.textContent ?? "").not.toMatch(/suggest-only/i);
     const card = cardOf(h);
-    expect(within(card).getByText(SIMPLE_GOAL.text)).toBeInTheDocument();
+    // v1.320.3: the heading renders before /autonomy/goals answers; wait for
+    // the GOAL itself (v1.320.2's release gate looked it up too early).
+    expect(await within(card).findByText(SIMPLE_GOAL.text, undefined, { timeout: 8000 })).toBeInTheDocument();
     expect(card.textContent ?? "").toMatch(/Chat/);
   });
 
