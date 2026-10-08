@@ -2924,6 +2924,15 @@ does not need a bump, stop and bump it.
   typed (pinned to arm remember_preference). Pins:
   `tests/test_chat_feedback_v1320.py`, the "rate a reply in Chat" block in
   `dashboard/__tests__/preferences-v1305.test.tsx` (6 mutations, all red).
+  v1.320.1 (test-only): v1.320.0's Release gate went red on
+  `agent-inbox-v1296` healthLine — `ago()` measured from a NOW taken at
+  FILE LOAD while healthLine reads the clock when it runs, so a loaded
+  runner read "31s ago"; the test now freezes Date at NOW (a 1.2 s
+  load delay reproduces CI's exact diff on the old shape).
+  v1.320.2: `comm_trust` joined `_SETTINGS_KEYS` — the Settings page had
+  PUT it since v1.298.0 and the daemon silently dropped it (found by the
+  redesign audit). A key the UI renders MUST be in the whitelist; pin:
+  `tests/test_comm_trust_setting_v13202.py`.
 - **Settings in Simple is the everyday three** (v1.319.0). `BASIC_KEYS`
   (default_provider, default_model, default_persona) are the only FIELDS
   rendered while `full = advanced || showAll` is false; the section heading

@@ -527,6 +527,11 @@ _SETTINGS_KEYS = [
     "default_persona",
     # Never substitute an explicitly-picked provider (see config.strict_model_pin).
     "strict_model_pin",
+    # v1.320.2: the trust posture of runs started from inbound messages
+    # (low | full, validated by Config). The Settings page has rendered and
+    # PUT this since v1.298.0, but the key was missing here, so every save
+    # was silently dropped and the posture never changed.
+    "comm_trust",
     # A LOCAL primary that answered with an error: refuse (default) or fail
     # over (see config.local_primary_policy, v1.228.0).
     "local_primary_policy",
