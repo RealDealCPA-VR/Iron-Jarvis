@@ -2930,6 +2930,11 @@ does not need a bump, stop and bump it.
   the full Overview set Advanced in a `beforeEach` (overview-wave2-v1310,
   ux-wave1-firstrun-v1313, links-wave1-v1309, overview-500-v1226). Pins:
   `dashboard/__tests__/home-simple-v1318.test.tsx` (9 mutations, all red).
+  SAME RELEASE (test-only): `wizard-wave2-v1310` "a run the MOCK answered"
+  went red on v1.317.0's Tests gate — it waited for /offline demo/ in the
+  WHOLE dialog, whose step text already says "chat keeps the offline demo"
+  before the run, then looked the verdict up; it now waits on the verdict
+  element (a 300 ms POST /sessions delay reproduces CI's exact error).
 - **Light is a SCHEME, and a theme can be the user's own** (v1.317.0).
   `<html data-scheme="light|dark">` answers "is this a light theme" — every
   light re-ink in globals.css (the generated tone block, the amber block,

@@ -425,10 +425,20 @@ describe("the celebration reads the provider that ACTUALLY answered", () => {
     await waitFor(() => expect(dialog()).toBeTruthy());
     goToFirstTask();
     fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    // Wait for the run's verdict to render (either wording), THEN judge it.
-    await waitFor(() => expect(dialog().textContent).toMatch(/offline demo|output is real/i));
+    // Wait for the run's VERDICT to render (either wording), THEN judge it.
+    // v1.318.0: the wait used to read the whole dialog — whose step text
+    // already says "chat keeps the offline demo…" BEFORE the run — so it
+    // passed at once and the verdict was looked up before it existed (red
+    // on a loaded CI runner). Wait on the verdict element itself.
+    const verdict = await waitFor(
+      () => {
+        const v = screen.getByTestId("first-task-verdict");
+        expect(v.textContent).toMatch(/offline demo|output is real/i);
+        return v;
+      },
+      { timeout: 8000 },
+    );
     expect(dialog().textContent).not.toMatch(/output is real/i);
-    const verdict = screen.getByTestId("first-task-verdict");
     expect(verdict.textContent).toMatch(/offline demo/i);
     expect(verdict.textContent).toMatch(/no model ran/i);
     expect(verdict.className).toMatch(/amber/);
