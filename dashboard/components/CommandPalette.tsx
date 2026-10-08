@@ -30,9 +30,10 @@ import {
   Brain,
   StickyNote,
   Palette,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
-import { NAV_ENTRIES, NON_RAIL_ENTRIES } from "@/lib/nav";
+import { SURFACES } from "@/lib/surfaces";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -78,6 +79,7 @@ interface PaletteRow extends PaletteItem {
 
 /** Row badge text — small, so a result never leaves you guessing what it IS. */
 const KIND_LABEL: Record<PaletteItem["kind"], string> = {
+  setting: "Setting",
   page: "Page",
   action: "Action",
   skill: "Skill",
@@ -94,7 +96,10 @@ const KIND_LABEL: Record<PaletteItem["kind"], string> = {
 // second hand-maintained copy here is what rotted last time.
 // v1.315.0: plus NON_RAIL_ENTRIES — pages that are found, never railed (the
 // Session board; reached from the bell and, now, from here).
-const PAGE_ITEMS: PaletteRow[] = [...NAV_ENTRIES, ...NON_RAIL_ENTRIES].map((e) => ({
+// Calm UI redesign S6: off the SURFACE MANIFEST (lib/surfaces.ts), which is
+// the nav catalogue plus the pages it never railed (Everything, the
+// Directory) — so every surface the app has is one search away (T2).
+const PAGE_ITEMS: PaletteRow[] = SURFACES.map((e) => ({
   id: `page:${e.href}`,
   kind: "page" as const,
   label: e.label,
@@ -317,6 +322,46 @@ function themeItems(): PaletteRow[] {
     href: "/settings#appearance",
   });
   return rows;
+}
+
+/** GET /settings/schema → `{settings: [...]}` (the one settings schema). */
+interface SchemaSettingRow {
+  key: string;
+  label: string;
+  help?: string;
+  aliases?: string[];
+  pattern?: boolean;
+}
+
+/** One row per setting (opens Settings at that row) and one "in chat" row
+ *  that puts the request in the composer — typed, never sent. Pattern keys
+ *  (per-tool permissions) are a family, not one row. */
+export function settingRows(settings: SchemaSettingRow[]): PaletteRow[] {
+  const out: PaletteRow[] = [];
+  for (const s of settings) {
+    if (!s || typeof s.key !== "string" || !s.key || s.pattern) continue;
+    const label = s.label || s.key;
+    const aliases = [...(Array.isArray(s.aliases) ? s.aliases : []), s.key.replace(/[._]/g, " ")];
+    out.push({
+      id: `setting:${s.key}`,
+      kind: "setting",
+      label,
+      blurb: clip(s.help),
+      aliases,
+      href: `/settings?focus=${encodeURIComponent(s.key)}`,
+      icon: SlidersHorizontal,
+    });
+    out.push({
+      id: `setting-chat:${s.key}`,
+      kind: "action",
+      label: `${label} — do it in chat`,
+      blurb: "Opens chat with the request typed; nothing changes until you send it.",
+      aliases,
+      href: `/chat?ask=${encodeURIComponent(`Change my ${label.toLowerCase()} setting to `)}`,
+      icon: MessageSquare,
+    });
+  }
+  return out;
 }
 
 /** GET /skills → `{skills: [...]}`. */
@@ -685,6 +730,9 @@ export function CommandPalette() {
 
   // Live item sources, fetched once (see ensureLive).
   const [skillItems, setSkillItems] = useState<PaletteRow[]>([]);
+  // Calm UI redesign S6 (AUDIT §4.3 / R5): every setting in the one schema,
+  // plus a "do it in chat" row that only types the request.
+  const [settingItems, setSettingItems] = useState<PaletteRow[]>([]);
   const [threadItems, setThreadItems] = useState<PaletteRow[]>([]);
   const [projectItems, setProjectItems] = useState<PaletteRow[]>([]);
 
@@ -758,6 +806,12 @@ export function CommandPalette() {
             icon: Sparkles,
           })),
         ),
+      ),
+    );
+
+    once("settings", () =>
+      get<{ settings?: SchemaSettingRow[] }>("/settings/schema").then((d) =>
+        setSettingItems(settingRows(d.settings ?? [])),
       ),
     );
 
@@ -958,12 +1012,13 @@ export function CommandPalette() {
       ...DEEP_LINK_ITEMS,
       ...ACTION_ITEMS,
       ...themeItems(),
+      ...settingItems,
       ...skillItems,
       ...threadItems,
       ...projectItems,
     ],
     // `open`: theme rows are re-read each time the palette opens (v1.317.0).
-    [skillItems, threadItems, projectItems, open],
+    [settingItems, skillItems, threadItems, projectItems, open],
   );
 
   /** id → row, so the pure scorer can hand back plain items and we can still
@@ -1165,6 +1220,7 @@ export function CommandPalette() {
                       id={`ij-palette-row-${i}`}
                       role="option"
                       aria-selected={on}
+                      data-href={row.href}
                       type="button"
                       onMouseEnter={() => setActive(i)}
                       onClick={() => run(row)}

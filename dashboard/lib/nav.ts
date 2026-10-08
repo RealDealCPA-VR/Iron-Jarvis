@@ -602,7 +602,8 @@ export function labelForPath(pathname: string | null | undefined): string | null
  * crumb must name a page the way the page names itself (its PageHeader
  * title), and every route that renders a page must have one. Two kinds live
  * here, deliberately OUTSIDE `NAV` (nav.test pins the sidebar's structure,
- * and these must never appear as rows, palette entries or tiles):
+ * and these are never rail rows; since the calm UI redesign S6 the
+ * Directory and Everything ARE palette entries, through lib/surfaces.ts):
  *  - deep-link routes with no rail row of their own: /marketplace
  *    (its page is titled "Directory"), and /ltm + /lessons, which render the
  *    Memory surface and so ARE the Memory page;
@@ -616,4 +617,6 @@ const CRUMB_LABELS: Readonly<Record<string, string>> = {
   "/ltm": "Memory",
   "/lessons": "Memory",
   "/fleet": "Fleet",
+  // Calm UI redesign S6: the directory of every surface (lib/surfaces.ts).
+  "/everything": "Everything",
 };

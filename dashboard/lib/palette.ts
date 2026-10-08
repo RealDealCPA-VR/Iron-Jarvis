@@ -17,7 +17,7 @@ export interface PaletteItem {
    *  the index and are merged into the list as their own segment. They are
    *  never passed to scorePalette — its AND-substring matcher knows nothing
    *  about message bodies and would simply throw the whole lane away. */
-  kind: "page" | "action" | "skill" | "project" | "thread" | "history";
+  kind: "setting" | "page" | "action" | "skill" | "project" | "thread" | "history";
   label: string;
   blurb?: string;
   /** What the user might CALL it, when that isn't what we named it. */
@@ -32,6 +32,9 @@ export interface ScoredPaletteItem extends PaletteItem {
 /** Ties break toward what the user can act on immediately: a page is a
  *  destination they meant to go to; a thread is history they might have meant. */
 const KIND_RANK: Record<PaletteItem["kind"], number> = {
+  // Calm UI redesign S6 (AUDIT §4.3): a setting named exactly wins the tie —
+  // "the thing I want is a control halfway down a page" is the commonest hunt.
+  setting: -1,
   page: 0,
   action: 1,
   skill: 2,
