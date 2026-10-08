@@ -37,6 +37,7 @@ import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 import { timeAgo, shortId } from "@/lib/format";
+import { agentDisplayName } from "@/lib/agentWorlds";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
 
@@ -136,6 +137,24 @@ export default function SessionsPage() {
     () => Array.from(new Set(sessions.map((s) => s.agent_type))).sort(),
     [sessions],
   );
+  // v1.315.0 (UX wave 3, "one AI identity"): an option's LABEL names what the
+  // table rows it selects read as — "Jarvis" when every "supervisor" row is a
+  // mission coordinator, "Jarvis / supervisor" when coordinators and plain
+  // supervisor runs are mixed. The option VALUE stays the raw id (the filter
+  // matches agent_type exactly, so one choice still selects both kinds).
+  const agentOptionLabels = useMemo(() => {
+    const names = new Map<string, Set<string>>();
+    for (const s of sessions) {
+      const set = names.get(s.agent_type) ?? new Set<string>();
+      set.add(agentDisplayName(s.agent_type, s.origin));
+      names.set(s.agent_type, set);
+    }
+    const out = new Map<string, string>();
+    for (const [raw, set] of names) {
+      out.set(raw, Array.from(set).sort((a, b) => (a === "Jarvis" ? -1 : b === "Jarvis" ? 1 : a.localeCompare(b))).join(" / "));
+    }
+    return out;
+  }, [sessions]);
   // Origin KINDS present in the fetched list (prefix before ":", e.g.
   // "schedule:nightly" → schedule) — the per-kind filter options.
   const originKindOptions = useMemo(
@@ -334,7 +353,7 @@ export default function SessionsPage() {
                     <option value="">All agents</option>
                     {agentOptions.map((a) => (
                       <option key={a} value={a}>
-                        {a}
+                        {agentOptionLabels.get(a) ?? a}
                       </option>
                     ))}
                   </select>
@@ -506,7 +525,14 @@ export default function SessionsPage() {
                                 />
                               </span>
                             </td>
-                            <td className="px-2 py-2.5 text-zinc-400">{s.agent_type}</td>
+                            {/* v1.315.0 (one AI identity): a mission's
+                                coordinator reads "Jarvis"; any other id keeps
+                                its text, title-cased by CSS. The raw id stays
+                                in the title, and the agent FILTER still
+                                matches on it. */}
+                            <td className="px-2 py-2.5 text-zinc-400" title={s.agent_type}>
+                              <span className="capitalize">{agentDisplayName(s.agent_type, s.origin)}</span>
+                            </td>
                             <td className="px-2 py-2.5">
                               {/* Amber when the run is paused for the user or
                                   finished short of the job (v1.227.0) —

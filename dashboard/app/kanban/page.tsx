@@ -30,8 +30,11 @@ export default function KanbanPage() {
   return (
     <PageShell>
       <Reveal>
+        {/* v1.315.0 (UX wave 3): "Session board", not the developer word
+            "Kanban" — the same name the title-bar crumb and the search box
+            use (lib/nav NON_RAIL_ENTRIES; still not a sidebar row). */}
         <PageHeader
-          title="Kanban"
+          title="Session board"
           subtitle="Live session lifecycle — drag a card from In Review onto Completed to approve, or onto Failed to reject."
           actions={
             <span className="flex items-center gap-2">
@@ -39,9 +42,10 @@ export default function KanbanPage() {
                 <Info size={13} className="text-accent-soft/70" />
                 {list.length} session{list.length === 1 ? "" : "s"}
               </span>
-              {/* This board has NO nav entry — it is reached only from the
-                  notification bell or Self-development, so without a door out a
-                  collapsed sidebar strands the user here. Sessions is the
+              {/* This board has no SIDEBAR row — it is reached from the
+                  notification bell, Self-development and (v1.315.0) the
+                  search box, so without a door out a collapsed sidebar
+                  strands the user here. Sessions is the
                   natural parent (this is a view of the same records) and is
                   always reachable, unlike guessing which entry point was used. */}
               <Link

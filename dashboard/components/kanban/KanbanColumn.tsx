@@ -2,6 +2,7 @@
 
 import { useDroppable } from "@dnd-kit/core";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
+import type { ReactNode } from "react";
 import type { SessionView } from "@/lib/types";
 import { dropAction, type LaneDef, type LaneId } from "@/lib/kanban";
 import type { Tone } from "@/components/ui";
@@ -33,6 +34,8 @@ export function KanbanColumn({
   busyId,
   onApprove,
   onReject,
+  compact = false,
+  action: headerAction,
 }: {
   lane: LaneDef;
   sessions: SessionView[];
@@ -45,6 +48,12 @@ export function KanbanColumn({
   busyId: string | null;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+  /** v1.315.0: the board is EMBEDDED in a narrow column (a project's mission
+   *  screen) — an empty lane may fold to one line at rest. */
+  compact?: boolean;
+  /** v1.315.0: a lane-owned action in the header (the standalone board's
+   *  two-press "Clear completed (n)" / "Clear failed (n)"). */
+  action?: ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: lane.id });
   const head = HEAD[lane.tone];
@@ -52,11 +61,21 @@ export function KanbanColumn({
   // Will this drop do something? (review -> completed = approve, -> failed = reject)
   const action = draggingFrom ? dropAction(draggingFrom, lane.id) : null;
   const armed = isOver && action !== null;
+  // v1.315.0 (UX wave 3, "the project board is not cramped"): on the compact
+  // (embedded) board an EMPTY lane folds to a single line instead of a
+  // ~600px dashed box — but only AT REST. An empty Completed/Failed lane is
+  // the drop target for drag-to-approve/reject, so the moment a drag starts
+  // (draggingFrom set) or a card hovers it (isOver) it is full height again.
+  const collapsed = compact && sessions.length === 0 && !draggingFrom && !isOver;
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div
+      data-lane={lane.id}
+      data-collapsed={collapsed ? "true" : undefined}
+      className={`flex min-w-0 flex-1 flex-col ${collapsed ? "self-start" : ""}`}
+    >
       {/* Column header */}
-      <div className="mb-3 flex items-center justify-between px-1">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 px-1">
         <div className="flex items-center gap-2.5">
           <span className={`h-2.5 w-2.5 rounded-full ${head.dot}`} />
           <h2 className={`text-sm font-semibold ${head.text}`}>{lane.title}</h2>
@@ -64,14 +83,17 @@ export function KanbanColumn({
             {count ?? sessions.length}
           </span>
         </div>
-        <span className="text-[11px] text-zinc-600">{lane.hint}</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] text-zinc-600">{lane.hint}</span>
+          {headerAction}
+        </span>
       </div>
       <div className={`mb-3 h-0.5 rounded-full bg-gradient-to-r ${head.bar} to-transparent`} />
 
       {/* Droppable body */}
       <div
         ref={setNodeRef}
-        className={`flex flex-1 flex-col gap-2.5 rounded-2xl border p-2.5 ring-1 ring-inset transition-colors duration-150 ${
+        className={`flex ${collapsed ? "" : "flex-1"} flex-col gap-2.5 rounded-2xl border ${collapsed ? "p-1.5" : "p-2.5"} ring-1 ring-inset transition-colors duration-150 ${
           armed
             ? `border-transparent ${RING[lane.tone]}`
             : isOver
@@ -107,7 +129,11 @@ export function KanbanColumn({
         </AnimatePresence>
 
         {sessions.length === 0 && (
-          <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] py-8 text-center text-xs text-zinc-600">
+          <div
+            className={`flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/[0.07] text-center text-xs text-zinc-600 ${
+              collapsed ? "py-1.5" : "py-8"
+            }`}
+          >
             {lane.id === "review" ? "No sessions awaiting review" : `No ${lane.title.toLowerCase()} sessions`}
           </div>
         )}

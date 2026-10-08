@@ -49,11 +49,18 @@ export function MissionRail({
     <nav
       aria-label="Agents navigation"
       data-testid="mission-rail"
-      className="card-surface flex flex-row gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-visible"
+      className="card-surface flex flex-row gap-1 p-1.5 lg:flex-col lg:p-2"
     >
       {MISSION_RAIL.map((row) => {
         const on = active === row.key;
-        const cls = `flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] transition-colors ${
+        // v1.315.0 (UX wave 3): below lg the rail was a clipped second menu
+        // ("New task · Chat · Projects · Agent…") as the first block of the
+        // page. The app-wide destinations are plain links the nav drawer
+        // already offers, so below lg only the two page-local rows (New task,
+        // Agents) show. Hidden by CSS, never by conditional rendering: every
+        // row still renders (agents-mission-v1307 pins all seven).
+        const pageLocal = Boolean(row.action);
+        const cls = `${pageLocal ? "flex flex-1 justify-center lg:flex-none lg:justify-start" : "hidden lg:flex"} shrink-0 items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] transition-colors ${
           on
             ? "bg-accent/15 font-semibold text-accent"
             : "text-zinc-300 hover:bg-white/5 hover:text-zinc-100"

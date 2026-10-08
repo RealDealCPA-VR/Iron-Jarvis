@@ -64,6 +64,7 @@ import { SessionFeedback } from "@/components/SessionFeedback";
 import { TimeTravelFeed } from "@/components/TimeTravelFeed";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, clockTime, shortId } from "@/lib/format";
+import { agentDisplayName } from "@/lib/agentWorlds";
 
 /** Session statuses that represent in-flight work (cancellable). "queued"
  *  (v1.166.0) is parked behind the concurrency cap — not yet running, but
@@ -408,7 +409,17 @@ export default function SessionDetailPage({
                 </div>
               )}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Meta label="Agent" value={session.agent_type} />
+                {/* v1.315.0 (one AI identity): a mission's coordinator is
+                    "Jarvis"; any other id keeps its text, title-cased by CSS;
+                    the raw id stays in the title. */}
+                <Meta
+                  label="Agent"
+                  value={
+                    <span title={session.agent_type} className="capitalize">
+                      {agentDisplayName(session.agent_type, session.origin)}
+                    </span>
+                  }
+                />
                 {/* v1.314.0: the model in words ("Demo model (scripted)",
                     "OpenAI · gpt-x"); the raw provider / model is the record
                     of what ran, so it stays in the title. */}
@@ -500,6 +511,35 @@ export default function SessionDetailPage({
               Renders nothing for a session that queued no items, which is
               almost all of them. */}
           <WorklistPanel sessionId={id} active={isActive} />
+
+          {/* Files handover (v1.168.0, P2) — what this session's tool ledger
+              says it wrote, previewable/downloadable right here. Renders
+              nothing when the session produced no files.
+              v1.315.0 (UX wave 3, "reads as a story"): it sits right under
+              the Summary (and the worklist), BEFORE Run controls — what the
+              run made is the second thing a reader wants, after what it
+              said. The raw record (live feed, Time-travel, runs, tool
+              table) still follows below, nothing removed. */}
+          <SessionFiles
+            sessionId={id}
+            workspacePath={session.workspace_path}
+            active={isActive}
+            onPreview={setPreviewPath}
+            reloadNonce={filesNonce}
+          />
+
+          {/* Embedded preview for a handed-over file — the chat's DocPreview,
+              driven by SessionFiles rows AND TeamTree file chips. */}
+          {previewPath && (
+            <Reveal>
+              <div className="h-[34rem]" data-testid="session-doc-preview">
+                <DocPreview
+                  path={previewPath}
+                  onClose={() => setPreviewPath(null)}
+                />
+              </div>
+            </Reveal>
+          )}
 
           {/* Lifecycle controls */}
           <Reveal>
@@ -665,30 +705,6 @@ export default function SessionDetailPage({
             </Reveal>
           )}
 
-          {/* Files handover (v1.168.0, P2) — what this session's tool ledger
-              says it wrote, previewable/downloadable right here. Renders
-              nothing when the session produced no files. */}
-          <SessionFiles
-            sessionId={id}
-            workspacePath={session.workspace_path}
-            active={isActive}
-            onPreview={setPreviewPath}
-            reloadNonce={filesNonce}
-          />
-
-          {/* Embedded preview for a handed-over file — the chat's DocPreview,
-              driven by SessionFiles rows AND TeamTree file chips. */}
-          {previewPath && (
-            <Reveal>
-              <div className="h-[34rem]" data-testid="session-doc-preview">
-                <DocPreview
-                  path={previewPath}
-                  onClose={() => setPreviewPath(null)}
-                />
-              </div>
-            </Reveal>
-          )}
-
           {/* Team + blackboard (v1.166.0, B3) — both render nothing for a
               solo session, so most pages are unchanged. */}
           <TeamTree
@@ -710,9 +726,19 @@ export default function SessionDetailPage({
               }
             >
               {sessionEvents.length === 0 ? (
-                <Empty icon={<Radio size={22} />}>
-                  No live events yet. New activity streams in here as the agent works.
-                </Empty>
+                // v1.315.0: "No live events yet" is only true while the run
+                // can still produce some. A FINISHED run says it is over and
+                // points at the record of every step (Time-travel, below).
+                // A finished run gets ONE quiet line, not a tall empty box.
+                isActive ? (
+                  <Empty icon={<Radio size={22} />}>
+                    No live events yet. New activity streams in here as the agent works.
+                  </Empty>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    This run has finished — every step it took is in Time-travel below.
+                  </p>
+                )
               ) : (
                 <div className="max-h-72 space-y-1 overflow-y-auto font-mono text-xs">
                   {sessionEvents.slice(0, 30).map((e) => (

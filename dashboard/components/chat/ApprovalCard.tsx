@@ -42,7 +42,7 @@
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
-import { toolWords } from "@/lib/toolWords";
+import { isBuiltinBrowserTool, toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
 
@@ -102,8 +102,11 @@ export function ApprovalCard({
   const [error, setError] = useState<string | null>(null);
   // v1.266.0: a browser action can be allowed FOR ITS TAB — this call, and every
   // later page action in the same tab until it closes. Offered only where it
-  // means something: a shell command has no tab.
-  const browserAction = approval.tool.startsWith("browser_");
+  // means something: a shell command has no tab. v1.315.0: keyed on the 14
+  // BUILT-IN browser tools by exact name (lib/toolWords) — an agent-made custom
+  // tool called `browser_backup` runs its author's command, has no tab, and the
+  // daemon never grants it one, so offering "Allow for this tab" was a lie.
+  const browserAction = isBuiltinBrowserTool(approval.tool);
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
   const canAlways = approval.canAlways === true;

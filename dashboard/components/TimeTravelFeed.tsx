@@ -27,6 +27,7 @@ import {
 import { timeAgo, clockTime } from "@/lib/format";
 import { providerDisplay } from "@/lib/onboarding";
 import { originLabel } from "@/components/sessions/OriginChip";
+import { toolWords } from "@/lib/toolWords";
 
 /** Aggregates over the currently-loaded window, surfaced to the host page. */
 export interface FeedStats {
@@ -652,6 +653,16 @@ function TimelineRow({
   // reversible action whose capture produced no inverse is not-undoable yet never
   // reversed.
   const reversed = !!e.undone;
+  // v1.315.0: the headline is words. A tool row says what the BUILT-IN tool
+  // does (lib/toolWords — built-ins only, exact name; initial capital), else
+  // the summary in words; any other row is its summary in words. The kind
+  // word / tool id becomes the chip, unless the headline already IS it.
+  const tw = e.tool ? toolWords(e.tool) : null;
+  const toolHead = tw ? tw.charAt(0).toUpperCase() + tw.slice(1) : "";
+  const said = humanSummary(e.summary);
+  const headline = toolHead || said || e.tool || meta.label;
+  const chipWord = e.tool || meta.label;
+  const chip = chipWord && chipWord !== headline ? chipWord : "";
 
   return (
     <li className="relative flex gap-3 rounded-xl px-2 py-2 transition-colors hover:bg-white/[0.02]">
@@ -664,16 +675,36 @@ function TimelineRow({
         </span>
       </span>
 
-      {/* body */}
+      {/* body
+          v1.315.0 (UX wave 3, "reads like a story, not a log"): the row's
+          FIRST words are what happened — "Session finished", "Save a file",
+          "Demo model · 120+40 tok" — and the kind word ("Progress", "Model
+          use") or the exact tool id is a muted chip after it. The raw ledger
+          summary and tool id stay in `title`s (a grant is keyed on the id).
+          Undo sits on that headline line (data-testid="timeline-line"),
+          beside the action it reverses — it used to float alone at the end
+          of the chip row. Still two-press ("Confirm undo?"). */}
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-sm text-zinc-200">
-            {e.tool ? (
-              <span className="font-mono text-[13px] text-zinc-100">{e.tool}</span>
-            ) : (
-              <span className="text-zinc-300">{meta.label}</span>
-            )}
+        <div
+          data-testid="timeline-line"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1"
+        >
+          <span
+            className="min-w-0 text-sm text-zinc-200"
+            title={e.summary || e.tool || undefined}
+          >
+            {headline}
           </span>
+          {chip && (
+            <span
+              title={e.tool || e.kind}
+              className={`rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[10.5px] text-zinc-500 ${
+                e.tool ? "font-mono" : ""
+              }`}
+            >
+              {chip}
+            </span>
+          )}
           {/* v1.314.0: who, in words ("Mission"); the raw origin is the title. */}
           {e.actor && !isEventTypeActor(e.actor) && (
             <span className="text-[11px] text-zinc-500" title={`Started by: ${e.actor}`}>
@@ -692,14 +723,39 @@ function TimelineRow({
           >
             {timeAgo(e.ts)}
           </span>
+          {e.undoable && (
+            <button
+              type="button"
+              onClick={onUndo}
+              disabled={undoing}
+              title="Reverse this action — restores the prior state"
+              className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                armed
+                  ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
+                  : "border-white/10 text-zinc-400 hover:border-accent/40 hover:text-accent-soft"
+              }`}
+            >
+              {undoing ? (
+                <LoaderInline label="Undoing…" />
+              ) : (
+                <>
+                  <Undo2 size={12} /> {armed ? "Confirm undo?" : "Undo"}
+                </>
+              )}
+            </button>
+          )}
         </div>
 
-        {e.summary && (
+        {/* A tool row's ledger line ("write_file ok") is its detail — the
+            headline is the tool in words, so the summary stays as the record
+            below it. Any other row's summary IS the headline (never twice). */}
+        {e.tool && toolHead && e.summary && (
           <div className="mt-0.5 truncate text-xs text-zinc-500" title={e.summary}>
             {humanSummary(e.summary)}
           </div>
         )}
 
+        {(inTok > 0 || outTok > 0 || cost > 0 || listPrice > 0 || (showSession && e.session_id)) && (
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {(inTok > 0 || outTok > 0) && (
             <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/20 bg-violet-500/[0.06] px-2 py-0.5 text-[10px] font-medium text-violet-300">
@@ -732,29 +788,8 @@ function TimelineRow({
               Open session <ExternalLink size={9} />
             </Link>
           )}
-
-          {e.undoable && (
-            <button
-              type="button"
-              onClick={onUndo}
-              disabled={undoing}
-              title="Reverse this action — restores the prior state"
-              className={`ml-auto inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-                armed
-                  ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
-                  : "border-white/10 text-zinc-400 hover:border-accent/40 hover:text-accent-soft"
-              }`}
-            >
-              {undoing ? (
-                <LoaderInline label="Undoing…" />
-              ) : (
-                <>
-                  <Undo2 size={12} /> {armed ? "Confirm undo?" : "Undo"}
-                </>
-              )}
-            </button>
-          )}
         </div>
+        )}
 
         {rowError && (
           <div className="mt-1.5 text-[11px] text-rose-300">{rowError}</div>

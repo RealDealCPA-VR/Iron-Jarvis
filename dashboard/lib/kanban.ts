@@ -13,7 +13,9 @@ export interface LaneDef {
 export const LANES: LaneDef[] = [
   { id: "active", title: "Active", tone: "cyan", hint: "Running now" },
   { id: "review", title: "In Review", tone: "amber", hint: "Awaiting approval" },
-  { id: "completed", title: "Completed", tone: "green", hint: "Merged & done" },
+  // v1.315.0: "Finished", not git's "Merged & done" — most finished runs
+  // never merged anything (a summary, a memo, a reply).
+  { id: "completed", title: "Completed", tone: "green", hint: "Finished" },
   { id: "failed", title: "Failed", tone: "red", hint: "Errored or rejected" },
 ];
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ShieldAlert,
+  Bot,
   ShieldCheck,
   Power,
   PowerOff,
@@ -543,27 +544,7 @@ export default function ComputerUsePage() {
       <Reveal>
         <PageHeader
           title="Browser"
-          subtitle="Two browsers live here. Your browser — your own Chrome or Edge, paired with Iron Jarvis so it can see your open tabs and read the page you are looking at. And a separate, disposable browser an agent drives on its own, gated behind allowlists and your explicit approval, with a live view so you can watch it work."
-          actions={
-            data ? (
-              <span
-                className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                  enabled
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                    : "border-zinc-500/25 bg-zinc-500/10 text-zinc-400"
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    enabled
-                      ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
-                      : "bg-zinc-500"
-                  }`}
-                />
-                {enabled ? "Agent browser on" : "Agent browser off"}
-              </span>
-            ) : null
-          }
+          subtitle="Two browsers live here. Your browser — your own Chrome or Edge, paired with Iron Jarvis so it can see your open tabs and read the page you are looking at. And the agent browser — a separate, disposable browser an agent drives on its own, gated behind allowlists and your explicit approval, with a live view so you can watch it work."
         />
       </Reveal>
 
@@ -574,12 +555,52 @@ export default function ComputerUsePage() {
       )}
 
       {/* Your browser — the user's OWN Chrome, paired here (v1.235.0, D03).
-          It sits above the computer-use explainer deliberately: this is the
+          It sits above the agent-browser explainer deliberately: this is the
           browser surface a daily-driver user wants, and the disposable-VM
           Playwright browser below it is the specialist one. Every existing
           section stays exactly where it was, once. */}
       <Reveal>
         <YourBrowserCard />
+      </Reveal>
+
+      {/* v1.315.0: the page holds TWO products and nothing said where the
+          second one starts — the "Agent browser off" pill sat in the page
+          header above Your browser (which has its own "Off"), and the amber
+          VM warning below read as a warning about the user's own browser. A
+          heading now opens the agent-browser half, and its on/off pill lives
+          in that heading. One name throughout this half: "agent browser"
+          (the daemon routes stay /computeruse/*). */}
+      <Reveal>
+        <div className="flex flex-wrap items-end justify-between gap-3 border-t hairline pt-5">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-base font-semibold text-zinc-100">
+              <Bot size={17} className="shrink-0 text-accent-soft" />
+              Agent browser
+            </h2>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              A separate, disposable browser an agent drives on its own — not
+              your Chrome or Edge.
+            </p>
+          </div>
+          {data ? (
+            <span
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                enabled
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                  : "border-zinc-500/25 bg-zinc-500/10 text-zinc-400"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  enabled
+                    ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
+                    : "bg-zinc-500"
+                }`}
+              />
+              {enabled ? "Agent browser on" : "Agent browser off"}
+            </span>
+          ) : null}
+        </div>
       </Reveal>
 
       {/* Safety explainer — lead, slightly cautionary. */}
@@ -591,8 +612,8 @@ export default function ComputerUsePage() {
               Read this before you turn it on.
             </div>
             <p className="leading-relaxed text-amber-100/80">
-              Computer use lets an agent control a browser (and, later, the desktop) on your
-              behalf. It is{" "}
+              The agent browser lets an agent control a browser (and, later, the desktop) on
+              your behalf. It is{" "}
               <span className="font-semibold text-amber-100">off by default</span>. Only enable it
               on an <span className="font-semibold text-amber-100">isolated, disposable VM</span> —
               never on a machine with logged-in accounts or files you can&apos;t afford to lose.
@@ -605,7 +626,7 @@ export default function ComputerUsePage() {
         </div>
       </Reveal>
 
-      {/* Live view — only exists while computer use is enabled */}
+      {/* Live view — only exists while the agent browser is on */}
       {enabled && (
         <Reveal>
           <Card
@@ -672,7 +693,7 @@ export default function ComputerUsePage() {
                   </span>
                   <div>
                     <div className="text-sm font-semibold text-zinc-100">
-                      Computer use is {enabled ? "enabled" : "disabled"}
+                      The agent browser is {enabled ? "on" : "off"}
                     </div>
                     <div className="text-xs text-zinc-500">
                       {enabled
@@ -691,11 +712,11 @@ export default function ComputerUsePage() {
                   }
                 >
                   {saving === "toggle" ? (
-                    <LoaderInline label={enabled ? "Disabling…" : "Enabling…"} />
+                    <LoaderInline label={enabled ? "Turning off…" : "Turning on…"} />
                   ) : enabled ? (
-                    <><PowerOff size={15} /> Disable</>
+                    <><PowerOff size={15} /> Turn off the agent browser</>
                   ) : (
-                    <><Power size={15} /> Enable computer use</>
+                    <><Power size={15} /> Turn on the agent browser</>
                   )}
                 </button>
               </div>
@@ -940,7 +961,7 @@ export default function ComputerUsePage() {
             <SkeletonRows rows={3} />
           ) : runs.length === 0 ? (
             <Empty icon={<History size={28} />}>
-              No runs recorded yet — history appears after the first computer-use run.
+              No runs recorded yet — history appears after the agent browser&apos;s first run.
             </Empty>
           ) : (
             <ul className="space-y-2">

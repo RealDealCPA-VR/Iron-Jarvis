@@ -716,7 +716,9 @@ export function RosterStrip({
                       />
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                       <span
-                        className={`min-w-0 truncate text-[13px] font-medium ${
+                        // v1.315.0: the id stays the TEXT; CSS title-cases it
+                        // ("Builder"), the same casing the front door uses.
+                        className={`min-w-0 truncate text-[13px] font-medium capitalize ${
                           active ? "text-accent-soft" : "text-zinc-200"
                         }`}
                       >

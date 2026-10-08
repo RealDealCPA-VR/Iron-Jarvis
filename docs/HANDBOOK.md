@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.314.0 (2026-10-04).*
+holds itself to. Current as of v1.315.0 (2026-10-04).*
 
 ---
 
@@ -354,12 +354,13 @@ into chat as `@guide …`, ready to send.
   one watched turn at a time, not for a background run making a batch of
   calls while you are elsewhere.
 
-### Sessions & Kanban
+### Sessions & the Session board
 Every agent run is a **session**: live token/tool streaming, the delegation
 **TeamTree**, the team's shared **blackboard**, a ledger-derived result card
 (files created/changed *proven from the ledger*, never from the model's
-closing paragraph), transcript export, cancel/rerun/continue. Kanban shows
-the same sessions as lanes — including **Queued** when a concurrency limit is
+closing paragraph), transcript export, cancel/rerun/continue. The **Session
+board** (`/kanban`; called Kanban before v1.315.0) shows the same sessions as
+lanes — including **Queued** when a concurrency limit is
 set. Cancel genuinely stops the agent, in every lane.
 
 - **Waiting for you** (v1.227.0): a run paused on a permission ask sits in
@@ -371,7 +372,7 @@ set. Cancel genuinely stops the agent, in every lane.
 - **The verdict is separate from the status** (v1.227.0): a finished run also
   carries an **outcome** — *completed*, *completed · with failures* (a call
   that changes files or state failed), or *completed · needs you* (an ask was
-  never answered). The session header, the sessions list, the kanban card and
+  never answered). The session header, the sessions list, the Session board card and
   a project's recent runs show it as an amber chip instead of a green badge,
   and the result card headlines "Finished — N calls were never approved".
   The Worklist panel offers **Re-run the N failed items**, which re-opens
@@ -382,8 +383,9 @@ set. Cancel genuinely stops the agent, in every lane.
   instead of holding them for 15 minutes.
 - **Summaries read like chat** (v1.230.0): the summary card on a session page
   renders the agent's markdown the way a chat reply does — bold, lists, code —
-  and a project's **Recent runs** rows show the summary's words on one line,
-  never its asterisks.
+  and a project's **Recent runs** rows show the summary's words, never its
+  asterisks (since v1.315.0 each row leads with what you asked, then the
+  summary on a quieter line, then when it ran).
 - **A session page in your words** (v1.232.0): the **Live activity** rows
   show the same short labels chat's progress line uses ("Using read_file…",
   "Step 2 of 4: …"; the raw event name is on hover), the **Traces** card is
@@ -784,7 +786,7 @@ three happen, Jarvis cannot see a single tab.
 **Jarvis browser** is a browser the app owns, separate from yours and logged into
 nothing. It is not built yet, and nothing in the app pretends otherwise.
 
-Below those sits the older **computer use** machinery, which drives a headless
+Below those sits the **agent browser** (the older computer-use machinery), which drives a headless
 Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
 cookies or sessions with your browser.
 
@@ -971,7 +973,7 @@ so you never have to guess whether a promise is in force or merely planned:
   never reaches Iron Jarvis at all. Your browser's own password manager keeps working,
   because Jarvis never sees what it fills.
 - **Changing a page asks first** (live): a click, typing, a key press or a
-  navigation is gated the same way computer use is gated. Every one of them asks
+  navigation is gated the same way the agent browser is gated. Every one of them asks
   before it runs at all, and the four that change a page ask AGAIN — whatever you
   have already allowed — when the target looks destructive or transactional, when the
   page marks the field sensitive, or when the control cannot be identified well enough
@@ -1435,8 +1437,22 @@ nothing was taken away.
   hover. Approval cards say what the action will do; the tool's own name is
   in the details. The Overview's health card reads "Tasks reviewed",
   "Finished", "Tools worked" and "Typical reply time".
+- **The busy screens, calmer** (v1.315.0). On a phone the chat's message
+  box gets its own line with the buttons under it, and a chat's ⋯ menu is
+  visible without hovering. The thread list says whether it shows this
+  project's chats or all of them. The mission coordinator is called
+  **Jarvis** everywhere. A session's page leads with what happened and what
+  it made; the step-by-step log is still there below. Kanban is now the
+  **Session board** (search finds it). Project cards have one main button
+  (**Set as focus** / **Clear focus**, formerly Make active / Deactivate),
+  the project header's model picker is labelled **Model** ("Same as app
+  default" when empty), and Recent runs show what you asked first. Creative
+  always asks before an upload is published to the public link. The Browser
+  page names its two parts: **your browser** (your own Chrome or Edge) and
+  the **agent browser**. File search's "By meaning" says it searches the
+  folders Iron Jarvis has indexed.
 - **Empty pages show the way.** An empty Reflexes, Sentinels, Webhooks,
-  Schedules, Kanban, Sessions or Terminals page says what the place is for,
+  Schedules, Session board, Sessions or Terminals page says what the place is for,
   gives an example or two, and offers the first step (the button opens the
   page's own form). Memory keeps task notes apart under **Notes about past
   jobs** — they are not added to your prompts.

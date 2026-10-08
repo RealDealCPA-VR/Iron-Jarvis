@@ -78,7 +78,10 @@ export type AgentsTab = "agents" | "manage";
 /** The detail panel's HERO portrait (v1.304.0): the agent opens on a big
  *  picture of itself — the user asked for the faces to be "more prominent",
  *  and this is the one place there is room for the whole face. */
-export const AGENT_HERO_PX = 160;
+// v1.315.0 (UX wave 3): 96px, was 160 — at 160 the portrait plus the
+// appearance panel pushed the agent's Inbox ("Queue for …") below the fold.
+// Still the largest face on the screen.
+export const AGENT_HERO_PX = 96;
 /** A row in the room's list (was 26). */
 export const AGENT_LIST_PX = 40;
 
@@ -298,7 +301,9 @@ export function AgentsPanel({
                       className={off ? "opacity-50" : ""}
                     />
                     <span
-                      className={`min-w-0 flex-1 truncate text-[12.5px] ${
+                      // v1.315.0: id as text, title-cased by CSS — the same
+                      // "Builder" the front door and the agent's heading show.
+                      className={`min-w-0 flex-1 truncate text-[12.5px] capitalize ${
                         isOpen ? "text-accent-soft" : "text-zinc-300"
                       }`}
                     >
@@ -448,7 +453,7 @@ export function AgentDetail({
   return (
     <div data-testid={`agent-detail-${bare}`} className="space-y-4">
       <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-        {/* THE HERO (v1.304.0). 160px inside the same status ring the table's
+        {/* THE HERO (v1.304.0). AGENT_HERO_PX (96px since v1.315.0) inside the same status ring the table's
             seats wear, on a soft accent halo — the agent opens on its own
             face. The ring is read from this row (`rosterStatus`), so it says
             what the seat said. Labelled: the picture is the first thing a
@@ -477,7 +482,7 @@ export function AgentDetail({
         </span>
         <div className="min-w-0 flex-1 text-center sm:pt-6 sm:text-left">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-[20px] font-semibold tracking-wide text-zinc-100">
+            <span className="truncate text-[20px] font-semibold capitalize tracking-wide text-zinc-100">
               {bare}
             </span>
             <span
@@ -556,11 +561,39 @@ export function AgentDetail({
         </div>
       )}
 
+      {entry.kind === "dynamic" && (
+        <p className="text-[11px] leading-relaxed text-zinc-500">
+          Its persona prompt, preferred model and tools live under{" "}
+          <span className="text-zinc-400">New &amp; manage</span>.
+        </p>
+      )}
+
+      {/* THE INBOX (v1.296.0): what this agent is doing, what waits for it,
+          and a composer to add to the queue. Builtin and custom agents only —
+          a remote has no queue on this daemon. Renders nothing on a daemon
+          without the route. */}
+      {entry.kind !== "remote" && <AgentInbox name={entry.name} projectId={projectId} />}
+
+      {/* THE FOLDER + THE COACH (v1.297.0): a custom agent's instructions
+          file (with revisions) and private notebook, then the reflection
+          coach's report and pending proposals. Keyed by the BARE slug — the
+          daemon's folder and coach routes take it without the "custom:"
+          prefix. Both render nothing on a daemon without the routes. */}
+      {entry.kind === "dynamic" && <AgentFiles name={bare} />}
+      {entry.kind === "dynamic" && <AgentCoach name={bare} />}
+
       {/* APPEARANCE — the same two controls for every kind of agent
-          (v1.214.0). Portrait first: it WINS over the drawn face wherever the
+          (v1.214.0). v1.315.0 (UX wave 3, "the work first"): it sits AFTER
+          the Inbox (and a custom agent's folder + coach) — the screen used to
+          open on a portrait panel and three swatch grids with the agent's
+          real job queue below the fold. Still fully expanded, same presses,
+          only lower. Portrait first: it WINS over the drawn face wherever the
           agent appears, so the picker below says so rather than quietly
           drawing something the app will not show. */}
       <div className="space-y-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+        <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-500">
+          Appearance
+        </h3>
         <AgentPortrait
           name={bare}
           avatar={entry.avatar}
@@ -583,27 +616,6 @@ export function AgentDetail({
           </p>
         )}
       </div>
-
-      {entry.kind === "dynamic" && (
-        <p className="text-[11px] leading-relaxed text-zinc-500">
-          Its persona prompt, preferred model and tools live under{" "}
-          <span className="text-zinc-400">New &amp; manage</span>.
-        </p>
-      )}
-
-      {/* THE INBOX (v1.296.0): what this agent is doing, what waits for it,
-          and a composer to add to the queue. Builtin and custom agents only —
-          a remote has no queue on this daemon. Renders nothing on a daemon
-          without the route. */}
-      {entry.kind !== "remote" && <AgentInbox name={entry.name} projectId={projectId} />}
-
-      {/* THE FOLDER + THE COACH (v1.297.0): a custom agent's instructions
-          file (with revisions) and private notebook, then the reflection
-          coach's report and pending proposals. Keyed by the BARE slug — the
-          daemon's folder and coach routes take it without the "custom:"
-          prefix. Both render nothing on a daemon without the routes. */}
-      {entry.kind === "dynamic" && <AgentFiles name={bare} />}
-      {entry.kind === "dynamic" && <AgentCoach name={bare} />}
     </div>
   );
 }

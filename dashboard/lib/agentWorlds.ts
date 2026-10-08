@@ -9,6 +9,12 @@
 // PURE ON PURPOSE. No React, no `lib/api` import: ~71 test files mock
 // `lib/api` wholesale, and a helper that lived behind that mock would be a
 // helper every one of those tests silently replaced.
+//
+// v1.315.0: its one import is lib/missionLinks (itself pure — it imports only
+// the import-free lib/mission), so `agentDisplayName` reads the SAME "is this
+// a mission's root?" rule every session link uses instead of forking it.
+
+import { isMissionRow } from "./missionLinks";
 
 /** Mirrors components/agents/identity.tsx — kept as a string union here so
  *  this module stays import-free. */
@@ -154,6 +160,22 @@ export function countsLine(c: WorldCounts): string {
  *  is chosen. The daemon's `sees` wins when it sends one. */
 export const REMOTE_SEES =
   "Remote agents see only the task Jarvis hands them — never the project's files or the other agents' work";
+
+/* ------------------------------------------------------ one identity --- */
+
+/** The name a user reads for the agent behind a run (v1.315.0, UX wave 3
+ *  "one AI identity"). A mission's COORDINATOR — the supervisor run a POST
+ *  /missions stamps with origin exactly "job:mission" — is Jarvis, the same
+ *  name the mission screen already gives it (lib/mission.ts). Everything
+ *  else keeps its raw id as TEXT: a mission teammate ("job:mission-member")
+ *  is not the coordinator even when it is a supervisor, and a scheduled
+ *  supervisor is not Jarvis either. Casing is CSS's job (`capitalize` on the
+ *  element), so getByText on a lowercase id and every filter VALUE stay the
+ *  raw id; callers keep that raw id in a `title`. */
+export function agentDisplayName(agentType: string, origin?: string | null): string {
+  if (agentType === "supervisor" && isMissionRow({ origin })) return "Jarvis";
+  return agentType;
+}
 
 /* ----------------------------------------------------------- the team --- */
 

@@ -32,6 +32,7 @@ import {
   UserRound,
   GraduationCap,
   FolderKanban,
+  SquareKanban,
   type LucideIcon,
 } from "lucide-react";
 
@@ -539,6 +540,34 @@ export const NAV: NavSectionDef[] = [
 export const NAV_ENTRIES: NavEntry[] = NAV.flatMap((s) => s.items);
 
 /**
+ * v1.315.0 (UX wave 3, "kanban-orphan-route") — pages the search box and the
+ * title-bar crumb must FIND that are deliberately NOT sidebar rows. NAV_ENTRIES
+ * is the rail (nav.test pins it, and the Sidebar renders every row of it), so
+ * a page reached from the bell or a deep link lives here instead: the palette
+ * offers it (components/CommandPalette PAGE_ITEMS) and `labelForPath` names
+ * it — never a new rail row. The Session board was reachable only from the
+ * bell, its crumb said the developer word "Kanban", and typing "kanban" sent
+ * people to Projects alone (that Projects alias stays — nav.test pins it).
+ */
+export const NON_RAIL_ENTRIES: NavEntry[] = [
+  {
+    href: "/kanban",
+    label: "Session board",
+    icon: SquareKanban,
+    aliases: [
+      "kanban",
+      "board of runs",
+      "session lanes",
+      "approve sessions",
+      "review board",
+      "drag to approve",
+    ],
+    blurb:
+      "Every session as a card in its lane — running, waiting for your review, finished or failed. Drag from In Review to approve or reject.",
+  },
+];
+
+/**
  * The nav label for a pathname — longest-prefix match so nested routes
  * (`/sessions/abc123`) resolve to their parent entry; "/" and unknown paths
  * answer null rather than a guess. The title bar's "where am I" and a pop-out
@@ -556,7 +585,13 @@ export function labelForPath(pathname: string | null | undefined): string | null
   // v1.313.0: a crumb override wins over a nav row of the SAME or a shorter
   // href, so "/fleet" reads "Fleet" (its page title) while the sidebar keeps
   // its longer "Local fleet", and the deep-link routes get a crumb at all.
-  for (const [href, label] of Object.entries(CRUMB_LABELS)) {
+  // v1.315.0: a NON_RAIL_ENTRIES page is named by its own label (one place —
+  // the palette shows the same words), ahead of the crumb overrides.
+  const crumbs: [string, string][] = [
+    ...NON_RAIL_ENTRIES.map((e): [string, string] => [e.href, e.label]),
+    ...Object.entries(CRUMB_LABELS),
+  ];
+  for (const [href, label] of crumbs) {
     if (!covers(href)) continue;
     if (!best || href.length >= best.href.length) best = { href, label };
   }
@@ -569,14 +604,15 @@ export function labelForPath(pathname: string | null | undefined): string | null
  * title), and every route that renders a page must have one. Two kinds live
  * here, deliberately OUTSIDE `NAV` (nav.test pins the sidebar's structure,
  * and these must never appear as rows, palette entries or tiles):
- *  - deep-link routes with no rail row of their own: /kanban, /marketplace
+ *  - deep-link routes with no rail row of their own: /marketplace
  *    (its page is titled "Directory"), and /ltm + /lessons, which render the
  *    Memory surface and so ARE the Memory page;
  *  - a route whose sidebar word is longer than its page title (/fleet).
  * /integrations is a server redirect to /connections and needs no entry.
  */
 const CRUMB_LABELS: Readonly<Record<string, string>> = {
-  "/kanban": "Kanban",
+  // v1.315.0: /kanban moved to NON_RAIL_ENTRIES ("Session board") — it is
+  // findable in search now, so it carries a label, aliases and a blurb.
   "/marketplace": "Directory",
   "/ltm": "Memory",
   "/lessons": "Memory",

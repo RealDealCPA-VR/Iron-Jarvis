@@ -25,6 +25,7 @@ import {
 import { API_BASE, ApiError, get, ijToken } from "@/lib/api";
 import { etagOf, isNotModified } from "@/lib/etag";
 import { Empty, ErrorNote, OfflineHint, Spinner } from "@/components/ui";
+import { Modal } from "@/components/Modal";
 
 /** One file from `GET /fs/files` — mtime is a UNIX epoch SECONDS float. */
 interface FileRow {
@@ -131,14 +132,8 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
   const [textErr, setTextErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Esc closes.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Esc closes — through <Modal> since v1.315.0, which also moves focus into
+  // the preview, keeps Tab inside it and gives focus back to the file row.
 
   // For text/code/documents, pull the extracted text (capped at 20k server-side).
   useEffect(() => {
@@ -172,18 +167,11 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
     }
   }
 
+  // v1.315.0 (UX wave 3): the shared <Modal> — the same backdrop + Escape
+  // dismissal and layer (80, above the chat's own overlays) as before, plus
+  // focus in / Tab trap / focus back, which this hand-rolled overlay lacked.
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={file.name}
-      onClick={onClose}
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="card-surface flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden focus:outline-none"
-      >
+    <Modal z={80} label={file.name} onClose={onClose} className="w-full max-w-3xl">
         <header className="flex items-center justify-between gap-3 border-b hairline px-5 py-3.5">
           <div className="flex min-w-0 items-center gap-2">
             <span className="shrink-0">
@@ -281,8 +269,7 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

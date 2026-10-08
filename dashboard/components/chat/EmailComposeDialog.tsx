@@ -11,8 +11,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Loader2, Mail, Paperclip, X } from "lucide-react";
+import { Modal } from "@/components/Modal";
 import { get, post } from "@/lib/api";
 import { splitAddresses } from "@/components/chat/emailDraft";
 
@@ -110,13 +110,8 @@ export function EmailComposeDialog({
     if (account !== undefined && account !== null) firstField.current?.focus();
   }, [account]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  // v1.315.0: Escape is <Modal>'s now, and it honours `busy` exactly as this
+  // dialog's own listener did — a send in flight is never dismissed.
 
   const toList = splitAddresses(to);
   const canSubmit = !busy && (mode === "draft" || toList.length > 0);
@@ -149,21 +144,24 @@ export function EmailComposeDialog({
     "w-full rounded-lg border border-white/10 bg-ink-900/60 px-2.5 py-1.5 text-[13px] text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-accent/40";
   const label = "text-[10px] font-semibold uppercase tracking-wider text-zinc-500";
 
-  const dialog = (
-    <div
-      role="presentation"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
-      onClick={() => !busy && onClose()}
+  // v1.315.0 (carry-modal-focus-chat-overlays): the dialog sits on the shared
+  // <Modal>, so it takes focus when it opens (the To field's own focus still
+  // wins once the account check answers), keeps Tab inside, and hands focus
+  // back to the button that opened it. Unchanged on purpose: the size
+  // (max-w-lg), the layer (z 50, where this overlay always sat), the scrim,
+  // Escape and the backdrop closing it, and `busy` freezing both while a save
+  // or send is in flight. The test id rides the overlay, which still holds
+  // every field.
+  return (
+    <Modal
+      label={title}
+      onClose={onClose}
+      busy={busy}
+      className="w-full max-w-lg"
+      testId="email-compose-dialog"
+      z={50}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        data-testid="email-compose-dialog"
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-4 py-3">
           <Mail size={14} className="text-accent-soft/80" aria-hidden="true" />
           <span className="flex-1 text-sm font-medium text-zinc-100">{title}</span>
           <button
@@ -210,7 +208,9 @@ export function EmailComposeDialog({
             </div>
           </div>
         ) : (
-          <div className="space-y-3 px-4 py-4">
+          // Modal caps the box at 88vh: on a short window the form scrolls
+          // inside it instead of losing its buttons off the bottom.
+          <div className="min-h-0 space-y-3 overflow-y-auto px-4 py-4">
             <div
               role="radiogroup"
               aria-label="What to do with this email"
@@ -336,9 +336,6 @@ export function EmailComposeDialog({
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
-
-  return typeof document === "undefined" ? null : createPortal(dialog, document.body);
 }

@@ -262,6 +262,13 @@ export function FacePicker({
   }, [face, name]);
 
   const pinned = Boolean(draft.shape || draft.color || draft.eyes);
+  // v1.315.0 (UX wave 3): "Apply face" is quiet (btn-ghost) until the draft
+  // actually differs from the STORED face, then accent — the bright button
+  // on an untouched picker out-shouted the agent's real work ("Queue for …").
+  // Never disabled: Apply with nothing chosen still resets, in one press.
+  const changed = (["shape", "color", "eyes"] as const).some(
+    (k) => (draft[k] ?? null) !== (face?.[k] ?? null),
+  );
 
   function choose(field: keyof FaceOverride, value: string | null) {
     setOk(null);
@@ -343,7 +350,7 @@ export function FacePicker({
             type="button"
             onClick={apply}
             disabled={busy}
-            className="btn-accent px-2.5 py-1 text-[11px]"
+            className={`${changed ? "btn-accent" : "btn-ghost"} px-2.5 py-1 text-[11px]`}
           >
             {busy ? <LoaderInline label="Saving…" /> : "Apply face"}
           </button>

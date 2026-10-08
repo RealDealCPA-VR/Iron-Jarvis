@@ -1387,7 +1387,10 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <span
-        className={`grid h-8 w-8 shrink-0 place-items-center rounded-xl border ${
+        // v1.315.0 (phone-chrome-eats-transcript): no avatar tiles below sm —
+        // on a 390px phone they cost every bubble 44px of a narrow line; the
+        // bubble's side and colour already say who is speaking.
+        className={`hidden h-8 w-8 shrink-0 place-items-center rounded-xl border sm:grid ${
           isUser
             ? "border-accent/30 bg-accent/10 text-accent-soft"
             : "border-white/[0.08] bg-white/[0.03] text-zinc-300"
@@ -1404,6 +1407,67 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
       >
         {children}
       </div>
+    </div>
+  );
+}
+
+/** v1.315.0 (project-tabs-shift-and-not-tabs): the project's views as a REAL
+ *  tablist — role=tab, aria-selected, aria-controls, roving tabindex — in the
+ *  same underline style as the Agents page's project tabs. It used to be a
+ *  row of chip buttons ABOVE the chat card that pushed the card ~52px down
+ *  whenever the open chat belonged to a project. Now it sits inline in the
+ *  card's own header (no row added, nothing shifts), and the same tablist is
+ *  drawn above the project surface so Tasks/Board/Media can switch back.
+ *  Arrow keys move focus only (wrapping); a click, Enter or Space selects —
+ *  manual activation, because selecting mounts a whole surface. */
+const PROJECT_VIEWS = ["chat", "tasks", "board", "media"] as const;
+const PROJECT_VIEW_CHAT_ID = "project-view-chat";
+const PROJECT_VIEW_SURFACE_ID = "project-view-surface";
+function ProjectViewTabs({
+  view,
+  onSelect,
+}: {
+  view: "chat" | ProjectSurfaceView;
+  onSelect: (v: "chat" | ProjectSurfaceView) => void;
+}) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, i: number) {
+    let next = -1;
+    if (e.key === "ArrowRight") next = (i + 1) % PROJECT_VIEWS.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + PROJECT_VIEWS.length) % PROJECT_VIEWS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = PROJECT_VIEWS.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    refs.current[next]?.focus();
+  }
+  return (
+    <div role="tablist" aria-label="Project views" className="flex items-center gap-0.5">
+      {PROJECT_VIEWS.map((v, i) => {
+        const selected = view === v;
+        return (
+          <button
+            key={v}
+            ref={(el) => {
+              refs.current[i] = el;
+            }}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={v === "chat" ? PROJECT_VIEW_CHAT_ID : PROJECT_VIEW_SURFACE_ID}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(v)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+            className={`-mb-px border-b-2 px-2.5 py-1 text-[13px] capitalize transition-colors ${
+              selected
+                ? "border-accent font-semibold text-zinc-100"
+                : "border-transparent text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            {v}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1574,6 +1638,29 @@ function applySkillPick(
 /** The textarea. The four caret handlers are the ones v1.105.0 measured as
  *  necessary (onSelect alone never fires for a collapsed caret), and the
  *  auto-grow lives here too — it keys off the text, so it belongs with it. */
+/** v1.315.0 (phone-composer-cramped): true at Tailwind's `sm` (640px) and up.
+ *  Read INSIDE the memoized composer, never on the page (v1.250.0: the page
+ *  must not re-render for the composer). It starts true — the server render
+ *  and a browser without matchMedia (jsdom) keep the full keyboard hints — and
+ *  follows the media query after mount. */
+const WIDE_QUERY = "(min-width: 640px)";
+function useWideScreen(): boolean {
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(WIDE_QUERY);
+    const sync = () => setWide(mq.matches);
+    sync();
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", sync);
+      return () => mq.removeEventListener("change", sync);
+    }
+    mq.addListener?.(sync);
+    return () => mq.removeListener?.(sync);
+  }, []);
+  return wide;
+}
+
 const ComposerInput = memo(function ComposerInput({
   store,
   inputRef,
@@ -1617,6 +1704,9 @@ const ComposerInput = memo(function ComposerInput({
   onPasteFiles: (files: File[]) => void;
 }) {
   const { text, caret, slashDismissed } = useComposer(store);
+  // v1.315.0: a touch screen has no Enter/Shift/Esc keys to hint at, and on a
+  // 390px phone the hints wrapped the placeholder onto three lines.
+  const wide = useWideScreen();
 
   // Auto-grow to fit multi-line text (up to ~1/4 viewport) and shrink back
   // when it is cleared on send, so a Shift+Enter draft is never trapped in
@@ -1751,12 +1841,22 @@ const ComposerInput = memo(function ComposerInput({
       aria-label="Message"
       placeholder={
         busy && onSteer
-          ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Esc stops)"
+          ? wide
+            ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Esc stops)"
+            : "Steer Jarvis mid-turn…"
           : talkingTo
-            ? `Message ${talkingTo}…  (Enter to send · @ to bring in someone else · Back to Jarvis above)`
-            : "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+            ? wide
+              ? `Message ${talkingTo}…  (Enter to send · @ to bring in someone else · Back to Jarvis above)`
+              : `Message ${talkingTo}…`
+            : wide
+              ? "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+              : "Message Iron Jarvis…"
       }
-      className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
+      // v1.315.0 (phone-composer-cramped): below sm the composer row wraps and
+      // the box takes the whole first line (basis-full, shown first), so the
+      // + / project / mic presses sit on the line under it instead of
+      // squeezing the box to ~95px. From sm up it is the old flex-1 again.
+      className="field order-first max-h-40 min-h-[2.75rem] flex-1 basis-full resize-none sm:order-none sm:basis-0"
     />
   );
 });
@@ -1942,7 +2042,9 @@ const SendArrow = memo(function SendArrow({
       disabled={busy || !(text.trim() || hasAttachments)}
       aria-label="Send"
       title="Send (Enter)"
-      className="btn-accent h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
+      // v1.315.0: ml-auto pins Send to the right end of the phone's controls
+      // line; from sm up the flex-1 box beside it leaves nothing to push.
+      className="btn-accent ml-auto h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
     >
       {busy ? <LoaderInline /> : <Send size={16} />}
     </button>
@@ -2697,6 +2799,14 @@ export default function ChatPage() {
   // slow answer for an old scope can never repaint the rail; and a request for
   // the scope already asked for is not sent again.
   const listScopeRef = useRef<string | null | undefined>(undefined);
+  // v1.315.0 (thread-rail-scope-silent): "All chats" widens the RAIL only.
+  // The open chat, its project, the composer's project and every save stay
+  // exactly as they are — the verifier caught that wiring it to
+  // chooseProject("") would re-save the open chat as "no project". The ref is
+  // what refreshThreads reads (it fires from the autosave chain, where
+  // closures go stale); the state is what the header renders.
+  const [railAll, setRailAll] = useState(false);
+  const railAllRef = useRef(false);
   // True once the page KNOWS its project: /projects answered (or failed), or
   // the user picked/cleared one. Before that a null projectId is "not known
   // yet", not "no project".
@@ -2879,6 +2989,10 @@ export default function ChatPage() {
     () => (projectId ? (projects.find((p) => p.id === projectId) ?? null) : null),
     [projects, projectId],
   );
+  // v1.315.0: the rail is showing one project's chats (not widened to "All
+  // chats"). Drives the rail header, the phone toggle, the empty wording and
+  // which rows name their project.
+  const railScoped = Boolean(projectId) && !railAll;
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -3260,6 +3374,10 @@ export default function ChatPage() {
   useLayoutEffect(() => {
     const scope =
       projectId === null && !projectsSettledRef.current ? wantedProjectId() : projectId;
+    // v1.315.0: picking (or leaving) a project shows that project's chats
+    // again — "All chats" was a look around, not a new selection.
+    railAllRef.current = false;
+    setRailAll(false);
     void showThreadsFor(scope);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -3726,8 +3844,21 @@ export default function ChatPage() {
     // The scope the rail is SHOWING (v1.311.0) — before /projects confirms a
     // remembered project that is the remembered one, not the still-null
     // projectId, so a refresh never swaps in another scope's list.
-    const scope = listScopeRef.current === undefined ? projectIdRef.current : listScopeRef.current;
+    // v1.315.0: a rail widened to "All chats" stays wide through a refresh.
+    const scope = railAllRef.current
+      ? null
+      : listScopeRef.current === undefined
+        ? projectIdRef.current
+        : listScopeRef.current;
     await showThreadsFor(scope, true);
+  }
+
+  /** v1.315.0: "All chats" ↔ "Only {project}" — the rail's scope alone. Never
+   *  chooseProject/clearProject/markSetupChanged: nothing is written. */
+  function setRailScopeAll(all: boolean) {
+    railAllRef.current = all;
+    setRailAll(all);
+    void showThreadsFor(all ? null : projectIdRef.current);
   }
 
   /** Point the sidebar at `scope`'s conversations (v1.311.0). A scope already
@@ -5127,6 +5258,17 @@ export default function ChatPage() {
   // back down on the next token. During a live stream scroll INSTANTLY (a smooth
   // animation queued per token never settles and reads as jitter).
   useEffect(() => {
+    // v1.315.0 (jump-pill-on-empty-state): the empty state has no latest
+    // message. It opens at its TOP — the lead line and the "Connect a model"
+    // card first — instead of being scrolled to its bottom, and the reader is
+    // re-pinned so the first message of the conversation still follows.
+    if (messages.length === 0 && !busy) {
+      pinnedRef.current = true;
+      setShowJump(false);
+      const el = scrollRef.current;
+      if (el) el.scrollTop = 0;
+      return;
+    }
     if (!pinnedRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: busy ? "auto" : "smooth", block: "end" });
     // v1.257.0 (S-02): `runStream.text` is deliberately NOT a dependency any
@@ -5155,6 +5297,9 @@ export default function ChatPage() {
   function onThreadScroll() {
     const el = scrollRef.current;
     if (!el) return;
+    // v1.315.0: scrolling the empty state is reading it, not leaving a
+    // conversation behind — there is nothing below to jump to.
+    if (messages.length === 0 && !busy) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     pinnedRef.current = nearBottom;
     setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
@@ -7179,12 +7324,18 @@ export default function ChatPage() {
    */
   const chatActions = (
         <div className="flex flex-wrap items-center gap-2">
-          {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
+          {/* Voice: hands-free Voice Chat + spoken-replies toggle.
+              v1.315.0 (phone-chrome-eats-transcript): icon-only below sm so
+              the header fits one row on a phone; its name stays "Voice chat"
+              (aria-pressed says whether it is on). */}
           <button
             type="button"
             onClick={toggleVoiceMode}
             disabled={!dictation.supported}
             aria-pressed={voiceMode}
+            // The visible word joins the name when it shows ("Voice on"), so
+            // the accessible name contains what a sighted user reads.
+            aria-label={voiceMode ? "Voice on" : "Voice chat"}
             title={
               voiceMode
                 ? "End voice chat"
@@ -7198,7 +7349,8 @@ export default function ChatPage() {
                 : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-accent/50 hover:text-accent-soft"
             }`}
           >
-            <AudioLines size={14} /> {voiceMode ? "Voice on" : "Voice"}
+            <AudioLines size={14} />{" "}
+            <span className="hidden sm:inline">{voiceMode ? "Voice on" : "Voice"}</span>
           </button>
           {tts.supported && (
             <button
@@ -7219,7 +7371,17 @@ export default function ChatPage() {
           )}
           {(
             <div className="flex items-center gap-1">
+              {/* v1.315.0: a quiet visible "Persona" so the select reads as a
+                  persona picker, not a stray "Assistant" (sm+; on a phone the
+                  row has no room and the select keeps its name). */}
+              <label
+                htmlFor="chat-persona-select"
+                className="mr-0.5 hidden text-[11px] text-zinc-500 sm:inline"
+              >
+                Persona
+              </label>
               <select
+                id="chat-persona-select"
                 aria-label="Persona"
                 value={persona}
                 onChange={(e) => {
@@ -7265,10 +7427,13 @@ export default function ChatPage() {
               </button>
             </div>
           )}
+          {/* v1.315.0: icon-only below sm, NAMED with the project — on a
+              phone this button is the card's only cue of the active project. */}
           <button
             type="button"
             onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
             aria-pressed={workspaceOpen}
+            aria-label={activeProject ? `Project: ${activeProject.name}` : "Project"}
             title={
               activeProject
                 ? `Project: ${activeProject.name} — replies ground in its knowledge; the panel holds its folder + files`
@@ -7281,7 +7446,7 @@ export default function ChatPage() {
             }`}
           >
             {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}{" "}
-            <span className="max-w-[9rem] truncate">
+            <span className="hidden max-w-[9rem] truncate sm:inline">
               {activeProject ? activeProject.name : "Project"}
             </span>
           </button>
@@ -7392,9 +7557,12 @@ export default function ChatPage() {
             className="btn-ghost self-start py-1.5 text-[13px] md:hidden"
           >
             <History size={14} />{" "}
+            {/* v1.315.0: the toggle names the scope it opens on. */}
             {sidebarOpen
               ? "Hide chats"
-              : `Chats${threads.length ? ` (${threads.length})` : ""}`}
+              : `Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
+                  threads.length ? ` (${threads.length})` : ""
+                }`}
           </button>
 
           {/* Threads sidebar */}
@@ -7419,19 +7587,52 @@ export default function ChatPage() {
                 />
               </div>
               <div className="shrink-0 border-b hairline px-3 pb-2 pt-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                    Threads
-                  </span>
+                <div className="flex items-center justify-between gap-2">
+                  {/* v1.315.0 (thread-rail-scope-silent): a project-scoped
+                      rail SAYS so — the other chats are not gone, they are
+                      one press away ("All chats", which widens this list
+                      only). */}
+                  {railScoped && activeProject ? (
+                    <span
+                      // Two lines before it clips: the project's name is the
+                      // point of this label, and the rail is only 15rem wide.
+                      className="line-clamp-2 min-w-0 flex-1 break-words text-[11px] font-medium leading-snug text-zinc-400"
+                      title={`Showing the chats in ${activeProject.name}`}
+                    >
+                      Threads in {activeProject.name}
+                    </span>
+                  ) : activeProject ? (
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                      All chats
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                      Threads
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={newChat}
-                    className="btn-ghost px-2 py-1 text-[12px]"
+                    className="btn-ghost shrink-0 whitespace-nowrap px-2 py-1 text-[12px]"
                     title="Start a new conversation"
                   >
                     <Plus size={13} /> New chat
                   </button>
                 </div>
+                {activeProject && (
+                  <button
+                    type="button"
+                    onClick={() => setRailScopeAll(railScoped)}
+                    className="mt-0.5 max-w-full truncate text-left text-[11px] text-zinc-500 underline-offset-2 transition-colors hover:text-accent-soft hover:underline"
+                    title={
+                      railScoped
+                        ? "Show every saved chat here — the open chat and its project stay as they are"
+                        : `Show only the chats in ${activeProject.name}`
+                    }
+                  >
+                    {railScoped ? "All chats" : `Only ${activeProject.name}`}
+                  </button>
+                )}
                 {threads.length > 0 && (
                   <div className="relative mt-2">
                     <Search
@@ -7462,8 +7663,9 @@ export default function ChatPage() {
                   </div>
                 ) : threads.length === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
-                    No saved chats yet — conversations appear here after the first
-                    reply.
+                    {railScoped && activeProject
+                      ? "No chats in this project yet."
+                      : "No saved chats yet — conversations appear here after the first reply."}
                   </p>
                 ) : visibleThreads.length === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
@@ -7518,37 +7720,48 @@ export default function ChatPage() {
                               <span className="min-w-0 truncate">
                                 {t.title || "Untitled chat"}
                               </span>
-                              {/* Origin chip: a MESSAGING thread names where it
-                                  comes from (the stronger signal, so it wins
-                                  the slot); otherwise, in the unscoped view,
-                                  project threads carry the project chip. */}
-                              {t.owner === "daemon" ? (
-                                <span
-                                  className="ml-auto max-w-[5.5rem] shrink-0 truncate rounded-full border border-accent/25 bg-accent/[0.08] px-1.5 text-[9px] uppercase tracking-wide text-accent-soft"
-                                  title="Messaging thread"
-                                >
-                                  {t.comm_channel || "linked"}
-                                </span>
-                              ) : !projectId && t.project_id ? (
-                                <span
-                                  className="ml-auto max-w-[5.5rem] shrink-0 truncate rounded-full border border-white/10 bg-white/[0.04] px-1.5 text-[9px] uppercase tracking-wide text-zinc-500"
-                                  title="Project thread"
-                                >
-                                  {projects.find((p) => p.id === t.project_id)?.name ??
-                                    "project"}
-                                </span>
-                              ) : null}
                             </span>
-                            <span className="block text-[11px] text-zinc-500">
+                            {/* v1.315.0 (thread-options-invisible-on-touch):
+                                the origin rides the META line, in readable
+                                sentence case — the 9px uppercase chip was cut
+                                to "Q3 BOOKKEEPI…", and the ⋯ that is now
+                                always visible on touch would sit on top of
+                                it. A MESSAGING thread names where it comes
+                                from (the stronger signal, so it wins);
+                                otherwise, while the rail shows every chat,
+                                a project thread names its project. */}
+                            <span className="block truncate text-[11px] text-zinc-500">
                               {timeAgo(t.updated_at)} · {count} msg
                               {count === 1 ? "" : "s"}
+                              {t.owner === "daemon" ? (
+                                <>
+                                  {" · "}
+                                  <span className="text-accent-soft/80" title="Messaging thread">
+                                    {capitalize(t.comm_channel || "linked")}
+                                  </span>
+                                </>
+                              ) : !railScoped && t.project_id ? (
+                                <>
+                                  {" · "}
+                                  <span title="Project thread">
+                                    {projects.find((p) => p.id === t.project_id)?.name ??
+                                      "Project"}
+                                  </span>
+                                </>
+                              ) : null}
                             </span>
                           </button>
                           )}
                           {renamingId !== t.id && (
+                            /* v1.315.0: visible by default — a touch screen has
+                               no hover, so the old opacity-0 left an invisible
+                               target. Only a hover-capable pointer hides it
+                               until the row is hovered or focused. */
                             <span
-                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 group-hover/thread:opacity-100 ${
-                                threadMenu?.id === t.id ? "opacity-100" : "opacity-0"
+                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:group-hover/thread:opacity-100 ${
+                                threadMenu?.id === t.id
+                                  ? "opacity-100"
+                                  : "[@media(hover:hover)]:opacity-0"
                               }`}
                             >
                               <button
@@ -7558,7 +7771,7 @@ export default function ChatPage() {
                                 aria-haspopup="menu"
                                 aria-expanded={threadMenu?.id === t.id}
                                 title="Chat options"
-                                className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] ${
+                                className={`grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-white/[0.06] md:h-6 md:w-6 ${
                                   threadMenu?.id === t.id
                                     ? "bg-white/[0.06] text-zinc-200"
                                     : "text-zinc-500 hover:text-zinc-200"
@@ -7909,33 +8122,34 @@ export default function ChatPage() {
                 </div>
               </Reveal>
             )}
-            {/* Project surface strip — the old project screen's tabs, inside
-                the chat module. Chat stays mounted (hidden) so the thread and
-                composer state survive a Tasks/Board detour untouched. */}
-            {activeProject && (
-              <div className="mb-3 flex flex-wrap items-center gap-1">
-                {(["chat", "tasks", "board", "media"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setProjectView(v)}
-                    className={`rounded-lg border px-2.5 py-1 text-[12px] capitalize transition-colors ${
-                      projectView === v
-                        ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
-                        : "border-white/10 text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {v}
-                  </button>
-                ))}
+            {/* Project surfaces — the old project screen's views, inside the
+                chat module. Chat stays mounted (hidden) so the thread and
+                composer state survive a Tasks/Board detour untouched.
+                v1.315.0: the tabs live in the chat card's header while Chat
+                is showing (no row above the card, so nothing shifts between a
+                project chat and a plain one); on Tasks/Board/Media the card is
+                hidden, so the same tablist sits above the surface to come
+                back. One tablist is visible at a time. */}
+            {activeProject && projectView !== "chat" && (
+              <div className="flex items-center border-b hairline">
+                <ProjectViewTabs view={projectView} onSelect={setProjectView} />
               </div>
             )}
-            {activeProject && projectView !== "chat" && (
-              <ProjectSurface
-                projectId={activeProject.id}
-                hasRoot={Boolean(activeProject.root) && activeProject.root_exists !== false}
-                view={projectView}
-              />
+            {activeProject && (
+              <div
+                id={PROJECT_VIEW_SURFACE_ID}
+                role="tabpanel"
+                aria-label={`Project ${projectView}`}
+                hidden={projectView === "chat"}
+              >
+                {projectView !== "chat" && (
+                  <ProjectSurface
+                    projectId={activeProject.id}
+                    hasRoot={Boolean(activeProject.root) && activeProject.root_exists !== false}
+                    view={projectView}
+                  />
+                )}
+              </div>
             )}
             {/* `card-surface` DIRECTLY, not <Card> (v1.215.0). Card wraps its
                 children in an unstyled `<div>` (`ui.tsx`: `{pad ? "p-4" : ""}`),
@@ -7948,6 +8162,9 @@ export default function ChatPage() {
                 height between them. */}
             <section
               data-testid="chat-card"
+              id={PROJECT_VIEW_CHAT_ID}
+              role={activeProject ? "tabpanel" : undefined}
+              aria-label={activeProject ? "Project chat" : undefined}
               className={`card-surface relative flex h-full min-h-0 flex-col overflow-hidden transition-shadow ${
                 activeProject && projectView !== "chat" ? "hidden" : ""
               }`}
@@ -8013,8 +8230,17 @@ export default function ChatPage() {
 
                   `justify-end` puts them right; they wrap rather than
                   overflow, because the persona <select> alone can be wide. */}
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b hairline px-3 py-2">
-                {chatActions}
+              {/* v1.315.0: a project chat's view tabs sit at the LEFT of this
+                  same header row; the controls keep the right (ml-auto), and
+                  `max-w-full` lets them wrap inside the row on a narrow card
+                  instead of overflowing it. */}
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b hairline px-3 py-2">
+                {activeProject && projectView === "chat" && (
+                  <ProjectViewTabs view={projectView} onSelect={setProjectView} />
+                )}
+                <div className="ml-auto flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+                  {chatActions}
+                </div>
               </div>
 
               {/* Message thread — THE ONLY SCROLLING PART of the card.
@@ -8200,7 +8426,11 @@ export default function ChatPage() {
                     )}
                   </>
                 )}
-                {showJump && (
+                {/* v1.315.0: never over the empty state (the same condition as
+                    its branch above) — a pill pointing at messages that do not
+                    exist covered the "I have an API key" door on a phone. A
+                    first reply still streaming is not the empty state. */}
+                {showJump && !(messages.length === 0 && !busy) && (
                   <button
                     type="button"
                     onClick={jumpToLatest}
@@ -8636,7 +8866,9 @@ export default function ChatPage() {
                 </div>
               )}
               {/* Composer */}
-              <div className="relative flex items-end gap-2 border-t hairline p-3">
+              {/* v1.315.0: flex-wrap below sm — the box takes the first line,
+                  the presses the second (phone-composer-cramped). */}
+              <div className="relative flex flex-wrap items-end gap-2 border-t hairline p-3 sm:flex-nowrap">
                 {/* "/" skill picker — floats above the composer */}
                 {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
                     below — one affordance grammar for both. */}
@@ -9132,8 +9364,10 @@ export default function ChatPage() {
                     }`}
                   >
                     <FolderKanban size={15} />
+                    {/* v1.315.0: icon-only on a phone (the title above and
+                        the card header still name the project). */}
                     {activeProject && (
-                      <span className="max-w-[7rem] truncate text-[12px]">
+                      <span className="hidden max-w-[7rem] truncate text-[12px] sm:inline">
                         {activeProject.name}
                       </span>
                     )}

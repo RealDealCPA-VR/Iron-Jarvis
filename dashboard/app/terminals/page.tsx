@@ -935,11 +935,14 @@ export default function TerminalsPage() {
               its live state; clicking one brings it into focus in the workspace
               beside it. Hidden on the canvas, which has its own way of showing
               you everything at once. */}
+          {/* v1.315.0 (phone): the rail's full height applied at EVERY width,
+              so at 390 px the first screen was an empty PANES column and the
+              stage sat a screen below. Below lg the rail is now capped
+              (max-h-56; PaneRail's own list scrolls inside it); the full
+              height — minus the demo strip, like every full-height module —
+              is lg-only. Layout only: no terminal behaviour changes. */}
           {shape === "rail" && !loading && (
-            <div
-              className="w-full shrink-0 lg:w-56 xl:w-64"
-              style={{ height: "calc(100vh - 12rem)", minHeight: 480 }}
-            >
+            <div className="flex w-full max-h-56 shrink-0 flex-col lg:w-56 lg:max-h-none lg:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] lg:min-h-[480px] xl:w-64">
               <PaneRail
                 panes={railPanes}
                 focusedId={activeId}
@@ -976,7 +979,10 @@ export default function TerminalsPage() {
               <div
                 ref={canvasRef}
                 className="relative w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
-                style={{ height: "calc(100vh - 12rem)", minHeight: 480 }}
+                // v1.315.0: subtracts the demo strip like the rail beside it
+                // (they must end on the same line at lg); 480 px floor kept
+                // at every width.
+                style={{ height: "calc(100vh - 12rem - var(--ij-strip-h, 0px))", minHeight: 480 }}
               >
                 {/* v1.313.0: the stage is a recessed THEME panel (ink-900), not
                     bg-black — black is the one neutral the themes do not remap,
@@ -1511,6 +1517,10 @@ export default function TerminalsPage() {
                         onSelect={setSelectedPath}
                         onOpenTerminal={(p) => addTerminal(p)}
                         onCollapse={() => changeTreeCollapsed(true)}
+                        // v1.315.0: the tab bar above already has THE collapse
+                        // button, and Build opens on the user's projects.
+                        hideHeaderCollapse
+                        showProjects
                       />
                     ) : (
                       <FilesPanel

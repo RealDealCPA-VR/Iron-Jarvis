@@ -32,7 +32,7 @@ import {
   Palette,
   type LucideIcon,
 } from "lucide-react";
-import { NAV_ENTRIES } from "@/lib/nav";
+import { NAV_ENTRIES, NON_RAIL_ENTRIES } from "@/lib/nav";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -92,7 +92,9 @@ const KIND_LABEL: Record<PaletteItem["kind"], string> = {
 // Straight off NAV_ENTRIES. Aliases and blurbs come along untouched: they were
 // written for exactly this box (see the essay at the top of lib/nav.ts), and a
 // second hand-maintained copy here is what rotted last time.
-const PAGE_ITEMS: PaletteRow[] = NAV_ENTRIES.map((e) => ({
+// v1.315.0: plus NON_RAIL_ENTRIES — pages that are found, never railed (the
+// Session board; reached from the bell and, now, from here).
+const PAGE_ITEMS: PaletteRow[] = [...NAV_ENTRIES, ...NON_RAIL_ENTRIES].map((e) => ({
   id: `page:${e.href}`,
   kind: "page" as const,
   label: e.label,

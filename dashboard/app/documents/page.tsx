@@ -20,6 +20,9 @@ import {
   RefreshCw,
   CalendarClock,
   ShieldCheck,
+  ExternalLink,
+  Copy,
+  Check,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
@@ -194,6 +197,82 @@ function readAsBase64(file: File): Promise<string> {
 function baseName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Saved-file actions (Open / Copy path)                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * v1.315.0: a save used to end on a raw path the user then had to hunt for in
+ * Explorer. The two things anyone does next — open it, or paste its path
+ * somewhere — sit right beside it. Same contract as the chat's ArtifactsRail:
+ * POST /documents/open {path} (the daemon's _preview_path may refuse a path or
+ * type with a 4xx — that message is shown here, never swallowed), and the
+ * clipboard write is try/caught (a denied clipboard must not crash the page,
+ * and "Copied" only shows after a copy that really happened).
+ */
+function SavedFileActions({ path }: { path: string }) {
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function open() {
+    if (opening) return;
+    setOpening(true);
+    setError(null);
+    try {
+      await post("/documents/open", { path });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function copy() {
+    try {
+      const clip = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+      if (!clip?.writeText) return;
+      await clip.writeText(path);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // A denied clipboard is not an error worth a banner; the path is on
+      // screen and selectable.
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void open()}
+          disabled={opening}
+          title="Open this file in its usual app"
+          className="btn-ghost btn-sm"
+        >
+          {opening ? <LoaderInline /> : <ExternalLink size={13} />}
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          title="Copy the file's full path"
+          className="btn-ghost btn-sm"
+        >
+          {copied ? <Check size={13} className="text-tone-success" /> : <Copy size={13} />}
+          Copy path
+        </button>
+        {/* The button keeps its name; the confirmation is a status beside it. */}
+        <span role="status" className="text-[11px] text-tone-success">
+          {copied ? "Copied" : ""}
+        </span>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </div>
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -985,13 +1064,16 @@ export default function DocumentsPage() {
 
               {writeOk && (
                 <div className="space-y-3">
-                  <SuccessNote>
-                    Saved{" "}
-                    <span className="font-mono text-emerald-100">
-                      {writeOk.path}
-                    </span>{" "}
-                    ({writeOk.bytes.toLocaleString()} bytes).
-                  </SuccessNote>
+                  <div data-testid="doc-write-saved" className="space-y-2">
+                    <SuccessNote>
+                      Saved{" "}
+                      <span className="break-all font-mono text-emerald-100">
+                        {writeOk.path}
+                      </span>{" "}
+                      ({writeOk.bytes.toLocaleString()} bytes).
+                    </SuccessNote>
+                    <SavedFileActions key={writeOk.path} path={writeOk.path} />
+                  </div>
                   <SaveToMemoryRow
                     key={`write-${writeOk.path}`}
                     filename={baseName(writeOk.path)}
@@ -1079,12 +1161,15 @@ export default function DocumentsPage() {
             {redError && <ErrorNote>{redError}</ErrorNote>}
 
             {redResult && (
-              <SuccessNote>
-                Redacted {redResult.total} item
-                {redResult.total === 1 ? "" : "s"} →{" "}
-                <span className="font-mono">{redResult.path}</span>
-                {redResult.note ? ` · ${redResult.note}` : ""}
-              </SuccessNote>
+              <div data-testid="doc-redact-saved" className="space-y-2">
+                <SuccessNote>
+                  Redacted {redResult.total} item
+                  {redResult.total === 1 ? "" : "s"} →{" "}
+                  <span className="break-all font-mono">{redResult.path}</span>
+                  {redResult.note ? ` · ${redResult.note}` : ""}
+                </SuccessNote>
+                <SavedFileActions key={redResult.path} path={redResult.path} />
+              </div>
             )}
 
             {redScan && (
@@ -1108,7 +1193,7 @@ export default function DocumentsPage() {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="btn-ghost text-xs"
+                          className="btn-ghost btn-sm"
                           onClick={() =>
                             setRedChecked(
                               new Set(redScan.findings.map((f) => f.id)),
@@ -1119,7 +1204,7 @@ export default function DocumentsPage() {
                         </button>
                         <button
                           type="button"
-                          className="btn-ghost text-xs"
+                          className="btn-ghost btn-sm"
                           onClick={() => setRedChecked(new Set())}
                         >
                           Clear

@@ -756,7 +756,8 @@ describe("the crumb names the page the way the page names itself", () => {
   });
 
   it("the deep-link routes resolve to the page they render", () => {
-    expect(labelForPath("/kanban")).toBe("Kanban");
+    // v1.315.0 (UX wave 3): the board is the "Session board" (its h1 too).
+    expect(labelForPath("/kanban")).toBe("Session board");
     expect(labelForPath("/marketplace")).toBe("Directory");
     // /ltm and /lessons render MemorySurface, whose h1 is "Memory".
     expect(readSrc("components", "memory", "MemorySurface.tsx")).toMatch(/title="Memory"/);

@@ -61,6 +61,7 @@ import {
   Skeleton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { Modal } from "@/components/Modal";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
@@ -1133,7 +1134,6 @@ function MediaLightbox({
   // Once a video is re-encoded to a playable copy, the player points here instead.
   const [playableSrc, setPlayableSrc] = useState<string | null>(null);
   const downloadRef = useRef<HTMLAnchorElement | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   // "Make playable" target — a gallery name or a local path, mirroring publishBody.
   const playableTarget: PlayableTarget | null = publishBody.path
@@ -1142,68 +1142,23 @@ function MediaLightbox({
       ? { name: publishBody.name }
       : null;
 
-  // Esc closes; ←/→ step through the caller's visible list — never while
-  // typing (Escape included: it should clear/blur the field, not nuke the
-  // dialog), and never while a video/audio element owns the arrows (seeking).
+  // ←/→ step through the caller's visible list — never while typing, and
+  // never while a video/audio element owns the arrows (seeking).
+  // v1.315.0: the portal, scrim, Escape, body scroll lock, focus-in, the Tab
+  // trap and focus-back are <Modal>'s now (one primitive, every dialog), so
+  // this overlay no longer hand-rolls them. The lightbox has no text field,
+  // so Modal's Escape-closes-everywhere costs nothing here.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
       if (tag === "VIDEO" || tag === "AUDIO") return;
       if (e.key === "ArrowLeft" && onPrev) onPrev();
       else if (e.key === "ArrowRight" && onNext) onNext();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, onPrev, onNext]);
-
-  // Body scroll lock while the dialog is open (restored on close/unmount).
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, []);
-
-  // Initial focus into the dialog; focus returns to the opener on close.
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
-    return () => opener?.focus();
-  }, []);
-
-  /** Minimal focus trap: Tab / Shift+Tab wrap within the dialog. */
-  const trapTab = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Tab") return;
-    const root = dialogRef.current;
-    if (!root) return;
-    const focusables = Array.from(
-      root.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), audio[controls], video[controls], [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-    if (focusables.length === 0) {
-      e.preventDefault();
-      return;
-    }
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-    if (e.shiftKey) {
-      if (active === first || active === root) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else if (active === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+  }, [onPrev, onNext]);
 
   const doDelete = async () => {
     if (!deleteName || delBusy) return;
@@ -1259,20 +1214,7 @@ function MediaLightbox({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onClick={onClose}
-      onKeyDown={trapTab}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-    >
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        className="card-surface flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden focus:outline-none"
-      >
+    <Modal label={title} onClose={onClose} className="w-full max-w-3xl">
         <header className="flex items-center justify-between gap-3 border-b hairline px-5 py-3.5">
           <h2 className="flex min-w-0 items-center gap-2 text-[13px] font-semibold tracking-wide text-zinc-200">
             <span className="shrink-0 text-accent-soft/80">{mediaIcon(media, 15)}</span>
@@ -1455,8 +1397,7 @@ function MediaLightbox({
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -3776,6 +3717,15 @@ export default function CreativePage() {
         if (errs.length > 0) setUploadErr(errs.join(" "));
         return;
       }
+      // v1.315.0: the "also publish" box went straight to a permanent public
+      // link with no prompt — and it stayed ticked, so a LATER drag-and-drop
+      // of a client scan published silently. Every other publish surface asks
+      // through THE gate (confirmPublish); this path now does too: once per
+      // batch, before anything leaves the page. Declined = the files still
+      // upload (that is what the user also asked for), just not published —
+      // and the note says so.
+      const publish = alsoPublish ? confirmPublish() : false;
+      const declinedPublish = alsoPublish && !publish;
       setUploading(true);
       const oks: string[] = [];
       let lastUrl: string | null = null;
@@ -3790,7 +3740,7 @@ export default function CreativePage() {
           const res = await post<UploadResult>("/creative/upload", {
             filename: file.name,
             content_b64,
-            ...(alsoPublish ? { publish: true } : {}),
+            ...(publish ? { publish: true } : {}),
           });
           uploadedAny = true;
           oks.push(`${file.name} (${formatSize(res.size)})`);
@@ -3808,7 +3758,10 @@ export default function CreativePage() {
       }
       if (oks.length > 0)
         setUploadOk(
-          oks.length === 1 ? `Uploaded ${oks[0]}.` : `Uploaded ${oks.length} files: ${oks.join(", ")}.`,
+          (oks.length === 1
+            ? `Uploaded ${oks[0]}.`
+            : `Uploaded ${oks.length} files: ${oks.join(", ")}.`) +
+            (declinedPublish ? " Not published: you declined the public link." : ""),
         );
       if (lastUrl) setUploadUrl(lastUrl);
       if (errs.length > 0) setUploadErr(errs.join(" "));
@@ -4026,7 +3979,10 @@ export default function CreativePage() {
                   onChange={(e) => setAlsoPublish(e.target.checked)}
                   className="h-3.5 w-3.5 accent-cyan-400"
                 />
-                also get a public URL
+                {/* v1.315.0: says WHERE the file goes and that it cannot be
+                    taken back; ticking it still asks (confirmPublish) on each
+                    upload batch. */}
+                Also publish to Pixio&apos;s public CDN (permanent link)
               </label>
               <button
                 type="button"

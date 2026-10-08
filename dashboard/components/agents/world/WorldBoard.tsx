@@ -68,6 +68,10 @@ export function WorldBoard({ projectId }: { projectId: string }) {
           reviewsState.reload();
         }}
         projectId={projectId}
+        // v1.315.0: embedded in the mission screen's centre column (~880px
+        // between the rail and the Team aside), so two lanes a row and empty
+        // lanes folded at rest — never four squeezed ~190px lanes.
+        compact
       />
     </div>
   );

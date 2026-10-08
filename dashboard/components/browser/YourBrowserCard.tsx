@@ -503,26 +503,34 @@ function SidebarNote({ appVersion, browser }: { appVersion: string; browser: Bro
         {browser.short} does not put a newly loaded add-on there. Click the puzzle-piece button at
         the top right of {browser.short}, find Iron Jarvis in that list, and {browser.pinAction}.
       </p>
-      <p
-        data-testid="browser-sidebar-stale"
-        className="mt-2 text-[11px] leading-relaxed text-zinc-500"
-      >
-        If the icon opens a small popup instead of a sidebar, {browser.short} is still running an
-        older copy of the add-on — open{" "}
-        <code className="font-mono text-zinc-400">{browser.extensionsPage}</code> and press Reload
-        on Iron Jarvis.
-        {appVersion ? (
-          <>
-            {" "}
-            This copy of Iron Jarvis is{" "}
-            <span data-testid="browser-sidebar-app-version" className="text-zinc-400">
-              {appVersion}
-            </span>
-            , and the sidebar prints the add-on version your browser is running in its own header —
-            an older number there is the copy to reload.
-          </>
-        ) : null}
-      </p>
+      {/* v1.315.0: the stale-copy remedy is troubleshooting, not a step —
+          it sits one click away so the card reads as one next step. A
+          <details> keeps every word (and the extensions page) in the DOM. */}
+      <details className="group mt-2">
+        <summary className="cursor-pointer select-none text-[11px] text-zinc-500 hover:text-zinc-300">
+          Icon opens a small popup instead of the sidebar?
+        </summary>
+        <p
+          data-testid="browser-sidebar-stale"
+          className="mt-1.5 text-[11px] leading-relaxed text-zinc-500"
+        >
+          If the icon opens a small popup instead of a sidebar, {browser.short} is still running an
+          older copy of the add-on — open{" "}
+          <code className="font-mono text-zinc-400">{browser.extensionsPage}</code> and press Reload
+          on Iron Jarvis.
+          {appVersion ? (
+            <>
+              {" "}
+              This copy of Iron Jarvis is{" "}
+              <span data-testid="browser-sidebar-app-version" className="text-zinc-400">
+                {appVersion}
+              </span>
+              , and the sidebar prints the add-on version your browser is running in its own header —
+              an older number there is the copy to reload.
+            </>
+          ) : null}
+        </p>
+      </details>
     </div>
   );
 }
@@ -739,7 +747,11 @@ export function YourBrowserCard() {
                     setHighlightAccess(true);
                     readOnlyRef.current?.focus();
                   }}
-                  className="btn-accent py-1.5 text-xs"
+                  // v1.315.0: ghost, not accent. The off card showed two
+                  // identical solid buttons stacked; "Set up my browser" is
+                  // the one primary step, and this is the shortcut for a user
+                  // who only needs the access switch (it moves focus there).
+                  className="btn-ghost py-1.5 text-xs"
                 >
                   <ShieldCheck size={14} /> Turn on
                 </button>
@@ -989,12 +1001,6 @@ export function YourBrowserCard() {
             {note && <SuccessNote>{note}</SuccessNote>}
             {actionError && <ErrorNote>{actionError}</ErrorNote>}
 
-            {/* THE SIDEBAR, NAMED. Above the access selector and in every state,
-                because a user who set this up once and never opens the guided
-                window again would otherwise never learn the sidebar exists —
-                and because the pin instruction is what makes it reachable. */}
-            <SidebarNote appVersion={appVersion} browser={browser} />
-
             {/* The access selector. Always present, because it is the switch the
                 whole feature hangs on and hiding it behind a state would make
                 "Turn on" a dead end. */}
@@ -1037,6 +1043,14 @@ export function YourBrowserCard() {
                 decide the rest.
               </p>
             </div>
+
+            {/* THE SIDEBAR, NAMED. In every state, because a user who set this
+                up once and never opens the guided window again would otherwise
+                never learn the sidebar exists — and because the pin instruction
+                is what makes it reachable. v1.315.0: BELOW the access selector
+                (it used to sit above it), so "Turn on … pick Read only or
+                Interactive below" lands on the selector, not on a help box. */}
+            <SidebarNote appVersion={appVersion} browser={browser} />
 
             {state !== "connected" && state !== "off" && (
               <p className="flex items-center gap-1.5 text-[11px] text-zinc-600">

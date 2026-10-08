@@ -428,7 +428,14 @@ function AssignComposer({
             <LoaderInline label="Queueing…" />
           ) : (
             <>
-              <Send size={12} /> Queue for {bare}
+              {/* v1.315.0: the name is title-cased by CSS (it sits under the
+                  title-cased agent heading); the TEXT stays the raw id, so the
+                  button's accessible name is unchanged. One inline wrapper so
+                  the button's flex gap never splits "for" from the name. */}
+              <Send size={12} />{" "}
+              <span>
+                Queue for <span className="capitalize">{bare}</span>
+              </span>
             </>
           )}
         </button>
@@ -495,7 +502,9 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
 
       {empty ? (
         <p className="text-[11.5px] leading-relaxed text-zinc-500">
-          Nothing queued — give {bare} a job above and it runs when {bare} is free.
+          {/* v1.315.0: CSS casing only — same words, same text. */}
+          Nothing queued — give <span className="capitalize">{bare}</span> a job above and it runs when{" "}
+          <span className="capitalize">{bare}</span> is free.
         </p>
       ) : (
         <div className="space-y-3">

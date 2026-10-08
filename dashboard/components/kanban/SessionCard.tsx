@@ -27,6 +27,7 @@ import { outcomeLabel, waitingLabel } from "@/components/sessions/SessionStatusB
 import { Badge, MockChip } from "@/components/ui";
 import { providerDisplay } from "@/lib/onboarding";
 import { timeAgo } from "@/lib/format";
+import { agentDisplayName } from "@/lib/agentWorlds";
 
 export interface CardData {
   session: SessionView;
@@ -127,6 +128,7 @@ export function CardInner({
   const waiting = waitingLabel(session);
   const outcome = outcomeLabel(session);
   const reviewable = lane === "review" && !waiting;
+  const agentName = agentDisplayName(session.agent_type, session.origin);
   return (
     <div
       className={`group/card relative rounded-xl border bg-ink-850/90 p-3.5 transition-all duration-200 ${
@@ -144,7 +146,15 @@ export function CardInner({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-300">
+        {/* v1.315.0 (UX wave 3, one AI identity): a mission's coordinator
+            reads "Jarvis" with Jarvis's face — the name the mission screen
+            gives it — never the internal "supervisor"; every other id keeps
+            its text, title-cased by `capitalize`. The raw id rides the title
+            (the card is a record of what ran). */}
+        <span
+          title={session.agent_type}
+          className="inline-flex items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] font-medium capitalize text-zinc-300"
+        >
           {/* The agent's face replaces the generic Cpu glyph (v1.171.0):
               identity from the agent type, mood from the card's REAL status
               via the shared moodForStatus mapping. Nested team children are
@@ -155,13 +165,13 @@ export function CardInner({
               ambiguity that forced title="" on TeamTree). */}
           <span aria-hidden="true" className="contents">
             <AgentFace
-              name={session.agent_type}
+              name={agentName === "Jarvis" ? "jarvis" : session.agent_type}
               mood={moodForStatus(session.status)}
               size={16}
               title=""
             />
           </span>
-          {session.agent_type}
+          {agentName}
         </span>
         {/* v1.314.0 (UX wave 2): the provider reads in plain words. A demo
             run's ONLY disclosure on a card used to be a bare monospace "mock"

@@ -55,6 +55,15 @@ const BROWSER_TOOLS: ReadonlySet<string> = new Set([
   "browser_navigate",
 ]);
 
+/** v1.315.0: true only for the 14 BUILT-IN browser tools, by exact name —
+ *  never a `browser_` prefix and never trimmed or case-folded (`Browser_click`
+ *  is not one). The approval card offers "Allow for this tab" only for these:
+ *  the daemon grants tabs to the real acting browser tools alone, so the
+ *  button on any other tool would promise something that cannot happen. */
+export function isBuiltinBrowserTool(tool: string): boolean {
+  return typeof tool === "string" && BROWSER_TOOLS.has(tool);
+}
+
 /** Plain words for a tool id, or null when this map does not know it. */
 export function toolWords(tool: string): string | null {
   const id = (tool || "").trim();
@@ -62,6 +71,6 @@ export function toolWords(tool: string): string | null {
   if (Object.prototype.hasOwnProperty.call(WORDS, id)) return WORDS[id];
   // The built-in browser tools act in a tab of the browser the user
   // connected; the card's tab answer and note say the rest.
-  if (BROWSER_TOOLS.has(id)) return "act in a browser tab";
+  if (isBuiltinBrowserTool(id)) return "act in a browser tab";
   return null;
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { FileSearch, Search, FileText, HardDrive, FolderOpen } from "lucide-react";
 import { get, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { FileSearchResult, Drive } from "@/lib/types";
+import type { FileSearchResult, Drive, Project } from "@/lib/types";
 import {
   Card,
   Badge,
@@ -20,17 +20,39 @@ import { FilePickerModal } from "@/components/FilePickerModal";
 
 type Mode = "content" | "name" | "semantic";
 const MODES: Mode[] = ["content", "name", "semantic"];
+// v1.315.0: the mode VALUES sent to /filesearch are unchanged; the buttons read
+// in plain words ("Semantic" was jargon) with a tooltip saying what each does.
+const MODE_WORDS: Record<Mode, { label: string; hint: string }> = {
+  content: { label: "In contents", hint: "Find files whose text contains your words" },
+  name: { label: "In file names", hint: "Find files whose name contains your words" },
+  semantic: {
+    label: "By meaning",
+    hint: "Find files about what you describe, even when they use different words",
+  },
+};
 
-const PROJECT_ROOT = ""; // empty root === search the project (daemon default)
+// Empty root === the daemon's default: `config.search_roots`, else the install's
+// project_root (platform.py) — an Iron Jarvis setting, NOT one of the user's
+// Projects. v1.315.0: it used to read "Project (default)", which a user with
+// real Projects took to mean one of theirs; it now says what it is.
+const DEFAULT_ROOT = "";
+const DEFAULT_LABEL = "Iron Jarvis default folders";
 
 export default function FileSearchPage() {
   const { data: drivesData } = useApi<{ drives: Drive[] }>("/filesearch/drives");
   const drives = drivesData?.drives ?? [];
+  // v1.315.0: the user's own Projects are offered by name (value = the
+  // project's folder). A project whose folder is gone is skipped — searching it
+  // would only error.
+  const { data: projectsData } = useApi<{ projects: Project[] }>("/projects");
+  const projects = (projectsData?.projects ?? []).filter(
+    (p) => p.root && p.root_exists !== false,
+  );
 
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<Mode>("content");
   // The drive/root chosen from the <select>; "" means the project default.
-  const [rootSel, setRootSel] = useState(PROJECT_ROOT);
+  const [rootSel, setRootSel] = useState(DEFAULT_ROOT);
   // Optional free-text path to drill into a sub-folder; overrides the select.
   const [customPath, setCustomPath] = useState("");
   const [browseOpen, setBrowseOpen] = useState(false);
@@ -42,10 +64,14 @@ export default function FileSearchPage() {
 
   // The path actually sent as `root` (custom path wins over the dropdown).
   const effectiveRoot = customPath.trim() || rootSel;
+  // What "Searching:" reads: a typed path as typed, a project by its name, a
+  // drive by its label, else the honest default. The raw path rides in `title`.
   const rootLabel =
-    effectiveRoot ||
+    customPath.trim() ||
+    projects.find((p) => p.root === rootSel)?.name ||
     drives.find((d) => d.path === rootSel)?.label ||
-    "Project (default)";
+    rootSel ||
+    DEFAULT_LABEL;
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -64,7 +90,7 @@ export default function FileSearchPage() {
         `/filesearch?${params.toString()}`,
       );
       setResults(data.results);
-      setSearchedRoot(effectiveRoot || "Project (default)");
+      setSearchedRoot(effectiveRoot || DEFAULT_LABEL);
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setOffline(true);
       else setError(err instanceof ApiError ? err.message : String(err));
@@ -79,7 +105,7 @@ export default function FileSearchPage() {
       <Reveal>
         <PageHeader
           title="File Search"
-          subtitle="Search the project or any local drive by file name, file content, or semantic meaning. Use the mic to dictate your query."
+          subtitle="Search your projects or any local drive by file name, file contents, or meaning. Use the mic to dictate your query."
         />
       </Reveal>
       {offline && (
@@ -122,7 +148,8 @@ export default function FileSearchPage() {
 
             {/* Drive / root selector --------------------------------------- */}
             <div className="flex flex-wrap items-end gap-3">
-              <div className="w-48">
+              {/* v1.315.0: wide enough for "Iron Jarvis default folders" and a project name. */}
+              <div className="w-full sm:w-64">
                 <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <HardDrive size={12} /> Search in
                 </label>
@@ -135,12 +162,25 @@ export default function FileSearchPage() {
                   }}
                   className="field"
                 >
-                  <option value={PROJECT_ROOT}>Project (default)</option>
-                  {drives.map((d) => (
-                    <option key={d.path} value={d.path}>
-                      {d.label} — {d.path}
-                    </option>
-                  ))}
+                  <option value={DEFAULT_ROOT}>{DEFAULT_LABEL}</option>
+                  {projects.length > 0 && (
+                    <optgroup label="Your projects">
+                      {projects.map((p) => (
+                        <option key={p.id} value={p.root}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {drives.length > 0 && (
+                    <optgroup label="Drives">
+                      {drives.map((d) => (
+                        <option key={d.path} value={d.path}>
+                          {d.label} — {d.path}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <div className="min-w-[200px] flex-1">
@@ -151,7 +191,7 @@ export default function FileSearchPage() {
                   <input
                     value={customPath}
                     onChange={(e) => setCustomPath(e.target.value)}
-                    placeholder="e.g. C:\\Users\\me\\Documents (optional)"
+                    placeholder="e.g. C:\Users\me\Documents (optional)"
                     className="field font-mono"
                   />
                   <button
@@ -173,21 +213,29 @@ export default function FileSearchPage() {
                     key={m}
                     type="button"
                     onClick={() => setMode(m)}
-                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
+                    title={MODE_WORDS[m].hint}
+                    aria-pressed={mode === m}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
                       mode === m
                         ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
                         : "border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
                     }`}
                   >
-                    {m}
+                    {MODE_WORDS[m].label}
                   </button>
                 ))}
               </div>
               <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
                 <HardDrive size={12} className="text-accent-soft/70" />
                 Searching:{" "}
-                <span className="font-mono text-accent-soft" title={rootLabel}>
-                  {rootLabel}
+                {/* v1.315.0: "By meaning" searches the daemon's embedded index
+                    (filesearch/service.search_semantic ignores the folder),
+                    so the line must not claim a scope it does not apply. */}
+                <span
+                  className="truncate text-accent-soft"
+                  title={mode === "semantic" ? undefined : effectiveRoot || DEFAULT_LABEL}
+                >
+                  {mode === "semantic" ? "the folders Iron Jarvis has indexed" : rootLabel}
                 </span>
               </div>
             </div>
@@ -215,7 +263,7 @@ export default function FileSearchPage() {
         >
           {results === null ? (
             <Empty icon={<Search size={22} />}>
-              Run a search to see matching files. Pick a drive or type a folder path to search beyond the project.
+              Run a search to see matching files. Pick one of your projects or a drive, or type a folder path, to search somewhere else.
             </Empty>
           ) : results.length === 0 ? (
             <Empty>No matches.</Empty>

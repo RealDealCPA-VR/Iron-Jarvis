@@ -73,30 +73,54 @@ interface RosterRow {
   healthy?: boolean;
 }
 
+/** v1.315.0: the platform's own housekeepers — real teammates Jarvis can
+ *  call on, but not what a busy professional came here to hand work to.
+ *  Sorted LAST (never hidden, never behind an extra press). */
+const BEHIND_THE_SCENES = new Set(["memory", "maintainer"]);
+
 /** The team Jarvis can call on — shown on the front door with no mission. */
 function AvailableTeam() {
   const { data } = useApi<{ roster?: RosterRow[] }>("/agents/roster");
-  const rows = useMemo(
-    () =>
-      (data?.roster ?? []).filter(
-        (r): r is RosterRow => Boolean(r) && typeof r.name === "string" && r.delegable !== false && r.healthy !== false,
-      ),
-    [data],
-  );
+  const rows = useMemo(() => {
+    const ok = (data?.roster ?? []).filter(
+      (r): r is RosterRow => Boolean(r) && typeof r.name === "string" && r.delegable !== false && r.healthy !== false,
+    );
+    // Stable: roster order within each group.
+    return [
+      ...ok.filter((r) => !BEHIND_THE_SCENES.has(r.name)),
+      ...ok.filter((r) => BEHIND_THE_SCENES.has(r.name)),
+    ];
+  }, [data]);
   return (
-    <div data-testid="mission-available-team" className="space-y-2">
-      <p className="text-[12px] text-zinc-400">
-        Jarvis picks from these teammates. You don&apos;t have to choose — just say what you need.
-      </p>
-      <ul className="space-y-1.5">
-        {rows.slice(0, 12).map((r) => {
+    <div data-testid="mission-available-team" className="space-y-2.5">
+      {/* v1.315.0 (UX wave 3, "one AI identity"): the panel opens on JARVIS —
+          the one assistant the user talks to — the same face + name the
+          mission view's coordinator block shows. A header, not a roster row:
+          the coordinator takes no delegated work, so it is never offered as
+          a teammate (and the internal word "supervisor" never appears). */}
+      <div data-testid="mission-available-jarvis" className="flex items-start gap-2.5 px-1">
+        <AgentFace name="jarvis" size={28} title="" />
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-zinc-100">Jarvis</div>
+          <p className="text-[11.5px] leading-snug text-zinc-400">
+            Picks from these teammates. You don&apos;t have to choose — just say what you need.
+          </p>
+        </div>
+      </div>
+      <ul className="space-y-1.5 border-l hairline pl-3 ml-4">
+        {/* v1.315.0: no preview cap — the old `slice(0, 12)` would push the
+            housekeepers (sorted last above) off the panel once 11+ custom
+            teammates exist, contradicting "never hidden". Every delegable,
+            healthy teammate is listed. */}
+        {rows.map((r) => {
           const label = r.name.includes(":") ? r.name.split(":").slice(1).join(":") : r.name;
           return (
             <li key={r.name} className="flex items-center gap-2.5">
               <AgentFace name={r.name} size={24} title="" />
               <div className="min-w-0">
                 <div className="truncate text-[12.5px] font-medium capitalize text-zinc-200">{label}</div>
-                {r.description && <div className="truncate text-[11px] text-zinc-500">{r.description}</div>}
+                {/* v1.315.0: two lines, never cut off mid-word. */}
+                {r.description && <div className="line-clamp-2 text-[11px] leading-snug text-zinc-500">{r.description}</div>}
               </div>
             </li>
           );

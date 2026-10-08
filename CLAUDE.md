@@ -2905,6 +2905,36 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The busy surfaces, calmer: one AI name, a findable board, a story
+  first** (v1.315.0, /goal UX & aesthetic wave 3 — 24 findings + 3
+  carry-overs over chat, agents & sessions, projects, build & files).
+  `lib/agentWorlds.agentDisplayName(agentType, origin)` is the ONE rule that
+  calls the mission coordinator "Jarvis" — a `supervisor` row is Jarvis ONLY
+  when its origin is a mission (`isMissionRow`); casing is CSS `capitalize`,
+  never rewritten text (tests getByText lowercase ids). A page that has no
+  rail row but must be found goes in `lib/nav.NON_RAIL_ENTRIES` (labelForPath,
+  the palette and search read it; the rail never does) — /kanban is the
+  **Session board** there. Chat: below sm the composer row wraps with the
+  textarea `order-first basis-full`; the project panel has real tabs
+  (role=tab, aria-selected, arrow keys move focus); the thread rail's scope
+  is said and "All chats" widens the RAIL only (`showThreadsFor(null)`, no
+  write to the open chat — mutation-pinned); thread ⋯ is
+  `[@media(hover:hover)]:opacity-0` so touch sees it; ApprovalCard's tab
+  answer keys on `lib/toolWords.isBuiltinBrowserTool` (exact names, never a
+  `browser_` prefix). Overlays use `<Modal>` for focus in/trap/back:
+  EmailComposeDialog, the Creative lightbox, and the Files preview
+  (`components/terminal/FilesPanel.tsx`, z 80 — chat AND Build load it). The
+  session page leads with summary + outcome + files (the raw timeline is
+  still below). Creative "also publish" calls the existing `confirmPublish()`
+  once per batch before any POST (declined = uploaded, not published, and
+  said so). File search's "By meaning" names its real scope
+  (`search_semantic` ignores roots). Recent runs read `plainText(runAsk())`.
+  Pins: `dashboard/__tests__/ux-wave3-*-v1315.test.tsx`. Carry-overs (W4):
+  reflex/sentinels empty-state Add should scroll to the form; desktop ask
+  watcher's own "rename a file"; LongTerm onto `<Modal>`; a denied
+  Time-travel row could read "Tried to …"; /sessions "Agent type" select
+  still shows raw ids.
+
 - **A user reads WORDS, never ids; an empty page shows the way; the demo
   strip is subtracted from every full-height module** (v1.314.0, /goal UX &
   aesthetic wave 2 — 31 findings + 4 wave-1 carry-overs). ONE place per
@@ -2951,8 +2981,9 @@ does not need a bump, stop and bump it.
   the theme row lives in the nav drawer on a phone; theme dots use a deeper
   `onLight` shade on light themes (≥ 3:1); the mood orb rests as dot+ring.
   Crumbs = the page's own title: `lib/nav.CRUMB_LABELS` (NOT nav rows —
-  nav.test pins the sidebar) covers /kanban, /marketplace ("Directory"),
-  /ltm + /lessons ("Memory") and /fleet ("Fleet"); sidebar words are
+  nav.test pins the sidebar) covers /marketplace ("Directory"),
+  /ltm + /lessons ("Memory") and /fleet ("Fleet") (/kanban moved to
+  `NON_RAIL_ENTRIES` in v1.315.0); sidebar words are
   "Self-development" and "Train Jarvis on me", the old words kept as
   aliases. DESIGN SYSTEM: `--tone-success|danger|warn|info|violet` RGB vars
   (dark = the old -300 tints, mark1/mark8 = deep inks), exposed only as

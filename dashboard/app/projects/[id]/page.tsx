@@ -21,6 +21,7 @@ import {
   ChevronDown,
   Database,
   ChevronRight,
+  Cpu,
   Folder,
   FolderOpen,
   History,
@@ -831,47 +832,84 @@ function ProjectWorkspaceInner({
                       this nothing on the project page led there; the only door
                       was Agents → Your projects. */}
                   <ProjectTeamLink projectId={id} team={teamApi.data?.team} />
-                  <select
-                    value={modelValue}
-                    onChange={(e) => chooseModel(e.target.value)}
-                    disabled={savingField === "model"}
-                    aria-label="Project default model"
-                    title="Default model for this project's chats and tasks"
-                    className="field text-sm"
-                  >
-                    <option value="">Project default</option>
-                    {/* A pinned model that isn't currently available must still
-                        SHOW (otherwise the picker reads blank and the pin looks
-                        lost) — surface it as an explicit "unavailable" option. */}
-                    {modelValue &&
-                      !availableModels.some(
-                        (m) => `${m.provider}::${m.model}` === modelValue,
-                      ) && (
-                        <option value={modelValue}>
-                          {project.default_provider} / {project.default_model} (unavailable)
+                  {/* v1.315.0 (UX wave 3): the model select had no visible
+                      label and, as a bare full-width .field, was the widest
+                      thing in the header — a box reading "Project default"
+                      that pushed the lifecycle buttons onto their own row.
+                      Now a visible "Model" label names it (the <label> is its
+                      accessible name — no aria-label, which would override
+                      it; tied by htmlFor), it is only as wide as its choice (w-auto, capped),
+                      and the empty choice says what it means: with no pin, chats
+                      and "You — run now" tasks use the app's default model
+                      (routes/projects.py task run → create_session(provider=None),
+                      chat_turn). One honest caveat lives in the title: a task
+                      queued for a custom agent falls back to THAT agent's own
+                      provider/model (assignments/dispatcher.py), while a pin
+                      here still wins over the agent's. Same options, same values. */}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <label
+                      htmlFor="project-default-model"
+                      className="flex shrink-0 items-center gap-1.5 text-[12px] text-zinc-500"
+                    >
+                      <Cpu size={12} className="shrink-0" aria-hidden="true" />
+                      Model
+                    </label>
+                    <select
+                      id="project-default-model"
+                      value={modelValue}
+                      onChange={(e) => chooseModel(e.target.value)}
+                      disabled={savingField === "model"}
+                      title="Default model for this project's chats and tasks. Empty = the app's default model; a task you queue for an agent uses that agent's own model unless you pin one here."
+                      className="field w-auto min-w-0 max-w-[16rem] py-1 text-sm"
+                    >
+                      <option value="">Same as app default</option>
+                      {/* A pinned model that isn't currently available must still
+                          SHOW (otherwise the picker reads blank and the pin looks
+                          lost) — surface it as an explicit "unavailable" option. */}
+                      {modelValue &&
+                        !availableModels.some(
+                          (m) => `${m.provider}::${m.model}` === modelValue,
+                        ) && (
+                          <option value={modelValue}>
+                            {project.default_provider} / {project.default_model} (unavailable)
+                          </option>
+                        )}
+                      {availableModels.map((m) => (
+                        <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
+                          {m.name || m.provider} / {m.model}
                         </option>
-                      )}
-                    {availableModels.map((m) => (
-                      <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
-                        {m.name || m.provider} / {m.model}
-                      </option>
-                    ))}
-                  </select>
+                      ))}
+                    </select>
+                  </div>
 
+                  {/* v1.315.0: the lifecycle — focus, Archive/Unarchive,
+                      Delete — is its own right-aligned group (ml-auto), apart
+                      from the primary pair (Open in Chat, Team & objectives),
+                      so Delete no longer sits beside them. Same buttons, same
+                      two-press ConfirmButtons, a 28px hit target (min-h-7). */}
+                  <div
+                    data-testid="project-header-lifecycle"
+                    className="ml-auto flex flex-wrap items-center gap-1.5"
+                  >
+                  {/* "Set as focus" / "Clear focus" (were "Make active" /
+                      "Deactivate"), the words the project cards use. The old
+                      tooltips promised surfaces "attach its context" / "stop
+                      defaulting" — untrue: active_project_id is read only by
+                      /health and a boot check, so it is a focus MARKER only. */}
                   {!archived &&
                     (project.active ? (
                       <button
                         type="button"
                         onClick={() => void deactivate()}
                         disabled={savingField === "active"}
-                        title="Clear the focus marker — surfaces stop defaulting to this project"
-                        className={BTN_GHOST}
+                        title="Clear the focus marker on this project (a marker only — nothing auto-carries context)."
+                        className={`${BTN_GHOST} min-h-7`}
                       >
                         {savingField === "active" ? (
                           <LoaderInline label="…" />
                         ) : (
                           <>
-                            <ZapOff size={13} /> Deactivate
+                            <ZapOff size={13} /> Clear focus
                           </>
                         )}
                       </button>
@@ -880,14 +918,14 @@ function ProjectWorkspaceInner({
                         type="button"
                         onClick={() => void activate()}
                         disabled={savingField === "active"}
-                        title="Make this project your focus — surfaces like Chat attach its context per session"
-                        className={BTN_PILL}
+                        title="Set as your focus project — a marker only, used to highlight it around the app. It does NOT auto-carry context; you attach a project per surface (e.g. pick it in Chat)."
+                        className={`${BTN_GHOST} min-h-7`}
                       >
                         {savingField === "active" ? (
                           <LoaderInline label="…" />
                         ) : (
                           <>
-                            <Zap size={13} /> Make active
+                            <Zap size={13} /> Set as focus
                           </>
                         )}
                       </button>
@@ -901,7 +939,7 @@ function ProjectWorkspaceInner({
                       onClick={() => void setStatus("active")}
                       disabled={savingField === "status"}
                       title="Restore this project as an active workspace"
-                      className={BTN_GHOST}
+                      className={`${BTN_GHOST} min-h-7`}
                     >
                       {savingField === "status" ? (
                         <LoaderInline label="…" />
@@ -913,6 +951,7 @@ function ProjectWorkspaceInner({
                     </button>
                   ) : (
                     <ConfirmButton
+                      className="min-h-7"
                       onConfirm={() => setStatus("archived")}
                       label="Archive"
                       confirmLabel="Archive?"
@@ -920,11 +959,13 @@ function ProjectWorkspaceInner({
                     />
                   )}
                   <ConfirmButton
+                    className="min-h-7"
                     onConfirm={removeProject}
                     label="Delete"
                     confirmLabel="Delete from app?"
                     title={`Remove "${project.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`}
                   />
+                  </div>
                 </div>
               </div>
 

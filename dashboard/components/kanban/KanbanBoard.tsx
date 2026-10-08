@@ -214,6 +214,7 @@ export function KanbanBoard({
   reviews,
   reload,
   projectId,
+  compact = false,
 }: {
   sessions: SessionView[];
   reviews: Record<string, Review>;
@@ -224,6 +225,14 @@ export function KanbanBoard({
    * sees every session — unchanged behaviour.
    */
   projectId?: string;
+  /**
+   * v1.315.0 (UX wave 3): the board is EMBEDDED in a narrow column (a
+   * project's mission screen, WorldBoard) — the viewport breakpoints lied
+   * there (four ~190px lanes at xl), so it lays out two lanes a row at most
+   * and an empty lane folds to one line at rest. The standalone /kanban page
+   * passes nothing and keeps four lanes at xl.
+   */
+  compact?: boolean;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -336,6 +345,44 @@ export function KanbanBoard({
     }
   }
 
+  /* The clear affordances (v1.315.0: in their OWN lane's header — "Clear
+   * completed (5)" used to float alone on a toolbar row above the board).
+   * POST /sessions/clear is status-wide (not project-scoped), so the
+   * bulk-clear buttons only appear on the unscoped standalone board — an
+   * embedded per-project board must never over-clear other projects.
+   * Counts derive from laneSessions — the SAME rows the column renders — so
+   * the button can never contradict the lane it sits in (a failed child
+   * nested under an active parent lives in the Active column; "Clear failed
+   * (1)" over an empty Failed column was the v1.168.0 review finding). The
+   * clear itself stays status-wide, two-press, and the toast reports the
+   * REAL cleared count. */
+  function clearAction(laneId: LaneId): React.ReactNode {
+    if (projectId) return null;
+    if (laneId === "completed" && laneSessions.completed.length > 0) {
+      return (
+        <ConfirmButton
+          label={`Clear completed (${laneSessions.completed.length})`}
+          confirmLabel="Confirm clear?"
+          title="Remove every completed session from the board"
+          onConfirm={() => clearLane("completed")}
+          className="!px-2 !py-0.5 !text-[11px]"
+        />
+      );
+    }
+    if (laneId === "failed" && laneSessions.failed.length > 0) {
+      return (
+        <ConfirmButton
+          label={`Clear failed (${laneSessions.failed.length})`}
+          confirmLabel="Confirm clear?"
+          title="Remove every failed or cancelled session from the board"
+          onConfirm={() => clearLane("failed")}
+          className="!px-2 !py-0.5 !text-[11px]"
+        />
+      );
+    }
+    return null;
+  }
+
   async function act(kind: "approve" | "reject", id: string) {
     setBusyId(id);
     setToast(null);
@@ -397,39 +444,6 @@ export function KanbanBoard({
         </div>
       )}
 
-      {/* Board toolbar — the lane headers live inside KanbanColumn, so the
-          clear affordances sit here, right-aligned above Completed/Failed.
-          POST /sessions/clear is status-wide (not project-scoped), so the
-          bulk-clear buttons only appear on the unscoped standalone board — an
-          embedded per-project board must never over-clear other projects.
-          Counts derive from laneSessions — the SAME rows the columns render —
-          so the toolbar can never contradict the column right under it (a
-          failed child nested under an active parent lives in the Active
-          column; "Clear failed (1)" over an empty Failed column was the
-          v1.168.0 review finding). The clear itself stays status-wide and the
-          toast reports the REAL cleared count. */}
-      {!projectId &&
-        (laneSessions.completed.length > 0 || laneSessions.failed.length > 0) && (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {laneSessions.completed.length > 0 && (
-            <ConfirmButton
-              label={`Clear completed (${laneSessions.completed.length})`}
-              confirmLabel="Confirm clear?"
-              title="Remove every completed session from the board"
-              onConfirm={() => clearLane("completed")}
-            />
-          )}
-          {laneSessions.failed.length > 0 && (
-            <ConfirmButton
-              label={`Clear failed (${laneSessions.failed.length})`}
-              confirmLabel="Confirm clear?"
-              title="Remove every failed or cancelled session from the board"
-              onConfirm={() => clearLane("failed")}
-            />
-          )}
-        </div>
-      )}
-
       <DndContext
         sensors={sensors}
         onDragStart={onDragStart}
@@ -437,8 +451,10 @@ export function KanbanBoard({
         onDragCancel={() => setActiveId(null)}
       >
         <div
-          className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
-            columns.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"
+          className={`grid grid-cols-1 gap-4 ${
+            compact
+              ? "sm:grid-cols-2"
+              : `md:grid-cols-2 ${columns.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"}`
           }`}
         >
           {columns.map((lane) => (
@@ -451,6 +467,8 @@ export function KanbanBoard({
               busyId={busyId}
               onApprove={(id) => act("approve", id)}
               onReject={(id) => act("reject", id)}
+              compact={compact}
+              action={clearAction(lane.id)}
             />
           ))}
         </div>

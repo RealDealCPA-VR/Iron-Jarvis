@@ -15,9 +15,6 @@ import {
   LayoutGrid,
   List,
   MessageSquare,
-  SquareKanban,
-  ListChecks,
-  BookOpen,
   Search,
   SearchX,
   X,
@@ -55,6 +52,10 @@ const BTN_PILL =
   "inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50";
 const BTN_GHOST =
   "inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 disabled:opacity-50";
+/* v1.315.0: a card's lifecycle buttons (focus, Unarchive) — the ghost look at
+   the same 28px floor (min-h-7) as the Archive/Delete ConfirmButtons beside
+   them, so the quiet group reads as one even row with a usable hit target. */
+const BTN_QUIET = `${BTN_GHOST} min-h-7`;
 
 /**
  * Honest copy for the focus-project marker. "Active" is only a lightweight flag
@@ -137,7 +138,12 @@ function ProjectTile({
         className="absolute inset-0 z-10 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       />
 
-      {/* Info block sits above the link but passes clicks through to it. */}
+      {/* Info block sits above the link but passes clicks through to it.
+          v1.315.0 (UX wave 3): the corner arrow and the inert "Chat · Tasks ·
+          Board · Knowledge" strip are gone — the strip looked clickable but
+          did nothing, printed "Chat" a second time, and the arrow was a third
+          cue for the one action "Open workspace" already names. The counts it
+          carried now sit on the meta line. */}
       <div className="pointer-events-none relative z-20 flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="min-w-0 truncate font-medium text-zinc-100">
@@ -145,11 +151,6 @@ function ProjectTile({
           </span>
           {p.active && <ActiveBadge />}
           {archived && <Badge value="archived" tone="slate" />}
-          {/* An unmistakable "this opens" cue that slides on hover. */}
-          <ArrowRight
-            size={15}
-            className="ml-auto shrink-0 text-zinc-600 transition-all group-hover:translate-x-0.5 group-hover:text-accent-soft"
-          />
         </div>
 
         {p.brief ? (
@@ -179,118 +180,128 @@ function ProjectTile({
           </div>
         )}
 
-        {/* What's inside — makes the tile read as a doorway, not a static card. */}
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
-          <span className="inline-flex items-center gap-1"><MessageSquare size={11} /> Chat</span>
-          <span className="inline-flex items-center gap-1"><ListChecks size={11} /> Tasks</span>
-          <span className="inline-flex items-center gap-1"><SquareKanban size={11} /> Board</span>
-          <span className="inline-flex items-center gap-1">
-            <BookOpen size={11} />{" "}
-            {p.knowledge_count ? `${p.knowledge_count} knowledge` : "Knowledge"}
-          </span>
-        </div>
-
-        <div className="text-[11px] text-zinc-600">
-          {sessions} {sessions === 1 ? "session" : "sessions"} · created{" "}
+        {/* What's inside, in words — the same "N sessions · N knowledge" the
+            list view's row reads (knowledge only when there is some). */}
+        <div className="text-[11px] text-zinc-500">
+          {sessions} {sessions === 1 ? "session" : "sessions"}
+          {knowledge > 0 && ` · ${knowledge} knowledge`} · created{" "}
           {timeAgo(p.created_at)}
-        </div>
-
-        {/* Primary CTA — visually a button; the stretched link handles the click. */}
-        <div className="mt-1">
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors group-hover:border-accent/40 group-hover:bg-accent/[0.14]">
-            Open workspace <ArrowRight size={12} />
-          </span>
         </div>
       </div>
 
-      {/* Lifecycle actions — re-enable pointer events so they don't navigate. */}
-      <div className="pointer-events-none relative z-20 mt-2 flex flex-wrap items-center gap-1.5">
-        {!archived && (
-          <Link
-            href={`/chat?project=${encodeURIComponent(p.id)}`}
-            title={`Chat inside "${p.name}" — the main chat scoped to this project`}
-            className={`${BTN_GHOST} pointer-events-auto`}
+      {/* Actions — v1.315.0: two groups instead of one row of equal-weight
+          buttons. LEFT, the everyday moves: "Open workspace" (the card's ONLY
+          accent-filled control — a visual of the stretched link, so a click on
+          it falls through and it adds no second tab stop) and Chat. RIGHT,
+          after ml-auto, the quiet lifecycle: focus, Archive/Unarchive and
+          Delete — still one press away, Archive and Delete still two-press
+          ConfirmButtons, now with a 28px hit target (min-h-7). The row
+          re-enables pointer events per control so they act without
+          navigating. */}
+      <div className="pointer-events-none relative z-20 mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-2">
+        <div data-testid="project-card-primary" className="flex flex-wrap items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="inline-flex min-h-7 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.12] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors group-hover:border-accent/50 group-hover:bg-accent/[0.18]"
           >
-            <MessageSquare size={13} /> Chat
-          </Link>
-        )}
-        {!archived &&
-          (p.active ? (
+            Open workspace{" "}
+            <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+          </span>
+          {!archived && (
+            <Link
+              href={`/chat?project=${encodeURIComponent(p.id)}`}
+              title={`Chat inside "${p.name}" — the main chat scoped to this project`}
+              className={`${BTN_GHOST} min-h-7 pointer-events-auto`}
+            >
+              <MessageSquare size={13} /> Chat
+            </Link>
+          )}
+        </div>
+
+        <div
+          data-testid="project-card-secondary"
+          className="ml-auto flex flex-wrap items-center gap-1.5"
+        >
+          {/* "Set as focus" / "Clear focus" (were "Make active" /
+              "Deactivate"): the words say what it is — a focus MARKER, not a
+              context spine (FOCUS_HINT). Ghost, never accent. */}
+          {!archived &&
+            (p.active ? (
+              <button
+                type="button"
+                onClick={deactivate}
+                disabled={busy !== null}
+                title="Clear the focus marker on this project (a marker only — nothing auto-carries context)."
+                className={`${BTN_QUIET} pointer-events-auto`}
+              >
+                {busy === "activate" ? (
+                  <LoaderInline label="Clearing…" />
+                ) : (
+                  <>
+                    <ZapOff size={13} /> Clear focus
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={activate}
+                disabled={busy !== null}
+                title={`Set as your focus project. ${FOCUS_HINT}`}
+                className={`${BTN_QUIET} pointer-events-auto`}
+              >
+                {busy === "activate" ? (
+                  <LoaderInline label="Setting…" />
+                ) : (
+                  <>
+                    <Zap size={13} /> Set as focus
+                  </>
+                )}
+              </button>
+            ))}
+
+          {archived ? (
             <button
               type="button"
-              onClick={deactivate}
+              onClick={() => setStatus("active")}
               disabled={busy !== null}
-              title="Clear the focus marker on this project (a marker only — nothing auto-carries context)."
-              className={`${BTN_GHOST} pointer-events-auto`}
+              className={`${BTN_QUIET} pointer-events-auto`}
             >
-              {busy === "activate" ? (
-                <LoaderInline label="Deactivating…" />
+              {busy === "status" ? (
+                <LoaderInline label="Restoring…" />
               ) : (
                 <>
-                  <ZapOff size={13} /> Deactivate
+                  <ArchiveRestore size={13} /> Unarchive
                 </>
               )}
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={activate}
-              disabled={busy !== null}
-              title={`Set as your focus project. ${FOCUS_HINT}`}
-              className={`${BTN_PILL} pointer-events-auto`}
-            >
-              {busy === "activate" ? (
-                <LoaderInline label="Activating…" />
-              ) : (
-                <>
-                  <Zap size={13} /> Make active
-                </>
-              )}
-            </button>
-          ))}
+            <ConfirmButton
+              className="pointer-events-auto min-h-7"
+              onConfirm={() => setStatus("archived")}
+              label="Archive"
+              confirmLabel="Archive?"
+              title={`Archive "${p.name}" — it stops appearing as a workspace but nothing is deleted`}
+            />
+          )}
 
-        {archived ? (
-          <button
-            type="button"
-            onClick={() => setStatus("active")}
-            disabled={busy !== null}
-            className={`${BTN_GHOST} pointer-events-auto`}
-          >
-            {busy === "status" ? (
-              <LoaderInline label="Restoring…" />
-            ) : (
-              <>
-                <ArchiveRestore size={13} /> Unarchive
-              </>
-            )}
-          </button>
-        ) : (
           <ConfirmButton
-            className="pointer-events-auto"
-            onConfirm={() => setStatus("archived")}
-            label="Archive"
-            confirmLabel="Archive?"
-            title={`Archive "${p.name}" — it stops appearing as a workspace but nothing is deleted`}
+            className="pointer-events-auto min-h-7"
+            onConfirm={() =>
+              run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`))
+            }
+            label="Delete"
+            confirmLabel={
+              knowledge > 0 ? `Delete + ${knowledge} knowledge?` : "Delete from app?"
+            }
+            title={
+              knowledge > 0
+                ? `Permanently delete "${p.name}" and its ${knowledge} ${knowledgeNoun} from Iron Jarvis. Your files and folders on this computer are NOT touched.`
+                : `Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`
+            }
           />
-        )}
-
-        <ConfirmButton
-          className="pointer-events-auto"
-          onConfirm={() =>
-            run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`))
-          }
-          label="Delete"
-          confirmLabel={
-            knowledge > 0 ? `Delete + ${knowledge} knowledge?` : "Delete from app?"
-          }
-          title={
-            knowledge > 0
-              ? `Permanently delete "${p.name}" and its ${knowledge} ${knowledgeNoun} from Iron Jarvis. Your files and folders on this computer are NOT touched.`
-              : `Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`
-          }
-        />
+        </div>
       </div>
-
       {cardError && (
         <div className="pointer-events-none relative z-20 mt-1">
           <div className="pointer-events-auto">
@@ -498,8 +509,12 @@ export default function ProjectsPage() {
               {/* v1.313.0: `isolate` + `z-[1]`: the .field input has a backdrop blur,
                   which painted over the magnifier and left an empty gap. And a
                   12rem floor, so on a phone the filter keeps a readable width
-                  and the other controls wrap to the next line instead. */}
-              <div className="relative isolate min-w-[12rem] flex-1">
+                  and the other controls wrap to the next line instead.
+                  v1.315.0: below sm the filter takes a whole line of its own,
+                  under the buttons (order-last + basis-full). At 390 the floor
+                  alone still left it ~196px, squeezed beside the +; sm+ it
+                  sits inline and grows, as before. */}
+              <div className="relative isolate order-last min-w-[12rem] flex-1 basis-full sm:order-none sm:basis-auto">
                 <Search
                   size={14}
                   className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"

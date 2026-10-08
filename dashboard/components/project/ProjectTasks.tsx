@@ -31,6 +31,7 @@ import {
 } from "@/components/agents/AgentInbox";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { plainText } from "@/components/Markdown";
+import { timeAgo } from "@/lib/format";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
@@ -165,6 +166,33 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
+}
+
+/** v1.315.0 (UX wave 3): what the user ASKED, read back out of a run's task.
+ *  `Session.task` for a run started from this page's Run box is NOT what the
+ *  user typed: `POST /projects/{id}/task` (routes/projects.py
+ *  run_project_task) stores the whole prompt it built — "You are working
+ *  directly inside the project folder…\nTask: <words>\n\nDeliverable: …\nWork
+ *  autonomously…" (the first line only when the project has a folder), and a
+ *  QUEUED run gets "\n\nWhy this was assigned: …" appended by the assignment
+ *  dispatcher. Shown raw, every row of a folder project led with the same two
+ *  lines of preamble. So: the text after the first line-initial "Task: ", up
+ *  to the LAST "\n\nDeliverable:" (the route appends its own Deliverable line
+ *  after the user's words, so a "Deliverable:" the user typed stays theirs),
+ *  else up to "\n\nWhy this was assigned:", else the end. Any other task (a
+ *  chat escalation, an older run, an API caller) is returned unchanged.
+ *  tests/test_project_task_prompt_shape_v1315.py pins the backend half of this
+ *  contract: change that prompt's shape and it goes red. */
+export function runAsk(task: string): string {
+  const t = task.replace(/\r\n/g, "\n");
+  const m = /(^|\n)Task: /.exec(t);
+  if (!m) return task;
+  const start = m.index + m[0].length;
+  let end = t.lastIndexOf("\n\nDeliverable:");
+  if (end < start) end = t.indexOf("\n\nWhy this was assigned:", start);
+  if (end < start) end = t.length;
+  const ask = t.slice(start, end).trim();
+  return ask || task;
 }
 
 /** Media tags can't send the Authorization header — the token rides as ?token=. */
@@ -514,11 +542,16 @@ export function ProjectTasks({
             size="sm"
             onTranscript={(chunk) => setTaskText((p) => appendDictation(p, chunk))}
           />
+          {/* v1.315.0 (UX wave 3): a 10rem floor. With a bare `min-w-0
+              flex-1` on this wrap row the select gave up ALL its width before
+              anything wrapped — on a phone it was a ~36px chevron box and you
+              could not see what the task would produce. Now the assignee and
+              Run wrap to the next line instead. */}
           <select
             aria-label="Deliverable"
             value={taskOutput}
             onChange={(e) => setTaskOutput(e.target.value as TaskOutput)}
-            className="field min-w-0 flex-1 text-sm"
+            className="field min-w-[10rem] flex-1 text-sm"
           >
             {TASK_OUTPUTS.map((o) => (
               <option key={o.value} value={o.value} disabled={o.value !== "chat" && !hasRoot}>
@@ -542,7 +575,7 @@ export function ProjectTasks({
             data-testid="project-task-assignee"
             value={effectiveAssignee}
             onChange={(e) => setAssignee(e.target.value)}
-            className="field w-40 min-w-0 text-sm"
+            className="field min-w-[9rem] flex-1 text-sm sm:w-40 sm:flex-none"
             title="Run it now yourself, or queue it for an agent — it runs when that agent is free"
           >
             <option value="">{selfLabel || "You — run now"}</option>
@@ -848,24 +881,57 @@ export function ProjectTasks({
               {history
                 .filter((s) => s.id !== taskRun?.id)
                 .slice(0, 8)
-                .map((s) => (
-                  <li key={s.id}>
-                    <Link
-                      href={`/sessions/${encodeURIComponent(s.id)}`}
-                      className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.03]"
-                    >
-                      <SessionStatusBadge session={s} />
-                      <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">
-                        {/* A one-line row: the summary's markdown markers are
-                            stripped (v1.230.0, U2), not printed. */}
-                        {plainText(s.summary || s.task)}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-accent-soft opacity-0 transition-opacity group-hover:opacity-100">
-                        open →
-                      </span>
-                    </Link>
-                  </li>
-                ))}
+                .map((s) => {
+                  // plainText: a task that did not come from the Run box (a delegation,
+                  // a schedule) can be model-written markdown (v1.230.0 rule).
+                  const ask = s.task ? plainText(runAsk(s.task)) : "";
+                  return (
+                    <li key={s.id}>
+                      {/* v1.315.0 (UX wave 3): rows that read apart. A row
+                          printed `summary || task`, so four runs read "Done.
+                          Wrote RESULT.md…" and nothing said what was asked or
+                          when. Now what was ASKED leads — `runAsk` reads the
+                          user's words back out of the prompt the task route
+                          stored (the raw task opens with the same machine
+                          preamble on every folder run, so showing it would
+                          make the rows identical again) — and the summary
+                          follows as its own muted line — still plainText
+                          (v1.230.0, U2: markers stripped, not printed) — and
+                          each row says when, like the sessions table's
+                          Created column. "open →" also shows on keyboard
+                          focus, not only on hover; below sm (no hover, no
+                          keyboard) it gives its width to the task, which may
+                          take two lines. */}
+                      <Link
+                        href={`/sessions/${encodeURIComponent(s.id)}`}
+                        title={ask || undefined}
+                        className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                      >
+                        <SessionStatusBadge session={s} />
+                        <span className="min-w-0 flex-1">
+                          {ask ? (
+                            <span className="line-clamp-2 break-words text-xs text-zinc-200">{ask}</span>
+                          ) : null}
+                          {s.summary ? (
+                            <span
+                              className={`block truncate ${
+                                ask ? "text-[11px] text-zinc-500" : "text-xs text-zinc-400"
+                              }`}
+                            >
+                              {plainText(s.summary)}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
+                          {timeAgo(s.created_at)}
+                        </span>
+                        <span className="hidden shrink-0 text-[11px] text-accent-soft opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
+                          open →
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
             </ul>
           </div>
         )}

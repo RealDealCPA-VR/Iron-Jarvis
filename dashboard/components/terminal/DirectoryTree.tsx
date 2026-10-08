@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import {
+  Briefcase,
   ChevronRight,
   Folder,
   FolderOpen,
@@ -19,7 +20,17 @@ import {
 } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { Drive, FsListing } from "@/lib/types";
+import type { Drive, FsListing, Project } from "@/lib/types";
+
+/** What a marker means, in words, for the chip's tooltip (v1.315.0: a bare
+ *  green "node" told a non-developer nothing). */
+const CHIP_WORDS: Record<string, string> = {
+  git: "Looks like a code project (tracked with Git)",
+  python: "Looks like a code project (Python)",
+  node: "Looks like a code project (Node)",
+  rust: "Looks like a code project (Rust)",
+  go: "Looks like a code project (Go)",
+};
 
 /** Colour + short label for a project marker, or null for plain folders. */
 function projectChip(kind: string) {
@@ -37,7 +48,7 @@ function projectChip(kind: string) {
   return (
     <span
       className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0 text-[9px] font-medium ${m.cls}`}
-      title={`${kind} project`}
+      title={CHIP_WORDS[kind] ?? `Looks like a code project (${kind})`}
     >
       {m.git && <GitBranch size={9} />}
       {m.label}
@@ -176,6 +187,8 @@ export function DirectoryTree({
   onOpenTerminal,
   hideAction = false,
   onCollapse,
+  showProjects = false,
+  hideHeaderCollapse = false,
 }: {
   selectedPath: string | null;
   onSelect: (path: string) => void;
@@ -188,9 +201,27 @@ export function DirectoryTree({
   /** When provided, the collapse button hands control to the PARENT (which can
    *  shrink the whole column) instead of just hiding this panel's body. */
   onCollapse?: () => void;
+  /** v1.315.0 (Build): list the user's Projects above the drive picker, so
+   *  the first thing the panel offers is their work, not C:\Windows. OPT-IN:
+   *  chat's and Memory's pickers do not pass it and never fetch /projects. */
+  showProjects?: boolean;
+  /** v1.315.0 (Build): drop this header's collapse button because the PARENT
+   *  already shows one (Build's tab bar) — two identical icons 50 px apart.
+   *  Opt-in: chat passes onCollapse WITHOUT this, and there the header button
+   *  is its only collapse / back-to-files control. */
+  hideHeaderCollapse?: boolean;
 }) {
   const { data, error, loading } = useApi<{ drives: Drive[] }>("/fs/drives");
   const drives = data?.drives ?? [];
+  // A null path = no request (useApi), so a picker without showProjects never
+  // asks for projects. A project whose folder is gone is skipped: selecting it
+  // would only hand "Open terminal here" a path that cannot be opened.
+  const { data: projectsData } = useApi<{ projects: Project[] }>(
+    showProjects ? "/projects" : null,
+  );
+  const projects = (projectsData?.projects ?? []).filter(
+    (p) => p.root && p.root_exists !== false,
+  );
   const [root, setRoot] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   // Typed root: a pasted Z:\Clients or \\server\share becomes the tree root —
@@ -213,21 +244,57 @@ export function DirectoryTree({
         <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
           Directory
         </h2>
-        <button
-          onClick={() => (onCollapse ? onCollapse() : setCollapsed((c) => !c))}
-          title={onCollapse || !collapsed ? "Collapse panel" : "Expand panel"}
-          className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-        >
-          {!onCollapse && collapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
-        </button>
+        {!hideHeaderCollapse && (
+          <button
+            onClick={() => (onCollapse ? onCollapse() : setCollapsed((c) => !c))}
+            title={onCollapse || !collapsed ? "Collapse panel" : "Expand panel"}
+            className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+          >
+            {!onCollapse && collapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
+          </button>
+        )}
       </header>
 
       {!collapsed && (
         <>
+          {/* Your projects (opt-in, Build). One click picks the project's
+              folder — the drive select and the tree stay below for anything
+              else. Capped + scrolled so a long list never pushes them away. */}
+          {showProjects && projects.length > 0 && (
+            <div className="shrink-0 border-b border-white/[0.06] px-4 py-3">
+              <div className="mb-1.5 text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                Your projects
+              </div>
+              <ul className="max-h-32 space-y-0.5 overflow-y-auto">
+                {projects.map((p) => {
+                  const on = selectedPath === p.root;
+                  return (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => onSelect(p.root)}
+                        title={p.root}
+                        aria-pressed={on}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[13px] transition-colors ${
+                          on
+                            ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
+                            : "text-zinc-300 hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <Briefcase size={13} className="shrink-0 text-zinc-500" />
+                        <span className="truncate">{p.name}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
           {/* Drive / root selector */}
           <div className="shrink-0 border-b border-white/[0.06] px-4 py-3">
             <label className="mb-1.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
-              Root
+              {showProjects && projects.length > 0 ? "Or browse a drive" : "Root"}
             </label>
             <select
               aria-label="Root directory"
@@ -278,12 +345,20 @@ export function DirectoryTree({
             <div className="text-[10px] uppercase tracking-[0.12em] text-zinc-400">
               Selected
             </div>
-            <div
-              className="mt-1 truncate font-mono text-[12px] text-accent-soft"
-              title={selectedPath ?? undefined}
-            >
-              {selectedPath ?? "— pick a folder below —"}
-            </div>
+            {/* v1.315.0: nothing picked is a quiet sentence, not an accent
+                monospace "value" that read as if a folder were chosen. */}
+            {selectedPath ? (
+              <div
+                className="mt-1 truncate font-mono text-[12px] text-accent-soft"
+                title={selectedPath}
+              >
+                {selectedPath}
+              </div>
+            ) : (
+              <div className="mt-1 text-[12px] text-zinc-500">
+                No folder picked yet — pick a project or a folder.
+              </div>
+            )}
             {!hideAction && onOpenTerminal && (
               <button
                 onClick={() => selectedPath && onOpenTerminal(selectedPath)}
