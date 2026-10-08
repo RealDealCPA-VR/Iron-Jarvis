@@ -178,6 +178,16 @@ def _record_settings_undo(platform, prior: "dict[str, Any]") -> None:
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+    @app.get("/settings/schema")
+    def get_settings_schema() -> dict[str, Any]:
+        """The ONE settings schema (calm UI redesign S1): groups, every setting
+        (label, help, type, options, tier, restart) and the credential names.
+        The Settings page renders from it; chat's config tools are generated
+        from the same declaration (``iron_jarvis.settings.schema``)."""
+        from ...settings.schema import public_schema
+
+        return public_schema()
+
     @app.get("/settings")
     def get_settings() -> dict[str, Any]:
         cfg = d.platform.config
