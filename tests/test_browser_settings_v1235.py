@@ -48,6 +48,7 @@ from iron_jarvis.daemon.schemas import _SETTINGS_KEYS
 from iron_jarvis.platform import build_platform
 
 _SETTINGS_SOURCE = Path(settings_routes.__file__)
+_WRITER_SOURCE = _SETTINGS_SOURCE.parents[2] / "settings" / "writer.py"
 
 
 def _read_source(path: Path) -> str:
@@ -195,8 +196,10 @@ def test_browser_is_named_in_the_live_rearm_groups():
     """A source pin, because the functional test above supplies its own hook
     table: the group name must be in the SHIPPED tuple, or the coordinator's
     ``_live_rearm["browser"]`` is registered and never consulted."""
-    source = _read_source(_SETTINGS_SOURCE)
-    marker = 'for group in ("autonomy", "sentinels", "calendar", "fleet", "browser"):'
+    # Calm UI redesign S2 (path update): the live re-arm table moved with the
+    # settings write into the one writer (iron_jarvis/settings/writer.py).
+    source = _read_source(_WRITER_SOURCE)
+    marker = '_REARM_GROUPS = ("autonomy", "sentinels", "calendar", "fleet", "browser")'
     assert marker in source, "the live re-arm groups no longer name browser"
 
 

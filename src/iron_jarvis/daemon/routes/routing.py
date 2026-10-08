@@ -13,7 +13,6 @@ from typing import Any
 from fastapi import FastAPI
 
 from ..schemas import RoutingDisableBody, RoutingEnableBody
-from ...core.config import persist_config_values
 
 
 def register(app: FastAPI, d) -> None:
@@ -47,9 +46,10 @@ def register(app: FastAPI, d) -> None:
         if not rm:  # default to the suggested cheapest connected model
             suggested = R.cheapest(R.connected_real_models(d.platform.providers, cfg))
             rm = R.format_pm(suggested) if suggested else ""
-        cfg.default_provider = "auto"
-        cfg.routing_model = rm
-        persist_config_values(cfg.home, {"default_provider": "auto", "routing_model": rm})
+        # Redesign S2: the one writer (ledger + Undo).
+        from .settings import config_writer
+
+        config_writer(d).apply({"default_provider": "auto", "routing_model": rm}, actor="model_menu")
         return _view()
 
     @app.get("/routing/quality")
@@ -244,11 +244,10 @@ def register(app: FastAPI, d) -> None:
                 provider, model = pick[0], pick[1]
             elif connected:
                 provider, model = connected[0]["provider"], connected[0]["model"]
-        cfg.default_provider = provider or "mock"
+        from .settings import config_writer
+
+        values: dict[str, Any] = {"default_provider": provider or "mock"}
         if model:
-            cfg.default_model = model
-        persist_config_values(
-            cfg.home,
-            {"default_provider": cfg.default_provider, "default_model": cfg.default_model},
-        )
+            values["default_model"] = model
+        config_writer(d).apply(values, actor="model_menu")
         return _view()

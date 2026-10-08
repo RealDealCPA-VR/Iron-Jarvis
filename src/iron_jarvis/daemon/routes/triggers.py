@@ -130,34 +130,23 @@ def register(app: FastAPI, d) -> None:
         lead = body.lead_minutes
         if lead is not None and lead < 0:
             raise HTTPException(status_code=400, detail="lead_minutes must be >= 0")
-        updated: list[str] = []
+        # Redesign S2: the one writer (validated, persisted, ledger + Undo,
+        # and the calendar loop re-armed live — that re-arm is the writer's).
+        from ...settings.writer import SettingError
+        from .settings import config_writer
+
+        values: dict[str, Any] = {"calendar_trigger_enabled": bool(body.enabled)}
+        if lead is not None:
+            values["calendar_lead_minutes"] = int(lead)
         try:
-            cfg.calendar_trigger_enabled = bool(body.enabled)
-            updated.append("calendar_trigger_enabled")
-            if lead is not None:
-                cfg.calendar_lead_minutes = int(lead)
-                updated.append("calendar_lead_minutes")
-        except Exception:  # noqa: BLE001 — pydantic validate_assignment rejects bad values
+            config_writer(d).apply(values, actor="calendar")
+        except SettingError:
             raise HTTPException(status_code=400, detail="invalid calendar trigger settings")
-        # Persist atomically (mirrors the settings route) so the toggle + lead time
-        # survive a restart.
-        d._persist_config(updated)
         # Store the ICS URL in the vault (a secret) — only when a non-empty value
         # was supplied, so toggling enabled on/off never clobbers a stored URL.
         ics_url = (body.ics_url or "").strip()
         if ics_url:
             d.platform.secrets.set(_CALENDAR_ICS_SECRET, ics_url, kind="password")
-        # LIVE re-arm: hop onto the daemon loop (this sync handler runs in a
-        # threadpool) and re-arm the calendar poller so the change takes effect now
-        # instead of at the next restart. Guarded — the coordinator wires this.
-        rearm = getattr(d, "_live_rearm", {}) or {}
-        loop = rearm.get("loop")
-        fn = rearm.get("calendar")
-        if loop is not None and fn is not None:
-            try:
-                loop.call_soon_threadsafe(fn)
-            except Exception:  # noqa: BLE001 — a re-arm hiccup must not fail the write
-                pass
         return _status()
 
     @app.delete("/triggers/calendar/url")

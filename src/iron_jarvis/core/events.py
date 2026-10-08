@@ -185,6 +185,9 @@ class EventType:
     # page was opened ({route, via}) so usage of each surface is countable
     # over time. Route = the first path segment only; no ids, no query.
     UI_PAGE_OPENED = "ui.page_opened"
+    # Redesign S2: a setting changed through the one writer ({keys, actor,
+    # action_id}); the Settings page and chat cards refresh from it.
+    CONFIG_CHANGED = "config.changed"
     # Messaging surfaces (v1.136.0): the DAEMON appended a message to a chat
     # thread (comm/threads.py — inbound phone message or the daemon's reply),
     # so an open dashboard thread can live-refresh. {thread_id, messages} —

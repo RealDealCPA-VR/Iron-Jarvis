@@ -40,7 +40,11 @@ def test_config_store_keys_are_real_config_fields():
     assert [k for k in schema.daemon_keys() if k not in fields] == []
 
 
-@pytest.mark.parametrize("d", [d for d in schema.SETTINGS if d.store == "config" and d.type == "enum"], ids=lambda d: d.key)
+@pytest.mark.parametrize(
+    "d",
+    [d for d in schema.SETTINGS if d.store == "config" and d.type == "enum" and not d.pattern],
+    ids=lambda d: d.key,
+)
 def test_every_enum_option_is_a_value_config_accepts(d, tmp_path):
     cfg = Config(home=tmp_path, project_root=tmp_path)
     for value, _label in d.options:

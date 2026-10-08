@@ -31,6 +31,7 @@ safety off is not the same act as turning it on).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -72,6 +73,14 @@ class SettingDef:
     attr: str = ""
     #: Extra validation beyond the store's own (raises ValueError).
     check: Callable[[Any], None] | None = field(default=None, compare=False, repr=False)
+    #: A family of keys: ``key`` ends in ``.{name}`` (e.g. ``permissions.{tool}``).
+    pattern: bool = False
+    #: False = not accepted by the generic ``PUT /settings``: the key has its
+    #: own route with its own side effect (Iron-Proxy start/stop, writing the
+    #: CLI's instruction file, clearing per-pack flags), as it always had.
+    #: Chat's ``config_set`` still changes it — through the writer, which runs
+    #: that same side effect.
+    put: bool = True
 
     @property
     def field_name(self) -> str:
@@ -101,6 +110,7 @@ class SettingDef:
             "store": self.store,
             "placeholder": self.placeholder,
             "secret": False,
+            "pattern": self.pattern,
         }
 
 
@@ -235,7 +245,7 @@ SETTINGS: tuple[SettingDef, ...] = (
     # ------------------------------------------------------------ connections
     S("iron_proxy_enabled", "Iron-Proxy (shared accounts)", "connections", "bool",
       "Pick which signed-in account each Claude/Codex/Grok call uses.",
-      tier="ask", aliases=("iron proxy", "accounts switcher")),
+      tier="ask", put=False, aliases=("iron proxy", "accounts switcher")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),
@@ -248,9 +258,13 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("calendar_tick_seconds", "Calendar check every (seconds)", "connections", "number",
       "How often the calendar is polled.", tier="ask", section="Calendar", advanced=True,
       check=_range(30, 86400)),
+    S("agent_browser_enabled", "Agent browser", "connections", "bool",
+      "Let agents drive their own separate browser (never your logged-in one).",
+      tier="ask", floor_when=(True,), attr="computer_use.enabled", section="Browser",
+      aliases=("computer use", "agent browser")),
     S("mcp_auto_approve", "Run app tools without asking", "permissions", "bool",
       "Let every app (MCP) tool run without an approval card. Not recommended.",
-      tier="ask-floor", restart=True, aliases=("mcp auto approve",)),
+      tier="ask-floor", restart=True, put=False, aliases=("mcp auto approve",)),
     # -------------------------------------------------------------- automation
     S("max_agent_steps", "Max steps per run", "automation", "number",
       "Safety ceiling on how many steps one agent run may take.", tier="ask", check=_range(1, 1000)),
@@ -313,10 +327,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", store="profile", attr="enabled", section="Profile"),
     S("profile_share_claude_code", "Share my profile with Claude Code", "memory", "bool",
       "Write your profile into Claude Code's own instructions file on this PC.",
-      tier="ask", section="Share with Build"),
+      tier="ask", put=False, section="Share with Build"),
     S("profile_share_codex", "Share my profile with Codex", "memory", "bool",
       "Write your profile into Codex's own instructions file on this PC.",
-      tier="ask", section="Share with Build"),
+      tier="ask", put=False, section="Share with Build"),
     S("memory_steward_enabled", "Memory steward", "memory", "bool",
       "Tidy and de-duplicate long-term memory in the background.", tier="ask", advanced=True),
     S("chat_files_root", "Chat files folder", "memory", "string",
@@ -335,6 +349,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       "A message from your phone, Slack or email starts a run. Low trust may read and answer but not change memory, settings, agents or skills.",
       options=(("low", "Low trust (default)"), ("full", "Full trust")),
       tier="ask", floor_when=("full",), aliases=("phone trust", "inbound trust")),
+    S("permissions.{tool}", "Approval for one tool", "permissions", "enum",
+      "Whether a tool may run without asking (allow), asks first (ask), or never runs (deny). Tools that touch your PC can never be set to allow.",
+      options=(("allow", "Run without asking"), ("ask", "Ask first"), ("deny", "Never run")),
+      tier="ask-floor", pattern=True, aliases=("tool permission", "always allow", "never allow")),
     S("event_retention_days", "Keep activity history (days)", "permissions", "number",
       "How long the activity log and ledger are kept. 0 = forever.", tier="ask", restart=True,
       check=_range(0, 36500)),
@@ -396,18 +414,35 @@ SECRETS: tuple[SecretDef, ...] = (
 )
 
 BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTINGS}
+_PATTERNS: tuple[SettingDef, ...] = tuple(d for d in SETTINGS if d.pattern)
+_NAME = re.compile(r"^[A-Za-z0-9_:.\-]{1,80}$")
 
 
 def get(key: str) -> SettingDef:
-    try:
+    """The definition for ``key`` — a plain key, or one of a family
+    (``permissions.shell`` → the ``permissions.{tool}`` definition)."""
+    if key in BY_KEY and not BY_KEY[key].pattern:
         return BY_KEY[key]
-    except KeyError:
-        raise KeyError(f"unknown setting: {key}") from None
+    for d in _PATTERNS:
+        prefix = d.key.split("{", 1)[0]
+        if key.startswith(prefix) and _NAME.match(key[len(prefix):]):
+            return d
+    raise KeyError(f"unknown setting: {key}")
+
+
+def pattern_arg(d: SettingDef, key: str) -> str:
+    """``permissions.shell`` → ``shell`` for a family definition."""
+    return key[len(d.key.split("{", 1)[0]):] if d.pattern else ""
 
 
 def daemon_keys() -> list[str]:
-    """Config-store keys — the ``PUT /settings`` whitelist."""
-    return [d.key for d in SETTINGS if d.store == "config"]
+    """Plain config-field keys — the ``PUT /settings`` whitelist (dotted and
+    family keys go through the writer's own hooks)."""
+    return [
+        d.key
+        for d in SETTINGS
+        if d.store == "config" and d.put and not d.pattern and "." not in d.field_name
+    ]
 
 
 def public_schema() -> dict[str, Any]:

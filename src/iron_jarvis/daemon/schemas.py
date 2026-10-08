@@ -518,124 +518,13 @@ class RestoreBody(BaseModel):
     name: str
 
 
-#: Whitelist of config keys the Settings UI may read/write (safe, restart-light).
-_SETTINGS_KEYS = [
-    "default_provider",
-    "default_model",
-    # Persona slug or free text used whenever a chat turn carries no explicit
-    # persona (desktop chat, stream, phone) — same contract as ChatBody.persona.
-    "default_persona",
-    # Never substitute an explicitly-picked provider (see config.strict_model_pin).
-    "strict_model_pin",
-    # v1.320.2: the trust posture of runs started from inbound messages
-    # (low | full, validated by Config). The Settings page has rendered and
-    # PUT this since v1.298.0, but the key was missing here, so every save
-    # was silently dropped and the posture never changed.
-    "comm_trust",
-    # A LOCAL primary that answered with an error: refuse (default) or fail
-    # over (see config.local_primary_policy, v1.228.0).
-    "local_primary_policy",
-    # Auto model routing — the classifier + optional tier overrides. "auto" as
-    # the default_provider is the ON switch.
-    "routing_model",
-    "routing_tiers_json",
-    "max_agent_steps",
-    # v1.228.0: per-tool-call deadline inside an agent run (seconds, 0 = none).
-    "tool_call_timeout_s",
-    "git_native",
-    "self_dev_enabled",
-    "self_dev_root",
-    "sandbox_runtime",
-    "ollama_base_url",
-    "ollama_model",
-    # Custom OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM /
-    # private gateways) — pairs with the optional custom_api_key vault entry.
-    "custom_base_url",
-    "custom_model",
-    # Known context windows (tokens) keyed "provider::model"/"model"/"provider"
-    # — scales attachment budgets for local endpoints that don't advertise
-    # theirs (a 128k fleet model gets whole documents inline; 8k gets RAG).
-    "model_context_windows",
-    "context_compaction",
-    # Step-aware routing (v1.135.0): role -> "provider:model" overrides for
-    # plan/synthesize/extract/judge/vision one-shots inside multi-step runs.
-    "model_roles",
-    # LOCAL-FIRST ROUTING (v1.148.0). These four shipped in Config but were
-    # absent HERE, so the only way to turn local-first on was to hand-edit
-    # config.toml — which is not a feature, it is a feature nobody can reach.
-    # `routing_local_ladder` is a LIST and is deliberately included: unlike
-    # fleet_nodes/mcp_servers (managed by their own routes), this one has no
-    # other editor, so the settings round-trip is its only home.
-    "prefer_local_when_capable",
-    "local_quality_bar",
-    "local_quality_min_samples",
-    "routing_local_ladder",
-    # Short-horizon decomposition for local models (v1.132.0) — same story.
-    "decompose_local_tasks",
-    # Where a chat with no project keeps each conversation's folder (v1.244.0;
-    # "" = <Documents>\Iron Jarvis — see config.chat_files_dir).
-    "chat_files_root",
-    # A second copy of every backup, on another drive (v1.249.0, R-05; "" = off).
-    # The folder is checked at PUT /settings (maintenance.mirror_dir_problem).
-    "backup_mirror_dir",
-    "backup_mirror_media",
-    # OpenCode store override for the Usage merge (dir or .db path).
-    "opencode_data_dir",
-    # Pi coding agent session-store override for the Usage merge (dir path).
-    "pi_sessions_dir",
-    # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a
-    # self-hosted STT server works independently of the (possibly non-transcribing)
-    # chat endpoint. Its key lives in the vault as voice_transcribe_key.
-    "voice_transcribe_base_url",
-    "voice_transcribe_model",
-    "voice_vosk_model_path",  # bundled offline (Vosk) model dir override
-    "event_retention_days",
-    # Motivation Layer (the pulse) — all OFF / conservative by default. Toggling
-    # autonomy_* at runtime re-arms the background loop LIVE (put_settings →
-    # _live_rearm); no restart needed.
-    "autonomy_enabled",
-    "autonomy_level",
-    "autonomy_dry_run",
-    "autonomy_kill_switch",
-    "autonomy_tick_seconds",
-    "autonomy_max_actions_per_day",
-    "autonomy_max_tokens_per_day",
-    # Sentinels (always-on watchers) — OFF by default. Toggling sentinels_* at
-    # runtime re-arms the background polling loop LIVE (mirrors autonomy_*).
-    "sentinels_enabled",
-    "sentinels_tick_seconds",
-    # CX-05 calendar trigger (inbound everything) — OFF by default. Toggling
-    # calendar_* at runtime re-arms the background polling loop LIVE (mirrors
-    # autonomy_*/sentinels_*). The ICS URL itself is a vault secret, not a setting.
-    "calendar_trigger_enabled",
-    "calendar_tick_seconds",
-    "calendar_lead_minutes",
-    # Local fleet — SCALARS only. `fleet_nodes` is deliberately absent (same rule
-    # as mcp_servers/custom_integrations): a list is managed by /fleet/nodes, and
-    # a settings-page round-trip of the whole blob is how nodes get lost.
-    "fleet_sampling_enabled",
-    "fleet_sampling_seconds",
-    "fleet_savings_baseline",
-    "fleet_code_route_enabled",
-    "fleet_code_target",
-    "fleet_code_task_classes",
-    # OpenCode CLI provider — CSV of "provider/model" it may serve.
-    # "" = auto-detect the models that genuinely run on your own hardware.
-    "opencode_local_models",
-    # Skill learning (v1.135.0) — the suggest-only skill loop's two switches.
-    # Also settable from the Skills page via PATCH /skills/learning/settings.
-    "skill_learning_enabled",
-    "skill_learning_auto_approve",
-    # v1.143.0: the periodic memory-curation review (additions are written,
-    # every change/removal is queued for approval — see Config).
-    "memory_steward_enabled",
-    # BROWSER (v1.235.0) — off | read_only | interactive, OFF by default. A key
-    # absent from THIS list is invisible to both settings routes, so the only way
-    # to turn the capability on would be hand-editing config.toml; moving it to
-    # `off` also re-arms live (put_settings → _live_rearm["browser"]) so the
-    # paired socket drops immediately instead of waiting for a restart.
-    "browser_access",
-]
+#: Whitelist of config keys the Settings UI may read/write. Since the calm UI
+#: redesign (S1/S2) it is GENERATED from the one settings schema
+#: (``iron_jarvis.settings.schema``) — the hand-kept list it replaces drifted
+#: (``comm_trust`` was rendered by the page and missing here until v1.320.2).
+from ..settings.schema import daemon_keys as _daemon_keys  # noqa: E402
+
+_SETTINGS_KEYS = _daemon_keys()
 
 
 class ConnectionKeyBody(BaseModel):

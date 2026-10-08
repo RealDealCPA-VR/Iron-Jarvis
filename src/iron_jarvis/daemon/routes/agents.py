@@ -2485,8 +2485,11 @@ def register(app: FastAPI, d) -> None:
                 or any(bool(s.get("auto_approve")) for s in servers),
                 "note": None,
             }
-        changed_keys = ["mcp_auto_approve"]
-        d.platform.config.mcp_auto_approve = bool(body.auto_approve)
+        # Redesign S2: the global flag through the one writer (ledger + Undo);
+        # the per-server flags it clears are pack records, persisted as before.
+        from .settings import config_writer
+
+        config_writer(d).apply({"mcp_auto_approve": bool(body.auto_approve)}, actor="tools_page")
         if not body.auto_approve:
             cleared = False
             for s in servers:
@@ -2495,8 +2498,7 @@ def register(app: FastAPI, d) -> None:
                     cleared = True
             if cleared:
                 d.platform.config.mcp_servers = servers
-                changed_keys.append("mcp_servers")
-        d._persist_config(changed_keys)
+                d._persist_config(["mcp_servers"])
         return {
             "auto_approve_global": bool(body.auto_approve),
             "auto_approve_effective": bool(body.auto_approve),

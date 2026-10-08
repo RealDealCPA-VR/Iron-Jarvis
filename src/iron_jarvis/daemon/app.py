@@ -2867,6 +2867,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # ``d.comm_thread_store``) is only provable with a test double in its
     # place, and a closure cannot be handed one any other way.
     app.state.d = d
+    # Calm UI redesign S2: THE one settings writer (validate, apply, side
+    # effects, ledger + undo, config.changed) — routes, Undo and chat's
+    # config tools all write through it.
+    from ..settings.writer import ConfigWriter
+
+    platform.config_writer = ConfigWriter(d)
 
     # THE WINDOW LADDER, handed to the agents package (v1.285.0): the panel's
     # per-speaker transcript budget reads the same pin → envelope → fleet →

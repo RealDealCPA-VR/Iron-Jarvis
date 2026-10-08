@@ -63,6 +63,18 @@ def register(app: FastAPI, d) -> None:
             "max_retries",
         ):
             setattr(cu.policy, field, getattr(fresh, field))
+        # Redesign S2 / AUDIT Q15: DURABLE now. The switch and the allowlists
+        # used to live in memory only and were lost on restart; the allowlists
+        # ride the config dict and the switch goes through the one writer
+        # (persisted, ledger + Undo).
+        from .settings import config_writer
+
+        cfg = d.platform.config
+        cu_cfg = dict(getattr(cfg, "computer_use", {}) or {})
+        cu_cfg["domain_allowlist"] = list(cu.policy.domain_allowlist)
+        cu_cfg["action_allowlist"] = list(cu.policy.action_allowlist)
+        cfg.computer_use = cu_cfg
+        config_writer(d).apply({"agent_browser_enabled": bool(body.enabled)}, actor="browser_page")
         # Switch to a real isolated browser when enabling (needs `playwright install`).
         if body.enabled and type(cu.browser).__name__ == "FakeBrowser":
             cu.browser = PlaywrightBrowser()

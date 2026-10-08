@@ -144,14 +144,14 @@ def register(app: FastAPI, d) -> None:
         (the v1.127.0 MCP-auto-approve pattern): ``None`` reads without
         changing, writes persist to config.toml, and the response returns the
         effective state so the checkboxes bind to truth."""
-        cfg = d.platform.config
-        changed: list[str] = []
+        # Redesign S2: the one writer (ledger + Undo).
+        from .settings import config_writer
+
+        values: dict[str, Any] = {}
         if body.enabled is not None:
-            cfg.skill_learning_enabled = bool(body.enabled)
-            changed.append("skill_learning_enabled")
+            values["skill_learning_enabled"] = bool(body.enabled)
         if body.auto_approve is not None:
-            cfg.skill_learning_auto_approve = bool(body.auto_approve)
-            changed.append("skill_learning_auto_approve")
-        if changed:
-            d._persist_config(changed)
+            values["skill_learning_auto_approve"] = bool(body.auto_approve)
+        if values:
+            config_writer(d).apply(values, actor="skills_page")
         return _settings_view()

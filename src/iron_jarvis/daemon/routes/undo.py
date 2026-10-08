@@ -170,48 +170,24 @@ def register(app: FastAPI, d) -> None:
             return out
 
     def _restore_settings(desc: dict[str, Any]) -> str:
-        """Step 3: reverse a settings change against the live config — the
-        restore rewrites config.toml and re-pointing a local endpoint builds
-        adapters, so both run here, off the loop."""
-        platform = d.platform
+        """Step 3: reverse a settings change — through THE one settings writer
+        (calm UI redesign S2), so an undo runs the SAME live side effects a
+        save does (endpoints re-pointed, every loop re-armed — the old copy
+        here re-armed only autonomy/sentinels, so undoing a calendar, fleet or
+        browser change waited for a restart). Off the loop (it may start or
+        stop a process, write files)."""
+        from .settings import config_writer
+
         try:
-            prior = json.loads(desc.get("pre_inline") or "{}").get("prior", {})
+            pre = json.loads(desc.get("pre_inline") or "{}")
         except (TypeError, ValueError):
-            prior = {}
-        updated = restore_config_values(platform.config, prior)
-        result_output = f"undo: restored settings {', '.join(updated) or '(none)'}"
-        # LIVE re-apply — mirror PUT /settings so undoing an endpoint/autonomy
-        # setting takes effect immediately instead of silently needing a restart.
-        # Best-effort: a re-point/re-arm error must never fail the undo itself.
-        cfg = platform.config
-        if any(
-            k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
-            for k in updated
-        ):
-            try:
-                platform.providers.configure_local(
-                    ollama_base_url=cfg.ollama_base_url,
-                    ollama_model=cfg.ollama_model,
-                    custom_base_url=cfg.custom_base_url,
-                    custom_model=cfg.custom_model,
-                )
-            except Exception:  # noqa: BLE001 — next boot still picks config up
-                pass
-        try:
-            rearm = getattr(d, "_live_rearm", None)
-            if rearm:
-                loop = rearm.get("loop")
-                if loop is not None:
-                    for group in ("autonomy", "sentinels"):
-                        if any(k.startswith(group) for k in updated):
-                            fn = rearm.get(group)
-                            if fn is not None:
-                                # Thread-safe hop onto the daemon loop (this
-                                # helper runs on a worker thread).
-                                loop.call_soon_threadsafe(fn)
-        except Exception:  # noqa: BLE001 — re-arm must never fail the undo itself
-            pass
-        return result_output
+            pre = {}
+        prior = pre.get("prior", {}) if isinstance(pre, dict) else {}
+        device_id = str(pre.get("device_id") or "") if isinstance(pre, dict) else ""
+        change = config_writer(d).restore(
+            prior, device_id=device_id, restore_fn=restore_config_values
+        )
+        return f"undo: restored settings {', '.join(change.updated) or '(none)'}"
 
     def _finalize(
         action_id: str,

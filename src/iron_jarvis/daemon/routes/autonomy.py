@@ -98,8 +98,10 @@ def register(app: FastAPI, d) -> None:
     @app.post("/autonomy/kill")
     def autonomy_kill(body: KillBody) -> dict[str, Any]:
         """Global kill switch: engage (default) or release. Persisted to config."""
-        d.platform.config.autonomy_kill_switch = bool(body.enabled)
-        d._persist_config(["autonomy_kill_switch"])
+        # Redesign S2: the one writer (ledger + Undo, loop re-armed).
+        from .settings import config_writer
+
+        config_writer(d).apply({"autonomy_kill_switch": bool(body.enabled)}, actor="autonomy_page")
         return {"kill_switch": d.platform.config.autonomy_kill_switch}
 
     @app.post("/autonomy/tick")

@@ -450,8 +450,13 @@ def register(app: FastAPI, d) -> None:
         Iron-Proxy or start the bundled one. Answers like ``GET /iron-proxy``;
         a start that failed is ``status.error`` in one sentence."""
         svc = _svc()
-        await asyncio.to_thread(svc.set_enabled, True)
-        await asyncio.to_thread(svc.start)
+        # Redesign S2: through the one writer (ledger + Undo); it calls
+        # svc.set_enabled + svc.start, exactly as this route did.
+        from .settings import config_writer
+
+        await asyncio.to_thread(
+            config_writer(d).apply, {"iron_proxy_enabled": True}, actor="connections"
+        )
         return await _view(svc)
 
     @app.post("/iron-proxy/disable")
@@ -460,8 +465,11 @@ def register(app: FastAPI, d) -> None:
         Iron Jarvis started (one the user started keeps running). CLI calls go
         back to the default login."""
         svc = _svc()
-        await asyncio.to_thread(svc.set_enabled, False)
-        await asyncio.to_thread(svc.stop)
+        from .settings import config_writer
+
+        await asyncio.to_thread(
+            config_writer(d).apply, {"iron_proxy_enabled": False}, actor="connections"
+        )
         return await _view(svc)
 
     @app.post("/iron-proxy/accounts", status_code=201)

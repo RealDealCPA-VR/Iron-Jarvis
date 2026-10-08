@@ -69,7 +69,12 @@ def register(app: FastAPI, d) -> None:
                 status_code=409,
                 detail=f"{spec.label} is not installed on this PC, so there is nothing to share with.",
             )
-        await asyncio.to_thread(svc.set_on, spec.id, bool(body.on))
+        # Redesign S2: the one writer (ledger + Undo) calls svc.set_on.
+        from .settings import config_writer
+
+        await asyncio.to_thread(
+            config_writer(d).apply, {spec.config_key: bool(body.on)}, actor="memory_page"
+        )
         return await asyncio.to_thread(svc.state)
 
     @app.post("/profile/share/{cli}/overwrite")

@@ -330,9 +330,16 @@ def register(app: FastAPI, d) -> None:
                 status_code=400, detail=f"connect {provider} before making it the default"
             )
         cfg = d.platform.config
-        cfg.default_provider = provider
-        cfg.default_model = d._PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
-        d._persist_config(["default_provider", "default_model"])
+        # Redesign S2: the one writer (ledger + Undo).
+        from .settings import config_writer
+
+        config_writer(d).apply(
+            {
+                "default_provider": provider,
+                "default_model": d._PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model),
+            },
+            actor="connections",
+        )
         return {"default_provider": provider, "default_model": cfg.default_model}
 
     @app.post("/connections/{provider}/key")

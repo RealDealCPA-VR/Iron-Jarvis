@@ -15,7 +15,6 @@ from typing import Any
 
 from .. import app as _app
 from ..schemas import RepairBody, RestoreBody, SettingsBody, _SETTINGS_KEYS
-from ...core.config import capture_config_undo, persist_config_values
 from ...core.logging import get_logger
 
 log = get_logger("daemon.maintenance")
@@ -126,54 +125,22 @@ def _first_local_model(d, name: str) -> str:
     return ""
 
 
-def _record_settings_undo(platform, prior: "dict[str, Any]") -> None:
-    """Journal a settings change as a reversible ``setting_restore`` action (TX-01),
-    so it appears on the audit timeline and can be reversed from time-travel
-    (``POST /undo`` restores the prior values via ``restore_config_values``).
+def schema_label(key: str) -> str:
+    from ...settings.writer import _label
 
-    ``prior`` holds only NON-SECRET keys whose value actually changed (secret-named
-    keys are refused capture upstream, so no credential lands in the journal).
-    Best-effort — a telemetry failure must never fail the settings write itself."""
-    if not prior:
-        return
-    import json
+    return _label(key)
 
-    from ...core.db import session_scope
-    from ...core.ids import new_id
-    from ...core.models import PermissionMode, ToolInvocation, UndoJournal
-    from ...tools.base import Reversibility
 
-    inv_id = new_id("tool")
-    keys = sorted(prior)
-    try:
-        with session_scope(platform.engine) as db:
-            db.add(
-                ToolInvocation(
-                    id=inv_id,
-                    session_id="settings",
-                    agent_run_id="",
-                    tool="update_settings",
-                    args_json=json.dumps({"changed": keys}),
-                    verdict=PermissionMode.ALLOW,
-                    ok=True,
-                    output="changed " + ", ".join(keys),
-                    reversibility=Reversibility.REVERSIBLE.value,
-                )
-            )
-            db.add(
-                UndoJournal(
-                    action_id=inv_id,
-                    session_id="settings",
-                    agent_run_id="",
-                    tool="update_settings",
-                    kind="setting_restore",
-                    reversible=True,
-                    pre_inline=json.dumps({"prior": prior}),
-                )
-            )
-            db.commit()
-    except Exception:  # noqa: BLE001 — journaling must never break the settings write
-        pass
+def config_writer(d):
+    """THE settings writer for this daemon (``platform.config_writer``),
+    made on first use for an app built without one (a test's bare deps)."""
+    from ...settings.writer import ConfigWriter
+
+    w = getattr(d.platform, "config_writer", None)
+    if w is None:
+        w = ConfigWriter(d)
+        d.platform.config_writer = w
+    return w
 
 
 def register(app: FastAPI, d) -> None:
@@ -195,94 +162,28 @@ def register(app: FastAPI, d) -> None:
 
     @app.put("/settings")
     def put_settings(body: SettingsBody) -> dict[str, Any]:
+        """Save settings through THE one writer (calm UI redesign S2):
+        validated all-or-nothing on a throwaway copy, applied, persisted
+        atomically, side effects run live (endpoints re-pointed, loops
+        re-armed), journaled with Undo. Keys outside the schema's config
+        whitelist are ignored, as they always were."""
+        from ...settings.writer import SettingError
+
         cfg = d.platform.config
         candidates = {k: v for k, v in body.values.items() if k in _SETTINGS_KEYS}
-        # Validate ALL keys on a throwaway copy first, so one bad value can't
-        # partially mutate (and then persist) the live config — which previously
-        # could brick the next boot or break in-flight sessions.
-        trial = cfg.model_copy(deep=True)
-        for key, value in candidates.items():
-            try:
-                setattr(trial, key, value)
-            except Exception:  # noqa: BLE001 - pydantic validation
-                raise HTTPException(status_code=400, detail=f"invalid value for {key}")
-        # v1.249.0 (R-05): the backup copy folder must be usable NOW — a folder
-        # on this machine the app may write in, outside its own data folder
-        # (maintenance.mirror_dir_problem → fs_policy.root_problem, the one
-        # definition). Checked HERE, where the blocking writability probe runs
-        # in the threadpool, never at config load: an unplugged drive must not
-        # stop the app from starting.
-        if "backup_mirror_dir" in candidates:
-            from ...maintenance import mirror_dir_problem
-
-            raw_mirror = str(candidates.get("backup_mirror_dir") or "").strip()
-            candidates["backup_mirror_dir"] = raw_mirror
-            problem = mirror_dir_problem(cfg.home, raw_mirror)
-            if problem:
-                raise HTTPException(status_code=400, detail=f"backup copy folder: {problem}")
-        # Everything validated — snapshot the PRIOR values (non-secret keys only)
-        # for a settings-change undo (TX-01) BEFORE mutating, then commit to the
-        # running config.
-        undo_snapshot = capture_config_undo(cfg, list(candidates.keys()))
-        updated: list[str] = []
-        for key, value in candidates.items():
-            setattr(cfg, key, value)
-            updated.append(key)
-        # Persist atomically (temp + os.replace) so a crash mid-write can't leave a
-        # torn config.toml that aborts the next boot.
-        persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in updated})
-        # TX-01: journal the change (only keys that actually changed value) as a
-        # reversible action so it lands on the audit timeline and can be undone.
-        changed_prior = {
-            k: v
-            for k, v in undo_snapshot.get("prior", {}).items()
-            if getattr(cfg, k, None) != v
-        }
-        _record_settings_undo(d.platform, changed_prior)
-        # v1.249.0 (R-05): switching the backup copy OFF retires its loop entry,
-        # or the Overview would keep naming a copy nobody asked for any more.
-        if "backup_mirror_dir" in updated and not getattr(cfg, "backup_mirror_dir", ""):
-            d.loop_health.pop("backup_mirror", None)
-        # LIVE re-arm: an autonomy_*/sentinels_* change re-arms its background
-        # loop immediately (this endpoint runs in a threadpool, so hop onto the
-        # daemon loop). Previously the toggle waited for the next restart.
-        # `browser` joined the groups in v1.235.0: moving browser_access to `off`
-        # must DROP the live paired socket, and a capability the user just turned
-        # off that keeps driving their real Chrome until the next restart is the
-        # one failure mode this whole switch exists to prevent.
-        loop = d._live_rearm.get("loop")
-        if loop is not None:
-            for group in ("autonomy", "sentinels", "calendar", "fleet", "browser"):
-                if any(k.startswith(group) for k in updated):
-                    fn = d._live_rearm.get(group)
-                    if fn is not None:
-                        loop.call_soon_threadsafe(fn)
-        # LIVE re-point: the ProviderManager captured the local/custom endpoint
-        # config at boot — without this, a freshly saved endpoint stayed
-        # unavailable (and adapters bound stale URLs/models) until restart.
-        if any(
-            k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
-            for k in updated
-        ):
-            try:
-                d.platform.providers.configure_local(
-                    ollama_base_url=cfg.ollama_base_url,
-                    ollama_model=cfg.ollama_model,
-                    custom_base_url=cfg.custom_base_url,
-                    custom_model=cfg.custom_model,
-                )
-            except Exception:  # noqa: BLE001 — next boot still picks config up
-                pass
-        # Editing the OpenCode allowlist must take effect NOW: the manager
-        # caches the resolved local models (available() is on the hot path).
-        if "opencode_local_models" in updated:
-            try:
-                d.platform.providers.refresh_opencode()
-            except Exception:  # noqa: BLE001 — a cache drop never breaks a save
-                pass
+        try:
+            change = config_writer(d).apply(candidates, actor="settings_page")
+        except SettingError as exc:
+            message = str(exc)
+            if message.startswith("backup copy folder"):
+                raise HTTPException(status_code=400, detail=message)
+            bad = next((k for k in candidates if k in message or schema_label(k) in message), "")
+            raise HTTPException(status_code=400, detail=f"invalid value for {bad}: {message}" if bad else message)
         return {
             "settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS},
-            "updated": updated,
+            "updated": change.updated,
+            "changed": change.changed,
+            "action_id": change.action_id,
         }
 
     @app.get("/diagnostics")

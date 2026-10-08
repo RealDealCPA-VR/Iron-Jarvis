@@ -907,21 +907,22 @@ def register(app: FastAPI, d) -> None:
                             "Routable for the node you want coding work to use"
                         ),
                     )
-            cfg.fleet_code_target = target
+        values: dict[str, Any] = {}
+        if body.target is not None:
+            values["fleet_code_target"] = target
         if body.enabled is not None:
-            if body.enabled and not (cfg.fleet_code_target or "").strip():
+            effective_target = values.get("fleet_code_target", cfg.fleet_code_target)
+            if body.enabled and not (effective_target or "").strip():
                 raise HTTPException(
                     status_code=400,
                     detail="set a target model before turning code routing on",
                 )
-            cfg.fleet_code_route_enabled = bool(body.enabled)
+            values["fleet_code_route_enabled"] = bool(body.enabled)
         if body.task_classes is not None:
-            cfg.fleet_code_task_classes = body.task_classes.strip()
-        d._persist_config(
-            [
-                "fleet_code_route_enabled",
-                "fleet_code_target",
-                "fleet_code_task_classes",
-            ]
-        )
+            values["fleet_code_task_classes"] = body.task_classes.strip()
+        # Redesign S2: the one writer (ledger + Undo, fleet loop re-armed).
+        from .settings import config_writer
+
+        if values:
+            config_writer(d).apply(values, actor="fleet_page")
         return _code_route_view()
