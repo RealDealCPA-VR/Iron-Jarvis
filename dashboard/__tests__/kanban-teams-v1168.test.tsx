@@ -336,7 +336,9 @@ describe("KanbanBoard team rendering", () => {
     );
     const chips = screen.getAllByTestId("origin-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("schedule:nightly");
+    // v1.314.0: the chip READS in plain words; the raw origin is kept.
+    expect(chips[0]).toHaveTextContent("Schedule · nightly");
+    expect(chips[0].getAttribute("data-origin")).toBe("schedule:nightly");
     // No team links → no badges anywhere.
     expect(screen.queryByTestId("team-badge")).not.toBeInTheDocument();
   });
@@ -464,6 +466,9 @@ describe("sessions page origin provenance", () => {
     render(<SessionsPage />);
     const chips = screen.getAllByTestId("origin-chip");
     expect(chips.map((c) => c.textContent)).toEqual(
+      expect.arrayContaining(["Schedule · nightly-brief", "Agents page"]),
+    );
+    expect(chips.map((c) => c.getAttribute("data-origin"))).toEqual(
       expect.arrayContaining(["schedule:nightly-brief", "job:agents"]),
     );
     expect(chips).toHaveLength(2); // s-mine gets NO chip — absence is honest

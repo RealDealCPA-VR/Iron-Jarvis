@@ -30,8 +30,9 @@ import {
   LoaderInline,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
-import { NewSessionForm } from "@/components/NewSessionForm";
-import OriginChip, { originKind } from "@/components/sessions/OriginChip";
+import { NewSessionForm, NEW_SESSION_TASK_ID } from "@/components/NewSessionForm";
+import OriginChip, { originKind, originLabel } from "@/components/sessions/OriginChip";
+import { CopyIconButton } from "@/components/Markdown";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
@@ -49,6 +50,19 @@ const NO_PROJECT = "__none__";
 const ORIGIN_MINE = "__mine__";
 const ORIGIN_AUTOMATED = "__auto__";
 const ORIGIN_KIND_PREFIX = "kind:";
+
+/** v1.314.0: focus the New-session form's own task box (the empty list's
+ *  way forward). scrollIntoView is guarded — not every host implements it. */
+function focusTaskBox() {
+  const el = document.getElementById(NEW_SESSION_TASK_ID) as HTMLTextAreaElement | null;
+  if (!el) return;
+  try {
+    el.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  } catch {
+    /* no scroll support — focusing is what matters */
+  }
+  el.focus();
+}
 
 export default function SessionsPage() {
   // Toolbar state. `query`/`statusFilter`/`agentFilter` filter the fetched list
@@ -335,8 +349,10 @@ export default function SessionsPage() {
                     <option value={ORIGIN_MINE}>Mine</option>
                     <option value={ORIGIN_AUTOMATED}>Automated</option>
                     {originKindOptions.map((k) => (
+                      // v1.314.0: plain words ("Schedule", "Message"); the
+                      // VALUE stays the raw kind the filter keys on.
                       <option key={k} value={`${ORIGIN_KIND_PREFIX}${k}`}>
-                        {k}
+                        {originLabel(k)}
                       </option>
                     ))}
                   </select>
@@ -376,8 +392,15 @@ export default function SessionsPage() {
                     No sessions match your filters.
                   </Empty>
                 ) : (
-                  <Empty icon={<Boxes size={26} />}>
-                    No sessions yet — create one on the left to get started.
+                  // v1.314.0 (UX wave 2): "on the left" was false on a phone,
+                  // where the form sits ABOVE the list. The press focuses the
+                  // page's OWN task box (one box — never a second form).
+                  <Empty
+                    icon={<Boxes size={26} />}
+                    title="No sessions yet"
+                    action={{ label: "Describe a task", onClick: focusTaskBox }}
+                  >
+                    A session is one task you hand to an agent. Describe it in the New session box and it shows up here.
                   </Empty>
                 )
               ) : visible.length === 0 ? (
@@ -440,9 +463,6 @@ export default function SessionsPage() {
                                 />
                               </Link>
                               <span className="flex flex-wrap items-center gap-2 pl-4">
-                                <span className="font-mono text-[11px] text-zinc-600">
-                                  {shortId(s.id)}
-                                </span>
                                 {s.provider === "mock" && <MockChip />}
                                 {/* Provenance (v1.168.0): who dispatched this
                                     session; renders nothing when untagged. */}
@@ -473,6 +493,17 @@ export default function SessionsPage() {
                                       project
                                     </span>
                                   ) : null)}
+                                {/* v1.314.0 (UX wave 2): the id no longer prints
+                                    on every row — it is a record, kept one
+                                    press away (copy, the full id in the title)
+                                    and still found by the search box. Last in
+                                    the row, so the hover-revealed button leaves
+                                    no gap before the chips. */}
+                                <CopyIconButton
+                                  text={s.id}
+                                  title={`Copy session id ${s.id}`}
+                                  className="grid h-5 w-5 place-items-center rounded-md text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                                />
                               </span>
                             </td>
                             <td className="px-2 py-2.5 text-zinc-400">{s.agent_type}</td>

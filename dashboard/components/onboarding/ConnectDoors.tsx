@@ -164,6 +164,7 @@ export function ConnectDoors({
   onEnabled,
   onOpenPane,
   className = "",
+  layout = "stack",
 }: {
   /** After anything connects (the wizard also reloads its checklist). Default:
    *  the DaemonProvider's /health refresh. */
@@ -175,6 +176,10 @@ export function ConnectDoors({
    *  steps aside so the pane is visible). */
   onOpenPane?: () => void;
   className?: string;
+  /** v1.314.0: "row" lays the three doors side by side from `sm` up. Opt-in:
+   *  the chat empty state passes it so its starter prompts reach the fold;
+   *  the first-run wizard's narrower modal keeps the default stacked doors. */
+  layout?: "stack" | "row";
 }) {
   const { health, refresh } = useDaemon();
   const after = onChanged ?? refresh;
@@ -391,7 +396,7 @@ export function ConnectDoors({
 
       {/* The three doors (v1.197.0) — plain-language first, mechanics
           revealed only for the picked one. */}
-      <div className="mt-3 grid gap-1.5">
+      <div className={`mt-3 grid gap-1.5${layout === "row" ? " sm:grid-cols-3" : ""}`}>
         {DOORS.map((d) => {
           const active = door === d.id;
           return (

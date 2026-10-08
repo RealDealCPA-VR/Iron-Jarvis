@@ -538,7 +538,7 @@ describe("TurnReceipt — auto-tier explanation is reachable, quietly", () => {
   it("stays quiet collapsed: no warning, and no link nested in the toggle", () => {
     render(<TurnReceipt route={AUTO_TIER} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle.textContent).toContain("ollama");
+    expect(toggle.textContent).toContain("Ollama"); // v1.314.0: providerDisplay
     expect(screen.queryByText(/answered by/)).toBeNull();
     expect(document.querySelector(".text-amber-300")).toBeNull();
     // Collapsed line lives inside the toggle button — an anchor there would

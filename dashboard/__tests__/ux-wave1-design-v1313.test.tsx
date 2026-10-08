@@ -538,10 +538,13 @@ describe("C. status primitives read through the tone tokens", () => {
     expect(ok.className).not.toMatch(NO_RAW_HUE);
   });
 
-  it("MockChip still discloses the offline mock (words + title) and reads in tone-warn", () => {
+  it("MockChip still discloses the demo model (words + title) and reads in tone-warn", () => {
     render(<ui.MockChip />);
-    const chip = screen.getByText(/offline mock/);
-    expect(chip.getAttribute("title")).toMatch(/offline mock model/);
+    // v1.314.0: the visible word is "demo model"; the title still names it
+    // honestly (scripted, no real AI) and keeps the old term for search.
+    const chip = screen.getByText(/demo model/);
+    expect(chip.getAttribute("title")).toMatch(/scripted replies, no real AI/);
+    expect(chip.getAttribute("title")).toMatch(/offline mock/);
     expect(chip.className).toContain("text-tone-warn");
     expect(chip.className).not.toMatch(NO_RAW_HUE);
   });
@@ -571,7 +574,8 @@ describe("C. status primitives read through the tone tokens", () => {
     for (const [origin, tone] of cases) {
       render(<OriginChip origin={origin} />);
       const chip = screen.getByTestId("origin-chip");
-      expect(chip).toHaveTextContent(origin);
+      // v1.314.0: plain words on the chip; the raw origin stays in title.
+      expect(chip.getAttribute("data-origin")).toBe(origin);
       expect(chip.getAttribute("title")).toBe(`Started by: ${origin}`);
       expect(chip.className, origin).toContain(`text-tone-${tone}`);
       expect(chip.className, origin).not.toMatch(NO_RAW_HUE);
@@ -1153,7 +1157,8 @@ describe("J. hints that explain what to do are readable", () => {
 
   it("Build's rail: the empty-state paragraph is meta/zinc-500 and the pane count is not zinc-700", () => {
     const src = read("components", "terminal", "PaneRail.tsx");
-    const para = classBefore(src, "No panes yet.");
+    // v1.314.0: the line now speaks of terminals (one name for one thing).
+    const para = classBefore(src, "No terminals open yet.");
     expect(para).toMatch(/\btext-(meta|xs|\[12px\])\b/);
     expect(para).toContain("text-zinc-500");
     expect(para).not.toMatch(/text-zinc-600|text-\[11\.5px\]/);

@@ -62,7 +62,8 @@ afterEach(() => cleanup());
 
 describe("mirrorLine — the status sentence", () => {
   it("says off, missing, no copy yet, the last copy, partial and failed in plain words", () => {
-    expect(mirrorLine(null).text).toMatch(/Off — backups are kept on this PC only/);
+    // v1.314.0: the unset state names the folder, never "Off" (it sat under a ticked box).
+    expect(mirrorLine(null).text).toMatch(/No backup folder set — backups stay on this PC only/);
     const miss = mirrorLine(mirror({ missing: true }));
     expect(miss.tone).toBe("warn");
     expect(miss.text).toContain(DIR);

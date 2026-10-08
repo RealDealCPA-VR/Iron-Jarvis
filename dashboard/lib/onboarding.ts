@@ -191,6 +191,19 @@ export function friendlyProvider(provider: string): string {
   return FRIENDLY[provider] ?? provider;
 }
 
+/** v1.314.0 (UX wave 2): the provider word a USER reads anywhere a row, chip,
+ *  option or receipt names one. The built-in scripted model is never shown as
+ *  "mock" — it is the demo model, and saying "scripted" keeps the disclosure
+ *  honest. The VALUE sent to the daemon stays the id; keep the raw id in a
+ *  `title` where the row is a record of what ran. */
+export function providerDisplay(provider: string | null | undefined): string {
+  const p = (provider || "").trim();
+  if (!p) return "";
+  if (p === "mock") return "Demo model (scripted)";
+  if (p === "auto") return "Auto";
+  return friendlyProvider(p);
+}
+
 export interface AnswerCandidate {
   /** What the press posts to W2-1 (a CLI name stays the CLI name; the daemon
    *  promotes it to the inherited API name so the quality dial applies). */

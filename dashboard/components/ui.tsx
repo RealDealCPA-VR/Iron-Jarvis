@@ -302,26 +302,82 @@ export function SkeletonRows({ rows = 4 }: { rows?: number }) {
   );
 }
 
+/** v1.314.0: an empty state's way forward — a link, or a press that opens the
+ *  page's OWN form (never a second copy of it). Existing `{label, href}`
+ *  callers are unchanged. */
+export type EmptyAction =
+  | { label: string; href: string; onClick?: never; disabled?: never }
+  | {
+      label: string;
+      onClick: () => void;
+      href?: never;
+      /** Mirror the page's own busy state (the header button's), so a quick
+       *  double-press cannot start the same thing twice. */
+      disabled?: boolean;
+    };
+
+const EMPTY_ACTION_CLASS =
+  "inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]";
+
+/**
+ * The one empty state. Three parts, each optional but the message (v1.314.0,
+ * UX wave 2): `title` says what this place is, `children` why it matters in
+ * one sentence, `action` the next step. `examples` are short illustrations
+ * ("When an email from my bank arrives, summarise it") — words, not presses;
+ * `secondary` is a quiet link for the reader who wants the other door.
+ */
 export function Empty({
   children,
   icon,
+  title,
   action,
+  secondary,
+  examples,
 }: {
   children: ReactNode;
   icon?: ReactNode;
-  /** Optional call-to-action link shown beneath the message. */
-  action?: { label: string; href: string };
+  /** What this place is, in plain words. */
+  title?: ReactNode;
+  /** The next step: a link, or a press that opens the page's own form. */
+  action?: EmptyAction;
+  /** A quieter second door (a link), e.g. "Most people want Reflexes". */
+  secondary?: { label: string; href: string };
+  /** Short illustrations of what goes here. */
+  examples?: string[];
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+    <div data-testid="empty-state" className="flex flex-col items-center justify-center gap-3 py-10 text-center">
       {icon && <div className="text-zinc-600">{icon}</div>}
+      {title && <div className="text-sm font-medium text-zinc-200">{title}</div>}
       <div className="max-w-sm text-sm text-zinc-500">{children}</div>
-      {action && (
-        <Link
-          href={action.href}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
-        >
-          {action.label} <ArrowRight size={13} />
+      {examples && examples.length > 0 && (
+        <ul data-testid="empty-examples" className="max-w-sm space-y-1 text-left text-xs text-zinc-500">
+          {examples.map((e) => (
+            <li key={e} className="flex gap-1.5">
+              <span aria-hidden className="text-zinc-600">•</span>
+              <span>{e}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {action &&
+        (action.href !== undefined ? (
+          <Link href={action.href} className={EMPTY_ACTION_CLASS}>
+            {action.label} <ArrowRight size={13} />
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={action.onClick}
+            disabled={action.disabled}
+            className={`${EMPTY_ACTION_CLASS} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            {action.label} <ArrowRight size={13} />
+          </button>
+        ))}
+      {secondary && (
+        <Link href={secondary.href} className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">
+          {secondary.label}
         </Link>
       )}
     </div>
@@ -335,9 +391,9 @@ export function MockChip({ className = "" }: { className?: string }) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2 py-0.5 text-[10px] font-medium text-tone-warn ${className}`}
-      title="Ran on the built-in offline mock model"
+      title="Ran on the built-in demo model — scripted replies, no real AI (offline mock)"
     >
-      <MoonStar size={10} /> offline mock
+      <MoonStar size={10} /> demo model
     </span>
   );
 }

@@ -173,7 +173,11 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("Connections — an inherited login reads as connected", () => {
-  it("renders 'Inherited from claude-cli' on the pill, no Disconnect, and says where the login lives", async () => {
+  // v1.314.0 (UX wave 2): the pill names the product ("Connected · via Claude
+  // Code", not the daemon id "claude-cli") and the where-it-lives line says
+  // "Uses your Claude Code sign-in — no key stored here". The halves that
+  // matter are unchanged: told apart from a vault "Connected", no Disconnect.
+  it("renders 'Connected · via Claude Code' on the pill, no Disconnect, and says where the login lives", async () => {
     seed([
       conn("anthropic", {
         display_name: "Anthropic",
@@ -194,10 +198,10 @@ describe("Connections — an inherited login reads as connected", () => {
     await screen.findByText("Anthropic");
 
     const anthropic = cardOf("anthropic");
-    expect(within(anthropic).getByText("Inherited from claude-cli")).toBeInTheDocument();
+    expect(within(anthropic).getByText("Connected · via Claude Code")).toBeInTheDocument();
     expect(within(anthropic).queryByText("Not connected")).toBeNull();
     expect(within(anthropic).queryByRole("button", { name: /Disconnect/ })).toBeNull();
-    expect(anthropic.textContent).toMatch(/signed in through the claude CLI/);
+    expect(anthropic.textContent).toMatch(/Uses your Claude Code sign-in — no key stored here/);
     // Test and Make default are still offered — it IS usable.
     expect(within(anthropic).getByRole("button", { name: /Test/ })).toBeInTheDocument();
 
@@ -210,7 +214,7 @@ describe("Connections — an inherited login reads as connected", () => {
     expect(within(cardOf("google")).getByText("Not connected")).toBeInTheDocument();
   });
 
-  it("names the codex CLI for an inherited OpenAI login", async () => {
+  it("names Codex for an inherited OpenAI login", async () => {
     seed([
       conn("openai", {
         display_name: "OpenAI",
@@ -222,7 +226,7 @@ describe("Connections — an inherited login reads as connected", () => {
     render(<ConnectionsPage />);
     await screen.findByText("OpenAI");
     const openai = cardOf("openai");
-    expect(within(openai).getByText("Inherited from codex-cli")).toBeInTheDocument();
-    expect(openai.textContent).toMatch(/signed in through the codex CLI/);
+    expect(within(openai).getByText("Connected · via Codex")).toBeInTheDocument();
+    expect(openai.textContent).toMatch(/Uses your Codex sign-in/);
   });
 });

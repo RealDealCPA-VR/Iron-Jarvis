@@ -475,16 +475,28 @@ export function fmtDuration(ms: number): string {
  * One line describing where coding work goes. Prefers the daemon's own `why`
  * (it is resolved live and already plain English) and never invents a
  * reassuring sentence when the daemon didn't send one.
+ *
+ * v1.314.0 (UX wave 2): a SENTENCE, starting with what it is about. The off
+ * state read "code routing is off" — a floating lowercase fragment naming a
+ * setting the user never saw — so it now says what that means. Off is off
+ * whatever the daemon's terse `why` for it says (the page keeps that raw
+ * `why` in a title). An on-state `why` still wins verbatim, with only its
+ * first letter raised; nothing is invented.
  */
 export function codeRouteText(
   route: FleetCodeRoute | null | undefined,
 ): string | null {
   if (!route) return null;
   const why = (route.effective?.why || "").trim();
-  if (why) return why;
   const target = (route.target || "").trim();
+  if (!route.enabled) {
+    return why || target
+      ? "Coding work isn’t sent to a local model — that routing is turned off."
+      : null;
+  }
+  if (why) return why.charAt(0).toUpperCase() + why.slice(1);
   if (!target) return null;
-  return route.enabled ? `coding work goes to ${target}` : `code routing is off`;
+  return `Coding work goes to ${target}`;
 }
 
 /* -------------------------------------------------------------------------- */

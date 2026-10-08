@@ -622,7 +622,10 @@ export function ModelSwitcher() {
         // off its right edge ran off the left of the screen. Below sm the
         // panel spans the bar (8px gutters); from sm it hangs off the chip.
         // Either way it never runs past the bottom of the window.
-        <div className="fixed inset-x-2 top-11 z-50 max-h-[calc(100vh-3.5rem)] overflow-y-auto rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-1.5 sm:w-80">
+        // v1.314.0: OPAQUE. The panel sits inside the header's own
+        // backdrop-filter, so its blur never blurred the page — at /95 faint
+        // page text showed through on a phone. A solid surface reads cleanly.
+        <div className="fixed inset-x-2 top-11 z-50 max-h-[calc(100vh-3.5rem)] overflow-y-auto rounded-xl border border-white/10 bg-ink-950 p-1.5 shadow-card-hover sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-1.5 sm:w-80">
           {/* Auto — smart routing: a COLLAPSIBLE disclosure. Compact by default so
               it never sits fully-expanded over the model list; expands on hover
               (or click, for touch/keyboard) to configure, and collapses to a

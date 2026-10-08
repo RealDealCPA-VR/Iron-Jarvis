@@ -29,6 +29,7 @@ import {
   FileText,
   Brain,
   StickyNote,
+  Palette,
   type LucideIcon,
 } from "lucide-react";
 import { NAV_ENTRIES } from "@/lib/nav";
@@ -38,6 +39,7 @@ import { normalizeIso } from "@/lib/format";
 import { recordOpen } from "@/lib/appTiles";
 import { useDaemon } from "@/lib/daemon";
 import { DocPreview } from "@/components/chat/DocPreview";
+import { THEMES, LIGHT_MARKS, applyTheme } from "@/lib/theme";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -273,6 +275,32 @@ const ACTION_ITEMS: PaletteRow[] = [
     icon: LayoutTemplate,
   },
 ];
+
+// ── Themes ───────────────────────────────────────────────────────────────────
+// v1.314.0 (UX wave 2): one "Theme: <name>" command per theme, built from the
+// SAME list the title bar's dots render (lib/theme.ts) — never a copy here.
+// A `run` row, not a link: it applies in place through the one setter, so the
+// bar's dots, the drawer and Settings → Appearance all follow, and the user
+// stays on the page they were on.
+const THEME_ITEMS: PaletteRow[] = THEMES.map((t) => ({
+  id: `theme:${t.id}`,
+  kind: "action" as const,
+  label: `Theme: ${t.name}`,
+  blurb: t.flavor,
+  aliases: [
+    "theme",
+    "appearance",
+    "colors",
+    "colours",
+    "look",
+    LIGHT_MARKS.has(t.id) ? "light mode" : "dark mode",
+    t.mark,
+  ],
+  icon: Palette,
+  run: () => {
+    applyTheme(t.id);
+  },
+}));
 
 /** GET /skills → `{skills: [...]}`. */
 interface SkillRow {
@@ -908,7 +936,15 @@ export function CommandPalette() {
   }, [open, query, activeProject]);
 
   const allItems = useMemo(
-    () => [...PAGE_ITEMS, ...DEEP_LINK_ITEMS, ...ACTION_ITEMS, ...skillItems, ...threadItems, ...projectItems],
+    () => [
+      ...PAGE_ITEMS,
+      ...DEEP_LINK_ITEMS,
+      ...ACTION_ITEMS,
+      ...THEME_ITEMS,
+      ...skillItems,
+      ...threadItems,
+      ...projectItems,
+    ],
     [skillItems, threadItems, projectItems],
   );
 

@@ -23,6 +23,18 @@ import { timeAgo } from "@/lib/format";
 
 const KINDS = ["api_key", "oauth", "token", "password", "generic"];
 
+/** v1.314.0 (UX wave 2): the words a user reads for each kind. The VALUE
+ *  posted to /secrets stays the token in KINDS; a stored row keeps the raw
+ *  kind in its title. An unknown kind shows as itself. */
+const KIND_LABELS: Record<string, string> = {
+  api_key: "API key",
+  oauth: "OAuth token",
+  token: "Access token",
+  password: "Password",
+  generic: "Other",
+};
+const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
+
 export default function SecretsPage() {
   const { data, error, loading, reload } = useApi<{ secrets: SecretMeta[] }>("/secrets");
   const offline = error && error.status === 0;
@@ -110,7 +122,8 @@ export default function SecretsPage() {
                     type="password"
                     value={value}
                     onChange={(e) => setValue(e.target.value)}
-                    placeholder="••••••••••••"
+                    // v1.314.0: a row of dots read as "a value is already here".
+                    placeholder="Paste the key or token"
                     className="field font-mono"
                     autoComplete="off"
                   />
@@ -128,7 +141,7 @@ export default function SecretsPage() {
                     >
                       {KINDS.map((k) => (
                         <option key={k} value={k}>
-                          {k}
+                          {kindLabel(k)}
                         </option>
                       ))}
                     </select>
@@ -197,7 +210,9 @@ export default function SecretsPage() {
                         >
                           <td className="px-2 py-2.5 font-mono text-zinc-100">{s.name}</td>
                           <td className="px-2 py-2.5">
-                            <Badge value={s.kind} tone="cyan" />
+                            <span title={`Kind: ${s.kind}`}>
+                              <Badge value={kindLabel(s.kind)} tone="cyan" keepCase />
+                            </span>
                           </td>
                           <td className="max-w-xs truncate px-2 py-2.5 text-zinc-400">
                             {s.description || <span className="text-zinc-600">—</span>}

@@ -703,7 +703,8 @@ describe("session detail page (P2 wiring)", () => {
     render(<SessionDetailPage params={fakeParams("s-1")} />);
     await act(async () => {});
     const chip = screen.getByTestId("origin-chip");
-    expect(chip.textContent).toBe("job:agents");
+    expect(chip.textContent).toBe("Agents page");
+    expect(chip.getAttribute("title")).toBe("Started by: job:agents");
   });
 
   it("no origin → no chip (a guessed 'user' chip would be a lie)", async () => {

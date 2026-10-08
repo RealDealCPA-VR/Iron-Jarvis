@@ -55,7 +55,8 @@ const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 describe("the module fills the app", () => {
   it("the row is the height of the window, and stretches its columns", () => {
     expect(CODE).toContain('data-testid="chat-room"');
-    expect(CODE).toMatch(/md:h-\[calc\(100vh-4\.5rem\)\]/);
+    // v1.314.0: minus the demo strip's published height (SimulatedBanner).
+    expect(CODE).toMatch(/md:h-\[calc\(100vh-4\.5rem-var\(--ij-strip-h,0px\)\)\]/);
     // `items-stretch`, not `items-start`: three columns can only take the
     // row's height if the row lets them.
     expect(CODE).toContain("md:items-stretch");

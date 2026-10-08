@@ -583,6 +583,20 @@ export default function ProjectsPage() {
                 ) : undefined
               }
             >
+              {/* v1.314.0 (UX wave 2): a fresh page was a bare form — nothing
+                  said what a project IS. While there are none, a short
+                  explainer sits beside the form (stacked below md). Every
+                  line is checked against the code: the brief and recent work
+                  ride into chats (chat_turn) and tasks (runtime
+                  _project_context) TAGGED to the project; a chat in the
+                  project works in its folder. */}
+              <div
+                className={
+                  loaded && totalCount === 0
+                    ? "grid gap-6 md:grid-cols-[minmax(0,36rem)_1fr]"
+                    : undefined
+                }
+              >
               <form onSubmit={submit} className="max-w-xl space-y-3.5">
                 <div>
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -661,6 +675,41 @@ export default function ProjectsPage() {
                 </button>
                 {formError && <ErrorNote>{formError}</ErrorNote>}
               </form>
+              {loaded && totalCount === 0 && (
+                <aside
+                  data-testid="projects-explainer"
+                  className="space-y-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-sm text-zinc-400"
+                >
+                  <div className="text-sm font-medium text-zinc-200">
+                    A project keeps one piece of work together
+                  </div>
+                  <ul className="space-y-2">
+                    <li className="flex gap-2">
+                      <span aria-hidden className="text-zinc-600">•</span>
+                      <span>
+                        Its <span className="text-zinc-200">brief</span> — the goal and the key facts — is
+                        handed to every chat and task you run in this project, along with what was done
+                        in it recently.
+                      </span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span aria-hidden className="text-zinc-600">•</span>
+                      <span>
+                        Its <span className="text-zinc-200">folder</span> tells agents where the project&apos;s
+                        files live, and a chat in the project works there.
+                      </span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span aria-hidden className="text-zinc-600">•</span>
+                      <span>Its chats, tasks, board and knowledge stay together under it.</span>
+                    </li>
+                  </ul>
+                  <p className="text-xs text-zinc-500">
+                    For example: &ldquo;Year-end close&rdquo;, with the folder where that work lives.
+                  </p>
+                </aside>
+              )}
+              </div>
             </Card>
           )}
 

@@ -25,7 +25,8 @@ function TriggerNodeImpl({ data, selected }: NodeProps) {
         <div className="text-[13px] font-semibold leading-tight text-zinc-100">
           {d.label || "Trigger"}
         </div>
-        <div className="text-[10px] uppercase tracking-[0.14em] text-accent-soft/70">
+        {/* v1.314.0: sentence case — the tracking-wide caps read as a shout. */}
+        <div className="text-[11px] text-accent-soft/70">
           On run · click to change
         </div>
       </div>

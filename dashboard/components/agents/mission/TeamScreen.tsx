@@ -67,7 +67,7 @@ export function TeamScreen({
       <div className="lg:sticky lg:top-3">
         <MissionRail active="agents" onAction={onRail} />
       </div>
-      <section className="card-surface flex h-[calc(100vh-7rem)] min-h-[32rem] flex-col p-0">
+      <section className="card-surface flex h-[calc(100vh-7rem-var(--ij-strip-h,0px))] min-h-[32rem] flex-col p-0">
         <AgentsPanel
           roster={roster}
           dynamic={(agentsData?.dynamic ?? []) as DynamicAgentFull[]}

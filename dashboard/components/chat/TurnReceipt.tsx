@@ -33,8 +33,13 @@
  * Since v1.228.0 a failover also carries `from` (the provider that failed)
  * and `why` (the router's derived word: "http 500" | "timeout" |
  * "unreachable" | "interrupted" | "transient error" | "error"), so the chip
- * can say "answered by claude-cli — fleet-rtx6000ada returned HTTP 500"
+ * can say "answered by Claude Code — fleet-rtx6000ada returned HTTP 500"
  * instead of a bare "failover" that never names the user's own endpoint.
+ * Since v1.314.0 every provider a user READS goes through providerDisplay
+ * ("claude-cli" → "Claude Code"); a custom endpoint id has no friendly name
+ * and passes through unchanged. The raw ids stay a record: a title on the
+ * collapsed line and the warning chip, and a quiet "(claude-cli)" in the
+ * expanded detail.
  */
 
 import { useId, useState, type ReactNode } from "react";
@@ -54,6 +59,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
+import { providerDisplay } from "@/lib/onboarding";
 
 /** The capability envelope's adaptation disclosure (v1.202.0): the daemon
  *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
@@ -266,6 +272,8 @@ export function wordWhy(why: string | null | undefined): string {
 export function routeWarning(route: TurnRoute | null | undefined): string | null {
   if (!route) return null;
   if (route.provider === "mock") return "mock answer — no real model ran";
+  // v1.314.0: plain provider names in the words; the ids stay in titles.
+  const who = providerDisplay(route.provider);
   if (route.reason === "failover") {
     // v1.228.0: name the provider that FAILED and why, when the router said.
     // This is what makes the DEFAULT route accountable — `requested` is ""
@@ -275,17 +283,27 @@ export function routeWarning(route: TurnRoute | null | undefined): string | null
     if (from && from !== route.provider) {
       const why = wordWhy(route.why);
       return why
-        ? `answered by ${route.provider} — ${from} ${why}`
-        : `answered by ${route.provider} — failover from ${from}`;
+        ? `answered by ${who} — ${providerDisplay(from)} ${why}`
+        : `answered by ${who} — failover from ${providerDisplay(from)}`;
     }
     return route.requested && route.requested !== route.provider
-      ? `answered by ${route.provider} — failover from ${route.requested}`
-      : `answered by ${route.provider} — failover`;
+      ? `answered by ${who} — failover from ${providerDisplay(route.requested)}`
+      : `answered by ${who} — failover`;
   }
   if (route.requested && route.requested !== route.provider) {
-    return `answered by ${route.provider} — asked for ${route.requested}`;
+    return `answered by ${who} — asked for ${providerDisplay(route.requested)}`;
   }
   return null;
+}
+
+/** v1.314.0: the raw route ids behind the plain words — a record, kept in a
+ *  title: "claude-cli · claude-fable-5 (failover from codex-cli)". */
+function rawRoute(rt: TurnRoute): string {
+  const bits = [rt.provider, rt.model].filter(Boolean).join(" · ");
+  const from = (rt.from ?? "").trim();
+  if (from && from !== rt.provider) return `${bits} (failover from ${from})`;
+  if (rt.requested && rt.requested !== rt.provider) return `${bits} (asked for ${rt.requested})`;
+  return bits;
 }
 
 /**
@@ -432,14 +450,15 @@ export function TurnReceipt({
       warning ? (
         <span
           key="who"
+          title={rawRoute(rt)}
           className="inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.06] px-1.5 py-px font-medium text-amber-300"
         >
           <AlertTriangle size={10} className="shrink-0" />
           {warning}
         </span>
       ) : (
-        <span key="who" className="text-zinc-400">
-          {rt.provider}
+        <span key="who" className="text-zinc-400" title={rawRoute(rt)}>
+          {providerDisplay(rt.provider)}
         </span>
       ),
     );
@@ -573,21 +592,25 @@ export function TurnReceipt({
               <RouteIcon size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div className="min-w-0 text-[11.5px] leading-relaxed">
                 <span className={warning ? "text-amber-300" : "text-zinc-300"}>
-                  {rt.provider}
+                  {providerDisplay(rt.provider)}
                 </span>
+                {/* v1.314.0: the raw id, quietly — a record for support. */}
+                {providerDisplay(rt.provider) !== rt.provider && (
+                  <span className="text-zinc-600"> ({rt.provider})</span>
+                )}
                 {rt.model && (
                   <span className="text-zinc-500"> · {rt.model}</span>
                 )}
                 {mismatch && (
-                  <span className="text-amber-300/90">
+                  <span className="text-amber-300/90" title={rt.requested}>
                     {" "}
-                    — requested {rt.requested}
+                    — requested {providerDisplay(rt.requested)}
                   </span>
                 )}
                 {rt.reason === "failover" && rt.from && rt.from !== rt.provider && (
-                  <span className="text-amber-300/90">
+                  <span className="text-amber-300/90" title={rt.from}>
                     {" "}
-                    — {rt.from} {wordWhy(rt.why) || "failed"}
+                    — {providerDisplay(rt.from)} {wordWhy(rt.why) || "failed"}
                   </span>
                 )}
                 {rt.reason === "auto-tier" ? (

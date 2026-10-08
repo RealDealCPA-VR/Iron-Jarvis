@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CalendarClock,
@@ -39,6 +39,7 @@ import { ChooserTiles } from "@/components/ChooserTiles";
 import { useFocusRef } from "@/lib/useFocusRef";
 import AgentFace from "@/components/agents/AgentFace";
 import { PageGrid } from "@/components/PageGrid";
+import { agentLabel } from "@/components/workflow/agents";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
@@ -103,11 +104,40 @@ const ADVANCED = "__advanced__";
 const ONCE = "__once__";
 
 
+/** v1.314.0: a next/once run reads short and human ("Tomorrow · 8:00 AM");
+ *  the exact date sits in the cell's title (fullWhen). Parsing is unchanged —
+ *  the same `new Date(value)` the row always used. */
+function shortWhen(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diff = Math.round((day - today) / 86_400_000);
+  if (diff === 0) return `Today · ${time}`;
+  if (diff === 1) return `Tomorrow · ${time}`;
+  const date = d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
+  return `${date} · ${time}`;
+}
+
+/** The full value, for a title attribute (the record stays reachable). */
+function fullWhen(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "long" });
+}
+
 /** A human-readable description of a stored schedule's trigger. */
 function triggerLabel(s: Schedule): string {
   const tt = (s.trigger_type ?? "").toLowerCase();
   if (tt === "date" || (!s.cron && s.run_at)) {
-    return s.run_at ? `Once · ${new Date(s.run_at).toLocaleString()}` : "Once";
+    return s.run_at ? `Once · ${shortWhen(s.run_at)}` : "Once";
   }
   if (tt === "interval" || (!s.cron && s.interval_seconds)) {
     return s.interval_seconds ? `Every ${s.interval_seconds}s` : "Interval";
@@ -358,6 +388,18 @@ export default function SchedulesPage() {
 
   // ?focus=add (the global search's deep link) rings the add card.
   const addFocusRef = useFocusRef<HTMLDivElement>("add");
+  // v1.314.0: the empty state's "Try the morning briefing" applies the REAL
+  // preset and moves focus INTO the add form (the task box). addFocusRef's
+  // div sits outside the <form>, so the focus target is the field itself.
+  const taskFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const [focusTask, setFocusTask] = useState(0);
+  useEffect(() => {
+    if (!focusTask) return;
+    const el = taskFieldRef.current;
+    if (!el) return;
+    el.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    el.focus();
+  }, [focusTask]);
 
   // Deep-link from the workflow editor's "Schedule…" button: ?workflow=<name>
   // prefills the create form for that workflow. Read window.location to avoid a
@@ -573,6 +615,7 @@ export default function SchedulesPage() {
                         placeholder="Every fire, an agent gets exactly these words. e.g. Summarize yesterday's work and today's plan."
                         rows={3}
                         aria-label="Task text"
+                        ref={taskFieldRef}
                         className="field resize-y text-sm leading-relaxed"
                       />
                     </div>
@@ -588,9 +631,11 @@ export default function SchedulesPage() {
                           onChange={(e) => setAgentName(e.target.value)}
                           className="field"
                         >
+                          {/* v1.314.0: friendly names first; the VALUE stays
+                              the agent id the payload carries. */}
                           {builtinAgents.map((t) => (
                             <option key={t} value={t}>
-                              {t}
+                              {agentLabel(t)}
                             </option>
                           ))}
                           {/* A dynamic agent named exactly like a builtin
@@ -610,9 +655,13 @@ export default function SchedulesPage() {
                             ))}
                         </select>
                       </div>
-                      <div className="mt-1 text-[11px] text-zinc-600">
-                        Custom agents fire with their own prompt and tools.
-                      </div>
+                      {/* Only when a custom agent is picked — it explains
+                          THAT choice, not the built-ins (v1.314.0). */}
+                      {dynamicAgents.includes(agentName) && !builtinAgents.includes(agentName) && (
+                        <div className="mt-1 text-[11px] text-zinc-600">
+                          Custom agents fire with their own prompt and tools.
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -823,7 +872,23 @@ export default function SchedulesPage() {
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : schedules.length === 0 ? (
-                <Empty icon={<CalendarClock size={24} />}>No schedules yet.</Empty>
+                // v1.314.0: teach, and wire the button to the REAL preset —
+                // applyTemplate fills the existing form, then focus moves into
+                // its task box (never a second form).
+                <Empty
+                  icon={<CalendarClock size={24} />}
+                  title="Run something on a timer"
+                  examples={TEMPLATES.map((t) => `${t.label} — ${CRON_TO_LABEL.get(t.cron) ?? t.cron}`)}
+                  action={{
+                    label: "Try the morning briefing",
+                    onClick: () => {
+                      applyTemplate(TEMPLATES[0]);
+                      setFocusTask((n) => n + 1);
+                    },
+                  }}
+                >
+                  An agent does a task on the days and times you pick, and sends you the result.
+                </Empty>
               ) : (
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
@@ -859,9 +924,12 @@ export default function SchedulesPage() {
                                   <span
                                     className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500"
                                     data-testid="schedule-agent"
+                                    title={scheduleAgent(s)}
                                   >
                                     <AgentFace name={scheduleAgent(s)} size={14} />
-                                    {scheduleAgent(s)}
+                                    {/* v1.314.0: the same friendly name the picker shows;
+                                        the agent id stays in the title. */}
+                                    {agentLabel(scheduleAgent(s))}
                                   </span>
                                 )}
                               </span>
@@ -912,9 +980,12 @@ export default function SchedulesPage() {
                             ) : null}
                           </td>
                           <td className="px-2 py-2.5 text-zinc-500">
-                            <span className="inline-flex items-center gap-1.5">
+                            <span
+                              className="inline-flex items-center gap-1.5"
+                              title={s.next_run ? fullWhen(s.next_run) : undefined}
+                            >
                               <Clock size={12} className="text-zinc-600" />
-                              {s.next_run ? new Date(s.next_run).toLocaleString() : "—"}
+                              {s.next_run ? shortWhen(s.next_run) : "—"}
                             </span>
                           </td>
                           <td className="px-2 py-2.5 text-right">

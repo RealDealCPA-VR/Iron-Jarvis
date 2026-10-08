@@ -24,7 +24,8 @@ import { useEvents } from "@/lib/useEvents";
 import { useRunStream } from "@/lib/useRunStream";
 import { useTTS } from "@/lib/useTTS";
 import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, CopyIconButton } from "@/components/Markdown";
+import { providerDisplay } from "@/lib/onboarding";
 import type {
   SessionDetail,
   SessionView,
@@ -393,23 +394,56 @@ export default function SessionDetailPage({
                 <StatusDot status={session.status} className="mt-1.5" />
                 <span>{session.task}</span>
               </div>
+              {session.summary && (
+                // The summary is model-written markdown (v1.230.0, U2): it
+                // renders through the shared chat renderer, never as raw text
+                // with its asterisks showing. v1.314.0 (UX wave 2): it sits
+                // DIRECTLY under the task — what the agent produced is read
+                // first; the folder and model below are the record.
+                <div
+                  data-testid="session-summary"
+                  className="mb-4 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 text-sm text-zinc-300"
+                >
+                  <Markdown content={session.summary} />
+                </div>
+              )}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Meta label="Agent" value={session.agent_type} />
+                {/* v1.314.0: the model in words ("Demo model (scripted)",
+                    "OpenAI · gpt-x"); the raw provider / model is the record
+                    of what ran, so it stays in the title. */}
                 <Meta
-                  label="Provider / model"
+                  label="Model"
                   value={
-                    <span className="font-mono text-xs">
-                      {session.provider} / {session.model}
+                    <span title={`${session.provider} / ${session.model}`}>
+                      {session.provider === "mock"
+                        ? providerDisplay(session.provider)
+                        : `${providerDisplay(session.provider)} · ${session.model}`}
                     </span>
                   }
                 />
                 <Meta label="Created" value={clockTime(session.created_at)} />
                 <Meta label="Finished" value={clockTime(session.finished_at)} />
+                {/* v1.314.0: one truncated line (it used to wrap to three)
+                    — the full path in the title and one press to copy. */}
                 <Meta
-                  label="Workspace"
+                  label="Folder"
+                  className="sm:col-span-2"
                   value={
-                    <span className="break-all font-mono text-xs text-zinc-400">
-                      {session.workspace_path}
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span
+                        className="truncate font-mono text-xs text-zinc-400"
+                        title={session.workspace_path}
+                      >
+                        {session.workspace_path}
+                      </span>
+                      {session.workspace_path && (
+                        <CopyIconButton
+                          text={session.workspace_path}
+                          title="Copy folder path"
+                          className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                        />
+                      )}
                     </span>
                   }
                 />
@@ -425,17 +459,6 @@ export default function SessionDetailPage({
                   {outTok > 0 && (
                     <Badge value={`${outTok.toLocaleString()} out`} tone="cyan" />
                   )}
-                </div>
-              )}
-              {session.summary && (
-                // The summary is model-written markdown (v1.230.0, U2): it
-                // renders through the shared chat renderer, never as raw text
-                // with its asterisks showing.
-                <div
-                  data-testid="session-summary"
-                  className="mt-4 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 text-sm text-zinc-300"
-                >
-                  <Markdown content={session.summary} />
                 </div>
               )}
             </Card>
@@ -882,9 +905,18 @@ function summarizeEvent(e: IJEvent): string {
   }
 }
 
-function Meta({ label, value }: { label: string; value: React.ReactNode }) {
+function Meta({
+  label,
+  value,
+  className = "",
+}: {
+  label: string;
+  value: React.ReactNode;
+  className?: string;
+}) {
+  // min-w-0 lets a long value (the folder path) truncate inside its grid cell.
   return (
-    <div>
+    <div className={`min-w-0 ${className}`}>
       <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-400">
         {label}
       </div>

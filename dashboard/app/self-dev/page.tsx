@@ -26,6 +26,15 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { PageGrid } from "@/components/PageGrid";
+
+/**
+ * v1.314.0 (UX wave 2): where the page sends people to switch it on. The
+ * Self-development switch lives in Settings' collapsed Advanced section, and
+ * `?focus=advanced` opens that section (app/settings/page.tsx) — a link to
+ * the top of Settings left the user hunting for a switch with another name.
+ */
+const SETTINGS_ADVANCED = "/settings?focus=advanced";
 
 interface SelfDevStatus {
   enabled: boolean;
@@ -80,7 +89,7 @@ export default function SelfDevPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           {/* Status */}
           <div className="lg:col-span-1">
             <Card title="Status" icon={<GitBranch size={15} />}>
@@ -93,23 +102,31 @@ export default function SelfDevPage() {
                       <StatusDot status={data.available ? "ok" : data.enabled ? "pending" : "idle"} />
                       Self-development
                     </span>
+                    {/* v1.314.0: plain state words (were available / blocked /
+                        disabled). */}
                     <Badge
-                      value={data.available ? "available" : data.enabled ? "blocked" : "disabled"}
+                      value={data.available ? "Ready" : data.enabled ? "Not ready" : "Off"}
                       tone={data.available ? "green" : data.enabled ? "amber" : "slate"}
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <SectionLabel>Repo root</SectionLabel>
+                    <SectionLabel>{data.enabled ? "Repo it works on" : "Repo it would edit"}</SectionLabel>
                     <div className="break-all rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 font-mono text-[11px] text-zinc-400">
                       {data.repo_root ?? "— not found —"}
                     </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <SectionLabel>Reason</SectionLabel>
-                    <p className="text-sm text-zinc-400">{data.reason}</p>
-                  </div>
+                  {/* v1.314.0: the daemon's own reason string (a config-key
+                      sentence) is a record, so it stays — ONCE, one click
+                      down. It used to print here AND as the action card's
+                      first line. */}
+                  <details className="text-[12px] text-zinc-500">
+                    <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-200">
+                      Technical details
+                    </summary>
+                    <p className="mt-1.5 break-words font-mono text-[11px] text-zinc-400">{data.reason}</p>
+                  </details>
                 </div>
               ) : (
                 <p className="text-sm text-zinc-500">Status unavailable.</p>
@@ -160,51 +177,83 @@ export default function SelfDevPage() {
                 </form>
               </Card>
             ) : (
-              <Card title="Not available yet" icon={<FolderGit2 size={15} />}>
-                <div className="space-y-4">
-                  <p className="text-sm text-zinc-400">
-                    {data
-                      ? data.reason
-                      : "Self-development needs the daemon to report its status."}
-                  </p>
-                  {/* The shared warning notice (v1.313.0): its border, tint, body
-                      ink and code chip are themed for the light Marks, where the
-                      hand-rolled amber-100 text + black chips were dark text
-                      on a muddy slab. Same words, same link. */}
-                  <div className="notice-warn notice-warn-body rounded-xl border px-4 py-3 text-[13px] leading-relaxed">
-                    To turn this on, enable{" "}
-                    <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-[12px]">
-                      self_dev_enabled
-                    </code>{" "}
-                    {data && data.enabled && !data.repo_root ? (
-                      <>
-                        and point{" "}
-                        <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-[12px]">
-                          self_dev_root
-                        </code>{" "}
-                        at a checkout of this repo
-                      </>
-                    ) : (
-                      "in your configuration"
-                    )}
-                    . You can do that in{" "}
-                    <Link href="/settings" className="font-medium text-accent-soft underline">
-                      Settings
-                    </Link>
-                    .
-                  </div>
-                  <Link
-                    href="/settings"
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
-                  >
-                    <SettingsIcon size={14} /> Open Settings <ArrowRight size={13} />
-                  </Link>
-                </div>
-              </Card>
+              <NotReadyCard data={data ?? null} />
             )}
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
+  );
+}
+
+/**
+ * v1.314.0 (UX wave 2): why Maintainer cannot start, in words. Three cases,
+ * each with its own title — "Not available yet" read as "coming in a future
+ * release" when the feature is simply switched off:
+ *  - switched off → "Turned off", the switch's name and where it is, and that
+ *    it applies after a restart (the setting is restart:true);
+ *  - on, but the repo was not found → the repo-root setting;
+ *  - no status from the daemon → say so (the offline notice is above).
+ * The config keys stay, AFTER the sentence, for whoever edits config.toml.
+ */
+function NotReadyCard({ data }: { data: SelfDevStatus | null }) {
+  if (!data) {
+    return (
+      <Card title="Waiting for Iron Jarvis" icon={<FolderGit2 size={15} />}>
+        <p className="text-sm text-zinc-400">
+          Self-development needs Iron Jarvis to report its status before it can start.
+        </p>
+      </Card>
+    );
+  }
+  const off = !data.enabled;
+  const noRepo = data.enabled && !data.repo_root;
+  return (
+    <Card
+      title={off ? "Turned off" : noRepo ? "Can’t find the Iron Jarvis code" : "Not ready"}
+      icon={<FolderGit2 size={15} />}
+    >
+      <div className="space-y-4">
+        <p className="text-sm leading-relaxed text-zinc-300">
+          {off ? (
+            <>
+              Self-development is off. Turn on <strong>Self-development</strong> in Settings →
+              Advanced, then restart Iron Jarvis (Settings → Maintenance → Restart daemon) so it
+              takes effect.
+            </>
+          ) : noRepo ? (
+            <>
+              Self-development is on, but Iron Jarvis can’t find its own source code. Set{" "}
+              <strong>Self-development repo root</strong> in Settings → Advanced to a copy of the
+              Iron Jarvis repo, then restart Iron Jarvis so it takes effect.
+            </>
+          ) : (
+            <>
+              Self-development is on but can’t start yet. The reason is under Status → Technical
+              details.
+            </>
+          )}
+        </p>
+        {/* The shared warning notice (v1.313.0): its border, tint, body ink
+            and code chip are themed for the light Marks. v1.314.0: the
+            config key comes AFTER the sentence, for whoever edits
+            config.toml by hand. */}
+        {(off || noRepo) && (
+          <div className="notice-warn notice-warn-body rounded-xl border px-4 py-3 text-[12px] leading-relaxed">
+            In config.toml this is{" "}
+            <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-[11px]">
+              {off ? "self_dev_enabled" : "self_dev_root"}
+            </code>
+            .
+          </div>
+        )}
+        <Link
+          href={SETTINGS_ADVANCED}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+        >
+          <SettingsIcon size={14} /> Open Settings → Advanced <ArrowRight size={13} />
+        </Link>
+      </div>
+    </Card>
   );
 }

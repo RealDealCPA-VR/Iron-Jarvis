@@ -45,6 +45,7 @@ import { timeAgo } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { YourBrowserCard } from "@/components/browser/YourBrowserCard";
+import { PageGrid } from "@/components/PageGrid";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -110,16 +111,28 @@ interface ActionMeta {
   hint: string;
 }
 
+// v1.314.0: each row LEADS with a plain label; the kind id (what the policy
+// and the API speak) stays in the row's title + data-kind, and every toggle
+// still calls toggleAction(kind) with the original id.
 const ACTIONS: ActionMeta[] = [
-  { kind: "navigate", label: "navigate", icon: Navigation, readonly: true, hint: "Open an allowlisted URL" },
-  { kind: "read", label: "read", icon: Eye, readonly: true, hint: "Snapshot the page DOM/a11y tree" },
-  { kind: "extract", label: "extract", icon: ScanEye, readonly: true, hint: "Pull structured data from the page" },
-  { kind: "screenshot", label: "screenshot", icon: Camera, readonly: true, hint: "Capture a screenshot artifact" },
-  { kind: "wait", label: "wait", icon: Footprints, readonly: true, hint: "Passive wait between steps" },
-  { kind: "click", label: "click", icon: MousePointerClick, readonly: false, hint: "Click an element — can mutate state" },
-  { kind: "type", label: "type", icon: Keyboard, readonly: false, hint: "Type text — credentials/PII require approval" },
-  { kind: "screenshot_click", label: "screenshot_click", icon: Camera, readonly: false, hint: "Pixel/visual click fallback — higher risk" },
+  { kind: "navigate", label: "Open a page", icon: Navigation, readonly: true, hint: "Only sites on your list" },
+  { kind: "read", label: "Read the page", icon: Eye, readonly: true, hint: "Reads the page's text and buttons" },
+  { kind: "extract", label: "Pull out data", icon: ScanEye, readonly: true, hint: "Copies details like a table or a price from the page" },
+  { kind: "screenshot", label: "Take a screenshot", icon: Camera, readonly: true, hint: "Saves a picture of the page" },
+  { kind: "wait", label: "Wait", icon: Footprints, readonly: true, hint: "Pauses between steps" },
+  { kind: "click", label: "Click", icon: MousePointerClick, readonly: false, hint: "Can change things on the site" },
+  { kind: "type", label: "Type", icon: Keyboard, readonly: false, hint: "Passwords and personal details ask you first" },
+  { kind: "screenshot_click", label: "Click by picture (last resort)", icon: Camera, readonly: false, hint: "Clicks a spot on a screenshot — higher risk" },
 ];
+
+/** v1.314.0: the isolation chip is built from the REAL config value. A known
+ *  value gets plain words (the raw value stays in the chip's title); an
+ *  unknown one is shown as itself — never dressed up as something safer. The
+ *  agent browser launches an isolated, incognito context (computeruse/
+ *  browser.py), which is what "isolated" means here. */
+const ISOLATION_LABEL: Record<string, string> = {
+  isolated: "A private, throwaway browser",
+};
 
 /* -------------------------------------------------------------------------- */
 /*  Domain normalisation                                                       */
@@ -210,8 +223,11 @@ function ApprovalCard({
           </span>
           <div>
             <div className="flex items-center gap-2">
-              <span className="rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-0.5 font-mono text-xs font-medium text-violet-200">
-                {kind}
+              <span
+                className="rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-200"
+                title={kind}
+              >
+                {ACTIONS.find((x) => x.kind === kind)?.label ?? kind}
               </span>
               <span className="text-[11px] text-zinc-500">run {approval.run_id}</span>
             </div>
@@ -411,8 +427,8 @@ function RunDetailView({ runId }: { runId: string }) {
 /* -------------------------------------------------------------------------- */
 
 const BEST_PRACTICES: { icon: LucideIcon; text: string }[] = [
-  { icon: Eye, text: "DOM / accessibility-first targeting — role + name + label text, never raw pixel coordinates." },
-  { icon: Camera, text: "Screenshots are a labelled fallback only, used when the accessibility tree can't locate a target." },
+  { icon: Eye, text: "Finds buttons and fields by their names and labels — the way a screen reader does — never by guessing where to click." },
+  { icon: Camera, text: "Clicking by picture is a labelled last resort, used only when a button can't be found by name." },
   { icon: ShieldAlert, text: "All page content is treated as untrusted; the model never decides what's safe — the policy does." },
   { icon: Check, text: "Every step is verified programmatically against an expected checkpoint, not by asking a model." },
   { icon: ScanEye, text: "Full action/result/screenshot tracing is recorded for every run for audit and replay." },
@@ -439,12 +455,16 @@ export default function ComputerUsePage() {
   const [saving, setSaving] = useState<"toggle" | "save" | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (data) {
-      setDomains(data.domain_allowlist ?? []);
-      setActions(data.action_allowlist ?? []);
-    }
-  }, [data]);
+  // Seed the draft from each load DURING render (v1.314.0), not in an effect:
+  // an effect left one committed frame where the new load sat beside the old
+  // draft — "Unsaved changes" flashed, and a tick pressed in that frame was
+  // overwritten when the effect landed. React re-renders before committing.
+  const [seededFrom, setSeededFrom] = useState<ComputerUseStatus | null>(null);
+  if (data && data !== seededFrom) {
+    setSeededFrom(data);
+    setDomains(data.domain_allowlist ?? []);
+    setActions(data.action_allowlist ?? []);
+  }
 
   const enabled = data?.enabled ?? false;
 
@@ -460,9 +480,10 @@ export default function ComputerUsePage() {
   const dirty = useMemo(
     () =>
       !!data &&
+      seededFrom === data &&
       (!sameSet(domains, data.domain_allowlist ?? []) ||
         !sameSet(actions, data.action_allowlist ?? [])),
-    [data, domains, actions],
+    [data, seededFrom, domains, actions],
   );
 
   async function apply(nextEnabled: boolean, which: "toggle" | "save") {
@@ -575,7 +596,7 @@ export default function ComputerUsePage() {
               <span className="font-semibold text-amber-100">off by default</span>. Only enable it
               on an <span className="font-semibold text-amber-100">isolated, disposable VM</span> —
               never on a machine with logged-in accounts or files you can&apos;t afford to lose.
-              The agent can only reach domains and perform actions you put on the allowlists below,
+              The agent can only open the sites and do the things you allow in the two lists below,
               and anything sensitive — typing credentials, payments, or destructive/transactional
               clicks — <span className="font-semibold text-amber-100">pauses for your explicit
               approval</span>.
@@ -682,18 +703,21 @@ export default function ComputerUsePage() {
               {/* Read-only operational chips */}
               <div className="flex flex-wrap gap-2.5">
                 <Chip
-                  label="isolation"
+                  label="Runs in"
                   value={
-                    <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className="inline-flex items-center gap-1.5 font-sans"
+                      title={data?.isolation ? `isolation: ${data.isolation}` : undefined}
+                    >
                       <Lock size={12} className="text-accent-soft" />
-                      {data?.isolation ?? "—"}
+                      {data?.isolation ? (ISOLATION_LABEL[data.isolation] ?? data.isolation) : "—"}
                     </span>
                   }
                 />
-                <Chip label="max steps" value={data?.max_steps ?? "—"} />
-                <Chip label="max retries" value={data?.max_retries ?? "—"} />
+                <Chip label="Step limit" value={data?.max_steps ?? "—"} />
+                <Chip label="Retries" value={data?.max_retries ?? "—"} />
                 <Chip
-                  label="pending"
+                  label="Waiting for you"
                   value={
                     <span className={data && data.pending_approvals > 0 ? "text-amber-300" : ""}>
                       {data?.pending_approvals ?? 0}
@@ -710,9 +734,10 @@ export default function ComputerUsePage() {
 
       {/* Allowlist editors */}
       <Reveal>
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* v1.314.0: PageGrid (wave-1 carry-over) — 2 columns at lg as before. */}
+        <PageGrid cols={2}>
           {/* Domain allowlist */}
-          <Card title="Domain allowlist" icon={<Globe size={15} />}>
+          <Card title="Sites it may open" icon={<Globe size={15} />}>
             <p className="mb-3 text-xs leading-relaxed text-zinc-500">
               The agent may only navigate to these hosts (and their subdomains). Any domain not on
               the list is <span className="font-medium text-zinc-300">denied outright</span>. An
@@ -765,12 +790,17 @@ export default function ComputerUsePage() {
           </Card>
 
           {/* Action allowlist */}
-          <Card title="Action allowlist" icon={<MousePointerClick size={15} />}>
+          <Card title="What it may do" icon={<MousePointerClick size={15} />}>
             <p className="mb-3 text-xs leading-relaxed text-zinc-500">
-              Pick which action kinds are permitted. Reads are safe defaults;{" "}
-              <span className="font-medium text-amber-200/90">click / type / screenshot_click</span>{" "}
-              mutate state and trigger approval on anything sensitive. Anything unchecked is denied.
+              Pick what the agent may do. Looking is the safe default;{" "}
+              <span className="font-medium text-amber-200/90">Click, Type and Click by picture</span>{" "}
+              can change things, and anything sensitive asks you first. Anything unticked is refused.
             </p>
+            {/* Until the first load the real allowlist is unknown — show
+                nothing ticked-or-not rather than a list that looks "all off". */}
+            {loading && !data ? (
+              <SkeletonRows rows={4} />
+            ) : (
             <div className="space-y-1.5">
               {ACTIONS.map((a) => {
                 const on = actions.includes(a.kind);
@@ -778,6 +808,10 @@ export default function ComputerUsePage() {
                 return (
                   <button
                     key={a.kind}
+                    type="button"
+                    data-kind={a.kind}
+                    title={`${a.label} (${a.kind})`}
+                    aria-pressed={on}
                     onClick={() => toggleAction(a.kind)}
                     className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors ${
                       on
@@ -799,9 +833,7 @@ export default function ComputerUsePage() {
                       className={on ? "text-accent-soft" : "text-zinc-500"}
                     />
                     <span className="flex-1">
-                      <span className="font-mono text-xs font-medium text-zinc-200">
-                        {a.label}
-                      </span>
+                      <span className="text-xs font-medium text-zinc-200">{a.label}</span>
                       <span className="ml-2 text-[11px] text-zinc-500">{a.hint}</span>
                     </span>
                     {a.readonly ? (
@@ -817,8 +849,9 @@ export default function ComputerUsePage() {
                 );
               })}
             </div>
+            )}
           </Card>
-        </div>
+        </PageGrid>
       </Reveal>
 
       {/* Save bar for allowlist edits */}
@@ -829,12 +862,12 @@ export default function ComputerUsePage() {
               {dirty ? (
                 <>
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                  Unsaved allowlist changes
+                  Unsaved changes — press Apply to keep them
                 </>
               ) : (
                 <>
                   <Check size={14} className="text-emerald-400" />
-                  Allowlists in sync with the daemon
+                  Saved
                 </>
               )}
             </div>
@@ -843,13 +876,13 @@ export default function ComputerUsePage() {
               disabled={!dirty || saving !== null}
               className="btn-accent px-4 py-1.5 text-xs"
             >
-              {saving === "save" ? <LoaderInline label="Saving…" /> : (<><Check size={14} /> Apply allowlists</>)}
+              {saving === "save" ? <LoaderInline label="Saving…" /> : (<><Check size={14} /> Apply changes</>)}
             </button>
           </div>
         </Reveal>
       )}
 
-      {/* Approval queue — human-in-the-loop gate */}
+      {/* Approval queue — the person-in-the-loop gate */}
       <Reveal>
         <Card
           title="Approval queue"
@@ -866,8 +899,8 @@ export default function ComputerUsePage() {
           }
         >
           <p className="mb-4 text-xs leading-relaxed text-zinc-500">
-            When the agent proposes a sensitive or destructive action it pauses here and waits for
-            you. Nothing runs until you approve it — this is the human-in-the-loop safety gate.
+            When the agent wants to do something sensitive or destructive, it pauses here and waits
+            for you — that action does not run until you approve it.
           </p>
           {approvalsState.loading && !approvalsState.data ? (
             <SkeletonRows rows={2} />

@@ -136,7 +136,8 @@ describe("agent picker (task form)", () => {
     const labels = within(picker)
       .getAllByRole("option")
       .map((o) => o.textContent);
-    expect(labels).toEqual(["builder", "researcher", "reviewer", "remy (custom)"]);
+    // v1.314.0: built-ins read their friendly names (values stay ids).
+    expect(labels).toEqual(["Builder", "Researcher", "Reviewer", "remy (custom)"]);
     await waitFor(() => expect(api.calls).toContain("/agents"));
   });
 
@@ -225,7 +226,9 @@ describe("task rows", () => {
   it("a row without agent_type shows builder — the fire's real default", async () => {
     mountPage([sched({ name: "plain", agent_type: "" })]);
     const badge = await screen.findByTestId("schedule-agent");
-    expect(badge).toHaveTextContent("builder");
+    // v1.314.0: the row reads the friendly name; the id stays in its title.
+    expect(badge).toHaveTextContent("Builder");
+    expect(badge.getAttribute("title")).toBe("builder");
     expect(within(badge).getByTestId("agent-face").getAttribute("data-face-shape")).toBe(
       faceShape("builder"),
     );
@@ -239,7 +242,7 @@ describe("task rows", () => {
         payload_json: JSON.stringify({ task: "x", agent_type: "researcher" }),
       }),
     ]);
-    expect(await screen.findByTestId("schedule-agent")).toHaveTextContent("researcher");
+    expect(await screen.findByTestId("schedule-agent")).toHaveTextContent("Researcher");
   });
 
   it("a non-string blob agent_type decays to builder, never a coerced name", async () => {
@@ -251,7 +254,7 @@ describe("task rows", () => {
       }),
     ]);
     const badge = await screen.findByTestId("schedule-agent");
-    expect(badge).toHaveTextContent("builder");
+    expect(badge).toHaveTextContent("Builder");
     expect(badge).not.toHaveTextContent("123");
   });
 

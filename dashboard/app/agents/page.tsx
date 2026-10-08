@@ -66,7 +66,7 @@ function ScreenLoading() {
     <div
       data-testid="agents-screen-loading"
       aria-busy="true"
-      className="card-surface h-[calc(100vh-7rem)] min-h-[32rem] animate-pulse"
+      className="card-surface h-[calc(100vh-7rem-var(--ij-strip-h,0px))] min-h-[32rem] animate-pulse"
     />
   );
 }

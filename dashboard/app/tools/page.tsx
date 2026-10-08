@@ -1327,8 +1327,9 @@ export default function ToolsPage() {
               {servers.length} extension{servers.length === 1 ? "" : "s"} ·{" "}
               {tools.length} of your own
             </span>
+            {/* v1.314.0: "all your agents", not "every agent in this fleet" (jargon). */}
             <span className="text-[12px] text-zinc-500">
-              available to every agent in this fleet
+              available to all your agents
             </span>
           </div>
           {/* ONE JOB STORY, replacing the two similar blurbs (review §7). */}

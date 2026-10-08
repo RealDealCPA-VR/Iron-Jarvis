@@ -9,7 +9,19 @@ import { useApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
+import { providerDisplay } from "@/lib/onboarding";
 import { VoiceInput, appendDictation } from "./VoiceInput";
+
+/** v1.314.0: the task box's DOM id, so the Sessions page's empty state can
+ *  focus THIS form's box (one box — never a second copy of the form). */
+export const NEW_SESSION_TASK_ID = "new-session-task";
+
+/** v1.314.0 (UX wave 2): a model the user reads in words. "mock" is the demo
+ *  model; its model id ("mock-1") adds nothing a user can act on, so the demo
+ *  reads "Demo model (scripted)" alone. The option VALUE stays the raw key. */
+function modelWords(provider: string, model: string): string {
+  return provider === "mock" ? providerDisplay(provider) : `${providerDisplay(provider)} · ${model}`;
+}
 
 // Fallback only — the real list comes live from GET /agents (builtin + dynamic)
 // so memory/maintainer/automation and custom agents aren't silently dropped.
@@ -198,6 +210,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
           />
         </div>
         <textarea
+          id={NEW_SESSION_TASK_ID}
           ref={taskRef}
           value={task}
           onChange={(e) => setTask(e.target.value)}
@@ -285,14 +298,17 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
           >
             <option value="">
               {health
-                ? `Default · ${health.default_provider} / ${health.default_model}`
+                ? // v1.314.0: the provider in words; the model id only for a real one.
+                  health.default_provider === "mock"
+                  ? `Default · ${providerDisplay(health.default_provider)}`
+                  : `Default · ${providerDisplay(health.default_provider)} / ${health.default_model}`
                 : "Default"}
             </option>
             {models.map((m) => {
               const avail = isAvailable(m);
               return (
                 <option key={optKey(m)} value={optKey(m)} disabled={!avail}>
-                  {m.name || m.provider} · {m.model}
+                  {m.name ? `${m.name} · ${m.model}` : modelWords(m.provider, m.model)}
                   {avail ? "" : " — not connected"}
                 </option>
               );

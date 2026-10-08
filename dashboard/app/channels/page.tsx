@@ -34,6 +34,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { timeAgo } from "@/lib/format";
 import { PageShell, Reveal } from "@/components/motion";
 import { ChooserTiles } from "@/components/ChooserTiles";
+import { PageGrid } from "@/components/PageGrid";
 import { useFocusRef } from "@/lib/useFocusRef";
 
 /** A configured outbound channel. Shape changed from string[] → object list. */
@@ -95,6 +96,26 @@ interface ChannelTestResult {
 /** Built-in channels have no config; deleting them is a server-side no-op. */
 const BUILTIN = new Set(["mock", "console"]);
 
+/** v1.314.0: the demo destination named "mock" only RECORDS a message inside
+ *  the app; it delivers nothing. Its name is a machine word, so a person reads
+ *  "Test log (in-app only)" (with a "Test only" badge, listed after the real
+ *  destinations) while the value sent stays "mock" and the raw name stays in a
+ *  title. Keyed on the NAME, never on `builtin` (This PC is built in too). */
+const TEST_LOG = "mock";
+const TEST_LOG_LABEL = "Test log (in-app only)";
+
+/** What a person reads for a destination name. */
+function destLabel(name: string): string {
+  if (name === TEST_LOG) return TEST_LOG_LABEL;
+  if (name === "this-pc") return "This PC";
+  return name;
+}
+
+/** Real destinations first, the test log last (a stable sort keeps the rest). */
+function testLogLast<T extends { name: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => Number(a.name === TEST_LOG) - Number(b.name === TEST_LOG));
+}
+
 /** Normalize the loose /comm/notify response into per-channel rows. */
 function normalize(res: unknown): { name: string; ok: boolean | null; detail: string }[] {
   if (!res || typeof res !== "object") return [];
@@ -121,7 +142,7 @@ function tipFor(detail?: string): string {
   if (d.includes("chat_id")) return "add your Chat ID via Edit.";
   if (d.includes("host") || d.includes("from_addr") || d.includes("to_addr"))
     return "fill the SMTP host and addresses via Edit.";
-  return "open Edit and re-check the channel's details.";
+  return "open Edit and re-check the destination's details.";
 }
 
 /** Tile metadata per addable type (v1.118.0): what you have, what it asks
@@ -215,7 +236,7 @@ export default function ChannelsPage() {
   const { data, error, loading, reload } = useApi<{ channels: ChannelInfo[] }>("/comm/channels");
   const { data: typesData } = useApi<{ types: ChannelType[] }>("/comm/channel-types");
   const offline = error && error.status === 0;
-  const channels = data?.channels ?? [];
+  const channels = testLogLast(data?.channels ?? []);
   const channelTypes = typesData?.types ?? [];
 
   /* --- Send test message --------------------------------------------------- */
@@ -579,7 +600,7 @@ export default function ChannelsPage() {
                   value={addName}
                   onChange={(e) => setAddName(e.target.value)}
                   placeholder="team-alerts"
-                  aria-label="Channel name"
+                  aria-label="Destination name"
                   autoComplete="off"
                   disabled={!!editing}
                   className="field font-mono text-sm disabled:opacity-60"
@@ -920,7 +941,8 @@ export default function ChannelsPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-2">
+        {/* v1.314.0: PageGrid (wave-1 carry-over) — 2 columns at lg as before. */}
+        <PageGrid cols={2}>
           <Card title={`Destinations${channels.length ? ` · ${channels.length}` : ""}`} icon={<Radio size={15} />}>
             {loading && !data ? (
               <SkeletonRows rows={3} />
@@ -954,10 +976,17 @@ export default function ChannelsPage() {
                       />
                       <div className="min-w-0">
                         <span className="flex items-center gap-2">
-                          <span className="truncate font-mono text-sm text-zinc-200">
-                            {c.name === "this-pc" ? "This PC" : c.name}
+                          <span
+                            className="truncate text-sm font-medium text-zinc-200"
+                            title={c.name === TEST_LOG || c.name === "this-pc" ? `Name: ${c.name}` : undefined}
+                          >
+                            {destLabel(c.name)}
                           </span>
-                          {c.type && <Badge value={c.type} tone="cyan" />}
+                          {c.name === TEST_LOG ? (
+                            <Badge value="Test only" tone="amber" keepCase />
+                          ) : (
+                            c.type && <Badge value={c.type} tone="cyan" />
+                          )}
                           {/* Two-way (v1.136.0): this destination also
                               LISTENS — with chat on, it's a full conversation
                               mirrored to the desktop Chat page. */}
@@ -968,7 +997,9 @@ export default function ChannelsPage() {
                         <span className="block text-[11px] text-zinc-500">
                           {c.name === "this-pc"
                             ? "Pops a notification on this device — no setup (desktop app)"
-                            : c.builtin
+                            : c.name === TEST_LOG
+                              ? "Keeps a copy inside the app for testing — nothing is sent anywhere"
+                              : c.builtin
                               ? "Built-in — always available"
                               : c.last_test_ok
                                 ? `Working — tested ${c.last_test_at ? timeAgo(c.last_test_at) : "earlier"}`
@@ -1020,7 +1051,7 @@ export default function ChannelsPage() {
                         </button>
                         <ConfirmButton
                           onConfirm={() => deleteChannel(c.name)}
-                          title={`Delete channel ${c.name}`}
+                          title={`Delete destination ${c.name}`}
                         />
                       </div>
                     )}
@@ -1049,12 +1080,12 @@ export default function ChannelsPage() {
               <div className="mt-3 space-y-2">
                 {testResult.ok ? (
                   <SuccessNote>
-                    Test message delivered — check {testResult.name}.
+                    Test message delivered — check {destLabel(testResult.name)}.
                   </SuccessNote>
                 ) : (
                   <>
                     <ErrorNote>
-                      Test to {testResult.name} failed
+                      Test to {destLabel(testResult.name)} failed
                       {testResult.detail ? ` — ${testResult.detail}` : "."}
                     </ErrorNote>
                     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent/15 bg-accent/[0.04] px-3 py-2 text-[12px] text-zinc-300">
@@ -1097,13 +1128,15 @@ export default function ChannelsPage() {
               </div>
               <div>
                 <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                  Channel
+                  Destination
                 </label>
-                <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
-                  <option value="">All channels</option>
+                {/* v1.314.0: our concept is a destination (VOCABULARY.md);
+                    option VALUES stay the destination names the API takes. */}
+                <select aria-label="Destination" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
+                  <option value="">All destinations</option>
                   {channels.map((c) => (
                     <option key={c.name} value={c.name}>
-                      {c.name}
+                      {destLabel(c.name)}
                     </option>
                   ))}
                 </select>
@@ -1118,7 +1151,7 @@ export default function ChannelsPage() {
               <div className="mt-4 space-y-2">
                 <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Result</div>
                 {results.length === 0 ? (
-                  <Empty>No channel responses.</Empty>
+                  <Empty>No destination answered.</Empty>
                 ) : (
                   results.map((r) => (
                     <div
@@ -1126,7 +1159,12 @@ export default function ChannelsPage() {
                       className="flex items-start justify-between gap-3 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5"
                     >
                       <div className="min-w-0">
-                        <span className="font-mono text-sm text-zinc-200">{r.name}</span>
+                        <span
+                          className="text-sm font-medium text-zinc-200"
+                          title={r.name === TEST_LOG ? `Name: ${r.name}` : undefined}
+                        >
+                          {destLabel(r.name)}
+                        </span>
                         <div className="truncate text-xs text-zinc-500">{r.detail}</div>
                       </div>
                       {r.ok === null ? (
@@ -1140,7 +1178,7 @@ export default function ChannelsPage() {
               </div>
             )}
           </Card>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

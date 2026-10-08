@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SlidersHorizontal,
   Save,
@@ -10,6 +10,7 @@ import {
   DatabaseBackup,
   Cpu,
   Gauge,
+  Palette,
 } from "lucide-react";
 import { get, put, post, ApiError } from "@/lib/api";
 import {
@@ -28,6 +29,9 @@ import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
 import { PageGrid } from "@/components/PageGrid";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { providerDisplay } from "@/lib/onboarding";
+import { useModels } from "@/lib/useModels";
 
 type FieldType = "text" | "number" | "boolean" | "select";
 type Value = string | number | boolean;
@@ -44,6 +48,9 @@ interface FieldDef {
   /** v1.298.0: plain words for an option's value in the <select>; the VALUE
    *  stays the daemon's token. An option without a label shows its value. */
   optionLabels?: Record<string, string>;
+  /** v1.314.0: the rest of a long hint, one click away behind "More" — the
+   *  row shows one sentence, nothing the old hint said is lost. */
+  more?: string;
   /** Marks settings that only fully apply after a daemon restart. */
   restart?: boolean;
 }
@@ -99,12 +106,15 @@ const FIELDS: FieldDef[] = [
     hint: "The AI service used when a chat doesn't pick one. Only providers currently available are listed — manage providers + keys on Connections.",
   },
   {
+    // v1.314.0: rendered as a <select> of the chosen provider's models (the
+    // /models catalogue), with "Other…" keeping free-text entry — see
+    // DefaultModelControl. The saved value is always the model id.
     key: "default_model",
     label: "Default model",
     type: "text",
     section: "models",
     placeholder: "claude-opus-4-8",
-    hint: "Model id used by default for new sessions.",
+    hint: "The model that answers by default. The list shows what the provider above offers; pick “Other…” to type a model id.",
   },
   {
     // Rendered as a <select>; its options are injected at render time from a
@@ -123,7 +133,7 @@ const FIELDS: FieldDef[] = [
     section: "models",
     hint:
       "When ON, a chat or session that explicitly picks a model must be answered by THAT model — " +
-      "never silently substituted (no failover, no capability reroute, no offline mock). If your pick " +
+      "never silently substituted (no failover, no capability reroute, no demo model). If your pick " +
       "can't take the turn you get an honest error instead of another provider's answer. Applies only " +
       "to explicit picks; the default/auto route still fails over.",
   },
@@ -133,12 +143,20 @@ const FIELDS: FieldDef[] = [
     type: "select",
     section: "models",
     options: ["refuse", "failover"],
-    hint:
-      "What happens when the model answering chat runs on YOUR machine (Ollama, a custom endpoint, a fleet " +
-      "node) and it replies with an error (429, 500, model not found). 'refuse' (default): the turn fails " +
-      "honestly by name and nothing stands in — the conversation never leaves this machine. 'failover': " +
-      "another connected provider answers, and the receipt under the reply says who and why. A local " +
-      "endpoint that never answered at all always refuses; Auto is the one route that may substitute.",
+    // v1.314.0: words for the two daemon tokens; the value saved stays
+    // "refuse" / "failover". The hint is one sentence; the detail it used to
+    // spell out with the raw tokens in quotes sits behind "More".
+    optionLabels: {
+      refuse: "Stop and tell me (default)",
+      failover: "Let another model answer",
+    },
+    hint: "When the model running on your own machine replies with an error: stop (the chat stays on this PC), or let another connected model answer.",
+    more:
+      "This covers a model on YOUR machine — Ollama, a custom endpoint, a fleet node — that replies with an " +
+      "error (429, 500, model not found). Stop and tell me: the turn fails honestly, naming the model, and " +
+      "nothing stands in — the conversation never leaves this machine. Let another model answer: " +
+      "another connected provider takes the turn, and the receipt under the reply says who and why. A local " +
+      "endpoint that never answered at all always stops; Auto is the one route that may substitute.",
   },
   {
     key: "event_retention_days",
@@ -278,7 +296,15 @@ const FIELDS: FieldDef[] = [
     type: "select",
     section: "automation",
     options: ["suggest", "act_low", "act_all"],
-    hint: "How far it may go. 'suggest' always proposes and never auto-acts; the others let it act, up to the caps below.",
+    // v1.314.0: words for the daemon's dial tokens (the value saved is
+    // unchanged). From motivation/engine.py _DIAL_AUTOEXEC: act_low runs
+    // low-risk actions, act_all low + medium; high risk is never automatic.
+    optionLabels: {
+      suggest: "Suggest only — never acts on its own",
+      act_low: "Act on low-risk steps",
+      act_all: "Act on low- and medium-risk steps",
+    },
+    hint: "How far it may go. Suggest only always proposes and never acts by itself; the others let it act, up to the caps below. High-risk steps are never done automatically.",
   },
   {
     key: "autonomy_dry_run",
@@ -361,8 +387,13 @@ const FIELDS: FieldDef[] = [
     type: "select",
     section: "advanced",
     options: ["native", "docker"],
+    // v1.314.0: words; the value saved stays "native" / "docker".
+    optionLabels: {
+      native: "On this PC (no container)",
+      docker: "Inside Docker",
+    },
     restart: true,
-    hint: "How tool execution is isolated. 'docker' requires Docker to be installed.",
+    hint: "How tool execution is isolated. Inside Docker needs Docker installed.",
   },
 ];
 
@@ -409,13 +440,19 @@ function FieldRow({
   def,
   value,
   onChange,
+  control: customControl,
 }: {
   def: FieldDef;
   value: Value;
   onChange: (v: Value) => void;
+  /** v1.314.0: a row whose control is not one of the four plain types
+   *  (Default model's scoped picker) passes it here. */
+  control?: React.ReactNode;
 }) {
   let control;
-  if (def.type === "boolean") {
+  if (customControl) {
+    control = customControl;
+  } else if (def.type === "boolean") {
     control = (
       <Toggle checked={Boolean(value)} onChange={(v) => onChange(v)} label={def.label} />
     );
@@ -478,8 +515,85 @@ function FieldRow({
         {def.hint && (
           <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">{def.hint}</p>
         )}
+        {def.more && (
+          <details className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+            <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-200">
+              More
+            </summary>
+            <p className="mt-1">{def.more}</p>
+          </details>
+        )}
       </div>
       <div className="w-full sm:max-w-[18rem]">{control}</div>
+    </div>
+  );
+}
+
+/** The "Other…" option's value: never a real model id. */
+const OTHER_MODEL = "__other_model__";
+
+/**
+ * v1.314.0 (UX wave 2): Default model as a picker. The user used to need the
+ * exact model id by heart; now the list is the chosen provider's models from
+ * the one catalogue (`useModels` — the same /models the title-bar switcher
+ * reads), re-scoped when the provider above changes. "Other…" reveals the old
+ * free-text box, so any id the catalogue does not list can still be saved,
+ * and a saved model the catalogue does not list stays shown and selected —
+ * never silently replaced. The value saved is always the model id.
+ */
+function DefaultModelControl({
+  provider,
+  value,
+  onChange,
+}: {
+  provider: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const { models } = useModels();
+  const [other, setOther] = useState(false);
+  const scoped = useMemo(
+    () => models.filter((m) => m.provider === provider),
+    [models, provider],
+  );
+  const known = scoped.some((m) => m.model === value);
+  return (
+    <div className="space-y-2">
+      <select
+        value={other ? OTHER_MODEL : value}
+        onChange={(e) => {
+          if (e.target.value === OTHER_MODEL) {
+            setOther(true);
+            return;
+          }
+          setOther(false);
+          onChange(e.target.value);
+        }}
+        aria-label="Default model"
+        className="field"
+      >
+        {/* The saved id stays visible even when this provider's list lacks it. */}
+        {!other && !known && <option value={value}>{value || "Not set"}</option>}
+        {scoped.map((m) => (
+          <option key={m.model} value={m.model}>
+            {m.name && m.name !== m.model ? `${m.name} (${m.model})` : m.model}
+            {m.available === false ? " — not connected" : ""}
+          </option>
+        ))}
+        <option value={OTHER_MODEL}>Other… (type a model id)</option>
+      </select>
+      {other && (
+        <input
+          type="text"
+          value={value}
+          placeholder="claude-opus-4-8"
+          onChange={(e) => onChange(e.target.value)}
+          aria-label="Default model id"
+          spellCheck={false}
+          autoFocus
+          className="field font-mono text-[13px]"
+        />
+      )}
     </div>
   );
 }
@@ -639,8 +753,14 @@ function ContextWindowsCard({
       <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
         <div className="flex flex-wrap items-baseline gap-x-2 text-[12px]">
           <span className="text-zinc-500">Your default route</span>
-          <span className="font-mono text-zinc-300">
-            {defaultProvider || "—"} / {defaultModel || "—"}
+          {/* v1.314.0: the provider in words (never "mock"); the raw pin key
+              form stays in the title, since pins below are keyed on it. */}
+          <span
+            className="text-zinc-300"
+            title={defaultProvider ? `${defaultProvider}::${defaultModel}` : undefined}
+          >
+            {providerDisplay(defaultProvider) || "—"} /{" "}
+            <span className="font-mono">{defaultModel || "—"}</span>
           </span>
           <span className="ml-auto">
             {activeKey ? (
@@ -912,6 +1032,43 @@ export default function SettingsPage() {
     [health],
   );
 
+  // v1.314.0: the words the provider <select> shows — built at render time,
+  // because the options arrive from /health and the saved value (FieldRow
+  // keeps it even when unavailable, "auto" included) may not be among them.
+  // The option VALUE stays the provider id the daemon saves.
+  const savedProvider = String(form.default_provider ?? "");
+  const providerLabels = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const id of [...providerOptions, savedProvider]) if (id) out[id] = providerDisplay(id);
+    return out;
+  }, [providerOptions, savedProvider]);
+
+  // v1.314.0: /settings?focus=advanced (the house ?focus= convention, read
+  // from window.location — see lib/useFocusRef.ts for why not
+  // useSearchParams) opens the collapsed Advanced section and brings it into
+  // view: the Self-development page sends people here to turn its switch on.
+  // The form renders only after /settings loads, so this waits for that
+  // rather than running once on mount (useFocusRef's mount-only effect would
+  // miss the <details>). It opens it once; the user can close it again.
+  const advancedRef = useRef<HTMLDetailsElement | null>(null);
+  useEffect(() => {
+    if (loading) return;
+    let wanted: string | null = null;
+    try {
+      wanted = new URLSearchParams(window.location.search).get("focus");
+    } catch {
+      return;
+    }
+    const el = advancedRef.current;
+    if (wanted !== "advanced" || !el) return;
+    el.open = true;
+    try {
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+    } catch {
+      /* jsdom / older engines: opening it is the part that matters */
+    }
+  }, [loading]);
+
   const changed = useMemo(() => {
     if (!original) return {} as Record<string, Value>;
     const diff: Record<string, Value> = {};
@@ -1048,13 +1205,22 @@ export default function SettingsPage() {
                             key={f.key}
                             def={
                               f.key === "default_provider"
-                                ? { ...f, options: providerOptions }
+                                ? { ...f, options: providerOptions, optionLabels: providerLabels }
                                 : f.key === "default_persona"
                                   ? { ...f, options: personaOptions }
                                   : f
                             }
                             value={form[f.key]}
                             onChange={(v) => update(f.key, v)}
+                            control={
+                              f.key === "default_model" ? (
+                                <DefaultModelControl
+                                  provider={savedProvider}
+                                  value={String(form.default_model ?? "")}
+                                  onChange={(v) => update("default_model", v)}
+                                />
+                              ) : undefined
+                            }
                           />
                         ))}
                       </div>
@@ -1064,6 +1230,7 @@ export default function SettingsPage() {
                       return (
                         <details
                           key={section.id}
+                          ref={advancedRef}
                           className="group rounded-xl border border-white/[0.05] bg-white/[0.015] px-4 py-3.5"
                         >
                           <summary className="cursor-pointer list-none">
@@ -1139,8 +1306,24 @@ export default function SettingsPage() {
             />
           </div>
 
-          {/* Sidebar: maintenance + access token */}
+          {/* Sidebar: appearance + maintenance + access token */}
           <div className="space-y-6 lg:col-span-1">
+            {/* v1.314.0 (UX wave 2): Appearance — the same theme choice as the
+                title bar's dots and the phone drawer, through the SAME store
+                (lib/theme.ts: <html data-theme> + localStorage), so all of
+                them stay in step. It applies at once and is kept per device;
+                it sits outside the Preferences form on purpose, so Save
+                changes never carries it to the daemon. */}
+            <div data-testid="settings-appearance">
+              <Card title="Appearance" icon={<Palette size={15} />}>
+                <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">
+                  Pick a theme for this window. It changes right away and is remembered on this
+                  PC — no need to save.
+                </p>
+                <ThemeSwitcher variant="drawer" />
+              </Card>
+            </div>
+
             {/* Maintenance */}
             <Card title="Maintenance" icon={<Wrench size={15} />}>
               <div className="space-y-4">

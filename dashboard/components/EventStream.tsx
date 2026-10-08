@@ -60,7 +60,8 @@ export function EventStream() {
         <Empty icon={<Radio size={22} />}>
           {connected
             ? "Waiting for events — run a session to see live activity."
-            : "No connection to /events yet."}
+            : // v1.314.0: plain words — no route path in front of a user.
+              "Not connected to Iron Jarvis yet — live activity appears here once it is."}
         </Empty>
       ) : (
         <ul className="max-h-[440px] space-y-0.5 overflow-y-auto pr-1 font-mono text-xs">

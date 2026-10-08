@@ -50,7 +50,10 @@ const SCOPES: ScopeDef[] = [
     id: "lessons",
     label: "What I've learned",
     Icon: GraduationCap,
-    blurb: "Distilled lessons that get injected into every future run.",
+    // v1.314.0: true to the daemon — reflections are kept out of every
+    // prompt since v1.279.0 (learning/engine.py _PROMPT_EXCLUDED_SOURCES).
+    blurb:
+      "Preferences and lessons Jarvis reads into chats and runs. Task reflections are kept as notes about past jobs and are not sent to the model.",
   },
   {
     id: "longterm",

@@ -24,7 +24,8 @@ import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
 import TrustChip from "@/components/TrustChip";
 import { outcomeLabel, waitingLabel } from "@/components/sessions/SessionStatusBadge";
-import { Badge } from "@/components/ui";
+import { Badge, MockChip } from "@/components/ui";
+import { providerDisplay } from "@/lib/onboarding";
 import { timeAgo } from "@/lib/format";
 
 export interface CardData {
@@ -162,9 +163,21 @@ export function CardInner({
           </span>
           {session.agent_type}
         </span>
-        <span className="rounded-md bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-zinc-400">
-          {session.provider}
-        </span>
+        {/* v1.314.0 (UX wave 2): the provider reads in plain words. A demo
+            run's ONLY disclosure on a card used to be a bare monospace "mock"
+            chip, so it becomes the shared MockChip ("demo model") — never
+            dropped. A real provider keeps its chip, raw id in the title
+            (the card is a record of what ran). */}
+        {session.provider === "mock" ? (
+          <MockChip />
+        ) : (
+          <span
+            title={session.model ? `${session.provider} / ${session.model}` : session.provider}
+            className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] text-zinc-400"
+          >
+            {providerDisplay(session.provider)}
+          </span>
+        )}
         {/* Provenance (v1.168.0): who dispatched this session. Renders nothing
             for the (historically most common) untagged user-started case. */}
         <OriginChip origin={session.origin} />

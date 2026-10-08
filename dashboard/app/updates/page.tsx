@@ -27,6 +27,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { PageGrid } from "@/components/PageGrid";
 
 interface UpdateStatus {
   available: boolean;
@@ -210,6 +211,11 @@ export default function UpdatesPage() {
 
   const sourceCheckout = isSourceCheckout(data);
   const available = !!data?.available;
+  // v1.314.0: `clean: false` means TWO things on the daemon (core/updates.py):
+  // real local changes, or a probe that threw ("git error: …"). Only the
+  // first may be called local changes — the second is "couldn't check".
+  const checkFailed = data?.clean === false && String(data?.reason ?? "").startsWith("git error");
+  const localChanges = data?.clean === false && !checkFailed;
 
   async function applyUpdate() {
     setBusy(true);
@@ -233,7 +239,7 @@ export default function UpdatesPage() {
           subtitle={
             bridge
               ? "Keep the Iron Jarvis desktop app up to date — check, download, and install the latest release."
-              : "Check for and apply updates pushed to the Iron Jarvis repo. Applying pulls the new source (git), re-syncs Python deps, and rebuilds the dashboard — then you restart to load it."
+              : "Check for and apply updates to the Iron Jarvis code this copy runs from. Applying downloads the new code, updates its packages and rebuilds the dashboard — then you restart to load it."
           }
         />
       </Reveal>
@@ -254,7 +260,7 @@ export default function UpdatesPage() {
           packaged desktop app the card above is the real updater. */}
       {!bridge && (
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <PageGrid cols={3}>
           {/* Status */}
           <div className="lg:col-span-1">
             <Card
@@ -297,18 +303,23 @@ export default function UpdatesPage() {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-2 text-sm text-zinc-300">
-                        <StatusDot status={available ? "pending" : "ok"} />
+                        {/* v1.314.0: amber, not green, while local changes hold it. */}
+                        <StatusDot status={available || data.clean === false ? "pending" : "ok"} />
                         Repository
                       </span>
+                      {/* v1.314.0: "local changes", not git's "dirty". */}
                       <Badge
                         value={
                           available
                             ? `${data.behind ?? 0} behind`
-                            : data.clean === false
-                              ? "dirty"
-                              : "up to date"
+                            : localChanges
+                              ? "Local changes"
+                              : checkFailed
+                                ? "Couldn't check"
+                                : "Up to date"
                         }
-                        tone={available ? "amber" : data.clean === false ? "red" : "green"}
+                        tone={available ? "amber" : data.clean === false ? "amber" : "green"}
+                        keepCase
                       />
                     </div>
 
@@ -324,10 +335,30 @@ export default function UpdatesPage() {
                       </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <SectionLabel>Detail</SectionLabel>
-                      <p className="text-sm text-zinc-400">{data.reason}</p>
-                    </div>
+                    {/* v1.314.0 (UX wave 2): the plain sentence first; the
+                        daemon's own reason (git's words: "commit or stash")
+                        stays one click down, never deleted. */}
+                    {localChanges && (
+                      <p className="text-[13px] leading-relaxed text-amber-200/90">
+                        You have local changes, so updates are paused until those changes are
+                        committed or set aside.
+                      </p>
+                    )}
+                    {checkFailed && (
+                      <p className="text-[13px] leading-relaxed text-amber-200/90">
+                        Couldn&apos;t check for updates — the reason is below.
+                      </p>
+                    )}
+                    {data.reason && (
+                      <details className="text-[12px] text-zinc-500">
+                        <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-200">
+                          Technical details
+                        </summary>
+                        <p className="mt-1.5 break-words font-mono text-[11px] text-zinc-400">
+                          {data.reason}
+                        </p>
+                      </details>
+                    )}
                   </div>
                 )
               ) : error ? (
@@ -349,20 +380,33 @@ export default function UpdatesPage() {
                 <div className="space-y-4">
                   <p className="flex items-start gap-2 text-[13px] leading-relaxed text-zinc-400">
                     <TriangleAlert size={15} className="mt-0.5 shrink-0 text-amber-300/80" />
-                    {/* v1.313.0: <Code> chips (theme-true) instead of literal black chips,
-                        which read as dark text on a muddy slab in Daylight. One <span>
-                        so the sentence flows inline — bare text nodes in this flex row
-                        each became a flex item and stacked the chips on a phone. */}
+                    {/* v1.314.0 (UX wave 2): the sentence in words; the exact
+                        commands moved one disclosure down (below). */}
                     <span>
-                      Applying runs{" "}
-                      <Code>git pull --ff-only</Code>{" "}
-                      →{" "}
-                      <Code>uv sync</Code>{" "}
-                      →{" "}
-                      <Code>pnpm build</Code>
-                      . It refuses if the working tree has uncommitted changes.
+                      Applying downloads the new code, updates its packages and rebuilds the
+                      dashboard. It won&apos;t run while this copy has local changes.
                     </span>
                   </p>
+                  {/* v1.313.0: <Code> chips (theme-true) instead of literal black chips,
+                      which read as dark text on a muddy slab in Daylight. One <span> so
+                      the sentence flows inline — bare text nodes in a flex row each
+                      became a flex item and stacked the chips on a phone. */}
+                  <details className="text-[12px] text-zinc-500">
+                    <summary className="cursor-pointer select-none text-zinc-400 hover:text-zinc-200">
+                      The exact steps
+                    </summary>
+                    <p className="mt-1.5 leading-relaxed">
+                      <span>
+                        Applying runs{" "}
+                        <Code>git pull --ff-only</Code>{" "}
+                        →{" "}
+                        <Code>uv sync</Code>{" "}
+                        →{" "}
+                        <Code>pnpm build</Code>
+                        . It refuses if the working tree has uncommitted changes.
+                      </span>
+                    </p>
+                  </details>
 
                   <button
                     type="button"
@@ -371,8 +415,12 @@ export default function UpdatesPage() {
                     className="btn-accent w-full"
                     title={
                       available
-                        ? "Pull and rebuild"
-                        : "No update available (or the tree is dirty)"
+                        ? "Download and rebuild"
+                        : localChanges
+                          ? "Paused while this copy has local changes"
+                          : checkFailed
+                            ? "Couldn't check for updates"
+                          : "No update available"
                     }
                   >
                     {busy ? (
@@ -380,7 +428,15 @@ export default function UpdatesPage() {
                     ) : (
                       <>
                         <DownloadCloud size={14} />{" "}
-                        {available ? `Apply update (${data?.behind ?? 0} commits)` : "Up to date"}
+                        {/* v1.314.0: never "Up to date" while local changes
+                            are what is holding the update back. */}
+                        {available
+                          ? `Apply update (${data?.behind ?? 0} commits)`
+                          : localChanges
+                            ? "Paused — local changes"
+                            : checkFailed
+                              ? "Couldn't check"
+                            : "Up to date"}
                       </>
                     )}
                   </button>
@@ -442,7 +498,7 @@ export default function UpdatesPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
       )}
     </PageShell>

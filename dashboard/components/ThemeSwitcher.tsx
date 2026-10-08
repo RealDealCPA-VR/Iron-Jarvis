@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
+import { THEMES, DEFAULT_THEME as DEFAULT, LIGHT_MARKS, applyTheme, type Mark } from "@/lib/theme";
 
 /**
  * Arc-reactor theme switcher. Four "Mark" reactors in the top bar re-skin the
@@ -23,64 +24,9 @@ import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
  *    otherwise be trapped in the drawer's transformed box.
  */
 
-interface Mark {
-  id: string; // data-theme value
-  mark: string; // "Mark 1"
-  name: string;
-  flavor: string;
-  accent: string; // preview color (each reactor shows ITS theme's color)
-  /** The same hue, deep enough to read on a LIGHT bar (>= 3:1 on the light
-   *  Marks' --ink-950). Only used while a light Mark is on. */
-  onLight: string;
-}
-
-const THEMES: Mark[] = [
-  {
-    id: "mark1",
-    mark: "Mark 1",
-    name: "Daylight",
-    flavor: "Dark work on a bright canvas — full light mode.",
-    accent: "#0891b2",
-    onLight: "#155e75",
-  },
-  {
-    id: "mark2",
-    mark: "Mark 2",
-    name: "Arc Cyan",
-    flavor: "The signature reactor glow. Balanced and cool.",
-    accent: "#22d3ee",
-    onLight: "#0e7490",
-  },
-  {
-    id: "mark8",
-    mark: "Mark 8",
-    name: "Liquid Glass",
-    flavor: "Frosted glass on silver light — clean, airy, unmistakably modern.",
-    accent: "#0a84ff",
-    onLight: "#0062cc",
-  },
-  {
-    id: "mark23",
-    mark: "Mark 23",
-    name: "Gold & Red",
-    flavor: "The classic hero colors — powered up.",
-    accent: "#f5b731",
-    onLight: "#92600a",
-  },
-  {
-    id: "mark29",
-    mark: "Mark 29",
-    name: "Silver & Red",
-    flavor: "Sleek chrome with a red-line edge.",
-    accent: "#bfc8d6",
-    onLight: "#5b6576",
-  },
-];
-
-const STORAGE_KEY = "ij_theme";
-const DEFAULT = "mark2";
-/** The Marks that paint a light bar (globals.css). */
-const LIGHT_MARKS = new Set(["mark1", "mark8"]);
+// v1.314.0: the Mark list, the storage key and the setter moved to
+// lib/theme.ts — the Settings Appearance row and the palette's "Theme:"
+// commands drive the SAME store, so the list exists once.
 
 function hexA(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -216,7 +162,6 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
   const [active, setActive] = useState<string>(DEFAULT);
   const [reveal, setReveal] = useState<Mark | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The reveal is portalled to <body>; render the portal only after mount so
   // the server render and the first client render agree.
   const [mounted, setMounted] = useState(false);
@@ -238,23 +183,13 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
   useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current);
-      if (clsTimer.current) clearTimeout(clsTimer.current);
     },
     [],
   );
 
   function apply(m: Mark) {
-    const html = document.documentElement;
-    html.classList.add("theme-transition"); // smooth color morph, briefly
-    html.dataset.theme = m.id;
-    try {
-      localStorage.setItem(STORAGE_KEY, m.id);
-    } catch {
-      /* private mode — the theme still applies for this session */
-    }
+    applyTheme(m.id); // the one setter (lib/theme.ts) — every row follows
     setActive(m.id);
-    if (clsTimer.current) clearTimeout(clsTimer.current);
-    clsTimer.current = setTimeout(() => html.classList.remove("theme-transition"), 520);
     setReveal(m);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setReveal(null), 2100);

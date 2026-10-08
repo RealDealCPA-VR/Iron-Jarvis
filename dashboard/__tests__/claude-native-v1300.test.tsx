@@ -323,7 +323,7 @@ describe("TurnReceipt — one quiet usage line", () => {
     expect(r2.container).toBeEmptyDOMElement();
     cleanup();
     render(<TurnReceipt route={ROUTE} />);
-    expect(screen.getByText("claude-cli")).toBeInTheDocument();
+    expect(screen.getByText("Claude Code")).toBeInTheDocument(); // v1.314.0: providerDisplay
     expect(screen.queryByTestId("turn-usage")).not.toBeInTheDocument();
     expect(usageWords(null)).toEqual({ cache: null, cost: null, list: false });
   });

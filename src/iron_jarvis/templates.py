@@ -496,7 +496,9 @@ def analyze_requirements(
             "setup_label": "Secrets",
         })
 
-    # 4) Reading/sending real email -> an email-capable plug-in must be live.
+    # 4) Reading/sending real email -> an email-capable extension must be live.
+    #    v1.314.0: user words follow VOCABULARY.md (plug-in -> extension, one
+    #    arrow "→"); the key, verdict and setup_path are unchanged.
     #    (Drafting text needs nothing — the verb list deliberately omits it.)
     if _EMAIL_RE.search(text):
         ok = any(
@@ -508,12 +510,12 @@ def analyze_requirements(
             "label": "Email access",
             "ok": ok,
             "detail": (
-                "An email-capable plug-in is connected." if ok else
-                "Reading or sending email needs an email plug-in (e.g. Gmail or "
-                "Outlook via MCP). Connect one under Tools -> Plug-ins."
+                "An email extension is connected." if ok else
+                "Reading or sending email needs an email extension (e.g. Gmail or "
+                "Outlook). Connect one under Tools → Extensions."
             ),
             "setup_path": "/tools",
-            "setup_label": "Tools → Plug-ins",
+            "setup_label": "Tools → Extensions",
         })
 
     # 5) Web research -> the built-in web_search tool must be registered
@@ -527,7 +529,8 @@ def analyze_requirements(
             "ok": ok,
             "detail": (
                 "Web search is available." if ok else
-                "The web_search tool isn't loaded on this install."
+                # v1.314.0: no internal tool id in front of a user.
+                "Web search isn't available on this install."
             ),
             "setup_path": "/tools",
             "setup_label": "Tools",

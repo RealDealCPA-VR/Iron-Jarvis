@@ -33,6 +33,8 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
+import { PageGrid } from "@/components/PageGrid";
+import { agentLabel } from "@/components/workflow/agents";
 
 /** One thing a template needs before it can actually run (v1.128.0). */
 interface Requirement {
@@ -327,7 +329,9 @@ export default function TemplatesPage() {
       </Reveal>
 
       <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
+        {/* v1.314.0: PageGrid (wave-1 carry-over) — same 3 columns at lg,
+            one shrinkable column on a phone. */}
+        <PageGrid cols={3}>
           <div className="lg:col-span-1">
             <Card
               title={editingId ? "Edit template" : "New template"}
@@ -369,9 +373,10 @@ export default function TemplatesPage() {
                     onChange={(e) => setAgentType(e.target.value)}
                     className="field"
                   >
+                    {/* v1.314.0: friendly names first; values stay ids. */}
                     {agentTypes.map((a) => (
                       <option key={a} value={a}>
-                        {a}
+                        {agentLabel(a)}
                       </option>
                     ))}
                   </select>
@@ -622,7 +627,7 @@ export default function TemplatesPage() {
               )}
             </Card>
           </div>
-        </div>
+        </PageGrid>
       </Reveal>
     </PageShell>
   );

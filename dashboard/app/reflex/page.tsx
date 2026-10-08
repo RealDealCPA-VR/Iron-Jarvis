@@ -819,8 +819,23 @@ export default function ReflexPage() {
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : rules.length === 0 ? (
-            <Empty icon={<Zap size={24} />}>
-              No reflexes yet — add one to make Iron Jarvis act on its own.
+            // v1.314.0: on a fresh install the page explanation lives in the (i)
+            // popover (v1.214.1), so this empty state is the one place a new
+            // user learns what a reflex IS. The button opens the SAME form the
+            // header button opens (setOpen(true) — it opens, never toggles).
+            // Every example below maps to a real source + action in the form.
+            <Empty
+              icon={<Zap size={24} />}
+              title="Start work when something happens"
+              examples={[
+                "When an email about “invoice” arrives, start a task to file it",
+                "When a calendar event called “standup” is coming up, run a workflow",
+                "When another app calls your webhook, start a session",
+              ]}
+              action={{ label: "Add your first reflex", onClick: () => setOpen(true) }}
+            >
+              A reflex is an if-this-then-that rule: a signal comes in, and Iron Jarvis starts the
+              work you picked. Anything risky still asks you first.
             </Empty>
           ) : (
             <div className="space-y-6">
@@ -1018,13 +1033,16 @@ function TriggersCard() {
               href="/channels"
               className="inline-flex items-center gap-1 text-[12px] text-accent-soft underline-offset-2 hover:underline"
             >
-              Channels <ArrowRight size={12} />
+              Notifications <ArrowRight size={12} />
             </Link>
           </div>
+          {/* v1.314.0: the page is Notifications and a row is a destination
+              (VOCABULARY.md) — "Channels" was the retired word. Route unchanged. */}
           <div className="mt-2 text-[11px] text-zinc-600">
-            Email triggers fire when a message lands in an inbound Email channel. Add one on the{" "}
+            Email triggers fire when a message lands in an email destination that listens for
+            incoming mail. Add one on the{" "}
             <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
-              Channels
+              Notifications
             </Link>{" "}
             page, then add an <span className="text-zinc-400">Email arrives</span> reflex above.
           </div>
@@ -1045,14 +1063,14 @@ function TriggersCard() {
               href="/channels"
               className="inline-flex items-center gap-1 text-[12px] text-accent-soft underline-offset-2 hover:underline"
             >
-              Channels <ArrowRight size={12} />
+              Notifications <ArrowRight size={12} />
             </Link>
           </div>
           <div className="mt-2 text-[11px] text-zinc-600">
-            Slack triggers fire on inbound Slack messages. Set up a Slack channel with inbound
-            enabled on the{" "}
+            Slack triggers fire on incoming Slack messages. Set up a Slack destination that listens
+            for incoming messages on the{" "}
             <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
-              Channels
+              Notifications
             </Link>{" "}
             page, then add a <span className="text-zinc-400">Slack message</span> reflex above.
           </div>

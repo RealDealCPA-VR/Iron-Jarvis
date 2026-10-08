@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { ApiError, del, get, patch, post } from "@/lib/api";
+import { providerDisplay } from "@/lib/onboarding";
 import {
   Badge,
   Card,
@@ -545,6 +546,21 @@ function NodeCard({
 /* -------------------------------------------------------------------------- */
 
 /**
+ * v1.314.0 (UX wave 2): a comparison model in words. Claude ids read as their
+ * product names ("claude-opus-4-8" -> "Claude Opus 4.8"); anything else keeps
+ * its id after the provider's plain name. Never invents a model.
+ */
+function baselineName(provider: string, model: string): string {
+  const claude = /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:-\d{8})?$/i.exec(model);
+  if (claude) {
+    const family = claude[1].charAt(0).toUpperCase() + claude[1].slice(1).toLowerCase();
+    return `Claude ${family} ${claude[2]}${claude[3] ? `.${claude[3]}` : ""}`;
+  }
+  const who = providerDisplay(provider);
+  return [who, model].filter(Boolean).join(" ");
+}
+
+/**
  * Local/cloud split. The avoided-spend figure is ALWAYS shown with the model it
  * was priced against — a bare "$14 saved" is a number nobody can check — so
  * with no comparison model we show the token split and say the basis is
@@ -557,6 +573,9 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
   const provider = (usage?.comparison_provider || "").trim();
   const model = (usage?.comparison_model || "").trim();
   const baseline = [provider, model].filter(Boolean).join(":");
+  // v1.314.0: the baseline in words ("Claude Opus 4.8"); the raw
+  // provider:model id stays in the title — it is what the estimate priced.
+  const baselineWords = baselineName(provider, model);
   const cloudCost = num(usage?.cloud_cost_usd);
   const byNode = (usage?.by_node ?? []).filter((n) => num(n.est_avoided_usd) !== null);
 
@@ -610,10 +629,27 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
             <div>
               <div className="text-xs text-emerald-300/90">
                 est. {fmtUsd(avoided)} avoided vs{" "}
-                <span className="font-mono text-emerald-200/90">{baseline}</span>
+                <span className="text-emerald-200/90" title={`Priced as ${baseline}`}>
+                  {baselineWords}
+                </span>
               </div>
+              {/* v1.314.0: the daemon's basis line names the raw
+                  provider:model id ("…on anthropic:claude-opus-4-8 at list
+                  price"). It is the record of what the estimate priced, so it
+                  stays — one press down, after a sentence in words. */}
               {usage?.basis && (
-                <div className="mt-1 text-[11px] text-zinc-600">{usage.basis}</div>
+                <details className="mt-1 text-[11px] text-zinc-600">
+                  <summary className="cursor-pointer select-none hover:text-zinc-400">
+                    How this is estimated
+                  </summary>
+                  <p className="mt-1">
+                    What the tokens that ran on local models would have cost on{" "}
+                    {baselineWords} at its list price.
+                  </p>
+                  <p className="mt-0.5 break-words font-mono text-[10px] text-zinc-600">
+                    {usage.basis}
+                  </p>
+                </details>
               )}
             </div>
           ) : (
@@ -747,7 +783,9 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
         <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
           <input
             className="field font-mono text-xs"
-            placeholder="http://100.66.161.52:8888"
+            // v1.314.0: an obviously-example LAN address — the old one was a
+            // real-looking private tailnet IP.
+            placeholder="http://192.168.1.50:8000"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             spellCheck={false}
@@ -906,7 +944,8 @@ export default function FleetPage() {
                 }
               >
                 <Dot on={!!sampling?.active} />
-                {sampling?.active ? "live" : "idle"}
+                {/* v1.314.0: say what the chip means ("live" was unexplained). */}
+                {sampling?.active ? "Live updates" : "Idle"}
               </span>
               <button
                 type="button"
@@ -944,9 +983,14 @@ export default function FleetPage() {
 
       {route && (
         <Reveal>
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          {/* v1.314.0: a quiet chip with a sentence; the daemon's own words
+              for the route stay in its title. */}
+          <div
+            className="inline-flex max-w-full items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1 text-xs text-zinc-400"
+            title={data?.code_route?.effective?.why || undefined}
+          >
             <Cpu size={13} className="shrink-0 text-accent-soft/70" />
-            <span>{route}</span>
+            <span className="min-w-0">{route}</span>
           </div>
         </Reveal>
       )}
@@ -964,12 +1008,18 @@ export default function FleetPage() {
       ) : roots.length === 0 ? (
         <Reveal>
           <Card title="Nodes" icon={<Server size={15} />}>
+            {/* v1.314.0 (UX wave 2): the primary way forward is the place a
+                user actually adds an endpoint — Connections' custom-endpoint
+                card, whose form posts /fleet/nodes (so it lists here).
+                Settings' Ollama/custom URLs stay as the second way in. */}
             <Empty
               icon={<Server size={26} />}
-              action={{ label: "Open Settings", href: "/settings" }}
+              title="No machines yet"
+              action={{ label: "Add an endpoint", href: "/connections?focus=endpoints" }}
+              secondary={{ label: "Open Settings", href: "/settings" }}
             >
-              No nodes yet. Endpoints you configure in Settings appear here
-              automatically — or add one below by URL.
+              Add a model server on Connections, or set the Ollama or custom URL in Settings —
+              they show up here automatically. You can also add one below by its address.
             </Empty>
           </Card>
         </Reveal>

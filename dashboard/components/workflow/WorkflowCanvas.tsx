@@ -49,6 +49,7 @@ import {
   MessageCircleQuestion,
   TriangleAlert,
   X,
+  Info,
 } from "lucide-react";
 import { get, post, patch, del, ApiError } from "@/lib/api";
 import {
@@ -136,6 +137,10 @@ const SEED_NODES: Node[] = [
   mkStep("s3", "Review", "reviewer", "Review the draft for correctness and quality; flag any fixes.", 880, 148),
 ];
 const SEED_EDGES: Edge[] = [mkEdge("trigger", "s1"), mkEdge("s1", "s2"), mkEdge("s2", "s3")];
+
+/** v1.314.0: the starter's name, and run()'s fallback for a blank name. */
+const EXAMPLE_NAME = "Example workflow";
+const UNTITLED_NAME = "Untitled workflow";
 
 /* ---- Rebuild a node graph from saved steps (Load) ------------------------ */
 
@@ -790,7 +795,13 @@ interface RunResult {
 function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(SEED_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(SEED_EDGES);
-  const [name, setName] = useState("demo-workflow");
+  // v1.314.0 (UX wave 2): a person's name for the starter, not a slug. The
+  // name is free text (sent as-is to /workflows/run, restored by Load), so
+  // there is NO separate slug key — saved and loaded names must agree.
+  const [name, setName] = useState(EXAMPLE_NAME);
+  // The fresh canvas is an EXAMPLE, and says so until the user makes it
+  // theirs: hidden on Load, on any graph edit, and once it is saved.
+  const [isExample, setIsExample] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -896,6 +907,7 @@ function Canvas() {
         return;
       }
       setEdges((eds) => addEdge({ ...c, animated: true }, eds));
+      setIsExample(false);
     },
     [edges, setEdges, showEdgeNotice],
   );
@@ -925,14 +937,17 @@ function Canvas() {
     setNodes((nds) => [...nds, newNode]);
     setEdges((eds) => addEdge(mkEdge(last.id, id), eds));
     setSelectedId(id);
+    setIsExample(false);
     setTimeout(() => fitView({ padding: 0.22, duration: 420 }), 60);
   }, [nodes, edges, setNodes, setEdges, fitView]);
 
   const updateData = useCallback(
-    (id: string, patch: Partial<StepNodeData>) =>
+    (id: string, patch: Partial<StepNodeData>) => {
+      setIsExample(false);
       setNodes((nds) =>
         nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)),
-      ),
+      );
+    },
     [setNodes],
   );
 
@@ -953,6 +968,7 @@ function Canvas() {
       });
       setNodes((nds) => nds.filter((n) => n.id !== id));
       setSelectedId((cur) => (cur === id ? null : cur));
+      setIsExample(false);
     },
     [edges, setEdges, setNodes],
   );
@@ -1059,6 +1075,7 @@ function Canvas() {
       setNodes(applyLayout(nn, loadLayout(def.name)));
       setEdges(ee);
       setName(def.name);
+      setIsExample(false);
       // Track the loaded def for rename-in-place + pin-preserving runs. The
       // list endpoint omits project_id, so fetch the pin from the detail
       // route (stale-response guard: only the LATEST load may land it).
@@ -1157,6 +1174,8 @@ function Canvas() {
             ? `Renamed “${loadedName}” to “${wfName}” and saved ${steps.length} step${steps.length === 1 ? "" : "s"}.`
             : `Saved “${wfName}” — ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
         );
+        // Saved = it is the user's workflow now, not the example.
+        setIsExample(false);
         try {
           window.dispatchEvent(
             new CustomEvent("ij:workflow-changed", {
@@ -1188,7 +1207,7 @@ function Canvas() {
     setCancelling(false);
     stopPolling();
     const steps = stepsFromGraph(nodes, edges);
-    const wfName = name.trim() || "demo-workflow";
+    const wfName = name.trim() || UNTITLED_NAME;
     if (steps.length === 0) {
       setError("Add at least one step before running.");
       return;
@@ -1311,7 +1330,7 @@ function Canvas() {
   );
 
   return (
-    <div className="card-surface flex h-[calc(100vh-12.5rem)] min-h-[560px] flex-col overflow-hidden">
+    <div className="card-surface flex h-[calc(100vh-12.5rem-var(--ij-strip-h,0px))] min-h-[560px] flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b hairline px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -1479,6 +1498,20 @@ function Canvas() {
           </button>
         </div>
       </div>
+
+      {/* v1.314.0 (UX wave 2): a brand-new user could not tell whether the
+          starter was theirs, a template or broken state. One quiet line says
+          it is an example; it goes once the graph is edited, a saved
+          workflow is loaded, or it is saved. */}
+      {isExample && (
+        <div
+          data-testid="workflow-example-notice"
+          className="flex items-center gap-2 border-b hairline px-4 py-2 text-xs text-zinc-400"
+        >
+          <Info size={13} className="shrink-0 text-accent-soft/70" aria-hidden />
+          An example to start from — change the steps, or Load a saved one.
+        </div>
+      )}
 
       {/* Canvas */}
       <div className="relative flex-1">

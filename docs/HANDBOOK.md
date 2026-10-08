@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.313.0 (2026-10-04).*
+holds itself to. Current as of v1.314.0 (2026-10-04).*
 
 ---
 
@@ -246,8 +246,9 @@ Chat is where most work happens, and it is wired into everything:
   them ("Lets this chat search the web and read pages" / "Each request picks
   the safe tools it needs"); the approval dropdown's hover title says it is
   the *approval posture for this chat*; the footer's model button reads
-  **default · <model name>** (the same name the title bar shows) instead of
-  "default model"; and a receipt line that used to say "3 tools max" now
+  **Default: <model name>** (since v1.314.0 — "Default: Demo model
+  (scripted)" while replies are still the scripted demo, with the raw
+  provider · model id on hover) instead of "default model"; and a receipt line that used to say "3 tools max" now
   says **capped at 3 tools for this local model** — the envelope fitting your
   own measured model, not a limit you set.
 - **What an escalated run inherits from the chat** (v1.232.0): the armed
@@ -661,7 +662,8 @@ costs); Activity (the full undo-capable action ledger); the **/you** page
 seam); Train (teach it your writing voice, suggest-only).
 
 - **Connections tells one truth** (v1.230.0): a provider inherited from a
-  logged-in CLI shows as **Inherited from claude-cli** (or codex-cli) — it is
+  logged-in CLI shows as **Connected · via Claude Code** (or Codex; before
+  v1.314.0 it read "Inherited from claude-cli") — it is
   connected, the switcher and chat can use it, and the chat picker calls it
   *included* rather than *metered*, because the subscription pays. There is
   no Disconnect on that card (no key is stored here; log out of the CLI to
@@ -1410,6 +1412,35 @@ an installed copy.)
 
 ---
 
+## What changed in the look and feel (v1.313.0 →)
+
+Every screen was photographed (a new install, a lived-in one, a phone, and
+the light Daylight theme) and reworked so it reads plainly and looks calm —
+nothing was taken away.
+
+- **The demo is always named.** While replies are the built-in scripted
+  demo, the title bar's model button says **Demo replies** (an amber dot on
+  narrow windows) and never shows a model name; the amber strip at the top
+  also appears when a model is connected but not yet chosen, and its
+  **Choose a model** opens the model menu right there. Wherever the app used
+  to say "mock" it now says **Demo model (scripted)**.
+- **Themes everywhere.** Pick a theme from the dots in the title bar, from
+  **Settings → Appearance**, from the menu drawer on a phone, or by typing
+  "Theme" in the Ctrl+K search — all four change the same setting. The light
+  themes now draw status colours and chips in deeper inks you can read.
+- **Phones.** Pages no longer slide sideways, the title bar's buttons no
+  longer overlap, and search icons sit inside their boxes.
+- **Plain words.** Sessions say who started them in words ("Schedule ·
+  nightly-brief", "Mission", "Queued job") — the exact origin is still on
+  hover. Approval cards say what the action will do; the tool's own name is
+  in the details. The Overview's health card reads "Tasks reviewed",
+  "Finished", "Tools worked" and "Typical reply time".
+- **Empty pages show the way.** An empty Reflexes, Sentinels, Webhooks,
+  Schedules, Kanban, Sessions or Terminals page says what the place is for,
+  gives an example or two, and offers the first step (the button opens the
+  page's own form). Memory keeps task notes apart under **Notes about past
+  jobs** — they are not added to your prompts.
+
 ## What got faster (v1.258.0)
 
 **Opening a chat.** A chat window can show a project board, a knowledge rail, a
@@ -1480,11 +1511,12 @@ now it stops while you are not looking and catches up the moment you come back.
    too (429, 500, "model not found"): under `local_primary_policy = refuse`
    — the default, on Settings → Models as "If my local model answers with an
    error" — the turn fails by name and nothing stands in, so a chat never
-   leaves this machine unless you switch it to `failover`. A dead local
+   leaves this machine unless you switch it to **Let another model answer**
+   (the `failover` setting). A dead local
    endpoint is caught by a ~2 s liveness check before the turn starts
    instead of after three 60 s timeouts. When a failover *does* happen, the
    receipt under the reply names what failed and why ("answered by
-   claude-cli — fleet-rtx6000ada returned HTTP 500"), and the phone/desktop
+   Claude Code — fleet-rtx6000ada returned HTTP 500"), and the phone/desktop
    alert carries the same reason. Auto is the one route that may substitute.
    Since v1.232.0 a provider that has failed repeatedly is put in a short
    **cooldown** and the next turn is refused *without* being sent — "fleet-

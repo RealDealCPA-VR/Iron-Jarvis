@@ -11,6 +11,7 @@ import {
   Undo2,
   ExternalLink,
   RotateCw,
+  ChevronRight,
 } from "lucide-react";
 import { get, post, ApiError } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
@@ -23,7 +24,9 @@ import {
   LoaderInline,
   type Tone,
 } from "@/components/ui";
-import { timeAgo, clockTime, shortId } from "@/lib/format";
+import { timeAgo, clockTime } from "@/lib/format";
+import { providerDisplay } from "@/lib/onboarding";
+import { originLabel } from "@/components/sessions/OriginChip";
 
 /** Aggregates over the currently-loaded window, surfaced to the host page. */
 export interface FeedStats {
@@ -66,15 +69,19 @@ const KINDS: { key: string; label: string }[] = [
   { key: "tool", label: "Actions" },
   { key: "token", label: "Tokens" },
   { key: "decision", label: "Decisions" },
-  { key: "lifecycle", label: "Lifecycle" },
+  // v1.314.0: "Progress", not the ledger's word "lifecycle" (the filter's
+  // key — what /audit is asked for — is unchanged).
+  { key: "lifecycle", label: "Progress" },
 ];
 
+// v1.314.0 (UX wave 2): a row's first line in words — "lifecycle" and
+// "event" were the read-model's kind names. Only the label changed.
 const KIND_META: Record<string, { icon: typeof Wrench; tone: Tone; label: string }> = {
-  tool: { icon: Wrench, tone: "cyan", label: "action" },
-  token: { icon: Coins, tone: "violet", label: "tokens" },
-  decision: { icon: Scale, tone: "amber", label: "decision" },
-  lifecycle: { icon: CircleDot, tone: "slate", label: "lifecycle" },
-  action: { icon: Sparkles, tone: "cyan", label: "event" },
+  tool: { icon: Wrench, tone: "cyan", label: "Action" },
+  token: { icon: Coins, tone: "violet", label: "Model use" },
+  decision: { icon: Scale, tone: "amber", label: "Decision" },
+  lifecycle: { icon: CircleDot, tone: "slate", label: "Progress" },
+  action: { icon: Sparkles, tone: "cyan", label: "Update" },
 };
 
 const PAGE = 50;
@@ -106,7 +113,11 @@ function kindMeta(kind: string) {
 export const EVENT_WORDS: Record<string, string> = {
   "provider.routed": "Picked a model for this turn",
   "provider.failover": "Switched provider after a failure",
-  "provider.downgraded": "Fell back to the offline mock",
+  // v1.314.0: never "mock" in words, and true to the router since v1.162.0 —
+  // this event now means the chosen model could not answer (it refuses; the
+  // only time the demo model still answers is the mock-default trap, where
+  // no real model answered either).
+  "provider.downgraded": "No real model answered",
   "autonomy.proposed": "Proposed an action on its own",
   "autonomy.executed": "Ran an action on its own",
   "llm.completed": "Model call finished",
@@ -118,7 +129,19 @@ export const EVENT_WORDS: Record<string, string> = {
   "action.reverted": "Action undone",
   "tool.executed": "Ran a tool",
   "tool.denied": "Refused a tool",
+  // v1.314.0 (UX wave 2): the events the Activity page printed raw.
+  "delegation.started": "Handed work to a teammate",
+  "delegation.completed": "Teammate finished",
+  "comm.desktop": "Sent a desktop notification",
 };
+
+/** v1.314.0: "agent running→completed" (eval/observability._event_summary
+ *  for agent.state_changed) as a sentence. */
+const AGENT_STATE_RE = /^agent ([a-z_]+)\s*→\s*([a-z_]+)$/;
+/** v1.314.0: a token row ("<provider>/<model> · <in>+<out> tok", the same
+ *  _event_summary). Anchored on the " tok" tail so a path with a slash in an
+ *  ordinary summary is never mistaken for one. */
+const TOKEN_SUMMARY_RE = /^([\w.-]+)\/(\S*) · (\d+\+\d+ tok)$/;
 
 const EVENT_TYPE_RE = /^([a-z_]+\.[a-z_.]+)\b\s*(.*)$/s;
 
@@ -127,6 +150,16 @@ const EVENT_TYPE_RE = /^([a-z_]+\.[a-z_.]+)\b\s*(.*)$/s;
 export function humanSummary(summary: string | null | undefined): string {
   const s = (summary ?? "").trim();
   if (!s) return "";
+  const st = AGENT_STATE_RE.exec(s);
+  if (st) return `Agent went from ${st[1]} to ${st[2]}`;
+  // A token row names the provider in words; the scripted model is "Demo
+  // model", never "mock" (its model id is "mock-1", so it is dropped too).
+  // A real row keeps its model id — it is the record of what ran.
+  const tok = TOKEN_SUMMARY_RE.exec(s);
+  if (tok) {
+    if (tok[1] === "mock") return `Demo model · ${tok[3]}`;
+    return [providerDisplay(tok[1]), tok[2], tok[3]].filter(Boolean).join(" · ");
+  }
   const m = EVENT_TYPE_RE.exec(s);
   if (!m) return s;
   const words = EVENT_WORDS[m[1]];
@@ -139,6 +172,61 @@ export function humanSummary(summary: string | null | undefined): string {
  *  person or an agent — "by provider.routed" says nothing. */
 export function isEventTypeActor(actor: string | null | undefined): boolean {
   return !!actor && /^[a-z_]+\.[a-z_.]+$/.test(actor.trim());
+}
+
+/**
+ * v1.314.0 (UX wave 2): a run of bookkeeping rows folds into ONE row.
+ *
+ * The Activity page is the audit trail that makes handing over control feel
+ * safe, yet its four Undo buttons sat among ~50 "lifecycle" and 0+0 "tokens"
+ * rows. A row is FOLDABLE when it is lifecycle, or a token row that used no
+ * tokens and no money — and NEVER when it can be undone, was refused, or was
+ * reversed: those stay one press away. Two or more consecutive foldable rows
+ * of the SAME session become a group that expands in place. Nothing leaves
+ * the timeline: every row is still rendered on expand, and the stats count
+ * the same entries.
+ */
+export function isFoldable(e: AuditEntry): boolean {
+  if (e.undoable || e.undone) return false;
+  if ((e.verdict && e.verdict.toLowerCase() === "deny") || e.ok === false) return false;
+  if (e.kind === "lifecycle") return true;
+  if (e.kind !== "token") return false;
+  const { cost, listPrice } = entryMoney(e);
+  return !(e.input_tokens || 0) && !(e.output_tokens || 0) && !cost && !listPrice;
+}
+
+export type FeedItem =
+  | { type: "row"; e: AuditEntry }
+  | { type: "group"; key: string; rows: AuditEntry[] };
+
+/** Entries (newest first) → rows and folded groups, order kept. */
+export function foldEntries(entries: AuditEntry[]): FeedItem[] {
+  const out: FeedItem[] = [];
+  let run: AuditEntry[] = [];
+  const flush = () => {
+    // Keyed on the OLDEST row (entries are newest first): a live refresh adds
+    // a running mission's next step on TOP of the run, so the newest id
+    // changes every few seconds and would remount the group (losing focus).
+    if (run.length >= 2) out.push({ type: "group", key: run[run.length - 1].id, rows: run });
+    else for (const e of run) out.push({ type: "row", e });
+    run = [];
+  };
+  for (const e of entries) {
+    if (isFoldable(e) && (run.length === 0 || run[0].session_id === e.session_id)) {
+      run.push(e);
+      continue;
+    }
+    flush();
+    if (isFoldable(e)) run.push(e);
+    else out.push({ type: "row", e });
+  }
+  flush();
+  return out;
+}
+
+/** v1.314.0: who did it, in words ("job:mission" -> "Mission"). */
+function actorWords(actor: string): string {
+  return originLabel(actor) || actor;
 }
 
 /**
@@ -353,6 +441,37 @@ export function TimeTravelFeed({
 
   const offline = error && error.status === 0;
 
+  // v1.314.0: fold runs of bookkeeping rows (see foldEntries). An expanded
+  // group is remembered by EVERY row id it held when the user opened it, and
+  // a group is open when ANY of its rows is in that set. A live refresh puts
+  // a mission's next progress row on top of the same run, so keying "open"
+  // on the newest row snapped an open group shut on every new row.
+  // Membership survives a prepend (the old rows are still in the run).
+  const items = useMemo(() => foldEntries(entries), [entries]);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const groupOpen = (rows: AuditEntry[]) => rows.some((r) => openGroups.has(r.id));
+  const toggleGroup = (rows: AuditEntry[]) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      const isOpen = rows.some((r) => next.has(r.id));
+      for (const r of rows) {
+        if (isOpen) next.delete(r.id);
+        else next.add(r.id);
+      }
+      return next;
+    });
+  const renderRow = (e: AuditEntry) => (
+    <TimelineRow
+      key={e.id}
+      e={e}
+      showSession={!sessionId}
+      armed={armed === e.id}
+      undoing={undoing === e.id}
+      rowError={rowError?.id === e.id ? rowError.msg : null}
+      onUndo={() => undo(e.id)}
+    />
+  );
+
   return (
     <div className="space-y-4">
       {/* Filter row */}
@@ -419,17 +538,19 @@ export function TimeTravelFeed({
         <ol className="relative space-y-1.5 pl-1">
           {/* the rail */}
           <span className="pointer-events-none absolute bottom-2 left-[10px] top-2 w-px bg-white/[0.06]" />
-          {entries.map((e) => (
-            <TimelineRow
-              key={e.id}
-              e={e}
-              showSession={!sessionId}
-              armed={armed === e.id}
-              undoing={undoing === e.id}
-              rowError={rowError?.id === e.id ? rowError.msg : null}
-              onUndo={() => undo(e.id)}
-            />
-          ))}
+          {items.map((it) =>
+            it.type === "row" ? (
+              renderRow(it.e)
+            ) : (
+              <StepGroup
+                key={`group:${it.key}`}
+                rows={it.rows}
+                open={groupOpen(it.rows)}
+                onToggle={() => toggleGroup(it.rows)}
+                renderRow={renderRow}
+              />
+            ),
+          )}
         </ol>
       )}
 
@@ -446,6 +567,60 @@ export function TimeTravelFeed({
         </div>
       )}
     </div>
+  );
+}
+
+/** v1.314.0: a folded run of bookkeeping rows — one button that expands the
+ *  rows in place (aria-expanded). Who ran them is said in words. */
+function StepGroup({
+  rows,
+  open,
+  onToggle,
+  renderRow,
+}: {
+  rows: AuditEntry[];
+  open: boolean;
+  onToggle: () => void;
+  renderRow: (e: AuditEntry) => React.ReactNode;
+}) {
+  const actor = rows.find((r) => r.actor && !isEventTypeActor(r.actor))?.actor ?? "";
+  const newest = rows[0];
+  return (
+    <>
+      <li className="relative flex gap-3 rounded-xl px-2 py-1.5">
+        <span className="relative z-10 mt-0.5 grid h-[21px] w-[21px] shrink-0 place-items-center">
+          <span className={`grid h-[21px] w-[21px] place-items-center rounded-full border ${NODE.slate}`}>
+            <CircleDot size={11} />
+          </span>
+        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            title={open ? "Hide these steps" : "Show each step"}
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-0.5 text-xs text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200"
+          >
+            <ChevronRight
+              size={12}
+              className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+            />
+            <span className="truncate">
+              {actor ? <span title={actor}>{actorWords(actor)} · </span> : null}
+              {rows.length} steps
+            </span>
+          </button>
+          <span className="text-[11px] text-zinc-600">progress updates</span>
+          <span
+            className="ml-auto shrink-0 text-[11px] text-zinc-600"
+            title={clockTime(newest.ts)}
+          >
+            {timeAgo(newest.ts)}
+          </span>
+        </div>
+      </li>
+      {open && rows.map((e) => renderRow(e))}
+    </>
   );
 }
 
@@ -499,9 +674,10 @@ function TimelineRow({
               <span className="text-zinc-300">{meta.label}</span>
             )}
           </span>
+          {/* v1.314.0: who, in words ("Mission"); the raw origin is the title. */}
           {e.actor && !isEventTypeActor(e.actor) && (
-            <span className="text-[11px] text-zinc-500">
-              by <span className="text-zinc-400">{e.actor}</span>
+            <span className="text-[11px] text-zinc-500" title={`Started by: ${e.actor}`}>
+              by <span className="text-zinc-400">{actorWords(e.actor)}</span>{" "}
             </span>
           )}
           {deny && <Badge value="denied" tone="red" />}
@@ -546,11 +722,14 @@ function TimelineRow({
             </span>
           )}
           {showSession && e.session_id && (
+            // v1.314.0: words on the link; the session id (a record — the
+            // Sessions search finds it) rides the title.
             <Link
               href={`/sessions/${e.session_id}`}
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-zinc-500 transition-colors hover:border-accent/30 hover:text-accent-soft"
+              title={`Open session ${e.session_id}`}
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] text-zinc-500 transition-colors hover:border-accent/30 hover:text-accent-soft"
             >
-              {shortId(e.session_id)} <ExternalLink size={9} />
+              Open session <ExternalLink size={9} />
             </Link>
           )}
 

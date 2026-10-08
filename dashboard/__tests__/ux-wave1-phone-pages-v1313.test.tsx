@@ -145,7 +145,8 @@ describe("/documents path rows on a phone", () => {
   it("Read: the row wraps and the path box takes a full line below sm", () => {
     render(<DocumentsPage />);
     const input = screen.getByPlaceholderText("C:\\Users\\you\\report.pdf");
-    const browse = screen.getByRole("button", { name: /Browse…/ });
+    // v1.314.0: "Browse…" became "Pick from folders…" (Read is the first).
+    const browse = screen.getAllByRole("button", { name: /Pick from folders…/ })[0];
     const { box, row } = rowChild(input, browse);
     expect(tokens(row)).toContain("flex-wrap");
     for (const need of ["min-w-[12rem]", "basis-full", "sm:basis-auto"]) {
@@ -161,7 +162,8 @@ describe("/documents path rows on a phone", () => {
   it("Redact PII: the document row wraps the same way", () => {
     render(<DocumentsPage />);
     const input = screen.getByLabelText("Document to redact");
-    const browse = screen.getAllByRole("button", { name: /^Browse$/ })[0];
+    // v1.314.0: Redact's "Browse" became "Pick from folders…" (the second).
+    const browse = screen.getAllByRole("button", { name: /Pick from folders…/ })[1];
     const { box, row } = rowChild(input, browse);
     expect(row.contains(browse)).toBe(true);
     expect(tokens(row)).toContain("flex-wrap");
@@ -169,7 +171,8 @@ describe("/documents path rows on a phone", () => {
       expect(tokens(box), `redact box needs ${need}`).toContain(need);
     }
     // Anti-vacuity: the field keeps its placeholder.
-    expect(input).toHaveAttribute("placeholder", "C:\\Clients\\Alvarez\\organizer.docx");
+    // v1.314.0: an example reads as one ("e.g."), not as a client's data.
+    expect(input).toHaveAttribute("placeholder", "e.g. C:\\Users\\you\\Documents\\organizer.docx");
   });
 });
 

@@ -4013,7 +4013,9 @@ export default function CreativePage() {
               ? "Browse your own media folders — every image, video, and track on this machine. Pin the folders you use most."
               : view === "create"
                 ? "Pick an engine, a skill, and a folder — Iron Jarvis launches the CLI in a background terminal (it appears on Build) and new media lands here as it’s created."
-                : "Everything Iron Jarvis has made — generations land here automatically. Ask for media in Chat (arm the pixio tools with the + menu) or in an agent session."
+                : // v1.314.0 (UX wave 2): no internal tool names — point at the
+                  // page's own Create tab and at Chat.
+                  "Everything Iron Jarvis makes lands here automatically. Make something in Create, or ask for it in Chat or an agent session."
           }
           actions={
             <div className="flex flex-wrap items-center gap-3">
@@ -4117,12 +4119,18 @@ export default function CreativePage() {
               <SkeletonGrid />
             ) : items.length === 0 ? (
               <Card>
+                {/* v1.314.0 (UX wave 2): the empty gallery used to send the user
+                    away to Chat while the page's own Create studio sat right
+                    above it. The first door is now that tab (the same
+                    switchView the tab row uses); Open Chat stays a link. */}
                 <Empty
                   icon={<Sparkles size={22} />}
-                  action={{ label: "Open Chat", href: "/chat" }}
+                  title="Nothing here yet"
+                  action={{ label: "Make something here", onClick: () => switchView("create") }}
+                  secondary={{ label: "Open Chat", href: "/chat" }}
                 >
-                  Nothing here yet — ask Iron Jarvis to make something, or upload media to use in
-                  generations.
+                  Images, video and audio Iron Jarvis makes land here automatically. Start one in
+                  Create, or ask for it in Chat.
                 </Empty>
               </Card>
             ) : visible.length === 0 ? (

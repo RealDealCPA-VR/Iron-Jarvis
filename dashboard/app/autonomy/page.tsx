@@ -41,6 +41,8 @@ import { PageShell, Reveal } from "@/components/motion";
 import { GrantRow, StandingGrants } from "@/components/StandingGrants";
 import type { GrantOffer, StandingGrant } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
+import { Markdown } from "@/components/Markdown";
+import { PageGrid } from "@/components/PageGrid";
 import {
   useLiveGoals,
   spentVsBudget,
@@ -110,6 +112,18 @@ interface Briefing {
   pushed: unknown;
 }
 
+/** v1.314.0: destination names as a person reads them — the same words as
+ *  the Notifications page (its destLabel is page-local, so this mirrors it).
+ *  "mock" is the built-in test log: it records the message in the app and
+ *  delivers nothing. */
+const TEST_LOG = "mock";
+const TEST_LOG_LABEL = "Test log (in-app only)";
+function destDisplay(name: string): string {
+  if (name === TEST_LOG) return TEST_LOG_LABEL;
+  if (name === "this-pc") return "This PC";
+  return name;
+}
+
 /** Shape of `pushed` when the POST actually fanned out to comm channels. */
 type BriefingPushResults = Record<string, { ok?: boolean; detail?: string }>;
 
@@ -120,6 +134,21 @@ type BriefingPushResults = Record<string, { ok?: boolean; detail?: string }>;
 const AUTONOMY_LEVELS = ["suggest", "act_low", "act_all"] as const;
 const GOAL_STATUSES = ["active", "paused", "done", "abandoned"] as const;
 const PRIORITIES = [1, 2, 3, 4, 5] as const;
+
+/** v1.314.0: priority in words. The scale is 1 = low … 5 = high
+ *  (motivation/models.py; the engine orders priority DESC), so 4–5 read
+ *  "high", 3 "normal", 1–2 "low". The number stays in the option value and
+ *  in a title — only the words a user reads change. */
+function priorityWord(p: number): "high" | "normal" | "low" {
+  return p >= 4 ? "high" : p === 3 ? "normal" : "low";
+}
+const PRIORITY_OPTION: Record<number, string> = {
+  5: "P5 · highest",
+  4: "P4 · high",
+  3: "P3 · normal",
+  2: "P2 · low",
+  1: "P1 · lowest",
+};
 
 const LEVEL_LABEL: Record<string, string> = {
   suggest: "Suggest only",
@@ -156,14 +185,17 @@ export default function AutonomyPage() {
   // Shared action feedback (kill switch, approve/reject, goal dials).
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
+  /** Raw record behind a note (e.g. destination names) — kept in its title. */
+  const [actionDetail, setActionDetail] = useState<string | null>(null);
   const [killBusy, setKillBusy] = useState(false);
   const [enableBusy, setEnableBusy] = useState(false);
   const [tickBusy, setTickBusy] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
 
-  function flash(ok: string | null, error: string | null = null) {
+  function flash(ok: string | null, error: string | null = null, detail: string | null = null) {
     setActionOk(ok);
     setActionError(error);
+    setActionDetail(detail);
   }
 
   async function toggleEnabled(enabled: boolean) {
@@ -173,8 +205,11 @@ export default function AutonomyPage() {
       await put("/settings", { values: { autonomy_enabled: enabled } });
       flash(
         enabled
-          ? 'Autonomy enabled. The background pulse arms on the next daemon restart — use "Run a tick" to deliberate right now.'
-          : "Autonomy disabled.",
+          ? // v1.314.0: the loop re-arms LIVE on this settings write
+            // (routes/settings.py → _live_rearm["autonomy"]), so the old
+            // "on the next daemon restart" was false as well as jargon.
+            'Autonomy is on. It checks in on its own from now on — press "Check now" to have it think once right away.'
+          : "Autonomy is off.",
       );
       status.reload();
     } catch (err) {
@@ -196,9 +231,9 @@ export default function AutonomyPage() {
           ? // The backend sets proposal_id even on a dedupe/backlog-full tick, so
             // only claim a NEW proposal when it wasn't deduped.
             r.proposal_id && !r.deduped
-            ? "Deliberated — a new proposal is in the backlog below."
-            : "Deliberated — nothing new to propose this tick."
-          : `Tick didn't run (${r.reason ?? "unknown"}).`,
+            ? "Checked — a new suggestion is waiting for you below."
+            : "Checked — nothing new to suggest right now."
+          : `Nothing was checked (${r.reason ?? "unknown reason"}).`,
       );
       status.reload();
       proposals.reload();
@@ -225,17 +260,34 @@ export default function AutonomyPage() {
       if (entries.length === 0) {
         flash(
           null,
-          "Briefing was summarised, but no comm channel is configured — nothing was sent. Connect Slack/Telegram/Discord first.",
+          "Briefing was summarised, but no destination is set up — nothing was sent. Add one (Slack, Telegram, Discord…) on the Notifications page first.",
         );
       } else if (failed.length === 0) {
-        flash(`Briefing sent to ${entries.map(([name]) => name).join(", ")}.`);
+        // v1.314.0 (review fix): Notifier._targets falls back to EVERY
+        // channel, which includes the built-in test log ("mock") — a
+        // destination that delivers nothing. So a person reads friendly
+        // names, the raw names stay in the note's title (a record of where
+        // it went), and a send that reached ONLY the test log says so
+        // instead of implying a delivery.
+        const real = entries.filter(([name]) => name !== TEST_LOG);
+        const toTestLog = real.length < entries.length;
+        flash(
+          real.length === 0
+            ? `Briefing written to the ${TEST_LOG_LABEL} — nothing left this app. To get it on your phone or in a chat, add a destination on the Notifications page.`
+            : `Briefing sent to ${real.map(([name]) => destDisplay(name)).join(", ")}${
+                toTestLog ? ` (and copied to the ${TEST_LOG_LABEL})` : ""
+              }.`,
+          null,
+          `Destinations: ${entries.map(([name]) => name).join(", ")}`,
+        );
       } else {
         const okCount = entries.length - failed.length;
         flash(
           null,
           `Briefing push failed on ${failed
-            .map(([name, v]) => `${name} (${v?.detail || "unknown error"})`)
-            .join(", ")}${okCount ? ` — ${okCount} other channel${okCount === 1 ? "" : "s"} succeeded` : ""}.`,
+            .map(([name, v]) => `${destDisplay(name)} (${v?.detail || "unknown error"})`)
+            .join(", ")}${okCount ? ` — ${okCount} other destination${okCount === 1 ? "" : "s"} succeeded` : ""}.`,
+          `Destinations: ${entries.map(([name]) => name).join(", ")}`,
         );
       }
       briefing.reload(); // the POST re-summarised — keep the card in sync
@@ -338,15 +390,17 @@ export default function AutonomyPage() {
                   </>
                 )}
               </button>
-              {/* Deliberate once right now (works even before the background loop arms). */}
+              {/* Deliberate once right now (works even before the background
+                  loop arms). v1.314.0: "Check now" (was "Run a tick") — an
+                  honest verb: it may also conclude there is nothing to do. */}
               <button
                 type="button"
                 onClick={runTick}
                 disabled={tickBusy || !s}
                 className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.08] px-3.5 py-2 text-sm font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
-                title="Deliberate once right now"
+                title="Think once right now: look at your goals and suggest a next step if one is worth it"
               >
-                {tickBusy ? <LoaderInline label="Thinking…" /> : <><Activity size={15} /> Run a tick</>}
+                {tickBusy ? <LoaderInline label="Thinking…" /> : <><Activity size={15} /> Check now</>}
               </button>
               <button
                 type="button"
@@ -397,8 +451,8 @@ export default function AutonomyPage() {
                 Kill switch engaged — autonomy is halted.
               </div>
               <div className="mt-1 text-rose-100/60">
-                No deliberation tick runs and no goal can act. Release it above to
-                resume the dials below.
+                Nothing is checked and no goal can act. Release it above to resume
+                the settings below.
               </div>
             </div>
           </div>
@@ -407,11 +461,13 @@ export default function AutonomyPage() {
 
       {(actionOk || actionError) && (
         <Reveal>
-          {actionOk ? (
-            <SuccessNote>{actionOk}</SuccessNote>
-          ) : (
-            <ErrorNote>{actionError}</ErrorNote>
-          )}
+          <div title={actionDetail ?? undefined}>
+            {actionOk ? (
+              <SuccessNote>{actionOk}</SuccessNote>
+            ) : (
+              <ErrorNote>{actionError}</ErrorNote>
+            )}
+          </div>
         </Reveal>
       )}
 
@@ -431,7 +487,7 @@ export default function AutonomyPage() {
 
       {/* Status tiles */}
       <Reveal>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label="Autonomy"
             value={s ? (s.enabled ? "Enabled" : "Disabled") : "—"}
@@ -475,14 +531,14 @@ export default function AutonomyPage() {
               type="button"
               onClick={pushBriefing}
               disabled={briefBusy}
-              title="Summarise now and push to your connected channels"
+              title="Summarise now and send it to your notification destinations"
               className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
             >
               {briefBusy ? (
                 <LoaderInline label="Sending…" />
               ) : (
                 <>
-                  <Send size={13} /> Send briefing to channels
+                  <Send size={13} /> Send briefing
                 </>
               )}
             </button>
@@ -493,9 +549,12 @@ export default function AutonomyPage() {
           ) : briefing.error && briefing.error.status !== 0 ? (
             <ErrorNote>{briefing.error.message}</ErrorNote>
           ) : briefing.data ? (
-            <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed text-zinc-300">
-              {briefing.data.text}
-            </pre>
+            // v1.314.0: the briefing is a note, so it reads like one — the ONE
+            // markdown renderer (components/Markdown.tsx), not a monospace
+            // <pre>. The backend text is unchanged (test_motivation.py).
+            <div className="text-sm leading-relaxed text-zinc-300">
+              <Markdown content={briefing.data.text} />
+            </div>
           ) : (
             <Empty icon={<Sun size={24} />}>No briefing available yet.</Empty>
           )}
@@ -514,7 +573,8 @@ export default function AutonomyPage() {
         />
       </Reveal>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* v1.314.0: PageGrid (wave-1 carry-over) — 2 columns at lg as before. */}
+      <PageGrid cols={2}>
         {/* Proposals queue */}
         <Reveal>
           <Card
@@ -587,7 +647,7 @@ export default function AutonomyPage() {
             onError={(m) => flash(null, m)}
           />
         </Reveal>
-      </div>
+      </PageGrid>
 
       {/* Standing goals */}
       <Reveal>
@@ -602,7 +662,7 @@ export default function AutonomyPage() {
           ) : goalList.length === 0 ? (
             <Empty icon={<Target size={24} />}>
               No standing goals yet. Add one above — Iron Jarvis will keep it in
-              mind and (within its dial + budget) work toward it.
+              mind and (within its settings and budget) work toward it.
             </Empty>
           ) : (
             <div className="space-y-2.5">
@@ -616,7 +676,8 @@ export default function AutonomyPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge value={g.status} tone={statusTone(g.status)} />
                         <span className="text-[11px] uppercase tracking-wide text-zinc-600">
-                          {g.category} · P{g.priority}
+                          {g.category} ·{" "}
+                          <span title={`P${g.priority}`}>{priorityWord(g.priority)} priority</span>
                         </span>
                       </div>
                       <p className="mt-1.5 text-sm text-zinc-200">{g.text}</p>
@@ -1458,7 +1519,7 @@ function NewGoalCard({
             className="field resize-y"
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <div>
             <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
               Category
@@ -1480,16 +1541,16 @@ function NewGoalCard({
               onChange={(e) => setPriority(Number(e.target.value))}
               className="field"
             >
-              {PRIORITIES.map((p) => (
+              {[...PRIORITIES].reverse().map((p) => (
                 <option key={p} value={p}>
-                  P{p}
+                  {PRIORITY_OPTION[p]}
                 </option>
               ))}
             </select>
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-              Dial
+              How much freedom
             </label>
             <select
               aria-label="Autonomy dial"
@@ -1593,9 +1654,10 @@ function StarterGoalsCard({
   return (
     <Card title="Starter goals" icon={<Sparkles size={15} />}>
       <p className="text-sm text-zinc-400">
-        Not sure what to seed? Add one with a click. Starters only make Iron
-        Jarvis PROPOSE things on its tick — nothing runs without your approval,
-        and the pulse itself stays off until you enable Autonomy above.
+        Not sure where to start? Add one with a click. A starter only lets Iron
+        Jarvis suggest things when it checks in — nothing runs without your
+        approval, and it does not check in at all until you turn Autonomy on
+        above.
       </p>
       <div className="mt-3.5 grid gap-2.5 sm:grid-cols-3">
         {STARTER_GOALS.map((r) => {
@@ -1610,7 +1672,11 @@ function StarterGoalsCard({
               <p className="mt-1 flex-1 text-sm text-zinc-400">{r.description}</p>
               <div className="mt-2.5 flex items-center justify-between gap-2">
                 <span className="text-[11px] uppercase tracking-wide text-zinc-600">
-                  {r.category} · P{r.priority} · suggest
+                  {/* STARTER_GOALS[].text stays verbatim — it is how an
+                      already-added starter is recognised. */}
+                  {r.category} ·{" "}
+                  <span title={`P${r.priority}`}>{priorityWord(r.priority)} priority</span> ·
+                  suggest only
                 </span>
                 <button
                   type="button"

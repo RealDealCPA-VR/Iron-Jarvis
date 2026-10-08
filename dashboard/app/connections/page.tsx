@@ -36,6 +36,7 @@ import { get, post, put, patch, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
+import { providerDisplay } from "@/lib/onboarding";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 
 /** A user-added custom endpoint (a routable fleet node) as the card shows it. */
@@ -378,8 +379,11 @@ function StatusPill({ conn }: { conn: Connection }) {
     // Inherited (v1.230.0, U5): connected THROUGH the logged-in CLI, no key
     // stored here — say so, instead of "Not connected" under an available
     // provider (the audit's live finding).
+    // v1.314.0 (UX wave 2): the product the user signed in to ("Claude
+    // Code"), never the daemon's CLI id ("claude-cli"), and still told apart
+    // from a key stored here ("Connected"). The raw `source` rides the title.
     const via = inheritedVia(conn);
-    label = via ? `Inherited from ${via}` : "Connected";
+    label = via ? `Connected · via ${providerDisplay(via)}` : "Connected";
   } else if (conn.status === "needs_auth") {
     tone = "border-amber-500/25 bg-amber-500/10 text-amber-300";
     label = "Needs auth";
@@ -389,7 +393,11 @@ function StatusPill({ conn }: { conn: Connection }) {
   }
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${tone}`}
+      data-testid="conn-status-pill"
+      title={conn.source || undefined}
+      // whitespace-nowrap (v1.314.0): the inherited label wrapped to two
+      // lines on desktop and three on a phone.
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${tone}`}
     >
       <span
         className={`h-1.5 w-1.5 rounded-full ${
@@ -869,38 +877,56 @@ function ConnectionCard({
     >
       {/* Header: icon + name + status */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
             <ProviderMark
               id={conn.provider}
               size={19}
               fallback={<Icon size={19} className={meta.tint} />}
             />
           </span>
-          <div>
-            <div className="text-sm font-semibold text-zinc-100">{conn.display_name}</div>
-            <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-              {conn.method === "oauth" ? (
-                <>
-                  <ShieldCheck size={11} /> OAuth 2.0
-                </>
-              ) : (
-                <>
-                  <KeyRound size={11} /> API key
-                </>
-              )}
-              {conn.account && <span className="text-zinc-600">· {conn.account}</span>}
-              {inheritedVia(conn) && (
-                <span className="text-zinc-600">
-                  · signed in through the {inheritedVia(conn)!.replace(/-cli$/, "")} CLI — no key
-                  stored here
-                </span>
-              )}
+          <div className="min-w-0">
+            {/* v1.314.0: the scripted model is never named "Mock" to a user
+                (lib/onboarding providerDisplay); the daemon's name stays in
+                the title. */}
+            <div
+              className="text-sm font-semibold text-zinc-100"
+              title={isMock ? conn.display_name : undefined}
+            >
+              {isMock ? providerDisplay("mock") : conn.display_name}
             </div>
+            {/* v1.314.0 (UX wave 2): an inherited login has no key, so no
+                "API key" method chip; where the login lives is its own line
+                (it was squeezed into this row and stacked into a column). */}
+            {inheritedVia(conn) ? (
+              conn.account ? (
+                <div className="text-[11px] text-zinc-600">{conn.account}</div>
+              ) : null
+            ) : (
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                {conn.method === "oauth" ? (
+                  <>
+                    <ShieldCheck size={11} /> OAuth 2.0
+                  </>
+                ) : (
+                  <>
+                    <KeyRound size={11} /> API key
+                  </>
+                )}
+                {conn.account && <span className="text-zinc-600">· {conn.account}</span>}
+              </div>
+            )}
           </div>
         </div>
         <StatusPill conn={conn} />
       </div>
+      {/* v1.314.0: its own full-width line, so it never squeezes beside the
+          pill. */}
+      {inheritedVia(conn) && (
+        <p className="-mt-2 text-[11px] leading-snug text-zinc-500">
+          Uses your {providerDisplay(inheritedVia(conn))} sign-in — no key stored here.
+        </p>
+      )}
 
       {conn.status === "no_tools" && conn.detail ? (
         <p className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200/90">
@@ -911,7 +937,8 @@ function ConnectionCard({
       {/* Body */}
       {isMock ? (
         <p className="text-xs leading-relaxed text-zinc-500">
-          The built-in offline model. Always available for testing — no key required.
+          The built-in demo model: scripted replies, no AI. Always available for testing — no
+          key required.
         </p>
       ) : conn.connected ? (
         <div className="flex items-center gap-2">

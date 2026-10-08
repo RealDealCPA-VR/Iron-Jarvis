@@ -99,22 +99,33 @@ function IntegrationCard({
   return (
     <Card hover>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        {/* v1.314.0 (UX wave 2): the integration id (and its kind) are a
+            record, not a heading — they moved into this title. */}
+        <div className="min-w-0" title={`Integration id: ${integ.id} · kind: ${integ.kind}`}>
           <div className="flex items-center gap-2">
-            <Dot on={integ.enabled} />
+            <Dot on={integ.enabled && integ.configured} />
             <h3 className="truncate text-sm font-semibold text-zinc-100">
               {integ.display_name}
             </h3>
           </div>
-          <div className="mt-0.5 font-mono text-[11px] text-zinc-600">{integ.id}</div>
-        </div>
-        <Badge value={integ.kind} tone="violet" />
+        </div>{" "}
+        {/* v1.314.0: ONE plain state where the kind pill was. "Disabled" + an
+            amber "Unconfigured" made a never-touched default read as an
+            error. (The space above keeps the name and the state two words
+            for anything reading the text.) */}
+        {integ.configured ? (
+          integ.enabled ? (
+            <Badge value="Ready" tone="green" />
+          ) : (
+            <Badge value="Off" tone="slate" />
+          )
+        ) : (
+          <Badge value="Not set up yet" tone="slate" keepCase />
+        )}
       </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge value={integ.enabled ? "enabled" : "disabled"} tone={integ.enabled ? "green" : "slate"} />
-        <Badge value={integ.configured ? "configured" : "unconfigured"} tone={integ.configured ? "cyan" : "amber"} />
-      </div>
+      {!integ.configured && (
+        <p className="mt-2 text-[11px] text-zinc-500">Press Configure to set it up.</p>
+      )}
 
       {integ.required_secrets.length > 0 && (
         <div className="mt-3">

@@ -350,8 +350,11 @@ export function PaneRail({
       className="flex h-full flex-col gap-2 overflow-hidden"
     >
       <div className="flex shrink-0 items-center justify-between px-1">
+        {/* v1.314.0 (UX wave 2): ONE name for one thing. The header says
+            "New terminal", so the rail says Terminals / New terminal too —
+            "pane" stays an internal word (testids, code), never a label. */}
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-          Panes
+          Terminals
         </span>
         {blocked.length > 0 ? (
           // The count is a BUTTON, not a label: with the list unsorted, this is
@@ -361,7 +364,7 @@ export function PaneRail({
             type="button"
             data-testid="rail-jump-blocked"
             onClick={() => onFocus(blocked[0].id)}
-            title="Go to the pane waiting on you"
+            title="Go to the terminal waiting on you"
             className="rounded-md border border-amber-400/30 bg-amber-400/[0.1] px-1.5 py-0.5 text-[10px] font-medium text-amber-200 transition-colors hover:bg-amber-400/[0.2]"
           >
             {blocked.length} needs you
@@ -378,8 +381,8 @@ export function PaneRail({
           // A helper paragraph, so the 12px `meta` step in zinc-500 (v1.313.0;
           // it was 11.5px zinc-600, under AA). Dense rail rows keep their size.
           <p className="px-1 py-3 text-meta text-zinc-500">
-            No panes yet. Open one and it appears here with whatever is running
-            inside it.
+            No terminals open yet. Open one and it appears here with whatever
+            is running inside it.
           </p>
         ) : (
           panes.map((p) => {
@@ -675,7 +678,7 @@ export function PaneRail({
           className="flex w-full items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-2 py-1.5 text-[11.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus size={13} className="shrink-0" />
-          New pane
+          New terminal
         </button>
         {footer}
       </div>

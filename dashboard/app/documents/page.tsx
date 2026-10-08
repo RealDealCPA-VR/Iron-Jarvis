@@ -37,6 +37,7 @@ import {
   LoaderInline,
   SkeletonRows,
   ConfirmButton,
+  SectionLabel,
   type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -710,13 +711,17 @@ export default function DocumentsPage() {
                     <>
                       <Upload size={18} className="text-accent-soft/70" />
                       <div className="text-sm text-zinc-300">
+                        {/* v1.314.0 (UX wave 2): two doors, two names — this
+                            one COPIES a file in ("choose a file"); the button
+                            below reads a file where it is ("Pick from
+                            folders…"). Both used to say "Browse". */}
                         Drop a file here to read it — or{" "}
                         <span className="font-medium text-accent-soft">
-                          Browse
+                          choose a file
                         </span>
                       </div>
                       <div className="text-[11px] text-zinc-600">
-                        Uploads to the daemon, then extracts the text
+                        Copies the file into Iron Jarvis, then reads its text
                         automatically.
                       </div>
                     </>
@@ -753,10 +758,10 @@ export default function DocumentsPage() {
                   <button
                     type="button"
                     onClick={() => setBrowseOpen(true)}
-                    title="Browse for a file"
+                    title="Pick a file from your folders — it is read where it is"
                     className="btn-ghost shrink-0"
                   >
-                    <FolderOpen size={14} /> Browse…
+                    <FolderOpen size={14} /> Pick from folders…
                   </button>
                   <button
                     type="submit"
@@ -773,8 +778,8 @@ export default function DocumentsPage() {
                   </button>
                 </div>
                 <div className="mt-1.5 text-[11px] text-zinc-600">
-                  Absolute or relative path. Reads PDF, Word, Excel, PowerPoint,
-                  CSV, Markdown and plain text.
+                  Paste the file&apos;s path or pick it from your folders. Reads
+                  PDF, Word, Excel, PowerPoint, CSV, Markdown and plain text.
                 </div>
               </div>
 
@@ -867,8 +872,8 @@ export default function DocumentsPage() {
                   <Badge value={writeType.label} tone={writeType.tone} />
                 </div>
                 <div className="mt-1.5 text-[11px] text-zinc-600">
-                  Saved under the daemon&apos;s documents folder — the extension
-                  picks the format.
+                  Saved in Iron Jarvis&apos;s own documents folder — the
+                  extension picks the format.
                 </div>
               </div>
 
@@ -1018,7 +1023,8 @@ export default function DocumentsPage() {
 
             <form onSubmit={runRedactScan} className="space-y-3.5">
               <div className="space-y-1.5">
-                <label className="text-xs text-zinc-400">Document</label>
+                {/* v1.314.0: the page's one label style (SectionLabel). */}
+                <SectionLabel>Document</SectionLabel>
                 {/* v1.313.0: wraps like the Read row, so the path stays
                     readable on a phone. The sizing sits on a wrapper because
                     .field is width:100%, which on the input itself would
@@ -1028,7 +1034,7 @@ export default function DocumentsPage() {
                     <input
                       value={redPath}
                       onChange={(e) => setRedPath(e.target.value)}
-                      placeholder="C:\Clients\Alvarez\organizer.docx"
+                      placeholder="e.g. C:\Users\you\Documents\organizer.docx"
                       className="field"
                       aria-label="Document to redact"
                     />
@@ -1036,26 +1042,25 @@ export default function DocumentsPage() {
                   <button
                     type="button"
                     onClick={() => setRedBrowse(true)}
+                    title="Pick a document from your folders — the original is never changed"
                     className="btn-ghost shrink-0"
                   >
-                    <FolderOpen size={14} /> Browse
+                    <FolderOpen size={14} /> Pick from folders…
                   </button>
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs text-zinc-400">
-                  Names to also look for{" "}
-                  <span className="text-zinc-500">
-                    — comma separated. Patterns catch SSNs, EINs, emails,
-                    phones, cards, accounts, DOBs, addresses and IPs; people and
-                    employers need naming.
-                  </span>
-                </label>
+                <SectionLabel>Names to also look for</SectionLabel>
+                <div className="text-[11px] text-zinc-500">
+                  Comma separated. Patterns catch SSNs, EINs, emails, phones,
+                  cards, accounts, DOBs, addresses and IPs; people and employers
+                  need naming.
+                </div>
                 <input
                   value={redNames}
                   onChange={(e) => setRedNames(e.target.value)}
-                  placeholder="Robert J. Alvarez, Maria Alvarez, Northwind CPA"
+                  placeholder="e.g. Jane Q. Client, John Client, Acme Payroll"
                   className="field w-full"
                   aria-label="Extra terms to flag"
                 />
@@ -1172,7 +1177,7 @@ export default function DocumentsPage() {
 
                     <div className="grid gap-3.5 sm:grid-cols-2">
                       <div className="space-y-1.5">
-                        <label className="text-xs text-zinc-400">Style</label>
+                        <SectionLabel>Style</SectionLabel>
                         <select
                           value={redStyle}
                           onChange={(e) =>
@@ -1191,7 +1196,7 @@ export default function DocumentsPage() {
                         </select>
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-xs text-zinc-400">Save to</label>
+                        <SectionLabel>Save to</SectionLabel>
                         <div className="flex gap-2">
                           <input
                             value={redOut}

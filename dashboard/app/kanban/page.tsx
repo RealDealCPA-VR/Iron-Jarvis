@@ -77,11 +77,23 @@ export default function KanbanPage() {
           </div>
         </Reveal>
       ) : !offline && list.length === 0 ? (
+        // v1.314.0 (UX wave 2): a fresh board used to be one sentence pointing
+        // at another page, with the four lanes hidden — so the user never
+        // learned what the board IS. Now the empty state says it and offers
+        // the door (Sessions' own task box, focused on arrival via ?new=1),
+        // and the four lanes still render with their own empty labels.
         <Reveal>
-          <div className="card-surface">
-            <Empty icon={<SquareKanban size={26} />}>
-              No sessions yet. Create one on the Sessions page to populate the board.
-            </Empty>
+          <div className="space-y-4">
+            <div className="card-surface">
+              <Empty
+                icon={<SquareKanban size={26} />}
+                title="No sessions yet"
+                action={{ label: "Start a session", href: "/sessions?new=1" }}
+              >
+                Each task you give an agent becomes a card here, in the lane for where it stands: running, waiting for your review, done, or failed.
+              </Empty>
+            </div>
+            <KanbanBoard sessions={[]} reviews={reviewsState.reviews} reload={refreshAll} />
           </div>
         </Reveal>
       ) : (

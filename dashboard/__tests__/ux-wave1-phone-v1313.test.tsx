@@ -84,6 +84,13 @@ const T4_FILES = [
   "app/tools/page.tsx",
   "components/chat/DraftCard.tsx",
   "components/memory/LongTerm.tsx",
+  // v1.314.0 (wave 2): the carry-over pages joined the ratchet.
+  "app/templates/page.tsx",
+  "app/autonomy/page.tsx",
+  "app/channels/page.tsx",
+  "app/computeruse/page.tsx",
+  "app/updates/page.tsx",
+  "app/self-dev/page.tsx",
 ];
 
 /* -------------------------------------------------------------------------- */

@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
-import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
+import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
 import { PageHeader } from "@/components/PageHeader";
@@ -837,7 +837,9 @@ export default function TerminalsPage() {
       <Reveal>
         <PageHeader
           title="Build"
-          subtitle="Live terminals on a free-form canvas — drag a pane by its header to move it, drag its edges to resize. Pick a project folder on the right and open a terminal there, or hit + to add one."
+          // v1.314.0 (UX wave 2): names the button that exists ("hit +"
+          // pointed at nothing in the default rail shape).
+          subtitle="Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. Switch to Canvas to drag and resize them freely."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {/* Back to the rail. Only on the canvas — in the rail its own
@@ -848,7 +850,7 @@ export default function TerminalsPage() {
                   type="button"
                   data-testid="shape-rail"
                   onClick={() => chooseShape("rail")}
-                  title="Rail — every pane in a list with its state, one in focus"
+                  title="Rail — every terminal in a list with its state, one in focus"
                   className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px]"
                 >
                   <PanelLeft size={14} />
@@ -951,7 +953,7 @@ export default function TerminalsPage() {
                     type="button"
                     data-testid="shape-canvas"
                     onClick={() => chooseShape("canvas")}
-                    title="Free-form canvas — drag and resize panes, several visible at once"
+                    title="Free-form canvas — drag and resize terminals, several visible at once"
                     className="flex w-full items-center gap-2 rounded-xl border border-white/[0.06] px-2 py-1.5 text-[11.5px] text-zinc-500 transition-colors hover:border-white/[0.14] hover:text-zinc-300"
                   >
                     <LayoutGrid size={13} className="shrink-0" />
@@ -981,8 +983,21 @@ export default function TerminalsPage() {
                     so on Daylight it was a grey slab. The panes' own terminal
                     colours are untouched. */}
                 {terminals.length === 0 ? (
-                  <div className="grid h-full place-items-center text-sm text-zinc-500">
-                    No terminals yet — hit New terminal.
+                  // v1.314.0 (UX wave 2): the biggest thing on a fresh Build
+                  // page was this stage holding one grey line and no button.
+                  // It now teaches and offers the SAME door as the header —
+                  // addTerminal(selectedPath), the one code path. The phrase
+                  // "No terminals yet" is kept (a review test matches it).
+                  <div className="grid h-full place-items-center px-4">
+                    <Empty
+                      icon={<SquareTerminal size={26} />}
+                      title="No terminals yet"
+                      action={{ label: "New terminal", onClick: () => void addTerminal(selectedPath), disabled: busy }}
+                    >
+                      {selectedPath
+                        ? `A terminal is a command line on this PC. A new one opens in ${selectedPath}.`
+                        : "A terminal is a command line on this PC. Open one here, or pick a project folder first to start in it."}
+                    </Empty>
                   </div>
                 ) : (
                   terminals.map((t, i) => {
@@ -1412,8 +1427,9 @@ export default function TerminalsPage() {
 
                 {/* Compact floating add button — a small, always-there way to
                     open a terminal without hunting for the header button. The
-                    rail has "New pane" in its own footer, so on the rail this
-                    would be the third button doing one job. */}
+                    rail has "New terminal" in its own footer, so on the rail
+                    this would be the third button doing one job. v1.314.0:
+                    it says "New terminal" too — one name for one thing. */}
                 {shape === "canvas" && (
                 <button
                   onClick={() => addTerminal(selectedPath)}
@@ -1426,7 +1442,7 @@ export default function TerminalsPage() {
                   ) : (
                     <Plus size={13} />
                   )}
-                  Add
+                  New terminal
                 </button>
                 )}
               </div>
@@ -1440,7 +1456,7 @@ export default function TerminalsPage() {
               treeCollapsed ? "lg:w-11" : "lg:w-80 xl:w-96"
             }`}
           >
-            <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-9rem)]">
+            <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-9rem-var(--ij-strip-h,0px))]">
               {treeCollapsed ? (
                 <button
                   onClick={() => changeTreeCollapsed(false)}

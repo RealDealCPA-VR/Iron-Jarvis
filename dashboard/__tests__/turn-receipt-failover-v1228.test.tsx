@@ -6,7 +6,9 @@
  * named the user's own endpoint that was skipped, nor WHY. The daemon's
  * `route` object now carries `from` (the provider that failed) and `why`
  * (the router's derived word: "http 500" | "timeout" | ...), and the chip
- * reads "answered by claude-cli — fleet-rtx6000ada returned HTTP 500".
+ * reads "answered by Claude Code — fleet-rtx6000ada returned HTTP 500".
+ * (v1.314.0: names go through providerDisplay — "claude-cli" reads "Claude
+ * Code", a custom endpoint id like fleet-rtx6000ada passes through.)
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -26,7 +28,7 @@ describe("routeWarning with from/why (v1.228.0)", () => {
         from: "fleet-rtx6000ada",
         why: "http 500",
       }),
-    ).toBe("answered by claude-cli — fleet-rtx6000ada returned HTTP 500");
+    ).toBe("answered by Claude Code — fleet-rtx6000ada returned HTTP 500");
   });
 
   it("words every router token in plain language", () => {
@@ -44,21 +46,21 @@ describe("routeWarning with from/why (v1.228.0)", () => {
   it("from without why still names who failed", () => {
     expect(
       routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "ollama" }),
-    ).toBe("answered by claude-cli — failover from ollama");
+    ).toBe("answered by Claude Code — failover from Ollama");
   });
 
   it("from === provider is not a failover story — falls back to the old wording", () => {
     expect(
       routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "claude-cli", why: "http 500" }),
-    ).toBe("answered by claude-cli — failover");
+    ).toBe("answered by Claude Code — failover");
   });
 
   it("pre-v1.228.0 messages (no from/why) keep their wording", () => {
     expect(
       routeWarning({ requested: "fleet-custom", provider: "claude-cli", reason: "failover" }),
-    ).toBe("answered by claude-cli — failover from fleet-custom");
+    ).toBe("answered by Claude Code — failover from fleet-custom");
     expect(routeWarning({ requested: "", provider: "claude-cli", reason: "failover" })).toBe(
-      "answered by claude-cli — failover",
+      "answered by Claude Code — failover",
     );
   });
 
@@ -90,7 +92,7 @@ describe("TurnReceipt renders the from/why story", () => {
         }}
       />,
     );
-    const chip = screen.getByText(/answered by claude-cli — fleet-rtx6000ada returned HTTP 500/);
+    const chip = screen.getByText(/answered by Claude Code — fleet-rtx6000ada returned HTTP 500/);
     expect(chip.className).toMatch(/amber/);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     // The expanded row is its own span whose whole text is the from/why

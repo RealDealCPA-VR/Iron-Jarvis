@@ -33,7 +33,9 @@ describe("/updates apply sentence flows inline", () => {
     const i = s.indexOf("Applying runs");
     expect(i).toBeGreaterThan(0);
     const before = s.slice(s.lastIndexOf("<p", i), i);
-    expect(before).toContain("flex items-start");
+    // v1.314.0 (UX wave 2): the exact commands moved one disclosure down
+    // ("The exact steps"), out of the flex row; they must still flow inline.
+    expect(s.slice(s.lastIndexOf("<details", i), i)).toContain("The exact steps");
     // The tag right before the sentence is a <span>, not the icon or the <p>.
     expect(before.trimEnd().endsWith("<span>"), "sentence must start inside a <span>").toBe(true);
     const after = s.slice(i, s.indexOf("</p>", i));

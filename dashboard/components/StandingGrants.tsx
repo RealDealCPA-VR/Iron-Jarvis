@@ -141,9 +141,12 @@ export function StandingGrants() {
         {grants.error ? (
           <ErrorNote>{grants.error.message}</ErrorNote>
         ) : rows.length === 0 ? (
+          // v1.314.0: plain words — where a grant comes from and why it is
+          // listed (no "daemon", no "key a grant"). The button only appears
+          // on cards that can offer it (can_always), so the copy says "offers".
           <p className="text-sm text-zinc-500">
-            None standing. The button appears on an approval card when the daemon can key a
-            grant on the exact call.
+            None yet. When an approval card offers “Always allow exactly this” and you press
+            it, it is listed here so you can take it back.
           </p>
         ) : (
           <ul className="space-y-1.5">

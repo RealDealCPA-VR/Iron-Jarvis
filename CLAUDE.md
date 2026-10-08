@@ -2905,6 +2905,39 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A user reads WORDS, never ids; an empty page shows the way; the demo
+  strip is subtracted from every full-height module** (v1.314.0, /goal UX &
+  aesthetic wave 2 — 31 findings + 4 wave-1 carry-overs). ONE place per
+  vocabulary, import never fork: `lib/onboarding.providerDisplay(id)` is the
+  provider word anywhere a user reads one ("mock" → "Demo model (scripted)",
+  "auto" → "Auto"; the VALUE posted stays the id, a record-of-what-ran row
+  keeps the raw id in `title`); `OriginChip.originLabel(origin)` reads origins
+  in words ("Schedule · nightly-brief", "Mission", "Queued job" — an id
+  suffix is never shown, an UNKNOWN origin is shown raw, never guessed; raw in
+  `title` + `data-origin`); `lib/toolWords.ts` says what a BUILT-IN tool does
+  on the approval card ("save a file") — built-ins only, keyed by exact name
+  (an agent-made `browser_backup` is not a browser tool), unknown → "run
+  <id>", the exact id stays on the card because a grant is keyed on it;
+  `lib/theme.ts` is THE theme store (list + `applyTheme`) behind the bar dots,
+  the phone drawer, Settings → Appearance and the palette's "Theme: <name>"
+  commands. `MockChip` reads "demo model". `<Empty title action={{label,
+  href} | {label, onClick, disabled}} secondary examples>` — an onClick
+  action opens the page's OWN form (never a second copy) and mirrors its busy
+  flag. Updates tells a FAILED check (`reason` "git error: …") from real
+  local changes. HEIGHT: `SimulatedBanner` publishes its rendered height as
+  `--ij-strip-h` (ResizeObserver; 0px when hidden or unmounted) and every
+  `h-[calc(100vh-…)]` module subtracts `var(--ij-strip-h,0px)` (chat, the
+  agents team screen + its loader, the workflow canvas, Build's rail) — the
+  strip pushed the chat composer's footer below a 1440x900 window; a new
+  full-height module must do the same (the coordinator pin fails on a bare
+  `h-[calc(100vh-Xrem)]` in those files). Handbook: "What changed in the look
+  and feel". Pins: `dashboard/__tests__/ux-wave2-{contracts,chat-words,
+  work-surfaces*,automation,system-memory,coordinator}-v1314.test.tsx`,
+  `tests/test_ux_wave2_templates_v1314.py`. Carry-overs to later waves:
+  ApprovalCard's `startsWith("browser_")` tab answer → the toolWords list;
+  desktop/main.js ask watcher's own "rename a file" copy; reflex/sentinels
+  empty-state Add should scroll to the form like Schedules.
+
 - **The shell never claims a model during a demo; colour lives in TONE
   tokens; a phone page never pans sideways** (v1.313.0, /goal UX & aesthetic
   wave 1 — 51 findings from a screenshot audit of every view: fresh install,

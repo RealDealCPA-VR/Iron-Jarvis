@@ -27,6 +27,7 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { agentLabel } from "@/components/workflow/agents";
 import { PageShell, Reveal } from "@/components/motion";
 
 /** One watcher, as returned by the daemon's `_sentinel_view` (GET /sentinels). */
@@ -124,9 +125,12 @@ export default function SentinelsPage() {
     setStatusError(null);
     try {
       await put("/settings", { values: { sentinels_enabled: true } });
+      // v1.314.0: plain words. The loop's first check runs ~30 s after it is
+      // armed, then every sentinels_tick_seconds (300 s by default, config.py)
+      // — so "every few minutes", never "every 30 seconds".
       setStatusOk(
-        "Sentinels enabled — the background watch loop is arming now (first " +
-          "sweep in ~30s). “Poll now” works immediately too.",
+        "Sentinels are on. The first check runs in about half a minute, then every few " +
+          "minutes. “Check now” works right away too.",
       );
       reload();
     } catch (err) {
@@ -144,13 +148,13 @@ export default function SentinelsPage() {
       const r = await post<PollResult>("/sentinels/poll");
       if (!r.ran) {
         setStatusOk(
-          "Sweep skipped — sentinels are disabled, so the poll was a no-op. Enable them first.",
+          "Nothing was checked — sentinels are off. Turn them on first, then check again.",
         );
       } else if (r.proposals.length === 0) {
-        setStatusOk("Sweep complete — no changes noticed, nothing suggested.");
+        setStatusOk("Checked — no changes noticed, nothing to suggest.");
       } else {
         setStatusOk(
-          `Sweep complete — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} minted. Review them in Autonomy → Proposals.`,
+          `Checked — ${r.proposals.length} suggestion${r.proposals.length === 1 ? "" : "s"} waiting for you. Review them in Autonomy → Proposals.`,
         );
       }
       reload();
@@ -212,21 +216,27 @@ export default function SentinelsPage() {
       <Reveal>
         <PageHeader
           title="Sentinels"
-          subtitle="Always-on watchers that observe (filesystem, for now) and only ever SUGGEST — a fired sentinel mints a proposal into the Autonomy backlog. It never acts on its own."
+          subtitle="Watchers that keep an eye on a folder and SUGGEST a next step when files change. Each suggestion waits in Autonomy → Proposals for your approval."
           actions={
             <div className="flex items-center gap-2">
+              {/* v1.314.0: "Check now" (was "Poll now"). While sentinels are
+                  off it stays pressable — the reply says why nothing ran —
+                  and its tooltip says so before the press. */}
               <button
                 type="button"
                 onClick={pollNow}
                 disabled={polling}
+                title={featureEnabled ? "Check every watched folder now" : "Turn sentinels on first"}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
               >
-                {polling ? <LoaderInline label="Sweeping…" /> : <><Radar size={14} /> Poll now</>}
+                {polling ? <LoaderInline label="Checking…" /> : <><Radar size={14} /> Check now</>}
               </button>
+              {/* While sentinels are off, "Enable sentinels" is THE primary on
+                  the page; Add stays here, quieter, one press as before. */}
               <button
                 type="button"
                 onClick={() => setOpen((v) => !v)}
-                className="btn-accent"
+                className={featureEnabled ? "btn-accent" : "btn-ghost"}
               >
                 <Plus size={14} /> Add sentinel
               </button>
@@ -248,13 +258,13 @@ export default function SentinelsPage() {
               <div className="text-sm">
                 {featureEnabled ? (
                   <span className="text-zinc-200">
-                    Sentinels are <span className="text-emerald-300">enabled</span> — the
-                    background loop sweeps enabled watchers on a timer.
+                    Sentinels are <span className="text-emerald-300">on</span> — your watched
+                    folders are checked every few minutes.
                   </span>
                 ) : (
                   <span className="text-zinc-300">
-                    Sentinels are <span className="text-amber-300">disabled</span> — watchers are
-                    kept but never checked, and manual polls no-op.
+                    Sentinels are <span className="text-amber-300">off</span> — nothing is being
+                    watched. Your watchers are kept and start again when you turn sentinels on.
                   </span>
                 )}
                 <div className="mt-0.5 text-[11px] text-zinc-500">
@@ -265,8 +275,8 @@ export default function SentinelsPage() {
                   >
                     Autonomy → Proposals
                   </Link>{" "}
-                  for your review — execution still flows through the autonomy dial, budget and
-                  approval.
+                  for your review — anything they suggest still goes through Autonomy&apos;s
+                  settings, budget and approvals.
                 </div>
               </div>
             </div>
@@ -295,8 +305,7 @@ export default function SentinelsPage() {
           </div>
           {!featureEnabled && (
             <div className="mt-2 text-[11px] text-zinc-600">
-              Enabling flips <code className="font-mono">sentinels_enabled</code> in Settings.
-              The background watch loop arms live — no restart needed.
+              Same switch as in Settings. It takes effect right away — no restart needed.
             </div>
           )}
           {(statusOk || statusError) && (
@@ -405,9 +414,11 @@ export default function SentinelsPage() {
                     onChange={(e) => setAgentType(e.target.value)}
                     className="field"
                   >
+                    {/* v1.314.0: friendly names (as on Schedules/Templates); the
+                        value stays the agent id the daemon stores. */}
                     {agentTypes.map((a) => (
                       <option key={a} value={a}>
-                        {a}
+                        {agentLabel(a)}
                       </option>
                     ))}
                   </select>
@@ -429,7 +440,7 @@ export default function SentinelsPage() {
                     ))}
                   </select>
                   <div className="mt-1 text-[11px] text-zinc-600">
-                    Carried onto the minted proposal — a noticed signal is never auto-high.
+                    Carried onto the suggestion — a noticed change is never marked high risk.
                   </div>
                 </div>
               </div>
@@ -474,8 +485,21 @@ export default function SentinelsPage() {
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : sentinels.length === 0 ? (
-            <Empty icon={<Radar size={24} />}>
-              No sentinels yet — use “Add sentinel” to watch a folder for changes.
+            // v1.314.0: teach on a fresh install (the explanation lives in the
+            // (i) popover). A fired sentinel mints SUGGEST-ONLY proposals; the
+            // wording stays "suggests … for you to approve" — never an absolute
+            // "never acts", because execution still flows through the dial.
+            <Empty
+              icon={<Radar size={24} />}
+              title="Keep an eye on a folder"
+              examples={[
+                "When a new scan lands in your intake folder, suggest sorting it",
+                "When a statement appears in Downloads, suggest filing it",
+              ]}
+              action={{ label: "Watch a folder", onClick: () => setOpen(true) }}
+            >
+              A sentinel watches a folder. When files change, it suggests a next step for you to
+              approve.
             </Empty>
           ) : (
             <div className="-mx-1 overflow-x-auto">

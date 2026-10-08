@@ -24,8 +24,10 @@ import {
   ConfirmButton,
   Code,
 } from "@/components/ui";
+import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { CopyIconButton } from "@/components/Markdown";
 
 /** Webhook records may carry event types as a JSON string or an array. */
 function eventTypes(w: Webhook): string[] {
@@ -44,10 +46,48 @@ function eventTypes(w: Webhook): string[] {
 
 type Direction = "inbound" | "outbound";
 
+/** v1.314.0: "only this computer" is TRUE only for a loopback daemon —
+ *  API_BASE can point at a deployed daemon (NEXT_PUBLIC_IJ_API), so the note
+ *  is decided from the host, never assumed. */
+function isLoopbackBase(base: string): boolean {
+  try {
+    const host = new URL(base).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+/** v1.314.0 (review fix): the empty state's examples must be TRUE for this
+ *  install. A loopback daemon (the default: it binds 127.0.0.1 and
+ *  daemon/auth.py refuses a non-loopback Host) cannot be reached by GitHub's
+ *  servers or a hosted form, so those senders are offered only when the
+ *  address is NOT loopback. An inbound webhook also never starts a task by
+ *  itself (routes/comm.py only publishes webhook.received and fires bound
+ *  reflexes), so the inbound example names the reflex. Outbound posts to any
+ *  URL, so the Zapier example is true everywhere. */
+function webhookExamples(loopback: boolean): string[] {
+  const inbound = loopback
+    ? ["A script or app on this PC tells Iron Jarvis something happened (a reflex decides what to do)"]
+    : [
+        "A web form tells Iron Jarvis when someone fills it in (a reflex decides what to do)",
+        "GitHub tells Iron Jarvis when code is pushed",
+      ];
+  return [...inbound, "Iron Jarvis tells Zapier when a task finishes"];
+}
+
+/** Quick-add chips for a sending webhook: real event names (core/events.py)
+ *  that APPEND to the free-text box, which stays visible (v1.314.0). */
+const EVENT_CHIPS: { event: string; label: string }[] = [
+  { event: "session.completed", label: "A task finishes" },
+  { event: "workflow.completed", label: "A workflow finishes" },
+];
+
 export default function WebhooksPage() {
   const { data, error, loading, reload } = useApi<{ webhooks: Webhook[] }>("/webhooks");
   const offline = error && error.status === 0;
   const webhooks = data?.webhooks ?? [];
+  const loopback = isLoopbackBase(API_BASE);
 
   // Add form
   const [open, setOpen] = useState(false);
@@ -105,8 +145,8 @@ export default function WebhooksPage() {
       });
       setOk(
         direction === "inbound"
-          ? `Inbound webhook ready: POST ${API_BASE}/webhooks/${slug.trim()}`
-          : `Outbound webhook "${slug.trim()}" registered.`,
+          ? `Ready. Other apps can now send events to ${API_BASE}/webhooks/${slug.trim()}`
+          : `Webhook "${slug.trim()}" added. Iron Jarvis will tell that app when those events happen.`,
       );
       setSlug("");
       setTargetUrl("");
@@ -126,7 +166,7 @@ export default function WebhooksPage() {
       <Reveal>
         <PageHeader
           title="Webhooks"
-          subtitle="Inbound and outbound webhook registrations."
+          subtitle="Let other apps tell Iron Jarvis something happened (a reflex decides what to do), or let Iron Jarvis tell other apps when work finishes."
           actions={
             <button
               type="button"
@@ -151,7 +191,7 @@ export default function WebhooksPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Slug
+                    Name (used in the address)
                   </label>
                   <input
                     value={slug}
@@ -170,8 +210,9 @@ export default function WebhooksPage() {
                     onChange={(e) => setDirection(e.target.value as Direction)}
                     className="field"
                   >
-                    <option value="inbound">Inbound (receive events)</option>
-                    <option value="outbound">Outbound (send events)</option>
+                    {/* Values stay inbound/outbound — only the words moved (v1.314.0). */}
+                    <option value="inbound">Receive — another app tells Iron Jarvis something happened</option>
+                    <option value="outbound">Send — tell another app when something finishes</option>
                   </select>
                 </div>
               </div>
@@ -201,10 +242,37 @@ export default function WebhooksPage() {
                     placeholder="session.completed, workflow.completed"
                     className="field font-mono"
                   />
+                  {direction === "outbound" && (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {EVENT_CHIPS.map((c) => {
+                        const listed = events
+                          .split(",")
+                          .map((x) => x.trim())
+                          .includes(c.event);
+                        return (
+                          <button
+                            key={c.event}
+                            type="button"
+                            disabled={listed}
+                            title={c.event}
+                            onClick={() =>
+                              setEvents((v) => {
+                                const t = v.trim().replace(/,$/, "");
+                                return t ? `${t}, ${c.event}` : c.event;
+                              })
+                            }
+                            className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40"
+                          >
+                            + {c.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="mt-1 text-[11px] text-zinc-600">
                     {direction === "outbound"
-                      ? "Comma-separated. An outbound webhook only sends the event types listed here, so pick at least one."
-                      : "Comma-separated. Not needed for an inbound webhook."}
+                      ? "Comma-separated. A sending webhook only sends the event types listed here, so pick at least one."
+                      : "Comma-separated. Not needed when another app sends events here."}
                   </div>
                 </div>
                 <div>
@@ -222,10 +290,10 @@ export default function WebhooksPage() {
 
               {direction === "inbound" && slug.trim() && (
                 <div className="text-[11px] text-zinc-500">
-                  Trigger URL:{" "}
+                  The other app sends to:{" "}
                   {/* <Code> (v1.313.0): a theme-true chip, not a literal black one. */}
                   <Code className="text-accent-soft">
-                    POST {API_BASE}/webhooks/{slug.trim()}
+                    {API_BASE}/webhooks/{slug.trim()}
                   </Code>
                 </div>
               )}
@@ -254,34 +322,62 @@ export default function WebhooksPage() {
       )}
 
       <Reveal>
+        {/* v1.314.0: lead with what a webhook is FOR; the address and the
+            HTTP detail follow, and most people are pointed to Reflexes. */}
         <Card>
-          <div className="text-sm text-zinc-400">
-            Inbound webhooks accept events at{" "}
-            <Code className="text-accent-soft">
-              POST {API_BASE}/webhooks/&#123;slug&#125;
-            </Code>
-            . Outbound webhooks POST registered events to their target URL.
+          <div className="space-y-2 text-sm text-zinc-400">
+            {/* The empty state below teaches the same idea, so the lead
+                sentence shows only once there is a list to read. */}
+            {webhooks.length > 0 && (
+              <p>
+                {loopback
+                  ? "A webhook is an address other apps on this computer can call to tell Iron Jarvis something happened"
+                  : "A webhook is an address other apps (a form, Zapier, GitHub) can call to tell Iron Jarvis something happened"}{" "}
+                — or one Iron Jarvis calls to tell another app when work finishes.
+              </p>
+            )}
+            <p className="text-[12px] text-zinc-500">
+              Other apps send events (as a POST request) to{" "}
+              <Code className="text-accent-soft">{API_BASE}/webhooks/&lt;name&gt;</Code>.
+              {loopback && " Only programs on this computer can reach this address."}
+            </p>
+            <p className="text-[12px] text-zinc-500">
+              To decide what happens when one arrives,{" "}
+              <Link href="/reflex" className="text-accent-soft underline-offset-2 hover:underline">
+                add a reflex →
+              </Link>
+            </p>
           </div>
         </Card>
       </Reveal>
 
       <Reveal>
-        <Card title={`Registrations${webhooks.length ? ` · ${webhooks.length}` : ""}`} icon={<WebhookIcon size={15} />}>
+        <Card title={`Your webhooks${webhooks.length ? ` · ${webhooks.length}` : ""}`} icon={<WebhookIcon size={15} />}>
           {listError && <ErrorNote>{listError}</ErrorNote>}
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : webhooks.length === 0 ? (
-            <Empty icon={<WebhookIcon size={24} />}>
-              No webhooks registered — use “Add webhook” to create one.
+            // v1.314.0: teach + open the page's OWN form (setOpen(true), never
+            // a toggle). The label must not read "Add webhook": that name
+            // belongs to the header button (webhooks-manage-v1292).
+            <Empty
+              icon={<WebhookIcon size={24} />}
+              title="Connect another app"
+              examples={webhookExamples(loopback)}
+              action={{ label: "Add your first webhook", onClick: () => setOpen(true) }}
+              secondary={{ label: "Most people want Reflexes instead →", href: "/reflex" }}
+            >
+              A webhook lets another app tell Iron Jarvis something happened (a reflex decides what
+              to do about it), or lets Iron Jarvis tell another app when work finishes.
             </Empty>
           ) : (
             <div className="-mx-1 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    <th className="px-2 py-2.5 font-medium">Slug</th>
+                    <th className="px-2 py-2.5 font-medium">Name</th>
                     <th className="px-2 py-2.5 font-medium">Direction</th>
-                    <th className="px-2 py-2.5 font-medium">Target / URL</th>
+                    <th className="px-2 py-2.5 font-medium">Address</th>
                     <th className="px-2 py-2.5 font-medium">Event types</th>
                     <th className="px-2 py-2.5 font-medium">Enabled</th>
                     <th className="px-2 py-2.5 font-medium"></th>
@@ -309,9 +405,18 @@ export default function WebhooksPage() {
                         </td>
                         <td className="max-w-xs px-2 py-2.5">
                           {inbound ? (
-                            <code className="font-mono text-[11px] text-zinc-400">
-                              POST /webhooks/{w.slug}
-                            </code>
+                            <span className="inline-flex max-w-full items-center gap-1">
+                              <code
+                                className="truncate font-mono text-[11px] text-zinc-400"
+                                title={`POST ${API_BASE}/webhooks/${w.slug}`}
+                              >
+                                {API_BASE}/webhooks/{w.slug}
+                              </code>
+                              <CopyIconButton
+                                text={`${API_BASE}/webhooks/${w.slug}`}
+                                title="Copy address"
+                              />
+                            </span>
                           ) : (
                             <span className="block truncate font-mono text-[11px] text-zinc-400" title={w.target_url ?? ""}>
                               {w.target_url || "—"}

@@ -42,6 +42,7 @@
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
+import { toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
 
@@ -57,8 +58,10 @@ function ArgLine({ name, value }: { name: string; value: unknown }) {
       </pre>
     );
   }
+  // v1.314.0: wrap, never truncate — a path cut off at the one moment the
+  // user is deciding is a decision made on half the facts.
   return (
-    <p className="truncate text-[11px] text-zinc-400">
+    <p className="break-all text-[11px] text-zinc-400">
       <span className="text-zinc-500">{name}:</span> {text}
     </p>
   );
@@ -69,7 +72,7 @@ function ExampleLine({ args }: { args: Record<string, unknown> }) {
   const text = Object.entries(args)
     .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
     .join(" · ");
-  return <p className="truncate font-mono text-[11px] text-zinc-400">{text || "—"}</p>;
+  return <p className="break-all font-mono text-[11px] text-zinc-400">{text || "—"}</p>;
 }
 
 /** "Waiting for you" in the words the daemon's wait actually has. */
@@ -129,6 +132,15 @@ export function ApprovalCard({
   const examples = (approval.examples ?? []).filter(
     (e): e is Record<string, unknown> => !!e && typeof e === "object",
   );
+  // v1.314.0: lead with what the action DOES in plain words; the exact tool
+  // id stays beside it as a <code> chip (the record of what will run). An id
+  // the map does not know keeps today's "run <id>" — no invented words.
+  const words = toolWords(approval.tool);
+  const toolChip = (
+    <code className="rounded bg-ink-900/80 px-1 font-mono text-[11.5px]" title="The exact tool that will run">
+      {approval.tool}
+    </code>
+  );
   return (
     <div
       role="alertdialog"
@@ -140,10 +152,13 @@ export function ApprovalCard({
       <div className="flex items-center gap-2">
         <ShieldQuestion size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
         <p className="text-[12.5px] font-medium text-amber-100">
-          The assistant wants to run{" "}
-          <code className="rounded bg-ink-900/80 px-1 font-mono text-[11.5px]">
-            {approval.tool}
-          </code>
+          {words ? (
+            <>
+              The assistant wants to {words} <span className="text-amber-100/70">({toolChip})</span>
+            </>
+          ) : (
+            <>The assistant wants to run {toolChip}</>
+          )}
           {batch ? (
             <>
               {" "}

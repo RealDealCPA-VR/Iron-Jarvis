@@ -66,7 +66,9 @@ describe("TurnReceipt — collapsed line", () => {
       />,
     );
     const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle.textContent).toContain("claude-cli");
+    // v1.314.0: the plain name ("Claude Code"), raw id in a title.
+    expect(toggle.textContent).toContain("Claude Code");
+    expect(toggle.querySelector('[title*="claude-cli"]')).not.toBeNull();
     expect(toggle.textContent).toContain("3 tools");
     expect(toggle.textContent).toContain("2 files");
     // Served-as-asked: no warning styling and no alarming wording.
@@ -112,7 +114,7 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
         }}
       />,
     );
-    const chip = screen.getByText(/answered by openai — failover/);
+    const chip = screen.getByText(/answered by OpenAI — failover/);
     expect(chip.className).toContain("amber");
   });
 
@@ -123,7 +125,7 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
       />,
     );
     const chip = screen.getByText(
-      /answered by openai — asked for ollama/,
+      /answered by OpenAI — asked for Ollama/,
     );
     expect(chip.className).toContain("amber");
   });
@@ -131,7 +133,7 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
   it("served-as-asked stays quiet: provider name, no warning", () => {
     render(<TurnReceipt route={SERVED_AS_ASKED} />);
     const toggle = screen.getByRole("button", { expanded: false });
-    expect(toggle.textContent).toContain("claude-cli");
+    expect(toggle.textContent).toContain("Claude Code"); // v1.314.0: plain name
     expect(screen.queryByText(/answered by/)).toBeNull();
     expect(document.querySelector(".text-amber-300")).toBeNull();
   });
@@ -190,7 +192,8 @@ describe("TurnReceipt — expand/collapse", () => {
     expect(screen.queryByText("read_file")).toBeNull();
     expand();
     // Requested vs served + reason.
-    expect(screen.getByText(/requested claude-cli/)).toBeTruthy();
+    // v1.314.0: plain name in the words, the raw id in the span's title.
+    expect(screen.getByText(/requested Claude Code/).getAttribute("title")).toBe("claude-cli");
     expect(screen.getByText(/\(failover\)/)).toBeTruthy();
     expect(screen.getByText(/gpt-5\.2/)).toBeTruthy();
     // Tools as individual entries.
@@ -290,12 +293,12 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "openai",
         reason: "failover",
       }),
-    ).toBe("answered by openai — failover from claude-cli");
+    ).toBe("answered by OpenAI — failover from Claude Code");
   });
   it("failover with requested === provider still warns, without a bogus 'from'", () => {
     expect(
       routeWarning({ requested: "openai", provider: "openai", reason: "failover" }),
-    ).toBe("answered by openai — failover");
+    ).toBe("answered by OpenAI — failover");
   });
   it('requested "" (chat\'s normal default-route value) is "didn\'t ask", not a mismatch', () => {
     expect(
@@ -303,7 +306,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
     ).toBeNull();
     expect(
       routeWarning({ requested: "", provider: "openai", reason: "failover" }),
-    ).toBe("answered by openai — failover");
+    ).toBe("answered by OpenAI — failover");
   });
   it("the quiet reasons stay quiet when the asked-for provider served", () => {
     // "prompted-tools" = the CHOSEN adapter kept the request via the scaffold
@@ -333,7 +336,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "openai",
         reason: "prompted-tools",
       }),
-    ).toBe("answered by openai — asked for claude-cli");
+    ).toBe("answered by OpenAI — asked for Claude Code");
   });
 });
 

@@ -37,7 +37,8 @@ export default function ActivityPage() {
                 rel="noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
               >
-                <Download size={14} /> .md
+                {/* v1.314.0: say what the button does; the format stays in it. */}
+                <Download size={14} /> Export .md
               </a>
               <a
                 href={exportUrl("json")}
@@ -45,7 +46,7 @@ export default function ActivityPage() {
                 rel="noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
               >
-                <Download size={14} /> .json
+                <Download size={14} /> Export .json
               </a>
             </div>
           }

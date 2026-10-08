@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useRef } from "react";
 import { Cable, Cpu, TriangleAlert } from "lucide-react";
 import { useDaemon } from "@/lib/daemon";
 import { noModelChosen } from "@/lib/onboarding";
@@ -30,22 +31,64 @@ import { noModelChosen } from "@/lib/onboarding";
  *    and something real is available. /health already filters the mock out
  *    of `providers`, so "no available entry" is exactly "simulated mode".
  */
+/** The CSS variable the strip publishes its rendered height on (v1.314.0).
+ *  Full-height modules (chat, the agents team screen, the workflow canvas,
+ *  Build's rail) size themselves as `100vh - <chrome>` — without subtracting
+ *  this, the strip pushed their bottom row (the chat composer's footer) below
+ *  the window whenever replies were a demo. 0px when the strip is hidden. */
+export const STRIP_HEIGHT_VAR = "--ij-strip-h";
+
+function setStripHeight(px: number) {
+  try {
+    document.documentElement.style.setProperty(STRIP_HEIGHT_VAR, `${Math.max(0, Math.round(px))}px`);
+  } catch {
+    /* no document (SSR) — nothing to size */
+  }
+}
+
 export function SimulatedBanner() {
   const { online, checking, health } = useDaemon();
 
-  if (checking || !online || !health) return null;
+  const hasRealProvider =
+    !!health && (health.providers?.some((p) => p.available) ?? false);
+  const demoDefault = !!health && noModelChosen(health.default_provider);
+  const visible = !checking && online && !!health && (!hasRealProvider || demoDefault);
 
-  const hasRealProvider = health.providers?.some((p) => p.available) ?? false;
-  const demoDefault = noModelChosen(health.default_provider);
-  if (hasRealProvider && !demoDefault) return null;
+  // Publish the strip's height while it shows; reset to 0 when it hides or
+  // unmounts. A ResizeObserver follows wrapping on narrow windows.
+  const observer = useRef<ResizeObserver | null>(null);
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    setStripHeight(el.getBoundingClientRect().height);
+    if (typeof ResizeObserver !== "undefined") {
+      observer.current = new ResizeObserver(() => setStripHeight(el.getBoundingClientRect().height));
+      observer.current.observe(el);
+    }
+  }, []);
+  useEffect(() => {
+    if (!visible) setStripHeight(0);
+  }, [visible]);
+  useEffect(
+    () => () => {
+      observer.current?.disconnect();
+      setStripHeight(0);
+    },
+    [],
+  );
+
+  if (!visible) return null;
 
   // The ModelSwitcher listens for this (the Ctrl K palette uses it too).
   const openModelMenu = () => window.dispatchEvent(new CustomEvent("ij:open-switcher"));
 
   return (
     <div
+      ref={measure}
       role="status"
       aria-live="polite"
+      data-testid="simulated-banner"
       className="border-b border-amber-500/25 bg-amber-500/[0.08] backdrop-blur-sm"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2 sm:px-6 lg:px-10">

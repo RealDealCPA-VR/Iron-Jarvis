@@ -105,6 +105,11 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
       "app/connections/page.tsx",
       "app/chat/page.tsx",
       "lib/nav.ts",
+      // v1.314.0 (UX wave 2): the automation pages are scanned too.
+      "app/templates/page.tsx",
+      "app/reflex/page.tsx",
+      "app/autonomy/page.tsx",
+      "app/channels/page.tsx",
     ]) {
       const code = read(f)
         .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -130,6 +135,27 @@ describe("alerts live under 'Notifications'", () => {
     // "a bot token + a channel" is SLACK's channel — their word, correct
     // usage. The ban is on OUR concept wearing that name.
     expect(read("app/channels/page.tsx")).toContain("a bot token + a channel");
+  });
+  it("our concept is a destination on every automation page (v1.314.0)", () => {
+    // "Channels" was OUR word for a destination; it is retired on the pages
+    // that link to Notifications. Slack's own "channel" stays allowed — the
+    // exemption above — so only OUR phrasings are banned here.
+    const code = (f: string) =>
+      read(f)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+    const reflex = code("app/reflex/page.tsx");
+    expect(reflex).not.toMatch(/^\s*Channels\b/m);
+    expect(reflex).not.toMatch(/Channels page|\bEmail channel\b/);
+    const autonomy = code("app/autonomy/page.tsx");
+    expect(autonomy).not.toMatch(/to channels|connected channels|comm channel/i);
+    const channels = code("app/channels/page.tsx");
+    expect(channels).not.toMatch(/All channels|No channel responses|aria-label="Channel"/);
+    expect(channels).not.toMatch(/^\s*Channel\s*$/m);
+    for (const f of ["app/templates/page.tsx", "app/reflex/page.tsx", "app/autonomy/page.tsx", "app/channels/page.tsx"]) {
+      // Our concept, any page: a "channel" that is not Slack's/Discord's.
+      expect(code(f), f).not.toMatch(/\b(?:Email|Telegram|inbound|comm) channels?\b/i);
+    }
   });
   it("the nav label follows, and the old word stays searchable", () => {
     const s = read("lib/nav.ts");

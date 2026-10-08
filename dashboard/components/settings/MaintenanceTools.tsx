@@ -136,7 +136,12 @@ export function mirrorLine(m: MirrorStatus | null | undefined): {
   tone: "ok" | "warn" | "muted";
   text: string;
 } {
-  if (!m || !m.configured) return { tone: "muted", text: "Off — backups are kept on this PC only." };
+  // v1.314.0 (UX wave 2): never "Off" — this line sat under the media
+  // checkbox, which is ticked by default, so "Off" read as "that box is off".
+  // What is actually unset is the FOLDER, so the line says that.
+  if (!m || !m.configured) {
+    return { tone: "muted", text: "No backup folder set — backups stay on this PC only." };
+  }
   if (m.missing) {
     return {
       tone: "warn",
@@ -528,6 +533,11 @@ function BackupMirror({ disabled, refreshKey }: { disabled: boolean; refreshKey?
           )}
         </button>
       </div>
+      {/* v1.314.0: the status line sits right under the folder it describes,
+          not under the media checkbox (it read as that box's state). */}
+      <p data-testid="backup-mirror-status" className={`mt-1.5 text-[11px] ${TONE_CLASS[line.tone]}`}>
+        {line.text}
+      </p>
       <label className="mt-2 flex items-center gap-2 text-[12px] text-zinc-400">
         <input
           id="backup-mirror-media"
@@ -542,9 +552,6 @@ function BackupMirror({ disabled, refreshKey }: { disabled: boolean; refreshKey?
         />
         Also keep generated images, video and audio there (only new files are copied each time)
       </label>
-      <p data-testid="backup-mirror-status" className={`mt-2 text-[11px] ${TONE_CLASS[line.tone]}`}>
-        {line.text}
-      </p>
       {note && <p className="mt-1 text-[11px] text-zinc-400">{note}</p>}
       {err && <ErrorNote>{err}</ErrorNote>}
       <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">

@@ -100,6 +100,13 @@ vi.mock("@/components/ui", () => ({
   ErrorNote: ({ children }: { children?: React.ReactNode }) => <div role="alert">{children}</div>,
   Spinner: ({ label }: { label?: string }) => <div>{label}</div>,
   ConfirmButton: ({ label }: { label: string }) => <button type="button">{label}</button>,
+  // v1.314.0: Build's empty stage is the shared Empty (title + why).
+  Empty: ({ title, children }: { title?: React.ReactNode; children?: React.ReactNode }) => (
+    <div data-testid="empty-state">
+      {title}
+      {children}
+    </div>
+  ),
 }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({
   DirectoryTree: () => <div data-testid="directory-tree" />,

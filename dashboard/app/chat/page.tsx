@@ -138,7 +138,7 @@ import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import { useDaemon } from "@/lib/daemon";
-import { needsConnect } from "@/lib/onboarding";
+import { needsConnect, providerDisplay } from "@/lib/onboarding";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
 import { turnUsageFrom } from "@/lib/types";
@@ -934,7 +934,9 @@ const APPROVAL_MODES = [
   {
     value: "yolo",
     label: "Auto-approve",
-    hint: "YOLO — run everything it can without asking",
+    // v1.314.0: plain words that still warn — "YOLO" was slang to a busy
+    // professional; the amber select colour keeps the danger visible too.
+    hint: "Runs everything it can without asking you first — use with care",
   },
 ] as const;
 type ApprovalMode = (typeof APPROVAL_MODES)[number]["value"];
@@ -2482,6 +2484,9 @@ export default function ChatPage() {
   // U8): the footer used to say "default model" while the title bar said
   // "brain (RTX)" — two words for one thing. Read, never polled here.
   const defaultModelName = useDaemon().health?.default_model ?? "";
+  // v1.314.0: which provider the default runs on, so the footer can name the
+  // default by its catalog label ("Claude Opus 4.8"), the same as a pick.
+  const defaultProviderId = useDaemon().health?.default_provider ?? "";
   // v1.310.0: the empty state leads with the connect doors while no real
   // model answers (or the default is still the offline demo) — read off the
   // same /health, never a second poll.
@@ -3054,12 +3059,33 @@ export default function ChatPage() {
   }, [choice, defaultModelName]);
   // v1.300.0: the trigger says the picker's label ("Opus 5.5") for a pick
   // whose catalog row carries one; every other case is modelLabel verbatim.
+  // v1.314.0 (composer-footer-jargon): the DEFAULT gets the same lookup, read
+  // as "Default: Claude Opus 4.8" — the raw id only when the catalog has no
+  // label for it (nothing invented). A default on the scripted demo model is
+  // named as that, never as the model id it pretends to be. The raw id the
+  // turn will run on stays in modelTriggerRaw (the trigger's inner title).
   const modelTriggerText = useMemo(() => {
-    if (!choice) return modelLabel;
+    if (!choice) {
+      if (!defaultModelName) return modelLabel;
+      if (defaultProviderId === "mock") return `Default: ${providerDisplay("mock")}`;
+      const row = models.find(
+        (m) => m.provider === defaultProviderId && m.model === defaultModelName,
+      );
+      return `Default: ${row?.label ? modelText(row) : defaultModelName}`;
+    }
     const { provider, model } = splitChoice(choice);
     const row = models.find((m) => m.provider === provider && m.model === model);
     return row?.label ? modelText(row) : modelLabel;
-  }, [choice, models, modelLabel]);
+  }, [choice, models, modelLabel, defaultModelName, defaultProviderId]);
+  /** The record behind the trigger's words: provider · model id. */
+  const modelTriggerRaw = useMemo(() => {
+    if (!choice) {
+      return defaultModelName
+        ? [defaultProviderId, defaultModelName].filter(Boolean).join(" · ")
+        : "";
+    }
+    return choice.replace("::", " · ");
+  }, [choice, defaultModelName, defaultProviderId]);
   useEffect(() => {
     if (!modelMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -7347,7 +7373,8 @@ export default function ChatPage() {
       <Reveal>
         {/* THE MODULE FILLS THE APP (v1.215.0), the same frame the Agents room
             uses: `md:h-[calc(100vh-4.5rem)]` is the title bar (2.5rem) plus
-            MainContent's own `py-4` (2rem), so the row ends exactly where the
+            MainContent's own `py-4` (2rem) — minus the demo strip's height
+            (`--ij-strip-h`, published by SimulatedBanner, v1.314.0), so the row ends exactly where the
             window does and only the panes inside it scroll. `items-stretch`
             (was `items-start`) is what lets all three columns take that
             height. Below md it is a plain stack — three columns on a phone is
@@ -7355,7 +7382,7 @@ export default function ChatPage() {
             height there instead. */}
         <div
           data-testid="chat-room"
-          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem)] md:min-h-[28rem] md:flex-row md:items-stretch"
+          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
         >
           {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
           <button
@@ -8016,11 +8043,14 @@ export default function ChatPage() {
                         demo-mode-chat-nonsense; the scripted-reply half of
                         that proposal was dropped by the verifier). */}
                     {showConnectDoors && (
-                      <div className="w-full max-w-md rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                      // v1.314.0: wider card + the doors side by side, so the
+                      // starter prompts below reach the fold on a laptop. The
+                      // row layout is opt-in — the wizard keeps its stack.
+                      <div className="w-full max-w-2xl rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
                         <p className="mb-2 text-sm font-semibold text-zinc-100">
                           Connect a model for real answers
                         </p>
-                        <ConnectDoors />
+                        <ConnectDoors layout="row" />
                       </div>
                     )}
                     <div className="flex flex-wrap justify-center gap-2">
@@ -9230,7 +9260,11 @@ export default function ChatPage() {
               {/* Composer footer: share on the left (under the project
                   control), the model switcher on the right. Both are the same
                   quiet weight — present when wanted, silent otherwise. */}
-              <div className="flex items-center justify-between px-4 pb-2.5">
+              {/* v1.314.0: the footer WRAPS on a phone — the plain-words
+                  labels ("Approvals:", "Default: Claude Opus 4.8") are longer
+                  than the old ids, and a row that runs off a 390px screen
+                  hides the model it names. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pb-2.5">
                 <button
                   type="button"
                   onClick={() => setShareOpen(true)}
@@ -9241,16 +9275,30 @@ export default function ChatPage() {
                       ? "Share this chat — full transcript or a compacted digest"
                       : "A chat can be shared after its first reply (it saves automatically)"
                   }
-                  className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-30"
+                  // v1.314.0: a real 28px target with the word, not a bare
+                  // 12px glyph; on a phone the icon stands alone (the
+                  // aria-label still names it).
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11.5px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 >
-                  <Share2 size={12} />
+                  <Share2 size={13} />
+                  <span className="hidden sm:inline">Share</span>
                 </button>
                 {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves
                     for this conversation. A native select at the footer's
                     quiet weight — one control, three positions, the current
                     one readable at a glance. YOLO reads amber because a
                     conversation running without asks should look like one. */}
+                {/* v1.314.0: a visible label says what the select controls —
+                    "Approve for me" alone did not say approvals of what. */}
+                <span className="inline-flex items-center gap-1.5">
+                <label
+                  htmlFor="chat-approval-mode"
+                  className="text-[11.5px] text-zinc-500"
+                >
+                  Approvals:
+                </label>
                 <select
+                  id="chat-approval-mode"
                   value={approvalMode}
                   onChange={(e) => {
                     const mode = asApprovalMode(e.target.value);
@@ -9287,6 +9335,7 @@ export default function ChatPage() {
                     </option>
                   ))}
                 </select>
+                </span>
                 {/* Context headroom (v1.146.0). Deliberately quiet until it
                     matters: nobody needs a gauge at 12% of a 200k window, and
                     a permanent meter is the kind of chrome that gets ignored
@@ -9335,7 +9384,9 @@ export default function ChatPage() {
                     }
                     className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
                   >
-                    <span className="max-w-[14rem] truncate font-mono">{modelTriggerText}</span>
+                    <span className="max-w-[14rem] truncate" title={modelTriggerRaw || undefined}>
+                      {modelTriggerText}
+                    </span>
                     <ChevronDown size={11} className="shrink-0" />
                   </button>
                   {modelMenuOpen && (

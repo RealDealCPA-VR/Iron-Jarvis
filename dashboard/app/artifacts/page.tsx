@@ -67,21 +67,31 @@ interface RunResult {
   artifact: CodeArtifactDetail;
 }
 
-/** Exit status as a glanceable pill. `null` = saved but never run. */
+/** Exit status as a glanceable pill. `null` = saved but never run.
+ *  v1.314.0 (UX wave 2): plain words ("Worked" / "Failed" / "Not run yet");
+ *  the exit code is the RECORD of what happened, so it stays in the title. */
 function RunStatus({ code }: { code: number | null }) {
-  if (code === null) return <Badge value="never run" tone="slate" />;
+  if (code === null) return <Badge value="Not run yet" tone="slate" keepCase />;
   if (code === 0)
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
-        <CheckCircle2 size={13} /> exit 0
+      <span title="Exit code 0" className="inline-flex items-center gap-1 text-xs text-emerald-400">
+        <CheckCircle2 size={13} /> Worked
       </span>
     );
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-rose-400">
-      <XCircle size={13} /> exit {code}
+    <span title={`Exit code ${code}`} className="inline-flex items-center gap-1 text-xs text-rose-400">
+      <XCircle size={13} /> Failed
     </span>
   );
 }
+
+/** v1.314.0: who saved a script, in words. The daemon only writes these two
+ *  (codelab/models.py); anything else is shown as it is, never guessed. The
+ *  raw origin stays in the badge's title. */
+const ORIGIN_WORDS: Record<string, string> = {
+  run_code: "Written by an agent",
+  manual: "Saved by hand",
+};
 
 function when(iso: string | null): string {
   if (!iso) return "—";
@@ -175,10 +185,12 @@ export default function ArtifactsPage() {
               ))}
             </div>
           ) : items.length === 0 ? (
-            <Card title="Scripts · 0" icon={<Code2 size={15} />}>
-              <Empty icon={<Code2 size={22} />}>
-                No saved scripts yet. When an agent uses <code>run_code</code> to solve
-                something, it lands here automatically — with what it was for.
+            // v1.314.0 (UX wave 2): no internal tool id in front of a user,
+            // and the card says what it holds instead of "Scripts · 0".
+            <Card title="Saved scripts" icon={<Code2 size={15} />}>
+              <Empty icon={<Code2 size={22} />} title="No saved scripts yet">
+                When an agent writes a small program to get something done, it is
+                kept here with what it was for — so you can read it or run it again.
               </Empty>
             </Card>
           ) : (
@@ -260,7 +272,8 @@ export default function ArtifactsPage() {
                       className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
                     >
                       <Play size={13} />
-                      {running ? "Running…" : "Run again"}
+                      {/* v1.314.0: "Run again" was a lie for a script that never ran. */}
+                      {running ? "Running…" : detail.data.last_run_at ? "Run again" : "Run"}
                     </button>
                     <ConfirmButton
                       label="Delete"
@@ -294,7 +307,13 @@ export default function ArtifactsPage() {
                       <Clock size={12} /> last run {when(detail.data.last_run_at)}
                     </span>
                     <RunStatus code={detail.data.last_exit_code} />
-                    <Badge value={detail.data.origin} tone="slate" />
+                    <span title={`Saved by: ${detail.data.origin}`} className="inline-flex">
+                      <Badge
+                        value={ORIGIN_WORDS[detail.data.origin] ?? detail.data.origin}
+                        tone="slate"
+                        keepCase
+                      />
+                    </span>
                   </div>
                   <pre className="max-h-[45vh] overflow-auto rounded-xl border border-white/[0.06] bg-ink-950 p-4 text-xs leading-relaxed text-zinc-300">
                     {detail.data.source}
