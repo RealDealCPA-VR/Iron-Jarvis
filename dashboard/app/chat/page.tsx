@@ -229,7 +229,7 @@ import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { appendDictation } from "@/components/VoiceInput";
-import { Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
+import { ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
@@ -8424,15 +8424,25 @@ export default function ChatPage() {
               <div
                 ref={scrollRef}
                 onScroll={onThreadScroll}
-                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 md:max-h-none"
+                // Redesign S11 (AUDIT §8): the conversation reads in a 760 px
+                // column, centred — each row is held to it, no new wrapper.
+                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 md:max-h-none [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px]"
               >
                 {messages.length === 0 && !busy ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-4">
-                    <Empty icon={<MessageSquare size={28} />}>
-                      Start a conversation. Ask a question or describe what you
-                      need — quick answers come straight back, and real work
-                      just gets done.
-                    </Empty>
+                  <div className="flex flex-1 flex-col items-center justify-center gap-6">
+                    {/* Redesign S11 (AUDIT §8, wireframe home.md): a calm
+                        greeting in the display step — the home is mostly
+                        whitespace around the composer. */}
+                    <div data-testid="chat-greeting" className="flex flex-col items-center gap-2 py-6 text-center">
+                      <p className="text-display font-semibold tracking-tight text-zinc-100">
+                        What can I help with?
+                      </p>
+                      <p className="max-w-md text-body text-zinc-500">
+                        Start a conversation. Ask a question or describe what you
+                        need — quick answers come straight back, and real work
+                        just gets done.
+                      </p>
+                    </div>
                     {/* v1.310.0: the way forward comes BEFORE the demo
                         prompts. Every chip answered by the offline demo is
                         the same scripted sentence, so a first-timer must see

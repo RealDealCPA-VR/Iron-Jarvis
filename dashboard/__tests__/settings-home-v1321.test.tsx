@@ -240,3 +240,25 @@ describe("Sessions: list or board (Q4a)", () => {
     vi.doUnmock("@/components/sessions/SessionBoard");
   });
 });
+
+describe("390 px: the groups are a drill-down list (AUDIT §8, redesign S11)", () => {
+  it("a phone opens on the list; a press opens the group with a way back", async () => {
+    render(<SettingsHome />);
+    const list = await screen.findByTestId("settings-groups-phone");
+    // The group's page waits behind the list on a phone (shown again from md up).
+    expect(screen.getByTestId("settings-group").className).toContain("hidden md:block");
+    fireEvent.click(within(list).getByRole("button", { name: /Agents & automation/ }));
+    expect(screen.queryByTestId("settings-groups-phone")).toBeNull();
+    expect(screen.getByTestId("settings-group").className).not.toContain("hidden");
+    expect(screen.getByTestId("settings-group").getAttribute("data-group")).toBe("automation");
+    fireEvent.click(screen.getByRole("button", { name: /All settings/ }));
+    expect(screen.getByTestId("settings-groups-phone")).toBeTruthy();
+  });
+
+  it("a deep link skips the list and lands in the group", async () => {
+    window.history.replaceState({}, "", "/settings?section=permissions");
+    render(<SettingsHome />);
+    await screen.findByTestId("settings-ledger-row");
+    expect(screen.queryByTestId("settings-groups-phone")).toBeNull();
+  });
+});

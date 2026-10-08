@@ -22,7 +22,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { ChevronDown, ChevronRight, Palette, RotateCcw, Search } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Palette, RotateCcw, Search } from "lucide-react";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { getDeviceId } from "@/lib/device";
@@ -183,6 +183,9 @@ export function SettingsHome() {
   const [saved, setSaved] = useState<{ action_id: string; count: number } | null>(null);
   const [error, setError] = useState("");
   const [ledgerKey, setLedgerKey] = useState(0);
+  // AUDIT §8 (390 px): on a phone the groups are a drill-down list — the list
+  // first, a group's page after a press, "All settings" back.
+  const [phoneList, setPhoneList] = useState(true);
   const deviceId = useRef("");
 
   const load = useCallback(async () => {
@@ -208,6 +211,7 @@ export function SettingsHome() {
     void load();
     const { section, focus } = readSection();
     if (focus) setFocusKey(focus);
+    if (focus || section) setPhoneList(false);
     if (section) {
       const group = section.split("-")[0];
       setActive(group);
@@ -316,24 +320,28 @@ export function SettingsHome() {
       <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
         {/* The seven groups. A phone gets a select (no sideways scroll). */}
         <nav aria-label="Settings groups" className="md:sticky md:top-2 md:self-start">
-          <label htmlFor="settings-group-select" className="sr-only">
-            Settings group
-          </label>
-          <select
-            id="settings-group-select"
-            value={active}
-            onChange={(e) => {
-              setActive(e.target.value);
-              setQuery("");
-            }}
-            className="field w-full md:hidden"
-          >
-            {(groups ?? []).map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.label}
-              </option>
-            ))}
-          </select>
+          {phoneList && !q && (
+            <ul className="divide-y divide-white/[0.05] rounded-2xl border border-white/[0.06] md:hidden" data-testid="settings-groups-phone">
+              {(groups ?? []).map((g) => (
+                <li key={g.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActive(g.id);
+                      setPhoneList(false);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-body-lg text-zinc-100">{g.label}</span>
+                      <span className="block text-meta text-zinc-500">{g.description}</span>
+                    </span>
+                    <ChevronRight size={15} className="shrink-0 text-zinc-500" aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <ul className="hidden space-y-0.5 md:block" data-testid="settings-groups">
             {(groups ?? []).map((g) => (
               <li key={g.id}>
@@ -355,7 +363,20 @@ export function SettingsHome() {
           </ul>
         </nav>
 
-        <div className="min-w-0 space-y-6" data-testid="settings-group" data-group={q ? "search" : active}>
+        <div
+          className={`min-w-0 max-w-[720px] space-y-6 ${phoneList && !q ? "hidden md:block" : ""}`}
+          data-testid="settings-group"
+          data-group={q ? "search" : active}
+        >
+          {!q && (
+            <button
+              type="button"
+              onClick={() => setPhoneList(true)}
+              className="inline-flex items-center gap-1 text-meta text-zinc-400 hover:text-zinc-200 md:hidden"
+            >
+              <ChevronLeft size={13} aria-hidden /> All settings
+            </button>
+          )}
           {!q && group && (
             <div>
               <h2 className="text-lg font-semibold text-zinc-50">{group.label}</h2>

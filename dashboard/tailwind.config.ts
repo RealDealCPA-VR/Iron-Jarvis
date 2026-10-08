@@ -81,6 +81,10 @@ const config: Config = {
         meta: ["12px", "18px"],
         body: ["13px", "20px"],
         "body-lg": ["14px", "22px"],
+        // Calm UI redesign S11 (AUDIT §8): the three new steps of the scale.
+        "title-sm": ["16px", "24px"],
+        title: ["20px", "28px"],
+        display: ["28px", "36px"],
       },
       fontFamily: {
         sans: [

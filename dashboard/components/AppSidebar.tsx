@@ -21,6 +21,7 @@ import { useEvents } from "@/lib/useEvents";
 import { NEW_CHAT_EVENT, setChatSlot } from "@/lib/sidebarSlot";
 import { EVERYTHING_TAB_EVENT, PINS_EVENT, SIDEBAR_HREFS, readPins, surfaceFor, type Surface } from "@/lib/surfaces";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
+import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
 
 /**
@@ -416,19 +417,18 @@ export function SidebarBody({
   return (
     <>
       <div className={`shrink-0 px-2 pt-2 ${collapsed ? "" : "space-y-1.5"}`}>
-        <button
-          type="button"
+        {/* AUDIT §8: the sidebar's ONE solid primary action. */}
+        <Button
+          variant="primary"
           onClick={newChat}
           data-testid="sidebar-new-chat"
           title="New chat"
           aria-label={collapsed ? "New chat" : undefined}
-          className={`flex w-full items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] py-2 text-sm font-medium text-zinc-100 transition-colors hover:border-accent/30 hover:bg-accent/[0.06] ${
-            collapsed ? "justify-center px-0" : "px-2.5"
-          }`}
+          className={`w-full ${collapsed ? "justify-center !px-0" : "justify-start"}`}
         >
-          <Plus size={15} className="text-accent" aria-hidden />
+          <Plus size={15} aria-hidden />
           {!collapsed && "New chat"}
-        </button>
+        </Button>
       </div>
       <nav aria-label="Main" className="shrink-0 space-y-0.5 px-2 pt-2" data-testid="sidebar-nav">
         {four.map((s) => (
