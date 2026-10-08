@@ -61,7 +61,7 @@ const CASES: [string, string, readonly string[]][] = [
   ["the desktop bridge", "components/DesktopNotifyBridge.tsx", DESKTOP_NOTIFY_EVENT_TYPES],
   ["GoalsStrip", "components/GoalsStrip.tsx", GOALS_EVENT_TYPES],
   ["the downgrade banner", "components/ProviderDowngradeBanner.tsx", PROVIDER_DOWNGRADE_EVENT_TYPES],
-  ["the Overview", "app/page.tsx", OVERVIEW_EVENT_TYPES],
+  ["the Overview", "components/overview/StatusOverview.tsx", OVERVIEW_EVENT_TYPES],
 ];
 
 describe("each filtered subscriber lists every event type it reads", () => {
@@ -101,7 +101,7 @@ describe("each filtered subscriber lists every event type it reads", () => {
   });
 
   it("the Overview passes its list to useEvents, and its live rows use the shared constant", () => {
-    const page = src("app/page.tsx");
+    const page = src("components/overview/StatusOverview.tsx");
     expect(page).toMatch(/useEvents\(40,\s*\{\s*types:\s*OVERVIEW_EVENT_TYPES\s*\}\)/);
     expect(page).toContain("new Set(OVERVIEW_LIVE_TYPES)");
     for (const t of OVERVIEW_LIVE_TYPES) expect(OVERVIEW_EVENT_TYPES).toContain(t);

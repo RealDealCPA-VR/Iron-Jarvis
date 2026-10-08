@@ -118,6 +118,10 @@ export function surfaceFor(href: string): Surface | undefined {
   return SURFACES.find((s) => s.href === href);
 }
 
+/** The sidebar's status dot links to /everything#status; a link to the page
+ *  you are on changes only the hash, so it also announces the tab. */
+export const EVERYTHING_TAB_EVENT = "ij:everything-tab";
+
 // ── Pins (AUDIT Q11) ─────────────────────────────────────────────────────────
 // Up to three Everything entries the user pins under the sidebar's four items.
 // None by default (the four-item cap is measured on a fresh profile). Kept in

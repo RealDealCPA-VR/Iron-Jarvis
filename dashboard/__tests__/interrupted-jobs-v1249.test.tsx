@@ -220,7 +220,7 @@ describe("both surfaces are wired to the same source", () => {
   });
 
   it("the Overview renders the note where the user lands after a restart", () => {
-    const src = readSrc("app/page.tsx");
+    const src = readSrc("components/overview/StatusOverview.tsx");
     expect(src).toContain('from "@/components/InterruptedJobs"');
     expect(src).toContain("<InterruptedJobsNote />");
   });

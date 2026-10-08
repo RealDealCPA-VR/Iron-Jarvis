@@ -128,7 +128,7 @@ def test_the_overview_has_one_admin_section_not_seven():
     """v1.156.0's other half: everything below the tiles now rests behind a
     single title instead of seven independently-collapsing cards."""
     src = (
-        Path(__file__).resolve().parents[1] / "dashboard" / "app" / "page.tsx"
+        Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
     ).read_text(encoding="utf-8")
     assert src.count("<CollapsibleCard") == 1, (
         f"expected exactly one collapsible on the overview, found "
@@ -142,7 +142,7 @@ def test_the_hero_and_tiles_stay_above_it():
     """The user asked for the top of the page to be left ALONE. Order matters:
     hero band, then tiles, then the stats card, and only then the admin fold."""
     src = (
-        Path(__file__).resolve().parents[1] / "dashboard" / "app" / "page.tsx"
+        Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
     ).read_text(encoding="utf-8")
     grid = src.index("<AppGrid />")
     health = src.index("<HealthCard")
@@ -167,7 +167,7 @@ def test_the_admin_fold_contains_no_reveal_wrappers():
     from pathlib import Path
 
     src = (
-        Path(__file__).resolve().parents[1] / "dashboard" / "app" / "page.tsx"
+        Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
     ).read_text(encoding="utf-8")
     start = src.index('<div className="space-y-5">')
     end = src.index("</CollapsibleCard>", start)

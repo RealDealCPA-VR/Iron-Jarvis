@@ -209,7 +209,7 @@ import {
 } from "@/components/InterruptedJobs";
 import { NAV_ENTRIES } from "@/lib/nav";
 import type { IJEvent } from "@/lib/types";
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 import ProjectWorkspacePage from "@/app/projects/[id]/page";
 import ChatPage from "@/app/chat/page";
 import {

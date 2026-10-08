@@ -30,7 +30,7 @@ import { DaemonProvider, HIDDEN_HEALTH_INTERVAL_MS } from "@/lib/daemon";
 import { usePolledApi } from "@/lib/useApi";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 
 type FetchCall = { url: string; init: RequestInit };
 const calls: FetchCall[] = [];

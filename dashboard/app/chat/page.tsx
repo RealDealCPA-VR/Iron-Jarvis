@@ -144,6 +144,7 @@ import {
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
+import { HomeLine } from "@/components/chat/HomeLine";
 import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
@@ -8741,6 +8742,11 @@ export default function ChatPage() {
                   onDismiss={() => setBatchDismissed(batchPreview.folder)}
                 />
               )}
+
+              {/* THE ONE CONDITIONAL LINE (redesign S8, AUDIT R2): restart-cut
+                  jobs, failing background work, or running / waiting work —
+                  the most urgent only, Open → Everything › Status. */}
+              <HomeLine />
 
               {/* PREFLIGHT (v1.165.0): the active model is known-unreachable
                   BEFORE the user types a paragraph into it. The app always had

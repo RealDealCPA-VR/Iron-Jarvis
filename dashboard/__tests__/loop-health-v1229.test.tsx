@@ -90,7 +90,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 import { NotificationBell } from "@/components/NotificationBell";
 
 const FLEET_ERR = "RuntimeError: fleet cycle exploded";

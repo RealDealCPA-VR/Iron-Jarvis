@@ -312,6 +312,41 @@ def _session_row(d, session) -> dict[str, Any]:
     return _session_view(session, d)
 
 
+
+def interrupted_rows(db) -> list:
+    """The jobs a restart cut off that are still offered Continue (v1.249.0,
+    R-02; mission roots only since v1.309.0): newest first, the last 3 days,
+    at most 20. Shared by ``GET /sessions/interrupted`` and the home's status
+    line (``GET /ui/status-line``, calm UI redesign S8)."""
+    from datetime import timedelta
+
+    from sqlalchemy import exists, or_
+    from sqlmodel import select
+
+    from ...agents.team import MISSION_MEMBER_ORIGIN as MEMBER_ORIGIN
+    from ...core.ids import utcnow
+    from ...core.models import AgentRun, Session, SessionStatus
+
+    cutoff = utcnow() - timedelta(days=3)
+    delegated = exists().where(
+        AgentRun.session_id == Session.id,
+        AgentRun.parent_id.is_not(None),  # type: ignore[union-attr]
+    )
+    return list(
+        db.exec(
+            select(Session)
+            .where(
+                Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
+                Session.interrupted_at >= cutoff,  # type: ignore[operator]
+                Session.status == SessionStatus.FAILED,
+                or_(Session.origin.is_(None), Session.origin != MEMBER_ORIGIN),  # type: ignore[union-attr]
+                ~delegated,
+            )
+            .order_by(Session.interrupted_at.desc())  # type: ignore[union-attr]
+            .limit(20)
+        )
+    )
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/sessions")
@@ -827,37 +862,11 @@ def register(app: FastAPI, d) -> None:
         the mission screen) and ``objective`` (the user's words, not the
         recap) — additive.
         """
-        from datetime import timedelta
-
-        from sqlalchemy import exists, or_
-        from sqlmodel import select
-
         from ...agents.mission import display_objective
-        from ...agents.team import MISSION_MEMBER_ORIGIN as MEMBER_ORIGIN
         from ...core.db import session_scope
-        from ...core.ids import utcnow
-        from ...core.models import AgentRun, Session, SessionStatus
 
-        cutoff = utcnow() - timedelta(days=3)
-        delegated = exists().where(
-            AgentRun.session_id == Session.id,
-            AgentRun.parent_id.is_not(None),  # type: ignore[union-attr]
-        )
         with session_scope(d.platform.engine) as db:
-            rows = list(
-                db.exec(
-                    select(Session)
-                    .where(
-                        Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
-                        Session.interrupted_at >= cutoff,  # type: ignore[operator]
-                        Session.status == SessionStatus.FAILED,
-                        or_(Session.origin.is_(None), Session.origin != MEMBER_ORIGIN),  # type: ignore[union-attr]
-                        ~delegated,
-                    )
-                    .order_by(Session.interrupted_at.desc())  # type: ignore[union-attr]
-                    .limit(20)
-                )
-            )
+            rows = interrupted_rows(db)
             out = [
                 {
                     "id": s.id,

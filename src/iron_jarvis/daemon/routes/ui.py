@@ -52,7 +52,48 @@ def normalize_route(raw: str) -> str | None:
     return f"/{first}" if _SEGMENT.match(first) else None
 
 
+def status_line(d) -> dict[str, int]:
+    """Counts for the home's ONE conditional line (calm UI redesign S8,
+    AUDIT §4.5 R2): jobs a restart cut off, background loops and tool packs
+    that are failing, and work running now. Numbers only — the detail lives
+    in Everything › Status. Never raises."""
+    out = {"interrupted": 0, "failing_loops": 0, "failing_packs": 0, "running": 0}
+    try:
+        from .sessions import interrupted_rows
+
+        with session_scope(d.platform.engine) as db:
+            out["interrupted"] = len(interrupted_rows(db))
+    except Exception:  # noqa: BLE001 — a count we cannot read is zero
+        pass
+    try:
+        out["failing_loops"] = sum(
+            1 for v in (getattr(d, "loop_health", {}) or {}).values() if isinstance(v, dict) and v.get("ok") is False
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ...mcp.tools import load_status
+
+        out["failing_packs"] = sum(
+            1
+            for s in (getattr(d.platform.config, "mcp_servers", None) or [])
+            if isinstance(s, dict) and (load_status(str(s.get("name") or "")) or {}).get("last_error")
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out["running"] = len(getattr(d.orchestrator, "_running", {}) or {})
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def register(app: FastAPI, d) -> None:
+    @app.get("/ui/status-line")
+    def ui_status_line() -> dict[str, int]:
+        """The home's one conditional line, in one read (redesign S8)."""
+        return status_line(d)
+
     @app.post("/ui/visit")
     async def ui_visit(body: UiVisitBody) -> dict[str, Any]:
         route = normalize_route(body.route)

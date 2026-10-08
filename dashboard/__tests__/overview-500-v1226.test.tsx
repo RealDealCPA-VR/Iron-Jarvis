@@ -66,7 +66,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 
 afterEach(() => cleanup());
 

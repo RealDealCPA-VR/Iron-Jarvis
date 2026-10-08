@@ -40,7 +40,7 @@ import { useInterruptedJobs, INTERRUPTED_PATH } from "@/components/InterruptedJo
 import { MoodOrb } from "@/components/MoodOrb";
 import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
 import { NotificationBell } from "@/components/NotificationBell";
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 
 /* ---- fetch stub: a tiny daemon ------------------------------------------ */
 

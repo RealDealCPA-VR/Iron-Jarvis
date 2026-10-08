@@ -31,9 +31,10 @@ import {
   StickyNote,
   Palette,
   SlidersHorizontal,
+  Gauge,
   type LucideIcon,
 } from "lucide-react";
-import { SURFACES } from "@/lib/surfaces";
+import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -117,6 +118,16 @@ const PAGE_ITEMS: PaletteRow[] = SURFACES.map((e) => ({
 // query string the page already understands. Keep it SHORT and evidence-driven;
 // this is not a second nav.
 const DEEP_LINK_ITEMS: PaletteRow[] = [
+  {
+    // Redesign S8: the old Overview's operational content.
+    id: "deep:status",
+    kind: "page",
+    label: "Everything → Status",
+    blurb: "What is running, health, failing background work and recent events.",
+    aliases: ["overview", "dashboard", "status", "health", "what is running", "diagnostics", "system health"],
+    href: "/everything#status",
+    icon: Gauge,
+  },
   {
     id: "deep:redact",
     kind: "page",
@@ -1110,6 +1121,11 @@ export function CommandPalette() {
     if (row.href) {
       recordOpen(row.href);
       router.push(row.href);
+      // Redesign S8: a hash-only move on /everything changes no route, so
+      // the page is told which tab to show too.
+      if (row.href === "/everything#status") {
+        window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }));
+      }
     }
   }
 

@@ -137,7 +137,7 @@ vi.mock("framer-motion", async () => {
 
 import { ApiError } from "@/lib/api";
 import { __resetApiCache } from "@/lib/apiCache";
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { DaemonProvider } from "@/lib/daemon";
 

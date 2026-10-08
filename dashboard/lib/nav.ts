@@ -76,10 +76,12 @@ export const NAV: NavSectionDef[] = [
     items: [
       {
         href: "/",
-        label: "Overview",
+        // Calm UI redesign S8: the home IS a new chat; what was the Overview
+        // is Everything › Status (its own palette row).
+        label: "Home",
         icon: LayoutDashboard,
-        aliases: ["home", "dashboard", "status", "health", "start", "main page"],
-        blurb: "Start here: ask for something, pick up where you left off, see what is running.",
+        aliases: ["home", "start", "main page", "new chat", "ask"],
+        blurb: "A new chat — ask anything. Recent chats and projects are in the sidebar.",
       },
       // Projects has its own row (below, since v1.151.1) AND lives inside
       // Chat (composer toggle + right-rail workspace).

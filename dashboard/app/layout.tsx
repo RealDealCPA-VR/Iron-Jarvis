@@ -4,6 +4,7 @@ import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
 import { RouteVisitBeacon } from "@/components/RouteVisitBeacon";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
+import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
 import { AppSidebar } from "@/components/AppSidebar";
@@ -113,6 +114,11 @@ export default function RootLayout({
                     area while no real provider is connected. Deliberately
                     non-dismissable. */}
                 <SimulatedBanner />
+                {/* Redesign S8: the mock-downgrade warning is the shell's,
+                    on every page (it was the Overview's alone). */}
+                <div className="px-3 pt-3 empty:hidden lg:px-4">
+                  <ProviderDowngradeBanner />
+                </div>
                 <MainContent>{children}</MainContent>
               </main>
             </div>

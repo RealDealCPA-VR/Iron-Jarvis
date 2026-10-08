@@ -159,7 +159,7 @@ vi.mock("framer-motion", async () => {
 });
 
 import { __resetApiCache } from "@/lib/apiCache";
-import OverviewPage from "@/app/page";
+import OverviewPage from "@/components/overview/StatusOverview";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
 import { AppGrid } from "@/components/overview/AppGrid";

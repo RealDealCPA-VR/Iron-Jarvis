@@ -110,7 +110,7 @@ vi.mock("@/components/motion", () => ({
 }));
 
 const ToolsPage = (await import("@/app/tools/page")).default;
-const OverviewPage = (await import("@/app/page")).default;
+const OverviewPage = (await import("@/components/overview/StatusOverview")).default;
 
 const failedRow = {
   name: "brave_search",

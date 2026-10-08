@@ -20,7 +20,14 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("@/lib/api", () => ({
-  get: async () => ({}),
+  // Realistic shapes for the Status view's reads (the old Overview).
+  get: async (path: string) => {
+    if (path.startsWith("/sessions")) return { sessions: [] };
+    if (path === "/vault") return { providers: [] };
+    if (path === "/templates") return { templates: [] };
+    if (path.startsWith("/reflex")) return { rules: [] };
+    return {};
+  },
   post: async () => ({}),
 }));
 
@@ -150,5 +157,36 @@ describe("the palette covers every surface and every setting", () => {
     expect(rows[0]).toMatchObject({ kind: "setting", href: "/settings?focus=default_model" });
     expect(rows[1].href).toBe(`/chat?ask=${encodeURIComponent("Change my default model setting to ")}`);
     expect(rows[0].aliases).toContain("default model");
+  });
+});
+
+describe("Everything › Status (redesign S8: where the Overview's content lives)", () => {
+  it("#status opens the Status tab; the old Overview renders there without its own title", async () => {
+    window.history.replaceState({}, "", "/everything#status");
+    try {
+      render(<EverythingPage />);
+      expect(screen.getByRole("tab", { name: "Status" }).getAttribute("aria-selected")).toBe("true");
+      const panel = await screen.findByTestId("everything-status");
+      expect(panel.id).toBe("status");
+      expect(screen.queryByTestId("everything-grid")).toBeNull();
+      // The Overview's own content has loaded (its module desk renders)…
+      expect(await within(panel).findByTestId("app-desk", undefined, { timeout: 4000 })).toBeTruthy();
+      // …and the page still has ONE title: Everything's.
+      expect(document.querySelectorAll("h1")).toHaveLength(1);
+      expect(document.querySelector("h1")?.textContent).toMatch(/Everything/);
+    } finally {
+      window.history.replaceState({}, "", "/everything");
+    }
+  });
+
+  it("the tabs switch, and the sidebar's status dot reaches the tab on the same page", async () => {
+    render(<EverythingPage />);
+    expect(screen.getByTestId("everything-grid")).toBeTruthy();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("ij:everything-tab", { detail: "status" }));
+    });
+    expect(await screen.findByTestId("everything-status")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Directory" }));
+    expect(screen.getByTestId("everything-grid")).toBeTruthy();
   });
 });

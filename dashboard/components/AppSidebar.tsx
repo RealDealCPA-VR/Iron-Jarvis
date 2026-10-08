@@ -19,7 +19,7 @@ import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { NEW_CHAT_EVENT, setChatSlot } from "@/lib/sidebarSlot";
-import { PINS_EVENT, SIDEBAR_HREFS, readPins, surfaceFor, type Surface } from "@/lib/surfaces";
+import { EVERYTHING_TAB_EVENT, PINS_EVENT, SIDEBAR_HREFS, readPins, surfaceFor, type Surface } from "@/lib/surfaces";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { MoodOrb } from "@/components/MoodOrb";
 
@@ -43,8 +43,8 @@ import { MoodOrb } from "@/components/MoodOrb";
  */
 
 const COLLAPSE_KEY = "ij_sidebar_collapsed";
-/** Routes that render the chat surface (S8 adds "/"). */
-export const CHAT_PATHS = ["/chat"];
+/** Routes that render the chat surface (S8: home is a chat). */
+export const CHAT_PATHS = ["/", "/chat"];
 
 /** The arc-reactor brand mark. */
 export function ArcMark({ size = "h-8 w-8" }: { size?: string }) {
@@ -288,7 +288,11 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
       <div className={`flex items-center gap-2 ${collapsed ? "flex-col" : ""}`}>
         <Link
           href="/everything#status"
-          onClick={() => onNavigate?.()}
+          onClick={() => {
+            // Same-page hash links change no route: tell the page too.
+            window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }));
+            onNavigate?.();
+          }}
           data-testid="sidebar-status"
           title={online ? "Running — open Status" : "Not running — reopen Iron Jarvis"}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-[12px] hover:bg-white/[0.04]"

@@ -1026,7 +1026,7 @@ describe("scheduleWords — cron becomes words, never a lie", () => {
 
 describe("Overview — the strip is mounted below PowerTips, unwrapped", () => {
   it("app/page.tsx mounts <GoalsStrip /> after <PowerTips /> and outside <Reveal>", () => {
-    const src = readFileSync(join(__dirname, "..", "app", "page.tsx"), "utf8");
+    const src = readFileSync(join(__dirname, "..", "components", "overview", "StatusOverview.tsx"), "utf8");
     const tips = src.indexOf("<PowerTips />");
     const strip = src.indexOf("<GoalsStrip />");
     expect(tips).toBeGreaterThan(-1);

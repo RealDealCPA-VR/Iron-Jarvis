@@ -1,0 +1,1412 @@
+"use client";
+
+/**
+ * EVERYTHING › STATUS (calm UI redesign S8, AUDIT Q1 / §4.2).
+ *
+ * This was the Overview page (app/page.tsx) until the home became the chat.
+ * Its operational content — the reactor status, health, running work, failing
+ * loops and packs, the event stream, the setup strip — lives here, opened from
+ * the sidebar's status dot (/everything#status). Moved whole: every pinned
+ * behaviour of the Overview is kept, and its tests import it from here.
+ */
+
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+// `m` + the layout's LazyMotion, like every other animated surface since
+// v1.250.0 (S-08): importing `motion` here pulled framer's full feature set
+// into the Overview's own chunk and cost this route ~6 kB.
+import { m, AnimatePresence } from "framer-motion";
+import {
+  Activity,
+  Gauge,
+  Wrench,
+  Timer,
+  Server,
+  ShieldCheck,
+  Boxes,
+  ArrowRight,
+  PlugZap,
+  HeartPulse,
+  Rocket,
+  History,
+  LayoutGrid,
+  Play,
+  BookMarked,
+  FolderKanban,
+  Cpu,
+  HardDrive,
+  Zap,
+  AlertTriangle,
+  ChevronRight,
+} from "lucide-react";
+import { usePolledApi, useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
+import { useEvents } from "@/lib/useEvents";
+import { OVERVIEW_EVENT_TYPES, OVERVIEW_LIVE_TYPES } from "@/components/overview/eventTypes";
+import { post, ApiError } from "@/lib/api";
+import type { Health, Metrics, VaultProvider, SessionView, IJEvent, Onboarding } from "@/lib/types";
+import {
+  Card,
+  Stat,
+  Badge,
+  StatusDot,
+  StatusIcon,
+  Dot,
+  Spinner,
+  OfflineHint,
+  Empty,
+  MockChip,
+  SkeletonRows,
+  Skeleton,
+  LoaderInline,
+  ErrorNote,
+  DataError,
+} from "@/components/ui";
+import { PageHeader } from "@/components/PageHeader";
+import { EventStream } from "@/components/EventStream";
+import { OnboardingWelcome } from "@/components/OnboardingWelcome";
+import { FirstRunStrip, FIRST_WIN_TASKS } from "@/components/onboarding/FirstRunStrip";
+// v1.313.0 (U1-1): `noModelChosen` is the ONE "replies are a scripted demo"
+// rule (lib/onboarding); this page used to keep its own copy.
+import { isDemoDefault, noModelChosen } from "@/lib/onboarding";
+import { PowerTips } from "@/components/PowerTips";
+import { InterruptedJobsNote } from "@/components/InterruptedJobs";
+import { sessionHref } from "@/lib/missionLinks";
+import { GoalsStrip } from "@/components/GoalsStrip";
+import { MoodOrb } from "@/components/MoodOrb";
+import { PageShell, Reveal } from "@/components/motion";
+import { AppGrid } from "@/components/overview/AppGrid";
+import { HealthCard } from "@/components/overview/HealthCard";
+import { pct, num, timeAgo, clockTime, shortId } from "@/lib/format";
+
+type Diagnostics = {
+  db_integrity?: string;
+  db_bytes?: number;
+  wal_bytes?: number;
+  secrets_key_present?: boolean;
+  secrets_key_valid?: boolean;
+  running_sessions?: number;
+  pending_reviews?: number;
+  tracked_worktrees?: number;
+  background_loops?: Record<string, LoopHealth>;
+  /** v1.229.0 (audit U4): each configured MCP server with the reason it did
+   *  not start (`last_error` null = loaded). */
+  mcp_servers?: { name: string; tools_loaded?: number; last_error?: string | null }[];
+};
+
+/** One entry of /diagnostics → background_loops (daemon/app.py `_tick`).
+ *  v1.229.0: every loop writes `last_error` + `at` on failure; `error` is the
+ *  pre-v1.229.0 rehydrate-step key, kept one release as an alias. */
+type LoopHealth = {
+  ok?: boolean;
+  last_error?: string;
+  error?: string;
+  at?: string;
+  last_success_at?: string;
+};
+
+/** GET /diagnostics/reliability — free disk + recent provider failures (24h). */
+type Reliability = {
+  disk?: { free?: number; total?: number };
+  recent_provider_failures?: number;
+};
+
+/** The active project (the "context spine") — carried on /health. */
+type ActiveProject = { id: string; name: string; root?: string };
+
+/** A saved reusable task from GET /templates (mirrors the Templates page). */
+interface Template {
+  id: string;
+  name: string;
+  agent_type: string;
+  task: string;
+  provider?: string | null;
+  model?: string | null;
+  created_at: string;
+}
+
+/** Event types that describe an agent starting or finishing a run. */
+const LIVE_EVENT_TYPES = new Set(OVERVIEW_LIVE_TYPES);
+
+/** Just the reflex-rule fields the Overview needs (see GET /reflex/rules). */
+type ReflexRuleLite = {
+  id: string;
+  name: string;
+  source: string;
+  action: string;
+  enabled: boolean;
+};
+
+/** The truthful state of a live-activity row. */
+type LiveState = "running" | "completed" | "failed";
+
+
+/** Short, human-ish label for a live activity row. */
+function eventLabel(e: IJEvent): string {
+  const p = e.payload || {};
+  const pick = (k: string) => (p[k] != null ? String(p[k]) : "");
+  return (
+    pick("summary") ||
+    pick("task") ||
+    pick("agent_type") ||
+    pick("name") ||
+    (e.session_id ? e.session_id.slice(0, 8) : "activity")
+  );
+}
+
+function fmtBytes(b?: number): string {
+  if (!b || b <= 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let n = b;
+  while (n >= 1024 && i < u.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${n.toFixed(i > 0 && n < 10 ? 1 : 0)} ${u[i]}`;
+}
+
+/** A compact stat tile for the hero status band. */
+function HeroStat({
+  label,
+  value,
+  icon,
+  tone = "neutral",
+  title,
+  hint,
+}: {
+  label: string;
+  value: ReactNode;
+  icon: ReactNode;
+  tone?: "neutral" | "accent" | "bad";
+  title?: string;
+  /** v1.313.0: the tile's exact meaning (and the metric's raw name) on hover,
+   *  so the label itself can stay plain words. */
+  hint?: string;
+}) {
+  const tint =
+    tone === "bad" ? "text-rose-300" : tone === "accent" ? "text-accent-soft" : "text-zinc-100";
+  return (
+    <div
+      title={hint}
+      className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 backdrop-blur-sm"
+    >
+      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+        <span className="text-accent-soft/70">{icon}</span>
+        {label}
+      </div>
+      <div className={`mt-1 truncate text-sm font-semibold ${tint}`} title={title}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function HealthItem({
+  label,
+  value,
+  status,
+}: {
+  label: string;
+  value: string;
+  status: "ok" | "bad" | "warn" | "neutral";
+}) {
+  const tint =
+    status === "ok"
+      ? "text-emerald-300"
+      : status === "bad"
+        ? "text-rose-300"
+        : status === "warn"
+          ? "text-amber-300"
+          : "text-zinc-200";
+  return (
+    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-zinc-400">{label}</div>
+      <div className={`mt-0.5 flex items-center gap-1.5 text-sm font-medium ${tint}`}>
+        {(status === "ok" || status === "bad") && <Dot on={status === "ok"} />}
+        <span className="truncate" title={value}>
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  ReactorHero — the arc-reactor centerpiece (the visual highlight).          */
+/* -------------------------------------------------------------------------- */
+
+function ReactorHero({
+  statusLine,
+  connected,
+  activeProject,
+  model,
+  modelChosen = true,
+  runningCount,
+  freeDisk,
+  failures,
+  diskLoading,
+}: {
+  statusLine: string;
+  connected: boolean;
+  activeProject?: ActiveProject | null;
+  model?: string;
+  /** v1.310.0: false while the default is the offline demo — `model` is then
+   *  a plain sentence, not an id, so it is not set in a code font. */
+  modelChosen?: boolean;
+  runningCount: number;
+  freeDisk?: number;
+  failures: number;
+  diskLoading: boolean;
+}) {
+  return (
+    <div className="card-surface relative overflow-hidden">
+      {/* Ambient arc-reactor bloom. */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute bottom-[-6rem] -right-20 h-72 w-72 rounded-full bg-accent/[0.07] blur-3xl" />
+        <div className="absolute left-[26%] top-1/2 h-[440px] w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgb(var(--accent-rgb)/0.12),transparent)]" />
+      </div>
+
+      <div className="relative grid gap-8 p-8 lg:grid-cols-[auto_1fr] lg:items-center lg:gap-12 lg:p-12">
+        {/* The reactor */}
+        <div className="relative mx-auto grid h-44 w-44 shrink-0 place-items-center sm:h-56 sm:w-56">
+          {/* Static concentric rings. */}
+          <div className="absolute inset-0 rounded-full border border-accent/15" />
+          <div className="absolute inset-[10%] rounded-full border border-accent/10" />
+          <div className="absolute inset-[22%] rounded-full border border-dashed border-accent/20" />
+          {/* Rotating conic sweep (masked to a thin outer ring band). */}
+          <div className="absolute inset-0 animate-spin rounded-full [animation-duration:13s] [background:conic-gradient(from_0deg,transparent_0deg,rgb(var(--accent-rgb)/0.55)_55deg,transparent_150deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))]" />
+          {/* Reverse inner sweep. */}
+          <div className="absolute inset-[14%] animate-spin rounded-full [animation-direction:reverse] [animation-duration:22s] [background:conic-gradient(from_180deg,transparent,rgba(95,201,221,0.4),transparent_120deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))]" />
+          {/* Orbiting glow node. */}
+          <div className="absolute inset-0 animate-spin [animation-duration:9s]">
+            <span className="absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-full bg-accent shadow-[0_0_12px_3px_rgb(var(--accent-rgb)/0.75)]" />
+          </div>
+          {/* Glowing core with the live MoodOrb. */}
+          <div className="relative grid h-[38%] w-[38%] place-items-center rounded-full border border-accent/25 bg-accent/[0.06] shadow-[0_0_55px_-8px_rgb(var(--accent-rgb)/0.6)] animate-pulse-glow">
+            <span className="scale-[2.2]">
+              <MoodOrb />
+            </span>
+          </div>
+        </div>
+
+        {/* Wordmark + status + stats */}
+        <div className="min-w-0 text-center lg:text-left">
+          <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-accent-soft/70">
+            Iron Jarvis
+          </div>
+          {/* v1.313.0 (hero-status-contradicts-demo): a live status line, not
+              a second <h1> — PageHeader owns the page's one heading. */}
+          <p
+            role="status"
+            className="text-gradient mt-2 text-3xl font-semibold leading-tight tracking-tight sm:text-[2.6rem]"
+          >
+            {statusLine}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-2 text-xs text-zinc-500 lg:justify-start">
+            <span className="inline-flex items-center gap-1.5">
+              <Dot on={connected} />
+              {connected ? "live" : "stream offline"}
+            </span>
+            {/* v1.313.0: no version here — the header chip already says it,
+                and saying it twice made the hero read like a console. */}
+            {activeProject && (
+              <Link
+                href={`/projects/${encodeURIComponent(activeProject.id)}`}
+                title="Your active context spine — new chats, sessions & workflows carry it"
+                className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 font-medium text-accent-soft shadow-[0_0_14px_rgb(var(--accent-rgb)/0.3)] transition-colors hover:bg-accent/[0.18]"
+              >
+                <FolderKanban size={11} />
+                {activeProject.name}
+              </Link>
+            )}
+          </div>
+
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <HeroStat
+              label="Model"
+              icon={<Cpu size={12} />}
+              tone="accent"
+              value={
+                model ? <span className={modelChosen ? "font-mono" : undefined}>{model}</span> : "—"
+              }
+              title={model}
+            />
+            <HeroStat
+              label="Running"
+              icon={<Zap size={12} />}
+              tone={runningCount > 0 ? "accent" : "neutral"}
+              value={String(runningCount)}
+            />
+            <HeroStat
+              label="Disk space free"
+              hint="Free disk — space left on the drive Iron Jarvis keeps its data on"
+              icon={<HardDrive size={12} />}
+              value={
+                freeDisk != null ? fmtBytes(freeDisk) : diskLoading ? <Skeleton className="h-4 w-16" /> : "—"
+              }
+            />
+            <HeroStat
+              label="Problems today"
+              hint="Failures 24h — model calls that failed in the last 24 hours"
+              icon={<AlertTriangle size={12} />}
+              tone={failures > 0 ? "bad" : "neutral"}
+              value={String(failures)}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  PanelSection — a titled block INSIDE the one collapsible admin card.       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * v1.156.0: the seven cards below the tiles each had their own chevron and
+ * their own persisted open/closed state, so the page below the fold was a
+ * column of half-open boxes — "smoother and less chaotic" was the ask. They are
+ * now plain sections inside ONE "Systems & admin" card.
+ *
+ * It accepts `storageKey` and `defaultOpen` and ignores them: those were
+ * per-card persistence that no longer has anything to persist, and taking them
+ * silently keeps the conversion a tag rename instead of seven prop rewrites
+ * that could each go wrong.
+ */
+function PanelSection({
+  title,
+  icon,
+  right,
+  summary,
+  children,
+}: {
+  title: ReactNode;
+  icon?: ReactNode;
+  right?: ReactNode;
+  summary?: ReactNode;
+  storageKey?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-b hairline pb-5 last:border-0 last:pb-0">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          {icon && <span className="shrink-0 text-accent-soft/80">{icon}</span>}
+          <span className="truncate text-[12.5px] font-semibold tracking-wide text-zinc-300">
+            {title}
+          </span>
+          {summary}
+        </div>
+        {right && <div className="flex shrink-0 items-center gap-3">{right}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  CollapsibleCard — a card whose body collapses so the hero stays the star.  */
+/* -------------------------------------------------------------------------- */
+
+function CollapsibleCard({
+  title,
+  icon,
+  right,
+  summary,
+  storageKey,
+  defaultOpen = false,
+  children,
+}: {
+  title: ReactNode;
+  icon?: ReactNode;
+  /** A link/action shown on the right of the header (stays clickable). */
+  right?: ReactNode;
+  /** A compact status shown in the header WHEN COLLAPSED (e.g. a count). */
+  summary?: ReactNode;
+  storageKey: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(storageKey);
+      if (v != null) setOpen(v === "1");
+    } catch {
+      /* localStorage unavailable — keep the default. */
+    }
+  }, [storageKey]);
+  function toggle() {
+    setOpen((o) => {
+      const next = !o;
+      try {
+        localStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+  return (
+    <section className="card-surface">
+      <div
+        className={`flex items-center justify-between gap-3 px-5 py-3.5 ${
+          open ? "border-b hairline" : ""
+        }`}
+      >
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className="group flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <ChevronRight
+            size={14}
+            className={`shrink-0 text-zinc-500 transition-transform duration-300 group-hover:text-accent-soft ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+          {icon && <span className="text-accent-soft/80">{icon}</span>}
+          <span className="truncate text-[13px] font-semibold tracking-wide text-zinc-200">
+            {title}
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          {!open && summary}
+          {right}
+        </div>
+      </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <m.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="p-5">{children}</div>
+          </m.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+/** A tiny count pill for a collapsed card header. */
+function CountPill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" }) {
+  const cls =
+    tone === "accent"
+      ? "border-accent/30 bg-accent/[0.1] text-accent-soft"
+      : "border-white/[0.08] bg-white/[0.03] text-zinc-400";
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>{children}</span>
+  );
+}
+
+export default function OverviewPage({ embedded = false }: { embedded?: boolean } = {}) {
+  // v1.230.0 (FP2/FP3): /health is the app's ONE shared poll (DaemonProvider)
+  // — this page ran a second one. /sessions asks for 50 rows, not the default
+  // 200 (a six-row widget pulled 60 KB every 5 s), and the daemon's ETag lets
+  // an unchanged list cost a 304 (usePolledApi keeps the data it holds).
+  const daemon = useDaemon();
+  const health = { data: daemon.health, loading: daemon.checking };
+  const metrics = usePolledApi<Metrics>("/metrics", 5000);
+  const vault = useApi<{ providers: VaultProvider[] }>("/vault");
+  const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions?limit=50", 5000);
+  // /diagnostics reads provider health, MCP status and a DB liveness ping
+  // (the integrity scan is on-demand only since v1.229.0) — still not free,
+  // so poll slowly.
+  const diag = usePolledApi<Diagnostics>("/diagnostics", 30000);
+  // Reliability signal (free disk + recent provider failures) — read-only.
+  const reliability = usePolledApi<Reliability>("/diagnostics/reliability", 30000);
+
+  const router = useRouter();
+  const templates = useApi<{ templates: Template[] }>("/templates");
+  // v1.310.0 (wave 2, overview-buries-first-action): ONE read of /onboarding
+  // for the whole page — the strip's gate and the welcome card share it, so
+  // the Overview never fetches the doctor twice per load.
+  const onboarding = useApi<Onboarding>("/onboarding");
+  // The gate is next_step ALONE (never sessions/threads, which arrive on a
+  // different poll and would make the strip flicker): while a getting-started
+  // step is still open, the first-run strip leads the page. `!= null` so an
+  // older/partial payload with no next_step key reads as "nothing to lead".
+  const firstRunOpen = onboarding.data?.next_step != null;
+  // LATCHED for this visit (v1.310.0 review): pressing "Use … for answers"
+  // ticks the last open step, the shared re-read turns next_step null, and
+  // an unlatched gate unmounted the strip — taking the press's own "Done — X
+  // now answers your questions" with it. Once shown, the strip stays until the
+  // user leaves the page; the next visit reads next_step fresh.
+  const [firstRunLatched, setFirstRunLatched] = useState(false);
+  useEffect(() => {
+    if (firstRunOpen) setFirstRunLatched(true);
+  }, [firstRunOpen]);
+  const showFirstRun = firstRunOpen || firstRunLatched;
+  // Ambient Operator: the enabled reflex rules (signal→action bindings) so the
+  // Overview shows what Iron Jarvis will do on its own, and recent fires.
+  const reflexes = usePolledApi<{ rules: ReflexRuleLite[] }>("/reflex/rules", 15000);
+  // v1.311.0 (wave 3): only the types this page reads — every other frame
+  // (browser tab switches, provider.routed per LLM call) re-rendered the
+  // whole Overview for nothing.
+  const { events, connected } = useEvents(40, { types: OVERVIEW_EVENT_TYPES });
+
+  // Calm UI redesign S7 (AUDIT Q2): the Simple/Advanced switch is retired —
+  // this page is the full Overview until S8 moves its content to
+  // Everything › Status and makes the home the chat.
+  const advanced = true;
+  // Simple mode: the full module grid waits behind "Show all modules".
+  const [allModules, setAllModules] = useState(false);
+
+  const offline = !daemon.checking && !daemon.online;
+  const m = metrics.data;
+
+  // Which first-win / template tile is currently starting a session.
+  const [starting, setStarting] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // One click → a real result: start the agent in the background (wait:false) and
+  // jump to its detail page so the user watches it run live.
+  async function startTask(
+    task: string,
+    key: string,
+    agentType = "builder",
+    provider?: string | null,
+    model?: string | null,
+  ) {
+    if (starting) return;
+    setStarting(key);
+    setStartError(null);
+    try {
+      const s = await post<SessionView>("/sessions", {
+        task,
+        agent_type: agentType,
+        wait: false,
+        // Carry a template's pinned provider/model into the run (else dropped).
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+      });
+      if (s?.id) {
+        router.push(`/sessions/${s.id}`);
+        return; // keep the spinner up while we navigate away
+      }
+      setStarting(null);
+    } catch (err) {
+      setStartError(err instanceof ApiError ? err.message : String(err));
+      setStarting(null);
+    }
+  }
+
+  // Recently finished sessions ("while you were away"), newest first.
+  const finished = useMemo(() => {
+    const all = sessions.data?.sessions ?? [];
+    return [...all]
+      .filter((s) => {
+        const st = s.status.toLowerCase();
+        return st === "completed" || st === "failed";
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.finished_at || b.created_at).getTime() -
+          new Date(a.finished_at || a.created_at).getTime(),
+      )
+      .slice(0, 6);
+  }, [sessions.data]);
+
+  // Live agent start/finish rows — TRUTHFUL: one row per run, newest event wins.
+  const liveEvents = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: {
+      id: string;
+      session_id: string | null;
+      label: string;
+      state: LiveState;
+      ts: string;
+    }[] = [];
+    for (const e of events) {
+      if (!LIVE_EVENT_TYPES.has(e.type)) continue;
+      const key = String(e.payload?.run_id ?? e.session_id ?? e.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const done = e.type === "agent.completed";
+      const failed = done && e.payload?.ok === false;
+      rows.push({
+        id: e.id,
+        session_id: e.session_id,
+        label: eventLabel(e),
+        state: failed ? "failed" : done ? "completed" : "running",
+        ts: e.ts,
+      });
+      if (rows.length >= 3) break;
+    }
+    return rows;
+  }, [events]);
+
+  // Ambient Operator surfacing: enabled reflexes + their recent fires.
+  const activeReflexes = useMemo(
+    () => (reflexes.data?.rules ?? []).filter((r) => r.enabled).length,
+    [reflexes.data],
+  );
+  // v1.226.0: a REAL daemon error (non-0, e.g. a 500) must not read as "No
+  // reflexes yet" / "No sessions yet" — the false-empty-state trap. Offline
+  // (status 0) stays with the OfflineHint; a stale-but-present payload keeps
+  // rendering (the global banner covers the refresh).
+  const reflexLoadError =
+    reflexes.error && reflexes.error.status !== 0 && !reflexes.data ? reflexes.error : null;
+  const sessionsLoadError =
+    sessions.error && sessions.error.status !== 0 && !sessions.data ? sessions.error : null;
+  const diagLoadError = diag.error && diag.error.status !== 0 && !diag.data ? diag.error : null;
+  const reflexFires = useMemo(
+    () => events.filter((e) => e.type === "reflex.fired").slice(0, 4),
+    [events],
+  );
+
+  const templateList = templates.data?.templates ?? [];
+
+  // Hero status band signals.
+  const runningCount = useMemo(
+    () =>
+      (sessions.data?.sessions ?? []).filter((s) => {
+        const st = s.status.toLowerCase();
+        return st === "running" || st === "active" || st === "pending";
+      }).length,
+    [sessions.data],
+  );
+  const failures = reliability.data?.recent_provider_failures ?? 0;
+  const freeDisk = reliability.data?.disk?.free;
+  // v1.229.0 (audit OBS2): the background loops that report ok:false, each
+  // with its reason. The hero must never say "nominal" over a dead loop, and
+  // the loop is NAMED — "N failed" told the user nothing they could act on.
+  const failingLoops = useMemo(
+    () =>
+      Object.entries(diag.data?.background_loops ?? {})
+        .filter(([, v]) => v && v.ok === false)
+        .map(([name, v]) => ({ name, error: v.last_error ?? v.error ?? "failed" })),
+    [diag.data],
+  );
+  // v1.229.0 (audit U4): a tool pack that did not start. It costs every agent
+  // its tools and used to sit under "All systems nominal" (the only trace was
+  // one WARNING line in daemon.log).
+  const failedPacks = useMemo(
+    () =>
+      (diag.data?.mcp_servers ?? [])
+        .filter((s) => s && s.last_error)
+        .map((s) => ({ name: s.name, error: s.last_error as string })),
+    [diag.data],
+  );
+  const statusLine = offline
+    ? "Daemon offline"
+    : runningCount > 0
+      ? `Working on ${runningCount} task${runningCount === 1 ? "" : "s"}`
+      : failingLoops.length > 0
+        ? `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`
+        : failedPacks.length > 0
+          ? `${failedPacks.length} thing${failedPacks.length === 1 ? "" : "s"} need${failedPacks.length === 1 ? "s" : ""} attention`
+          : failures > 0
+            ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
+            : // v1.313.0 (hero-status-contradicts-demo): the biggest words on
+              // the page never call it "nominal" while every reply is the
+              // scripted demo. Everything above still ranks first — a dead
+              // loop or a running task is the more urgent truth.
+              // v1.313.0 (review): until /health has answered, the page
+              // does not yet know whether replies are the demo, so it says
+              // neither — a demo install used to flash "All good" first.
+              // Only under the real provider: outside one (bare test
+              // renders) nothing will ever answer, and the line stays as
+              // it always was.
+              daemon.provided && !health.data
+              ? "Checking in…"
+              : health.data && isDemoDefault(health.data)
+                ? "Ready — choose a model to get real answers"
+                : "All good — ready when you are";
+
+  // Compact connections summary.
+  const realProviders = (health.data?.providers ?? []).filter(
+    (p) => p.provider !== "mock" && p.class !== "mock",
+  );
+  const readyCount = realProviders.filter((p) => p.available).length;
+  const vaultLoggedIn = (vault.data?.providers ?? []).filter((p) => p.logged_in).length;
+
+  // The active project (context spine) rides on /health.
+  const activeProject = (health.data as (Health & { active_project?: ActiveProject }) | undefined)
+    ?.active_project;
+
+  const recentCount = sessions.data?.sessions.length ?? 0;
+  const awayCount = liveEvents.length + finished.length;
+
+  return (
+    <PageShell>
+      {/* Embedded in Everything › Status the page's header is Everything's. */}
+      {!embedded && (
+      <Reveal>
+        <PageHeader
+          title={advanced ? "Overview" : "Home"}
+          subtitle={
+            advanced
+              ? "Your starting point: what Iron Jarvis is doing right now, how it is running, and where to go next."
+              : "Ask for something, pick up where you left off, or choose where to go."
+          }
+          actions={
+            health.data ? (
+              <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
+                <Dot on={health.data.status === "ok"} />
+                <span className="text-zinc-400">v{health.data.version}</span>
+              </span>
+            ) : null
+          }
+        />
+      </Reveal>
+      )}
+
+      {offline && (
+        <Reveal>
+          <OfflineHint />
+        </Reveal>
+      )}
+
+      {/* The mock-downgrade warning moved to the app shell (redesign S8):
+          it shows on every page now, not only here. */}
+
+      {/* v1.310.0 (wave 2): the FIRST-RUN STRIP — while setup is unfinished,
+          the first thing under the title is the way to a first real answer
+          (the checklist, one "Ask Jarvis anything" box, the Try-it-now
+          starters), not daemon metrics and thirty tiles. Once next_step is
+          null it is gone and the page below is exactly as before. */}
+      {showFirstRun && (
+        <Reveal>
+          <FirstRunStrip onboarding={onboarding} />
+        </Reveal>
+      )}
+
+      {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
+      {advanced && (
+      <Reveal>
+        <ReactorHero
+          statusLine={statusLine}
+          connected={connected}
+          activeProject={activeProject}
+          model={
+            // v1.310.0 (mock-default-trap-cli-ollama, d): a fresh install's
+            // default is the offline demo, and "mock/claude-opus-4-8" read as
+            // a real Claude model answering. Say what is true instead. An
+            // EMPTY default is untouched too (the W2-1 contract treats it so),
+            // and would otherwise render "/claude-opus-4-8".
+            health.data
+              ? noModelChosen(health.data.default_provider)
+                ? "No model chosen yet"
+                : `${health.data.default_provider}/${health.data.default_model}`
+              : undefined
+          }
+          modelChosen={!!health.data && !noModelChosen(health.data.default_provider)}
+          runningCount={runningCount}
+          freeDisk={freeDisk}
+          failures={failures}
+          diskLoading={reliability.loading}
+        />
+      </Reveal>
+      )}
+
+      {/* v1.249.0 (R-02): work a restart cut off, on the page the user lands
+          on afterwards — with the Continue that used to exist only on the
+          session's own page. Renders nothing when there is nothing to pick up. */}
+      <InterruptedJobsNote />
+
+      {/* v1.229.0: a failing background loop is named where the user lands,
+          in BOTH modes — the health tile below is Advanced-only and inside
+          a collapsed card, so in Simple mode this line is the only truth. */}
+      {failingLoops.length > 0 && (
+        <Reveal>
+          <div
+            role="status"
+            data-testid="loop-failing-note"
+            className="flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="min-w-0 truncate">
+              Background task{failingLoops.length === 1 ? "" : "s"} failing:{" "}
+              {failingLoops.map((l) => `${l.name} — ${l.error}`).join(" · ")}
+            </span>
+          </div>
+        </Reveal>
+      )}
+
+      {/* v1.229.0 (audit U4): the pack that did not start, named with its
+          reason and a way to the Retry — in BOTH modes, like the loop note. */}
+      {failedPacks.length > 0 && (
+        <Reveal>
+          <div
+            role="status"
+            data-testid="pack-failing-note"
+            className="flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="min-w-0 truncate">
+              Tool pack{failedPacks.length === 1 ? "" : "s"} didn’t start:{" "}
+              {failedPacks.map((p) => `${p.name} — ${p.error}`).join(" · ")}
+            </span>
+            <Link href="/tools" className="ml-auto shrink-0 font-medium text-amber-100 underline-offset-2 hover:underline">
+              Retry on Tools
+            </Link>
+          </div>
+        </Reveal>
+      )}
+
+      {/* THE DESKTOP (v1.151.0). Every module as an app icon, most-used first
+          until you arrange them yourself. Directly under the title bar (which
+          is untouched) because "where do I go" is the first question this page
+          is asked, and it used to be answered only by the collapsed rail.
+          Since v1.294.0 it is three doors — Office, Operations, System —
+          each opening in place onto its ten modules; see lib/appTiles.ts. */}
+      {(advanced || allModules) && (
+        <Reveal>
+          <AppGrid />
+        </Reveal>
+      )}
+
+      {/* One card, four numbers (v1.151.0) — was four separate Stat tiles,
+          which gave "avg latency" the same visual weight as a whole module.
+          Shown in both modes now: run quality is not an advanced concern. */}
+      {advanced && (
+        <Reveal>
+          <HealthCard metrics={m ?? null} loading={metrics.loading} />
+        </Reveal>
+      )}
+
+      {/* First-run welcome + getting-started checklist — here only while the
+          strip is NOT up (the strip carries it at the top; one card, never
+          two). It still nudges for a failing check after setup is done. */}
+      {!showFirstRun && (
+        <Reveal>
+          <OnboardingWelcome state={onboarding} />
+        </Reveal>
+      )}
+
+      {/* Power tips (v1.198.0): the shortcuts the README teaches, surfaced
+          in-app for packaged users who never see GitHub. One-shot dismiss —
+          Help carries the same info permanently. */}
+      {advanced && (
+        <Reveal>
+          <PowerTips />
+        </Reveal>
+      )}
+
+      {/* Goals strip (v1.208.0): the forgotten-goal killer — every live goal
+          visible from the page the user lands on, linking to /autonomy.
+          Deliberately NOT wrapped in <Reveal>: the strip renders null when
+          there is nothing to show, and a motion wrapper around null would
+          still be an empty div (a husk). */}
+      <GoalsStrip />
+
+      {/* SYSTEMS & ADMIN (v1.156.0) — ONE collapsible instead of seven.
+          Everything below the tiles used to be its own card with its own
+          chevron and its own remembered open/closed state, so the page below
+          the fold was a column of half-open boxes competing with the tiles for
+          attention. The hero, the tiles and the stats card stay exactly where
+          they were; the rest now rests behind a single title that behaves like
+          the cards it replaced. Collapsed by default: this is the part of the
+          page you go looking for, not the part you land on. */}
+      {advanced && (
+      <Reveal>
+        <CollapsibleCard
+          title="Systems & admin"
+          icon={<Wrench size={15} />}
+          storageKey="ij_ov_admin"
+          summary={
+            <span className="text-xs text-zinc-500">
+              activity, connections, sessions, health
+            </span>
+          }
+        >
+          <div className="space-y-5">
+      {/* First-win: one click → a real result. While the first-run strip is
+          up these starters live THERE (pointing at Chat); once setup is done
+          they come back here unchanged, still starting a run. */}
+        {!showFirstRun && (
+        <PanelSection
+          title="Try it now"
+          icon={<Rocket size={15} />}
+          storageKey="ij_ov_tryit"
+          summary={<CountPill tone="accent">one click → your first result</CountPill>}
+        >
+          {startError && (
+            <div className="mb-3">
+              <ErrorNote>{startError}</ErrorNote>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {FIRST_WIN_TASKS.map((t) => {
+              const busy = starting === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  disabled={!!starting}
+                  onClick={() => startTask(t.task, t.key)}
+                  className="group relative flex h-full flex-col gap-3 overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.04] hover:shadow-card-hover disabled:pointer-events-none disabled:opacity-60"
+                >
+                  <span className="pointer-events-none absolute -right-6 -top-8 h-24 w-24 rounded-full bg-accent/10 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-accent/20 bg-accent/[0.08] text-accent-soft">
+                    {t.icon}
+                  </span>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-zinc-100">{t.title}</div>
+                    <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-zinc-500">{t.task}</p>
+                  </div>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-accent-soft">
+                    {busy ? (
+                      <LoaderInline label="Starting…" />
+                    ) : (
+                      <>
+                        Run
+                        <ArrowRight
+                          size={13}
+                          className="transition-transform group-hover:translate-x-0.5"
+                        />
+                      </>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </PanelSection>
+        )}
+
+      {/* Ambient operator — the reflexes that act on their own + recent fires. */}
+        <PanelSection
+          title="Ambient operator"
+          icon={<Zap size={15} />}
+          storageKey="ij_ov_ambient"
+          summary={
+            <CountPill tone={activeReflexes > 0 ? "accent" : "neutral"}>
+              {activeReflexes > 0 ? `${activeReflexes} active` : "none"}
+            </CountPill>
+          }
+          right={
+            <Link href="/reflex" className="text-xs text-accent transition-colors hover:text-accent/80">
+              Manage →
+            </Link>
+          }
+        >
+          <Link
+            href="/reflex"
+            className="flex items-center justify-between rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-accent/[0.05]"
+          >
+            <span className="text-sm text-zinc-300">
+              {activeReflexes > 0
+                ? `${activeReflexes} active ${activeReflexes === 1 ? "reflex" : "reflexes"}`
+                : reflexLoadError
+                  ? "Reflexes could not be loaded"
+                  : "No reflexes yet"}
+            </span>
+            <span className="text-xs text-zinc-500">
+              {activeReflexes > 0
+                ? "webhooks & messages that run work on their own"
+                : reflexLoadError
+                  ? reflexLoadError.message
+                  : "Set one up →"}
+            </span>
+          </Link>
+
+          {reflexFires.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {reflexFires.map((e) => {
+                const p = e.payload || {};
+                const ok = p.ok !== false;
+                return (
+                  <li
+                    key={e.id}
+                    className="flex items-center gap-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 text-xs"
+                  >
+                    <StatusDot status={ok ? "completed" : "failed"} />
+                    <span className="shrink-0 font-medium text-zinc-200">
+                      {String(p.rule ?? "reflex")}
+                    </span>
+                    <span className="truncate text-zinc-500">
+                      {ok ? "fired" : "failed"} → {String(p.action ?? p.detail ?? "action")}
+                    </span>
+                    <span className="ml-auto shrink-0 tabular-nums text-[11px] text-zinc-600">
+                      {clockTime(e.ts)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </PanelSection>
+
+      {/* While you were away — live activity + recently finished sessions. */}
+        <PanelSection
+          title="While you were away"
+          icon={<History size={15} />}
+          storageKey="ij_ov_away"
+          summary={
+            <span className="flex items-center gap-2">
+              {awayCount > 0 && <CountPill>{awayCount}</CountPill>}
+              <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <Dot on={connected} />
+                {connected ? "live" : "offline"}
+              </span>
+            </span>
+          }
+        >
+          {liveEvents.length > 0 && (
+            <div className="mb-3 space-y-1.5">
+              {liveEvents.map((e) => {
+                const failed = e.state === "failed";
+                const running = e.state === "running";
+                const label = running ? "Running now" : failed ? "Failed" : "Just finished";
+                const tone = failed
+                  ? "border-rose-500/25 bg-rose-500/[0.06] hover:bg-rose-500/[0.1]"
+                  : "border-accent/20 bg-accent/[0.05] hover:bg-accent/[0.09]";
+                const row = (
+                  <span className="flex items-center gap-2.5">
+                    <StatusDot status={e.state} />
+                    <span
+                      className={`shrink-0 font-medium ${failed ? "text-rose-200" : "text-zinc-200"}`}
+                    >
+                      {label}
+                    </span>
+                    <span className="truncate text-zinc-500">{e.label}</span>
+                    <span className="ml-auto shrink-0 tabular-nums text-[11px] text-zinc-600">
+                      {clockTime(e.ts)}
+                    </span>
+                  </span>
+                );
+                return e.session_id ? (
+                  <Link
+                    key={e.id}
+                    href={`/sessions/${e.session_id}`}
+                    className={`block rounded-xl border px-3 py-2 text-xs transition-colors ${tone}`}
+                  >
+                    {row}
+                  </Link>
+                ) : (
+                  <div key={e.id} className={`rounded-xl border px-3 py-2 text-xs ${tone}`}>
+                    {row}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {sessionsLoadError ? (
+            <DataError error={sessionsLoadError} what="sessions" />
+          ) : sessions.loading && !sessions.data ? (
+            <SkeletonRows rows={4} />
+          ) : finished.length > 0 ? (
+            <ul className="space-y-2">
+              {finished.map((s) => (
+                <li key={s.id}>
+                  <Link
+                    href={sessionHref(s)}
+                    className="block rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <StatusIcon status={s.status} size={14} />
+                        <span className="truncate text-sm text-zinc-200">
+                          {s.task || "Untitled session"}
+                        </span>
+                      </span>
+                      <Badge value={s.status} />
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 pl-6 text-[11px] text-zinc-500">
+                      <span>{timeAgo(s.finished_at || s.created_at)}</span>
+                      {s.summary && (
+                        <>
+                          <span>·</span>
+                          <span className="truncate">{s.summary}</span>
+                        </>
+                      )}
+                      {s.provider === "mock" && <MockChip className="ml-auto" />}
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : liveEvents.length === 0 ? (
+            <Empty icon={<History size={22} />}>Nothing yet — try a task above.</Empty>
+          ) : null}
+        </PanelSection>
+
+      {/* Saved tasks — one-click runs from saved templates (omitted when none).
+          Renamed from "Your apps" in v1.151.1: the tile grid above is now the
+          apps, and two things called that on one page is a coin toss. */}
+      {templateList.length > 0 && (
+            <PanelSection
+            title="Saved tasks"
+            icon={<LayoutGrid size={15} />}
+            storageKey="ij_ov_apps"
+            summary={<CountPill>{templateList.length}</CountPill>}
+            right={
+              <Link
+                href="/templates"
+                className="flex items-center gap-1 text-xs text-accent-soft transition-colors hover:text-accent"
+              >
+                manage <ArrowRight size={12} />
+              </Link>
+            }
+          >
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {templateList.map((t) => {
+                const key = `tpl-${t.id}`;
+                const busy = starting === key;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={!!starting}
+                    onClick={() =>
+                      startTask(t.task, key, t.agent_type || "builder", t.provider, t.model)
+                    }
+                    title={t.task}
+                    className="group flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-500/30 hover:bg-violet-500/[0.04] disabled:pointer-events-none disabled:opacity-60"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/[0.08] text-violet-300">
+                      {busy ? <LoaderInline /> : <BookMarked size={16} />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-zinc-100">{t.name}</div>
+                      <p className="truncate text-xs text-zinc-500">{t.task}</p>
+                    </div>
+                    <Play
+                      size={14}
+                      className="shrink-0 text-zinc-600 transition-colors group-hover:text-violet-300"
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </PanelSection>
+        )}
+
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          {/* Connections — compact summary + manage link. */}
+          <PanelSection
+            title="Connections"
+            icon={<Server size={15} />}
+            storageKey="ij_ov_connections"
+            summary={
+              <CountPill tone={readyCount > 0 ? "accent" : "neutral"}>
+                {readyCount}/{realProviders.length} ready
+              </CountPill>
+            }
+            right={
+              <Link
+                href="/connections"
+                className="flex items-center gap-1 text-xs text-accent-soft transition-colors hover:text-accent"
+              >
+                manage <ArrowRight size={12} />
+              </Link>
+            }
+          >
+            {health.loading && !health.data ? (
+              <SkeletonRows rows={2} />
+            ) : health.data ? (
+              <div className="space-y-3">
+                <div className="text-xs text-zinc-500">
+                  default{" "}
+                  <span className="font-mono text-zinc-300">
+                    {health.data.default_provider} / {health.data.default_model}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+                    <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-400">
+                      <Server size={12} /> Providers
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-zinc-200">
+                      <Dot on={readyCount > 0} />
+                      {readyCount} of {realProviders.length} ready
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+                    <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-400">
+                      <ShieldCheck size={12} /> Browser vault
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-zinc-200">
+                      <Dot on={vaultLoggedIn > 0} />
+                      {vaultLoggedIn} logged in
+                    </div>
+                  </div>
+                </div>
+                {readyCount === 0 && (
+                  <Link
+                    href="/connections"
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                  >
+                    <PlugZap size={14} /> Connect a real model <ArrowRight size={12} />
+                  </Link>
+                )}
+              </div>
+            ) : (
+              <Empty icon={<Server size={22} />} action={{ label: "Connect a model", href: "/connections" }}>
+                No provider data.
+              </Empty>
+            )}
+          </PanelSection>
+
+          {/* Recent sessions */}
+          <PanelSection
+            title="Recent sessions"
+            icon={<Boxes size={15} />}
+            storageKey="ij_ov_recent"
+            summary={recentCount > 0 ? <CountPill>{recentCount}</CountPill> : undefined}
+            right={
+              <Link
+                href="/sessions"
+                className="flex items-center gap-1 text-xs text-accent-soft transition-colors hover:text-accent"
+              >
+                view all <ArrowRight size={12} />
+              </Link>
+            }
+          >
+            {sessionsLoadError ? (
+              <DataError error={sessionsLoadError} what="sessions" />
+            ) : sessions.loading && !sessions.data ? (
+              <SkeletonRows rows={4} />
+            ) : sessions.data && sessions.data.sessions.length > 0 ? (
+              <ul className="space-y-2">
+                {sessions.data.sessions.slice(0, 6).map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      // v1.309.0: a mission opens its mission screen (inside
+                      // its project), not the raw session page — the same
+                      // rule for "While you were away" above.
+                      href={sessionHref(s)}
+                      className="block rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-white/[0.12] hover:bg-white/[0.05]"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <StatusDot status={s.status} />
+                          <span className="truncate text-sm text-zinc-200">{s.task}</span>
+                        </span>
+                        <Badge value={s.status} />
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 pl-4 text-[11px] text-zinc-500">
+                        <span className="font-mono">{shortId(s.id)}</span>
+                        <span>·</span>
+                        <span>{s.agent_type}</span>
+                        <span>·</span>
+                        <span>{timeAgo(s.created_at)}</span>
+                        {s.provider === "mock" && <MockChip className="ml-auto" />}
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            ) : sessions.loading && !sessions.data ? (
+              // v1.311.0: a spinner only while NOTHING is held — an empty list
+              // already answered reads "No sessions yet", never a spinner.
+              <Spinner />
+            ) : (
+              <Empty icon={<Boxes size={22} />}>No sessions yet.</Empty>
+            )}
+          </PanelSection>
+        </div>
+
+      {/* System health (the /diagnostics self-test) — Advanced */}
+      {advanced && (
+            <PanelSection
+            title="System health"
+            icon={<HeartPulse size={15} />}
+            storageKey="ij_ov_health"
+            summary={
+              <CountPill tone={diag.data?.db_integrity === "ok" ? "neutral" : "neutral"}>self-test</CountPill>
+            }
+          >
+            {diagLoadError ? (
+              <DataError error={diagLoadError} what="diagnostics" />
+            ) : diag.loading && !diag.data ? (
+              <SkeletonRows rows={2} />
+            ) : diag.data ? (
+              <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                <HealthItem
+                  label="DB integrity"
+                  value={diag.data.db_integrity === "ok" ? "ok" : diag.data.db_integrity || "—"}
+                  status={diag.data.db_integrity === "ok" ? "ok" : "bad"}
+                />
+                <HealthItem
+                  label="Secrets key"
+                  value={
+                    diag.data.secrets_key_valid === false
+                      ? "invalid"
+                      : diag.data.secrets_key_present
+                        ? "valid"
+                        : "missing"
+                  }
+                  status={
+                    diag.data.secrets_key_valid === false || !diag.data.secrets_key_present ? "bad" : "ok"
+                  }
+                />
+                <HealthItem
+                  label="WAL size"
+                  value={fmtBytes(diag.data.wal_bytes)}
+                  status={(diag.data.wal_bytes || 0) > 64 * 1024 * 1024 ? "warn" : "neutral"}
+                />
+                <HealthItem
+                  label="Running"
+                  value={String(diag.data.running_sessions ?? 0)}
+                  status="neutral"
+                />
+                <HealthItem
+                  label="Pending reviews"
+                  value={String(diag.data.pending_reviews ?? 0)}
+                  status={(diag.data.pending_reviews || 0) > 0 ? "warn" : "neutral"}
+                />
+                <HealthItem
+                  label="Worktrees"
+                  value={String(diag.data.tracked_worktrees ?? 0)}
+                  status="neutral"
+                />
+                <HealthItem
+                  label="Background loops"
+                  value={
+                    failingLoops.length
+                      ? `${failingLoops.length} failed: ${failingLoops.map((l) => l.name).join(", ")}`
+                      : "ok"
+                  }
+                  status={failingLoops.length ? "bad" : "ok"}
+                />
+              </div>
+              {/* v1.229.0: the failing loops BY NAME with their last error —
+                  a count alone is not something the user can act on. */}
+              {failingLoops.length > 0 && (
+                <ul data-testid="failing-loops" className="mt-3 space-y-1 text-[12px]">
+                  {failingLoops.map((l) => (
+                    <li key={l.name} className="flex min-w-0 gap-2">
+                      <span className="shrink-0 font-mono text-rose-300">{l.name}</span>
+                      <span className="min-w-0 truncate text-zinc-400" title={l.error}>
+                        {l.error}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              </>
+            ) : (
+              <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
+            )}
+          </PanelSection>
+        )}
+
+          </div>
+        </CollapsibleCard>
+      </Reveal>
+      )}
+
+      {advanced && (
+        <Reveal>
+          <EventStream />
+        </Reveal>
+      )}
+    </PageShell>
+  );
+}

@@ -14,6 +14,7 @@
  */
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { Pin, PinOff, Search } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
@@ -22,12 +23,19 @@ import { recordOpen } from "@/lib/appTiles";
 import {
   EVERYTHING_GROUPS,
   MAX_PINS,
+  EVERYTHING_TAB_EVENT,
   PINS_EVENT,
   readPins,
   surfacesIn,
   togglePin,
   type Surface,
 } from "@/lib/surfaces";
+
+// Everything › Status (redesign S8): the old Overview's operational content,
+// loaded only when the tab is opened.
+const StatusOverview = dynamic(() => import("@/components/overview/StatusOverview"), { ssr: false });
+
+type Tab = "directory" | "status";
 
 function matches(s: Surface, q: string): boolean {
   if (!q) return true;
@@ -43,6 +51,30 @@ export default function EverythingPage() {
   const [q, setQ] = useState("");
   const [pins, setPins] = useState<string[]>([]);
   const [pinNote, setPinNote] = useState("");
+  const [tab, setTab] = useState<Tab>("directory");
+
+  useEffect(() => {
+    const fromHash = () => setTab(window.location.hash === "#status" ? "status" : "directory");
+    fromHash();
+    const onTab = (e: Event) => setTab((e as CustomEvent<Tab>).detail === "status" ? "status" : "directory");
+    window.addEventListener("hashchange", fromHash);
+    window.addEventListener(EVERYTHING_TAB_EVENT, onTab);
+    return () => {
+      window.removeEventListener("hashchange", fromHash);
+      window.removeEventListener(EVERYTHING_TAB_EVENT, onTab);
+    };
+  }, []);
+
+  function choose(next: Tab) {
+    setTab(next);
+    try {
+      const url = new URL(window.location.href);
+      url.hash = next === "status" ? "status" : "";
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {
+      /* no history (tests) */
+    }
+  }
 
   useEffect(() => {
     const sync = () => setPins(readPins());
@@ -74,6 +106,35 @@ export default function EverythingPage() {
   return (
     <PageShell>
       <PageHeader title="Everything" subtitle="Every part of Iron Jarvis, grouped, each with one line about what it is for." />
+      <div role="tablist" aria-label="Everything" className="flex gap-1 border-b border-white/[0.06]">
+        {(
+          [
+            ["directory", "Directory"],
+            ["status", "Status"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            id={`everything-tab-${key}`}
+            aria-selected={tab === key}
+            aria-controls={`everything-panel-${key}`}
+            onClick={() => choose(key)}
+            className={`-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors ${
+              tab === key ? "border-accent text-zinc-100" : "border-transparent text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "status" ? (
+        <section id="status" role="tabpanel" aria-labelledby="everything-tab-status" data-testid="everything-status">
+          <StatusOverview embedded />
+        </section>
+      ) : (
+      <>
       <Reveal>
         <div className="relative isolate max-w-md">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-500" aria-hidden />
@@ -145,6 +206,8 @@ export default function EverythingPage() {
           </div>
         )}
       </Reveal>
+      </>
+      )}
     </PageShell>
   );
 }
