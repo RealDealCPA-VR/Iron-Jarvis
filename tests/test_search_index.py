@@ -1556,7 +1556,13 @@ def test_a_backfill_sized_write_cannot_stall_a_chat_save(engine, index):
     # contended p95 = 319 ms against limit 276 on a shared runner that took
     # 31 min for the suite (alone p95 5.5 ms): scheduler noise, not the
     # inversion, which was seconds. 500 ms still fails a real stall.
-    limit = max(500.0, base_p95 * 50.0)
+    # v1.320.3: AND the machine's own worst UNCONTENDED pause. The v1.320.1
+    # release gate measured alone p95 5.2 ms but alone max 576 ms — a runner
+    # that freezes a lone save for half a second — and contended p95 583 ms
+    # against limit 500. A contended p95 under 1.5x the stall this same
+    # machine produces with no backfill at all is scheduler noise; the
+    # inversion this guards is 165 SECONDS and still fails every bar here.
+    limit = max(500.0, base_p95 * 50.0, max(baseline) * 1.5)
     assert p95 < limit, (
         f"chat saves are stalling behind the backfill (limit {limit:.0f}ms): {detail}"
     )
