@@ -972,3 +972,93 @@ describe("the bell rings for a scan's suggestion only, quietly", () => {
     await waitFor(() => expect(H.notify).toHaveBeenCalled());
   });
 });
+
+// ------------------------------------------------- v1.320.0: rate a reply
+//
+// The user: "Teach it your style" said "rate a finished session", and Chat —
+// where it sent them — had no rating at all. Every settled reply now carries
+// 👍 / 👎; a 👎 asks what to change, and the answer is the lesson.
+
+describe("rate a reply in Chat (v1.320.0)", () => {
+  const feedbackPosts = () => H.api.posts.filter((p) => p.path === "/chat/feedback");
+
+  it("the newest reply asks 'Was this helpful?'; 👍 records it and saves it on the message", async () => {
+    render(<ChatPage />);
+    await send("hello", "Reply 1.");
+    const row = await screen.findByTestId("reply-rating");
+    expect(row.textContent).toMatch(/Was this helpful\?/);
+    const saves = threadSaves().length;
+    fireEvent.click(within(row).getByRole("button", { name: "Good reply" }));
+    expect(await screen.findByTestId("reply-rated")).toHaveTextContent("Thanks — noted.");
+    expect(feedbackPosts()).toEqual([
+      { path: "/chat/feedback", body: expect.objectContaining({ rating: "up", comment: "" }) },
+    ]);
+    await waitFor(() => expect(threadSaves().length).toBeGreaterThan(saves));
+    expect((lastSaved().at(-1) as { rating?: unknown }).rating).toEqual({ value: "up" });
+  });
+
+  it("👎 asks what should be different; the answer is sent and said back", async () => {
+    render(<ChatPage />);
+    await send("hello", "Reply 1.");
+    fireEvent.click(within(await screen.findByTestId("reply-rating")).getByRole("button", { name: "Not quite right" }));
+    const ask = screen.getByTestId("reply-rating-ask");
+    const box = within(ask).getByLabelText("What should be different next time?");
+    expect(document.activeElement).toBe(box);
+    fireEvent.change(box, { target: { value: "shorter, with bullets" } });
+    fireEvent.click(within(ask).getByRole("button", { name: "Save" }));
+    expect(await screen.findByTestId("reply-rated")).toHaveTextContent(
+      "Noted — Jarvis will remember: “shorter, with bullets”",
+    );
+    expect(feedbackPosts().at(-1)!.body).toEqual(
+      expect.objectContaining({ rating: "down", comment: "shorter, with bullets" }),
+    );
+    await waitFor(() =>
+      expect((lastSaved().at(-1) as { rating?: unknown }).rating).toEqual({
+        value: "down",
+        note: "shorter, with bullets",
+      }),
+    );
+  });
+
+  it("Enter in the 👎 box saves the rating and never sends a chat message", async () => {
+    render(<ChatPage />);
+    await send("hello", "Reply 1.");
+    fireEvent.click(within(await screen.findByTestId("reply-rating")).getByRole("button", { name: "Not quite right" }));
+    const box = screen.getByLabelText("What should be different next time?");
+    fireEvent.change(box, { target: { value: "use plain words" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.submit(box.closest("form")!);
+    await screen.findByTestId("reply-rated");
+    expect(H.stream.bodies.length).toBe(1); // only the first turn
+  });
+
+  it("a reopened chat shows the saved rating, not the buttons", async () => {
+    window.history.replaceState({}, "", "/chat?thread=t9");
+    H.api.getResponses["/chat/threads/t9"] = {
+      id: "t9",
+      title: "Rated",
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: "Earlier reply.",
+          route: { requested: "", provider: "mock", model: "mock", reason: "default" },
+          rating: { value: "down", note: "less formal" },
+        },
+      ],
+    };
+    render(<ChatPage />);
+    await screen.findByText("Earlier reply.");
+    expect(await screen.findByTestId("reply-rated")).toHaveTextContent("less formal");
+    expect(screen.queryByTestId("reply-rating")).toBeNull();
+  });
+
+  it("a failed save says so and leaves the buttons", async () => {
+    H.api.postResponses["/chat/feedback"] = new H.FakeApiError("down", 0);
+    render(<ChatPage />);
+    await send("hello", "Reply 1.");
+    fireEvent.click(within(await screen.findByTestId("reply-rating")).getByRole("button", { name: "Good reply" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Couldn't save that/);
+    expect(screen.queryByTestId("reply-rated")).toBeNull();
+  });
+});

@@ -25,6 +25,10 @@ import type { DoctorCheck, Onboarding, OnboardingStep } from "@/lib/types";
 
 const DISMISS_KEY = "ij_onboarding_dismissed";
 
+/** The preference the "Teach it your style" press puts in Chat's box. It
+ *  starts with "From now on" — the words that arm remember_preference. */
+export const TEACH_EXAMPLE = "From now on, keep your answers short and to the point";
+
 /** Map a checklist step to the page that completes it. */
 const STEP_LINK: Record<string, { href: string; cta: string }> = {
   connect_ai: { href: "/connections", cta: "Connect a model" },
@@ -33,13 +37,13 @@ const STEP_LINK: Record<string, { href: string; cta: string }> = {
   // brand-new user to the empty Sessions list.
   first_session: { href: "/chat", cta: "Open Chat" },
   work_with_document: { href: "/documents", cta: "Open Documents" },
-  // v1.197.0: the teach-style signal is CREATED by asking Chat to remember a
-  // preference (e.g. "remember: I like short answers" — the chat-armable
-  // remember_preference tool writes the LessonRecord). Thumbs feedback exists
-  // only on session detail pages, so "rate a reply" would be an impossible
-  // instruction here; /memory?scope=lessons is a dead end for a user with
-  // zero lessons.
-  teach_style: { href: "/chat", cta: "Teach it in Chat" },
+  // v1.197.0: the teach-style signal is CREATED in Chat — a stated
+  // preference (the remember_preference tool writes the lesson) or, since
+  // v1.320.0, a 👍 / 👎 under a reply. v1.320.0: the press opens Chat with an
+  // example preference ALREADY TYPED (nothing is sent until the user does) —
+  // a blank Chat left the user guessing what "teach" meant.
+  // /memory?scope=lessons stays a dead end for a user with zero lessons.
+  teach_style: { href: `/chat?ask=${encodeURIComponent(TEACH_EXAMPLE)}`, cta: "Teach it in Chat" },
   set_up_voice: { href: "/connections", cta: "Enable voice" },
 };
 

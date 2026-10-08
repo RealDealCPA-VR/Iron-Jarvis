@@ -71,13 +71,24 @@ class LearningEngine:
 
     # -- feedback -----------------------------------------------------------
     def record_feedback(
-        self, session_id: str, rating: str, comment: str = ""
+        self,
+        session_id: str,
+        rating: str,
+        comment: str = "",
+        *,
+        lesson_on_bare_down: bool = True,
     ) -> FeedbackRecord:
         """Store user feedback and, when it carries signal, distil a lesson.
 
         A ``down`` rating or any non-empty comment is worth learning from, so it
         is condensed into a high-weight (3) ``feedback`` lesson that future runs
         will see.
+
+        ``lesson_on_bare_down=False`` (v1.320.0, a chat reply's 👎 with no
+        note): the rating is recorded but no lesson is written — "a past
+        result was rejected; be more careful" says nothing about WHAT to do
+        differently, and a thumbs-down on one reply must not add a vague rule
+        to every later prompt. The note, when given, is the lesson.
         """
         comment = (comment or "").strip()
         with session_scope(self.engine) as db:
@@ -88,7 +99,7 @@ class LearningEngine:
             db.commit()
             db.refresh(record)
 
-        if rating == "down" or comment:
+        if comment or (rating == "down" and lesson_on_bare_down):
             if comment:
                 text = (
                     f"Feedback ({rating}) on a past task: {comment}. "

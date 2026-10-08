@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.319.0 (2026-10-04).*
+holds itself to. Current as of v1.320.0 (2026-10-04).*
 
 ---
 
@@ -1433,6 +1433,16 @@ nothing was taken away.
   **Settings → Appearance**, from the menu drawer on a phone, or by typing
   "Theme" in the Ctrl+K search — all four change the same setting. The light
   themes now draw status colours and chips in deeper inks you can read.
+- **Rate a reply in Chat** (v1.320.0). Under each reply in Chat there is a
+  👍 / 👎 (the newest reply asks "Was this helpful?"; older replies show the
+  buttons when you point at them). 👍 is noted at once. 👎 asks **What
+  should be different next time?** — your answer is remembered and used in
+  later replies (it appears with your other lessons on the Memory page);
+  **Skip** records the 👎 without a rule. A rating is kept with the chat, so
+  reopening it shows what you said. The setup checklist's **Teach it your
+  style** now says exactly this, and its button opens Chat with an example
+  ("From now on, keep your answers short and to the point") already typed —
+  edit it and press Send. Agent runs can still be rated on their own page.
 - **Settings opens short** (v1.319.0). In Simple mode, **Settings** shows
   the everyday choices — which AI answers, its model, and the default
   persona — plus Appearance and Maintenance. **Show all settings** opens the

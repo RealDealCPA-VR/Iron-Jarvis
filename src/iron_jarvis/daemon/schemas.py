@@ -1159,6 +1159,14 @@ class FeedbackBody(BaseModel):
     comment: str = ""
 
 
+class ChatFeedbackBody(BaseModel):
+    """v1.320.0: a 👍 / 👎 on a chat reply (chat turns have no session row)."""
+
+    rating: str = "up"  # up | down
+    comment: str = ""
+    thread_id: str = ""
+
+
 class DocWriteBody(BaseModel):
     path: str
     content: str

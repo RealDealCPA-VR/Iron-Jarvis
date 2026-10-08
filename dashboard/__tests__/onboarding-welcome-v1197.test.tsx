@@ -177,10 +177,12 @@ describe("OnboardingWelcome step links (v1.197.0)", () => {
     await screen.findByText("Welcome to Iron Jarvis");
 
     const link = rowLink("Step teach_style");
-    expect(link).toHaveAttribute("href", "/chat");
+    // v1.320.0: Chat opens with an example preference already typed (nothing
+    // is sent) — a blank Chat left the user guessing what "teach" meant.
+    const href = new URL(link.getAttribute("href") ?? "", "http://ij.test");
+    expect(href.pathname).toBe("/chat");
+    expect(href.searchParams.get("ask")).toMatch(/^From now on, /);
     expect(link.textContent).toContain("Teach it in Chat");
-    // "Rate a reply" named an affordance Chat does not have (thumbs live on
-    // session detail only) — the CTA must not regress to it.
     expect(link.textContent).not.toContain("Rate a reply");
     // The dead end for a zero-lesson user must be gone entirely.
     expect(link.getAttribute("href")).not.toContain("/memory");

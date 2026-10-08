@@ -25,6 +25,7 @@ from ..schemas import (
     ChatBody,
     ChatCompactBody,
     ChatCrystallizeBody,
+    ChatFeedbackBody,
     ChatRememberBody,
     ChatShareBody,
     PersonaCreateBody,
@@ -1732,6 +1733,33 @@ def register(app: FastAPI, d) -> None:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/chat/feedback")
+    def chat_feedback(body: ChatFeedbackBody) -> dict[str, Any]:
+        """A 👍 / 👎 on a chat reply (v1.320.0).
+
+        The user's report: the setup checklist said "rate a finished session",
+        the rating lived only on an agent run's own page, and Chat — where the
+        checklist sent them — had no way to rate anything. A chat turn has no
+        Session row, so the rating is stored against ``chat:<thread id>``
+        (``chat`` for a conversation not saved yet) through the SAME learning
+        engine as a session rating: it counts as teaching (the checklist's
+        "Teach it your style"), and a note becomes a lesson every later
+        prompt carries. A bare 👎 is recorded WITHOUT a lesson — it does not
+        say what to change. The reply's text is never stored here.
+        """
+        rating = (body.rating or "").strip().lower()
+        if rating not in ("up", "down"):
+            raise HTTPException(status_code=422, detail="rating must be 'up' or 'down'")
+        comment = (body.comment or "").strip()[:500]
+        thread = (body.thread_id or "").strip()[:80]
+        fb = d.platform.learning.record_feedback(
+            f"chat:{thread}" if thread else "chat",
+            rating,
+            comment,
+            lesson_on_bare_down=False,
+        )
+        return {"id": fb.id, "rating": fb.rating, "remembered": bool(comment)}
 
     @app.post("/chat/turns/{turn_id}/stop")
     async def stop_chat_turn(turn_id: str) -> dict[str, Any]:

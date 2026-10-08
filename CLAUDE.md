@@ -2905,6 +2905,25 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A chat reply can be rated; "Teach it your style" names what to do**
+  (v1.320.0, a user report: the step said "rate a finished session", the
+  rating lived only on session detail, and the step's button opened a blank
+  Chat). `POST /chat/feedback {rating up|down, comment ≤ 500, thread_id}`
+  stores a FeedbackRecord against `chat:<thread>` (`chat` unsaved) through
+  `learning.record_feedback(..., lesson_on_bare_down=False)` — a note is the
+  lesson (source "feedback", weight 3); a bare 👎 records the rating with NO
+  "be more careful" lesson (the session route keeps its old behaviour). It
+  counts for `_taught_style` (any FeedbackRecord). Dashboard:
+  `components/chat/ReplyRating.tsx` under every settled assistant reply in
+  `MessageRow` (newest: "Was this helpful?", always visible; older: on
+  hover), 👎 asks "What should be different next time?" (Enter submits the
+  little form and never reaches the composer); the answer is stored on the
+  message (`ChatMessage.rating`) via `RowHandlers.rateReply` → queueSave,
+  buttons disabled mid-turn. The checklist detail names "From now on" and
+  👍 / 👎, and `OnboardingWelcome.TEACH_EXAMPLE` opens `/chat?ask=` with it
+  typed (pinned to arm remember_preference). Pins:
+  `tests/test_chat_feedback_v1320.py`, the "rate a reply in Chat" block in
+  `dashboard/__tests__/preferences-v1305.test.tsx` (6 mutations, all red).
 - **Settings in Simple is the everyday three** (v1.319.0). `BASIC_KEYS`
   (default_provider, default_model, default_persona) are the only FIELDS
   rendered while `full = advanced || showAll` is false; the section heading

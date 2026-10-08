@@ -117,6 +117,7 @@ import {
 } from "@/components/chat/TurnReceipt";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
+import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import {
   applySettled,
   decodeSuggestion,
@@ -363,6 +364,9 @@ interface ChatMessage {
   steer?: boolean;
   /** v1.282.0: the preference sentences this turn kept (the receipt says them). */
   remembered?: string[];
+  /** v1.320.0: the user's 👍 / 👎 on this reply (and what to change), so a
+   *  reopened chat shows the answer instead of asking again. */
+  rating?: ReplyRatingValue;
   /** v1.305.0: a repeated correction the daemon proposes keeping — the quiet
    *  line under the receipt. `state` records the user's answer, so a reload
    *  renders "Remembered: …" (or "won't suggest again"), never the ask. */
@@ -2102,6 +2106,8 @@ export interface RowHandlers {
   /** v1.305.0: the user answered the suggestion under reply `index` — store
    *  the answer on that message and save it. */
   settleSuggestion: (index: number, next: ChatSuggestion) => void;
+  /** v1.320.0: the user rated reply `index` — store it on the message, save. */
+  rateReply: (index: number, rating: ReplyRatingValue) => void;
   crystallize: (threadId: string) => void;
   promote: (content: string) => Promise<void>;
   /** The receipt's own prop types, not a second description of them: these
@@ -2444,6 +2450,17 @@ const MessageRow = memo(function MessageRow({
           </button>
         )}
       </div>
+      {/* v1.320.0: 👍 / 👎 — a reply can be rated where it was read. Not on
+          a reply still being worked on by an agent (nothing to judge yet). */}
+      {m.content.trim() && !m.awaitingSession && (
+        <ReplyRating
+          rating={m.rating}
+          threadId={threadId}
+          prominent={isLast}
+          disabled={busy}
+          onRated={(r) => h.rateReply(i, r)}
+        />
+      )}
     </div>
   );
 });
@@ -7489,6 +7506,15 @@ export default function ChatPage() {
     },
     crystallize: (id) => void crystallizeThread(id),
     handOff: (index) => void handOffPanelReply(index),
+    rateReply: (index, rating) => {
+      const cur = messagesRef.current;
+      if (!cur[index] || cur[index].role !== "assistant") return;
+      const updated = cur.map((m, j) => (j === index ? { ...m, rating } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      // The buttons are disabled mid-turn, so this never races a turn's save.
+      queueSave(updated);
+    },
     settleSuggestion: (index, next) => {
       // v1.305.0: the answer is remembered for every LATER save too — a turn
       // that started before the press ends with a history still holding the
@@ -7520,6 +7546,7 @@ export default function ChatPage() {
       handOff: (index) => rowImplRef.current.handOff(index),
       settleSuggestion: (index, next) =>
         rowImplRef.current.settleSuggestion(index, next),
+      rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),

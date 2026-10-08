@@ -182,7 +182,8 @@ def _document_touched(platform) -> bool:
 
 def _taught_style(engine) -> bool:
     """True once the USER has taught it something: a CONFIRMED lesson that is
-    not an automatic reflection, or any rating on a finished session.
+    not an automatic reflection, or any rating — of a finished session or,
+    since v1.320.0, of a chat reply (POST /chat/feedback).
 
     v1.310.0: this used to be "any LessonRecord" -- but every finished
     session (the wizard's demo run included) writes a ``source="reflection"``
@@ -349,13 +350,17 @@ def getting_started(platform) -> list[dict]:
         "detail": (
             "Iron Jarvis has started learning how you like to work."
             if taught
-            else "Tell it how you like things in Chat (or rate a finished "
-            "session); it becomes a lesson applied to every future task."
+            # v1.320.0: the user could not follow the old line ("…or rate a
+            # finished session" — the rating lived on a page Simple mode no
+            # longer shows, and Chat had none). Chat has 👍 / 👎 now.
+            else "Tell Jarvis how you like things — for example “From now on, "
+            "keep answers short” — or press 👍 / 👎 under a reply in Chat. "
+            "It remembers, and uses it from then on."
         ),
         "done": taught,
-        # Chat has no thumbs affordance (feedback UI lives on session detail),
-        # so the followable path from the hero surface is the
-        # remember_preference tool — a typed preference becomes a lesson.
+        # The followable path from Chat is the remember_preference tool — a
+        # typed preference becomes a lesson (and since v1.320.0 a 👎 with a
+        # note under a reply does too, through POST /chat/feedback).
         # v1.310.0: the example MUST arm that tool. The old "remember: I like
         # short answers" armed recall/ltm_search/ltm_append (a fact to file
         # away), so the user followed the step and no preference was kept.
