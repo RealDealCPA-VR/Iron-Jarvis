@@ -45,6 +45,17 @@ const WORDS: Record<string, string> = {
   channel_toggle: "turn a channel's two-way messages on or off",
   channel_connect: "add a notification channel",
   app_connect: "connect an app",
+  // AUDIT §6.3: the rest of the records, and "undo that".
+  webhook_update: "change a webhook",
+  webhook_delete: "remove a webhook",
+  sentinel_update: "pause or resume a watcher",
+  sentinel_delete: "remove a watcher",
+  goal_update: "change a goal",
+  goal_delete: "drop a goal",
+  reflex_create: "add a rule that acts on its own",
+  reflex_update: "change a rule that acts on its own",
+  reflex_delete: "remove a rule that acts on its own",
+  config_undo: "undo your last change",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

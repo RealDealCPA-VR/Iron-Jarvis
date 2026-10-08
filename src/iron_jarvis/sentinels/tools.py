@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 
 
 class SentinelAddTool(Tool):
@@ -29,6 +29,9 @@ class SentinelAddTool(Tool):
         "unless sentinels are enabled in Settings."
     )
     permission_key = "sentinel_add"
+    # Calm UI redesign (AUDIT §6.3): a sentinel made from chat has an Undo (it
+    # removes the sentinel) — settings.records holds the snapshot/restore.
+    reversibility = Reversibility.REVERSIBLE
     input_schema = {
         "type": "object",
         "properties": {
@@ -46,6 +49,11 @@ class SentinelAddTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
 
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        from ..settings.records import capture_create_undo
+
+        return await capture_create_undo(self.platform, "sentinel", str(args.get("name") or "").strip())
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             rec = self.platform.sentinels.add(
@@ -59,16 +67,31 @@ class SentinelAddTool(Tool):
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
+        data: dict[str, Any] = {
+            "id": rec.id,
+            "name": rec.name,
+            "kind": rec.kind,
+            "enabled": rec.enabled,
+        }
+        card = _created_card(rec.name, rec.decoded_config().get("path") or rec.kind)
+        if card:
+            data["record_change"] = card
         return ToolResult(
             ok=True,
             output=f"created sentinel '{rec.name}' (kind={rec.kind}); suggest-only",
-            data={
-                "id": rec.id,
-                "name": rec.name,
-                "kind": rec.kind,
-                "enabled": rec.enabled,
-            },
+            data=data,
         )
+
+
+def _created_card(name: str, where: str) -> dict[str, Any] | None:
+    """The reply's "Sentinel created … [Undo]" card — only when this call
+    captured an Undo (a direct ``execute`` keeps its old ``data``)."""
+    try:
+        from ..settings.records import create_card
+
+        return create_card("sentinel", name, f"watches {where}")
+    except Exception:  # noqa: BLE001 — a card never fails the tool
+        return None
 
 
 def sentinel_tools(platform) -> list[Tool]:

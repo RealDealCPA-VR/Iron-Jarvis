@@ -52,6 +52,21 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "channel_toggle",
         "channel_connect",
         "app_connect",
+        # ...nor a webhook, sentinel, goal or reflex rule (each is unattended
+        # work a later signal starts), nor "undo that" — an undo can put back
+        # a trigger the user had removed. ``grant_revoke`` stays ALLOWED: it
+        # only takes an always-allow away (every later call asks again), and
+        # its Undo is the user's press on the card, never a low run's tool.
+        "webhook_update",
+        "webhook_delete",
+        "sentinel_update",
+        "sentinel_delete",
+        "goal_update",
+        "goal_delete",
+        "reflex_create",
+        "reflex_update",
+        "reflex_delete",
+        "config_undo",
         "create_agent",
         "remember_preference",
         "skill_create",

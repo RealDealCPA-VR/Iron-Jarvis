@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 
 
 class WebhookAddTool(Tool):
@@ -31,6 +31,10 @@ class WebhookAddTool(Tool):
         "using a stored secret. Returns the slug and direction."
     )
     permission_key = "webhook_add"
+    # Calm UI redesign (AUDIT §6.3): a webhook made from chat has an Undo (it
+    # removes the webhook, or puts back the one a re-used slug replaced) —
+    # settings.records holds the snapshot/restore.
+    reversibility = Reversibility.REVERSIBLE
     input_schema = {
         "type": "object",
         "properties": {
@@ -45,6 +49,11 @@ class WebhookAddTool(Tool):
 
     def __init__(self, platform) -> None:
         self.platform = platform
+
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        from ..settings.records import capture_create_undo
+
+        return await capture_create_undo(self.platform, "webhook", str(args.get("slug") or ""))
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         slug = args.get("slug") or ""
@@ -94,11 +103,26 @@ class WebhookAddTool(Tool):
                 slug, handler, secret=secret, secret_name=secret_name
             )
 
+        data: dict[str, Any] = {"slug": slug, "direction": direction}
+        card = _created_card(slug, direction)
+        if card:
+            data["record_change"] = card
         return ToolResult(
             ok=True,
             output=f"registered {direction} webhook '{slug}'",
-            data={"slug": slug, "direction": direction},
+            data=data,
         )
+
+
+def _created_card(slug: str, direction: str) -> dict[str, Any] | None:
+    """The reply's "Webhook created … [Undo]" card — only when this call
+    captured an Undo (a direct ``execute`` keeps its old ``data``)."""
+    try:
+        from ..settings.records import create_card
+
+        return create_card("webhook", slug, f"{direction} webhook")
+    except Exception:  # noqa: BLE001 — a card never fails the tool
+        return None
 
 
 def webhook_tools(platform) -> list[Tool]:

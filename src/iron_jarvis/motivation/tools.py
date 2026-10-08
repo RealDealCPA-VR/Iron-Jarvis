@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 
 
 class GoalAddTool(Tool):
@@ -29,6 +29,10 @@ class GoalAddTool(Tool):
         "default). Use this for durable objectives, not one-off tasks."
     )
     permission_key = "goal_add"
+    # Calm UI redesign (AUDIT §6.3): a goal recorded from chat has an Undo (it
+    # removes the goal) — settings.records holds the snapshot/restore. The
+    # engine mints the id, so the capture is named after the write.
+    reversibility = Reversibility.REVERSIBLE
     input_schema = {
         "type": "object",
         "properties": {
@@ -42,6 +46,11 @@ class GoalAddTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
 
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        from ..settings.records import capture_create_undo
+
+        return await capture_create_undo(self.platform, "goal", "", pending=True)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             rec = self.platform.intent.add_goal(
@@ -52,10 +61,20 @@ class GoalAddTool(Tool):
             )
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
+        data: dict[str, Any] = {"id": rec.id, "autonomy_level": rec.autonomy_level, "status": rec.status}
+        try:
+            from ..settings.records import bind_created, create_card
+
+            bind_created(rec.id)
+            card = create_card("goal", rec.id, f"{rec.status}, {rec.autonomy_level}", label=f"Goal “{rec.text}”")
+        except Exception:  # noqa: BLE001 — a card never fails the tool
+            card = None
+        if card:
+            data["record_change"] = card
         return ToolResult(
             ok=True,
             output=f"recorded standing goal: {rec.text}",
-            data={"id": rec.id, "autonomy_level": rec.autonomy_level, "status": rec.status},
+            data=data,
         )
 
 

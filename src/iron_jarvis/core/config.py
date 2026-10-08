@@ -249,6 +249,21 @@ def default_permissions() -> dict[str, str]:
         "channel_toggle": "ask",
         "channel_connect": "ask",
         "app_connect": "ask",
+        # The rest of AUDIT §6.3: webhooks, sentinels, goals and reflex rules
+        # change unattended work — ask, with an Undo. Taking back an "always
+        # allow" only narrows what runs unasked — allow, with an Undo. "Undo
+        # that" from chat is itself a change — ask.
+        "webhook_update": "ask",
+        "webhook_delete": "ask",
+        "sentinel_update": "ask",
+        "sentinel_delete": "ask",
+        "goal_update": "ask",
+        "goal_delete": "ask",
+        "reflex_create": "ask",
+        "reflex_update": "ask",
+        "reflex_delete": "ask",
+        "grant_revoke": "allow",
+        "config_undo": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

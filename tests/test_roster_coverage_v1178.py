@@ -197,6 +197,9 @@ _OFF_ROSTER_BY_DESIGN = {
     # pinned by tests/test_settings_records_v1321.py.
     "schedule_update", "schedule_delete", "workflow_update", "workflow_delete",
     "workflow_schedule", "channel_toggle", "channel_connect", "app_connect",
+    # The rest of AUDIT §6.3 + "undo that" — same reasoning: a card + Undo where the user is present.
+    "webhook_update", "webhook_delete", "sentinel_update", "sentinel_delete", "goal_update",
+    "goal_delete", "reflex_create", "reflex_update", "reflex_delete", "grant_revoke", "config_undo",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the
