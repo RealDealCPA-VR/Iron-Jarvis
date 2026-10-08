@@ -111,7 +111,15 @@ export function RoomTranscript({ thread, onRail }: { thread: string; onRail: (ta
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">
-                      <span className="text-[13px] font-semibold capitalize text-zinc-100">{label}</span>
+                      {/* v1.316.0: a custom/remote speaker ("custom:x") reads
+                          as typed; a built-in id is title-cased by CSS. */}
+                      <span
+                        className={`text-[13px] font-semibold text-zinc-100 ${
+                          who.includes(":") ? "" : "capitalize"
+                        }`}
+                      >
+                        {label}
+                      </span>
                       <span className="text-[11px] text-zinc-500">{clock(m.at ?? null)}</span>
                     </div>
                     {m.content ? (

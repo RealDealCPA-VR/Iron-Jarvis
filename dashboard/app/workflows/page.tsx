@@ -26,12 +26,13 @@ import {
   stepKindHint,
   type StarterWorkflow,
 } from "@/components/workflow/starters";
-import { Card, Badge, Empty, SkeletonRows } from "@/components/ui";
+import { Card, Badge, Empty, Field, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
 import { SavedWorkflows } from "@/components/workflow/SavedWorkflows";
 import { timeAgo } from "@/lib/format";
+import { plainText } from "@/components/Markdown";
 
 export default function WorkflowsPage() {
   // Handoff from a terminal pane's "→ Workflow" button: it stashes the generated
@@ -72,6 +73,12 @@ export default function WorkflowsPage() {
     return () => clearTimeout(t);
   }, []);
 
+  // v1.316.0 (UX wave 4): the builder's conversation lives HERE, so the quick
+  // box above the canvas and the "Build with chat" card below are two doors
+  // into ONE send (one POST /workflows/generate, one thread) — never a second
+  // generator path.
+  const builder = useWorkflowBuilder();
+
   return (
     <PageShell>
       <Reveal>
@@ -80,6 +87,10 @@ export default function WorkflowsPage() {
           subtitle="Wire agents into a visual, multi-step workflow, then run it — describe one below, or send a terminal session here with its → Workflow button."
         />
       </Reveal>
+      {/* v1.316.0 (UX wave 4): the easy path before the power editor — with
+          no saved workflows yet, describe one in words or pick a starter
+          right here; the canvas below is unchanged. */}
+      <QuickStart builder={builder} />
       <Reveal>
         <WorkflowCanvas />
       </Reveal>
@@ -93,12 +104,146 @@ export default function WorkflowsPage() {
         <StarterTemplates />
       </Reveal>
       <Reveal>
-        <WorkflowBuilderChat />
+        <div id="build-with-chat" className="scroll-mt-4">
+          <WorkflowBuilderChat builder={builder} />
+        </div>
       </Reveal>
       <Reveal>
         <RunHistory />
       </Reveal>
     </PageShell>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Quick start (v1.316.0): describe it, or pick a starter — above the editor  */
+/* -------------------------------------------------------------------------- */
+
+/** The easy path, shown ABOVE the canvas while the user has no saved
+ *  workflows (UX wave 4: the viewport-tall editor used to hide both easy paths
+ *  below the fold). Two doors, no new machinery:
+ *   - "Describe a workflow" sends through the page's ONE builder (`builder.
+ *     send` — the same POST, the same thread "Build with chat" shows);
+ *   - a starter button fires the same `ij:load-workflow` event the Templates
+ *     card fires, and saves nothing — the user presses Save.
+ *  The describe door is NOT save-free: POST /workflows/generate saves the
+ *  workflow it builds (daemon `_build_workflow` → `store.save`) before it
+ *  replies, so this box never says "nothing is saved" about it — the
+ *  daemon's own reply ("Built X … Loaded into the editor") is the line.
+ *  Shown on the same rule the Templates card uses to expand itself: only once
+ *  /workflows has ANSWERED with none (loading/offline = unknown = hidden). It
+ *  reads the list once per visit, so it never vanishes mid-task when the
+ *  first workflow is saved. */
+function QuickStart({ builder }: { builder: WorkflowBuilder }) {
+  const { data, error, loading } = useApi<{ workflows: unknown[] }>("/workflows");
+  const saved = data?.workflows;
+  const none = !loading && !error && Array.isArray(saved) && saved.length === 0;
+  const [text, setText] = useState("");
+  // Index in the builder thread where this box's last message landed, so the
+  // reply shown here is the one to THIS box's request.
+  const [sentAt, setSentAt] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState<string | null>(null);
+
+  if (!none) return null;
+
+  const answer =
+    sentAt !== null && builder.messages[sentAt + 1]?.role === "assistant"
+      ? builder.messages[sentAt + 1]
+      : null;
+  // The builder's reply is markdown ("Built **name** …"); this one line reads
+  // it as plain words (the card below keeps the full reply).
+  const reply = answer ? plainText(answer.content) : null;
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const msg = text.trim();
+    if (!msg || builder.busy) return;
+    setSentAt(builder.messages.length);
+    setLoaded(null);
+    setText("");
+    void builder.send(msg);
+  }
+
+  function loadStarter(s: StarterWorkflow) {
+    window.dispatchEvent(new CustomEvent("ij:load-workflow", { detail: starterLoadDetail(s) }));
+    setLoaded(s.title);
+    setSentAt(null);
+  }
+
+  function showChat() {
+    document.getElementById("build-with-chat")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  return (
+    <Reveal>
+      <section className="card-surface px-4 py-3.5">
+        <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          {/* v1.316.0: the shared <Field> (useId → htmlFor/id), not a
+              hand-written label with a fixed id. */}
+          <Field
+            className="min-w-0 flex-1"
+            label={
+              <span className="inline-flex items-center gap-1.5">
+                <Sparkles size={12} aria-hidden /> Describe a workflow
+              </span>
+            }
+          >
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="e.g. research a topic, draft a summary, then review it"
+              className="field text-[13px]"
+              disabled={builder.busy}
+            />
+          </Field>
+          <button
+            type="submit"
+            disabled={builder.busy || !text.trim()}
+            className="btn-accent shrink-0"
+          >
+            {builder.busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            Build it
+          </button>
+        </form>
+        {(builder.busy && sentAt !== null) || reply ? (
+          <p className="mt-2 text-xs text-zinc-400" aria-live="polite">
+            {builder.busy && sentAt !== null ? (
+              "Building the workflow…"
+            ) : (
+              <>
+                {reply}{" "}
+                <button
+                  type="button"
+                  onClick={showChat}
+                  className="text-accent-soft underline-offset-2 hover:underline"
+                >
+                  Refine it in Build with chat
+                </button>
+              </>
+            )}
+          </p>
+        ) : null}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-zinc-500">Or start from a template:</span>
+          {STARTERS.map((s) => (
+            <button
+              key={s.name}
+              type="button"
+              onClick={() => loadStarter(s)}
+              title={s.blurb}
+              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            >
+              {s.title}
+            </button>
+          ))}
+        </div>
+        {loaded && (
+          <p className="mt-2 text-xs text-zinc-500" aria-live="polite">
+            Loaded “{loaded}” into the editor below — press Save to keep it.
+          </p>
+        )}
+      </section>
+    </Reveal>
   );
 }
 
@@ -115,19 +260,22 @@ const EXAMPLES = [
   "Read a folder of docs, extract the key points, and save a brief",
 ];
 
-function WorkflowBuilderChat() {
+/** v1.316.0: the builder chat's state, lifted to the page so the quick box
+ *  above the canvas sends through the SAME `send` (and lands in the same
+ *  thread) as the card's own box. Behaviour is the pre-v1.316.0 component's,
+ *  moved verbatim. */
+type WorkflowBuilder = {
+  messages: ChatMsg[];
+  busy: boolean;
+  send: (text: string) => Promise<void>;
+};
+
+function useWorkflowBuilder(): WorkflowBuilder {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   // The workflow currently loaded in the editor (name + steps). Sent back on a
   // follow-up so /workflows/generate REFINES it instead of minting a new one.
   const currentRef = useRef<{ name: string; steps: WfStep[] } | null>(null);
-  const threadRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, busy]);
-
   // Track what the canvas has loaded (via Load, terminal handoff, or a prior
   // generate) so refinements carry the current workflow as context.
   useEffect(() => {
@@ -148,7 +296,6 @@ function WorkflowBuilderChat() {
   async function send(text: string) {
     const msg = text.trim();
     if (!msg || busy) return;
-    setInput("");
     setMessages((m) => [...m, { role: "user", content: msg }]);
     setBusy(true);
     try {
@@ -185,6 +332,24 @@ function WorkflowBuilderChat() {
     } finally {
       setBusy(false);
     }
+  }
+
+  return { messages, busy, send };
+}
+
+function WorkflowBuilderChat({ builder }: { builder: WorkflowBuilder }) {
+  const { messages, busy } = builder;
+  const [input, setInput] = useState("");
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, busy]);
+
+  function send(text: string) {
+    if (!text.trim() || busy) return;
+    setInput("");
+    void builder.send(text);
   }
 
   return (

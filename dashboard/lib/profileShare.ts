@@ -101,7 +101,20 @@ export function filesWords(c: ShareCli): string {
   return `${first} and the same file in ${n} Iron-Proxy account folder${n === 1 ? "" : "s"} (${accounts.join(", ")})`;
 }
 
-/** The sentence under a switch: what is written, where, and who sees it. */
+/** v1.316.0: what EVERY switch writes — said once above the switches. */
+export const SHARE_EXPLAIN =
+  "Writes your profile and the preferences you said or kept — nothing else Jarvis remembers — " +
+  "into a marked block in that tool's own instructions file.";
+
+/** One switch's own line: its file(s), and the company that sees them. The
+ *  vendor is named on EVERY switch — that is the privacy disclosure. */
+export function shareWhere(c: ShareCli): string {
+  const vendor = c.vendor || "its maker";
+  return `${filesWords(c)} — ${c.label} reads it in every session, so ${vendor} sees it when ${c.label} runs.`;
+}
+
+/** The whole sentence for one switch: what is written, where, and who sees
+ *  it (SHARE_EXPLAIN + shareWhere in one sentence, for a single-switch use). */
 export function shareSentence(c: ShareCli): string {
   const vendor = c.vendor || "its maker";
   return (

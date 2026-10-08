@@ -238,6 +238,20 @@ export function Lessons() {
   // The user curates what sticks: forget a lesson -> it stops shaping runs.
   const [deleting, setDeleting] = useState<string | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
+  // v1.316.0: Forget is TWO presses. It used to be one immediate DELETE behind
+  // an `opacity-0` button only a mouse hover could reveal; it is now visible
+  // to keyboard focus and on touch screens, and a control that is always in
+  // reach of a thumb must not delete on a stray tap. First press arms
+  // ("Sure?"), the second forgets — the skills Archive pattern.
+  const [armed, setArmed] = useState<string | null>(null);
+  function pressForget(id: string) {
+    if (armed !== id) {
+      setArmed(id);
+      return;
+    }
+    setArmed(null);
+    void forget(id);
+  }
   async function forget(id: string) {
     setDeleting(id);
     setForgetError(null);
@@ -323,17 +337,32 @@ export function Lessons() {
         {lesson.id && (
           <button
             type="button"
-            onClick={() => void forget(lesson.id as string)}
+            onClick={() => pressForget(lesson.id as string)}
+            // Leaving the button puts it back to rest, so an armed "Sure?"
+            // never waits on screen for a later, unrelated tap.
+            onBlur={() => setArmed((a) => (a === lesson.id ? null : a))}
             disabled={deleting === lesson.id}
+            // The title is unchanged at rest and armed (pinned by count).
             title={
               note
                 ? "Forget this lesson — removes this note about a past job"
                 : "Forget this lesson — it stops shaping your chats and runs"
             }
-            className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-600 opacity-0 transition-all hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100 disabled:opacity-50"
+            aria-label={
+              armed === lesson.id
+                ? "Sure? Press again to forget this lesson"
+                : "Forget this lesson"
+            }
+            className={`mt-0.5 grid h-7 min-w-7 shrink-0 place-items-center rounded-md transition-all disabled:opacity-50 ${
+              armed === lesson.id
+                ? "border border-rose-500/40 bg-rose-500/15 px-2 text-xs font-medium text-rose-300 opacity-100"
+                : "w-7 text-zinc-600 opacity-0 hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70"
+            }`}
           >
             {deleting === lesson.id ? (
               <Loader2 size={13} className="animate-spin" />
+            ) : armed === lesson.id ? (
+              "Sure?"
             ) : (
               <Trash2 size={13} />
             )}

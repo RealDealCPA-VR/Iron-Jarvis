@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { get, post, put } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
-import { decodeShareView, fileLine, shareSentence, type ShareCli } from "@/lib/profileShare";
+import { decodeShareView, fileLine, SHARE_EXPLAIN, shareWhere, type ShareCli } from "@/lib/profileShare";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -25,7 +25,7 @@ const ACTION =
   "rounded px-1 py-px text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-40";
 const LABEL = "text-[10.5px] font-semibold uppercase tracking-[0.12em] text-zinc-500";
 
-export function ProfileShareRow() {
+export function ProfileShareRow({ onSettled }: { onSettled?: () => void } = {}) {
   const [clis, setClis] = useState<ShareCli[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -41,7 +41,10 @@ export function ProfileShareRow() {
 
   useEffect(() => {
     let live = true;
-    void load(() => live);
+    // v1.316.0: the card above the Memory tabs says when it stopped growing.
+    void load(() => live).finally(() => {
+      if (live) onSettled?.();
+    });
     return () => {
       live = false;
     };
@@ -72,6 +75,13 @@ export function ProfileShareRow() {
   return (
     <div data-testid="profile-share" className="space-y-2 border-t border-white/[0.05] pt-2.5">
       <p className={LABEL}>Share with Build</p>
+      {/* v1.316.0: what is written is the same for every switch, so it is said
+          ONCE; each switch's own line keeps its file(s) and names the company
+          that sees it — that part is a privacy disclosure and is never
+          shared or shortened. */}
+      <p data-testid="profile-share-explain" className="text-xs leading-relaxed text-zinc-500">
+        {SHARE_EXPLAIN}
+      </p>
       {shown.map((c) => {
         const isBusy = busy === c.cli;
         // Off still lists a file whose block could NOT be taken out (locked,
@@ -106,7 +116,7 @@ export function ProfileShareRow() {
               )}
             </div>
             <p data-testid={`profile-share-sentence-${c.cli}`} className="pl-10 text-[11.5px] leading-relaxed text-zinc-500">
-              {shareSentence(c)}
+              {shareWhere(c)}
               {c.on && c.omitted > 0 && (
                 <> {c.omitted} preference{c.omitted === 1 ? " was" : "s were"} left out to keep it under 4,000 characters.</>
               )}

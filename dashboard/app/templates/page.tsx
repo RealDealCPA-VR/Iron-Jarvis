@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   BookMarked,
+  ChevronDown,
   Plus,
   Play,
   Bot,
@@ -29,12 +30,17 @@ import {
   SuccessNote,
   LoaderInline,
   ConfirmButton,
+  Field,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { PageGrid } from "@/components/PageGrid";
-import { agentLabel } from "@/components/workflow/agents";
+// v1.316.0 (UX wave 4, agent-names-raw-lowercase): THE agent-name rule —
+// built-ins read as words, a custom agent keeps the name the user typed. The
+// workflow editor's own label map covers only its five agents, so "guide" or
+// "maintainer" used to read as raw lowercase ids here.
+import { agentLabel } from "@/lib/agentWorlds";
 
 /** One thing a template needs before it can actually run (v1.128.0). */
 interface Requirement {
@@ -134,6 +140,10 @@ export default function TemplatesPage() {
     ];
     return names.length ? names : FALLBACK_AGENTS;
   })();
+  // Built-in comes from the roster (GET /agents' builtin list), never a list
+  // kept here; before /agents answers, the fallback names ARE built-ins.
+  const builtinAgents = new Set(agentsData ? agentsData.builtin ?? [] : FALLBACK_AGENTS);
+  const nameOf = (a: string) => agentLabel(a, { builtin: builtinAgents.has(a) });
   const models = modelsData?.models ?? [];
 
   const [name, setName] = useState("");
@@ -173,8 +183,22 @@ export default function TemplatesPage() {
   const { data: startersData, reload: reloadStarters } = useApi<{
     starters: Starter[];
   }>("/templates/starters");
-  const starters = startersData?.starters ?? [];
+  // v1.316.0 (templates-own-items-buried): a starter the user already added
+  // sorts to the END (it still shows, still says "Added") — the ones they can
+  // still add come first. Stable sort: the curated order holds within each.
+  const starters = [...(startersData?.starters ?? [])].sort(
+    (a, b) => Number(!!a.already_added) - Number(!!b.already_added),
+  );
   const [starterBusy, setStarterBusy] = useState<string | null>(null);
+  // The library is folded under "Browse starters (N)" once the user has
+  // templates of their own, and open for a new user with none. The default is
+  // latched ONCE when /templates first answers, so adding a first starter does
+  // not snap the library shut mid-browse; after that the user's own toggle wins.
+  const [startersOpen, setStartersOpen] = useState<boolean | null>(null);
+  const templatesLoaded = data !== undefined && data !== null;
+  useEffect(() => {
+    if (templatesLoaded && startersOpen === null) setStartersOpen(templates.length === 0);
+  }, [templatesLoaded, startersOpen, templates.length]);
 
   async function addStarter(s: Starter) {
     setStarterBusy(s.id);
@@ -338,54 +362,58 @@ export default function TemplatesPage() {
               icon={editingId ? <Pencil size={15} /> : <Plus size={15} />}
             >
               <form onSubmit={submit} className="space-y-3.5">
-                <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Name
-                  </label>
+                {/* v1.316.0 (form-labels-not-associated): every label is tied
+                    to its control through <Field> (useId → htmlFor/id), so a
+                    screen reader names the field and a click on the label
+                    focuses it. The selects keep their own aria-labels. */}
+                <Field label="Name">
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Daily standup digest"
                     className="field"
                   />
-                </div>
+                </Field>
 
-                <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    When to use it{" "}
-                    <span className="text-zinc-600">(description)</span>
-                  </label>
+                <Field
+                  label={
+                    <>
+                      When to use it <span className="text-zinc-600">(description)</span>
+                    </>
+                  }
+                >
                   <input
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="e.g. Use each morning to get oriented"
                     className="field"
                   />
-                </div>
+                </Field>
 
-                <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    <Bot size={12} /> Agent type
-                  </label>
+                <Field
+                  label={
+                    <span className="inline-flex items-center gap-1.5">
+                      <Bot size={12} aria-hidden="true" /> Agent type
+                    </span>
+                  }
+                >
                   <select
                     aria-label="Agent type"
                     value={effectiveAgent}
                     onChange={(e) => setAgentType(e.target.value)}
                     className="field"
                   >
-                    {/* v1.314.0: friendly names first; values stay ids. */}
+                    {/* v1.316.0: built-ins read as words, custom names as
+                        typed (lib/agentWorlds.agentLabel); values stay ids. */}
                     {agentTypes.map((a) => (
                       <option key={a} value={a}>
-                        {agentLabel(a)}
+                        {nameOf(a)}
                       </option>
                     ))}
                   </select>
-                </div>
+                </Field>
 
-                <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Task
-                  </label>
+                <Field label="Task">
                   <textarea
                     value={task}
                     onChange={(e) => setTask(e.target.value)}
@@ -393,13 +421,16 @@ export default function TemplatesPage() {
                     rows={4}
                     className="field resize-y"
                   />
-                </div>
+                </Field>
 
-                <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    <Cpu size={12} /> Model{" "}
-                    <span className="text-zinc-600">(optional)</span>
-                  </label>
+                <Field
+                  label={
+                    <span className="inline-flex items-center gap-1.5">
+                      <Cpu size={12} aria-hidden="true" /> Model{" "}
+                      <span className="text-zinc-600">(optional)</span>
+                    </span>
+                  }
+                >
                   <select
                     aria-label="Model"
                     value={model}
@@ -420,7 +451,7 @@ export default function TemplatesPage() {
                       </option>
                     ))}
                   </select>
-                </div>
+                </Field>
 
                 <button
                   type="submit"
@@ -501,55 +532,6 @@ export default function TemplatesPage() {
             )}
             {sugOk && <SuccessNote>{sugOk}</SuccessNote>}
             {sugError && <ErrorNote>{sugError}</ErrorNote>}
-            {starters.length > 0 && (
-              <Card title="Starter library" icon={<Sparkles size={15} />}>
-                <p className="mb-3 text-[13px] text-zinc-400">
-                  Curated templates you can add with one click. If a starter
-                  needs a connection you don&apos;t have yet, it says so below
-                  its card — with a link to the page that sets it up.
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {starters.map((s) => (
-                    <div
-                      key={s.id}
-                      className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="font-medium text-zinc-100">{s.name}</span>
-                        {s.already_added ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
-                            Added
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => void addStarter(s)}
-                            disabled={starterBusy !== null}
-                            title={`Add "${s.name}" to your templates`}
-                            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
-                          >
-                            {starterBusy === s.id ? (
-                              <LoaderInline label="Adding…" />
-                            ) : (
-                              <>
-                                <Plus size={12} /> Add
-                              </>
-                            )}
-                          </button>
-                        )}
-                      </div>
-                      <p className="mt-1 text-[12px] italic text-zinc-500">
-                        {s.description}
-                      </p>
-                      <p className="mt-1.5 line-clamp-2 text-[13px] text-zinc-400">
-                        {s.task}
-                      </p>
-                      <RequirementChips requirements={s.requirements} />
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            )}
             <Card
               title={`Saved templates${templates.length ? ` · ${templates.length}` : ""}`}
               icon={<BookMarked size={15} />}
@@ -574,7 +556,12 @@ export default function TemplatesPage() {
                             <span className="font-medium text-zinc-100">
                               {t.name}
                             </span>
-                            <Badge value={t.agent_type} tone="violet" />
+                            {/* v1.316.0: the agent's NAME (a built-in in
+                                words, a custom one exactly as typed — keepCase,
+                                no CSS re-casing); the raw id stays in title. */}
+                            <span title={t.agent_type}>
+                              <Badge value={nameOf(t.agent_type)} tone="violet" keepCase />
+                            </span>
                             {t.provider && t.model && (
                               <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
                                 <Cpu size={11} /> {t.model}
@@ -582,8 +569,18 @@ export default function TemplatesPage() {
                             )}
                           </div>
                           {t.description?.trim() && (
-                            <p className="mt-1 text-[13px] italic text-zinc-400">
-                              &mdash; {t.description.trim()}
+                            <p className="mt-1 text-[13px] text-zinc-400">
+                              {/* v1.316.0: a muted "When to use" lead-in, not
+                                  an italic leading dash that read like a stray
+                                  mark. A note that already opens with "Use…" /
+                                  "When…" says it itself, so no lead-in there
+                                  ("When to use: Use when…" stuttered). */}
+                              {!/^(use|when)\b/i.test(t.description.trim()) && (
+                                <>
+                                  <span className="text-zinc-500">When to use:</span>{" "}
+                                </>
+                              )}
+                              {t.description.trim()}
                             </p>
                           )}
                           <p className="mt-1.5 line-clamp-2 text-sm text-zinc-400">
@@ -626,6 +623,76 @@ export default function TemplatesPage() {
                 </div>
               )}
             </Card>
+            {/* v1.316.0 (templates-own-items-buried): the user's OWN
+                templates come first; the curated library folds below them
+                under "Browse starters (N)" — open for a new user with none,
+                folded once they have some. Every starter and its Add stay. */}
+            {starters.length > 0 && (
+              <section className="card-surface">
+                <details
+                  open={startersOpen ?? false}
+                  onToggle={(e) => setStartersOpen((e.currentTarget as HTMLDetailsElement).open)}
+                  className="group"
+                >
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold tracking-wide text-zinc-200 [&::-webkit-details-marker]:hidden">
+                    <Sparkles size={15} className="text-zinc-500" aria-hidden="true" />
+                    Browse starters ({starters.length})
+                    <ChevronDown
+                      size={14}
+                      aria-hidden="true"
+                      className="ml-auto text-zinc-500 transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  <div className="border-t hairline p-4">
+                    <p className="mb-3 text-[13px] text-zinc-400">
+                      Curated templates you can add with one click. If a starter
+                      needs a connection you don&apos;t have yet, it says so below
+                      its card — with a link to the page that sets it up.
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {starters.map((s) => (
+                        <div
+                          key={s.id}
+                          className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="font-medium text-zinc-100">{s.name}</span>
+                            {s.already_added ? (
+                              <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
+                                Added
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void addStarter(s)}
+                                disabled={starterBusy !== null}
+                                title={`Add "${s.name}" to your templates`}
+                                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                              >
+                                {starterBusy === s.id ? (
+                                  <LoaderInline label="Adding…" />
+                                ) : (
+                                  <>
+                                    <Plus size={12} /> Add
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </div>
+                          <p className="mt-1 text-[12px] italic text-zinc-500">
+                            {s.description}
+                          </p>
+                          <p className="mt-1.5 line-clamp-2 text-[13px] text-zinc-400">
+                            {s.task}
+                          </p>
+                          <RequirementChips requirements={s.requirements} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              </section>
+            )}
           </div>
         </PageGrid>
       </Reveal>

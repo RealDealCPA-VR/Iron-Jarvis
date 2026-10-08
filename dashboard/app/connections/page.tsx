@@ -78,6 +78,7 @@ interface VerifyResult {
 }
 import {
   Card,
+  Code,
   OfflineHint,
   SkeletonRows,
   ErrorNote,
@@ -352,6 +353,63 @@ function metaFor(provider: string): ProviderMeta {
   return META[provider] ?? { icon: Cpu, tint: "text-zinc-300" };
 }
 
+/**
+ * v1.316.0 (UX wave 4, oauth-cards-hidden-dev-setup): the daemon now says
+ * whether an account login could START (`oauth_client_configured`, a bool —
+ * never the id). Additive and local here: an older daemon sends nothing, and
+ * then the card keeps today's "Log in with your account".
+ */
+type ConnRow = Connection & { oauth_client_configured?: boolean };
+
+/**
+ * v1.316.0 (UX wave 4, connections-model-path-buried): the cards came in the
+ * daemon's alphabetical order — AI models, memory drives and creative media
+ * mixed in one grid, so someone who came to "connect a model" read ten equal
+ * cards. Grouped now, AI models first. An UNKNOWN provider lands in AI models
+ * (most new providers are models), so no card is ever dropped; every card
+ * keeps its `conn-card-${provider}` id (deep links and Fleet target it).
+ */
+type ConnGroupKey = "ai" | "drives" | "creative";
+const CONN_GROUPS: { key: ConnGroupKey; title: string; hint: string }[] = [
+  { key: "ai", title: "AI models", hint: "Where answers come from." },
+  {
+    key: "drives",
+    title: "Cloud drives for memory",
+    hint: "Files Jarvis can search and remember.",
+  },
+  { key: "creative", title: "Creative media", hint: "Images, video and audio." },
+];
+const GROUP_OF: Record<string, ConnGroupKey> = {
+  dropbox: "drives",
+  google_drive: "drives",
+  onedrive: "drives",
+  box: "drives",
+  pixio: "creative",
+};
+/** Order inside AI models: the big model makers first, your own endpoint
+ *  last. A fixed order (not "connected first"), so a card never jumps away
+ *  from under the pointer the moment it connects. */
+const AI_ORDER = ["anthropic", "openai", "google", "xai", "openrouter", "custom"];
+function groupOf(provider: string): ConnGroupKey {
+  return GROUP_OF[provider] ?? "ai";
+}
+function aiRank(provider: string): number {
+  if (provider === "mock") return AI_ORDER.length + 2;
+  const i = AI_ORDER.indexOf(provider);
+  return i === -1 ? AI_ORDER.length + 1 : i;
+}
+/** The drives the Directory also connects under the SAME connection id
+ *  (its connectors use provider=google_drive / onedrive / dropbox), so the
+ *  card can say it is one connection in two places. */
+const DIRECTORY_DRIVES = new Set(["dropbox", "google_drive", "onedrive"]);
+
+/** The address a user-registered app must allow as its redirect — the
+ *  platform resolver's default (`platform.py`; a
+ *  `<provider>_oauth_redirect_uri` secret overrides it). */
+function oauthCallback(provider: string): string {
+  return `http://localhost:8787/oauth/${provider}/callback`;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Status pill                                                                */
 /* -------------------------------------------------------------------------- */
@@ -504,6 +562,10 @@ function ConnectionCard({
   // A provider may offer account-login (OAuth), an API key, or BOTH.
   const canOAuth = (conn.supports_oauth ?? conn.method === "oauth") && !isMock;
   const canKey = (conn.supports_api_key ?? conn.method === "api_key") && !isMock;
+  // v1.316.0: the login needs an app the USER registers first, and the daemon
+  // says none exists yet. Keyed on canOAuth (never on oauth_help — xAI carries
+  // help text but is key-only). Absent field (older daemon) = today's card.
+  const needsSetup = canOAuth && (conn as ConnRow).oauth_client_configured === false;
 
   // SAVED ENDPOINTS (custom card): every routable custom endpoint —
   // user-added routable fleet node — each one its own provider ("fleet-<id>")
@@ -981,8 +1043,69 @@ function ConnectionCard({
               canOAuth is false and this button never shows for them. */}
           {canOAuth && (
             <div className="space-y-2">
-              <button onClick={connectOAuth} disabled={busy} className="btn-accent w-full py-1.5 text-xs">
-                {busy ? <LoaderInline label="Starting…" /> : <><ShieldCheck size={14} /> Log in with your account</>}
+              {/* v1.316.0 (UX wave 4): when the login needs an app the user
+                  registers first, say so BEFORE the press — folded, as steps
+                  — instead of after a 400. The button below stays clickable
+                  (never gated behind opening the fold), and the old 400 note
+                  further down still catches anything this misses. */}
+              {needsSetup && (
+                <details className="group rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2">
+                  <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-300 transition-colors hover:text-zinc-100 [&::-webkit-details-marker]:hidden">
+                    <ChevronRight
+                      size={13}
+                      aria-hidden
+                      className="shrink-0 transition-transform duration-200 group-open:rotate-90"
+                    />
+                    One-time setup (about 5 minutes)
+                  </summary>
+                  <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[11px] leading-relaxed text-zinc-400">
+                    <li>
+                      {conn.oauth_help ||
+                        `${conn.display_name} needs an OAuth app that you register yourself.`}
+                    </li>
+                    <li>
+                      Allow this redirect address:{" "}
+                      <Code className="break-all">{oauthCallback(conn.provider)}</Code>
+                    </li>
+                    <li>
+                      In{" "}
+                      <Link href="/secrets" className="font-medium text-accent-soft underline">
+                        Secrets
+                      </Link>
+                      , save its client id as <Code>{conn.provider}_oauth_client_id</Code>{" "}
+                      and, if it has one, its secret as{" "}
+                      <Code>{conn.provider}_oauth_client_secret</Code>.
+                    </li>
+                    <li>Come back and press Set up &amp; log in.</li>
+                  </ol>
+                  {meta.docsUrl && (
+                    <a
+                      href={meta.docsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+                    >
+                      Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
+                    </a>
+                  )}
+                </details>
+              )}
+              {/* v1.316.0 (accent-overuse-no-primary): outlined, not filled —
+                  the page's one filled accent is "Add connection". Full width
+                  for a thumb on a phone, its own width from sm. */}
+              <button
+                onClick={connectOAuth}
+                disabled={busy}
+                className="btn-soft w-full py-1.5 text-xs sm:w-auto"
+              >
+                {busy ? (
+                  <LoaderInline label="Starting…" />
+                ) : (
+                  <>
+                    <ShieldCheck size={14} />{" "}
+                    {needsSetup ? "Set up & log in" : "Log in with your account"}
+                  </>
+                )}
               </button>
               {manualOpen && (
                 <form onSubmit={submitManualCode} className="space-y-2">
@@ -1022,10 +1145,10 @@ function ConnectionCard({
                   </div>
                 </form>
               )}
-              {conn.oauth_help && (
+              {conn.oauth_help && !needsSetup && (
                 <p className="text-[11px] leading-relaxed text-zinc-500">{conn.oauth_help}</p>
               )}
-              {meta.docsUrl && (
+              {meta.docsUrl && !needsSetup && (
                 <a
                   href={meta.docsUrl}
                   target="_blank"
@@ -1207,7 +1330,7 @@ function ConnectionCard({
             (!open ? (
               <button
                 onClick={() => setOpen(true)}
-                className={`${canOAuth ? "btn-ghost" : "btn-accent"} w-full py-1.5 text-xs`}
+                className={`${canOAuth ? "btn-ghost" : "btn-soft"} w-full py-1.5 text-xs sm:w-auto`}
               >
                 {isCustom ? <Plus size={14} /> : <KeyRound size={14} />}{" "}
                 {canOAuth
@@ -1382,6 +1505,19 @@ function ConnectionCard({
           scopes the testid so a provider that also appears on the CLI-tools
           row (ollama) never renders two nodes with one testid. */}
       <ModelReportLine rows={quality} provider={conn.provider} surface="card" />
+
+      {/* v1.316.0 (three-overlapping-catalogs): the Directory connects this
+          same drive under the SAME connection id — one connection, two doors.
+          One name for that page everywhere: "Directory". */}
+      {DIRECTORY_DRIVES.has(conn.provider) && (
+        <Link
+          href="/marketplace"
+          className="inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+          title="The Directory's storage cards connect this same account — connecting in either place is one connection"
+        >
+          Same connection in the Directory <ArrowRight size={11} aria-hidden />
+        </Link>
+      )}
 
       {/* Test result + errors */}
       {test &&
@@ -1628,6 +1764,17 @@ export default function ConnectionsPage() {
   const { health, refresh: refreshHealth } = useDaemon();
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
+  // v1.316.0: the cards in titled groups, AI models first (see CONN_GROUPS).
+  const grouped = CONN_GROUPS.map((g) => ({
+    ...g,
+    items: connections
+      .filter((c) => groupOf(c.provider) === g.key)
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) =>
+        g.key === "ai" ? aiRank(a.c.provider) - aiRank(b.c.provider) || a.i - b.i : a.i - b.i,
+      )
+      .map(({ c }) => c),
+  })).filter((g) => g.items.length > 0);
   const connectedCount = connections.filter((c) => c.connected).length;
   // The "+ Add connection" dropdown lists these: everything not yet connected
   // (mock is built-in — nothing to connect).
@@ -1640,6 +1787,11 @@ export default function ConnectionsPage() {
     daemonProviders.some((p) => p.provider === provider && p.available);
   // v1.234.0: installed but the CLI itself says "not signed in" — shown as
   // its own amber state with the remedy, never as "Not detected".
+  // v1.316.0 (connections-model-path-buried): what ALREADY works with no key,
+  // said first — from the SAME detection the Subscription card below uses, so
+  // the two can never disagree. A signed-out CLI is not "ready"; nothing
+  // detected = no line at all.
+  const readyNow = CLI_PROVIDERS.filter((info) => isDetected(info.provider));
   const isSignedOut = (provider: string) =>
     daemonProviders.some(
       (p) => p.provider === provider && Boolean(p.installed) && p.signed_in === false,
@@ -1860,25 +2012,81 @@ export default function ConnectionsPage() {
         </Reveal>
       )}
 
-      <Reveal>
-        {loading && !data ? (
+      {readyNow.length > 0 && (
+        <Reveal>
+          <div
+            data-testid="connections-ready-banner"
+            className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.05] px-4 py-3 text-[13px] text-zinc-300"
+          >
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden />
+            {/* basis-64: on a phone the link wraps below the sentence
+                instead of squeezing it into a one-word column. */}
+            <span className="min-w-0 flex-1 basis-64">
+              <span className="font-medium text-zinc-100">Ready now, no key needed:</span>{" "}
+              {readyNow
+                .map(
+                  (info) =>
+                    // providerDisplay knows the common CLIs ("Claude Code");
+                    // a row it does not know keeps the row's own name, never
+                    // a raw id like "opencode-cli".
+                    `${providerDisplay(info.provider) !== info.provider ? providerDisplay(info.provider) : info.name} (${info.description.charAt(0).toLowerCase()}${info.description.slice(1)})`,
+                )
+                .join(", ")}
+              . Choose {readyNow.length === 1 ? "it" : "one"} in any model picker.
+            </span>
+            <a
+              href="#subscription-providers"
+              className="ml-7 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-soft hover:text-accent sm:ml-0 sm:mt-0.5"
+            >
+              See subscription &amp; local providers <ArrowRight size={12} aria-hidden />
+            </a>
+          </div>
+        </Reveal>
+      )}
+
+      {loading && !data ? (
+        <Reveal>
           <Card>
             <SkeletonRows rows={4} />
           </Card>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {connections.map((conn) => (
-              <ConnectionCard
-                key={conn.provider}
-                conn={conn}
-                onChanged={reload}
-                id={`conn-card-${conn.provider}`}
-                quality={qualityRows}
-              />
-            ))}
-          </div>
-        )}
-      </Reveal>
+        </Reveal>
+      ) : (
+        grouped.map((group) => (
+          <Reveal key={group.key}>
+            <section className="space-y-3.5" aria-labelledby={`conn-group-${group.key}`}>
+              {/* The Directory's section header (accent bar + uppercase h2). */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span
+                  aria-hidden="true"
+                  className="h-4 w-1 rounded-full bg-gradient-to-b from-accent to-accent/20 shadow-[0_0_8px_rgb(var(--accent-rgb)/0.4)]"
+                />
+                <h2
+                  id={`conn-group-${group.key}`}
+                  className="text-[12px] font-semibold uppercase tracking-[0.14em] text-zinc-300"
+                >
+                  {group.title}
+                </h2>
+                <span className="text-[11px] text-zinc-500">{group.hint}</span>
+                <span
+                  aria-hidden="true"
+                  className="h-px min-w-[2rem] flex-1 bg-gradient-to-r from-white/[0.08] to-transparent"
+                />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {group.items.map((conn) => (
+                  <ConnectionCard
+                    key={conn.provider}
+                    conn={conn}
+                    onChanged={reload}
+                    id={`conn-card-${conn.provider}`}
+                    quality={qualityRows}
+                  />
+                ))}
+              </div>
+            </section>
+          </Reveal>
+        ))
+      )}
 
       {/* Measured endpoints (v1.204.0): the capability measurements, BELOW
           the connect cards as their own section. Renders nothing at all when
@@ -1886,7 +2094,10 @@ export default function ConnectionsPage() {
           Reveal so an empty section leaves no husk in the layout. */}
       <MeasuredEndpoints entries={measuredEntries} />
 
+      {/* v1.316.0: the anchor the "Ready now" line links to. The card keeps
+          its place (the measured-endpoints order is unchanged). */}
       <Reveal>
+        <div id="subscription-providers" className="scroll-mt-24">
         <Card
           title="Subscription & local providers"
           icon={<Terminal size={16} className="text-accent-soft" />}
@@ -1933,6 +2144,7 @@ export default function ConnectionsPage() {
             These use plans you already pay for — no API keys. Pick them in any model picker.
           </p>
         </Card>
+        </div>
       </Reveal>
 
       {/* Iron-Proxy accounts (v1.301.0): renders nothing on an older daemon,

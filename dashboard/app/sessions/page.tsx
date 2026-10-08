@@ -37,7 +37,7 @@ import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 import { timeAgo, shortId } from "@/lib/format";
-import { agentDisplayName } from "@/lib/agentWorlds";
+import { agentDisplayName, agentLabel } from "@/lib/agentWorlds";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
 
@@ -103,6 +103,17 @@ export default function SessionsPage() {
   }, [projects]);
   const projectsLoaded = projData != null;
 
+  // v1.316.0 (UX wave 4, agent names): which agent ids are BUILT-IN comes from
+  // the daemon's GET /agents list, never a list kept in this page — so a
+  // built-in reads as a word in the filter ("tax_helper" → "Tax helper").
+  // Until /agents answers (or if it fails) every option shows its raw id,
+  // exactly as before; a custom agent always keeps the name the user typed.
+  const { data: agentsData } = useApi<{ builtin?: string[] }>("/agents");
+  const builtinAgents = useMemo(
+    () => new Set(Array.isArray(agentsData?.builtin) ? agentsData!.builtin : []),
+    [agentsData],
+  );
+
   const offline = error && error.status === 0;
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
@@ -142,11 +153,14 @@ export default function SessionsPage() {
   // mission coordinator, "Jarvis / supervisor" when coordinators and plain
   // supervisor runs are mixed. The option VALUE stays the raw id (the filter
   // matches agent_type exactly, so one choice still selects both kinds).
+  // v1.316.0: option text is TEXT (CSS `capitalize` cannot reach an
+  // <option>), so a built-in reads as a name via agentLabel — "Jarvis /
+  // Supervisor" — while the Jarvis rule stays agentDisplayName's.
   const agentOptionLabels = useMemo(() => {
     const names = new Map<string, Set<string>>();
     for (const s of sessions) {
       const set = names.get(s.agent_type) ?? new Set<string>();
-      set.add(agentDisplayName(s.agent_type, s.origin));
+      set.add(agentLabel(s.agent_type, { builtin: builtinAgents.has(s.agent_type), origin: s.origin }));
       names.set(s.agent_type, set);
     }
     const out = new Map<string, string>();
@@ -154,7 +168,7 @@ export default function SessionsPage() {
       out.set(raw, Array.from(set).sort((a, b) => (a === "Jarvis" ? -1 : b === "Jarvis" ? 1 : a.localeCompare(b))).join(" / "));
     }
     return out;
-  }, [sessions]);
+  }, [sessions, builtinAgents]);
   // Origin KINDS present in the fetched list (prefix before ":", e.g.
   // "schedule:nightly" → schedule) — the per-kind filter options.
   const originKindOptions = useMemo(

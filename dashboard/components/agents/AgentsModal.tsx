@@ -303,7 +303,11 @@ export function AgentsPanel({
                     <span
                       // v1.315.0: id as text, title-cased by CSS — the same
                       // "Builder" the front door and the agent's heading show.
-                      className={`min-w-0 flex-1 truncate text-[12.5px] capitalize ${
+                      // v1.316.0: built-ins only; a custom or remote name reads
+                      // exactly as the user typed it (the agentLabel rule).
+                      className={`min-w-0 flex-1 truncate text-[12.5px] ${
+                        e.kind === "builtin" ? "capitalize " : ""
+                      }${
                         isOpen ? "text-accent-soft" : "text-zinc-300"
                       }`}
                     >
@@ -482,7 +486,13 @@ export function AgentDetail({
         </span>
         <div className="min-w-0 flex-1 text-center sm:pt-6 sm:text-left">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-[20px] font-semibold capitalize tracking-wide text-zinc-100">
+            {/* v1.316.0: CSS title-case for a built-in only — a custom or
+                remote name is shown as typed. */}
+            <span
+              className={`truncate text-[20px] font-semibold tracking-wide text-zinc-100 ${
+                entry.kind === "builtin" ? "capitalize" : ""
+              }`}
+            >
               {bare}
             </span>
             <span

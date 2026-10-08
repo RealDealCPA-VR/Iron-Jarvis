@@ -191,9 +191,33 @@ class ConnectionRegistry:
                     # not connected. Additive (v1.230.0).
                     "source": source,
                     "scopes": scopes,
+                    # v1.316.0 (UX wave 4): could an account login START right
+                    # now? The Dropbox / Drive / OneDrive cards promised "Log
+                    # in with your account" and only after a 400 said the user
+                    # had to register their own app. A BOOL, never the id —
+                    # the same answer start_oauth would give. Additive.
+                    "oauth_client_configured": self._oauth_client_configured(spec),
                 }
             )
         return out
+
+    def _oauth_client_configured(self, spec: ConnectionSpec) -> bool:
+        """True only when :meth:`start_oauth` would find a client id.
+
+        Mirrors start_oauth's own lookup (the platform's resolver, then the
+        spec's embedded public id) so the card and the press cannot disagree.
+        A key-only provider is False even when it carries ``oauth_help`` (xAI).
+        A resolver fault reads as not configured — it must never blank the
+        whole Connections page.
+        """
+        if not spec.supports_oauth:
+            return False
+        try:
+            app = self._oauth_app(spec.provider) or {}
+        except Exception:  # noqa: BLE001 — a vault/resolver fault is "not configured"
+            app = {}
+        client_id = (app.get("client_id") if isinstance(app, dict) else None) or spec.oauth_client_id
+        return bool(client_id)
 
     def _inherited(self, provider: str) -> str | None:
         """The CLI *provider* is served through, or None — never raises."""

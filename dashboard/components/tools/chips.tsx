@@ -23,7 +23,19 @@ import { CAPABILITY_CHIP, CAPABILITY_LABEL, type Capability } from "./meta";
 
 /* ------------------------------------------------------------------ status */
 
-export type ToolStatus = "added" | "available" | "blocked";
+/**
+ * v1.316.0 (UX wave 4): "ready" = the pack needs a runtime AND the daemon's
+ * launcher found it on this PC (`/mcp/catalog` `runtime_ready: true`). Every
+ * pack used to wear an amber "Needs Node" on a machine that runs Node; a
+ * warning that is always on teaches people to ignore warnings. The amber
+ * "blocked" chip still shows exactly when the runtime is missing (or the
+ * daemon is too old to say), and the requirement stays in the title.
+ */
+export type ToolStatus = "added" | "available" | "blocked" | "ready";
+
+/** The status chips' shared shape — one literal, so the four states cannot
+ *  drift apart in size (v1.316.0 lifted it when "ready" made a fourth). */
+const STATUS_CHIP = "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium";
 
 export function StatusChip({
   status,
@@ -39,9 +51,20 @@ export function StatusChip({
     return (
       <span
         data-testid="status-added"
-        className={`inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/[0.1] px-1.5 py-0.5 text-[10.5px] font-medium text-emerald-300 ${className}`}
+        className={`${STATUS_CHIP} border-emerald-500/30 bg-emerald-500/[0.1] text-emerald-300 ${className}`}
       >
         <Check size={11} aria-hidden /> Enabled
+      </span>
+    );
+  }
+  if (status === "ready") {
+    return (
+      <span
+        data-testid="status-ready"
+        title={`Needs ${needs} — found on this PC, so it can be added now`}
+        className={`${STATUS_CHIP} border-white/10 text-zinc-400 ${className}`}
+      >
+        <Check size={11} aria-hidden /> Uses {needs}
       </span>
     );
   }
@@ -50,7 +73,7 @@ export function StatusChip({
       <span
         data-testid="status-blocked"
         title={`This extension runs through ${needs}`}
-        className={`inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10.5px] font-medium text-amber-200/90 ${className}`}
+        className={`${STATUS_CHIP} border-amber-400/25 bg-amber-400/[0.08] text-amber-200/90 ${className}`}
       >
         <AlertTriangle size={11} aria-hidden /> Needs {needs}
       </span>
@@ -59,7 +82,7 @@ export function StatusChip({
   return (
     <span
       data-testid="status-available"
-      className={`inline-flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-500 ${className}`}
+      className={`${STATUS_CHIP} border-white/10 text-zinc-500 ${className}`}
     >
       <Download size={11} aria-hidden /> Not added
     </span>

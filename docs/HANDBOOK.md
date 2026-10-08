@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.315.0 (2026-10-04).*
+holds itself to. Current as of v1.316.0 (2026-10-04).*
 
 ---
 
@@ -538,9 +538,10 @@ with the request typed in.
 - **The 3D memory graph**, lessons, and a "What I can remember" index the
   model sees each turn.
 - **Two search boxes, two jobs** (v1.232.0): the **Recall** box at the top
-  of /memory searches every store at once; the box under the Working tab is
-  titled **Search working memory** and says so — it searches only the
-  working store (session · project · user). The count field beside each
+  of /memory searches every store at once; the box under the Working tab
+  (and, since v1.316.0, the one under Long-term) is titled **Search only
+  this tab** with the note "Recall, above, searches everything" — it
+  searches only that store. The count field beside each
   query is labelled **Results** (it was "k").
 - **One search for everything you have** (v1.253.0): the command palette
   (Ctrl+K) now answers from three places at once — your **files**, your
@@ -571,7 +572,9 @@ with the request typed in.
   **Delete** on every row — Delete asks first and names any schedule or
   reflex rule that still fires that workflow, since those would fail until
   re-pointed — starter templates, a "build with chat" box, and the run
-  history with Resume for interrupted runs. Workflows are born three ways:
+  history with Resume for interrupted runs. Since v1.316.0, while no
+  workflow is saved, a **Describe a workflow** box and the starter buttons
+  sit ABOVE the editor, so the easy way in comes first. Workflows are born three ways:
   describe a repeatable process in Chat and a **draft card** appears (Save,
   Run once, or Open in the editor — a card born inside a project is pinned to
   that project, so its runs use the project's folder and knowledge); type a
@@ -1451,6 +1454,20 @@ nothing was taken away.
   page names its two parts: **your browser** (your own Chrome or Edge) and
   the **agent browser**. File search's "By meaning" says it searches the
   folders Iron Jarvis has indexed.
+- **Settings, usage, memory and connections, plainer** (v1.316.0). Change
+  any setting and a **Save changes** bar stays at the bottom of the window
+  until you save or reset; a row of links at the top jumps to each section.
+  Usage starts on **Tokens** when nothing was billed, shows every day of
+  the period (empty days included), and says what local models would have
+  cost at a cloud list price as an estimate — never as money spent.
+  Autonomy shows one list, **Simple goals**, with its on/off state at the
+  top; goals made in Chat are listed separately as **Goals from Chat**.
+  Links to /ltm and /lessons open the right part of Memory. Every form label
+  is tied to its box (click the words to type). Agent names read as names
+  ("Builder"), while the exact id is what is saved. Connections leads with
+  choosing a model; cards that need a one-time developer setup fold it
+  away. The Tools catalog says **Uses Node** when Node is installed instead
+  of warning that it is missing.
 - **Empty pages show the way.** An empty Reflexes, Sentinels, Webhooks,
   Schedules, Session board, Sessions or Terminals page says what the place is for,
   gives an example or two, and offers the first step (the button opens the

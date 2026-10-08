@@ -88,6 +88,7 @@ import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
 import AgentFace, { type FaceOverride } from "@/components/agents/AgentFace";
 import { SOURCE_LABEL, type AgentSource } from "@/components/agents/identity";
+import { agentLabel } from "@/lib/agentWorlds";
 // The pure roster helpers live with the seats since v1.304.0 (TableSeats must
 // not import this framer-backed file to read a word off a row); re-exported
 // here under the same names, so every existing import keeps working.
@@ -718,7 +719,12 @@ export function RosterStrip({
                       <span
                         // v1.315.0: the id stays the TEXT; CSS title-cases it
                         // ("Builder"), the same casing the front door uses.
-                        className={`min-w-0 truncate text-[13px] font-medium capitalize ${
+                        // v1.316.0: built-ins only — a custom or remote name
+                        // reads as the user typed it ("ledger-checker", not
+                        // "Ledger-Checker"), the agentLabel rule.
+                        className={`min-w-0 truncate text-[13px] font-medium ${
+                          e.kind === "builtin" ? "capitalize " : ""
+                        }${
                           active ? "text-accent-soft" : "text-zinc-200"
                         }`}
                       >
@@ -916,8 +922,14 @@ export function RosterStrip({
                 // Provenance and health ride IN the option text: a picker whose
                 // closed state hides whether an agent is a remote — or offline —
                 // is the wrong trade for a tidier page.
+                // v1.316.0 (UX wave 4, agent names): an <option> is TEXT that
+                // CSS `capitalize` cannot reach, so a built-in (the row's own
+                // `kind`, never a list kept here) reads as a name — "File
+                // manager — Built-in"; custom and remote names stay as typed.
+                // The VALUE stays the raw roster name; the face is still
+                // drawn from the raw name.
                 <option key={e.name} value={e.name}>
-                  {bareName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
+                  {agentLabel(bareName(e.name), { builtin: e.kind === "builtin" })} — {SOURCE_LABEL[e.kind] ?? e.kind}
                   {e.kind === "remote" && !e.healthy ? " (offline)" : ""}
                   {e.paused ? " (paused)" : ""}
                   {!e.delegable ? " (chat-only)" : ""}
@@ -994,7 +1006,12 @@ export function RosterStrip({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                 <span
-                  className="truncate text-[13px] font-medium text-zinc-100"
+                  // v1.316.0: a built-in is title-cased by CSS like the rail
+                  // row beside it — the id stays the TEXT and the title; a
+                  // custom or remote name reads as typed.
+                  className={`truncate text-[13px] font-medium text-zinc-100 ${
+                    selected.kind === "builtin" ? "capitalize" : ""
+                  }`}
                   title={selected.name}
                 >
                   {shown}

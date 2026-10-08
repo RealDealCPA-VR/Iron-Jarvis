@@ -24,7 +24,7 @@
 // one switch per Claude Code / Codex found on this PC, OFF by default, that
 // keeps the profile + kept preferences in that CLI's own instructions file.
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrainCircuit, UserRound } from "lucide-react";
 import { get } from "@/lib/api";
 import { Card } from "@/components/ui";
@@ -84,8 +84,18 @@ export function countsLine(o: MemoryOverview): string {
   return parts.join(" · ");
 }
 
-export function KnowsAboutYou() {
+export function KnowsAboutYou({ onSettled }: { onSettled?: () => void } = {}) {
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
+  // v1.316.0: tell the page when this card has stopped growing (every read
+  // answered, or failed quietly) — a Memory deep link re-lands its scroll
+  // then, because the card sits ABOVE the section the link names. Three
+  // reads: the overview, the preference sections, and the Share row (which
+  // only mounts once there is an overview).
+  const [overviewDone, setOverviewDone] = useState(false);
+  const [prefsDone, setPrefsDone] = useState(false);
+  const [shareDone, setShareDone] = useState(false);
+  const onShareSettled = useCallback(() => setShareDone(true), []);
+  const told = useRef(false);
   // null = the daemon has no status-aware list (older daemon, failed read):
   // the card keeps the v1.279.0 list from the overview.
   const [prefs, setPrefs] = useState<PreferencesView | null>(null);
@@ -109,9 +119,13 @@ export function KnowsAboutYou() {
         }
       } catch {
         /* an older daemon or a failed fetch: say nothing rather than "nothing" */
+      } finally {
+        if (live) setOverviewDone(true);
       }
     })();
-    void loadPrefs(() => live);
+    void loadPrefs(() => live).finally(() => {
+      if (live) setPrefsDone(true);
+    });
     return () => {
       live = false;
     };
@@ -129,6 +143,14 @@ export function KnowsAboutYou() {
     }
   }, [prefs]);
 
+  useEffect(() => {
+    if (told.current || !overviewDone || !prefsDone) return;
+    // No overview = no card and no Share row to wait for.
+    if (overview && !shareDone) return;
+    told.current = true;
+    onSettled?.();
+  }, [overviewDone, prefsDone, shareDone, overview, onSettled]);
+
   if (!overview) return null;
 
   const { profile, preferences } = overview;
@@ -138,11 +160,14 @@ export function KnowsAboutYou() {
     <Card title="What Jarvis knows about you" icon={<BrainCircuit size={14} />}>
       <div data-testid="knows-about-you" className="space-y-3">
         {/* The profile: the one paragraph that governs HOW every answer is written. */}
-        <div className="flex flex-wrap items-start gap-2 text-[12.5px]">
-          <UserRound size={14} className="mt-0.5 shrink-0 text-zinc-500" />
+        {/* v1.316.0: no flex-wrap, and the text takes the room — on a phone
+            the icon used to sit alone on its own line with the sentence
+            wrapped underneath. The profile line is the headline fact. */}
+        <div className="flex items-start gap-2 text-[12.5px]">
+          <UserRound size={14} className="mt-[3px] shrink-0 text-zinc-500" />
           {profile.filled ? (
-            <p className="min-w-0 text-zinc-300">
-              <span className="text-zinc-200">{profile.about_line || "Your profile is set."}</span>
+            <p className="min-w-0 flex-1 text-zinc-300">
+              <span className="text-[13px] text-zinc-100">{profile.about_line || "Your profile is set."}</span>
               {(profile.tone || profile.writing_style) && (
                 <span className="text-zinc-500">
                   {" "}
@@ -155,7 +180,7 @@ export function KnowsAboutYou() {
               </Link>
             </p>
           ) : (
-            <p className="text-zinc-400">
+            <p className="min-w-0 flex-1 text-zinc-400">
               No profile yet.{" "}
               <Link href="/you" className="text-accent-soft hover:underline">
                 Tell Jarvis who you are and how you like answers
@@ -198,7 +223,7 @@ export function KnowsAboutYou() {
         {counts && <p className="text-[11.5px] text-zinc-500">{counts}</p>}
 
         {/* v1.306.0: the profile follows the user into Build panes — opt-in. */}
-        <ProfileShareRow />
+        <ProfileShareRow onSettled={onShareSettled} />
       </div>
     </Card>
   );

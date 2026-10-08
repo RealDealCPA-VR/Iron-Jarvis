@@ -138,9 +138,10 @@ afterEach(() => cleanup());
 
 describe("SkillCurator helpers", () => {
   it("curatorHeadline counts the lists and names the last sweep", () => {
-    expect(curatorHeadline(curatorView())).toBe("Curator — 1 candidate · 1 archived · never swept");
+    // v1.316.0: the same three facts in plain words (was "Curator — 1 candidate · … · never swept").
+    expect(curatorHeadline(curatorView())).toBe("Tidy-up: 1 unused skill could be archived · 1 archived · never run");
     const v = curatorView({ candidates: [], archived: [], last_sweep_at: new Date().toISOString() });
-    expect(curatorHeadline(v)).toMatch(/^Curator — 0 candidates · 0 archived · last sweep /);
+    expect(curatorHeadline(v)).toMatch(/^Tidy-up: nothing to archive · 0 archived · last run /);
   });
 
   it("sweepSentence: a dry run reads would_archive (its archived is [] by contract), a real one says what went and the backup", () => {
@@ -232,7 +233,7 @@ describe("the Curator panel", () => {
     hooks.api["/skills/curator"] = curatorView();
     render(<SkillsPage />);
     const panel = screen.getByTestId("curator-panel");
-    expect(panel.textContent).toContain("Curator — 1 candidate · 1 archived · never swept");
+    expect(panel.textContent).toContain("Tidy-up: 1 unused skill could be archived · 1 archived · never run");
     expect(within(panel).queryByTestId("curator-candidate-ledger-sum")).toBeNull();
     expect(within(panel).queryByTestId("curator-dry-run")).toBeNull();
     fireEvent.click(within(panel).getByTestId("curator-toggle"));
@@ -318,8 +319,8 @@ describe("the Curator panel", () => {
     const v = curatorView({ last_sweep_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString() });
     render(<SkillCurator view={v} onRefresh={() => {}} onSkillsChanged={() => {}} />);
     const panel = screen.getByTestId("curator-panel");
-    expect(panel.textContent).toMatch(/last sweep /);
-    expect(panel.textContent).not.toContain("never swept");
+    expect(panel.textContent).toMatch(/last run /);
+    expect(panel.textContent).not.toContain("never run");
     fireEvent.click(within(panel).getByTestId("curator-toggle"));
     expect(panel.textContent).toContain("idle days");
     expect(panel.textContent).toContain("min age days");

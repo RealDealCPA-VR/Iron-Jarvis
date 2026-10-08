@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CalendarClock,
@@ -39,7 +39,10 @@ import { ChooserTiles } from "@/components/ChooserTiles";
 import { useFocusRef } from "@/lib/useFocusRef";
 import AgentFace from "@/components/agents/AgentFace";
 import { PageGrid } from "@/components/PageGrid";
-import { agentLabel } from "@/components/workflow/agents";
+// v1.316.0 (agent-names-raw-lowercase): THE agent-name rule — built-ins
+// read as words ("guide" → "Guide"), a custom agent keeps the name the user
+// typed. The workflow editor's map knew only its own five agents.
+import { agentLabel } from "@/lib/agentWorlds";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
@@ -323,6 +326,10 @@ function editBody(
 }
 
 export default function SchedulesPage() {
+  // v1.316.0 (form-labels-not-associated): one useId per form, so each
+  // <label htmlFor> names exactly ONE control even when two copies of a
+  // form are on screen (the Schedules add form + its edit dialog).
+  const fid = useId();
   const { data, error, loading, reload } = usePolledApi<{ schedules: Schedule[] }>(
     "/schedules",
     8000,
@@ -337,6 +344,9 @@ export default function SchedulesPage() {
     "/agents",
   );
   const builtinAgents = agentsData?.builtin ?? FALLBACK_AGENTS;
+  // Built-in comes from the roster's builtin list (the fallback names before
+  // /agents answers) — never a list kept here.
+  const nameOf = (a: string) => agentLabel(a, { builtin: builtinAgents.includes(a) });
   const dynamicAgents = (agentsData?.dynamic ?? []).map((a) => a.name);
   // Projects a task schedule can run inside; destinations its result can reach.
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
@@ -574,9 +584,11 @@ export default function SchedulesPage() {
             <Card title="Add schedule" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  {/* v1.316.0: this names the GROUP below (a radiogroup with
+                      its own aria-label), so it is not a <label>. */}
+                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     What should happen?
-                  </label>
+                  </p>
                   <ChooserTiles
                     ariaLabel="Schedule kind"
                     value={kind}
@@ -606,10 +618,11 @@ export default function SchedulesPage() {
                 {kind === "task" && (
                   <>
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         The task
                       </label>
                       <textarea
+                        id={`${fid}-task`}
                         value={taskText}
                         onChange={(e) => setTaskText(e.target.value)}
                         placeholder="Every fire, an agent gets exactly these words. e.g. Summarize yesterday's work and today's plan."
@@ -620,12 +633,13 @@ export default function SchedulesPage() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-agent`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         Who runs it
                       </label>
                       <div className="flex items-center gap-2">
                         <AgentFace name={agentName} size={22} />
                         <select
+                          id={`${fid}-agent`}
                           aria-label="Agent"
                           value={agentName}
                           onChange={(e) => setAgentName(e.target.value)}
@@ -635,7 +649,7 @@ export default function SchedulesPage() {
                               the agent id the payload carries. */}
                           {builtinAgents.map((t) => (
                             <option key={t} value={t}>
-                              {agentLabel(t)}
+                              {nameOf(t)}
                             </option>
                           ))}
                           {/* A dynamic agent named exactly like a builtin
@@ -664,10 +678,11 @@ export default function SchedulesPage() {
                       )}
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         Run inside a project
                       </label>
                       <select
+                        id={`${fid}-project`}
                         aria-label="Project"
                         value={projectId}
                         onChange={(e) => setProjectId(e.target.value)}
@@ -717,15 +732,23 @@ export default function SchedulesPage() {
 
                 {kind === "workflow" && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                      Workflow to run
-                    </label>
+                    {/* v1.316.0: a <label> only when the picker renders. */}
+                    {workflowNames.length > 0 ? (
+                      <label htmlFor={`${fid}-workflow`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Workflow to run
+                      </label>
+                    ) : (
+                      <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Workflow to run
+                      </p>
+                    )}
                     {workflowNames.length === 0 ? (
                       <div className="text-[11px] text-amber-300/80">
                         No saved workflows yet — create one on the Workflows page first.
                       </div>
                     ) : (
                       <select
+                        id={`${fid}-workflow`}
                         aria-label="Workflow to run"
                         value={workflowName}
                         onChange={(e) => setWorkflowName(e.target.value)}
@@ -744,10 +767,11 @@ export default function SchedulesPage() {
 
                 {kind === "event" && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-event`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Event type
                     </label>
                     <input
+                      id={`${fid}-event`}
                       value={eventType}
                       onChange={(e) => setEventType(e.target.value)}
                       placeholder="schedule.fired"
@@ -759,10 +783,11 @@ export default function SchedulesPage() {
 
                 {kind !== "event" && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Send the result to
                     </label>
                     <select
+                      id={`${fid}-dest`}
                       aria-label="Send the result to"
                       value={dest}
                       onChange={(e) => setDest(e.target.value)}
@@ -784,10 +809,11 @@ export default function SchedulesPage() {
                 )}
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
+                    id={`${fid}-name`}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="morning-briefing"
@@ -796,10 +822,11 @@ export default function SchedulesPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-repeat`} className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Repeat size={12} /> Repeat
                   </label>
                   <select
+                    id={`${fid}-repeat`}
                     aria-label="Repeat"
                     value={repeat}
                     onChange={(e) => setRepeat(e.target.value)}
@@ -820,10 +847,11 @@ export default function SchedulesPage() {
 
                 {isOnce && (
                   <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-runat`} className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       <Timer size={12} /> Run at
                     </label>
                     <input
+                      id={`${fid}-runat`}
                       type="datetime-local"
                       value={runAt}
                       onChange={(e) => setRunAt(e.target.value)}
@@ -837,10 +865,11 @@ export default function SchedulesPage() {
 
                 {isAdvanced && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-cron`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Cron expression
                     </label>
                     <input
+                      id={`${fid}-cron`}
                       value={advancedCron}
                       onChange={(e) => setAdvancedCron(e.target.value)}
                       placeholder="0 9 * * *"
@@ -928,8 +957,9 @@ export default function SchedulesPage() {
                                   >
                                     <AgentFace name={scheduleAgent(s)} size={14} />
                                     {/* v1.314.0: the same friendly name the picker shows;
-                                        the agent id stays in the title. */}
-                                    {agentLabel(scheduleAgent(s))}
+                                        the agent id stays in the title (v1.316.0:
+                                        lib/agentWorlds.agentLabel). */}
+                                    {nameOf(scheduleAgent(s))}
                                   </span>
                                 )}
                               </span>
@@ -1146,13 +1176,16 @@ function KnobFields({
   // A schedule cannot chain to itself (the daemon 422s); a stored pick that
   // names a deleted schedule still renders so it can be cleared.
   const choices = Array.from(new Set([...others.filter((n) => n && n !== self), contextFrom].filter(Boolean)));
+  // v1.316.0: its own ids — KnobFields renders in the add form AND the editor.
+  const fid = useId();
   return (
     <>
       <div>
-        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        <label htmlFor={`${fid}-folder`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
           Folder
         </label>
         <input
+          id={`${fid}-folder`}
           value={workspaceRoot}
           onChange={(e) => setWorkspaceRoot(e.target.value)}
           placeholder="C:\\Users\\you\\Documents\\reports"
@@ -1165,10 +1198,11 @@ function KnobFields({
         </div>
       </div>
       <div>
-        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        <label htmlFor={`${fid}-context`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
           Use the result of
         </label>
         <select
+          id={`${fid}-context`}
           aria-label="Use the result of"
           value={contextFrom}
           onChange={(e) => setContextFrom(e.target.value)}
@@ -1186,10 +1220,11 @@ function KnobFields({
         </div>
       </div>
       <div>
-        <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        <label htmlFor={`${fid}-script`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
           Pre-run script
         </label>
         <input
+          id={`${fid}-script`}
           value={scriptCommand}
           onChange={(e) => setScriptCommand(e.target.value)}
           placeholder="git pull"
@@ -1255,6 +1290,7 @@ function ScheduleEditor({
   onSaved: (msg: string) => void;
 }) {
   const was = knobsOf(schedule);
+  const fid = useId(); // v1.316.0: ties the editor's labels
   const tt = (schedule.trigger_type ?? "").toLowerCase();
   const isOnce = tt === "date" || (!schedule.cron && !!schedule.run_at);
   const isInterval = tt === "interval" || (!schedule.cron && !!schedule.interval_seconds);
@@ -1329,10 +1365,11 @@ function ScheduleEditor({
       </header>
       <form onSubmit={save} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         <div>
-          <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <label htmlFor={`${fid}-name`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
             Name
           </label>
           <input
+            id={`${fid}-name`}
             value={name}
             readOnly
             aria-label="Schedule name"
@@ -1342,10 +1379,11 @@ function ScheduleEditor({
         </div>
         {isOnce ? (
           <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <label htmlFor={`${fid}-runat`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
               Run at
             </label>
             <input
+              id={`${fid}-runat`}
               type="datetime-local"
               value={runAt}
               onChange={(e) => setRunAt(e.target.value)}
@@ -1359,10 +1397,11 @@ function ScheduleEditor({
           </div>
         ) : isInterval ? (
           <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <label htmlFor={`${fid}-interval`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
               Every (seconds)
             </label>
             <input
+              id={`${fid}-interval`}
               type="number"
               min={1}
               value={intervalSeconds}
@@ -1373,10 +1412,11 @@ function ScheduleEditor({
           </div>
         ) : (
           <div>
-            <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <label htmlFor={`${fid}-cron`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
               Cron expression
             </label>
             <input
+              id={`${fid}-cron`}
               value={cron}
               onChange={(e) => setCron(e.target.value)}
               aria-label="Cron expression"
@@ -1390,10 +1430,11 @@ function ScheduleEditor({
         {schedule.kind === "task" && (
           <>
             <div>
-              <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+              <label htmlFor={`${fid}-task`} className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
                 The task
               </label>
               <textarea
+                id={`${fid}-task`}
                 value={task}
                 onChange={(e) => setTask(e.target.value)}
                 rows={3}

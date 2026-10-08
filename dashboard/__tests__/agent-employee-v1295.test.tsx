@@ -214,12 +214,13 @@ describe("creating an employee", () => {
     fireEvent.change(details.getByLabelText("Step budget"), { target: { value: "40" } });
     const reports = details.getByLabelText("Reports to") as HTMLSelectElement;
     // You, the builtins, then the OTHER custom agents by bare name.
+    // v1.316.0: built-in TEXT reads as a name (agentLabel); values stay raw.
     expect(Array.from(reports.options).map((o) => [o.value, o.textContent])).toEqual([
       ["", "You"],
-      ["supervisor", "supervisor"],
-      ["builder", "builder"],
-      ["planner", "planner"],
-      ["reviewer", "reviewer"],
+      ["supervisor", "Supervisor"],
+      ["builder", "Builder"],
+      ["planner", "Planner"],
+      ["reviewer", "Reviewer"],
       ["custom:analyst", "analyst"],
     ]);
     fireEvent.change(reports, { target: { value: "custom:analyst" } });
@@ -472,7 +473,7 @@ describe("the allowance meter and the captions on the row", () => {
     expect((meter.querySelector("[role=progressbar] > div") as HTMLElement).style.width).toBe(
       "24%",
     );
-    expect(screen.getByTestId("agent-reports-to-skeptic").textContent).toBe("Reports to builder");
+    expect(screen.getByTestId("agent-reports-to-skeptic").textContent).toBe("Reports to Builder"); // v1.316.0: a built-in reads as a name
   });
 
   it("warning is amber, exhausted is rose, and a dollar bound rides along", () => {

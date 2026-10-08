@@ -174,17 +174,21 @@ describe("Help page heroes + core loop (v1.198.0)", () => {
     renderHelp();
 
     expect(heroCard(/One surface for everything/)).toHaveAttribute("href", "/chat");
-    expect(heroCard(/The context spine/)).toHaveAttribute("href", "/projects");
-    expect(heroCard(/Live terminals side by side/)).toHaveAttribute("href", "/terminals");
+    // v1.316.0: the Projects/Build blurbs say it in plain words (no "context
+    // spine", no "Live terminals"); the links and titles are unchanged.
+    expect(heroCard(/A home for each piece of work/)).toHaveAttribute("href", "/projects");
+    expect(heroCard(/Command windows for coding, side by side/)).toHaveAttribute("href", "/terminals");
     expect(heroCard(/Generate images, video, music and speech/)).toHaveAttribute(
       "href",
       "/creative",
     );
 
     // Titles ride on the same cards (Build is the nav's name for /terminals).
-    expect(within(heroCard(/Live terminals side by side/)).getByText("Build")).toBeInTheDocument();
     expect(
-      within(heroCard(/The context spine/)).getByText("Projects"),
+      within(heroCard(/Command windows for coding, side by side/)).getByText("Build"),
+    ).toBeInTheDocument();
+    expect(
+      within(heroCard(/A home for each piece of work/)).getByText("Projects"),
     ).toBeInTheDocument();
   });
 

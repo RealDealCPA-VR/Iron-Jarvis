@@ -1,9 +1,13 @@
 "use client";
 
 import {
+  cloneElement,
+  isValidElement,
   useEffect,
+  useId,
   useState,
   type ButtonHTMLAttributes,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import Link from "next/link";
@@ -298,6 +302,40 @@ export function SkeletonRows({ rows = 4 }: { rows?: number }) {
       {Array.from({ length: rows }).map((_, i) => (
         <Skeleton key={i} className="h-10 w-full" />
       ))}
+    </div>
+  );
+}
+
+/**
+ * v1.316.0 (UX wave 4, form-labels-not-associated): a form label that is
+ * really tied to its control. The one child (an input, select or textarea)
+ * gets an id from `useId` unless it already carries one, and the label's
+ * `htmlFor` points at it — so clicking the words focuses the control and a
+ * screen reader reads the label. Repeated forms never collide. A control's
+ * own `aria-label` (tests use getByLabelText on some) is left as it is.
+ */
+export function Field({
+  label,
+  hint,
+  children,
+  className = "",
+}: {
+  label: ReactNode;
+  /** One quiet line under the control. */
+  hint?: ReactNode;
+  children: ReactElement<{ id?: string }>;
+  className?: string;
+}) {
+  const auto = useId();
+  const own = isValidElement(children) ? children.props.id : undefined;
+  const id = own || auto;
+  return (
+    <div className={className}>
+      <label htmlFor={id} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+        {label}
+      </label>
+      {isValidElement(children) && !own ? cloneElement(children, { id }) : children}
+      {hint && <p className="mt-1 text-[11px] text-zinc-500">{hint}</p>}
     </div>
   );
 }

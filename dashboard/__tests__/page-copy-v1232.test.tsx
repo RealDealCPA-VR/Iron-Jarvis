@@ -92,8 +92,13 @@ describe("U6 — Usage lists models that did work", () => {
     const { default: UsagePage } = await import("@/app/usage/page");
     render(<UsagePage />);
     expect(screen.getByText("Across 1 model")).toBeInTheDocument();
-    expect(screen.getByText(/custom · brain/)).toBeInTheDocument();
-    expect(screen.queryByText(/mock · mock-1/)).toBeNull();
+    // v1.316.0: the provider reads in words ("custom" → "your own
+    // endpoint"); the raw id stays in the row's title. The mock check keys on
+    // the MODEL id, which is shown as-is, so it cannot pass just because the
+    // provider word changed.
+    expect(screen.getByText(/your own endpoint · brain/)).toBeInTheDocument();
+    expect(document.querySelector('[title^="custom · brain"]')).not.toBeNull();
+    expect(screen.queryByText(/mock-1/)).toBeNull();
     expect(screen.queryByText(/bogusmodel/)).toBeNull();
   });
 });

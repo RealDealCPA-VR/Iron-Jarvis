@@ -719,7 +719,10 @@ function AccountRow({
             type="button"
             onClick={onSignIn}
             disabled={busy}
-            className={`${a.state?.status === "unauthenticated" ? "btn-accent" : "btn-ghost"} px-2.5 py-1 text-xs`}
+            // v1.316.0 (UX wave 4): a signed-out account's Sign in is the
+            // accent OUTLINE, not a filled bar — Connections keeps one filled
+            // accent ("Add connection"); still told apart from the quiet rows.
+            className={`${a.state?.status === "unauthenticated" ? "btn-soft" : "btn-ghost"} px-2.5 py-1 text-xs`}
           >
             <LogIn size={13} /> Sign in
           </button>

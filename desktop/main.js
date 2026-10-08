@@ -2547,13 +2547,19 @@ let askSeen = {}; // id -> { first: ms, sent: number }
 let askWaitingCount = 0;
 
 //: Plain words for the common asks; anything else names the tool as it is.
+//: v1.316.0 (UX wave 4, carry-desktop-ask-words): these AGREE with the
+//: approval card's words (dashboard/lib/toolWords.ts) — the toast and the card
+//: must not describe one ask two ways. rename_file renames OR moves a file (a
+//: `new_path` in another folder moves it), so "rename a file" was untrue for a
+//: move; write_file reads "save", as on the card. BUILT-INS ONLY, by exact
+//: name, the same rule as toolWords: `rename_real_file`, `delete_file` and
+//: `move_file` are not built-in tools (an agent-made or connected tool runs
+//: whatever its author wrote — tools/dynamic.py), so the app cannot vouch for
+//: them in its own words; they fall back to "use <its name>" below.
 const ASK_PHRASES = {
-  rename_file: ["rename", "file", "files"],
-  rename_real_file: ["rename", "file", "files"],
-  write_file: ["write", "file", "files"],
+  rename_file: ["rename or move", "file", "files"],
+  write_file: ["save", "file", "files"],
   write_document: ["create", "document", "documents"],
-  delete_file: ["delete", "file", "files"],
-  move_file: ["move", "file", "files"],
   excel_edit: ["edit", "workbook", "workbooks"],
   shell: ["run", "command", "commands"],
 };

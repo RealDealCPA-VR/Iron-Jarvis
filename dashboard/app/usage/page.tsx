@@ -23,6 +23,14 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { LIST_PRICE_TITLE } from "@/lib/types";
+import Link from "next/link";
+import {
+  baselineName,
+  compactCount,
+  exactCount,
+  formatTokens,
+  usageProviderName,
+} from "@/lib/format";
 
 /* -------------------------------------------------------------------------- */
 /*  Local types (GET /usage?days=N)                                            */
@@ -55,6 +63,16 @@ interface UsageByModel {
   /** v1.300.0: the row's cost is the LIST-PRICE EQUIVALENT of a
    *  subscription's tokens (claude-cli) — not money spent. */
   list_price_equivalent?: boolean;
+}
+
+/** v1.316.0: the slice of GET /fleet/usage?days=N this page reads — the
+ *  local-models estimate, always with the model it was priced against. */
+interface FleetUsageEstimate {
+  local_tokens?: number | null;
+  est_avoided_usd?: number | null;
+  comparison_provider?: string | null;
+  comparison_model?: string | null;
+  basis?: string | null;
 }
 
 interface UsageResponse {
@@ -91,6 +109,17 @@ function usd(v: number | null | undefined): string {
 function count(v: number | null | undefined): string {
   const n = typeof v === "number" && !Number.isNaN(v) ? v : 0;
   return n.toLocaleString();
+}
+
+/** "$7,687" — a whole-dollar estimate (cents would claim a precision an
+ *  estimate does not have). */
+function usdWhole(v: number): string {
+  return v.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
 }
 
 function dayLabel(iso: string): string {
@@ -264,8 +293,83 @@ function buildHeatmap(byDay: UsageByDay[]): HeatmapModel {
 
 const DAY_OPTIONS = [7, 30, 90] as const;
 
+/* -------------------------------------------------------------------------- */
+/*  Over-time chart (v1.316.0)                                                 */
+/* -------------------------------------------------------------------------- */
+
+type ChartMetric = "cost" | "tokens";
+
+interface ChartDay {
+  iso: string;
+  tokens: number;
+  cost: number;
+  /** No raw row for this calendar day — drawn as a quiet baseline tick. */
+  empty: boolean;
+}
+
+/** "YYYY-MM-DD" → that LOCAL calendar day at midnight (null if unreadable). */
+function localDay(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * One entry per calendar day across the window, zero-filled FOR DRAWING ONLY
+ * (hasData and the empty state still read the raw by_day). It used to draw
+ * only the days that had rows, evenly spaced under a "Sep 8 → Oct 7" axis,
+ * so a three-week gap looked like three busy days in a row.
+ *
+ * The span is the selected window ending today (local), WIDENED to include
+ * any raw row outside it: the daemon cuts off at now-N days in UTC, so a row
+ * can sit one local day past either end, and dropping it would hide real
+ * usage the totals above still count.
+ */
+function buildChartDays(byDay: UsageByDay[], days: number): ChartDay[] {
+  const byIso = new Map<string, { tokens: number; cost: number }>();
+  for (const row of byDay) {
+    const iso = row.day.slice(0, 10);
+    const prev = byIso.get(iso) ?? { tokens: 0, cost: 0 };
+    byIso.set(iso, {
+      tokens: prev.tokens + (row.input_tokens ?? 0) + (row.output_tokens ?? 0),
+      cost: prev.cost + (row.cost_usd ?? 0),
+    });
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let first = new Date(today);
+  first.setDate(today.getDate() - (Math.max(1, days) - 1));
+  let last = new Date(today);
+  for (const iso of Array.from(byIso.keys())) {
+    const d = localDay(iso);
+    if (!d) continue;
+    if (d < first) first = d;
+    if (d > last) last = d;
+  }
+  const out: ChartDay[] = [];
+  // Step by calendar date (not +86,400,000 ms) so a DST change never skips
+  // or repeats a day. The cap stops a corrupt far-off row drawing forever.
+  for (const d = new Date(first); d <= last && out.length < 3700; d.setDate(d.getDate() + 1)) {
+    const iso = isoDay(d);
+    const rec = byIso.get(iso);
+    out.push({ iso, tokens: rec?.tokens ?? 0, cost: rec?.cost ?? 0, empty: !rec });
+  }
+  return out;
+}
+
+/** Bar height as a percentage of the window's max — one decimal, so the
+ *  busiest day is exactly "100%". */
+function barPct(v: number, max: number): number {
+  if (!(max > 0) || !(v > 0)) return 0;
+  return Math.round((v / max) * 1000) / 10;
+}
+
 export default function UsagePage() {
   const [days, setDays] = useState<number>(30);
+  // v1.316.0: Cost or Tokens over time. null = not chosen yet, so the chart
+  // follows the data (Tokens when nothing in the window was billed).
+  const [metricPick, setMetricPick] = useState<ChartMetric | null>(null);
   const { data, error, loading, reload } = usePolledApi<UsageResponse>(
     `/usage?days=${days}`,
     15000,
@@ -277,6 +381,10 @@ export default function UsagePage() {
     loading: yearLoading,
     reload: reloadYear,
   } = useApi<UsageResponse>("/usage?days=365");
+  // v1.316.0: the local-models estimate for the SAME window, from the Fleet
+  // page's own endpoint. Best-effort: if it fails, the line is simply not
+  // drawn — Total cost never depends on it.
+  const { data: fleet } = useApi<FleetUsageEstimate>(`/fleet/usage?days=${days}`);
 
   // Manual refresh: reload BOTH data sources; spin only for user-initiated
   // reloads (the 15s poll also flips `loading`, which shouldn't animate).
@@ -333,6 +441,30 @@ export default function UsagePage() {
     () => Math.max(0, ...byDay.map((d) => d.cost_usd)),
     [byDay],
   );
+
+  // v1.316.0: the chart. With nothing billed in the window the cost bars
+  // were all the 2px floor — a big empty panel that read as broken tracking —
+  // so the default series is then Tokens (Cost stays one press away).
+  const chartDays = useMemo(() => buildChartDays(byDay, days), [byDay, days]);
+  const noBilled = !(maxDayCost > 0);
+  const metric: ChartMetric = metricPick ?? (noBilled ? "tokens" : "cost");
+  const chartVal = (d: ChartDay) => (metric === "cost" ? d.cost : d.tokens);
+  const chartMax = Math.max(0, ...chartDays.map(chartVal));
+  const tickStep = chartDays.length <= 10 ? 1 : chartDays.length <= 45 ? 7 : 14;
+  const dense = chartDays.length > 45;
+
+  // v1.316.0: what local models did, priced against a NAMED baseline. Only
+  // when the daemon priced it (> 0) AND local tokens exist AND the baseline
+  // has a name — never a bare "you saved $X" (fleet.py's rule).
+  const estProvider = (fleet?.comparison_provider ?? "").trim();
+  const estModel = (fleet?.comparison_model ?? "").trim();
+  const estUsd = fleet?.est_avoided_usd;
+  const showLocalEstimate =
+    typeof estUsd === "number" &&
+    Number.isFinite(estUsd) &&
+    estUsd > 0 &&
+    (fleet?.local_tokens ?? 0) > 0 &&
+    !!(estProvider || estModel);
 
   return (
     <PageShell>
@@ -409,6 +541,28 @@ export default function UsagePage() {
                       ~{usd(totals.list_price_equivalent_usd)} list-price equivalent (subscription)
                     </span>
                   )}
+                {/* v1.316.0: "$0.00 for 1.5 billion tokens" read as a
+                    tracking bug. When local models did the work, say so —
+                    with the estimate's baseline named and the raw
+                    provider:model in the title. Its own line, NEVER added to
+                    Total cost (the same rule as the list-price line above). */}
+                {showLocalEstimate && (
+                  <span
+                    data-testid="usage-local-estimate"
+                    title={
+                      fleet?.basis ||
+                      `estimate: what the local tokens would have cost on ${[estProvider, estModel]
+                        .filter(Boolean)
+                        .join(":")} at list price`
+                    }
+                    className="block text-zinc-500"
+                  >
+                    <Link href="/fleet" className="hover:text-zinc-300 hover:underline">
+                      Local models, not billed: ~{usdWhole(estUsd as number)} vs{" "}
+                      {baselineName(estProvider, estModel)} list price (estimate) →
+                    </Link>
+                  </span>
+                )}
               </>
             }
             icon={<Coins size={16} />}
@@ -416,10 +570,18 @@ export default function UsagePage() {
           />
           <Stat
             label="Total tokens"
-            value={count(totalTokens)}
-            sub={`${count(totals?.input_tokens)} in · ${count(
-              totals?.output_tokens,
-            )} out`}
+            // v1.316.0: "1.52B", not a ten-digit number read digit by digit;
+            // the exact counts stay one hover away.
+            value={<span title={exactCount(totalTokens)}>{compactCount(totalTokens)}</span>}
+            sub={
+              <span
+                title={`${exactCount(totals?.input_tokens)} in · ${exactCount(
+                  totals?.output_tokens,
+                )} out`}
+              >
+                {compactCount(totals?.input_tokens)} in · {compactCount(totals?.output_tokens)} out
+              </span>
+            }
             icon={<Hash size={16} />}
           />
           <Stat
@@ -528,9 +690,36 @@ export default function UsagePage() {
         </Card>
       </Reveal>
 
-      {/* Cost over time */}
+      {/* Cost / Tokens over time (v1.316.0: one bar per calendar day, a real
+          scale, and Tokens when nothing in the window was billed). */}
       <Reveal>
-        <Card title="Cost over time" icon={<BarChart3 size={15} />}>
+        <Card
+          title={metric === "cost" ? "Cost over time" : "Tokens over time"}
+          icon={<BarChart3 size={15} />}
+          right={
+            <div
+              role="group"
+              aria-label="Chart shows"
+              className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-ink-900/80 p-1"
+            >
+              {(["cost", "tokens"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={metric === k}
+                  onClick={() => setMetricPick(k)}
+                  className={`rounded-lg px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                    metric === k
+                      ? "bg-accent/15 text-accent-soft"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  {k === "cost" ? "Cost" : "Tokens"}
+                </button>
+              ))}
+            </div>
+          }
+        >
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : !hasData || byDay.length === 0 ? (
@@ -539,39 +728,87 @@ export default function UsagePage() {
               tracking spend.
             </Empty>
           ) : (
-            <div className="flex h-44 items-end gap-1 overflow-x-auto pb-1">
-              {byDay.map((d) => {
-                const h =
-                  maxDayCost > 0
-                    ? Math.max(2, Math.round((d.cost_usd / maxDayCost) * 100))
-                    : 2;
-                return (
-                  <div
-                    key={d.day}
-                    className="group flex min-w-[10px] flex-1 flex-col items-center justify-end gap-1.5"
-                    title={`${dayLabel(d.day)} · ${usd(d.cost_usd)} · ${count(
-                      d.input_tokens + d.output_tokens,
-                    )} tokens`}
-                  >
-                    <div className="relative flex w-full items-end justify-center">
+            <>
+              {noBilled && (
+                // Only what is TRUE: nothing was billed. A $0 run can be a
+                // subscription, a local model or a model with no known price,
+                // so the caption names all three rather than guessing which.
+                <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">
+                  No billed spend in this window. Runs on a subscription, a local model or a
+                  model without a known price count as $0 here.
+                </p>
+              )}
+              {/* The top of the scale, so a bar's height means something. It
+                  sits ABOVE the plot (not over it): laid over the bars it hid
+                  the busiest day on a phone. */}
+              <div
+                data-testid="usage-chart-max"
+                className="mb-1 text-[10px] tabular-nums text-zinc-500"
+              >
+                {metric === "cost" ? usd(chartMax) : `${formatTokens(chartMax)} tokens`}
+              </div>
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-x-0 top-0 border-t border-dashed border-white/[0.08]" />
+                <div className={`flex h-44 items-end ${dense ? "gap-px" : "gap-1"}`}>
+                  {chartDays.map((d) => {
+                    const pctH = barPct(chartVal(d), chartMax);
+                    const value = metric === "cost" ? usd(d.cost) : formatTokens(d.tokens);
+                    return (
                       <div
-                        className="w-full rounded-t-sm bg-accent/40 transition-all duration-300 group-hover:bg-accent/70"
-                        style={{ height: `${h}%`, minHeight: 2 }}
-                      />
-                      <span className="pointer-events-none absolute -top-5 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 text-[10px] text-zinc-200 opacity-0 transition-opacity group-hover:opacity-100">
-                        {usd(d.cost_usd)}
-                      </span>
+                        key={d.iso}
+                        className={`group relative flex h-full flex-1 items-end ${
+                          dense ? "min-w-0" : "min-w-[3px]"
+                        }`}
+                        title={`${dayLabel(d.iso)} · ${usd(d.cost)} · ${count(d.tokens)} tokens`}
+                      >
+                        <div
+                          data-testid="usage-day-bar"
+                          data-day={d.iso}
+                          data-empty={d.empty ? "true" : undefined}
+                          className={`w-full rounded-t-sm transition-colors duration-300 ${
+                            pctH > 0
+                              ? "bg-accent/45 group-hover:bg-accent/75"
+                              : "bg-white/[0.07] group-hover:bg-white/[0.14]"
+                          }`}
+                          style={{ height: `${pctH}%`, minHeight: 2 }}
+                        />
+                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 text-[10px] text-zinc-200 opacity-0 transition-opacity group-hover:opacity-100">
+                          {value}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="border-t border-white/[0.08]" />
+              </div>
+              {/* Day ticks, counted back from the newest day so it is always
+                  named. */}
+              <div
+                aria-hidden="true"
+                className={`mt-1.5 flex h-4 text-[10px] text-zinc-600 ${dense ? "gap-px" : "gap-1"}`}
+              >
+                {chartDays.map((d, i) => {
+                  const fromEnd = chartDays.length - 1 - i;
+                  const show = fromEnd % tickStep === 0;
+                  return (
+                    <div
+                      key={d.iso}
+                      className={`relative flex-1 ${dense ? "min-w-0" : "min-w-[3px]"}`}
+                    >
+                      {show && (
+                        <span
+                          className={`absolute top-0 whitespace-nowrap ${
+                            fromEnd === 0 ? "right-0" : "left-1/2 -translate-x-1/2"
+                          }`}
+                        >
+                          {dayLabel(d.iso)}
+                        </span>
+                      )}
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {hasData && byDay.length > 0 && (
-            <div className="mt-2 flex justify-between text-[11px] text-zinc-600">
-              <span>{dayLabel(byDay[0].day)}</span>
-              <span>{dayLabel(byDay[byDay.length - 1].day)}</span>
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </Card>
       </Reveal>
@@ -595,6 +832,8 @@ export default function UsagePage() {
                   <div
                     key={`${m.provider}:${m.model}`}
                     className="group"
+                    // v1.316.0: the raw "provider · model" stays here — it is
+                    // the record of what ran; the label below reads words.
                     title={`${m.provider} · ${m.model || "—"} — ${count(
                       m.input_tokens,
                     )} in · ${count(m.output_tokens)} out · ${count(
@@ -602,8 +841,8 @@ export default function UsagePage() {
                     )} run${m.runs === 1 ? "" : "s"}`}
                   >
                     <div className="flex items-baseline justify-between gap-3">
-                      <span className="truncate font-mono text-xs text-zinc-300">
-                        {m.provider} · {m.model || "—"}
+                      <span className="truncate text-xs text-zinc-300">
+                        {usageProviderName(m.provider) || m.provider} · {m.model || "—"}
                       </span>
                       <span className="shrink-0 text-right text-xs tabular-nums text-zinc-400">
                         {count(tokens)} tok

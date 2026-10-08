@@ -623,7 +623,10 @@ describe("Updates (source checkout) — 'local changes', not 'dirty' / git verbs
     expect(folded).toMatch(/git pull --ff-only/);
     expect(container.textContent).toContain(DIRTY.reason);
     expect(screen.getByRole("button", { name: /Re-check/ })).toBeInTheDocument();
-    expect(container.querySelector("button.btn-accent")).toBeTruthy(); // the apply button
+    // v1.316.0: the apply button is still there (disabled) — now a quiet
+    // ghost, because brand-fill is kept for an update you can actually apply.
+    const apply = screen.getByRole("button", { name: /Paused — local changes/ }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
   });
 });
 

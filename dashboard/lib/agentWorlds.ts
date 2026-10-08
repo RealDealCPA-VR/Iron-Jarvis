@@ -177,6 +177,25 @@ export function agentDisplayName(agentType: string, origin?: string | null): str
   return agentType;
 }
 
+/** v1.316.0 (UX wave 4, agent-names-raw-lowercase): an agent's name as
+ *  TEXT, for places CSS `capitalize` cannot reach (a `<select>`'s options, a
+ *  placeholder sentence). A BUILT-IN agent's id reads as a word ("builder" →
+ *  "Builder", "file_manager" → "File manager"); a custom agent keeps the
+ *  name the user typed; the mission coordinator is Jarvis (agentDisplayName).
+ *  Whether a name is built-in comes from the CALLER (the roster's `builtin`
+ *  list), never a list kept here. The VALUE a form posts stays the raw id,
+ *  and an avatar is still drawn from the raw name. */
+export function agentLabel(
+  name: string,
+  opts: { builtin?: boolean; origin?: string | null } = {},
+): string {
+  const shown = agentDisplayName(name, opts.origin);
+  if (shown !== name) return shown;
+  if (!opts.builtin) return name;
+  const words = name.replace(/[_-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
+}
+
 /* ----------------------------------------------------------- the team --- */
 
 /** "custom:x" / "remote:x" → "x"; builtins pass through. */

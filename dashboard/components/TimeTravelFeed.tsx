@@ -657,8 +657,17 @@ function TimelineRow({
   // does (lib/toolWords — built-ins only, exact name; initial capital), else
   // the summary in words; any other row is its summary in words. The kind
   // word / tool id becomes the chip, unless the headline already IS it.
+  // v1.316.0 (UX wave 4, carry-denied-row-words): a DENIED or failed row —
+  // the same `deny` flag that shows the red "denied" badge — did NOT happen,
+  // so its words say it was only tried: "Tried to save a file" (the phrase
+  // stays lower-case after "Tried to"). Allowed rows and rows for a tool with
+  // no words are unchanged; the raw-id chip and the badge stay as they are.
   const tw = e.tool ? toolWords(e.tool) : null;
-  const toolHead = tw ? tw.charAt(0).toUpperCase() + tw.slice(1) : "";
+  const toolHead = tw
+    ? deny
+      ? `Tried to ${tw}`
+      : tw.charAt(0).toUpperCase() + tw.slice(1)
+    : "";
   const said = humanSummary(e.summary);
   const headline = toolHead || said || e.tool || meta.label;
   const chipWord = e.tool || meta.label;

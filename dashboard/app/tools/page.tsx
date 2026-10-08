@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   Wrench,
   Plus,
@@ -143,7 +144,27 @@ interface McpCatalogEntry {
   category?: string;
   /** Prerequisite runtime, plain language: "Node" | "Python (uv)". */
   needs?: string;
+  /** v1.316.0: the daemon's launcher found this pack's command on this PC
+   *  right now (the SAME resolution that starts the pack). Absent on an older
+   *  daemon — then the card keeps the amber "Needs X" exactly as before. */
+  runtime_ready?: boolean;
 }
+
+/**
+ * v1.316.0 (UX wave 4, three-overlapping-catalogs): packs the Directory ALSO
+ * offers under the SAME id. Both surfaces write one `mcp_servers` entry named
+ * by that id (Directory: `connectors/service.py` `{"name": connector.id}`), so
+ * adding in either place is the same pack — never a second copy. Only exact
+ * twins are listed: Directory's Puppeteer is not Tools' Playwright, and its
+ * `sequential_thinking` is not Tools' `sequentialthinking`.
+ */
+const DIRECTORY_TWINS: ReadonlySet<string> = new Set([
+  "github",
+  "filesystem",
+  "fetch",
+  "memory",
+  "box",
+]);
 
 /**
  * Turn a pasted npm package or GitHub repo into a ready MCP launch command
@@ -990,7 +1011,15 @@ export default function ToolsPage() {
           {/* 2. STATUS — including the runtime, promoted from a grey pill to
               a real state the user can act on. */}
           <StatusChip
-            status={connected ? "added" : entry.needs ? "blocked" : "available"}
+            status={
+              connected
+                ? "added"
+                : entry.runtime_ready === true && entry.needs
+                  ? "ready"
+                  : entry.needs
+                    ? "blocked"
+                    : "available"
+            }
             needs={entry.needs}
           />
         </div>
@@ -1031,6 +1060,19 @@ export default function ToolsPage() {
             />
           )}
         </div>
+
+        {/* v1.316.0: the same pack has a guided setup in the Directory —
+            one name for that page everywhere ("Directory", never
+            Marketplace). Only exact twins (same mcp_servers name). */}
+        {DIRECTORY_TWINS.has(entry.id) && (
+          <Link
+            href="/marketplace"
+            className="mt-2 inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+            title="The Directory adds this same extension with a guided form — adding it in either place is the same thing"
+          >
+            Also in the Directory — guided setup <ChevronRight size={11} aria-hidden />
+          </Link>
+        )}
 
         {/* The launch command, default closed. */}
         <details className="group mt-2.5">
@@ -2034,7 +2076,7 @@ export default function ToolsPage() {
                           onClick={() => void testServer(s.name)}
                           disabled={testing}
                           title={`Test "${s.name}" — connect now and list its tools`}
-                          className="inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                          className="btn-soft btn-sm"
                         >
                           {testing ? (
                             <LoaderInline label="Testing…" />

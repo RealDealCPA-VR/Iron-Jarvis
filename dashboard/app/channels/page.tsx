@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   Search,
   Megaphone,
@@ -233,6 +233,10 @@ const TELEGRAM_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
 };
 
 export default function ChannelsPage() {
+  // v1.316.0 (form-labels-not-associated): ties each label to its field;
+  // a label that names a GROUP (the type tiles) or a read-only value (the
+  // editing Type badge) is a plain heading, not a <label>.
+  const fid = useId();
   const { data, error, loading, reload } = useApi<{ channels: ChannelInfo[] }>("/comm/channels");
   const { data: typesData } = useApi<{ types: ChannelType[] }>("/comm/channel-types");
   const offline = error && error.status === 0;
@@ -556,16 +560,16 @@ export default function ChannelsPage() {
               )}
               {editing ? (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Type
-                  </label>
+                  </p>
                   <Badge value={DEST_META[addType]?.label ?? addType} tone="cyan" />
                 </div>
               ) : (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Where should alerts go?
-                  </label>
+                  </p>
                   <ChooserTiles
                     ariaLabel="Destination type"
                     value={addType}
@@ -592,10 +596,11 @@ export default function ChannelsPage() {
               )}
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Name
                 </label>
                 <input
+                  id={`${fid}-name`}
                   type="text"
                   value={addName}
                   onChange={(e) => setAddName(e.target.value)}
@@ -671,10 +676,11 @@ export default function ChannelsPage() {
                   }
                   return (
                   <div key={f.key}>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <label htmlFor={`${fid}-f-${f.key}`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       {label}
                     </label>
                     <input
+                      id={`${fid}-f-${f.key}`}
                       type={f.secret ? "password" : "text"}
                       value={addValues[f.key] ?? ""}
                       onChange={(e) =>
@@ -1115,10 +1121,11 @@ export default function ChannelsPage() {
           <Card title="Send test message" icon={<Send size={15} />}>
             <form onSubmit={send} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-message`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Message
                 </label>
                 <textarea
+                  id={`${fid}-message`}
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   rows={3}
@@ -1127,12 +1134,12 @@ export default function ChannelsPage() {
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-dest`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Destination
                 </label>
                 {/* v1.314.0: our concept is a destination (VOCABULARY.md);
                     option VALUES stay the destination names the API takes. */}
-                <select aria-label="Destination" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
+                <select id={`${fid}-dest`} aria-label="Destination" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
                   <option value="">All destinations</option>
                   {channels.map((c) => (
                     <option key={c.name} value={c.name}>

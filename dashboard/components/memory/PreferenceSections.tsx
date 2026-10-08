@@ -48,8 +48,12 @@ export function originWord(row: Pick<PrefRow, "origin" | "source">): string {
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+// v1.316.0: a finger-sized target. These were ~30x14px links of 11px zinc-500
+// — on a phone the one control that makes Jarvis forget something was hard to
+// see and harder to hit. `py-1` gives a 24px hit area; `-my-1` keeps it from
+// pushing the sentence's line apart (the target overlaps the gap instead).
 const ACTION =
-  "rounded px-1 py-px text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-40";
+  "-my-1 rounded px-1.5 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-40";
 const LABEL = "text-[10.5px] font-semibold uppercase tracking-[0.12em] text-zinc-500";
 
 function Quotes({ quotes }: { quotes: PrefQuote[] }) {
@@ -265,7 +269,7 @@ export function PreferenceSections({
                             {originWord(p)}
                           </span>
                         )}
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 opacity-60 transition-opacity group-hover/pref:opacity-100 focus-within:opacity-100">
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 opacity-60 transition-opacity group-hover/pref:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                           <button
                             type="button"
                             data-testid="prefs-edit"

@@ -57,6 +57,7 @@ import { Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PageGrid } from "@/components/PageGrid";
+import { Modal } from "@/components/Modal";
 
 const DEFAULT_SOURCES = ["brain", "obsidian", "notion"];
 
@@ -552,7 +553,17 @@ export function LongTerm() {
       )}
 
       <Reveal>
-        <Card>
+        {/* v1.316.0: titled like Working's box — Recall, above, is the one
+            search across everything; this strip searches the long-term bases
+            only, and now says so instead of being an unlabelled third box. */}
+        <Card
+          title="Search only this tab"
+          right={
+            <span className="text-[11px] font-normal text-zinc-500">
+              Recall, above, searches everything
+            </span>
+          }
+        >
           <form onSubmit={search} className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -788,8 +799,11 @@ export function LongTerm() {
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Base
                   </label>
+                  {/* v1.316.0: its own name — two selects both called "Base"
+                      (search and append) were indistinguishable to a screen
+                      reader. The visible label is unchanged. */}
                   <select
-                    aria-label="Base"
+                    aria-label="Base to add the note to"
                     value={appendSource}
                     onChange={(e) => setAppendSource(e.target.value)}
                     className="field"
@@ -1399,69 +1413,66 @@ export function LongTerm() {
         </div>
       </Reveal>
 
-      {/* Folder browser modal — pick a local notes folder off the machine ---- */}
+      {/* Folder browser modal — pick a local notes folder off the machine ----
+          v1.316.0: on the shared <Modal> (portal, focus in / Tab trap / focus
+          back to the Browse button). Same z layer (50), same size, same
+          dismissals: the backdrop, Escape, Cancel and the X all close it. */}
       {browseOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-          onClick={() => setBrowseOpen(false)}
+        <Modal
+          label="Pick a markdown folder"
+          onClose={() => setBrowseOpen(false)}
+          className="w-full max-w-lg"
+          z={50}
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Pick a markdown folder"
-            onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[82vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
-          >
-            <header className="flex items-center gap-2 border-b hairline px-4 py-3">
-              <FolderOpen size={16} className="text-accent-soft/80" />
-              <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
-                Pick a markdown folder
-              </h2>
-              <button
-                type="button"
-                onClick={() => setBrowseOpen(false)}
-                title="Close"
-                className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-              >
-                <X size={14} />
-              </button>
-            </header>
+          <header className="flex items-center gap-2 border-b hairline px-4 py-3">
+            <FolderOpen size={16} className="text-accent-soft/80" />
+            <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
+              Pick a markdown folder
+            </h2>
+            <button
+              type="button"
+              onClick={() => setBrowseOpen(false)}
+              title="Close"
+              className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+            >
+              <X size={14} />
+            </button>
+          </header>
 
-            <div className="min-h-0 flex-1 p-3">
-              <div className="h-[56vh]">
-                <DirectoryTree
-                  selectedPath={browsePick}
-                  onSelect={setBrowsePick}
-                  hideAction
-                />
-              </div>
+          <div className="min-h-0 flex-1 p-3">
+            <div className="h-[56vh]">
+              <DirectoryTree
+                selectedPath={browsePick}
+                onSelect={setBrowsePick}
+                hideAction
+              />
             </div>
-
-            <footer className="flex items-center gap-3 border-t hairline px-4 py-3">
-              <div
-                className="min-w-0 flex-1 truncate font-mono text-[12px] text-accent-soft"
-                title={browsePick ?? undefined}
-              >
-                {browsePick ?? "— select a folder —"}
-              </div>
-              <button
-                type="button"
-                onClick={() => setBrowseOpen(false)}
-                className="btn-ghost py-1.5 text-[13px]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => browsePick && useFolder(browsePick)}
-                disabled={!browsePick}
-                className="btn-accent py-1.5 text-[13px]"
-              >
-                Use this folder
-              </button>
-            </footer>
           </div>
-        </div>
+
+          <footer className="flex items-center gap-3 border-t hairline px-4 py-3">
+            <div
+              className="min-w-0 flex-1 truncate font-mono text-[12px] text-accent-soft"
+              title={browsePick ?? undefined}
+            >
+              {browsePick ?? "— select a folder —"}
+            </div>
+            <button
+              type="button"
+              onClick={() => setBrowseOpen(false)}
+              className="btn-ghost py-1.5 text-[13px]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => browsePick && useFolder(browsePick)}
+              disabled={!browsePick}
+              className="btn-accent py-1.5 text-[13px]"
+            >
+              Use this folder
+            </button>
+          </footer>
+        </Modal>
       )}
     </>
   );

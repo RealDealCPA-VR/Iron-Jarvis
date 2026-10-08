@@ -58,6 +58,10 @@ interface FieldDef {
 interface SectionDef {
   id: SectionId;
   title: string;
+  /** v1.316.0: the short word in the jump index at the top of the form. Never
+   *  exactly "Advanced" — that string is the section's own heading (pinned by
+   *  getByText in ux-wave2-system-memory). */
+  jump: string;
   description: string;
   /** Advanced sections render collapsed inside a <details>. */
   advanced?: boolean;
@@ -68,24 +72,28 @@ const SECTIONS: SectionDef[] = [
   {
     id: "models",
     title: "Models & routing",
+    jump: "Models",
     description:
       "Which AI answers by default, and how much history Iron Jarvis keeps. Add providers and API keys on the Connections page.",
   },
   {
     id: "local",
     title: "Local & custom models",
+    jump: "Local models",
     description:
       "Run against a local Ollama server or any OpenAI-compatible endpoint. Leave blank to turn these off.",
   },
   {
     id: "automation",
     title: "Automation & autonomy",
+    jump: "Automation",
     description:
-      "Advanced, and off by default. Lets Iron Jarvis act on your standing goals — always within the caps you set here. Manage goals on the Autonomy page.",
+      "Advanced, and off by default. Lets Iron Jarvis act on your goals — always within the caps you set here. Manage goals on the Autonomy page.",
   },
   {
     id: "advanced",
     title: "Advanced",
+    jump: "Advanced options",
     description: "Power-user options. Leave these alone unless you know you need them.",
     advanced: true,
   },
@@ -288,7 +296,7 @@ const FIELDS: FieldDef[] = [
     label: "Autonomy (the pulse)",
     type: "boolean",
     section: "automation",
-    hint: "Let Iron Jarvis deliberate on your standing goals and propose (or, within budget, act). Off by default; takes effect immediately.",
+    hint: "Let Iron Jarvis deliberate on your goals and propose (or, within budget, act). Off by default; takes effect immediately.",
   },
   {
     key: "autonomy_level",
@@ -1110,6 +1118,25 @@ export default function SettingsPage() {
     setError(null);
   }
 
+  // v1.316.0: the jump index. The Preferences form runs past 2,400px, so the
+  // index at its top reaches each section in one press. The Advanced section
+  // is a collapsed <details>, so its link OPENS it first — scrolling to a
+  // closed summary would show a heading and none of the switches the person
+  // came for. The scroll is done here (not by the browser's hash jump) so the
+  // URL stays /settings and the ?focus= deep link keeps working; jsdom and
+  // older engines lack smooth scrollIntoView, so it is best-effort.
+  function jumpTo(e: React.MouseEvent<HTMLAnchorElement>, id: SectionId) {
+    const el = document.getElementById(`settings-${id}`);
+    if (!el) return;
+    e.preventDefault();
+    if (el instanceof HTMLDetailsElement) el.open = true;
+    try {
+      el.scrollIntoView({ block: "start", behavior: "smooth" });
+    } catch {
+      /* opening it is the part that matters */
+    }
+  }
+
   async function backupNow() {
     setMaintOk(null);
     setMaintErr(null);
@@ -1194,6 +1221,23 @@ export default function SettingsPage() {
                 <SkeletonRows rows={8} />
               ) : (
                 <form onSubmit={save} className="space-y-8">
+                  {/* v1.316.0: jump index — one press to any section. */}
+                  <nav
+                    aria-label="Settings sections"
+                    className="-mb-2 flex flex-wrap items-center gap-1.5 text-[12px]"
+                  >
+                    <span className="mr-1 text-zinc-500">Jump to</span>
+                    {SECTIONS.map((section) => (
+                      <a
+                        key={section.id}
+                        href={`#settings-${section.id}`}
+                        onClick={(e) => jumpTo(e, section.id)}
+                        className="rounded-full border border-white/[0.08] px-2.5 py-1 text-zinc-300 transition-colors hover:border-white/[0.16] hover:text-zinc-100"
+                      >
+                        {section.jump}
+                      </a>
+                    ))}
+                  </nav>
                   {SECTIONS.map((section) => {
                     const fields = FIELDS.filter((f) => f.section === section.id);
                     if (fields.length === 0) return null;
@@ -1230,8 +1274,9 @@ export default function SettingsPage() {
                       return (
                         <details
                           key={section.id}
+                          id={`settings-${section.id}`}
                           ref={advancedRef}
-                          className="group rounded-xl border border-white/[0.05] bg-white/[0.015] px-4 py-3.5"
+                          className="group scroll-mt-4 rounded-xl border border-white/[0.05] bg-white/[0.015] px-4 py-3.5"
                         >
                           <summary className="cursor-pointer list-none">
                             <span className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent-soft/80">
@@ -1250,7 +1295,11 @@ export default function SettingsPage() {
                     }
 
                     return (
-                      <div key={section.id} className="space-y-4">
+                      <div
+                        key={section.id}
+                        id={`settings-${section.id}`}
+                        className="scroll-mt-4 space-y-4"
+                      >
                         <div>
                           <h3 className="text-[12px] font-semibold uppercase tracking-[0.12em] text-accent-soft/80">
                             {section.title}
@@ -1271,7 +1320,27 @@ export default function SettingsPage() {
                     </p>
                   )}
 
-                  <div className="flex items-center gap-2 pt-1">
+                  {/* v1.316.0: the Save row is ALWAYS here (disabled while clean),
+                      and while there are unsaved changes it pins itself to the
+                      bottom of the window — a change made at the top of this
+                      long form no longer leaves Save 2,000px away. Same single
+                      Save, same Reset, same count; only where it sits changes.
+                      It bleeds to the card's edges (-mx-4 against the card's
+                      p-4) and is a mostly OPAQUE card colour, because the card
+                      already blurs what is behind it and a second, nested
+                      backdrop-filter is unreliable — fields scrolling under a
+                      see-through bar would read as a mess. The border is
+                      always there (transparent while clean) so turning sticky
+                      does not shift the row. No ancestor up to <main> may
+                      carry overflow-*, or sticky silently stops sticking. */}
+                  <div
+                    data-testid="settings-save-bar"
+                    className={`-mx-4 flex flex-wrap items-center gap-2 border-t px-4 py-2 ${
+                      dirty
+                        ? "sticky bottom-0 z-10 rounded-b-2xl border-white/[0.08] bg-ink-850/95 shadow-[0_-10px_24px_-14px_rgb(0_0_0/0.55)]"
+                        : "border-transparent"
+                    }`}
+                  >
                     <button type="submit" disabled={busy || !dirty} className="btn-accent">
                       {busy ? (
                         <LoaderInline label="Saving…" />

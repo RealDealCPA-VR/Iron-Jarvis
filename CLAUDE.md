@@ -2905,6 +2905,39 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Labels are tied, names read as names, a capped canvas, an estimate is
+  never spend** (v1.316.0, /goal UX & aesthetic wave 4 — the last: 25
+  findings + 5 carry-overs over home & system, automation, memory & self,
+  connections & catalogs). `components/ui.Field` is THE form label: it gives
+  its one child an id from `useId` (keeping an existing id and aria-label)
+  and points the label's `htmlFor` at it — templates, webhooks, reflex,
+  sentinels, schedules, channels and autonomy use it. `lib/agentWorlds.
+  agentLabel(name, {builtin, origin})` is the TEXT name for places CSS cannot
+  case (select options, placeholders, button words): built-ins → "Builder" /
+  "File manager", custom names as typed, a mission coordinator → "Jarvis";
+  `builtin` comes from the CALLER (the roster/GET /agents list), never a list
+  in the helper; the VALUE posted stays the id and an avatar is drawn from the
+  raw name. This SUPERSEDES the v1.315.0 "casing is CSS only" line for text
+  contexts (chips may still use `capitalize`). The workflow canvas is CAPPED
+  (`h-[min(64vh,680px)]`, taller `max-sm:` cap) and no longer full-height, so
+  it no longer subtracts `--ij-strip-h` (the v1.314.0 pin moved) — do not put
+  the calc back; the Describe-a-workflow box and starters sit above it while
+  nothing is saved. Settings: a sticky "Save changes" bar while dirty + a
+  jump index. Usage: a zero-filled calendar window, Tokens by default when
+  nothing was billed, and the local-model figure says "(estimate)" against a
+  NAMED baseline — shown only when a baseline is named AND local tokens ran
+  (the v1.300.0 list-price-equivalent honesty). Autonomy: ONE list, "Simple
+  goals" (/autonomy/goals), state at the top; chat contracts are "Goals from
+  Chat". /mcp/catalog rows carry `runtime_ready` from the SAME command
+  resolution the MCP launcher uses (absent → the amber "Needs X" chip; true →
+  a neutral "Uses X"). `ConnectionRegistry` rows carry
+  `oauth_client_configured` (mirrors start_oauth's lookup; key-only providers
+  False even with a client id — pinned with an everyone-has-an-id resolver;
+  a resolver fault reads False). /ltm and /lessons scroll to their section;
+  the desktop ask watcher's words agree with `lib/toolWords.ts` (pinned
+  against the TS file). Pins: `dashboard/__tests__/ux-wave4-*-v1316.test.tsx`,
+  `tests/test_ux_wave4_{mcp_catalog,desktop_words}_v1316.py`.
+
 - **The busy surfaces, calmer: one AI name, a findable board, a story
   first** (v1.315.0, /goal UX & aesthetic wave 3 — 24 findings + 3
   carry-overs over chat, agents & sessions, projects, build & files).

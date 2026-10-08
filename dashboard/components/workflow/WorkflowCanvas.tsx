@@ -849,6 +849,9 @@ function Canvas() {
   const [defsLoading, setDefsLoading] = useState(false);
   const [loadOpen, setLoadOpen] = useState(false);
   const loadRef = useRef<HTMLDivElement | null>(null);
+  /** v1.316.0: a blank Save puts the cursor here, so the refusal is also the
+   *  way forward (the field now reads "Untitled workflow" when blank). */
+  const nameRef = useRef<HTMLInputElement | null>(null);
 
   const idRef = useRef(4);
   const { fitView } = useReactFlow();
@@ -1129,7 +1132,11 @@ function Canvas() {
       const steps = stepsFromGraph(nodes, edges);
       const wfName = name.trim();
       if (!wfName) {
+        // v1.316.0 (UX wave 4): never save under a hidden fallback — a second
+        // untitled save would overwrite the first. Ask, and put the cursor
+        // where the answer goes.
         setError("Name the workflow before saving.");
+        nameRef.current?.focus();
         return;
       }
       if (steps.length === 0) {
@@ -1330,19 +1337,32 @@ function Canvas() {
   );
 
   return (
-    <div className="card-surface flex h-[calc(100vh-12.5rem-var(--ij-strip-h,0px))] min-h-[560px] flex-col overflow-hidden">
+    // v1.316.0 (UX wave 4): a capped height instead of `calc(100vh-…)`. A
+    // viewport-tall editor pushed the plain-language builder and the starters
+    // below the fold at EVERY window size (2400 px tall included); capped, the
+    // page's easier paths stay within reach. Being no longer viewport-tall,
+    // it has no demo strip to subtract (v1.314.0's --ij-strip-h rule is for
+    // full-height modules). Below sm the toolbar wraps to ~200 px, so the
+    // cap is taller there or the graph shrinks to a strip under the minimap.
+    <div className="card-surface flex h-[min(64vh,680px)] min-h-[420px] flex-col overflow-hidden max-sm:h-[min(80vh,680px)]">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 border-b hairline px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/10 text-accent-soft">
             <Workflow size={16} />
           </span>
+          {/* v1.316.0 (UX wave 4): a hairline border at rest so the name
+              reads as a field you can edit, not a heading; blank reads
+              "Untitled workflow" — the same words run() uses for a blank
+              name (Save asks for one instead). */}
           <input
+            ref={nameRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="workflow name"
+            placeholder={UNTITLED_NAME}
             aria-label="Workflow name"
-            className="min-w-0 max-w-[280px] flex-1 rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 hover:border-white/10 focus:border-accent/50 focus:bg-ink-900/60"
+            title="Rename this workflow"
+            className="min-w-0 max-w-[280px] flex-1 rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1 text-sm font-semibold text-zinc-100 outline-none transition-colors placeholder:font-normal placeholder:text-zinc-500 hover:border-white/20 focus:border-accent/50 focus:bg-ink-900/60"
           />
           <span className="hidden rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[11px] text-zinc-500 sm:inline">
             {stepCount} step{stepCount === 1 ? "" : "s"}

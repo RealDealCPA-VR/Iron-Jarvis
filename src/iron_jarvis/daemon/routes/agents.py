@@ -2358,8 +2358,40 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/mcp/catalog")
-    def mcp_catalog() -> dict[str, Any]:
-        return {"catalog": d._MCP_CATALOG}
+    async def mcp_catalog() -> dict[str, Any]:
+        """The add-a-pack catalog, each row carrying ``runtime_ready``.
+
+        v1.316.0 (UX wave 4): the Tools page painted EVERY pack with an amber
+        "Needs Node" on a machine that runs Node, because ``needs`` is a static
+        field. ``runtime_ready`` answers "would the launcher find this pack's
+        command right now?" with the launcher's OWN resolution
+        (``resolve_launcher``: real PATH, then the per-user bin dirs a
+        GUI-launched daemon misses) — a which-only check would disagree with
+        what actually starts. Computed per request (a user who installs uv
+        sees it on reload), on COPIES (never written into the shared list),
+        off the loop (PATH probes touch the disk), and any fault is False,
+        never a 500.
+        """
+        from ...mcp.tools import resolve_launcher
+
+        def _ready(command: str) -> bool:
+            try:
+                resolve_launcher(command)
+                return True
+            except Exception:  # noqa: BLE001 — not found / unreadable dir = not ready
+                return False
+
+        def _rows() -> list[dict[str, Any]]:
+            cache: dict[str, bool] = {}
+            out: list[dict[str, Any]] = []
+            for row in d._MCP_CATALOG:
+                cmd = str(row.get("command") or "")
+                if cmd not in cache:
+                    cache[cmd] = _ready(cmd)
+                out.append({**row, "runtime_ready": cache[cmd]})
+            return out
+
+        return {"catalog": await asyncio.to_thread(_rows)}
 
     @app.get("/mcp/servers")
     def mcp_servers() -> dict[str, Any]:

@@ -26,10 +26,11 @@ import {
   MessageSquareQuote,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
-import { post, put, ApiError } from "@/lib/api";
+import { get, post, put, ApiError } from "@/lib/api";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageHeader } from "@/components/PageHeader";
 import {
+  Button,
   Card,
   ErrorNote,
   OfflineHint,
@@ -198,6 +199,40 @@ export default function YouPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.316.0: how many kept preferences and lessons Jarvis holds about the
+  // user. They live in Memory, not in the profile, so the preview below never
+  // showed them — the line under it says they exist and links there. The
+  // count is `lessons.total - lessons.reflections`: the daemon's
+  // counts_by_source over CONFIRMED user-scope rows, minus task reflections —
+  // the same pool apply_to_prompt draws from (_PROMPT_EXCLUDED_SOURCES).
+  // NOT `preferences.length`: overview.py caps that list at MAX_PREFERENCES
+  // (12), so 30 kept lessons would read "12". And not "you told Jarvis":
+  // the pool includes feedback and distilled rows the user never typed.
+  // null = unknown (an older daemon, a failed read, a non-number): the line
+  // is simply not shown, never guessed.
+  const [prefCount, setPrefCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const o = await get<{ lessons?: { total?: unknown; reflections?: unknown } }>(
+          "/memory/overview",
+        );
+        const total = o?.lessons?.total;
+        const reflections = o?.lessons?.reflections ?? 0;
+        if (live && typeof total === "number" && typeof reflections === "number") {
+          const n = total - reflections;
+          if (Number.isFinite(n) && n > 0) setPrefCount(n);
+        }
+      } catch {
+        /* quiet: no line rather than a wrong one */
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (loaded.data) {
@@ -216,6 +251,11 @@ export default function YouPage() {
   function set<K extends keyof Profile>(key: K, value: Profile[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
     setSaved(false);
+  }
+
+  /** Put the saved profile back — the header's Discard and the bar's. */
+  function discard() {
+    if (preview) setDraft(preview.profile);
   }
 
   async function save() {
@@ -283,7 +323,7 @@ export default function YouPage() {
               {dirty && (
                 <button
                   type="button"
-                  onClick={() => preview && setDraft(preview.profile)}
+                  onClick={discard}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-100"
                 >
                   <RotateCcw size={14} /> Discard
@@ -519,8 +559,41 @@ export default function YouPage() {
               Unsaved changes — this preview updates when you save.
             </p>
           )}
+          {prefCount !== null && prefCount > 0 && (
+            <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+              Plus {prefCount} {prefCount === 1 ? "preference or lesson" : "preferences and lessons"}{" "}
+              Jarvis keeps about you — not part of this preview; the strongest are added to
+              each conversation.{" "}
+              <Link href="/memory" className="text-accent-soft hover:underline">
+                See them in Memory
+              </Link>
+            </p>
+          )}
         </Card>
       </Reveal>
+
+      {/* v1.316.0: Save in reach. The page is ~1800px tall and Save/Discard
+          lived only in the header, so an edit near the bottom left the only
+          way to keep it off-screen. While anything is unsaved this bar sticks
+          to the bottom of the view with the SAME save() and discard() the
+          header uses (the header keeps its buttons). No beforeunload guard:
+          inside the desktop app it can silently block closing the window. */}
+      {dirty && (
+        <div
+          data-testid="you-unsaved-bar"
+          role="region"
+          aria-label="Unsaved changes"
+          className="sticky bottom-4 z-20 flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-ink-850/95 px-4 py-3 shadow-card-hover backdrop-blur-xl"
+        >
+          <span className="min-w-0 flex-1 text-[13px] text-zinc-200">You have unsaved changes</span>
+          <Button variant="secondary" size="md" onClick={discard} disabled={saving}>
+            <RotateCcw size={14} /> Discard
+          </Button>
+          <Button variant="soft" size="md" onClick={() => void save()} disabled={saving}>
+            <Save size={14} /> {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
       </>
       )}
     </PageShell>

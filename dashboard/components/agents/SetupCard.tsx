@@ -46,6 +46,7 @@ import AgentFace, {
   type FaceOverride,
 } from "./AgentFace";
 import { AgentPortrait } from "./AgentPortrait";
+import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
 
 // The disclosure key lives on the PAGE now (v1.185.0) — one owner, one write,
@@ -585,7 +586,11 @@ export function patchEmployeeFields(
 
 /** "builder" → "builder", "custom:skeptic" → "skeptic", "" → "". */
 function reportsToLabel(value: string): string {
-  return value.startsWith("custom:") ? value.slice("custom:".length) : value;
+  // v1.316.0 (UX wave 4, agent names): a stored "custom:<name>" is a custom
+  // agent — its typed name, as is; anything else is a built-in id (the
+  // daemon's own marker, no list kept here) and reads as a name ("Builder").
+  if (value.startsWith("custom:")) return value.slice("custom:".length);
+  return agentLabel(value, { builtin: !value.includes(":") });
 }
 
 const APPROVAL_OPTIONS: { value: AgentApprovalMode; label: string }[] = [
@@ -634,9 +639,12 @@ function EmployeeFields({
             className="field text-xs"
           >
             {unknownBase && <option value="">as stored</option>}
+            {/* v1.316.0: every base type is a built-in (the daemon's list or
+                the fallback), so its option TEXT reads as a name ("File
+                manager"); the VALUE posted as base_type stays the raw id. */}
             {baseTypes.map((b) => (
               <option key={b} value={b}>
-                {b}
+                {agentLabel(b, { builtin: true })}
               </option>
             ))}
           </select>
@@ -737,7 +745,10 @@ function reportsToChoices(
 ): { value: string; label: string }[] {
   return [
     { value: "", label: "You" },
-    ...builtin.filter(Boolean).map((b) => ({ value: b, label: b })),
+    // v1.316.0: built-ins read as names ("Supervisor", "File manager"); the
+    // VALUE posted as reports_to stays the raw id. Custom agents below keep
+    // the name the user typed.
+    ...builtin.filter(Boolean).map((b) => ({ value: b, label: agentLabel(b, { builtin: true }) })),
     ...siblings
       .filter((s) => s && s !== self)
       .map((s) => ({ value: `custom:${s}`, label: s })),

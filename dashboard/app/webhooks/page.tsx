@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   Webhook as WebhookIcon,
   ArrowDownLeft,
@@ -88,6 +88,9 @@ export default function WebhooksPage() {
   const offline = error && error.status === 0;
   const webhooks = data?.webhooks ?? [];
   const loopback = isLoopbackBase(API_BASE);
+  // v1.316.0 (form-labels-not-associated): useId ties each label to its
+  // field, so a screen reader names it and a click on the label focuses it.
+  const fid = useId();
 
   // Add form
   const [open, setOpen] = useState(false);
@@ -190,10 +193,11 @@ export default function WebhooksPage() {
             <form onSubmit={submit} className="space-y-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-slug`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name (used in the address)
                   </label>
                   <input
+                    id={`${fid}-slug`}
                     value={slug}
                     onChange={(e) => setSlug(e.target.value)}
                     placeholder="github-push"
@@ -201,10 +205,11 @@ export default function WebhooksPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-direction`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Direction
                   </label>
                   <select
+                    id={`${fid}-direction`}
                     aria-label="Direction"
                     value={direction}
                     onChange={(e) => setDirection(e.target.value as Direction)}
@@ -219,10 +224,11 @@ export default function WebhooksPage() {
 
               {direction === "outbound" && (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-target`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Target URL
                   </label>
                   <input
+                    id={`${fid}-target`}
                     value={targetUrl}
                     onChange={(e) => setTargetUrl(e.target.value)}
                     placeholder="https://example.com/hook"
@@ -233,10 +239,11 @@ export default function WebhooksPage() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-events`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Event types
                   </label>
                   <input
+                    id={`${fid}-events`}
                     value={events}
                     onChange={(e) => setEvents(e.target.value)}
                     placeholder="session.completed, workflow.completed"
@@ -276,10 +283,11 @@ export default function WebhooksPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-secret`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Secret name (optional)
                   </label>
                   <input
+                    id={`${fid}-secret`}
                     value={secretName}
                     onChange={(e) => setSecretName(e.target.value)}
                     placeholder="name of a stored secret"

@@ -1,4 +1,5 @@
 import type { AgentAllowance } from "./types";
+import { providerDisplay } from "./onboarding";
 
 export function shortId(id: string | null | undefined): string {
   if (!id) return "—";
@@ -118,4 +119,61 @@ export function allowanceSummary(a: AgentAllowance): string {
     parts.push(`${Math.round(a.pct)}%`);
   }
   return parts.join(" · ");
+}
+
+/* ---- v1.316.0: big numbers at a glance, money in one format ------------- */
+
+/** "1.52B", "3.15M", "12.4K" — a count read at a glance (Intl compact, at most
+ *  two decimals). Show the EXACT count beside it in a `title` (see
+ *  `exactCount`): a ten-digit number read digit by digit is not information,
+ *  but the precise figure must stay one hover away. */
+export function compactCount(v: number | null | undefined): string {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+/** "1,524,819,623" — the exact count, for the `title` beside a compactCount. */
+export function exactCount(v: number | null | undefined): string {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return n.toLocaleString();
+}
+
+/** A sum of metered money where a fraction of a cent matters ("Cost in this
+ *  view"): exactly zero reads "$0.00" like every other page; a small non-zero
+ *  cost keeps four decimals so $0.0200 does not round to a misleading $0.02 —
+ *  or to "$0.00", which would claim nothing was spent. */
+export function usdPrecise(v: number | null | undefined): string {
+  const n = typeof v === "number" && Number.isFinite(v) ? v : 0;
+  if (n === 0) return "$0.00";
+  return `$${n.toFixed(Math.abs(n) < 1 ? 4 : 2)}`;
+}
+
+/**
+ * The model an estimate was priced against, in words: "Claude Opus 4.8" for
+ * claude-opus-4-8 (a dated snapshot suffix is dropped); anything else is its
+ * id after the provider's plain name. Never invents a model. Copied from the
+ * Fleet page's private helper (app/fleet/page.tsx keeps its own copy for now)
+ * so Usage names the SAME baseline in the same words.
+ */
+export function baselineName(provider: string, model: string): string {
+  const claude = /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?(?:-\d{8})?$/i.exec(model);
+  if (claude) {
+    const family = claude[1].charAt(0).toUpperCase() + claude[1].slice(1).toLowerCase();
+    return `Claude ${family} ${claude[2]}${claude[3] ? `.${claude[3]}` : ""}`;
+  }
+  const who = providerDisplay(provider);
+  return [who, model].filter(Boolean).join(" ");
+}
+
+/** A usage row's provider in words: `pi/<x>` and `opencode/<x>` read like the
+ *  daemon's own fleet labels ("Pi · local-models", fleet.py); every other id
+ *  goes through providerDisplay ("claude-cli" → "Claude Code"). */
+export function usageProviderName(provider: string | null | undefined): string {
+  const p = (provider || "").trim();
+  if (p.startsWith("pi/")) return `Pi · ${p.slice(3)}`;
+  if (p.startsWith("opencode/")) return `OpenCode · ${p.slice(9)}`;
+  return providerDisplay(p);
 }

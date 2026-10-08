@@ -38,6 +38,7 @@ import type {
 } from "@/lib/types";
 import { Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
+import { agentLabel } from "@/lib/agentWorlds";
 
 /** The composer's three priorities → the wire's -10..10 scale. */
 export const PRIORITY_OPTIONS = [
@@ -67,10 +68,28 @@ export function bareAssignee(name: string): string {
   return name.startsWith("custom:") ? name.slice("custom:".length) : name;
 }
 
+/** v1.316.0 (UX wave 4, agent names): the assignee as a NAME inside a
+ *  sentence or placeholder, where CSS `capitalize` cannot reach. A roster
+ *  name with no "custom:"/"remote:" prefix is a built-in (that prefix IS the
+ *  daemon's own marker — no list kept here), so "file_manager" reads "File
+ *  manager"; a custom agent keeps the name the user typed. Display only: the
+ *  POSTed assignee stays the raw roster name. */
+export function assigneeLabel(name: string): string {
+  return agentLabel(bareAssignee(name), { builtin: !name.includes(":") });
+}
+
+/** v1.316.0: the CSS casing for an inline name — a built-in is title-cased
+ *  ("Builder"); a custom or remote name reads exactly as typed (no
+ *  `capitalize`, so "ledger-checker" never shows as "Ledger-checker"). The
+ *  TEXT stays the bare id either way. */
+function nameCase(name: string): string {
+  return name.includes(":") ? "" : "capitalize";
+}
+
 /** The sentence every "Queue" surface says after a successful POST. */
 export function queuedSentence(assignee: string): string {
-  const bare = bareAssignee(assignee);
-  return `Queued for ${bare} — it runs when ${bare} is free.`;
+  const shown = assigneeLabel(assignee);
+  return `Queued for ${shown} — it runs when ${shown} is free.`;
 }
 
 /** A row's one-line title: the daemon's `title`, else the task's first line. */
@@ -380,7 +399,7 @@ function AssignComposer({
         value={task}
         onChange={(e) => setTask(e.target.value)}
         rows={2}
-        placeholder={`What should ${bare} do next? It waits its turn.`}
+        placeholder={`What should ${assigneeLabel(name)} do next? It waits its turn.`}
         className="field resize-y"
       />
       <div className="grid gap-2 sm:grid-cols-3">
@@ -434,7 +453,7 @@ function AssignComposer({
                   the button's flex gap never splits "for" from the name. */}
               <Send size={12} />{" "}
               <span>
-                Queue for <span className="capitalize">{bare}</span>
+                Queue for <span className={nameCase(name)}>{bare}</span>
               </span>
             </>
           )}
@@ -503,8 +522,8 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
       {empty ? (
         <p className="text-[11.5px] leading-relaxed text-zinc-500">
           {/* v1.315.0: CSS casing only — same words, same text. */}
-          Nothing queued — give <span className="capitalize">{bare}</span> a job above and it runs when{" "}
-          <span className="capitalize">{bare}</span> is free.
+          Nothing queued — give <span className={nameCase(name)}>{bare}</span> a job above and it runs when{" "}
+          <span className={nameCase(name)}>{bare}</span> is free.
         </p>
       ) : (
         <div className="space-y-3">

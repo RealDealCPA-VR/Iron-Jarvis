@@ -67,7 +67,11 @@ describe("the demo strip publishes its height", () => {
     ["app/chat/page.tsx", "md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))]"],
     ["components/agents/mission/TeamScreen.tsx", "h-[calc(100vh-7rem-var(--ij-strip-h,0px))]"],
     ["app/agents/page.tsx", "h-[calc(100vh-7rem-var(--ij-strip-h,0px))]"],
-    ["components/workflow/WorkflowCanvas.tsx", "h-[calc(100vh-12.5rem-var(--ij-strip-h,0px))]"],
+    // v1.316.0 (UX wave 4, T3): the workflow canvas is no longer viewport-tall
+    // (a capped `h-[min(64vh,680px)]`, so the builder and starters stay within
+    // reach), so it has no strip to subtract; the bare-calc ban below still
+    // runs on it.
+    ["components/workflow/WorkflowCanvas.tsx", "h-[min(64vh,680px)]"],
     ["app/terminals/page.tsx", "lg:h-[calc(100vh-9rem-var(--ij-strip-h,0px))]"],
   ])("%s subtracts the strip from its full height", (rel, cls) => {
     const s = read(rel);

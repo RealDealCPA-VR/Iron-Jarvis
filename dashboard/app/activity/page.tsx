@@ -9,6 +9,7 @@ import { Card, Stat } from "@/components/ui";
 import { TimeTravelFeed, type FeedStats } from "@/components/TimeTravelFeed";
 import { SafetyChecksCard } from "@/components/SafetyChecks";
 import { AgentHistoryCard } from "@/components/AgentHistory";
+import { usdPrecise } from "@/lib/format";
 
 export default function ActivityPage() {
   const [stats, setStats] = useState<FeedStats | null>(null);
@@ -74,7 +75,9 @@ export default function ActivityPage() {
               value is said apart, never summed as cost. */}
           <Stat
             label="Cost in this view"
-            value={`$${(stats?.costUsd ?? 0).toFixed(stats && stats.costUsd < 1 ? 4 : 2)}`}
+            // v1.316.0: exactly zero reads "$0.00" like Usage (it read
+            // "$0.0000"); a small non-zero cost keeps four decimals.
+            value={usdPrecise(stats?.costUsd)}
             sub={
               (stats?.listPriceUsd ?? 0) > 0
                 ? `+ ~$${(stats?.listPriceUsd ?? 0).toFixed((stats?.listPriceUsd ?? 0) < 1 ? 4 : 2)} list-price value (Claude subscription, not billed)`

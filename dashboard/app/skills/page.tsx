@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu, Pin, Archive, Search } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillCuratorView, SkillDetail, SkillLearningOverview } from "@/lib/types";
@@ -171,7 +171,34 @@ export default function SkillsPage() {
     }
     selectedRef.current = name;
     setSelected(name);
+    // v1.316.0: below lg the instructions column sits UNDER the whole list,
+    // so a tap changed nothing visible on screen. Bring it into view there;
+    // on a desktop it is already beside the list and nothing moves.
+    try {
+      if (window.matchMedia?.("(max-width: 1023px)")?.matches) {
+        revealPending.current = true;
+        // After this render, so the column already shows the chosen skill.
+        window.setTimeout(revealInstructions, 0);
+      }
+    } catch {
+      /* no matchMedia (old engine) — nothing to scroll */
+    }
   }
+
+  // While the instructions load the column is short, so the first scroll can
+  // stop early (nothing below it to scroll into); land again once they arrive.
+  const revealPending = useRef(false);
+  function revealInstructions() {
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    document
+      .getElementById("skill-instructions")
+      ?.scrollIntoView?.({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  }
+  useEffect(() => {
+    if (!revealPending.current || !selected || detail.loading || !detail.data) return;
+    revealPending.current = false;
+    revealInstructions();
+  }, [selected, detail.loading, detail.data]);
 
   async function runSkill(e: React.FormEvent) {
     e.preventDefault();
@@ -199,6 +226,9 @@ export default function SkillsPage() {
   // Filter by source (All / Claude / Codex / …) + a re-scan action so newly
   // added external skills show up without restarting the daemon.
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  // v1.316.0: a text filter over name AND description, combined with the
+  // source chips — 40+ skills in one list could only be narrowed by source.
+  const [query, setQuery] = useState("");
   const [rescanning, setRescanning] = useState(false);
   async function rescan() {
     setRescanning(true);
@@ -223,14 +253,31 @@ export default function SkillsPage() {
 
   const offline = error && error.status === 0;
   const allSkills = data?.skills ?? [];
-  const counts = data?.counts ?? {};
+  const needle = query.trim().toLowerCase();
+  const matching = needle
+    ? allSkills.filter(
+        (s) =>
+          s.name.toLowerCase().includes(needle) ||
+          (s.description ?? "").toLowerCase().includes(needle),
+      )
+    : allSkills;
+  // The chip counts follow the search: with words typed they count the
+  // matches per source; with none they are the daemon's own counts.
+  const counts: Record<string, number> = needle
+    ? matching.reduce<Record<string, number>>((acc, s) => {
+        const k = s.source ?? "user";
+        acc[k] = (acc[k] ?? 0) + 1;
+        return acc;
+      }, {})
+    : (data?.counts ?? {});
   const skills =
     sourceFilter === "all"
-      ? allSkills
-      : allSkills.filter((s) => (s.source ?? "user") === sourceFilter);
+      ? matching
+      : matching.filter((s) => (s.source ?? "user") === sourceFilter);
   // Sources present, ordered, for the filter chips (only show chips that exist).
   const sourceOrder = ["user", "claude", "codex", "builtin", "custom"];
-  const presentSources = sourceOrder.filter((s) => (counts[s] ?? 0) > 0);
+  // Chips exist for the sources the daemon has (stable while typing).
+  const presentSources = sourceOrder.filter((s) => (data?.counts?.[s] ?? 0) > 0);
   const canSubmit = !busy && name.trim().length > 0 && instructions.trim().length > 0;
 
   function resetForm() {
@@ -412,7 +459,27 @@ export default function SkillsPage() {
               </Card>
             )}
 
-            <Card title={`Available · ${allSkills.length}`} icon={<Sparkles size={15} />}>
+            <Card
+              title={`Available · ${needle ? `${matching.length} of ${allSkills.length}` : allSkills.length}`}
+              icon={<Sparkles size={15} />}
+            >
+              {allSkills.length > 0 && (
+                <div className="relative isolate mb-3">
+                  <Search
+                    size={14}
+                    aria-hidden
+                    className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-zinc-600"
+                  />
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Find a skill by name or what it does"
+                    aria-label="Search skills"
+                    className="field py-1.5 pl-9 text-[13px]"
+                  />
+                </div>
+              )}
               {/* Source filter chips — only sources that actually exist show up. */}
               {presentSources.length > 1 && (
                 <div className="mb-3 flex flex-wrap gap-1.5">
@@ -424,7 +491,7 @@ export default function SkillsPage() {
                         : "border-white/10 text-zinc-400 hover:bg-white/[0.04]"
                     }`}
                   >
-                    All {allSkills.length}
+                    All {matching.length}
                   </button>
                   {presentSources.map((src) => {
                     const meta = SOURCE_META[src] ?? SOURCE_META.user;
@@ -437,7 +504,7 @@ export default function SkillsPage() {
                           active ? meta.cls : "border-white/10 text-zinc-400 hover:bg-white/[0.04]"
                         }`}
                       >
-                        {meta.label} {counts[src]}
+                        {meta.label} {counts[src] ?? 0}
                       </button>
                     );
                   })}
@@ -451,7 +518,14 @@ export default function SkillsPage() {
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : skills.length === 0 ? (
-                <Empty icon={<Sparkles size={22} />}>No skills.</Empty>
+                needle ? (
+                  <p className="py-3 text-center text-xs text-zinc-500">
+                    No skill matches &ldquo;{query.trim()}&rdquo;
+                    {sourceFilter !== "all" ? " in this source" : ""}.
+                  </p>
+                ) : (
+                  <Empty icon={<Sparkles size={22} />}>No skills.</Empty>
+                )
               ) : (
                 <ul className="max-h-[70vh] space-y-1 overflow-auto">
                   {skills.map((s) => {
@@ -530,7 +604,7 @@ export default function SkillsPage() {
             </Card>
           </div>
 
-          <div className="lg:col-span-2">
+          <div id="skill-instructions" className="scroll-mt-14 lg:col-span-2">
             <Card title={selected ?? "Instructions"} icon={<BookOpen size={15} />}>
               {!selected ? (
                 <Empty icon={<BookOpen size={22} />}>Select a skill to view its instructions.</Empty>

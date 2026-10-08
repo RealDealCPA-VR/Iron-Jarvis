@@ -9240,7 +9240,7 @@ export default function ChatPage() {
                                 {marketplaceTeasers.length > 0 && (
                                   <div className="mt-0.5 border-t hairline pt-1">
                                     <p className="px-2.5 pb-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-zinc-600">
-                                      From the marketplace
+                                      From the Directory
                                     </p>
                                     {marketplaceTeasers.map((c) => (
                                       <Link
@@ -9267,7 +9267,7 @@ export default function ChatPage() {
                                   className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
                                 >
                                   <Store size={13} className="shrink-0" />
-                                  Marketplace ↗
+                                  Directory ↗
                                 </Link>
                               </div>
                             )}

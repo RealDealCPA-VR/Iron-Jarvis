@@ -110,6 +110,10 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
       "app/reflex/page.tsx",
       "app/autonomy/page.tsx",
       "app/channels/page.tsx",
+      // v1.316.0 (UX wave 4): the rest of the automation pages.
+      "app/webhooks/page.tsx",
+      "app/sentinels/page.tsx",
+      "app/schedules/page.tsx",
     ]) {
       const code = read(f)
         .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -152,9 +156,22 @@ describe("alerts live under 'Notifications'", () => {
     const channels = code("app/channels/page.tsx");
     expect(channels).not.toMatch(/All channels|No channel responses|aria-label="Channel"/);
     expect(channels).not.toMatch(/^\s*Channel\s*$/m);
-    for (const f of ["app/templates/page.tsx", "app/reflex/page.tsx", "app/autonomy/page.tsx", "app/channels/page.tsx"]) {
+    for (const f of [
+      "app/templates/page.tsx",
+      "app/reflex/page.tsx",
+      "app/autonomy/page.tsx",
+      "app/channels/page.tsx",
+      // v1.316.0 (UX wave 4): the rest of the automation pages.
+      "app/webhooks/page.tsx",
+      "app/sentinels/page.tsx",
+      "app/schedules/page.tsx",
+    ]) {
       // Our concept, any page: a "channel" that is not Slack's/Discord's.
       expect(code(f), f).not.toMatch(/\b(?:Email|Telegram|inbound|comm) channels?\b/i);
+    }
+    // v1.316.0: these three name the Notifications page by its nav word too.
+    for (const f of ["app/webhooks/page.tsx", "app/sentinels/page.tsx", "app/schedules/page.tsx"]) {
+      expect(code(f), f).not.toMatch(/Channels page|^\s*Channels\b/m);
     }
   });
   it("the nav label follows, and the old word stays searchable", () => {

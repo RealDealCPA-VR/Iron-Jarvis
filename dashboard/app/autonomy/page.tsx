@@ -35,6 +35,7 @@ import {
   LoaderInline,
   ConfirmButton,
   statusTone,
+  Field,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -351,6 +352,9 @@ export default function AutonomyPage() {
   }
 
   const killed = !!s?.kill_switch;
+  /** v1.316.0: the Kill switch rests neutral only when autonomy is off AND
+   *  nothing is pending — the moment either changes it is red again. */
+  const killQuiet = !s?.enabled && !(s?.pending_proposals ?? 0);
   const goalList = goals.data?.goals ?? [];
   // Exact goal texts already on the books — lets starter recipes render as
   // "Added ✓" across visits so clicks stay idempotent. (`?? ""` kept from the
@@ -409,7 +413,15 @@ export default function AutonomyPage() {
                 className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
                   killed
                     ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
-                    : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
+                    : killQuiet
+                      ? // v1.316.0 (UX wave 4): while autonomy is OFF and
+                        // nothing waits, there is nothing for the switch to
+                        // stop (it halts only the motivation loop —
+                        // motivation/engine.py), so it rests neutral and turns
+                        // red on hover. Still enabled, still "Kill switch",
+                        // still one press.
+                        "border-white/15 bg-white/[0.04] text-zinc-300 hover:border-rose-500/40 hover:bg-rose-500/[0.1] hover:text-rose-300"
+                      : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
                 }`}
                 title={killed ? "Release the global kill switch" : "Halt all autonomy now"}
               >
@@ -471,21 +483,9 @@ export default function AutonomyPage() {
         </Reveal>
       )}
 
-      {/* Goals (v1.208.0) — the contract-and-breaker goals live where autonomy
-          already lives, ABOVE the older motivation dials: what each goal is
-          bound to, what it has spent against what you allowed, and the
-          controls per state. Live-refreshed on goal.* events. */}
-      <Reveal>
-        <GoalsSection />
-      </Reveal>
-
-      {/* Standing grants (v1.299.0) — every "Always allow exactly this",
-          revocable. Renders nothing on a daemon without /grants. */}
-      <Reveal>
-        <StandingGrants />
-      </Reveal>
-
-      {/* Status tiles */}
+      {/* Status tiles — v1.316.0 (UX wave 4): FIRST, so whether autonomy is
+          on is the first thing the page says (it used to be the third block,
+          under Goals and Standing grants). */}
       <Reveal>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
@@ -521,59 +521,9 @@ export default function AutonomyPage() {
         </div>
       </Reveal>
 
-      {/* Morning briefing */}
-      <Reveal>
-        <Card
-          title="Morning briefing"
-          icon={<Sun size={15} />}
-          right={
-            <button
-              type="button"
-              onClick={pushBriefing}
-              disabled={briefBusy}
-              title="Summarise now and send it to your notification destinations"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
-            >
-              {briefBusy ? (
-                <LoaderInline label="Sending…" />
-              ) : (
-                <>
-                  <Send size={13} /> Send briefing
-                </>
-              )}
-            </button>
-          }
-        >
-          {briefing.loading && !briefing.data ? (
-            <SkeletonRows rows={3} />
-          ) : briefing.error && briefing.error.status !== 0 ? (
-            <ErrorNote>{briefing.error.message}</ErrorNote>
-          ) : briefing.data ? (
-            // v1.314.0: the briefing is a note, so it reads like one — the ONE
-            // markdown renderer (components/Markdown.tsx), not a monospace
-            // <pre>. The backend text is unchanged (test_motivation.py).
-            <div className="text-sm leading-relaxed text-zinc-300">
-              <Markdown content={briefing.data.text} />
-            </div>
-          ) : (
-            <Empty icon={<Sun size={24} />}>No briefing available yet.</Empty>
-          )}
-        </Card>
-      </Reveal>
-
-      {/* Starter goals — one-click, suggest-only seeds for a fresh install */}
-      <Reveal>
-        <StarterGoalsCard
-          existingTexts={goalTexts}
-          onCreated={() => {
-            goals.reload();
-            status.reload();
-          }}
-          onError={(m) => flash(null, m)}
-        />
-      </Reveal>
-
-      {/* v1.314.0: PageGrid (wave-1 carry-over) — 2 columns at lg as before. */}
+      {/* v1.316.0 (UX wave 4): what waits on you sits right under the on/off
+          state — Proposals beside the morning briefing (PageGrid, 2 columns at
+          lg; one column on a phone). */}
       <PageGrid cols={2}>
         {/* Proposals queue */}
         <Reveal>
@@ -637,33 +587,105 @@ export default function AutonomyPage() {
           </Card>
         </Reveal>
 
-        {/* New goal */}
+        {/* Morning briefing */}
         <Reveal>
-          <NewGoalCard
-            onCreated={() => {
-              goals.reload();
-              status.reload();
-            }}
-            onError={(m) => flash(null, m)}
-          />
+          <Card
+            title="Morning briefing"
+            icon={<Sun size={15} />}
+            right={
+              <button
+                type="button"
+                onClick={pushBriefing}
+                disabled={briefBusy}
+                title="Summarise now and send it to your notification destinations"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+              >
+                {briefBusy ? (
+                  <LoaderInline label="Sending…" />
+                ) : (
+                  <>
+                    <Send size={13} /> Send briefing
+                  </>
+                )}
+              </button>
+            }
+          >
+            {briefing.loading && !briefing.data ? (
+              <SkeletonRows rows={3} />
+            ) : briefing.error && briefing.error.status !== 0 ? (
+              <ErrorNote>{briefing.error.message}</ErrorNote>
+            ) : briefing.data ? (
+              // v1.314.0: the briefing is a note, so it reads like one — the ONE
+              // markdown renderer (components/Markdown.tsx), not a monospace
+              // <pre>. The backend text is unchanged (test_motivation.py).
+              <div className="text-sm leading-relaxed text-zinc-300">
+                <Markdown content={briefing.data.text} />
+              </div>
+            ) : (
+              <Empty icon={<Sun size={24} />}>No briefing available yet.</Empty>
+            )}
+          </Card>
         </Reveal>
       </PageGrid>
 
-      {/* Standing goals */}
+      {/* Goals from Chat (v1.208.0) — the contract-and-breaker goals: what each
+          goal is bound to, what it has spent against what you allowed, and the
+          controls per state. Live-refreshed on goal.* events. v1.316.0 (UX wave
+          4): they sit BELOW the on/off state and Proposals — a person first
+          needs to know whether autonomy is on and what waits on them. */}
+      <Reveal>
+        <GoalsSection />
+      </Reveal>
+
+      {/* Standing grants (v1.299.0) — every "Always allow exactly this",
+          revocable. Renders nothing on a daemon without /grants. */}
+      <Reveal>
+        <StandingGrants />
+      </Reveal>
+
+      {/* v1.316.0: one place for the simple kind of goal — its list, its
+          form and the starters as consecutive cards (stacked, so each keeps the
+          full width its own inner grid was laid out for). */}
+      {/* Simple goals (the /autonomy/goals records). v1.316.0 (UX wave 4):
+          was "Standing goals", a second thing called goals with no word on
+          how it differs from Goals from Chat. NOT "Suggest-only goals":
+          the per-goal dial offers Act (low-risk)/Act (all), so that title
+          would be false. The list, its form and the starters now sit
+          together as consecutive cards. */}
       <Reveal>
         <Card
-          title={`Standing goals${goalList.length ? ` · ${goalList.length}` : ""}`}
+          title={`Simple goals${goalList.length ? ` · ${goalList.length}` : ""}`}
           icon={<Target size={15} />}
         >
+          {/* How these differ from Goals from Chat — checked against the
+              engine: a simple goal is read on every check-in
+              (motivation/engine.py); its dial is capped by the page's own
+              setting (effective_level) and "suggest" never acts; a Chat goal
+              is a contract record with its own budget and verifier
+              (goals/models.py). */}
+          <p className="mb-3 max-w-3xl text-xs leading-relaxed text-zinc-500">
+            A sentence Iron Jarvis keeps in mind each time it checks in. Set to
+            Suggest only, it proposes a next step for you to approve; a goal set
+            to Act may take some steps itself (never a high-risk one), within
+            the overall autonomy setting and budget. Goals made in Chat are
+            different — each has its
+            own contract, budget and finish check, and is listed under Goals
+            from Chat.
+          </p>
           {goals.loading && !goals.data ? (
             <SkeletonRows rows={4} />
           ) : goals.error && goals.error.status !== 0 ? (
             <ErrorNote>{goals.error.message}</ErrorNote>
           ) : goalList.length === 0 ? (
-            <Empty icon={<Target size={24} />}>
-              No standing goals yet. Add one above — Iron Jarvis will keep it in
-              mind and (within its settings and budget) work toward it.
-            </Empty>
+            // v1.316.0: names the form instead of pointing — it said "Add one
+            // above" while the form sat below it. One quiet line (like Goals
+            // from Chat's): the form is the very next card, and a tall empty
+            // panel only pushed it down.
+            <p className="text-sm text-zinc-500">
+              No simple goals yet. Write one in New goal or pick a starter —
+              Iron Jarvis will keep it in mind and (within its settings and
+              budget) work toward it.
+            </p>
           ) : (
             <div className="space-y-2.5">
               {goalList.map((g) => (
@@ -723,6 +745,29 @@ export default function AutonomyPage() {
             </div>
           )}
         </Card>
+      </Reveal>
+
+      {/* New goal */}
+      <Reveal>
+        <NewGoalCard
+          onCreated={() => {
+            goals.reload();
+            status.reload();
+          }}
+          onError={(m) => flash(null, m)}
+        />
+      </Reveal>
+
+      {/* Starter goals — one-click, suggest-only seeds for a fresh install */}
+      <Reveal>
+        <StarterGoalsCard
+          existingTexts={goalTexts}
+          onCreated={() => {
+            goals.reload();
+            status.reload();
+          }}
+          onError={(m) => flash(null, m)}
+        />
       </Reveal>
     </PageShell>
   );
@@ -1096,7 +1141,12 @@ function GoalsSection() {
     "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50";
 
   return (
-    <Card title={`Goals${list.length ? ` · ${list.length}` : ""}`} icon={<Flag size={15} />}>
+    // v1.316.0 (UX wave 4): "Goals from Chat" — the page has a second kind of
+    // goal (Simple goals, below), so this title says where these come from.
+    <Card
+      title={`Goals from Chat${list.length ? ` · ${list.length}` : ""}`}
+      icon={<Flag size={15} />}
+    >
       <GoalsDigest />
       {(ok || warn || error) && (
         <div className="mb-3">
@@ -1120,9 +1170,13 @@ function GoalsSection() {
         <ErrorNote>{goals.error.message}</ErrorNote>
       ) : list.length === 0 ? (
         // One quiet line — no CTA to a creation form that doesn't exist.
+        // v1.316.0: and a pointer to the OTHER kind — the New goal form writes
+        // /autonomy/goals (Simple goals), never this /goals list, so the words
+        // must not imply it fills this card.
         <p className="text-sm text-zinc-500">
           No goals yet. Goals are born in Chat — ask for something recurring
-          and it takes a seat here, budget and all.
+          and it takes a seat here, budget and all. For a lighter goal that
+          Iron Jarvis keeps in mind when it checks in, use Simple goals below.
         </p>
       ) : (
         <div className="space-y-2.5">
@@ -1507,10 +1561,18 @@ function NewGoalCard({
   return (
     <Card title="New goal" icon={<Plus size={15} />}>
       <form onSubmit={submit} className="space-y-3.5">
-        <div>
-          <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-            <Sparkles size={12} /> What should I keep working toward?
-          </label>
+        {/* v1.316.0 (UX wave 4): every label is tied to its field through
+            <Field> (useId → htmlFor/id), so a click on the words focuses the
+            field and a screen reader names it. The selects keep their own
+            aria-labels ("Priority", "Autonomy dial") — tests and assistive
+            tech already know them by those names. */}
+        <Field
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              <Sparkles size={12} /> What should I keep working toward?
+            </span>
+          }
+        >
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -1518,23 +1580,17 @@ function NewGoalCard({
             rows={3}
             className="field resize-y"
           />
-        </div>
+        </Field>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-              Category
-            </label>
+          <Field label="Category">
             <input
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               placeholder="general"
               className="field"
             />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-              Priority
-            </label>
+          </Field>
+          <Field label="Priority">
             <select
               aria-label="Priority"
               value={priority}
@@ -1547,11 +1603,8 @@ function NewGoalCard({
                 </option>
               ))}
             </select>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-              How much freedom
-            </label>
+          </Field>
+          <Field label="How much freedom">
             <select
               aria-label="Autonomy dial"
               value={level}
@@ -1564,7 +1617,7 @@ function NewGoalCard({
                 </option>
               ))}
             </select>
-          </div>
+          </Field>
         </div>
         <button
           type="submit"
@@ -1684,7 +1737,7 @@ function StarterGoalsCard({
                   disabled={isAdded || busyId !== null}
                   title={
                     isAdded
-                      ? "Already in your standing goals"
+                      ? "Already in your simple goals"
                       : `Add "${r.title}" as a suggest-only goal`
                   }
                   className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${

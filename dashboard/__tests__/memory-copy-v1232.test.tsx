@@ -30,8 +30,10 @@ afterEach(cleanup);
 describe("WorkingMemory copy (v1.232.0)", () => {
   it("titles the box and says it searches only the working store", () => {
     render(<WorkingMemory />);
-    expect(screen.getByText("Search working memory")).toBeInTheDocument();
-    expect(screen.getByText(/only the working store .* the Recall box searches everything/)).toBeInTheDocument();
+    // v1.316.0: "Search only this tab" + a pointer to Recall (was "Search
+    // working memory" with the "(session · project · user)" jargon).
+    expect(screen.getByText("Search only this tab")).toBeInTheDocument();
+    expect(screen.getByText(/Recall, above, searches everything/)).toBeInTheDocument();
   });
 
   it("labels the count field 'Results', not 'k'", () => {

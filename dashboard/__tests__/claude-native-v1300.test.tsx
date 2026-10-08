@@ -621,7 +621,11 @@ describe("the Usage page says a subscription's cost as a list-price equivalent",
     expect(cell).toHaveAttribute("title", LIST_PRICE_TITLE);
     // Anti-vacuity: one flagged row, one phrase; the metered row keeps "$0.50".
     expect(screen.getAllByTestId("usage-list-price")).toHaveLength(1);
-    const openai = screen.getByText("openai · gpt-5").parentElement as HTMLElement;
+    // v1.316.0: the label reads words ("OpenAI · gpt-5"); the raw
+    // "provider · model" is the row's title, so find the row by it.
+    const openai = Array.from(document.querySelectorAll("[title]")).find((e) =>
+      (e.getAttribute("title") ?? "").startsWith("openai · gpt-5"),
+    ) as HTMLElement;
     expect(openai.textContent).toContain("$0.50");
     expect(openai.textContent).not.toContain("list-price");
   });

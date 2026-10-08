@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 /**
  * v1.170.0 P7 — workflows page: starter catalog + run-history resume.
@@ -322,7 +322,10 @@ describe("StarterTemplates (via the page)", () => {
       expect(await screen.findByText(/No saved workflows yet/)).toBeInTheDocument();
       const buttons = screen.getAllByText("Load into editor");
       expect(buttons).toHaveLength(STARTERS.length);
-      expect(screen.getByText("Client intake triage")).toBeInTheDocument();
+      // v1.316.0: scoped to the Templates card — the quick start above the
+      // canvas now ALSO offers each starter by title (one press, same event).
+      const templates = screen.getByRole("heading", { name: /^Templates/ }).closest("section")!;
+      expect(within(templates as HTMLElement).getByText("Client intake triage")).toBeInTheDocument();
       expect(
         screen.getByText("5 steps · asks you · notifies you · verified output"),
       ).toBeInTheDocument();

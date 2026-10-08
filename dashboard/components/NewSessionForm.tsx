@@ -10,6 +10,7 @@ import { useModels } from "@/lib/useModels";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
 import { providerDisplay } from "@/lib/onboarding";
+import { agentLabel } from "@/lib/agentWorlds";
 import { VoiceInput, appendDictation } from "./VoiceInput";
 
 /** v1.314.0: the task box's DOM id, so the Sessions page's empty state can
@@ -274,9 +275,15 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
             onChange={(e) => setAgentType(e.target.value)}
             className="field"
           >
+            {/* v1.316.0 (UX wave 4, agent names): a built-in reads as a name
+                ("file_manager" → "File manager") — built-in-ness comes from
+                the daemon's GET /agents list (or the fallback), never a list
+                kept here. The VALUE stays the raw id: it is what /sessions
+                receives and what a ?agent= deep link names. Custom agents keep
+                the name the user typed, "(custom)" as on Schedules. */}
             {builtinAgents.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {agentLabel(t, { builtin: true })}
               </option>
             ))}
             {dynamicAgents.map((t) => (

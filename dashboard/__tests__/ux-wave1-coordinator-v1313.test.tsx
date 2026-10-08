@@ -39,7 +39,8 @@ describe("/updates apply sentence flows inline", () => {
     // The tag right before the sentence is a <span>, not the icon or the <p>.
     expect(before.trimEnd().endsWith("<span>"), "sentence must start inside a <span>").toBe(true);
     const after = s.slice(i, s.indexOf("</p>", i));
-    expect(after).toContain("<Code>pnpm build</Code>");
+    // v1.316.0: each chip may carry a className (whitespace-nowrap).
+    expect(after).toMatch(/<Code(?: className="[^"]*")?>pnpm build<\/Code>/);
     expect(after.trimEnd().endsWith("</span>")).toBe(true);
   });
 });

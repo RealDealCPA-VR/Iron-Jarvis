@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Brain,
-  Store,
   Search,
   Plug,
   ShieldCheck,
@@ -17,15 +16,12 @@ import {
   Sparkles,
   ArrowRight,
   Info,
-  Zap,
-  Layers,
   X,
 } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
 import {
   Badge,
-  Stat,
   OfflineHint,
   Empty,
   Skeleton,
@@ -367,6 +363,18 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         </a>
       )}
 
+      {/* v1.316.0 (three-overlapping-catalogs): the SAME pack on the Tools
+          page — only where both write one mcp_servers entry under this id. */}
+      {TOOLS_TWINS.has(c.id) && (
+        <Link
+          href="/tools"
+          className="inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+          title="Tools lists this same extension with its launch command — adding it in either place is the same thing"
+        >
+          Also in Tools — advanced setup <ArrowRight size={11} aria-hidden="true" />
+        </Link>
+      )}
+
       {/* Spacer pushes actions to the bottom for even card heights */}
       <div className="flex-1" />
 
@@ -402,17 +410,20 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       ) : (
         <div className="space-y-2.5">
           {!open ? (
+            /* v1.316.0 (UX wave 4): outlined, not filled — nineteen equal
+               cyan bars gave the eye nowhere to land. The accent lives in
+               the icon; the press is unchanged. */
             <button
               type="button"
               onClick={toggleForm}
               disabled={busy}
-              className="btn-accent w-full py-1.5 text-xs"
+              className="btn-ghost w-full py-1.5 text-xs"
             >
               {busy && c.connect_via === "oauth" ? (
                 <LoaderInline label="Starting…" />
               ) : (
                 <>
-                  <Plug size={14} /> Connect
+                  <Plug size={14} className="text-accent-soft" /> Connect
                 </>
               )}
             </button>
@@ -562,6 +573,21 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   );
 }
 
+/**
+ * v1.316.0 (three-overlapping-catalogs): Directory connectors the Tools page
+ * ALSO adds under the same id — both write ONE `mcp_servers` entry named by
+ * it, so they are the same pack, never a second copy. Exact twins only:
+ * Puppeteer is not Tools' Playwright, and `sequential_thinking` is not Tools'
+ * `sequentialthinking`. Kept in step with `DIRECTORY_TWINS` in tools/page.tsx.
+ */
+const TOOLS_TWINS: ReadonlySet<string> = new Set([
+  "github",
+  "filesystem",
+  "fetch",
+  "memory",
+  "box",
+]);
+
 /* -------------------------------------------------------------------------- */
 /*  Skeleton card (first load)                                                  */
 /* -------------------------------------------------------------------------- */
@@ -600,6 +626,9 @@ export default function MarketplacePage() {
 
   const [search, setSearch] = useState("");
   const [activeCat, setActiveCat] = useState<string>("All");
+  // v1.316.0: "show only what I have connected" — a toggle on the summary
+  // line's count, beside (not instead of) the category chips and search.
+  const [connectedOnly, setConnectedOnly] = useState(false);
 
   const total = connectors.length;
   const connectedCount = connectors.filter((c) => c.connected).length;
@@ -615,6 +644,7 @@ export default function MarketplacePage() {
   const visible = useMemo(
     () =>
       connectors.filter((c) => {
+        if (connectedOnly && !c.connected) return false;
         const inCat = activeCat === "All" || c.category === activeCat;
         const inSearch =
           !q ||
@@ -623,7 +653,7 @@ export default function MarketplacePage() {
           c.unlocks.toLowerCase().includes(q);
         return inCat && inSearch;
       }),
-    [connectors, activeCat, q],
+    [connectors, activeCat, q, connectedOnly],
   );
 
   // Group visible connectors by category, honoring the returned category order.
@@ -650,12 +680,13 @@ export default function MarketplacePage() {
           title="Directory"
           subtitle="Connect Iron Jarvis to your apps — one tap. Tokens are stored encrypted; nothing is sent anywhere but the service you connect."
           actions={
-            /* Users arrive from the chat "+" menu (Marketplace has no nav
-               entry) — give them the door back so a collapsed sidebar never
-               strands them here. */
+            /* Users arrive from the chat "+" menu (the Directory has no nav
+               row) — give them the door back so a collapsed sidebar never
+               strands them here. v1.316.0: a quiet door, not the page's one
+               filled accent — the first thing the eye met was "leave". */
             <Link
               href="/chat"
-              className="btn-accent px-3 py-1.5 text-[13px]"
+              className="btn-ghost px-3 py-1.5 text-[13px]"
               title="Back to the conversation — new connectors appear in the + menu"
             >
               <ArrowLeft size={14} /> Back to chat
@@ -670,24 +701,45 @@ export default function MarketplacePage() {
         </Reveal>
       )}
 
-      {/* Stat strip — the page's pulse at a glance */}
+      {/* v1.316.0 (UX wave 4): the four stat tiles (~110 px of prime space)
+          are one summary line — all four numbers kept, tools live 0 included.
+          "N connected" is a toggle that narrows the cards to connected ones. */}
       {data && !offline && (
         <Reveal>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat
-              label="Connected"
-              value={connectedCount}
-              icon={<CheckCircle2 size={15} />}
-              accent={connectedCount > 0}
-            />
-            <Stat label="Available" value={total} icon={<Store size={15} />} />
-            <Stat label="Tools live" value={toolsLive} icon={<Zap size={15} />} />
-            <Stat
-              label="Categories"
-              value={categories.length}
-              icon={<Layers size={15} />}
-            />
-          </div>
+          <p
+            data-testid="directory-summary"
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-zinc-500"
+          >
+            <button
+              type="button"
+              onClick={() => setConnectedOnly((v) => !v)}
+              aria-pressed={connectedOnly}
+              disabled={connectedCount === 0 && !connectedOnly}
+              title={
+                connectedOnly
+                  ? "Show every connector again"
+                  : "Show only the connectors you have connected"
+              }
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium transition-colors disabled:cursor-default disabled:opacity-60 ${
+                connectedOnly
+                  ? "border-accent/40 bg-accent/[0.12] text-accent-soft"
+                  : "border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:text-zinc-100"
+              }`}
+            >
+              <CheckCircle2 size={13} aria-hidden="true" />
+              {connectedCount} connected
+            </button>
+            <span aria-hidden="true">·</span>
+            <span>{total} available</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {toolsLive} tool{toolsLive === 1 ? "" : "s"} live
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {categories.length} categor{categories.length === 1 ? "y" : "ies"}
+            </span>
+          </p>
         </Reveal>
       )}
 
@@ -748,7 +800,11 @@ export default function MarketplacePage() {
       ) : offline ? null : visible.length === 0 ? (
         <Reveal>
           <Empty icon={<Search size={24} />}>
-            {q || activeCat !== "All"
+            {connectedOnly && !q && activeCat === "All"
+              ? "Nothing is connected yet — press the connected count again to see every connector."
+              : connectedOnly && (q || activeCat !== "All")
+              ? "No connected connectors match your search — press the connected count to show every connector."
+              : q || activeCat !== "All" || connectedOnly
               ? "No connectors match your search. Try a different term or category."
               : "No connectors available."}
           </Empty>

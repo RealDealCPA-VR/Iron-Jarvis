@@ -571,7 +571,8 @@ def test_a_waiting_job_is_announced_once_then_reminded(tmp_path):
     first = out[0]["notify"]
     assert len(first) == 1, "the waiting job was never announced"
     assert first[0]["title"] == "Jarvis is waiting for you"
-    assert first[0]["body"] == "rename 4 files — click to open the job."
+    # v1.316.0: the tool renames OR moves (lib/toolWords.ts says the same).
+    assert first[0]["body"] == "rename or move 4 files — click to open the job."
     assert first[0]["sessionId"] == "sess_7", "the click cannot open the job"
     assert out[1]["notify"] == [], "it re-announced the same ask on the next tick"
     assert len(out[2]["notify"]) == 1, "no reminder after an hour"
@@ -644,7 +645,7 @@ def test_the_asks_are_described_in_plain_words_and_never_quote_arguments(tmp_pat
         tmp_path,
     )["out"]
     bodies = [n["body"] for n in out[0]["notify"]]
-    assert bodies[0].startswith("rename a file — ")
+    assert bodies[0].startswith("rename or move a file — ")  # v1.316.0, = lib/toolWords.ts
     assert bodies[1].startswith("edit 3 workbooks — ")
     assert bodies[2].startswith("use some new tool (2 times) — ")
     assert bodies[3].startswith("use a tool — ")

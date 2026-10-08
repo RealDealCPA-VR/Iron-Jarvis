@@ -379,7 +379,13 @@ export default function UpdatesPage() {
               ) : (
                 <div className="space-y-4">
                   <p className="flex items-start gap-2 text-[13px] leading-relaxed text-zinc-400">
-                    <TriangleAlert size={15} className="mt-0.5 shrink-0 text-amber-300/80" />
+                    {/* v1.316.0: the caution is amber only while there IS an
+                        update to apply. Up to date, an amber warning beside a
+                        green "Up to date" badge was two signals at once. */}
+                    <TriangleAlert
+                      size={15}
+                      className={`mt-0.5 shrink-0 ${available ? "text-amber-300/80" : "text-zinc-500"}`}
+                    />
                     {/* v1.314.0 (UX wave 2): the sentence in words; the exact
                         commands moved one disclosure down (below). */}
                     <span>
@@ -398,11 +404,14 @@ export default function UpdatesPage() {
                     <p className="mt-1.5 leading-relaxed">
                       <span>
                         Applying runs{" "}
-                        <Code>git pull --ff-only</Code>{" "}
+                        {/* v1.316.0: whitespace-nowrap per chip (not in
+                            .code-inline, which is shared): a command never
+                            breaks letter by letter on a phone. */}
+                        <Code className="whitespace-nowrap">git pull --ff-only</Code>{" "}
                         →{" "}
-                        <Code>uv sync</Code>{" "}
+                        <Code className="whitespace-nowrap">uv sync</Code>{" "}
                         →{" "}
-                        <Code>pnpm build</Code>
+                        <Code className="whitespace-nowrap">pnpm build</Code>
                         . It refuses if the working tree has uncommitted changes.
                       </span>
                     </p>
@@ -412,7 +421,12 @@ export default function UpdatesPage() {
                     type="button"
                     onClick={applyUpdate}
                     disabled={busy || !available}
-                    className="btn-accent w-full"
+                    // v1.316.0: brand-filled ONLY when there is an update to
+                    // apply. A disabled brand-filled "Up to date" (or "Paused")
+                    // looked like the page's main action while saying nothing
+                    // could be done; up to date, paused and couldn't-check are
+                    // all the quiet ghost now. The disabled rule is unchanged.
+                    className={`${available ? "btn-accent" : "btn-ghost"} w-full`}
                     title={
                       available
                         ? "Download and rebuild"
@@ -430,7 +444,13 @@ export default function UpdatesPage() {
                         <DownloadCloud size={14} />{" "}
                         {/* v1.314.0: never "Up to date" while local changes
                             are what is holding the update back. */}
-                        {available
+                        {/* v1.316.0: before the check answers, say so — it
+                            read "Up to date" while nothing was known yet. */}
+                        {!data
+                          ? loading
+                            ? "Checking…"
+                            : "Status unavailable"
+                          : available
                           ? `Apply update (${data?.behind ?? 0} commits)`
                           : localChanges
                             ? "Paused — local changes"

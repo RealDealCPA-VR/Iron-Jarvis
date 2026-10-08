@@ -52,13 +52,14 @@ export function WorkingMemory() {
       <Reveal>
         {/* v1.232.0 (audit U15): two stacked search boxes on one page — the
             Recall box above searches EVERY store; this one is the working
-            store only. Say so in the title, or the second box reads as a
-            duplicate of the first. */}
+            store only. v1.316.0: the title says so in plain words ("only this
+            tab") and Recall stays the one prominent search; the old storage
+            jargon in the corner is gone. */}
         <Card
-          title="Search working memory"
+          title="Search only this tab"
           right={
             <span className="text-[11px] font-normal text-zinc-500">
-              only the working store (session · project · user) — the Recall box searches everything
+              Recall, above, searches everything
             </span>
           }
         >

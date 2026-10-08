@@ -7,11 +7,12 @@
 // that preselect their scope. A List ⇄ Graph toggle swaps the scoped lists
 // for the all-scopes memory graph (`?view=graph`, persisted in localStorage).
 
-import { Suspense, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   BrainCircuit,
+  Download,
   GraduationCap,
   Database,
   List as ListIcon,
@@ -43,8 +44,9 @@ const SCOPES: ScopeDef[] = [
     id: "working",
     label: "Working",
     Icon: BrainCircuit,
-    blurb:
-      "Short-lived session, project, and user key-values that agents read mid-run.",
+    // v1.316.0: plain words — the old blurb's storage jargon read like a
+    // database console to the person this page is for.
+    blurb: "Scratch notes agents keep while a job is running.",
   },
   {
     id: "lessons",
@@ -60,7 +62,7 @@ const SCOPES: ScopeDef[] = [
     label: "Long-term",
     Icon: Database,
     blurb:
-      "The durable memory bases — the built-in one, your vault, Notion, or cloud — that agents search on demand.",
+      "Your knowledge bases — the built-in one plus any vault, Notion or drive you connect — that agents search when they need to.",
   },
 ];
 
@@ -91,6 +93,11 @@ export function MemorySurface({
 }: {
   initialScope?: MemoryScope;
 }) {
+  // v1.316.0: the profile card above the tabs fills in AFTER its fetches, and
+  // grows. A deep link's landing scroll made before that would end up too
+  // high, so the scoped half re-lands once when the card has settled.
+  const [aboveSettled, setAboveSettled] = useState(false);
+  const onAboveSettled = useCallback(() => setAboveSettled(true), []);
   return (
     <PageShell>
       <Reveal>
@@ -101,15 +108,29 @@ export function MemorySurface({
       </Reveal>
       {/* v1.279.0: the answer to "what do you know about me?" comes first —
           the scopes below are where a person goes to look something up. */}
-      <KnowsAboutYou />
+      <KnowsAboutYou onSettled={onAboveSettled} />
       <Suspense fallback={null}>
-        <ScopedMemory initialScope={initialScope} />
+        <ScopedMemory initialScope={initialScope} aboveSettled={aboveSettled} />
       </Suspense>
     </PageShell>
   );
 }
 
-function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  } catch {
+    return false;
+  }
+}
+
+function ScopedMemory({
+  initialScope,
+  aboveSettled,
+}: {
+  initialScope: MemoryScope;
+  aboveSettled: boolean;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   // `?scope=` wins (deep links like /memory?scope=longterm); otherwise the
@@ -117,6 +138,53 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
   const param = searchParams.get("scope");
   const scope: MemoryScope = isScope(param) ? param : initialScope;
   const active = SCOPES.find((s) => s.id === scope) ?? SCOPES[0];
+
+  // v1.316.0 — a deep link LANDS on the part it names. /ltm, /lessons, the
+  // Train doorways and the palette's "lessons"/"long-term" all opened on the
+  // same top as /memory (profile card + Recall), with the chosen tab ~900px
+  // down, so the link looked like it did nothing. Decided ONCE, at mount:
+  // a wrapper route (initialScope !== "working") or an explicit ?scope=.
+  // A bare /memory opens at the top as before. A tab press also writes
+  // ?scope=, which is why this is a ref read at mount and never re-derived.
+  // A `?focus=<card>` link (the palette's "Add a memory base", "Import from
+  // another AI") lands on that CARD via useFocusRef — the row never fights it.
+  const scopesRef = useRef<HTMLDivElement>(null);
+  const landing = useRef<"pending" | "landed" | "done">(
+    (initialScope !== "working" || isScope(param)) && !searchParams.get("focus") ? "pending" : "done",
+  );
+  const land = useCallback(() => {
+    scopesRef.current?.scrollIntoView?.({
+      block: "start",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, []);
+  // First landing, as soon as the row exists.
+  useEffect(() => {
+    if (landing.current !== "pending") return;
+    landing.current = "landed";
+    land();
+  }, [land]);
+  // The person took over (scrolled, typed, tapped): never move them again.
+  useEffect(() => {
+    if (landing.current === "done") return;
+    const stop = () => {
+      landing.current = "done";
+    };
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchstart", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    return () => {
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchstart", stop);
+      window.removeEventListener("keydown", stop);
+    };
+  }, []);
+  // One re-landing after the card above has filled in (or failed quietly).
+  useEffect(() => {
+    if (!aboveSettled || landing.current !== "landed") return;
+    landing.current = "done";
+    land();
+  }, [aboveSettled, land]);
 
   // View resolution: `?view=` wins (shareable deep links), then the persisted
   // localStorage choice, then List. This component only renders client-side
@@ -136,6 +204,8 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
 
   function switchTo(next: MemoryScope) {
     if (next === scope) return;
+    // A tab press is the person steering: no later landing may move them.
+    landing.current = "done";
     // Shallow-ish client swap: same surface, new query param. Landing on
     // /memory even from the /lessons and /ltm wrappers keeps the URL canonical.
     // Preserve an explicit `?view=` so scope changes never flip the view.
@@ -164,21 +234,17 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
 
       <Reveal>
         <div>
-          {/* Imports (ChatGPT / Claude / Takeout) live on the Long-term tab;
-              Simple mode hides the /ltm nav item, so this line is the door
-              from every other tab (v1.232.0). */}
-          {view === "list" && scope !== "longterm" && (
-            <p className="mb-3 text-[12px] text-zinc-500">
-              <Link
-                href="/memory?scope=longterm"
-                className="text-accent-soft hover:text-accent"
-                data-testid="memory-import-link"
-              >
-                Import from ChatGPT/Claude/Takeout → Long-term memory
-              </Link>
-            </p>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* v1.316.0: the scope row is the deep-link landing target
+              (id + scroll-mt-14 clears the 40px title bar). The Import door
+              moved INTO it, beside the view switch — it used to float alone
+              between two cards. Imports (ChatGPT / Claude / Takeout) live on
+              the Long-term tab; Simple mode hides the /ltm nav item, so this
+              is the door from every other tab (v1.232.0). */}
+          <div
+            id="memory-scopes"
+            ref={scopesRef}
+            className="flex scroll-mt-14 flex-wrap items-center gap-3"
+          >
             {view === "list" ? (
               <div
                 role="tablist"
@@ -217,10 +283,25 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
               </div>
             )}
 
+            {view === "list" && scope !== "longterm" && (
+              <Link
+                href="/memory?scope=longterm"
+                className="btn-ghost btn-sm ml-auto"
+                data-testid="memory-import-link"
+              >
+                <Download size={13} aria-hidden className="shrink-0" />
+                {/* Short on a phone so the door and List/Graph share a row;
+                    the full words (the Handbook's) from sm up. */}
+                <span className="sm:hidden">Import from another AI</span>
+                <span className="hidden sm:inline">Import from ChatGPT/Claude/Takeout → Long-term memory</span>
+              </Link>
+            )}
             <div
               role="group"
               aria-label="Memory view"
-              className="inline-flex items-center gap-1 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-1"
+              className={`inline-flex items-center gap-1 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-1 ${
+                view === "list" && scope !== "longterm" ? "" : "ml-auto"
+              }`}
             >
               {VIEWS.map(({ id, label, Icon }) => {
                 const selected = id === view;

@@ -286,10 +286,12 @@ export function RecallSearch() {
         {/* Results / states */}
         <div className="mt-3">
           {busy ? null : results === null ? (
-            <Empty icon={<Sparkles size={22} />}>
+            // v1.316.0: one quiet line before the first search, not the big
+            // empty-state block — it held ~150px of blank space on every visit.
+            <p data-testid="recall-hint" className="text-[12px] text-zinc-500">
               One search across everything Iron Jarvis remembers — files, notes,
               working memory, projects, lessons, and past runs.
-            </Empty>
+            </p>
           ) : results.length === 0 ? (
             <Empty icon={<Search size={22} />}>Nothing in memory matches that yet.</Empty>
           ) : (

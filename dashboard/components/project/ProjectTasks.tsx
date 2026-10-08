@@ -32,6 +32,7 @@ import {
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { plainText } from "@/components/Markdown";
 import { timeAgo } from "@/lib/format";
+import { agentLabel } from "@/lib/agentWorlds";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
@@ -75,7 +76,8 @@ export function assigneeOptions(
   for (const b of agents?.builtin ?? []) {
     // A coordinator (supervisor, planner) is refused by the daemon as an
     // assignee — see `canBeAssignee`; guide and the rest are offered.
-    if (typeof b === "string" && b && canBeAssignee(b)) out.push({ value: b, label: b });
+    // v1.316.0: a built-in reads as a name ("Builder"); the VALUE stays the id.
+    if (typeof b === "string" && b && canBeAssignee(b)) out.push({ value: b, label: agentLabel(b, { builtin: true }) });
   }
   for (const d of agents?.dynamic ?? []) {
     if (d && typeof d.name === "string" && d.name) {
@@ -281,6 +283,10 @@ export function ProjectTasks({
   // The chosen assignee must still exist in the list the user can see; a
   // custom agent deleted since is not quietly posted anyway.
   const effectiveAssignee = assignees.some((o) => o.value === assignee) ? assignee : "";
+  // v1.316.0: the button and its queued note name the agent the same way
+  // the picker does (the option's label), never a raw lowercase id.
+  const assigneeName =
+    assignees.find((o) => o.value === effectiveAssignee)?.label ?? bareAssignee(effectiveAssignee);
   // This project's queue — the same rows the agents' inboxes show. An older
   // daemon 404s and the list stays absent.
   const asg = usePolledApi<{ assignments: Assignment[] }>(
@@ -600,7 +606,7 @@ export function ProjectTasks({
             disabled={taskStarting || planning || pendingPlan !== null || !taskText.trim()}
             title={
               effectiveAssignee
-                ? `Queue this for ${bareAssignee(effectiveAssignee)} — it runs when ${bareAssignee(effectiveAssignee)} is free`
+                ? `Queue this for ${assigneeName} — it runs when ${assigneeName} is free`
                 : "Start an agent session on this task"
             }
             className="btn-accent shrink-0"
@@ -611,7 +617,7 @@ export function ProjectTasks({
               <LoaderInline label="Checking…" />
             ) : effectiveAssignee ? (
               <>
-                <Send size={13} /> Queue for {bareAssignee(effectiveAssignee)}
+                <Send size={13} /> Queue for {assigneeName}
               </>
             ) : (
               <>

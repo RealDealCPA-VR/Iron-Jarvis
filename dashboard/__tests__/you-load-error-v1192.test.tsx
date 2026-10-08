@@ -178,9 +178,11 @@ describe("/you when the profile loads", () => {
 
     fireEvent.change(about, { target: { value: "I run a small CPA firm. And I ski." } });
 
+    // v1.316.0: once dirty, the sticky unsaved bar adds a second Save; the
+    // header's (first in document order) is the one this pin is about.
     await waitFor(() => {
       expect(
-        (screen.getByRole("button", { name: /^Save/ }) as HTMLButtonElement).disabled,
+        (screen.getAllByRole("button", { name: /^Save/ })[0] as HTMLButtonElement).disabled,
       ).toBe(false);
     });
   });

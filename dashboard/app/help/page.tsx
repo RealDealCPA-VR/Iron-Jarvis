@@ -62,13 +62,15 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/projects",
     title: "Projects",
     icon: FolderKanban,
-    desc: "The context spine: a brief, instructions, a real folder, and knowledge every chat and task inside it inherits.",
+    // v1.316.0: plain words for a busy professional ("the context spine" is
+    // our own architecture term, not help).
+    desc: "A home for each piece of work: a brief, instructions, a real folder and saved knowledge that every chat and task inside it starts from.",
   },
   {
     href: "/terminals",
     title: "Build",
     icon: SquareTerminal,
-    desc: "Live terminals side by side, each openable in any project folder.",
+    desc: "Command windows for coding, side by side — open each one in any project folder.",
   },
   {
     href: "/creative",
@@ -146,7 +148,10 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/self-dev",
     title: "Self-development",
     icon: GitBranch,
-    desc: "Let a Maintainer improve Iron Jarvis's own code on a throwaway worktree — always review-gated.",
+    // v1.316.0: "throwaway worktree" said in words. The review gate stays in
+    // the sentence — it is the safety promise of this page (self-dev/page.tsx:
+    // "every change is review-gated and never merges on its own").
+    desc: "Let a Maintainer agent improve Iron Jarvis's own code in a separate copy — every change waits for your review and never merges on its own.",
   },
 ];
 
@@ -578,6 +583,8 @@ function AskGuideCard() {
   // @guide mention (prefilled, never auto-sent), where the Guide answers
   // with its docs lookup.
   const href = guideChatPath(q);
+  // v1.316.0: the counts are bookkeeping, not help — the line says what the
+  // Guide knows in words and the exact counts move to its title (hover).
   const knows =
     s
       ? `${s.docs.length} reference doc${s.docs.length === 1 ? "" : "s"} (${s.doc_sections} sections) plus ${s.live_sections} live catalogs of this install`
@@ -600,9 +607,16 @@ function AskGuideCard() {
               linkRef.current?.click();
             }
           }}
-          placeholder="e.g. How do updates install? What is a memory base?"
+          // v1.316.0: one example, so it is never cut mid-word on a phone.
+          placeholder="e.g. How do updates install?"
           aria-label="Ask the Guide"
-          className="field min-w-0 flex-1 text-sm"
+          // v1.316.0: below sm the box takes the whole row and the button
+          // wraps under it — at 390px `flex-1` next to a shrink-0 button
+          // squeezed it to ~165px and cut the placeholder mid-word. From sm up
+          // the basis goes back to 0 (flex-1's own), NOT `auto`: `.field` is
+          // w-full, so an auto basis is still 100% and the button would wrap
+          // under the box on a desktop too.
+          className="field min-w-0 flex-1 basis-full text-sm sm:basis-0"
         />
         <Link
           ref={linkRef}
@@ -624,7 +638,12 @@ function AskGuideCard() {
           "Checking what the Guide knows…"
         ) : (
           <>
-            Knows {knows}.
+            <span
+              title={`Knows ${knows}.`}
+              className="cursor-help underline decoration-dotted decoration-zinc-600 underline-offset-2"
+            >
+              Knows this app&apos;s guides and what&apos;s in your install.
+            </span>
             {s.missing.length > 0 && (
               <span className="text-amber-300/90">
                 {" "}

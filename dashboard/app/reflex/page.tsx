@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Zap,
@@ -250,6 +250,9 @@ function RuleSentence({ r }: { r: ReflexRule }) {
 /* -------------------------------------------------------------------------- */
 
 export default function ReflexPage() {
+  // v1.316.0 (form-labels-not-associated): useId ties each label to its
+  // field, so a screen reader names it and a click on the label focuses it.
+  const fid = useId();
   const { data, error, loading, reload } = usePolledApi<{ rules: ReflexRule[] }>(
     "/reflex/rules",
     15000,
@@ -274,6 +277,24 @@ export default function ReflexPage() {
 
   // Add form
   const [open, setOpen] = useState(false);
+  // v1.316.0 (carry-empty-add-scrolls-to-form): the empty state's Add opens
+  // THIS form, which sits ABOVE the list — on a phone a scrolled-down user saw
+  // nothing happen. Every press bumps the counter, the effect scrolls the form
+  // into view and focuses its first field (Schedules' taskFieldRef pattern),
+  // also when the header already opened it. The header Add still toggles.
+  const formStartRef = useRef<HTMLSelectElement | null>(null);
+  const [focusForm, setFocusForm] = useState(0);
+  useEffect(() => {
+    if (!focusForm) return;
+    const el = formStartRef.current;
+    if (!el) return;
+    el.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    el.focus();
+  }, [focusForm]);
+  const openFromEmpty = () => {
+    setOpen(true);
+    setFocusForm((n) => n + 1);
+  };
   const [name, setName] = useState("");
   const [source, setSource] = useState<ReflexSource>("webhook");
   const [match, setMatch] = useState("");
@@ -476,7 +497,7 @@ export default function ReflexPage() {
               )}
               {templateShownFor(r) && r.task_template.trim() && (
                 <span className="max-w-[18rem] truncate" title={r.task_template}>
-                  template: {r.task_template.trim()}
+                  task: {r.task_template.trim()}
                 </span>
               )}
             </div>
@@ -552,10 +573,12 @@ export default function ReflexPage() {
               {/* Signal: source + match */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-source`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Signal source
                   </label>
                   <select
+                    id={`${fid}-source`}
+                    ref={formStartRef}
                     aria-label="Signal source"
                     value={source}
                     onChange={(e) => pickSource(e.target.value as ReflexSource)}
@@ -569,12 +592,13 @@ export default function ReflexPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-match`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     {SOURCE_META[source].matchLabel}
                   </label>
                   {source === "webhook" ? (
                     inboundSlugs.length > 0 ? (
                       <select
+                        id={`${fid}-match`}
                         aria-label="Webhook slug"
                         value={match}
                         onChange={(e) => setMatch(e.target.value)}
@@ -590,6 +614,7 @@ export default function ReflexPage() {
                     ) : (
                       <>
                         <input
+                          id={`${fid}-match`}
                           value={match}
                           onChange={(e) => setMatch(e.target.value)}
                           placeholder="github-push"
@@ -610,6 +635,7 @@ export default function ReflexPage() {
                   ) : (
                     <>
                       <input
+                        id={`${fid}-match`}
                         value={match}
                         onChange={(e) => setMatch(e.target.value)}
                         placeholder={SOURCE_META[source].matchPlaceholder}
@@ -626,10 +652,11 @@ export default function ReflexPage() {
               {/* Action: action + target */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-action`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Action
                   </label>
                   <select
+                    id={`${fid}-action`}
                     aria-label="Action"
                     value={action}
                     onChange={(e) => pickAction(e.target.value as ReflexAction)}
@@ -642,12 +669,22 @@ export default function ReflexPage() {
                 </div>
                 {targetNeeded && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                      {action === "workflow" ? "Workflow" : "Remote agent"}
-                    </label>
+                    {/* v1.316.0: a <label> only when there IS a picker to
+                        name — with none saved yet it is a plain heading over
+                        the "create one first" note. */}
+                    {(action === "workflow" ? workflowNames.length > 0 : agentNames.length > 0) ? (
+                      <label htmlFor={`${fid}-target`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        {action === "workflow" ? "Workflow" : "Remote agent"}
+                      </label>
+                    ) : (
+                      <p className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        {action === "workflow" ? "Workflow" : "Remote agent"}
+                      </p>
+                    )}
                     {action === "workflow" ? (
                       workflowNames.length > 0 ? (
                         <select
+                          id={`${fid}-target`}
                           aria-label="Workflow"
                           value={target}
                           onChange={(e) => setTarget(e.target.value)}
@@ -674,6 +711,7 @@ export default function ReflexPage() {
                       )
                     ) : agentNames.length > 0 ? (
                       <select
+                        id={`${fid}-target`}
                         aria-label="Remote agent"
                         value={target}
                         onChange={(e) => setTarget(e.target.value)}
@@ -705,13 +743,16 @@ export default function ReflexPage() {
                 )}
               </div>
 
-              {/* Task template (session / remote_agent only) */}
+              {/* The task it hands over (session / remote_agent only).
+                  v1.316.0: shown as "Task" — "template" is the saved prompt
+                  on /templates; the wire field stays task_template. */}
               {templateShown && (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Task template
+                  <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Task
                   </label>
                   <textarea
+                    id={`${fid}-task`}
                     value={taskTemplate}
                     onChange={(e) => setTaskTemplate(e.target.value)}
                     rows={3}
@@ -730,10 +771,11 @@ export default function ReflexPage() {
               {/* Project grounding (context spine) — session/workflow actions */}
               {projectShown && (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-project`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Run inside a project (optional)
                   </label>
                   <select
+                    id={`${fid}-project`}
                     aria-label="Project"
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
@@ -757,10 +799,11 @@ export default function ReflexPage() {
               {/* Name + enabled */}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name (optional)
                   </label>
                   <input
+                    id={`${fid}-name`}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="deploy → nightly"
@@ -822,7 +865,8 @@ export default function ReflexPage() {
             // v1.314.0: on a fresh install the page explanation lives in the (i)
             // popover (v1.214.1), so this empty state is the one place a new
             // user learns what a reflex IS. The button opens the SAME form the
-            // header button opens (setOpen(true) — it opens, never toggles).
+            // header button opens (it opens, never toggles) and, since
+            // v1.316.0, scrolls to it and focuses its first field.
             // Every example below maps to a real source + action in the form.
             <Empty
               icon={<Zap size={24} />}
@@ -832,7 +876,7 @@ export default function ReflexPage() {
                 "When a calendar event called “standup” is coming up, run a workflow",
                 "When another app calls your webhook, start a session",
               ]}
-              action={{ label: "Add your first reflex", onClick: () => setOpen(true) }}
+              action={{ label: "Add your first reflex", onClick: openFromEmpty }}
             >
               A reflex is an if-this-then-that rule: a signal comes in, and Iron Jarvis starts the
               work you picked. Anything risky still asks you first.
@@ -901,6 +945,7 @@ function templateShownFor(r: ReflexRule): boolean {
 /* -------------------------------------------------------------------------- */
 
 function TriggersCard() {
+  const fid = useId(); // v1.316.0: ties the calendar labels
   const { data, reload } = useApi<TriggersStatus>("/triggers");
   const cal = data?.calendar;
   const emailActive = !!data?.email?.active;
@@ -968,10 +1013,11 @@ function TriggersCard() {
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
             <div>
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label htmlFor={`${fid}-ical`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 iCal URL
               </label>
               <input
+                id={`${fid}-ical`}
                 type="url"
                 value={icsUrl}
                 onChange={(e) => setIcsUrl(e.target.value)}
@@ -984,10 +1030,11 @@ function TriggersCard() {
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label htmlFor={`${fid}-lead`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 Lead (min)
               </label>
               <input
+                id={`${fid}-lead`}
                 type="number"
                 min={0}
                 value={lead}

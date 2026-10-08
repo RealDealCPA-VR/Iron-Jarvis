@@ -359,9 +359,13 @@ export default function TrainPage() {
           blurb="An Obsidian vault, a Notion database, a shared drive, or an MCP brain. Once connected, Iron Jarvis retrieves from it on every relevant question — no tool to arm, no folder to name."
         >
           <div className="space-y-2">
+            {/* v1.316.0: count what the USER added. The built-in base is
+                always there, so a fresh install read "1 connected" while the
+                step (done only past one base) still showed as not done. The
+                doorway lands ON the Long-term tab, not the top of Memory. */}
             <Doorway
-              href="/ltm"
-              label={`Memory bases — ${st?.memory_bases ?? 0} connected`}
+              href="/memory?scope=longterm"
+              label={`Your notes and wikis — ${Math.max(0, (st?.memory_bases ?? 1) - 1)} connected (the built-in base is always on)`}
               note="Obsidian, Notion, Dropbox, Google Drive, OneDrive, SSH, an MCP brain"
             />
             <Doorway
@@ -381,10 +385,14 @@ export default function TrainPage() {
           done={(st?.memory_items ?? 0) > 0}
           blurb="Everything another assistant already learned about you. Paste a summary, or import a ChatGPT / Claude / Takeout export — you review every item before it is kept."
         >
+          {/* v1.316.0: the import lives on the Long-term tab, so the doorway
+              lands there. No count: `memory_items` counts WORKING-memory rows,
+              while an import becomes its own memory base — "N items" here
+              described neither. */}
           <Doorway
-            href="/memory"
-            label={`Memory — ${st?.memory_items ?? 0} items`}
-            note="Import from another AI, review what is stored, browse the memory graph"
+            href="/memory?scope=longterm"
+            label="Import from ChatGPT, Claude or Google Takeout"
+            note="On Memory's Long-term tab — you review every item before it is kept"
           />
         </Step>
       </Reveal>

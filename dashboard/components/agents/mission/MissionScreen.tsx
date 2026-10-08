@@ -118,7 +118,15 @@ function AvailableTeam() {
             <li key={r.name} className="flex items-center gap-2.5">
               <AgentFace name={r.name} size={24} title="" />
               <div className="min-w-0">
-                <div className="truncate text-[12.5px] font-medium capitalize text-zinc-200">{label}</div>
+                {/* v1.316.0: a "custom:"/"remote:" name reads as typed; only a
+                    built-in id is title-cased by CSS. */}
+                <div
+                  className={`truncate text-[12.5px] font-medium text-zinc-200 ${
+                    r.name.includes(":") ? "" : "capitalize"
+                  }`}
+                >
+                  {label}
+                </div>
                 {/* v1.315.0: two lines, never cut off mid-word. */}
                 {r.description && <div className="line-clamp-2 text-[11px] leading-snug text-zinc-500">{r.description}</div>}
               </div>

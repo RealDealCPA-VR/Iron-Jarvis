@@ -117,9 +117,11 @@ describe("Ask the Guide (v1.223.0)", () => {
     };
     hooks.responses["/helpdocs"] = { docs: [] };
     render(<HelpPage />);
-    expect(
-      screen.getByText(/Knows 2 reference docs \(46 sections\) plus 12 live catalogs/),
-    ).toBeInTheDocument();
+    // v1.316.0: the line reads in words; the exact counts moved to its title.
+    expect(screen.getByText(/Knows this app.s guides/)).toHaveAttribute(
+      "title",
+      expect.stringMatching(/Knows 2 reference docs \(46 sections\) plus 12 live catalogs/),
+    );
     expect(screen.getByText(/Missing from this install: SPEC\.MD/)).toBeInTheDocument();
   });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Radar,
@@ -27,7 +27,10 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
-import { agentLabel } from "@/components/workflow/agents";
+// v1.316.0 (agent-names-raw-lowercase): THE agent-name rule — built-ins
+// read as words ("maintainer" → "Maintainer"), a custom agent keeps the name
+// the user typed. The workflow editor's map knew only its own five agents.
+import { agentLabel } from "@/lib/agentWorlds";
 import { PageShell, Reveal } from "@/components/motion";
 
 /** One watcher, as returned by the daemon's `_sentinel_view` (GET /sentinels). */
@@ -98,6 +101,10 @@ export default function SentinelsPage() {
     ];
     return names.length ? names : FALLBACK_AGENTS;
   })();
+  // Built-in comes from the roster (GET /agents' builtin list); before it
+  // answers, the fallback names ARE built-ins.
+  const builtinAgents = new Set(agentsData ? agentsData.builtin ?? [] : FALLBACK_AGENTS);
+  const nameOf = (a: string) => agentLabel(a, { builtin: builtinAgents.has(a) });
 
   // Status banner actions (enable + poll now).
   const [enabling, setEnabling] = useState(false);
@@ -107,6 +114,26 @@ export default function SentinelsPage() {
 
   // Add form
   const [open, setOpen] = useState(false);
+  // v1.316.0 (form-labels-not-associated): ties each label to its field.
+  const fid = useId();
+  // v1.316.0 (carry-empty-add-scrolls-to-form): "Watch a folder" opens THIS
+  // form, which sits ABOVE the list — on a phone a scrolled-down user saw
+  // nothing happen. Every press bumps the counter; the effect scrolls the form
+  // into view and focuses its first field (Schedules' pattern), also when the
+  // header already opened it. The header Add still toggles.
+  const formStartRef = useRef<HTMLInputElement | null>(null);
+  const [focusForm, setFocusForm] = useState(0);
+  useEffect(() => {
+    if (!focusForm) return;
+    const el = formStartRef.current;
+    if (!el) return;
+    el.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    el.focus();
+  }, [focusForm]);
+  const openFromEmpty = () => {
+    setOpen(true);
+    setFocusForm((n) => n + 1);
+  };
   const [name, setName] = useState("");
   const [kind, setKind] = useState("file");
   const [path, setPath] = useState("");
@@ -323,10 +350,12 @@ export default function SentinelsPage() {
             <form onSubmit={submit} className="space-y-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-name`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
+                    id={`${fid}-name`}
+                    ref={formStartRef}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="downloads-watch"
@@ -334,10 +363,11 @@ export default function SentinelsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-kind`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Kind
                   </label>
                   <select
+                    id={`${fid}-kind`}
                     aria-label="Watcher kind"
                     value={kind}
                     onChange={(e) => setKind(e.target.value)}
@@ -357,10 +387,11 @@ export default function SentinelsPage() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-path`} className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <FolderSearch size={12} /> Path to watch
                   </label>
                   <input
+                    id={`${fid}-path`}
                     value={path}
                     onChange={(e) => setPath(e.target.value)}
                     placeholder="C:\Users\you\Downloads"
@@ -372,10 +403,11 @@ export default function SentinelsPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-glob`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Glob (optional)
                   </label>
                   <input
+                    id={`${fid}-glob`}
                     value={glob}
                     onChange={(e) => setGlob(e.target.value)}
                     placeholder="*.pdf"
@@ -388,10 +420,11 @@ export default function SentinelsPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <label htmlFor={`${fid}-task`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Suggested task (optional)
                 </label>
                 <input
+                  id={`${fid}-task`}
                   value={task}
                   onChange={(e) => setTask(e.target.value)}
                   placeholder="Summarise any new bank statements and flag anything unusual"
@@ -405,29 +438,32 @@ export default function SentinelsPage() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-agent`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Agent type
                   </label>
                   <select
+                    id={`${fid}-agent`}
                     aria-label="Agent type"
                     value={agentType}
                     onChange={(e) => setAgentType(e.target.value)}
                     className="field"
                   >
-                    {/* v1.314.0: friendly names (as on Schedules/Templates); the
-                        value stays the agent id the daemon stores. */}
+                    {/* v1.316.0: built-ins in words, custom names as typed
+                        (lib/agentWorlds.agentLabel); the value stays the agent
+                        id the daemon stores. */}
                     {agentTypes.map((a) => (
                       <option key={a} value={a}>
-                        {agentLabel(a)}
+                        {nameOf(a)}
                       </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  <label htmlFor={`${fid}-risk`} className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Risk
                   </label>
                   <select
+                    id={`${fid}-risk`}
                     aria-label="Risk"
                     value={risk}
                     onChange={(e) => setRisk(e.target.value)}
@@ -496,7 +532,7 @@ export default function SentinelsPage() {
                 "When a new scan lands in your intake folder, suggest sorting it",
                 "When a statement appears in Downloads, suggest filing it",
               ]}
-              action={{ label: "Watch a folder", onClick: () => setOpen(true) }}
+              action={{ label: "Watch a folder", onClick: openFromEmpty }}
             >
               A sentinel watches a folder. When files change, it suggests a next step for you to
               approve.
@@ -545,7 +581,10 @@ export default function SentinelsPage() {
                         >
                           {s.task || <span className="text-zinc-600">review what changed</span>}
                         </span>
-                        <span className="text-[11px] text-zinc-600">→ {s.agent_type}</span>
+                        {/* v1.316.0: the agent's name; its id stays in title. */}
+                        <span className="text-[11px] text-zinc-600" title={s.agent_type}>
+                          → {nameOf(s.agent_type)}
+                        </span>
                       </td>
                       <td className="px-2 py-2.5">
                         <Badge value={s.risk} tone={s.risk === "low" ? "green" : "amber"} />

@@ -690,9 +690,9 @@ function assignTo(): Array<[string, string]> {
 describe("a project's Tasks tab offers its team first in 'Assign to'", () => {
   it("pure: team members first (assignable seats only), every other agent after, none dropped", () => {
     expect(teamAssigneeChoices(TEAM_ROWS, AGENTS as never)).toEqual([
-      { value: "researcher", label: "researcher", group: TEAM_GROUP },
+      { value: "researcher", label: "Researcher", group: TEAM_GROUP },
       { value: "custom:analyst", label: "analyst — yours", group: TEAM_GROUP },
-      { value: "builder", label: "builder", group: OTHERS_GROUP },
+      { value: "builder", label: "Builder", group: OTHERS_GROUP },
       { value: "custom:drafter", label: "drafter — yours", group: OTHERS_GROUP },
     ]);
     // No team, or a team with no seat the queue can take: today's flat list.

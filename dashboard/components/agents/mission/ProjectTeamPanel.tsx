@@ -12,7 +12,7 @@ import AgentFace from "@/components/agents/AgentFace";
 import { Modal } from "@/components/Modal";
 import { TeamEditor } from "@/components/agents/world/TeamEditor";
 import type { RosterEntry } from "@/components/agents/RosterStrip";
-import { bareMemberName, memberAvatar, type WorldMember } from "@/lib/agentWorlds";
+import { bareMemberName, memberAvatar, memberSource, type WorldMember } from "@/lib/agentWorlds";
 import { useApi } from "@/lib/useApi";
 
 export function ProjectTeamPanel({
@@ -48,7 +48,15 @@ export function ProjectTeamPanel({
                 <li key={m.name} data-testid={`project-team-${m.name}`} className="flex items-center gap-2.5 px-1">
                   <AgentFace name={bare} size={26} avatarUrl={memberAvatar(m) ?? undefined} title="" />
                   <div className="min-w-0">
-                    <div className="truncate text-[12.5px] font-medium capitalize text-zinc-200">{bare}</div>
+                    {/* v1.316.0: CSS title-case for a built-in only — a custom
+                        or remote teammate's name reads exactly as typed. */}
+                    <div
+                      className={`truncate text-[12.5px] font-medium text-zinc-200 ${
+                        memberSource(m) === "builtin" ? "capitalize" : ""
+                      }`}
+                    >
+                      {bare}
+                    </div>
                     {m.description && <div className="truncate text-[11px] text-zinc-500">{m.description}</div>}
                   </div>
                 </li>

@@ -13,9 +13,10 @@
  * archived one, or run a sweep — DRY RUN by default: the result sentence
  * says what WOULD go, and nothing moves until the box is unticked.
  *
- * Collapsed by default to one line: "Curator — N candidates · M archived ·
- * last sweep …". Hidden entirely when the daemon has no curator (the page
- * passes no view).
+ * Collapsed by default to one line (v1.316.0 words): "Tidy-up: N unused
+ * skills could be archived · M archived · last run …" ("nothing to archive"
+ * / "never run" when there is none). Hidden entirely when the daemon has no
+ * curator (the page passes no view).
  */
 
 import { useState } from "react";
@@ -32,11 +33,15 @@ function errText(err: unknown): string {
 /** The collapsed header line. The status fields sit FLAT on the view — the
  *  daemon's `overview()` is its `status()` with the lists in place of the
  *  counts; a nested `status` object never arrives. */
+// v1.316.0: in plain words. "Curator — 0 candidates · never swept" was a
+// developer's status line; the same three facts now read as a tidy-up: what
+// could be archived, what already is, and when it last ran.
 export function curatorHeadline(v: SkillCuratorView): string {
   const c = v.candidates?.length ?? 0;
   const a = v.archived?.length ?? 0;
-  const sweep = v.last_sweep_at ? `last sweep ${timeAgo(v.last_sweep_at)}` : "never swept";
-  return `Curator — ${c} candidate${c === 1 ? "" : "s"} · ${a} archived · ${sweep}`;
+  const run = v.last_sweep_at ? `last run ${timeAgo(v.last_sweep_at)}` : "never run";
+  const could = c === 0 ? "nothing to archive" : `${c} unused skill${c === 1 ? "" : "s"} could be archived`;
+  return `Tidy-up: ${could} · ${a} archived · ${run}`;
 }
 
 /** The sentence a sweep's answer reads as, dry or real. A dry run moves
