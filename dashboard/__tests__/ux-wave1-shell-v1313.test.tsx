@@ -439,20 +439,9 @@ describe("desktop nav is discoverable", () => {
     expect(seen).toHaveBeenCalledTimes(1);
   });
 
-  it("CONTROL: the drawer still opens on ij:toggle-nav and lists the nav", async () => {
-    render(<NavDrawer />);
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent("ij:toggle-nav"));
-    });
-    const drawer = await screen.findByRole("dialog", { name: "Navigation" });
-    // v1.318.0: Simple (the default) lists the seven places…
-    expect(within(drawer).getByRole("link", { name: /^Work$/ })).toBeInTheDocument();
-    expect(within(drawer).getByRole("link", { name: /^Apps & settings$/ })).toBeInTheDocument();
-    // …and Advanced is today's full menu.
-    fireEvent.click(within(drawer).getByRole("button", { name: /Advanced/i }));
-    expect(within(drawer).getByRole("link", { name: /^Chat$/ })).toBeInTheDocument();
-    expect(within(drawer).getByRole("link", { name: /^Settings$/ })).toBeInTheDocument();
-  });
+  // Calm UI redesign S7 (APPROVED Q18): the Simple-mode CONTROL that read the
+  // seven places and the Advanced switch was removed with those surfaces; the
+  // drawer's opening and its four items are pinned by sidebar-v1321.test.tsx.
 });
 
 /* ===================================== 2. the model chip tells the truth */

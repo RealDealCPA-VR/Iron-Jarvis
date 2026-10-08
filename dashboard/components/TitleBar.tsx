@@ -182,7 +182,9 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
           // v1.313.0: an unlabelled 28px icon was the ONLY visible way to ~38
           // pages on a desktop. From md up it says "Menu" in words; on a
           // phone it stays a square icon (the bar has no room for the word).
-          className={`flex ${BAR_CONTROL_H} min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 sm:min-w-8 md:px-2`}
+          // Calm UI redesign S7: from md up the sidebar is always on screen,
+          // so the ☰ is a phone control.
+          className={`flex ${BAR_CONTROL_H} min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-lg text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 sm:min-w-8 md:hidden md:px-2`}
         >
           <Menu size={16} strokeWidth={2} />
           <span className="hidden text-[12px] font-medium md:inline">Menu</span>

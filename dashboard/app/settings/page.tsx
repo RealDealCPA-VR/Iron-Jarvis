@@ -27,7 +27,6 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
-import { useAdvancedMode } from "@/lib/uiMode";
 import { useDaemon } from "@/lib/daemon";
 import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -975,21 +974,9 @@ function LocalCapabilitiesCard() {
 }
 
 export default function SettingsPage() {
-  // v1.318.0: Simple mode opens on the everyday settings; "Show all
-  // settings" (or Advanced) shows the whole form, unchanged.
-  const [advanced] = useAdvancedMode();
-  const [showAll, setShowAll] = useState(false);
-  const full = advanced || showAll;
-  // A link that points INTO the form (?focus=…, #settings-…) is asking for a
-  // setting the short view may not show: open the whole form for it.
-  useEffect(() => {
-    try {
-      const { search, hash } = window.location;
-      if (new URLSearchParams(search).has("focus") || hash.startsWith("#settings-")) setShowAll(true);
-    } catch {
-      /* no location (tests without one) — the short view stays */
-    }
-  }, []);
+  // Calm UI redesign S7 (AUDIT Q2): the short Simple view is retired — the
+  // whole form, always (S10 regroups it from the one schema).
+  const full = true;
   const [original, setOriginal] = useState<Record<string, Value> | null>(null);
   const [form, setForm] = useState<Record<string, Value>>({});
   const [loadError, setLoadError] = useState<ApiError | null>(null);
@@ -1348,24 +1335,6 @@ export default function SettingsPage() {
                     );
                   })}
 
-                  {!full && (
-                    <div
-                      data-testid="settings-show-all"
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3"
-                    >
-                      <p className="text-[12px] leading-relaxed text-zinc-400">
-                        More settings: local models, automation limits, history and power-user
-                        options.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setShowAll(true)}
-                        className="rounded-lg border border-white/10 px-3 py-1.5 text-[12px] text-zinc-200 hover:border-white/20"
-                      >
-                        Show all settings
-                      </button>
-                    </div>
-                  )}
 
                   {restartTouched && dirty && (
                     <p className="text-[11px] text-amber-300/80">

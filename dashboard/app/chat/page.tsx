@@ -128,6 +128,7 @@ import {
   type ConfigCard,
 } from "@/lib/configCards";
 import { getDeviceId } from "@/lib/device";
+import { NEW_CHAT_EVENT, useChatSlot } from "@/lib/sidebarSlot";
 import {
   applySettled,
   decodeSuggestion,
@@ -2827,6 +2828,11 @@ export default function ChatPage() {
   // Share dialog for the OPEN thread (full transcript / compacted digest).
   const [shareOpen, setShareOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
+  // Calm UI redesign S7 (AUDIT Q5): on a wide screen the app sidebar holds
+  // the conversation list — this page's own thread rail, portaled in (layout
+  // only: same state, same rename / pin / move / delete). No slot (a phone, a
+  // test, a pop-out) keeps the rail where it always was.
+  const chatSlot = useChatSlot();
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
   // Pinned threads (per-device view preference) + inline rename state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -3548,6 +3554,9 @@ export default function ChatPage() {
       const skill = (params.get("skill") || "").trim();
       const thread = (params.get("thread") || "").trim();
       const wantPersona = (params.get("persona") || "").trim();
+      // Redesign S7: the sidebar's "New chat" from another page lands here —
+      // a fresh conversation, so the last one is not reopened.
+      const fresh = params.get("new") === "1";
       if (wantPersona) selectPersonaLocal(wantPersona);
       if (ask) {
         composer.setText(ask);
@@ -3562,7 +3571,7 @@ export default function ChatPage() {
         inputRef.current?.focus();
       }
       if (thread) void openThread(thread);
-      else if (!ask && !skill && !wantPersona) {
+      else if (!ask && !skill && !wantPersona && !fresh) {
         // v1.311.0: no landing params — reopen the conversation this window
         // had open (a ?thread= link wins and becomes the remembered one; an
         // ask/skill/persona landing is the start of something new). Only
@@ -3570,7 +3579,7 @@ export default function ChatPage() {
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona) {
+      if (ask || skill || thread || wantPersona || fresh) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -3578,6 +3587,7 @@ export default function ChatPage() {
         url.searchParams.delete("skill");
         url.searchParams.delete("thread");
         url.searchParams.delete("persona");
+        url.searchParams.delete("new");
         window.history.replaceState(null, "", url.toString());
       }
     } catch {
@@ -7271,6 +7281,14 @@ export default function ChatPage() {
     setAwaitingId(null); // also tears down the event watcher + polling interval
   }
 
+  // Redesign S7: the sidebar's "New chat" while this page is open.
+  const newChatRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onNew = () => newChatRef.current();
+    window.addEventListener(NEW_CHAT_EVENT, onNew);
+    return () => window.removeEventListener(NEW_CHAT_EVENT, onNew);
+  }, []);
+
   function newChat() {
     forgetOpenThread(); // v1.311.0: the next visit starts fresh too
     chatGenRef.current += 1; // orphan any in-flight /chat reply
@@ -7620,57 +7638,26 @@ export default function ChatPage() {
     [],
   );
 
-  return (
-    <PageShell className="space-y-0">
-      {/* NOTHING STANDS ABOVE THE WORK (v1.215.0). The page header and the
-          standing blurb that followed it are both gone: the title moved into
-          the thread rail, its explanation moved behind that title, and the
-          controls moved into the chat card's own header. What is left starts
-          at the top of the module. */}
-      <Reveal>
-        {/* THE MODULE FILLS THE APP (v1.215.0), the same frame the Agents room
-            uses: `md:h-[calc(100vh-4.5rem)]` is the title bar (2.5rem) plus
-            MainContent's own `py-4` (2rem) — minus the demo strip's height
-            (`--ij-strip-h`, published by SimulatedBanner, v1.314.0), so the row ends exactly where the
-            window does and only the panes inside it scroll. `items-stretch`
-            (was `items-start`) is what lets all three columns take that
-            height. Below md it is a plain stack — three columns on a phone is
-            three unusable columns — and each pane carries its own capped
-            height there instead. */}
-        <div
-          data-testid="chat-room"
-          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
-        >
-          {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((v) => !v)}
-            aria-expanded={sidebarOpen}
-            className="btn-ghost self-start py-1.5 text-[13px] md:hidden"
-          >
-            <History size={14} />{" "}
-            {/* v1.315.0: the toggle names the scope it opens on. */}
-            {sidebarOpen
-              ? "Hide chats"
-              : `Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
-                  threads.length ? ` (${threads.length})` : ""
-                }`}
-          </button>
-
-          {/* Threads sidebar */}
-          <aside
-            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:h-full md:w-60`}
-          >
+  // The sidebar's New chat always reaches this render's newChat.
+  newChatRef.current = newChat;
+  // Redesign S7: the thread rail, lifted into a value so it can render in the
+  // app sidebar (portal) or in place — one element, one behaviour.
+  const threadRail = (
             <section
               data-testid="chat-thread-rail"
-              className="card-surface flex h-full min-h-0 flex-col overflow-hidden"
+              data-in-sidebar={chatSlot ? "true" : undefined}
+              className={
+                chatSlot
+                  ? "flex min-h-0 flex-1 flex-col"
+                  : "card-surface flex h-full min-h-0 flex-col overflow-hidden"
+              }
             >
               {/* THE MODULE'S NAME, TOP LEFT, INSIDE THIS CARD (v1.215.0) —
                   "We can also put the chat title in the card on the left just
                   like in agents". `ModuleTitle` is the SAME component the other
                   pages use, at a smaller size: the hover/focus/tap popover and
                   its a11y wiring have one implementation, not two. */}
-              <div className="shrink-0 px-3 pt-2.5">
+              <div className={chatSlot ? "hidden" : "shrink-0 px-3 pt-2.5"}>
                 <ModuleTitle
                   title="Chat"
                   hint={CHAT_HINT}
@@ -7697,6 +7684,9 @@ export default function ChatPage() {
                     <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                       All chats
                     </span>
+                  ) : chatSlot ? (
+                    // In the app sidebar the "Chats" heading already names it.
+                    <span />
                   ) : (
                     <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                       Threads
@@ -7705,7 +7695,7 @@ export default function ChatPage() {
                   <button
                     type="button"
                     onClick={newChat}
-                    className="btn-ghost shrink-0 whitespace-nowrap px-2 py-1 text-[12px]"
+                    className={`btn-ghost shrink-0 whitespace-nowrap px-2 py-1 text-[12px] ${chatSlot ? "hidden" : ""}`}
                     title="Start a new conversation"
                   >
                     <Plus size={13} /> New chat
@@ -7746,7 +7736,7 @@ export default function ChatPage() {
                   below its content, so without it the list grows the card past
                   the bottom of the window. The `max-h` is the narrow-width
                   floor, where the card has no height to fill. */}
-              <div className="max-h-[50vh] min-h-0 flex-1 overflow-y-auto p-1.5 md:max-h-none">
+              <div className={`min-h-0 flex-1 overflow-y-auto p-1.5 ${chatSlot ? "" : "max-h-[50vh] md:max-h-none"}`}>
                 {threadsLoading && threads.length === 0 ? (
                   <div className="space-y-1 p-1">
                     {[0, 1, 2, 3].map((i) => (
@@ -7880,7 +7870,58 @@ export default function ChatPage() {
                 )}
               </div>
             </section>
+  );
+
+  return (
+    <PageShell className="space-y-0">
+      {/* NOTHING STANDS ABOVE THE WORK (v1.215.0). The page header and the
+          standing blurb that followed it are both gone: the title moved into
+          the thread rail, its explanation moved behind that title, and the
+          controls moved into the chat card's own header. What is left starts
+          at the top of the module. */}
+      <Reveal>
+        {/* THE MODULE FILLS THE APP (v1.215.0), the same frame the Agents room
+            uses: `md:h-[calc(100vh-4.5rem)]` is the title bar (2.5rem) plus
+            MainContent's own `py-4` (2rem) — minus the demo strip's height
+            (`--ij-strip-h`, published by SimulatedBanner, v1.314.0), so the row ends exactly where the
+            window does and only the panes inside it scroll. `items-stretch`
+            (was `items-start`) is what lets all three columns take that
+            height. Below md it is a plain stack — three columns on a phone is
+            three unusable columns — and each pane carries its own capped
+            height there instead. */}
+        <div
+          data-testid="chat-room"
+          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
+        >
+          {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
+          {!chatSlot && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-expanded={sidebarOpen}
+            className="btn-ghost self-start py-1.5 text-[13px] md:hidden"
+          >
+            <History size={14} />{" "}
+            {/* v1.315.0: the toggle names the scope it opens on. */}
+            {sidebarOpen
+              ? "Hide chats"
+              : `Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
+                  threads.length ? ` (${threads.length})` : ""
+                }`}
+          </button>
+          )}
+
+          {/* Threads sidebar — in the app sidebar on a wide screen
+              (redesign S7, portaled), here on a phone. */}
+          {chatSlot ? (
+            createPortal(threadRail, chatSlot)
+          ) : (
+          <aside
+            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:h-full md:w-60`}
+          >
+            {threadRail}
           </aside>
+          )}
 
           {/* ⋯ thread menu popout (v1.114.0) — portaled to <body> so neither
               the Card's overflow-hidden nor a themed backdrop-filter can clip

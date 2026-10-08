@@ -69,8 +69,6 @@ import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
 import { AppGrid } from "@/components/overview/AppGrid";
 import { HealthCard } from "@/components/overview/HealthCard";
-import { HomeStart } from "@/components/overview/HomeStart";
-import { useAdvancedMode } from "@/lib/uiMode";
 import { pct, num, timeAgo, clockTime, shortId } from "@/lib/format";
 
 type Diagnostics = {
@@ -549,10 +547,10 @@ export default function OverviewPage() {
   // whole Overview for nothing.
   const { events, connected } = useEvents(40, { types: OVERVIEW_EVENT_TYPES });
 
-  // The Simple/Advanced switch (lib/uiMode.ts — live: a flip in the menu
-  // re-renders this page at once). Simple (the default) is the calm home,
-  // v1.318.0; Advanced is the full Overview, unchanged.
-  const [advanced] = useAdvancedMode();
+  // Calm UI redesign S7 (AUDIT Q2): the Simple/Advanced switch is retired —
+  // this page is the full Overview until S8 moves its content to
+  // Everything › Status and makes the home the chat.
+  const advanced = true;
   // Simple mode: the full module grid waits behind "Show all modules".
   const [allModules, setAllModules] = useState(false);
 
@@ -772,22 +770,6 @@ export default function OverviewPage() {
       {showFirstRun && (
         <Reveal>
           <FirstRunStrip onboarding={onboarding} />
-        </Reveal>
-      )}
-
-      {/* v1.318.0 — SIMPLE MODE: the calm home (components/overview/
-          HomeStart.tsx) in place of the hero, the grid, the run-quality and
-          shortcuts cards and "Systems & admin". Every notice above and below
-          (offline, downgrade, interrupted work, failing loops and packs, the
-          setup nudge, live goals) shows in BOTH modes. */}
-      {!advanced && (
-        <Reveal>
-          <HomeStart
-            statusLine={statusLine}
-            healthy={!offline && failingLoops.length === 0}
-            showAsk={!showFirstRun}
-            onShowAll={() => setAllModules(true)}
-          />
         </Reveal>
       )}
 

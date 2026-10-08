@@ -85,7 +85,7 @@ export function FirstRunStrip({ onboarding }: { onboarding: ApiState<Onboarding>
 
 /**
  * The one "Ask Jarvis anything" box and the Try-it-now starters (v1.318.0:
- * lifted out so the Simple home, components/overview/HomeStart.tsx, offers
+ * lifted out so another home surface could offer
  * the SAME box once setup is done — never a second copy that could drift).
  */
 export function AskAndStart({ starters = true }: { starters?: boolean } = {}) {

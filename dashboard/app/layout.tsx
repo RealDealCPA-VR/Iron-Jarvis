@@ -5,10 +5,8 @@ import { RouteVisitBeacon } from "@/components/RouteVisitBeacon";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
 import { NotificationBell } from "@/components/NotificationBell";
-import { MoodOrb } from "@/components/MoodOrb";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
-import { ThemeSwitcher } from "@/components/ThemeSwitcher";
-import { AdvancedOnly } from "@/components/AdvancedOnly";
+import { AppSidebar } from "@/components/AppSidebar";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
@@ -92,18 +90,11 @@ export default function RootLayout({
             <TitleBar
               right={
                 <>
-                  {/* Arc-reactor theme switcher (the "Marks"). v1.319.0: on
-                      the bar in Advanced only — Simple keeps it in the menu
-                      drawer, Settings → Appearance and Ctrl K. */}
-                  <AdvancedOnly>
-                    <div className="hidden sm:block">
-                      <ThemeSwitcher />
-                    </div>
-                  </AdvancedOnly>
+                  {/* Calm UI redesign S7: the theme lives in Settings ›
+                      Appearance, the palette and the phone drawer; the mood
+                      orb sits in the sidebar's footer by the status dot. */}
                   {/* One-click switcher for the active provider/model. */}
                   <ModelSwitcher />
-                  {/* Live "mood" orb — reflects idle / thinking / alert. */}
-                  <MoodOrb />
                   <NotificationBell />
                 </>
               }
@@ -113,6 +104,10 @@ export default function RootLayout({
             <div className="relative flex flex-1 overflow-hidden">
               {/* Ambient arc-reactor glow behind everything. */}
               <div className="app-aura pointer-events-none absolute inset-0 -z-10" />
+              {/* Calm UI redesign S7: the persistent sidebar (md and up) —
+                  New chat, four items, chats and projects. On a phone the
+                  same body is the ☰ drawer (components/Sidebar.tsx). */}
+              <AppSidebar />
               <main className="flex flex-1 flex-col overflow-y-auto">
                 {/* Persistent "simulated mode" strip — top of the content
                     area while no real provider is connected. Deliberately
