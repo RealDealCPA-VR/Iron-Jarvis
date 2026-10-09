@@ -53,7 +53,7 @@ function ArgLine({ name, value }: { name: string; value: unknown }) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if ((name === "command" || name === "code") && typeof value === "string") {
     return (
-      <pre className="max-h-40 overflow-auto rounded-lg border border-white/[0.08] bg-black/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-200">
+      <pre className="max-h-40 overflow-auto rounded-lg border border-white/[0.08] bg-ink-900/70 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-200">
         {value}
       </pre>
     );
@@ -89,11 +89,16 @@ export function waitingLine(timeoutS: number | undefined): string {
 export function ApprovalCard({
   approval,
   onConversation,
+  docked = false,
 }: {
   approval: PendingApproval;
   /** Called on "Allow for this conversation" so the page adds the tool to the
    *  composer's armed set — the persistence half of that button's promise. */
   onConversation?: (tool: string) => void;
+  /** Calm chat W1-6 (v1.326.0): drawn in the composer's place. The dock's
+   *  own card (components/chat/DockAsk) is the box, so the card drops its
+   *  own border and tint and keeps only its padding. */
+  docked?: boolean;
 }) {
   // Which button is in flight; the card disables itself after one click. The
   // resolved frame (or stream end) unmounts it — a second decision has no
@@ -148,7 +153,11 @@ export function ApprovalCard({
     <div
       role="alertdialog"
       aria-label={batch ? `Approve ${approval.tool} × ${count}?` : `Approve ${approval.tool}?`}
-      className="space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+      className={
+        docked
+          ? "space-y-2.5 px-4 pb-4 pt-3"
+          : "space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+      }
       data-testid="chat-approval-card"
       data-count={count}
     >
@@ -245,6 +254,8 @@ export function ApprovalCard({
         )}
         <button
           type="button"
+          // The dock's Enter presses THIS button (lib/dockAsk): one path.
+          data-dock-primary=""
           onClick={() => void decide("once")}
           disabled={!!sent}
           className="btn-accent text-xs"
@@ -283,6 +294,7 @@ export function ApprovalCard({
         )}
         <button
           type="button"
+          data-dock-decline=""
           onClick={() => void decide("deny")}
           disabled={!!sent}
           className="btn-ghost text-xs text-rose-300 hover:text-rose-200"

@@ -32,9 +32,13 @@ function stop(e: KeyboardEvent) {
 export function SamplingCard({
   ask,
   onDecide,
+  docked = false,
 }: {
   ask: McpSamplingAsk;
   onDecide: (decision: Decision) => Promise<boolean>;
+  /** Calm chat W1-6 (v1.326.0): drawn in the composer's place, inside the
+   *  dock's own card — so no border or tint of its own. */
+  docked?: boolean;
 }) {
   const [busy, setBusy] = useState<Decision | "">("");
   const [decided, setDecided] = useState<McpOutcome | null>(null);
@@ -65,7 +69,11 @@ export function SamplingCard({
       data-testid="mcp-sampling-card"
       data-outcome={outcome ?? ""}
       onKeyDown={stop}
-      className="space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+      className={
+        docked
+          ? "space-y-2.5 px-4 pb-4 pt-3"
+          : "space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+      }
     >
       <div className="flex items-center gap-2">
         <Sparkles size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
@@ -120,10 +128,23 @@ export function SamplingCard({
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="primary" size="sm" onClick={() => void decide("approve")} disabled={!!busy}>
+          {/* The dock's Enter / Esc press these buttons (lib/dockAsk). */}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void decide("approve")}
+            disabled={!!busy}
+            data-dock-primary=""
+          >
             {busy === "approve" ? <LoaderInline label="Allowing…" /> : "Allow once"}
           </Button>
-          <Button variant="danger" size="sm" onClick={() => void decide("deny")} disabled={!!busy}>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => void decide("deny")}
+            disabled={!!busy}
+            data-dock-decline=""
+          >
             {busy === "deny" ? <LoaderInline label="Declining…" /> : "Deny"}
           </Button>
         </div>

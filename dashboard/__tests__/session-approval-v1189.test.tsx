@@ -41,7 +41,11 @@ describe("a paused run's ask reaches the chat", () => {
     // over the events — the runtime asks in parallel batches, and one slot
     // showed one card of N. Behaviour is driven end-to-end in
     // wave1-approvals.test.tsx; this pins the call site.
-    expect(page).toMatch(/sessionAsks\.map\(\(ask\) => \(\s*<ApprovalCard/);
+    // Calm chat W1-6 (v1.326.0): the cards are drawn in the composer's place
+    // (<DockAsk>, one at a time with "1 of N"); every pending ask still feeds
+    // that list as an approval, and the dock is rendered with it.
+    expect(page).toMatch(/sessionAsks\.map\(\(ask\) => \(\{\s*id: ask\.id,/);
+    expect(page).toMatch(/<DockAsk\s+asks=\{dockAsks\}/);
     // A resolution closes only ITS request — a stale one must not eat a newer
     // question (same rule as the stream hook's), and a request whose id has
     // already resolved never becomes a card.

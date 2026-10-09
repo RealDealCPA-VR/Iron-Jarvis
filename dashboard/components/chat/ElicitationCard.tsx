@@ -98,9 +98,13 @@ function stop(e: KeyboardEvent) {
 export function ElicitationCard({
   ask,
   onAnswer,
+  docked = false,
 }: {
   ask: McpElicitationAsk;
   onAnswer: (action: Action, content?: Record<string, unknown>) => Promise<AnswerResult>;
+  /** Calm chat W1-6 (v1.326.0): drawn in the composer's place, inside the
+   *  dock's own card — so no border or tint of its own. */
+  docked?: boolean;
 }) {
   const [values, setValues] = useState<Record<string, Value>>(() => {
     const v: Record<string, Value> = {};
@@ -180,7 +184,11 @@ export function ElicitationCard({
       onSubmit={onSubmit}
       onKeyDown={stop}
       noValidate
-      className="space-y-2.5 rounded-xl border border-accent/25 bg-accent/[0.06] p-3"
+      className={
+        docked
+          ? "space-y-2.5 px-4 pb-4 pt-3"
+          : "space-y-2.5 rounded-xl border border-accent/25 bg-accent/[0.06] p-3"
+      }
     >
       <div className="flex items-center gap-2">
         <MessageCircleQuestion size={15} className="shrink-0 text-accent-soft" aria-hidden="true" />
@@ -306,10 +314,18 @@ export function ElicitationCard({
         </p>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" variant="primary" size="sm" disabled={!!busy}>
+          {/* The dock's Enter / Esc press these buttons (lib/dockAsk), so a
+              key runs the same checks a click does. */}
+          <Button type="submit" variant="primary" size="sm" disabled={!!busy} data-dock-primary="">
             {busy === "accept" ? <LoaderInline label="Sending…" /> : "Send"}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => void answer("decline")} disabled={!!busy}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void answer("decline")}
+            disabled={!!busy}
+            data-dock-decline=""
+          >
             {busy === "decline" ? <LoaderInline label="Declining…" /> : "Decline"}
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void answer("cancel")} disabled={!!busy}>

@@ -163,7 +163,14 @@ describe("finding 39 — the grant is real consent: it persists", () => {
   });
 
   it("routes BOTH cards (chat's mid-turn ask and the run's mid-run ask) here", () => {
-    expect(page.match(/onConversation=\{armFromApproval\}/g) ?? []).toHaveLength(2);
+    // Calm chat W1-6 (v1.326.0): both lanes' asks are now drawn by ONE card
+    // in the composer's place (<DockAsk>), fed from one list that holds the
+    // chat turn's approval AND the escalated run's asks. One wiring covers
+    // both lanes, so the count is 1 and the list must carry both.
+    expect(page.match(/onConversation=\{armFromApproval\}/g) ?? []).toHaveLength(1);
+    expect(page).toMatch(/<DockAsk\s+asks=\{dockAsks\}\s+onConversation=\{armFromApproval\}/);
+    expect(page).toMatch(/approval: chatBusy \? stream\.approval : null/);
+    expect(page).toMatch(/sessionApprovals: awaiting\s*\?\s*sessionAsks\.map/);
     // No hand-rolled inline handler may survive alongside it — that is exactly
     // how the two lanes drifted apart in the first place.
     expect(page).not.toMatch(/onConversation=\{\(tool\)/);

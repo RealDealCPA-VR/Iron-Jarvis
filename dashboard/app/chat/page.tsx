@@ -123,8 +123,8 @@ import {
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { LiveToolRows, WorkLine, WorkRow } from "@/components/chat/WorkLine";
 import { FollowupChips } from "@/components/chat/FollowupChips";
-import { ElicitationCard } from "@/components/chat/ElicitationCard";
-import { SamplingCard } from "@/components/chat/SamplingCard";
+import { DockAsk } from "@/components/chat/DockAsk";
+import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
 import { PackPromptForm } from "@/components/chat/PackPromptForm";
 import {
   answerElicitation,
@@ -132,6 +132,7 @@ import {
   decodeResourceReceipts,
   fetchPackPrompts,
   fetchPackResources,
+  outcomeWords,
   type PackPrompt,
   type PackResource,
   type ResourceReceipt,
@@ -180,7 +181,6 @@ import {
 } from "@/lib/composerChips";
 import { scrollToLatest, useRepinOnGrowth } from "@/lib/transcriptRepin";
 import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
-import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
@@ -2850,22 +2850,17 @@ const PREP_WORDS: Record<PrepStep, string> = {
  *
  * Everything it renders is what the bubble always rendered, in the same order:
  * the streamed markdown (or the waiting row with its clock), the live tool
- * cards, the quiet note, and the mid-turn approval card.
+ * cards and the quiet note. Calm chat W1-6 (v1.326.0): a question for the
+ * user (the mid-turn approval, an app's question) is no longer here. It
+ * takes the composer's place in the dock (<DockAsk>); only the record of
+ * an app's question that ENDED stays, as one quiet line.
  */
 function LiveReply({
   stream,
   onGrow,
-  // NAMED for the page function it carries, so both approval cards — this one
-  // and the agent lane's — visibly route to the page's ONE grant handler.
-  // chat-consent-v1192 pins that by reading this file's source, so keep the
-  // wiring literal here and do not spell the prop pair out in prose: the pin
-  // counts occurrences and a comment quoting the JSX is a third match.
-  // Two lanes drifting apart is the bug that pin exists to catch.
-  armFromApproval,
 }: {
   stream: UseChatStream;
   onGrow: () => void;
-  armFromApproval: (tool: string) => void;
 }) {
   const text = useLiveText(stream);
   // v1.323.0: the model's reasoning, folded — read HERE, never on the page.
@@ -2907,29 +2902,17 @@ function LiveReply({
       </div>
       {text && <StreamingText content={text} />}
       {text && <QuietNote since={stream.lastEventAt ?? null} />}
-      {/* MID-TURN APPROVAL (v1.187.0): the daemon paused this turn on an
-          ask-tier tool and is waiting for a decision. "Allow for this
-          conversation" also arms the tool here, so later turns grant it via
-          the existing "+"-menu machinery — one store. */}
-      {stream.approval && (
-        <ApprovalCard
-          approval={stream.approval}
-          onConversation={armFromApproval}
-        />
-      )}
-      {/* v1.324.0: an app asking the user a question, or asking to use the
-          turn's model — answered here, while its tool waits. */}
-      {(stream.mcpAsks ?? []).map((a) =>
-        a.kind === "elicitation" ? (
-          <ElicitationCard
-            key={a.id}
-            ask={a}
-            onAnswer={(act, content) => answerElicitation(a.id, act, content)}
-          />
-        ) : (
-          <SamplingCard key={a.id} ask={a} onDecide={(dec) => decideSampling(a.id, dec)} />
-        ),
-      )}
+      {/* v1.324.0: an app's question (or its request to use the model) is
+          answered in the dock while its tool waits (W1-6). Once it ENDS, how
+          it ended stays here as one quiet grey line, so the reply's record
+          says what happened to it. */}
+      {(stream.mcpAsks ?? [])
+        .filter((a) => a.outcome)
+        .map((a) => (
+          <p key={a.id} data-testid="mcp-ask-settled" className="mt-1 text-[12px] text-zinc-500">
+            {outcomeWords(a.outcome!, a.pack)}
+          </p>
+        ))}
     </Bubble>
   );
 }
@@ -6180,6 +6163,34 @@ export default function ChatPage() {
     );
     return extra.length ? [...askFold.asks, ...extra] : askFold.asks;
   }, [askFold, polledAsks]);
+
+  // CALM CHAT W1-6 (v1.326.0): every question waiting on the user, in one
+  // list, drawn in the composer's place (<DockAsk>): this chat turn's
+  // approval and its apps' open questions, then an escalated run's asks.
+  // Gated exactly as the bubbles that used to carry them were (chatBusy /
+  // awaiting), so nothing shows that the transcript would not have shown.
+  const dockAsks = useMemo(
+    () =>
+      collectDockAsks({
+        approval: chatBusy ? stream.approval : null,
+        mcpAsks: chatBusy ? stream.mcpAsks : null,
+        sessionApprovals: awaiting
+          ? sessionAsks.map((ask) => ({
+              id: ask.id,
+              callId: "",
+              tool: ask.tool,
+              args: ask.args,
+              count: ask.count,
+              examples: ask.examples,
+              timeoutS: ask.timeoutS,
+            }))
+          : null,
+      }),
+    [chatBusy, stream.approval, stream.mcpAsks, awaiting, sessionAsks],
+  );
+  const askInDock = dockAsks.length > 0;
+  // The question answered and the card gone: the caret goes back to the box.
+  const focusComposerAfterAsk = useCallback(() => inputRef.current?.focus(), []);
 
   // FALLBACK: if the /events socket is down, poll the session until it finishes.
   // The interval is torn down whenever the turn ends or the component unmounts.
@@ -9589,11 +9600,7 @@ export default function ChatPage() {
                         {/* v1.250.0 (S-03): the live bubble is its own
                             component so a streamed token re-renders IT, not
                             this page. Same bubble, same order, same clock. */}
-                        <LiveReply
-                          stream={stream}
-                          onGrow={scrollLiveIntoView}
-                          armFromApproval={armFromApproval}
-                        />
+                        <LiveReply stream={stream} onGrow={scrollLiveIntoView} />
                         {/* v1.278.0: the steer notes sent to this turn. Honest
                             wording — a note lands at the next step, never
                             inside a sentence already being written. */}
@@ -9643,27 +9650,9 @@ export default function ChatPage() {
                             />
                           </div>
                           <AgentLiveText stream={runStream} onGrow={scrollLiveIntoView} />
-                          {/* MID-RUN APPROVAL (v1.189.0): the escalated run is
-                              PAUSED on an ask-tier tool. Same card, same
-                              answer route as chat's own mid-turn ask —
-                              "conversation" also arms the tool here so later
-                              turns (and their escalations, via allow_tools)
-                              carry the grant. */}
-                          {sessionAsks.map((ask) => (
-                            <ApprovalCard
-                              key={ask.id}
-                              approval={{
-                                id: ask.id,
-                                callId: "",
-                                tool: ask.tool,
-                                args: ask.args,
-                                count: ask.count,
-                                examples: ask.examples,
-                                timeoutS: ask.timeoutS,
-                              }}
-                              onConversation={armFromApproval}
-                            />
-                          ))}
+                          {/* MID-RUN APPROVAL (v1.189.0): the run's asks are
+                              answered in the dock, in the composer's place
+                              (calm chat W1-6, `dockAsks` below). */}
                         </div>
                       </Bubble>
                     )}
@@ -10058,9 +10047,28 @@ export default function ChatPage() {
                       web. Right: reasoning, the model, the mic and Send (Stop while a
                       turn runs). Chips are ghosts that fill only on hover; the card has
                       a hairline edge and no focus ring (the caret is the cue). */}
+                  {/* CALM CHAT W1-6 (v1.326.0): A QUESTION FOR YOU TAKES THE
+                      COMPOSER'S PLACE. While a turn waits on the user (an
+                      approval, an app's question, an app asking to use the
+                      model), that card is drawn here instead of in the
+                      transcript, and the composer below is hidden but stays
+                      mounted, so the draft, attachments and pickers are all
+                      exactly as they were when the question is answered.
+                      "Allow for this conversation" routes to the page's ONE
+                      grant handler for both lanes (chat-consent-v1192). */}
+                  <DockAsk
+                    asks={dockAsks}
+                    onConversation={armFromApproval}
+                    onAnswerElicitation={answerElicitation}
+                    onDecideSampling={decideSampling}
+                    onStop={stop}
+                    returnFocus={focusComposerAfterAsk}
+                  />
                   <div
                     data-testid="chat-composer"
-                    className={`relative z-[1] flex flex-col rounded-[24px] bg-ink-800 ${COMPOSER_CARD_EDGE}`}
+                    inert={askInDock}
+                    aria-hidden={askInDock || undefined}
+                    className={`relative z-[1] ${askInDock ? "hidden" : "flex"} flex-col rounded-[24px] bg-ink-800 ${COMPOSER_CARD_EDGE}`}
                   >
                     {/* "/" skill picker — floats above the composer */}
                     {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
@@ -11320,7 +11328,9 @@ export default function ChatPage() {
                       />
                     )}
                     <span className="hidden sm:inline">
-                      {composerKeyHint(busy, !commMeta)}
+                      {askInDock
+                        ? dockAskKeyHint(dockAsks[0].kind)
+                        : composerKeyHint(busy, !commMeta)}
                     </span>
                   </div>
                 </div>

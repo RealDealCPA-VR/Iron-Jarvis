@@ -235,17 +235,23 @@ const resolved = (id: string, n: number, decision = "once") => ({
 });
 
 describe("wave 1 A1 — a batch of parallel asks on the chat page", () => {
-  it("two approval.requested events for the awaited session render TWO cards", async () => {
+  // Calm chat W1-6 (v1.326.0): the asks take the composer's place ONE AT A
+  // TIME with "1 of N" (they used to stack in the transcript, one card each).
+  // The A1 promise is unchanged: no pending ask is invisible — the count says
+  // how many wait, and the next one is drawn the moment the first resolves.
+  it("two approval.requested events: the first is drawn with '1 of 2', the second follows it", async () => {
     await escalateIntoS1();
     // Newest-first, as useEvents delivers them (the runtime publishes one per
     // call inside the gather — session_7e56 published 4-5 per turn).
     await act(async () => H.emit([ask("apr_2", 2), ask("apr_1", 1)]));
-    const cards = await screen.findAllByRole("button", { name: /Allow once/ });
-    expect(cards.length, "one card per pending ask").toBe(2);
+    await waitFor(() => expect(screen.getByTestId("dock-ask-count").textContent).toBe("1 of 2"));
     // Oldest ask first, so the order the run asked in is the order shown.
-    const dialogs = screen.getAllByRole("alertdialog");
-    expect(dialogs[0].textContent).toContain("1.pdf");
-    expect(dialogs[1].textContent).toContain("2.pdf");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(screen.getByRole("alertdialog").textContent).toContain("1.pdf");
+    // apr_1 answered: apr_2 takes its place, and the count goes.
+    await act(async () => H.emit([resolved("apr_1", 3), ask("apr_2", 2), ask("apr_1", 1)]));
+    await waitFor(() => expect(screen.getByRole("alertdialog").textContent).toContain("2.pdf"));
+    expect(screen.queryByTestId("dock-ask-count")).toBeNull();
   });
 
   it("answering the newest ask leaves the older, still-pending one visible", async () => {
@@ -285,16 +291,16 @@ describe("wave 1 A1 — a batch of parallel asks on the chat page", () => {
   it("a card's answer posts to the shared /chat/approvals/{id} route with THAT id", async () => {
     await escalateIntoS1();
     await act(async () => H.emit([ask("apr_2", 2), ask("apr_1", 1)]));
-    const buttons = await screen.findAllByRole("button", { name: /Allow once/ });
-    fireEvent.click(buttons[1]); // the second card is apr_2 (oldest first)
+    // The card on screen is apr_1 (oldest first, one at a time since W1-6).
+    fireEvent.click(await screen.findByRole("button", { name: /Allow once/ }));
     await waitFor(() =>
       expect(
         H.api.posts.some(
-          (p) => p.path === "/chat/approvals/apr_2" && p.body.decision === "once",
+          (p) => p.path === "/chat/approvals/apr_1" && p.body.decision === "once",
         ),
       ).toBe(true),
     );
     // Clicking one card never answers the other.
-    expect(H.api.posts.some((p) => p.path === "/chat/approvals/apr_1")).toBe(false);
+    expect(H.api.posts.some((p) => p.path === "/chat/approvals/apr_2")).toBe(false);
   });
 });
