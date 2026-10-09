@@ -2953,6 +2953,11 @@ does not need a bump, stop and bump it.
   (`components/connections/EndpointModelPicker.tsx`, POST
   /connections/endpoints/models; no probe while typing). Pins: the
   `*-v1326`, `*-v1327`, `*-v1328` files in dashboard/__tests__ and tests/.
+  v1.326.1 (test-only): v1.326.0's Tests + Release went red on
+  `work-line-v1326` "names the model by the menu's label" — the label comes
+  from GET /models, which lands AFTER the thread, so the line first reads the
+  raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
+  reproduced CI's exact error.
 
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo

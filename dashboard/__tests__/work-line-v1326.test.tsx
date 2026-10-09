@@ -426,7 +426,11 @@ describe("on the chat page (calm chat W1-5)", () => {
     const rows = screen.getAllByTestId("reply-actions");
     const newest = rows.at(-1)!;
     const receipt = within(newest).getByTestId("turn-receipt");
-    expect(within(receipt).getByTestId("turn-answered-by").textContent).toBe("answered by Opus 5.5");
+    // v1.326.1: the label comes from the models list, which lands AFTER the
+    // thread; until then the line names the raw id. Wait for the label.
+    await waitFor(() =>
+      expect(within(receipt).getByTestId("turn-answered-by").textContent).toBe("answered by Opus 5.5"),
+    );
     expect(receipt.textContent).toMatch(/2 tools·1 file/);
     // Expanding still gives the full receipt, exactly as before.
     fireEvent.click(receipt);
