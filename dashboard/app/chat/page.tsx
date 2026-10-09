@@ -3700,10 +3700,12 @@ export default function ChatPage() {
     }
   }
 
-  async function renameThread(id: string, title: string) {
+  /** Resolves true when the new title was saved (v1.329.0: the top bar's
+   *  rename reads it to undo its at-once title on a failure). */
+  async function renameThread(id: string, title: string): Promise<boolean> {
     const clean = title.trim();
     setRenamingId(null);
-    if (!clean) return;
+    if (!clean) return false;
     try {
       // Same 409 carve-out as assignThreadProject: rename a messaging thread
       // with a title-only body — its messages belong to the daemon.
@@ -3719,11 +3721,65 @@ export default function ChatPage() {
         });
       }
       void refreshThreads();
+      return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      return false;
     }
   }
+
+  // v1.329.0 (calm chat W4 F8): RENAME THE OPEN CHAT from the top bar's ⋯.
+  // The title in the top bar turns into a box in place (the list row's
+  // rename does the same in its row). It is its OWN state, not renamingId:
+  // with one shared id the list row of the same chat would open a second
+  // box, and two boxes would each save on blur. `id` is the chat being
+  // renamed, captured at the press, so a save always lands on that chat.
+  const [titleRename, setTitleRename] = useState<{ id: string; draft: string } | null>(null);
+  // One save per rename: Enter, Escape and the blur that follows the box
+  // leaving the page all come through here, and only the first counts.
+  const titleRenameOpenRef = useRef(false);
+  // Where focus goes back after Enter or Escape: the ⋯ button.
+  const titleRenameReturnRef = useRef<HTMLElement | null>(null);
+
+  function startTitleRename(id: string, current: string, returnTo: HTMLElement | null) {
+    titleRenameOpenRef.current = true;
+    titleRenameReturnRef.current = returnTo;
+    setTitleRename({ id, draft: current });
+  }
+
+  /** `save` false = Escape (nothing changes). `refocus` = a key ended it, so
+   *  focus goes back to the ⋯ button; a blur leaves focus where the user put it. */
+  async function endTitleRename(save: boolean, refocus: boolean) {
+    if (!titleRenameOpenRef.current) return;
+    titleRenameOpenRef.current = false;
+    const r = titleRename;
+    setTitleRename(null);
+    if (refocus) titleRenameReturnRef.current?.focus();
+    if (!save || !r) return;
+    const clean = r.draft.trim();
+    const before = threads.find((t) => t.id === r.id)?.title ?? "";
+    if (!clean || clean === before.trim()) return;
+    // Shown at once, so the bar never flashes the old title between the
+    // box closing and the list coming back. A failed save puts it back.
+    setThreads((prev) => prev.map((t) => (t.id === r.id ? { ...t, title: clean } : t)));
+    setOpenedTitle((o) => (o && o.id === r.id ? { ...o, title: clean } : o));
+    const saved = await renameThread(r.id, clean);
+    if (!saved && mountedRef.current) {
+      setThreads((prev) => prev.map((t) => (t.id === r.id ? { ...t, title: before } : t)));
+      void refreshThreads();
+    }
+  }
+
+  // A rename box belongs to the chat it was opened on: opening another chat
+  // (or a new one) closes it without saving.
+  useEffect(() => {
+    if (titleRename && titleRename.id !== threadId) {
+      titleRenameOpenRef.current = false;
+      setTitleRename(null);
+    }
+  }, [threadId, titleRename]);
+
   const activeProject = useMemo(
     () => (projectId ? (projects.find((p) => p.id === projectId) ?? null) : null),
     [projects, projectId],
@@ -8880,7 +8936,52 @@ export default function ChatPage() {
           Chats
         </button>
       )}
-      {crumbTitle ? (
+      {titleRename && titleRename.id === threadId ? (
+        // v1.329.0 (calm chat W4 F8): the ⋯ menu's Rename. The title turns
+        // into a box right where it is read; Enter saves, Escape leaves it as
+        // it was, and clicking away saves (the list row's rename does too).
+        <div
+          data-testid="chat-title-rename"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-zinc-500 sm:max-w-[28rem]"
+        >
+          {activeProject && (
+            // On a phone the box needs the room more than the project name
+            // does (the Project button still names it).
+            <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
+              <span className="min-w-0 max-w-[10rem] shrink truncate" title={activeProject.name}>
+                {activeProject.name}
+              </span>
+              <span aria-hidden className="shrink-0 text-zinc-600">
+                /
+              </span>
+            </span>
+          )}
+          <input
+            autoFocus
+            value={titleRename.draft}
+            onChange={(e) => {
+              const v = e.target.value;
+              setTitleRename((r) => (r ? { ...r, draft: v } : r));
+            }}
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void endTitleRename(true, true);
+              } else if (e.key === "Escape") {
+                // Only the rename: never the composer's Stop or a drawer.
+                e.preventDefault();
+                e.stopPropagation();
+                void endTitleRename(false, true);
+              }
+            }}
+            onBlur={() => void endTitleRename(true, false)}
+            aria-label="Rename this chat"
+            placeholder="Chat name"
+            className="field h-8 min-w-0 flex-1 py-1 text-[13px] text-zinc-100"
+          />
+        </div>
+      ) : crumbTitle ? (
         <nav
           aria-label="Breadcrumb"
           data-testid="chat-breadcrumb"
@@ -8967,9 +9068,73 @@ export default function ChatPage() {
           <Share2 size={14} />
           <span className="hidden sm:inline">Share</span>
         </button>
-        <ChatMoreMenu>
+        <ChatMoreMenu
+          // A fresh visit never opens with Delete already half-pressed, and
+          // leaving the menu disarms it (the list row's menu does the same).
+          onOpenChange={() => setDeleteArmedId(null)}
+        >
           {(closeMenu, menuTrigger) => (
             <>
+              {/* v1.329.0 (calm chat W4 F8): THE OPEN CHAT'S OWN ACTIONS.
+                  Only for a saved chat (a new chat has nothing to rename,
+                  pin, archive or delete yet), and the very handlers the
+                  chat list's row menu calls: renameThread, togglePin,
+                  archiveThread (409 → ArchiveChatDialog) and the two-press
+                  pressDelete. Each one that closes the menu hands focus to
+                  the ⋯ button first, so a dialog that opens next (Archive's)
+                  gives it back there, never to the page body. */}
+              {threadId && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="chat-more-rename"
+                    onClick={() => {
+                      const trigger = menuTrigger();
+                      closeMenu();
+                      startTitleRename(threadId, crumbTitle, trigger);
+                    }}
+                    className={menuRow}
+                  >
+                    <Pencil size={15} className="shrink-0 text-zinc-400" />
+                    <span className="min-w-0 flex-1">Rename</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="chat-more-pin"
+                    aria-pressed={pinnedIds.includes(threadId)}
+                    onClick={() => {
+                      menuTrigger()?.focus();
+                      closeMenu();
+                      togglePin(threadId);
+                    }}
+                    className={menuRow}
+                  >
+                    {pinnedIds.includes(threadId) ? (
+                      <PinOff size={15} className="shrink-0 text-zinc-400" />
+                    ) : (
+                      <Pin size={15} className="shrink-0 text-zinc-400" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      {pinnedIds.includes(threadId) ? "Unpin" : "Pin to top"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="chat-more-archive"
+                    onClick={() => {
+                      menuTrigger()?.focus();
+                      closeMenu();
+                      void archiveThread(threadId);
+                    }}
+                    title="Hide it from the chat list. It is kept, and comes back from Archived"
+                    className={menuRow}
+                  >
+                    <Archive size={15} className="shrink-0 text-zinc-400" />
+                    <span className="min-w-0 flex-1">Archive</span>
+                  </button>
+                  <div className="my-1 h-px bg-white/[0.06]" />
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -9097,6 +9262,33 @@ export default function ChatPage() {
                   {workspaceOpen ? "Hide project panel" : "Show project panel"}
                 </span>
               </button>
+              {threadId && (
+                <>
+                  <div className="my-1 h-px bg-white/[0.06]" />
+                  {/* Deleting is permanent: the first press arms it and says
+                      so (the menu stays open), the second deletes. The same
+                      pressDelete as the list row, so the open chat is left
+                      for a new one, as there. */}
+                  <button
+                    type="button"
+                    data-testid="chat-more-delete"
+                    data-armed={deleteArmedId === threadId ? "true" : undefined}
+                    onClick={() => {
+                      if (deleteArmedId === threadId) {
+                        menuTrigger()?.focus();
+                        closeMenu();
+                      }
+                      pressDelete(threadId);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-tone-danger transition-colors hover:bg-tone-danger/10"
+                  >
+                    <Trash2 size={15} className="shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      {deleteArmedId === threadId ? "Delete for good? Press again" : "Delete chat"}
+                    </span>
+                  </button>
+                </>
+              )}
             </>
           )}
         </ChatMoreMenu>

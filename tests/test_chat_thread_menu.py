@@ -64,8 +64,13 @@ def test_a_scroll_outside_the_menu_closes_it_but_inside_does_not(src: str):
 
 
 def test_delete_is_separated_and_destructive_styled(src: str):
-    i = src.index("Delete chat")
+    # v1.329.0: the top bar's ⋯ now also has "Delete chat" for the open chat
+    # (earlier in the file), so the LIST ROW's item is found from its own
+    # handler; the top bar's is styled with the danger theme token.
+    i = src.index("Delete chat", src.index("pressDelete(mt.id)"))
     assert "text-rose-300" in src[i - 600 : i]
+    j = src.index("Delete chat", src.index('data-testid="chat-more-delete"'))
+    assert "text-tone-danger" in src[j - 600 : j]
 
 
 def test_memory_keeps_the_menu_open_for_feedback(src: str):

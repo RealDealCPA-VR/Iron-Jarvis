@@ -20,6 +20,11 @@
  *   * Tab past the last control closes it, so it never lingers behind focus.
  * The page passes `children` as a function of `close`, so an action that
  * should end the visit (Voice, Project panel) can close it on the way out.
+ *
+ * v1.329.0 (calm chat W4 F8): for a SAVED chat the page also puts the open
+ * chat's own Rename, Pin, Archive and Delete here, the same handlers the
+ * chat list's row menu uses, so the chat you are reading can be managed
+ * without finding it in the list (on a phone the list is behind a drawer).
  */
 
 import { MoreHorizontal } from "lucide-react";
@@ -30,6 +35,7 @@ const TABBABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabi
 export function ChatMoreMenu({
   label = "More chat options",
   children,
+  onOpenChange,
 }: {
   /** The trigger's accessible name. */
   label?: string;
@@ -37,12 +43,25 @@ export function ChatMoreMenu({
    *  focus should come back here (the project drawer) names it as the
    *  return target, since the row that was pressed unmounts with the panel. */
   children: (close: () => void, trigger: () => HTMLElement | null) => ReactNode;
+  /** v1.329.0: told each time the panel opens or closes, so the page can
+   *  reset a row that must never be left half-pressed (the two-press
+   *  Delete). Not called on mount. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const seenOpenRef = useRef(open);
+
+  useEffect(() => {
+    if (seenOpenRef.current === open) return;
+    seenOpenRef.current = open;
+    onOpenChangeRef.current?.(open);
+  }, [open]);
 
   function close(refocus = false) {
     setOpen(false);
