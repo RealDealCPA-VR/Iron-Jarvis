@@ -2959,6 +2959,27 @@ does not need a bump, stop and bump it.
   raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
   reproduced CI's exact error.
 
+- **@ another chat, what a reply changed, archive** (v1.328.0, calm chat
+  wave 3). W3-1: the composer's @ menu has a Chats section from GET
+  /chat/threads/search-refs (re-queried on open, the open chat excluded); a
+  pick is a chip (max 3, `lib/chatRefs.ts`, composerStore), sent as
+  `thread_refs` on both lanes and cleared after send; a queued message keeps
+  its own refs, Edit merges them back. When chats match and the menu is
+  short, the sections above keep 3 rows (1 under 260px) plus "N more agents,
+  type to narrow" (`lib/chatRefsMenuFit.squeezedLeadRows`). The new-chat
+  section is `md:overflow-y-auto` (below md it only clipped the menu). W3-2:
+  `ReplyChanges` puts ChangedFiles under each plain reply whose `documents`
+  is non-empty; window from `lib/turnChanges.turnWindow`; fetched once per
+  reply only when on screen (IntersectionObserver; none in jsdom = no ask),
+  page-lifetime map of 200; Undo reuses the receipt's undoFor/undoWrite.
+  KNOWN GAP (wave 4): an edit_file-only turn lists no documents, so no line.
+  W3-3: the row ⋯ has Archive (409 → ArchiveChatDialog → re-POST
+  {stop:true}; a still_running note is shown, never "stopped"); "Archived (N)"
+  view (?archived=only, every project; ⋯ = Unarchive / Delete; pressing a row
+  unarchives + opens). `lib/archiveChat.ts` uses fetch directly because
+  lib/api's post keeps only `detail` from an error body (the 409's `running`
+  list would be lost).
+
 - **The chat list is grouped and lit, one permission chip, the receipt names
   its rules and refs** (v1.327.0, calm chat wave 2). W2-1: the rail
   (`chat-thread-rail`, one element for the desktop portal AND the phone

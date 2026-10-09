@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.327.2 (2026-10-04).*
+holds itself to. Current as of v1.328.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,28 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Point at another chat, see what changed, archive (v1.328.0)
+
+Calm chat, part three (DeepSeek Harness ideas only).
+
+- **Point a message at another chat.** Type "@" in the message box: under
+  the agents there is now a **Chats** section that searches your saved chats
+  as you type. Picking one adds a small chip inside the message box (up to
+  three; the × removes one). Jarvis reads those chats as reference for that
+  message, and the reply details say "Read 2 earlier chats: …". A queued
+  message keeps its own chats. Archived chats are not offered.
+- **What a reply changed.** When a reply wrote files, a quiet line under it
+  says how many and how much ("2 files changed +14 −3"). Press it to see each
+  file; hover a file for the first changed lines, press it for the full
+  side-by-side changes, and use Undo where Undo already applies. If a file
+  changed again afterwards, the line says "changed since".
+- **Archive a chat.** In the chat list, a chat's menu has **Archive**. If the
+  chat is still working, you are asked first and "Stop and archive" stops it;
+  anything that could not be stopped is named, never hidden. Archived chats
+  leave the list; **Archived (N)** at the foot of the list shows them, with
+  Unarchive and Delete. Opening an archived chat brings it back. A phone
+  message into an archived chat also brings it back.
 
 ## Chat list, permissions and reply details (v1.327.0)
 
