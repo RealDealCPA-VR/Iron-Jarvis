@@ -2525,6 +2525,9 @@ async def chat_stream(
     _grounding = await _prep_step(_ground())
     if _grounding is _PREP_STOPPED or await _stop():
         return
+    # v1.326.0: this join also carries the project folder's AGENTS.md /
+    # CLAUDE.md sections (right after the project block). MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn joins the same object.
     system += _grounding.before_attachments()
     conn_tools = _grounding.conn_tools
 
@@ -4312,6 +4315,13 @@ async def chat_stream(
             # (possibly []). MIRROR NOTE (lock-step): chat_turn.py's response
             # carries the identical key.
             "thread_refs": thread_refs_receipt,
+            # FOLDER RULES (v1.326.0): the project folder's instruction files
+            # this turn injected (AGENTS.md / CLAUDE.md / *.local.md, read
+            # order) — ALWAYS present (possibly []). The sections themselves
+            # joined the prompt through `_grounding.before_attachments()`
+            # above, the shared seam, before the planner. MIRROR NOTE
+            # (lock-step): chat_turn.py's response carries the identical key.
+            "folder_rules": list(_grounding.folder_rules_used),
             # TRUNCATED (v1.323.0): true iff the FINAL answering model call
             # stopped for running out of output tokens (a tool round never
             # counts) — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's

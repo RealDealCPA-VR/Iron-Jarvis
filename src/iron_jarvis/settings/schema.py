@@ -335,6 +335,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("profile_share_codex", "Share my profile with Codex", "memory", "bool",
       "Write your profile into Codex's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
+    S("chat_folder_rules", "Read a project's AGENTS.md and CLAUDE.md in chat", "memory", "bool",
+      "When a chat is in a project that has a folder, it reads the instruction files in that "
+      "folder (AGENTS.md, CLAUDE.md and their .local versions) and follows them.",
+      tier="allow", aliases=("agents.md", "claude.md", "folder rules", "project instructions")),
     S("memory_steward_enabled", "Memory steward", "memory", "bool",
       "Tidy and de-duplicate long-term memory in the background.", tier="ask", advanced=True),
     S("chat_files_root", "Chat files folder", "memory", "string",

@@ -446,7 +446,18 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # present): what the user attached from their apps this turn. Same
         # key in the SSE done frame; tests/test_mcp_chat_lane_v1324.py.
         "resources",
+        # v1.326.0: one more — "folder_rules" ([str], always present): the
+        # project folder's instruction files (AGENTS.md / CLAUDE.md / *.local)
+        # this turn injected. Same key in the SSE done frame;
+        # tests/test_chat_folder_rules_v1326.py.
+        "folder_rules",
+        # v1.326.0: "thread_refs" ([{id, title, chars, ok, note}], always
+        # present): the saved chats @-referenced this turn;
+        # tests/test_chat_thread_refs_v1326.py.
+        "thread_refs",
     }
+    assert body["thread_refs"] == []
+    assert body["folder_rules"] == []
     assert body["remembered"] == []
     assert body["suggestion"] is None
     assert body["trust"] == "full" and body["trust_reason"] == "" and body["trust_note"] is None

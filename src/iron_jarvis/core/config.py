@@ -416,6 +416,9 @@ class Config(BaseModel):
     #: Follow-up questions under a chat reply (v1.323.0): one extra short call
     #: to the same model after each reply. Off by default.
     chat_followups: bool = False
+    #: Project folder instructions (AGENTS.md / CLAUDE.md) in every chat
+    #: turn (v1.326.0). On by default.
+    chat_folder_rules: bool = True
     # A SECOND copy of every backup (v1.249.0, R-05): after each automatic or
     # manual backup the newest archive is copied here and pruned to the same
     # keep count, and — with backup_mirror_media — the generated-media library

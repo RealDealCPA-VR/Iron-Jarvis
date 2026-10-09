@@ -4062,7 +4062,8 @@ class _Grounding:
     the fixed order the prompt has always had — the order is the contract
     (``tests/test_wave3_chat_lanes_v1311.py`` pins it byte for byte)::
 
-        project block → lessons → memory index → fabric → connector memory
+        project block → project folder instructions → lessons → memory index
+        → fabric → connector memory
         [attachments + "/" skill: the lane's own, OUTSIDE the gather]
         → roster → saved workflows
 
@@ -4070,20 +4071,32 @@ class _Grounding:
     """
 
     __slots__ = (
-        "project", "lessons", "index", "fabric", "connector", "conn_tools",
-        "roster", "workflows", "packs_starting",
+        "project", "folder_rules", "folder_rules_used", "lessons", "index",
+        "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
     )
 
     def __init__(self) -> None:
         self.project = self.lessons = self.index = self.fabric = ""
         self.connector = self.roster = self.workflows = ""
+        #: The project folder's AGENTS.md / CLAUDE.md (+ .local) sections
+        #: (v1.326.0, ``projects/folder_rules``) and the file names injected —
+        #: the turn's ``folder_rules`` receipt on BOTH lanes ([] = none).
+        self.folder_rules = ""
+        self.folder_rules_used: list[str] = []
         self.conn_tools: list[str] = []
         #: MCP packs still loading after the bounded wait (v1.311.0 review);
         #: the lanes put ``packs_starting_note`` on their Tools seam.
         self.packs_starting: list[str] = []
 
     def before_attachments(self) -> str:
-        return self.project + self.lessons + self.index + self.fabric + self.connector
+        # The folder's own instructions ride RIGHT AFTER the project block they
+        # belong to, and before the planner like every grounded section ("" —
+        # a byte-identical prompt — when the project has no usable folder or
+        # no instruction files, or the setting is off).
+        return (
+            self.project + self.folder_rules + self.lessons + self.index
+            + self.fabric + self.connector
+        )
 
     def after_skill(self) -> str:
         # The packs note rides the shared join (v1.311.0 review), so both
@@ -4285,9 +4298,30 @@ async def _gather_grounding(
         # SAVED WORKFLOWS (v1.170.0): bounded; never raises.
         return _saved_workflows_block(platform)
 
+    _proj_root = (
+        str(getattr(resolved_proj, "root", "") or "").strip()
+        if resolved_proj is not None else ""
+    )
+
+    def _folder_rules() -> tuple[str, list[str]]:
+        # PROJECT FOLDER INSTRUCTIONS (v1.326.0): the grounded project's own
+        # AGENTS.md / CLAUDE.md (+ AGENTS.local.md / CLAUDE.local.md), read
+        # through the ONE reader (projects/folder_rules), each file scanned by
+        # promptguard, all of them under one shared cap. A file read, so off
+        # the loop like every hop here; never raises.
+        from ..projects.folder_rules import chat_folder_rules_block
+
+        return chat_folder_rules_block(_proj_root, event_bus=bus, session_id="chat")
+
     hops: list[tuple[str, Any]] = []
     if resolved_proj is not None:
         hops += [("project", _project_text), ("knowledge", _knowledge)]
+    # Only a project WITH a folder, and only while the setting is on — read
+    # LIVE each turn (``chat_folder_rules``, settings/schema.py).
+    from ..projects.folder_rules import chat_folder_rules_enabled
+
+    if _proj_root and chat_folder_rules_enabled(getattr(platform, "config", None)):
+        hops.append(("folder_rules", _folder_rules))
     if learning is not None:
         hops.append(("lessons", _lessons))
     hops.append(("index", _index))
@@ -4322,6 +4356,8 @@ async def _gather_grounding(
                 + "\n".join(recent)
             )
         out.project = block
+    if "folder_rules" in got:
+        out.folder_rules, out.folder_rules_used = got["folder_rules"]
     out.lessons = got.get("lessons", "")
     out.index = got["index"]
     out.fabric = got.get("fabric", "")
@@ -4469,6 +4505,9 @@ async def run_chat_turn(
     _grounding = await _gather_grounding(
         d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
     )
+    # v1.326.0: this join also carries the project folder's AGENTS.md /
+    # CLAUDE.md sections (right after the project block, before the planner).
+    # MIRROR NOTE (lock-step): routes/chat.py joins the same object.
     system += _grounding.before_attachments()
     conn_tools = _grounding.conn_tools
 
@@ -5427,6 +5466,11 @@ async def run_chat_turn(
         # []). MIRROR NOTE (lock-step): the stream done-frame carries the
         # identical key.
         "thread_refs": thread_refs_receipt,
+        # FOLDER RULES (v1.326.0): the project folder's instruction files this
+        # turn actually injected (["AGENTS.md", "CLAUDE.md", …] in read order)
+        # — ALWAYS present (possibly []). MIRROR NOTE (lock-step): the stream
+        # done-frame in routes/chat.py carries the identical key.
+        "folder_rules": list(_grounding.folder_rules_used),
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,
