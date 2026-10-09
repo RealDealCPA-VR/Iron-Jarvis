@@ -6925,10 +6925,6 @@ export default function ChatPage() {
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
         ...((res as { truncated?: unknown }).truncated === true ? { truncated: true } : {}),
         ...(res.route ? { route: res.route } : {}),
-        // v1.324.0: the apps' resources this turn read (whitelisted).
-        ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
-          ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
-          : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.remembered?.length ? { remembered: res.remembered } : {}),
@@ -6950,6 +6946,10 @@ export default function ChatPage() {
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
         ...(doorsPost ? { doors: doorsPost } : {}),
+        // v1.324.0: the apps' resources this turn read (whitelisted).
+        ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
+          ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
+          : {}),
       };
       const full: ChatMessage[] = [
         ...history,

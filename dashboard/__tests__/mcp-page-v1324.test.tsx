@@ -32,6 +32,7 @@ const H = vi.hoisted(() => {
     replies: [] as string[],
     extra: [] as Record<string, unknown>[],
     hold: false,
+    reject: null as Error | null,
     streaming: false,
     version: 0,
     live: { tools: [] as unknown[], mcpAsks: [] as unknown[] },
@@ -89,6 +90,7 @@ vi.mock("@/lib/useChatStream", async () => {
   };
   const run = async (body: Record<string, unknown>, onDelta: (d: string, f: string) => void) => {
     H.stream.bodies.push(body);
+    if (H.stream.reject) throw H.stream.reject;
     H.stream.streaming = true;
     H.stream.bump();
     if (H.stream.hold) {
@@ -179,6 +181,7 @@ beforeEach(() => {
   H.stream.replies.length = 0;
   H.stream.extra.length = 0;
   H.stream.hold = false;
+  H.stream.reject = null;
   H.stream.streaming = false;
   H.stream.settle = null;
   H.stream.live = { tools: [], mcpAsks: [] };
@@ -298,6 +301,29 @@ describe('"@" attaches an app\'s resource to the next message (v1.324.0)', () =>
     await screen.findByText("answered without it");
     expect((await screen.findByTestId("app-resource-failed")).textContent).toContain(
       "Couldn't read file:///notes/budget.md from files: The app did not answer.",
+    );
+  });
+
+  it("the POST lane (no stream route) sends them too and says what it could not read", async () => {
+    H.stream.reject = new H.FakeStreamError("no stream route", 404);
+    H.api.postResponses["/chat"] = {
+      reply: "post answer",
+      resources: [
+        { pack: "files", uri: "file:///notes/budget.md", ok: false, note: "Too slow.", bogus: 1 },
+      ],
+    };
+    render(<ChatPage />);
+    const el = await box();
+    await pickResource(el);
+    type(el, "summarize");
+    fireEvent.keyDown(el, { key: "Enter" });
+    await screen.findByText("post answer");
+    const sent = H.api.posts.find((p) => p.path === "/chat")!;
+    expect(sent.body.resources).toEqual([
+      { pack: "files", uri: "file:///notes/budget.md", name: "Budget notes" },
+    ]);
+    expect((await screen.findByTestId("app-resource-failed")).textContent).toContain(
+      "Couldn't read file:///notes/budget.md from files: Too slow.",
     );
   });
 
