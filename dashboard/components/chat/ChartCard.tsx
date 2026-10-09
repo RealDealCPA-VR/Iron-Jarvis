@@ -407,60 +407,67 @@ export function ChartCard({ spec }: { spec: ChartSpec }) {
       .join(" · ")}`;
   })();
 
+  // Calm chat W1-4 (v1.326.0): the chart reads as part of the reply, not a
+  // card inside it. No frame and no filled header: a quiet title line with
+  // ghost buttons, the chart on the page, and a table ruled with hairlines.
   const btn =
-    "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100";
+    "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-100";
 
   return (
     <figure
       data-testid="chart-card"
       data-chart-type={spec.type}
-      className="my-2.5 max-w-2xl overflow-hidden rounded-xl border border-white/10 bg-ink-900/50"
+      className="my-3 max-w-2xl"
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-white/[0.06] bg-white/[0.02] px-3 py-1.5">
-        <figcaption className="min-w-0 flex-1 text-[13px] text-zinc-200">
-          <span className="truncate">{spec.title || `${TYPE_WORD[spec.type]} chart`}</span>
-          {spec.unit && <span className="ml-1.5 text-zinc-500">({spec.unit})</span>}
+      <div className="-mr-2 flex flex-wrap items-center gap-x-1 gap-y-1">
+        {/* The title takes the line on a narrow screen and wraps there (the
+            two buttons drop below it together) instead of running under them. */}
+        <figcaption className="min-w-0 flex-[1_1_14rem] text-[13px] font-medium text-zinc-200">
+          <span>{spec.title || `${TYPE_WORD[spec.type]} chart`}</span>
+          {spec.unit && <span className="ml-1.5 font-normal text-zinc-500">({spec.unit})</span>}
         </figcaption>
-        <button
-          type="button"
-          className={btn}
-          aria-pressed={asTable}
-          onClick={() => {
-            setAsTable((v) => !v);
-            setActive(null);
-          }}
-        >
-          {asTable ? <BarChart3 size={12} aria-hidden /> : <Table2 size={12} aria-hidden />}
-          {asTable ? "Show as chart" : "Show as table"}
-        </button>
-        <button type="button" className={btn} onClick={copyData} title="Copy the numbers as CSV (paste into a spreadsheet)">
-          {copy === "copied" ? (
-            <Check size={12} aria-hidden className="text-tone-success" />
-          ) : (
-            <Copy size={12} aria-hidden />
-          )}
-          {copy === "copied" ? "Copied" : copy === "failed" ? "Couldn't copy" : "Copy data"}
-        </button>
+        <div className="flex items-center">
+          <button
+            type="button"
+            className={btn}
+            aria-pressed={asTable}
+            onClick={() => {
+              setAsTable((v) => !v);
+              setActive(null);
+            }}
+          >
+            {asTable ? <BarChart3 size={12} aria-hidden /> : <Table2 size={12} aria-hidden />}
+            {asTable ? "Show as chart" : "Show as table"}
+          </button>
+          <button type="button" className={btn} onClick={copyData} title="Copy the numbers as CSV (paste into a spreadsheet)">
+            {copy === "copied" ? (
+              <Check size={12} aria-hidden className="text-tone-success" />
+            ) : (
+              <Copy size={12} aria-hidden />
+            )}
+            {copy === "copied" ? "Copied" : copy === "failed" ? "Couldn't copy" : "Copy data"}
+          </button>
+        </div>
       </div>
 
       {asTable ? (
-        <div className="overflow-x-auto p-3">
+        <div className="overflow-x-auto pt-1">
           <table data-testid="chart-table" className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                <th className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-left font-medium text-zinc-100">
+                <th className="border-b border-white/[0.16] py-1.5 pr-3 text-left font-medium text-zinc-400">
                   Label
                 </th>
                 {spec.series.map((s, j) => (
                   <th
                     key={j}
-                    className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-right font-medium text-zinc-100"
+                    className="border-b border-white/[0.16] py-1.5 pl-3 text-right font-medium text-zinc-400"
                   >
                     {s.name || `Series ${j + 1}`}
                   </th>
                 ))}
                 {pie && (
-                  <th className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-right font-medium text-zinc-100">
+                  <th className="border-b border-white/[0.16] py-1.5 pl-3 text-right font-medium text-zinc-400">
                     Share
                   </th>
                 )}
@@ -469,14 +476,14 @@ export function ChartCard({ spec }: { spec: ChartSpec }) {
             <tbody>
               {spec.labels.map((label, i) => (
                 <tr key={i}>
-                  <td className="border border-white/10 px-2.5 py-1.5 text-zinc-300">{label}</td>
+                  <td className="border-b border-white/[0.08] py-1.5 pr-3 text-zinc-300">{label}</td>
                   {spec.series.map((s, j) => (
-                    <td key={j} className="border border-white/10 px-2.5 py-1.5 text-right tabular-nums text-zinc-300">
+                    <td key={j} className="border-b border-white/[0.08] py-1.5 pl-3 text-right tabular-nums text-zinc-300">
                       {formatValue(s.values[i], spec.unit)}
                     </td>
                   ))}
                   {pie && (
-                    <td className="border border-white/10 px-2.5 py-1.5 text-right tabular-nums text-zinc-400">
+                    <td className="border-b border-white/[0.08] py-1.5 pl-3 text-right tabular-nums text-zinc-400">
                       {`${Math.round((spec.series[0].values[i] / pieTotal) * 100)}%`}
                     </td>
                   )}
@@ -486,7 +493,7 @@ export function ChartCard({ spec }: { spec: ChartSpec }) {
           </table>
         </div>
       ) : (
-        <div className="px-3 pb-2 pt-3">
+        <div className="pt-2">
           {pie ? (
             <div ref={ref} className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
               <PieChart spec={spec} active={active} setActive={setActive} />

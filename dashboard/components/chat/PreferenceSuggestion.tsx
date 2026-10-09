@@ -106,7 +106,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
   if (s.state === "gone") return null;
   if (s.state === "kept") {
     return (
-      <div id={domId} data-testid="pref-suggestion" data-state="kept" className="ml-11 mt-1 text-[11px]">
+      <div id={domId} data-testid="pref-suggestion" data-state="kept" className="mt-1 text-[11px]">
         <span data-testid="pref-suggestion-kept" className="text-accent-soft">
           Remembered: {s.text}
         </span>
@@ -115,7 +115,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
   }
   if (s.state === "declined") {
     return (
-      <div id={domId} data-testid="pref-suggestion" data-state="declined" className="ml-11 mt-1 text-[11px] text-zinc-600">
+      <div id={domId} data-testid="pref-suggestion" data-state="declined" className="mt-1 text-[11px] text-zinc-600">
         Won&apos;t suggest &ldquo;{quotable(s.text)}&rdquo; again.
       </div>
     );
@@ -132,7 +132,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
     "rounded px-1 py-px text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-40";
 
   return (
-    <div id={domId} data-testid="pref-suggestion" data-state="open" className="ml-11 mt-1 text-[11px] text-zinc-500">
+    <div id={domId} data-testid="pref-suggestion" data-state="open" className="mt-1 text-[11px] text-zinc-500">
       <div className="inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-1">
         <Lightbulb size={10} className="shrink-0 text-accent-soft/70" aria-hidden="true" />
         {editing ? (

@@ -729,18 +729,21 @@ describe("the chat top bar fits a phone (phone-chrome-eats-transcript)", () => {
     expect(classes(word)).toContain("sm:inline");
   });
 
-  it("message avatars hide below sm", async () => {
+  // Calm chat W1-4 (v1.326.0) went further than v1.315.0's "hide below sm":
+  // there are no avatar tiles at ANY width now (the reply is prose, your own
+  // message a tinted bubble on the right), so a phone line loses nothing.
+  it("messages carry no avatar tile at any width", async () => {
     window.history.replaceState({}, "", "/chat?thread=t9");
     render(<ChatPage />);
     const msg = await screen.findByText("The ledger totals 1.2M.");
+    const row = msg.closest("[data-msg-index]");
+    expect(row).not.toBeNull();
     let avatar: Element | null = null;
-    for (let n: Element | null = msg; n && !avatar; n = n.parentElement) {
+    for (let n: Element | null = msg; n && n !== row?.parentElement && !avatar; n = n.parentElement) {
       const first = n.firstElementChild;
       if (classes(n).includes("gap-3") && first?.tagName === "SPAN" && first.querySelector("svg")) avatar = first;
     }
-    expect(avatar).not.toBeNull();
-    expect(classes(avatar)).toContain("hidden");
-    expect(classes(avatar)).toContain("sm:grid");
+    expect(avatar).toBeNull();
   });
 
   it("the persona select carries a visible 'Persona' label", async () => {

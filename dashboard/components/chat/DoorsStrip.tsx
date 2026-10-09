@@ -45,7 +45,7 @@ export function DoorsStrip({ doors }: DoorsStripProps) {
   );
   if (usable.length === 0) return null;
   return (
-    <div className="ml-11 mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+    <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
       {usable.map((d) => (
         <Link
           key={d.href}

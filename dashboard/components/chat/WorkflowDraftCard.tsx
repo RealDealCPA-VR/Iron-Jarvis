@@ -392,7 +392,7 @@ export function WorkflowRunChip({
   return (
     <div
       data-testid="workflow-run-chip"
-      className="ml-11 max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]"
+      className="max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]"
     >
       <div className="flex items-center gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
         <GitBranch size={15} className="shrink-0 text-accent-soft" />
@@ -551,7 +551,7 @@ export function WorkflowDraftCard({
   const running = Boolean(runId) && runIsLive(run.runStatus);
 
   return (
-    <div className="ml-11 max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]">
+    <div className="max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]">
       <div className="flex items-start gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
         <GitBranch size={15} className="mt-0.5 shrink-0 text-accent-soft" />
         <div className="min-w-0 flex-1">

@@ -303,8 +303,10 @@ export function RegenerateMenu({
   }
 
   const sameName = currentRow ? modelText(currentRow) : "default model";
+  // Calm chat W1-4: 28px tall ghosts, like every control in the row under a
+  // reply (the "with another model" chevron stays a narrow 16px).
   const btn =
-    "grid h-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40";
+    "grid h-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
 
   const hasRecent = items.some((it) => it.section === "recent");
 
@@ -365,7 +367,7 @@ export function RegenerateMenu({
         disabled={disabled}
         title={quickLabel}
         aria-label={quickLabel}
-        className={`${btn} w-6`}
+        className={`${btn} w-7`}
       >
         <RefreshCw size={12} />
       </button>

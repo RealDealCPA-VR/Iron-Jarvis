@@ -650,7 +650,7 @@ export function TurnReceipt({
   }
 
   return (
-    <div className="ml-11 mt-1 text-[11px] text-zinc-500">
+    <div className="mt-1 text-[11px] text-zinc-500">
       <button
         type="button"
         aria-expanded={open}

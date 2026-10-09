@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 
 /**
  * "‹ 2 / 3 ›" — flip between the versions kept at one fork (v1.325.0; the
@@ -25,14 +26,15 @@ export function BranchPicker({
 }) {
   if (!Number.isInteger(count) || count < 2) return null;
   const at = Math.min(Math.max(0, Math.trunc(pos) || 0), count - 1);
-  const btn =
-    "grid h-5 w-5 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-30";
+  // Calm chat W1-4: the same 28px ghost squares as the rest of the row under
+  // a message (an end arrow is dimmed and ignores the pointer).
+  const btn = `${REPLY_ACTION_BTN} disabled:pointer-events-none`;
   return (
     <span
       data-testid="branch-picker"
       role="group"
       aria-label={`Version ${at + 1} of ${count}`}
-      className="inline-flex select-none items-center gap-0.5 text-[11px] tabular-nums text-zinc-500"
+      className="inline-flex select-none items-center text-[12px] tabular-nums text-zinc-500"
     >
       <button
         type="button"

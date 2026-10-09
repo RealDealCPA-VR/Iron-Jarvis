@@ -17,11 +17,18 @@
  * "Teach it your style") and on the message, so a reopened chat shows what
  * was said instead of asking again. The newest reply shows the buttons; an
  * older one shows them on hover, like its other actions.
+ *
+ * Calm chat W1-4 (v1.326.0): it lives INSIDE the quiet action row under the
+ * reply (the chat page decides when that row shows), as two 28px ghost
+ * buttons. The question "Was this helpful?" is read to screen readers; the
+ * thumbs say it on screen. The 👎 question wraps onto its own line below the
+ * row, and the row stays visible while it is open.
  */
 
 import { useState, type FormEvent } from "react";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { post } from "@/lib/api";
+import { REPLY_ACTION_SQUARE } from "@/components/chat/replyActions";
 
 export interface ReplyRatingValue {
   value: "up" | "down";
@@ -40,7 +47,8 @@ export function ReplyRating({
 }: {
   rating?: ReplyRatingValue;
   threadId: string | null;
-  /** The newest reply: always visible. Older replies: on hover/focus. */
+  /** The newest reply: its row is always on screen, so the question is
+   *  asked (to screen readers). Visibility itself is the row's job. */
   prominent: boolean;
   /** A turn is running — answer when it is done. */
   disabled: boolean;
@@ -71,7 +79,7 @@ export function ReplyRating({
 
   if (rating) {
     return (
-      <p data-testid="reply-rated" className="ml-11 mt-1 text-[12px] text-zinc-500">
+      <span data-testid="reply-rated" className="inline-flex min-w-0 items-center px-1.5 text-[12px] text-zinc-500">
         {rating.value === "up" ? (
           <>
             <ThumbsUp size={11} className="mr-1 inline align-[-1px]" aria-hidden />
@@ -88,7 +96,7 @@ export function ReplyRating({
             Noted.
           </>
         )}
-      </p>
+      </span>
     );
   }
 
@@ -98,7 +106,7 @@ export function ReplyRating({
       void send({ value: "down", note: note.trim() || undefined });
     };
     return (
-      <form data-testid="reply-rating-ask" onSubmit={submit} className="ml-11 mt-1.5 max-w-xl space-y-1.5">
+      <form data-testid="reply-rating-ask" onSubmit={submit} className="mt-1 max-w-xl basis-full space-y-1.5">
         <label htmlFor="reply-rating-note" className="block text-[12px] text-zinc-300">
           What should be different next time?
         </label>
@@ -140,22 +148,15 @@ export function ReplyRating({
   }
 
   return (
-    <div
-      data-testid="reply-rating"
-      className={`ml-11 mt-1 flex items-center gap-1 text-[12px] text-zinc-500 ${
-        prominent
-          ? ""
-          : "opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100"
-      }`}
-    >
-      {prominent && <span className="mr-0.5">Was this helpful?</span>}
+    <span data-testid="reply-rating" className="inline-flex items-center text-[12px] text-zinc-500">
+      {prominent && <span className="sr-only">Was this helpful?</span>}
       <button
         type="button"
         disabled={disabled || busy}
         onClick={() => void send({ value: "up" })}
         aria-label="Good reply"
         title="Good reply"
-        className="grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] hover:text-tone-success disabled:opacity-40"
+        className={`${REPLY_ACTION_SQUARE} hover:text-tone-success`}
       >
         <ThumbsUp size={13} />
       </button>
@@ -165,7 +166,7 @@ export function ReplyRating({
         onClick={() => setAsking(true)}
         aria-label="Not quite right"
         title="Not quite right — say what to change"
-        className="grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] hover:text-tone-danger disabled:opacity-40"
+        className={`${REPLY_ACTION_SQUARE} hover:text-tone-danger`}
       >
         <ThumbsDown size={13} />
       </button>
@@ -174,6 +175,6 @@ export function ReplyRating({
           {error}
         </span>
       )}
-    </div>
+    </span>
   );
 }

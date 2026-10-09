@@ -185,7 +185,7 @@ export function RunResultCard({
 
   return (
     <div
-      className={`ml-11 max-w-[640px] rounded-xl border ${
+      className={`max-w-[640px] rounded-xl border ${
         failed ? "border-rose-500/25 bg-rose-500/[0.04]" : "border-white/[0.08] bg-white/[0.02]"
       }`}
     >

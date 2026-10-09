@@ -27,7 +27,7 @@ export function FollowupChips({ suggestions, onPick, disabled = false }: Followu
     <div
       data-testid="followup-chips"
       aria-label="Suggested follow-ups"
-      className="ml-11 mt-1.5 flex flex-wrap gap-1.5"
+      className="mt-1.5 flex flex-wrap gap-1.5"
     >
       {shown.map((s, i) => (
         <button

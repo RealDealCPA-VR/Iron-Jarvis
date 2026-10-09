@@ -233,7 +233,7 @@ export function ConfigCards({
 }) {
   if (!cards.length) return null;
   return (
-    <div data-testid="config-cards" className="ml-11 mt-2 space-y-2">
+    <div data-testid="config-cards" className="mt-2 space-y-2">
       {cards.map((c, i) =>
         c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />

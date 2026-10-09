@@ -203,7 +203,7 @@ export function GoalContractCard({
   return (
     <div
       data-testid="goal-contract-card"
-      className="ml-11 mt-2 max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]"
+      className="mt-2 max-w-[640px] rounded-xl border border-accent/20 bg-accent/[0.04]"
     >
       <div className="flex items-start gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
         <Target size={15} className="mt-0.5 shrink-0 text-accent-soft" />
@@ -379,7 +379,7 @@ export function GoalBirth({
       />
     );
   return (
-    <div className="ml-11 mt-1.5 inline-flex items-center gap-1">
+    <div className="mt-1.5 inline-flex items-center gap-1">
       <button
         type="button"
         onClick={() => setOpen(true)}

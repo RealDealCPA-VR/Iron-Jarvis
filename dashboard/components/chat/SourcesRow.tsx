@@ -87,7 +87,7 @@ function domainOf(url: string): string {
 export function SourcesRow({ sources }: { sources: ChatSource[] }) {
   if (sources.length === 0) return null;
   return (
-    <div className="ml-11 mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
       <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
         <Globe size={10} className="shrink-0 text-accent-soft/70" /> Sources:
       </span>

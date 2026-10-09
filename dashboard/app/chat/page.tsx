@@ -94,7 +94,6 @@ import {
   Square,
   Store,
   Trash2,
-  User,
   Volume2,
   VolumeX,
   Wrench,
@@ -262,6 +261,7 @@ import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
+import { REPLY_ACTION_BTN, REPLY_ACTION_SQUARE } from "@/components/chat/replyActions";
 import { ConversationMap } from "@/components/chat/ConversationMap";
 import { QuoteSelection } from "@/components/chat/QuoteSelection";
 import { RegenerateMenu } from "@/components/chat/RegenerateMenu";
@@ -1501,7 +1501,7 @@ function PromoteKnowledgeButton({
         onClick={() => void run()}
         title={label}
         aria-label={label}
-        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+        className={`${REPLY_ACTION_SQUARE} hover:text-accent-soft`}
       >
         {state === "busy" ? (
           <Loader2 size={12} className="animate-spin" />
@@ -1512,7 +1512,7 @@ function PromoteKnowledgeButton({
         )}
       </button>
       {err && (
-        <span className="truncate text-[10.5px] text-rose-300/90">{err}</span>
+        <span className="truncate text-[12px] text-tone-danger">{err}</span>
       )}
     </span>
   );
@@ -1521,31 +1521,34 @@ function PromoteKnowledgeButton({
 
 // ------------------------------------------------------------------- bubbles
 
+/** Calm chat W1-4: a reply is PROSE on the page. Tables inside it (markdown
+ *  tables, a chart's "Show as table") read as part of the text: hairline rules
+ *  under each row, no grid, no filled header. Scoped here so the same
+ *  markdown keeps its grid everywhere else in the app. */
+const REPLY_PROSE =
+  "min-w-0 text-sm leading-relaxed text-zinc-200 " +
+  "[&_table]:text-[13px] " +
+  "[&_th]:border-x-0 [&_th]:border-t-0 [&_th]:border-white/[0.16] [&_th]:bg-transparent [&_th]:py-1.5 [&_th]:pl-0 [&_th]:pr-3 [&_th]:font-medium [&_th]:text-zinc-400 " +
+  "[&_td]:border-x-0 [&_td]:border-t-0 [&_td]:border-white/[0.08] [&_td]:py-1.5 [&_td]:pl-0 [&_td]:pr-3";
+
 function Bubble({ role, children }: { role: ChatMessage["role"]; children: ReactNode }) {
-  const isUser = role === "user";
-  return (
-    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
-      <span
-        // v1.315.0 (phone-chrome-eats-transcript): no avatar tiles below sm —
-        // on a 390px phone they cost every bubble 44px of a narrow line; the
-        // bubble's side and colour already say who is speaking.
-        className={`hidden h-8 w-8 shrink-0 place-items-center rounded-xl border sm:grid ${
-          isUser
-            ? "border-accent/30 bg-accent/10 text-accent-soft"
-            : "border-white/[0.08] bg-white/[0.03] text-zinc-300"
-        }`}
-      >
-        {isUser ? <User size={15} /> : <Bot size={15} />}
-      </span>
-      <div
-        className={`min-w-0 max-w-[80%] rounded-2xl border px-4 py-2.5 text-sm leading-relaxed ${
-          isUser
-            ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-accent/25 bg-accent/[0.1] text-zinc-100"
-            : "border-white/[0.06] bg-white/[0.03] text-zinc-200"
-        }`}
-      >
-        {children}
+  // Calm chat W1-4 (v1.326.0): no avatars and no box around a reply. Your own
+  // message is a soft tinted bubble on the right; the reply is prose in the
+  // same centred column. Side and fill already say who is speaking.
+  if (role === "user")
+    return (
+      <div className="flex justify-end">
+        <div
+          data-testid="user-bubble"
+          className="min-w-0 max-w-[85%] whitespace-pre-wrap break-words rounded-[20px] bg-accent/[0.1] px-4 py-2.5 text-sm leading-relaxed text-zinc-100 [overflow-wrap:anywhere] sm:max-w-[72%]"
+        >
+          {children}
+        </div>
       </div>
+    );
+  return (
+    <div data-testid="reply-prose" className={REPLY_PROSE}>
+      {children}
     </div>
   );
 }
@@ -2482,7 +2485,7 @@ const MessageRow = memo(function MessageRow({
         {((!busy && !m.steer) || when.short) && (
           <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
             {when.short && (
-              <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[11px] text-zinc-500">
+              <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[12px] text-zinc-500">
                 {when.short}
               </time>
             )}
@@ -2492,7 +2495,7 @@ const MessageRow = memo(function MessageRow({
                 onClick={() => h.editMessage(i)}
                 title="Edit and resend — what follows is kept as an earlier version"
                 aria-label="Edit and resend"
-                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                className={REPLY_ACTION_BTN}
               >
                 <Pencil size={12} />
               </button>
@@ -2524,39 +2527,33 @@ const MessageRow = memo(function MessageRow({
     return (
       <div
         data-testid="panel-progress"
-        className="ml-11 flex min-w-0 items-center gap-2 text-[12px] text-zinc-400"
+        className="flex min-w-0 items-center gap-2 text-[12px] text-zinc-500"
       >
-        <Bot size={11} className="shrink-0 text-accent-soft/70" />
-        <span className="shrink-0 font-medium text-zinc-300">{agentDisplayName(m.panelWho)}</span>
+        <span className="shrink-0 font-medium text-zinc-400">{agentDisplayName(m.panelWho)}</span>
         <span className="truncate">{m.content}</span>
       </div>
     );
   // v1.150.0: a panel reply is attributed. Without a name on it, a three-way
   // conversation is an unreadable wall of anonymous assistant bubbles.
+  // Calm chat W1-4: the name is a small muted line above the prose, no pill
+  // and no icon; the reply itself has no box, like Jarvis's own.
   if (m.panelWho)
     return (
       <div className="group/msg space-y-1">
-        <div className="ml-11 flex items-center gap-2">
+        <div className="flex items-center gap-2 text-[12px]">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-              m.panelError
-                ? "border-rose-500/30 bg-rose-500/[0.06] text-rose-300"
-                : "border-accent/25 bg-accent/[0.06] text-accent-soft"
-            }`}
+            data-testid="panel-who"
+            className={`font-medium ${m.panelError ? "text-tone-danger" : "text-zinc-400"}`}
           >
-            <Bot size={11} />
             {agentDisplayName(m.panelWho)}
           </span>
           {m.panelError && (
-            <span className="text-[11px] text-rose-400/80">couldn&apos;t answer</span>
+            <span className="text-tone-danger">couldn&apos;t answer</span>
           )}
           {/* v1.285.0: what KIND of line a remote sent back, when it is not
               a plain reply — a question, a "done", or "still working". */}
           {m.panelKind && m.panelKind !== "message" && m.panelKind !== "progress" && (
-            <span
-              data-testid="panel-kind"
-              className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.08] px-1.5 py-px text-[10px] font-medium text-emerald-300"
-            >
+            <span data-testid="panel-kind" className="text-zinc-500">
               {m.panelKind === "pending" ? "working — will report back" : m.panelKind}
             </span>
           )}
@@ -2585,7 +2582,7 @@ const MessageRow = memo(function MessageRow({
         )}
         {/* What the speakers were NOT shown (v1.284.0) — said, never silent. */}
         {m.panelNote && (
-          <div data-testid="panel-note" className="ml-11 text-[11px] text-zinc-500">
+          <div data-testid="panel-note" className="text-[12px] text-zinc-500">
             {m.panelNote}
           </div>
         )}
@@ -2600,7 +2597,7 @@ const MessageRow = memo(function MessageRow({
             type="button"
             data-testid="panel-hand-off"
             onClick={() => h.handOff(i)}
-            className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12]"
+            className="-ml-2 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.08]"
           >
             <Wrench size={12} />
             Have {agentDisplayName(m.panelWho)} do this
@@ -2627,8 +2624,8 @@ const MessageRow = memo(function MessageRow({
   if (m.escalated)
     return (
       <div className="group/msg">
-        <div className="ml-11 flex items-start gap-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[12px] text-zinc-300">
-          <Zap size={13} className="mt-0.5 shrink-0 text-accent-soft" />
+        <div className="flex items-start gap-2 text-[13px] text-zinc-400">
+          <Zap size={13} className="mt-[3px] shrink-0 text-accent-soft" />
           <span>
             {m.escalatedTo ? (
               <>
@@ -2644,7 +2641,7 @@ const MessageRow = memo(function MessageRow({
   const suggestion = decodeSuggestion(m.suggestion);
   const configCards = decodeConfigCards(m.configCards);
   return (
-    <div className="group/msg">
+    <div className="group/msg" data-testid="reply">
       <Bubble role="assistant">
         {/* v1.323.0: the model's reasoning, folded above its answer. */}
         {m.thinking && <ThinkingDisclosure text={m.thinking} seconds={m.thinkingSeconds ?? null} />}
@@ -2653,21 +2650,10 @@ const MessageRow = memo(function MessageRow({
           <MemoMarkdown content={m.content} />
         </div>
       </Bubble>
-      {/* v1.325.0: the answers a Try again kept — always on screen. */}
-      {versions && (
-        <div className="ml-11 mt-1">
-          <BranchPicker
-            pos={versions.pos}
-            count={versions.count}
-            disabled={busy}
-            onSwitch={(to) => h.switchVersion(i, to)}
-          />
-        </div>
-      )}
       {/* v1.324.0: an app resource the user attached that could not be read
           says so here — the answer above was written without it. */}
       {(m.appResources ?? []).some((r) => !r.ok) && (
-        <div data-testid="app-resource-failed" className="ml-11 mt-1 text-[11px] text-amber-400/80">
+        <div data-testid="app-resource-failed" className="mt-1 text-[12px] text-amber-400/80">
           {(m.appResources ?? [])
             .filter((r) => !r.ok)
             .map((r) => `Couldn't read ${r.uri} from ${r.pack}${r.note ? `: ${r.note}` : ""}`)
@@ -2675,7 +2661,7 @@ const MessageRow = memo(function MessageRow({
         </div>
       )}
       {(m.interrupted || m.truncated) && (
-        <div className="ml-11 mt-1 flex flex-wrap items-center gap-2 text-[11px] italic text-amber-400/80">
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] italic text-amber-400/80">
           <span data-testid="reply-cut-note">
             {m.truncated
               ? "stopped — the reply ran out of room"
@@ -2687,7 +2673,7 @@ const MessageRow = memo(function MessageRow({
               type="button"
               data-testid="continue-reply"
               onClick={h.continueReply}
-              className="not-italic rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+              className="not-italic inline-flex h-7 items-center rounded-lg px-2 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
             >
               Continue
             </button>
@@ -2704,115 +2690,21 @@ const MessageRow = memo(function MessageRow({
           <WorkflowRunChip runId={m.workflowRun.runId} name={m.workflowRun.name} />
         </div>
       )}
-      {/* TURN RECEIPT (v1.165.0): server-side accountability — who answered and
-          why, tools run/denied, files. Supersedes the legacy viaProvider chip
-          below whenever the message carries a route. */}
-      {m.route && (
-        <div className="ml-11">
-          <TurnReceipt
-            route={m.route}
-            adapted={m.adapted}
-            toolsUsed={m.toolsUsed}
-            deniedTools={m.deniedTools}
-            remembered={m.remembered}
-            trust={m.trust}
-            trustReason={m.trustReason}
-            trustNote={m.trustNote}
-            usage={m.usage}
-            steps={m.steps}
-            timing={m.timing}
-            documents={m.documents}
-            onOpenDocument={h.openDocument}
-            undoFor={h.undoFor}
-            onUndo={h.undoWrite}
-          />
-        </div>
-      )}
-      {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
-          a standing preference in the receipt's own quiet voice — directly
-          under it, with Keep · Edit · Not this. Decoded again here because a
-          reopened thread hands back whatever the disk held. */}
-      {suggestion && suggestion.state !== "gone" && (
-        <div className="ml-11">
-          <PreferenceSuggestion
-            suggestion={suggestion}
-            onSettle={(next) => h.settleSuggestion(i, next)}
-          />
-        </div>
-      )}
-      {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
-          Undo, and the secure card a credential is pasted into. Decoded again
-          here because a reopened thread hands back whatever the disk held. */}
-      <ConfigCards cards={configCards} onSettle={(ci, next) => h.settleConfigCard(i, ci, next)} />
-      {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
-          SERVER-derived from the tools that executed ok (files excluded; the
-          ArtifactsRail owns files). Rides the message, so live and persisted
-          turns render alike; a pre-v1.199.0 message has none. */}
-      <DoorsStrip doors={m.doors} />
-      {!m.route && m.viaProvider && (
-        <div
-          className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
-          title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
-        >
-          <Bot size={10} className="shrink-0" />
-          answered by {m.viaProvider}
-        </div>
-      )}
-      {/* Tools the reply's tool loop actually ran — LEGACY line for
-          pre-v1.165.0 messages; the TurnReceipt carries the same fact (plus
-          denials) when a route is present, so both would say it twice. */}
-      {!m.route && m.toolsUsed && m.toolsUsed.length > 0 && (
-        <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
-          <Wrench size={10} className="shrink-0 text-accent-soft/70" />
-          <span className="truncate">used: {m.toolsUsed.join(", ")}</span>
-        </div>
-      )}
-      {/* URLs the turn's web tools actually returned */}
-      {m.sources && m.sources.length > 0 && <SourcesRow sources={m.sources} />}
-      {/* Crystallize nudge (v1.120.0): agent turns are by definition
-          multi-step — offer to keep the process. */}
-      {m.fromSession && isLast && !busy && threadId && (
-        <button
-          type="button"
-          disabled={crystallizingId !== null}
-          onClick={() => h.crystallize(threadId)}
-          className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12] disabled:opacity-50"
-        >
-          {crystallizingId ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <GitBranch size={12} />
-          )}
-          Keep this as a workflow?
-        </button>
-      )}
-      {/* Goal birth (v1.208.0): only on the newest settled reply; GoalBirth
-          applies the deliberately-high bar and renders nothing otherwise,
-          because a false chip trains the user to ignore every chip. */}
-      {isLast && !busy && (
-        <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} />
-      )}
-      <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
-        <CopyIconButton text={m.content} title="Copy message" />
-        {/* v1.323.0: READ ALOUD — this one reply, on a press, whether or
-            not spoken replies are on; a second press stops it. */}
-        {m.content.trim() && (
-          <button
-            type="button"
-            data-testid="read-aloud"
-            onClick={() => h.readAloud(i)}
-            aria-pressed={reading}
-            title={reading ? "Stop reading" : "Read aloud"}
-            aria-label={reading ? "Stop reading" : "Read aloud"}
-            className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] hover:text-zinc-200 ${reading ? "text-accent-soft" : "text-zinc-500"}`}
-          >
-            {reading ? <VolumeX size={12} /> : <Volume2 size={12} />}
-          </button>
-        )}
-        <PromoteKnowledgeButton
-          disabledReason={projectId ? null : "bind this chat to a project first"}
-          onPromote={() => h.promote(m.content)}
-        />
+      {/* Calm chat W1-4 (v1.326.0): ONE quiet row of 28px ghost buttons right
+          under the reply: Copy, Try again, 👍 / 👎, read aloud, save to the
+          project, the versions a Try again kept ("‹ 1 / 2 ›") and the time.
+          The newest reply keeps it on screen; an older one shows it on hover
+          or focus, and always on a touch screen (no hover there). A 👎 that
+          is asking "what should be different?" keeps the row open. */}
+      <div
+        data-testid="reply-actions"
+        className={`-ml-1.5 mt-1 flex flex-wrap items-center text-zinc-500 ${
+          isLast
+            ? ""
+            : "opacity-0 transition-opacity focus-within:opacity-100 has-[form]:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
+        }`}
+      >
+        <CopyIconButton text={m.content} title="Copy message" className={REPLY_ACTION_BTN} />
         {canRegen && regen && (
           // v1.325.0: Try again — the same model, or "with…" another one for
           // this turn only (the conversation's own pick is untouched).
@@ -2832,27 +2724,138 @@ const MessageRow = memo(function MessageRow({
             onClick={() => h.regenerate()}
             title="Regenerate reply"
             aria-label="Regenerate reply"
-            className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+            className={REPLY_ACTION_BTN}
           >
             <RefreshCw size={12} />
           </button>
         )}
+        {/* v1.320.0: 👍 / 👎 — a reply can be rated where it was read. Not on
+            a reply still being worked on by an agent (nothing to judge yet). */}
+        {m.content.trim() && !m.awaitingSession && (
+          <ReplyRating
+            rating={m.rating}
+            threadId={threadId}
+            prominent={isLast}
+            disabled={busy}
+            onRated={(r) => h.rateReply(i, r)}
+          />
+        )}
+        {/* v1.323.0: READ ALOUD — this one reply, on a press, whether or
+            not spoken replies are on; a second press stops it. */}
+        {m.content.trim() && (
+          <button
+            type="button"
+            data-testid="read-aloud"
+            onClick={() => h.readAloud(i)}
+            aria-pressed={reading}
+            title={reading ? "Stop reading" : "Read aloud"}
+            aria-label={reading ? "Stop reading" : "Read aloud"}
+            className={`${REPLY_ACTION_BTN} ${reading ? "!text-accent-soft" : ""}`}
+          >
+            {reading ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
+        )}
+        <PromoteKnowledgeButton
+          disabledReason={projectId ? null : "bind this chat to a project first"}
+          onPromote={() => h.promote(m.content)}
+        />
+        {/* v1.325.0: the answers a Try again kept, "‹ 1 / 2 ›". */}
+        {versions && (
+          <BranchPicker
+            pos={versions.pos}
+            count={versions.count}
+            disabled={busy}
+            onSwitch={(to) => h.switchVersion(i, to)}
+          />
+        )}
         {when.short && (
-          <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[11px] text-zinc-500">
+          <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1.5 text-[12px] text-zinc-500">
             {when.short}
           </time>
         )}
       </div>
-      {/* v1.320.0: 👍 / 👎 — a reply can be rated where it was read. Not on
-          a reply still being worked on by an agent (nothing to judge yet). */}
-      {m.content.trim() && !m.awaitingSession && (
-        <ReplyRating
-          rating={m.rating}
-          threadId={threadId}
-          prominent={isLast}
-          disabled={busy}
-          onRated={(r) => h.rateReply(i, r)}
+      {/* TURN RECEIPT (v1.165.0): server-side accountability — who answered and
+          why, tools run/denied, files. Supersedes the legacy viaProvider chip
+          below whenever the message carries a route. */}
+      {m.route && (
+        <TurnReceipt
+          route={m.route}
+          adapted={m.adapted}
+          toolsUsed={m.toolsUsed}
+          deniedTools={m.deniedTools}
+          remembered={m.remembered}
+          trust={m.trust}
+          trustReason={m.trustReason}
+          trustNote={m.trustNote}
+          usage={m.usage}
+          steps={m.steps}
+          timing={m.timing}
+          documents={m.documents}
+          onOpenDocument={h.openDocument}
+          undoFor={h.undoFor}
+          onUndo={h.undoWrite}
         />
+      )}
+      {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
+          a standing preference in the receipt's own quiet voice — directly
+          under it, with Keep · Edit · Not this. Decoded again here because a
+          reopened thread hands back whatever the disk held. */}
+      {suggestion && suggestion.state !== "gone" && (
+        <PreferenceSuggestion
+          suggestion={suggestion}
+          onSettle={(next) => h.settleSuggestion(i, next)}
+        />
+      )}
+      {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
+          Undo, and the secure card a credential is pasted into. Decoded again
+          here because a reopened thread hands back whatever the disk held. */}
+      <ConfigCards cards={configCards} onSettle={(ci, next) => h.settleConfigCard(i, ci, next)} />
+      {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
+          SERVER-derived from the tools that executed ok (files excluded; the
+          ArtifactsRail owns files). Rides the message, so live and persisted
+          turns render alike; a pre-v1.199.0 message has none. */}
+      <DoorsStrip doors={m.doors} />
+      {!m.route && m.viaProvider && (
+        <div
+          className="mt-1 text-[12px] text-amber-200/90"
+          title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
+        >
+          answered by {m.viaProvider}
+        </div>
+      )}
+      {/* Tools the reply's tool loop actually ran — LEGACY line for
+          pre-v1.165.0 messages; the TurnReceipt carries the same fact (plus
+          denials) when a route is present, so both would say it twice. */}
+      {!m.route && m.toolsUsed && m.toolsUsed.length > 0 && (
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500">
+          <Wrench size={11} className="shrink-0" />
+          <span className="truncate">used: {m.toolsUsed.join(", ")}</span>
+        </div>
+      )}
+      {/* URLs the turn's web tools actually returned */}
+      {m.sources && m.sources.length > 0 && <SourcesRow sources={m.sources} />}
+      {/* Crystallize nudge (v1.120.0): agent turns are by definition
+          multi-step — offer to keep the process. */}
+      {m.fromSession && isLast && !busy && threadId && (
+        <button
+          type="button"
+          disabled={crystallizingId !== null}
+          onClick={() => h.crystallize(threadId)}
+          className="-ml-2 mt-1 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.08] disabled:opacity-50"
+        >
+          {crystallizingId ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <GitBranch size={12} />
+          )}
+          Keep this as a workflow?
+        </button>
+      )}
+      {/* Goal birth (v1.208.0): only on the newest settled reply; GoalBirth
+          applies the deliberately-high bar and renders nothing otherwise,
+          because a false chip trains the user to ignore every chip. */}
+      {isLast && !busy && (
+        <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} />
       )}
     </div>
   );
@@ -9540,7 +9543,18 @@ export default function ChatPage() {
                         messages[i - 1].role === "user" &&
                         !busy;
                       return (
-                        <div key={i} data-msg-index={i} className="contents">
+                        // Calm chat W1-4: each message holds itself to the
+                        // reading column. The scroller's `[&>*]` rule cannot
+                        // reach it — it sits inside QuoteSelection, which has
+                        // no box (`contents`) — so without this the replies
+                        // and your bubble spread across the whole window. A
+                        // hidden Continue turn renders nothing, so it keeps
+                        // no box (an empty one would add a gap).
+                        <div
+                          key={i}
+                          data-msg-index={i}
+                          className={m.continuation ? "contents" : "mx-auto w-full max-w-[760px]"}
+                        >
                         <MessageRow
                           m={m}
                           i={i}
@@ -9593,9 +9607,9 @@ export default function ChatPage() {
                             wording — a note lands at the next step, never
                             inside a sentence already being written. */}
                         {pendingSteers.length > 0 && (
-                          <div data-testid="steer-notes" className="ml-11 mt-1 space-y-0.5">
+                          <div data-testid="steer-notes" className="mt-1 space-y-0.5">
                             {pendingSteers.map((note, k) => (
-                              <p key={k} className="text-[11.5px] text-zinc-500">
+                              <p key={k} className="text-[12px] text-zinc-500">
                                 <span className="text-accent-soft">Steer sent:</span> {note}
                                 <span className="text-zinc-600">
                                   {" "}
