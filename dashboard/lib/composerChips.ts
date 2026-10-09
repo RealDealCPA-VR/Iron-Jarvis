@@ -89,5 +89,5 @@ export function composerKeyHint(busy: boolean, steerable: boolean): string {
     return "Enter sends a note Jarvis reads at its next step · Ctrl+Enter sends after this reply · Esc stops";
   }
   if (busy) return "Esc stops";
-  return "Enter to send · Shift+Enter new line · / for skills · @ for agents";
+  return "Enter to send · Shift+Enter new line · / for skills · @ for agents and chats";
 }

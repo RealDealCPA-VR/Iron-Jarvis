@@ -115,8 +115,10 @@ describe("the controls cannot be scrolled away", () => {
     // conversation the section is overflow-hidden (only the transcript
     // scrolls); on a new chat it is overflow-y-auto, so the centred greeting,
     // card and suggestions can still be reached on a short screen.
+    // v1.328.0: from md only — below md the section is as tall as its content
+    // (the page scrolls), and the class only clipped the "@" menu.
     expect(CODE).toMatch(
-      /relative flex h-full min-h-0 flex-col \$\{\s*emptyHero \? "overflow-y-auto" : "overflow-hidden"\s*\}/,
+      /relative flex h-full min-h-0 flex-col \$\{\s*emptyHero \? "md:overflow-y-auto" : "overflow-hidden"\s*\}/,
     );
     const card = CODE.indexOf('data-testid="chat-card"');
     expect(CODE.slice(card, card + 400)).not.toContain("card-surface");

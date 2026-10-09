@@ -136,6 +136,15 @@ import {
   type ResourceReceipt,
 } from "@/lib/mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "@/lib/turnReads";
+import {
+  CHAT_REFS_FULL_NOTE,
+  CHAT_REFS_MAX,
+  addChatRef,
+  chatRefIds,
+  useChatRefSearch,
+  visibleChatRefRows,
+  type ChatRefPick,
+} from "@/lib/chatRefs";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
@@ -272,7 +281,8 @@ import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import ThreadGroups, { GROUP_LIMIT } from "@/components/chat/ThreadGroups";
-import { markViewed, readLastViewed, threadStatuses } from "@/lib/threadStatus";
+import { formatAge, markViewed, readLastViewed, threadStatuses } from "@/lib/threadStatus";
+import { AT_MENU_ROOMY_PX, squeezedLeadRows, useAtMenuFit } from "@/lib/chatRefsMenuFit";
 import { useThreadListPoll } from "@/lib/threadListPoll";
 import { appendDictation } from "@/components/VoiceInput";
 import { ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
@@ -565,6 +575,10 @@ interface ChatMessage {
   /** v1.325.0: the dashboard page this question was asked about ("Ask Jarvis
    *  about this page") — sent with this turn, and again on a Try again. */
   pageContext?: PageContext;
+  /** v1.328.0 (calm chat W3-1): the saved chats this user message pointed at
+   *  with "@" ({id, title}) — sent as `thread_refs` with this turn, and again
+   *  on a Try again. */
+  chatRefs?: ChatRefPick[];
   /** v1.327.0 (calm chat W2-3): the project folder's instruction files this
    *  turn followed ("AGENTS.md", "CLAUDE.md") — the receipt says them. Absent
    *  when none were read and on older messages. */
@@ -581,6 +595,8 @@ interface QueuedMessage {
   files: UploadedFile[];
   appRes: PackResource[];
   page: PageContext | null;
+  /** v1.328.0: the saved chats picked with "@" when it was queued. */
+  refs: ChatRefPick[];
 }
 /** v1.325.0: at most this many messages wait for the running reply. */
 const MAX_QUEUED = 3;
@@ -630,6 +646,7 @@ type ChatRequestBody = {
   resources?: { pack: string; uri: string; name?: string }[]; // v1.324.0: "@" → from your apps
   mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
   page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
+  thread_refs?: string[]; // v1.328.0: "@" → saved chats read as reference material (≤ 3 ids)
 };
 interface ChatResponse {
   reply: string;
@@ -1767,11 +1784,15 @@ const ComposerInput = memo(function ComposerInput({
   onTyped,
   onPasteFiles,
   talkingTo = "",
+  atKeys,
 }: {
   store: ComposerStore;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   busy: boolean;
   skills: SkillOption[] | null;
+  /** v1.328.0: while the "@" menu is open it owns ↑↓, Enter and Esc. The
+   *  picker puts its handler here (null while closed); true = handled. */
+  atKeys?: React.RefObject<AtKeyHandler | null>;
   onSend: (text: string) => void;
   onStop: () => void;
   /** v1.284.0: the agent(s) the conversation is with — the placeholder says
@@ -1885,6 +1906,9 @@ const ComposerInput = memo(function ComposerInput({
         return;
       }
     }
+    // v1.328.0: the "@" menu (agents, chats, app files) — it yields to the
+    // "/" menu, so it is only asked when that one is closed.
+    if (!slashActive && atKeys?.current?.(e)) return;
     // Escape cancels an in-flight turn (keyboard "Stop") without leaving the composer.
     if (e.key === "Escape" && busy) {
       e.preventDefault();
@@ -2088,8 +2112,15 @@ const SlashPicker = memo(function SlashPicker({
   );
 });
 
-/** The "@" agent picker (v1.150.0). Same shape as the "/" picker — one
- *  affordance grammar for both — and it yields to it when both could open. */
+/** v1.328.0: the "@" menu's key handler. The picker owns it (it knows the
+ *  rows); the textarea's keydown asks it first while the menu is open.
+ *  Returns true when the key was handled. */
+type AtKeyHandler = (e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean;
+
+/** The "@" picker: agents (v1.150.0), app files (v1.324.0) and saved chats
+ *  (v1.328.0). Same shape as the "/" picker — one affordance grammar for
+ *  both — and it yields to it when both could open. ↑↓ move across every
+ *  section in the order drawn, Enter picks, Esc closes. */
 const AtPicker = memo(function AtPicker({
   store,
   busy,
@@ -2097,6 +2128,11 @@ const AtPicker = memo(function AtPicker({
   resources,
   onOpened,
   onPickResource,
+  inputRef,
+  openChatId,
+  chatRefs,
+  onPickChat,
+  keysRef,
 }: {
   store: ComposerStore;
   busy: boolean;
@@ -2107,6 +2143,16 @@ const AtPicker = memo(function AtPicker({
   onOpened: () => void;
   /** Picking one consumes the "@token" and attaches it to the next message. */
   onPickResource: (r: PackResource) => void;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** v1.328.0: the saved chat this page has open — never offered. */
+  openChatId: string | null;
+  /** v1.328.0: the chats already picked (not offered again). */
+  chatRefs: ChatRefPick[];
+  /** v1.328.0: picking a chat adds a chip; the message text is untouched
+   *  apart from the "@token" being consumed. */
+  onPickChat: (c: ChatRefPick) => void;
+  /** v1.328.0: where this picker puts its key handler for the textarea. */
+  keysRef: React.RefObject<AtKeyHandler | null>;
 }) {
   const { text, caret, slashDismissed, atDismissed } = useComposer(store);
   const atToken = busy || atDismissed ? null : tokenAt(text, caret, "@");
@@ -2118,7 +2164,28 @@ const AtPicker = memo(function AtPicker({
   useEffect(() => {
     if (open) openedRef.current();
   }, [open]);
-  if (atToken === null || slashOpen) return null;
+  const typed = open ? (atToken?.query ?? "") : "";
+  // Asked at once each time the menu opens, then again as the query changes.
+  const chatRows = useChatRefSearch(open, typed, openChatId);
+  // The highlighted row, across every section; back to the top as the query
+  // changes or the menu reopens.
+  const [active, setActive] = useState(0);
+  const activeRef = useRef(0);
+  activeRef.current = active;
+  useEffect(() => {
+    setActive(0);
+  }, [typed, open]);
+  // v1.328.0 fix round: the menu opens where it has room. On a NEW chat the
+  // card is centred and the section that clips the menu starts just above it,
+  // so a tall menu opening upward lost its first rows off the top. The fit
+  // measures the card against that edge (before paint) and picks the side and
+  // a height that keep every row reachable by scrolling inside the menu.
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const fit = useAtMenuFit(menuRef, open, `${chatRefs.length}|${text.length}`);
+  if (atToken === null || slashOpen) {
+    keysRef.current = null;
+    return null;
+  }
   const atQuery = atToken.query ?? "";
   const list = mentionable ?? [];
   const agentMatches = atQuery
@@ -2137,29 +2204,134 @@ const AtPicker = memo(function AtPicker({
         r.uri.toLowerCase().includes(atQuery),
     )
     .slice(0, 50);
+  const chatMatches = visibleChatRefRows(chatRows, chatRefs, openChatId, atQuery);
+  // With full room each section keeps its own short scroll, so agents and
+  // chats are both in view at once. When the fit squeezed the menu, those
+  // inner scrolls would nest inside a small one: the sections drop their caps
+  // and the menu scrolls as one list.
+  const roomy = !fit || fit.maxHeight >= AT_MENU_ROOMY_PX;
+  // ... and then the agents alone would fill it (a new chat, where pointing at
+  // an earlier chat is most likely), with the Chats section below the fold.
+  // So while chats match, the sections above them keep only their first rows
+  // and say how many more there are; typing narrows them as before.
+  const lead = !roomy && fit && chatMatches.length > 0 ? squeezedLeadRows(fit.maxHeight) : Infinity;
+  const resourceShown = resourceMatches.slice(0, lead);
+  const agentShown = mentionable === null ? [] : agentMatches.slice(0, lead);
+  const resourceMore = resourceMatches.length - resourceShown.length;
+  const agentMore = mentionable === null ? 0 : agentMatches.length - agentShown.length;
+  const tok = atToken;
+
+  function pickResource(r: PackResource) {
+    const cur = store.get();
+    store.setText(spliceToken(cur.text, tok), tok.start);
+    store.setAtDismissed(false);
+    onPickResource(r);
+  }
+  function pickAgent(a: MentionableAgent) {
+    const cur = store.get();
+    store.setText(spliceToken(cur.text, tok) + `@${a.mention} `);
+    store.setAtDismissed(false);
+  }
+  /** A chat becomes a chip, never words in the message: only the "@token"
+   *  is consumed, the caret goes back where it was, the box keeps focus. */
+  function pickChat(c: ChatRefPick) {
+    const cur = store.get();
+    const pos = tok.start;
+    store.setText(spliceToken(cur.text, tok), pos);
+    store.setAtDismissed(false);
+    onPickChat(c);
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.selectionStart = el.selectionEnd = pos;
+    });
+  }
+
+  // Every row in the order it is drawn — the keys walk this one list.
+  const rows: { key: string; pick: () => void }[] = [
+    ...resourceShown.map((r) => ({ key: `res:${r.pack}/${r.uri}`, pick: () => pickResource(r) })),
+    ...agentShown.map((a) => ({
+      key: `agent:${a.name}`,
+      pick: () => pickAgent(a),
+    })),
+    ...chatMatches.map((c) => ({ key: `chat:${c.id}`, pick: () => pickChat(c) })),
+  ];
+  const activeIdx = rows.length ? Math.min(active, rows.length - 1) : -1;
+  const rowIndex = new Map(rows.map((r, i) => [r.key, i]));
+  const rowProps = (key: string) => {
+    const i = rowIndex.get(key) ?? -1;
+    const on = i === activeIdx;
+    return {
+      "aria-selected": on,
+      "data-active": on ? "true" : undefined,
+      ref: (el: HTMLButtonElement | null) => {
+        if (on) el?.scrollIntoView({ block: "nearest" });
+      },
+      onMouseEnter: () => setActive(i),
+      className: `flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-accent/[0.12] hover:text-accent-soft ${
+        on ? "bg-accent/[0.12] text-accent-soft" : "text-zinc-300"
+      }`,
+    };
+  };
+  keysRef.current = (e) => {
+    const n = rows.length;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      store.setAtDismissed(true);
+      return true;
+    }
+    if (n === 0) return false; // nothing to move over or pick: Enter sends
+    const cur = Math.min(activeRef.current, n - 1);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = Math.min(cur + 1, n - 1);
+      activeRef.current = next;
+      setActive(next);
+      return true;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = Math.max(cur - 1, 0);
+      activeRef.current = next;
+      setActive(next);
+      return true;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      rows[cur].pick();
+      return true;
+    }
+    return false;
+  };
+  const chatsFull = chatRefs.length >= CHAT_REFS_MAX;
+  const below = fit?.side === "below";
+  const sectionCap = (cls: string) => (roomy ? `${cls} overflow-y-auto` : "");
+  const ageNow = Date.now();
 
   return (
-    <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+    <div
+      ref={menuRef}
+      data-testid="at-menu"
+      data-side={below ? "below" : "above"}
+      style={fit ? { maxHeight: fit.maxHeight } : undefined}
+      className={`absolute left-3 right-3 z-20 ${
+        below ? "top-full mt-2" : "bottom-full mb-2"
+      } max-h-[min(28rem,60vh)] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40`}
+    >
       {resourceMatches.length > 0 && (
-        <div role="listbox" aria-label="From your apps" className="max-h-40 overflow-y-auto border-b border-white/[0.06] p-1">
+        <div role="listbox" aria-label="From your apps" className={`${sectionCap("max-h-40")} border-b border-white/[0.06] p-1`}>
           <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
             From your apps — attach to your next message
           </div>
-          {resourceMatches.map((r) => (
+          {resourceShown.map((r) => (
             <button
               key={`${r.pack}/${r.uri}`}
               type="button"
               role="option"
-              aria-selected={false}
               data-testid="pack-resource-option"
-              onClick={() => {
-                const cur = store.get();
-                store.setText(spliceToken(cur.text, atToken), atToken.start);
-                store.setAtDismissed(false);
-                onPickResource(r);
-              }}
+              {...rowProps(`res:${r.pack}/${r.uri}`)}
+              onClick={() => pickResource(r)}
               title={r.description || r.uri}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
             >
               <FileText size={12} className="shrink-0 text-accent-soft/70" />
               <span className="shrink-0 text-[12px]">{r.title || r.name || r.uri}</span>
@@ -2167,33 +2339,40 @@ const AtPicker = memo(function AtPicker({
               <span className="truncate text-[11px] text-zinc-500">{r.description}</span>
             </button>
           ))}
+          {resourceMore > 0 && (
+            <p data-testid="at-menu-more-resources" className="px-2.5 py-1 text-[11px] text-zinc-500">
+              {resourceMore} more from your apps, type to narrow
+            </p>
+          )}
         </div>
       )}
       {mentionable === null ? (
         <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
       ) : agentMatches.length === 0 ? (
-        <p className="px-3 py-2.5 text-xs text-zinc-500">
-          no matching agent — add one on the Agents page
-        </p>
+        // v1.328.0: when chats match, the empty agents line is noise.
+        chatMatches.length === 0 && (
+          <p className="px-3 py-2.5 text-xs text-zinc-500">
+            no matching agent — add one on the Agents page
+          </p>
+        )
       ) : (
-        <div role="listbox" aria-label="Agents" className="max-h-72 overflow-y-auto p-1">
+        <div
+          role="listbox"
+          aria-label="Agents"
+          className={`${sectionCap(chatMatches.length > 0 ? "max-h-40" : "max-h-72")} p-1`}
+        >
           <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
             {agentMatches.length} agent{agentMatches.length === 1 ? "" : "s"}
             {atQuery ? " matching" : ""} — they answer instead of Iron Jarvis
           </div>
-          {agentMatches.map((a) => (
+          {agentShown.map((a) => (
             <button
               key={a.name}
               type="button"
               role="option"
-              aria-selected={false}
-              onClick={() => {
-                const cur = store.get();
-                store.setText(spliceToken(cur.text, atToken) + `@${a.mention} `);
-                store.setAtDismissed(false);
-              }}
+              {...rowProps(`agent:${a.name}`)}
+              onClick={() => pickAgent(a)}
               title={a.description}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
             >
               <Bot size={12} className="shrink-0 text-accent-soft/70" />
               <span className="shrink-0 font-mono text-[12px]">{a.mention}</span>
@@ -2207,6 +2386,54 @@ const AtPicker = memo(function AtPicker({
                 <span className="shrink-0 text-[10px] text-amber-400/80">offline</span>
               )}
               <span className="truncate text-[11px] text-zinc-500">{a.description}</span>
+            </button>
+          ))}
+          {agentMore > 0 && (
+            <p data-testid="at-menu-more-agents" className="px-2.5 py-1 text-[11px] text-zinc-500">
+              {agentMore} more agent{agentMore === 1 ? "" : "s"}, type to narrow
+            </p>
+          )}
+        </div>
+      )}
+      {/* v1.328.0: SAVED CHATS (GET /chat/threads/search-refs). A pick is a
+          chip in the composer card, read with the next message. Nothing is
+          drawn while the first answer is on its way or when none match. */}
+      {chatMatches.length > 0 && (
+        <div
+          role="listbox"
+          aria-label="Chats"
+          data-testid="at-menu-chats"
+          className={`${sectionCap("max-h-48")} border-t border-white/[0.06] p-1`}
+        >
+          <div className="flex items-baseline gap-2 px-2.5 pb-1 pt-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+              Chats
+            </span>
+            <span className="truncate text-[11px] text-zinc-600">
+              {chatsFull
+                ? `${CHAT_REFS_FULL_NOTE}. Remove one to add another.`
+                : "Read with your next message"}
+            </span>
+          </div>
+          {chatMatches.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              role="option"
+              data-testid="chat-ref-option"
+              {...rowProps(`chat:${c.id}`)}
+              onClick={() => pickChat(c)}
+              title={c.title}
+            >
+              <MessageSquare size={12} className="shrink-0 text-accent-soft/70" />
+              <span data-testid="chat-ref-title" className="truncate text-[12px]">{c.title}</span>
+              {/* When it last changed, so chats that share a title can be
+                  told apart (the chat list's own "8m / 2h" format). */}
+              {formatAge(c.updatedAt, ageNow) && (
+                <span data-testid="chat-ref-age" className="ml-auto shrink-0 pl-2 text-[11px] text-zinc-500">
+                  {formatAge(c.updatedAt, ageNow)}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -2399,6 +2626,9 @@ const MessageRow = memo(function MessageRow({
           )}
           {m.pageContext && (
             <AttachmentFooter names={[`About: ${m.pageContext.title || m.pageContext.path}`]} />
+          )}
+          {m.chatRefs && m.chatRefs.length > 0 && (
+            <AttachmentFooter names={m.chatRefs.map((c) => `Chat: ${c.title}`)} />
           )}
         </Bubble>
         {/* v1.325.0: the versions an edit kept — always on screen. */}
@@ -3186,6 +3416,18 @@ export default function ChatPage() {
   // v1.325.0: "Ask Jarvis about this page" — the page the next message asks
   // about (a chip above the box; consumed by the send).
   const [pageCtx, setPageCtx] = useState<PageContext | null>(null);
+  // v1.328.0 (calm chat W3-1): saved chats picked with "@" for the NEXT
+  // message (chips in the card; consumed by the send like attachments). The
+  // ref is what a send reads (sends fire from stale closures); the note is
+  // the quiet "Up to 3 chats" a pick past the cap leaves beside the chips.
+  const [chatRefs, setChatRefsState] = useState<ChatRefPick[]>([]);
+  const chatRefsRef = useRef<ChatRefPick[]>([]);
+  const setChatRefs = useCallback((next: ChatRefPick[]) => {
+    chatRefsRef.current = next;
+    setChatRefsState(next);
+  }, []);
+  const [chatRefNote, setChatRefNote] = useState("");
+  const atKeysRef = useRef<AtKeyHandler | null>(null);
   const [promptForm, setPromptForm] = useState<PackPrompt | null>(null);
   const packListsAtRef = useRef<{ prompts: number; resources: number }>({ prompts: 0, resources: 0 });
   // TALKING TO AN AGENT (v1.284.0): after "@builder …" the follow-ups keep
@@ -5745,6 +5987,20 @@ export default function ChatPage() {
         : [...cur, r],
     );
   }, []);
+  // v1.328.0: "@" → a saved chat. At most CHAT_REFS_MAX; a pick past that is
+  // refused with the quiet note, the chips unchanged.
+  const pickChatRef = useCallback(
+    (c: ChatRefPick) => {
+      const { next, full } = addChatRef(chatRefsRef.current, c);
+      if (full) {
+        setChatRefNote(CHAT_REFS_FULL_NOTE);
+        return;
+      }
+      setChatRefNote("");
+      if (next !== chatRefsRef.current) setChatRefs(next);
+    },
+    [setChatRefs],
+  );
 
   const loadSkillsOnce = useCallback(() => {
     if (skillsFetchedRef.current) return;
@@ -6882,6 +7138,10 @@ export default function ChatPage() {
     // read from the message, so a Try again sends it again.
     const turnPage = asked?.role === "user" ? asked.pageContext : undefined;
     if (turnPage?.text.trim()) body.page_context = turnPage;
+    // v1.328.0: the saved chats this question pointed at with "@" — read
+    // from the message too, and the same body goes to both lanes.
+    const turnRefs = chatRefIds(asked?.role === "user" ? asked.chatRefs : undefined);
+    if (turnRefs.length) body.thread_refs = turnRefs;
     // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
     const turnId = mintTurnId();
     body.turn_id = turnId;
@@ -7387,11 +7647,21 @@ export default function ChatPage() {
     if (!q) setAppResources([]);
     const page = q ? q.page : pageCtx;
     if (!q) setPageCtx(null);
+    // v1.328.0: and so are the chats picked with "@" (a queued message keeps
+    // its own). They ride the user message so a Try again sends them again.
+    const refs = q ? q.refs : chatRefsRef.current;
+    if (!q) {
+      setChatRefs([]);
+      setChatRefNote("");
+    }
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
       at: new Date().toISOString(),
       ...(page ? { pageContext: page } : {}),
+      // Saved as id + title only: the age shown in the menu and on the chip is
+      // for telling chats apart at pick time, not part of the conversation.
+      ...(refs.length ? { chatRefs: refs.map((r) => ({ id: r.id, title: r.title })) } : {}),
       ...(appRes.length
         ? { appResources: appRes.map((r) => ({ pack: r.pack, uri: r.uri, ok: true, note: r.title || r.name || "" })) }
         : {}),
@@ -7532,6 +7802,7 @@ export default function ChatPage() {
       files: attachmentsRef.current,
       appRes: appResources,
       page: pageCtx,
+      refs: chatRefsRef.current,
     };
     const next = [...queuedRef.current, item];
     queuedRef.current = next;
@@ -7539,6 +7810,8 @@ export default function ChatPage() {
     setAttachments([]);
     setAppResources([]);
     setPageCtx(null);
+    setChatRefs([]);
+    setChatRefNote("");
     composer.reset();
   }
 
@@ -7565,6 +7838,14 @@ export default function ChatPage() {
     if (res.length) setAppResources((prev) => [...res, ...prev]);
     const page = items.find((x) => x.page)?.page;
     if (page) setPageCtx(page);
+    // v1.328.0: their chats come back as chips too, ahead of any picked
+    // since (no duplicates, at most CHAT_REFS_MAX).
+    const back = items.flatMap((x) => x.refs ?? []);
+    if (back.length) {
+      let refs: ChatRefPick[] = [];
+      for (const r of [...back, ...chatRefsRef.current]) refs = addChatRef(refs, r).next;
+      setChatRefs(refs);
+    }
   }
 
   /** v1.325.0: send one queued message — the chat lane only. A messaging
@@ -8256,6 +8537,9 @@ export default function ChatPage() {
     // v1.324.0: an app resource picked for one conversation is not sent in
     // another.
     setAppResources([]);
+    // v1.328.0: nor a chat picked with "@" (it may be the one opened next).
+    setChatRefs([]);
+    setChatRefNote("");
     setPromptForm(null);
   }
 
@@ -8694,6 +8978,9 @@ export default function ChatPage() {
       if (kept.length) queueSave(kept);
       composer.setText(target.content);
       setAttachments(attachmentsOf(target));
+      // v1.328.0: the chats it pointed at come back as chips with it.
+      setChatRefs(target.chatRefs ?? []);
+      setChatRefNote("");
       inputRef.current?.focus();
     },
     crystallize: (id) => void crystallizeThread(id),
@@ -9553,8 +9840,13 @@ export default function ChatPage() {
               // Calm chat W1-3: a new chat may be taller than a short window
               // (the connect doors, the ideas), so it scrolls as a whole; a
               // conversation scrolls only its transcript, as before.
+              // v1.328.0: from md only. Below md the column has no set height,
+              // so the section is as tall as its content and never scrolled:
+              // the class only CLIPPED, and it held the composer's "@" menu to
+              // the strip under the card while the rest of the phone screen
+              // sat empty. The page itself scrolls there.
               className={`relative flex h-full min-h-0 flex-col ${
-                emptyHero ? "overflow-y-auto" : "overflow-hidden"
+                emptyHero ? "md:overflow-y-auto" : "overflow-hidden"
               } ${activeProject && projectView !== "chat" ? "hidden" : ""}`}
             >
               {/* Drop affordance (v1.104.0). A 2px accent ring on the card edge
@@ -10198,6 +10490,11 @@ export default function ChatPage() {
                       resources={packResources}
                       onOpened={loadPackResources}
                       onPickResource={pickAppResource}
+                      inputRef={inputRef}
+                      openChatId={threadId}
+                      chatRefs={chatRefs}
+                      onPickChat={pickChatRef}
+                      keysRef={atKeysRef}
                     />
                     <SlashPicker
                       store={composer}
@@ -10247,6 +10544,8 @@ export default function ChatPage() {
                         toolbar's tools chip and listed (with Disarm) in its menu. */}
                     {(attachments.length > 0 ||
                       appResources.length > 0 ||
+                      chatRefs.length > 0 ||
+                      chatRefNote !== "" ||
                       pageCtx !== null ||
                       workfolder !== null ||
                       activeSkill !== "" ||
@@ -10376,6 +10675,45 @@ export default function ChatPage() {
                             </button>
                           </span>
                         ))}
+                        {/* v1.328.0: saved chats picked with "@" — read with the
+                            next message as reference material (≤ 3). */}
+                        {chatRefs.map((c) => (
+                          <span
+                            key={`chat-ref-${c.id}`}
+                            data-testid="chat-ref-chip"
+                            title={`${c.title}: this chat is read with your next message`}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <MessageSquare size={11} className="shrink-0 text-accent-soft" />
+                            <span data-testid="chat-ref-chip-title" className="max-w-[14rem] truncate">{c.title}</span>
+                            {formatAge(c.updatedAt) && (
+                              <span data-testid="chat-ref-chip-age" className="shrink-0 text-[11px] text-zinc-500">
+                                {formatAge(c.updatedAt)}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setChatRefs(chatRefsRef.current.filter((x) => x.id !== c.id));
+                                setChatRefNote("");
+                              }}
+                              aria-label={`Remove chat ${c.title}`}
+                              title="Don't send this chat"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        ))}
+                        {chatRefNote && (
+                          <span
+                            data-testid="chat-ref-limit"
+                            role="status"
+                            className="text-[11px] text-zinc-500"
+                          >
+                            {chatRefNote}
+                          </span>
+                        )}
                         {attachments.map((a, i) => (
                           <span
                             key={`${a.path}-${i}`}
@@ -10465,6 +10803,7 @@ export default function ChatPage() {
                       }}
                       onPasteFiles={(files) => void addFilesRef.current(files)}
                       talkingTo={addressee.map(agentDisplayName).join(", ")}
+                      atKeys={atKeysRef}
                     />
                     <div
                       data-testid="composer-toolbar"

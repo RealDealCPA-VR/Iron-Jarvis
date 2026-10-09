@@ -29,7 +29,7 @@ export interface ComposerState {
   caret: number;
   /** Esc closed the "/" dropdown; any edit reopens it. */
   slashDismissed: boolean;
-  /** Esc closed the "@" dropdown. */
+  /** Esc closed the "@" dropdown; any edit reopens it (v1.328.0). */
   atDismissed: boolean;
   /** Highlighted row in the "/" dropdown (↑↓ + Enter). */
   skillIndex: number;
@@ -90,8 +90,10 @@ export function createComposerStore(): ComposerStore {
         listeners.delete(cb);
       };
     },
+    // v1.328.0: typing reopens the "@" menu too — Esc closing it was final
+    // until a pick, which Esc had just ruled out.
     type: (text, caret) =>
-      commit({ ...state, text, caret, slashDismissed: false }),
+      commit({ ...state, text, caret, slashDismissed: false, atDismissed: false }),
     setText: (text, caret) =>
       commit({ ...state, text, caret: caret ?? text.length }),
     setCaret: (caret) => commit({ ...state, caret }),

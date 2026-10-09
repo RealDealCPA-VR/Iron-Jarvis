@@ -274,7 +274,10 @@ describe("a new chat: one centred group", () => {
     expect(scroller.previousElementSibling?.getAttribute("data-testid")).toBe("chat-hero-spacer-top");
     expect(dock.nextElementSibling?.getAttribute("data-testid")).toBe("chat-hero-spacer-bottom");
     // A tall new chat (doors, ideas) scrolls as a whole on a short screen.
-    expect(classes(screen.getByTestId("chat-card"))).toContain("overflow-y-auto");
+    // v1.328.0: from md; below md the page scrolls and the section must not
+    // clip the composer's "@" menu.
+    expect(classes(screen.getByTestId("chat-card"))).toContain("md:overflow-y-auto");
+    expect(classes(screen.getByTestId("chat-card"))).not.toContain("overflow-y-auto");
     // The glide honours prefers-reduced-motion.
     for (const id of ["chat-hero-spacer-top", "chat-hero-spacer-bottom"]) {
       expect(classes(screen.getByTestId(id))).toEqual(
