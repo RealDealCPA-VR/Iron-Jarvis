@@ -245,9 +245,20 @@ describe("the chip classes and the keyboard line", () => {
 
 /* -------------------------------------------------------------- the page */
 
+/* Calm chat W1-3 (v1.326.0): on a NEW chat the project chip sits just above
+ * the card, the conversation map is not drawn and nothing is faded (the
+ * composer is centred; new-chat-centre-v1326.test.tsx pins that screen). The
+ * pins below are about the card in a CONVERSATION, so they open one first. */
+async function openConversation() {
+  window.history.replaceState({}, "", "/chat?thread=ta");
+  const view = render(<ChatPage />);
+  await screen.findByText("The ledger is read.");
+  return view;
+}
+
 describe("one card holds every control", () => {
   it("the box is on top of the card, and the toolbar under it holds every control", async () => {
-    const { container } = render(<ChatPage />);
+    const { container } = await openConversation();
     const b = await box();
     const c = card();
     expect(b.parentElement).toBe(c);
@@ -293,7 +304,7 @@ describe("one card holds every control", () => {
   });
 
   it("the toolbar chips are ghosts at rest; only + carries a soft fill", async () => {
-    render(<ChatPage />);
+    await openConversation();
     await box();
     const tb = within(toolbar());
     for (const el of [
@@ -317,7 +328,7 @@ describe("one card holds every control", () => {
   });
 
   it("the old footer row is gone; the map, the gauge and the keys are quiet text under the card", async () => {
-    render(<ChatPage />);
+    await openConversation();
     await box();
     expect(screen.queryByText("Approvals:")).toBeNull();
     const meta = screen.getByTestId("composer-meta");
@@ -329,7 +340,7 @@ describe("one card holds every control", () => {
   });
 
   it("no divider line above the composer: the transcript fades into it", async () => {
-    render(<ChatPage />);
+    await openConversation();
     await box();
     const dock = screen.getByTestId("chat-dock");
     for (const el of [dock, card(), toolbar()]) {

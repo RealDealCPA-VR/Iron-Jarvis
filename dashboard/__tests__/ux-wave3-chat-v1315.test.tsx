@@ -344,7 +344,12 @@ afterEach(() => {
 
 describe("the composer on a phone (phone-composer-cramped)", () => {
   it("the message box takes the whole first line of the composer card; + / project / mic stay one press away under it", async () => {
+    // v1.326.0 (calm chat W1-3): on a NEW chat the project chip sits just
+    // above the card (new-chat-centre-v1326 pins that); the toolbar row is a
+    // conversation's, so these pins open one.
+    window.history.replaceState({}, "", "/chat?thread=t9");
     render(<ChatPage />);
+    await screen.findByText("The ledger totals 1.2M.");
     const box = await composerBox();
     // v1.326.0 (calm chat W1-2): the composer is ONE card at EVERY width —
     // the box on top, one toolbar row under it — so the v1.315.0 pins on a
@@ -374,7 +379,11 @@ describe("the composer on a phone (phone-composer-cramped)", () => {
 
   it("the project quick-toggle is icon-only on a phone; its title still names the project", async () => {
     withProject();
+    // v1.326.0 (W1-3): the toolbar toggle is a conversation's (a new chat
+    // names the project in the chip above the card, at every width).
+    window.history.replaceState({}, "", "/chat?thread=tp");
     render(<ChatPage />);
+    await screen.findByText("Q3 ledger sums to 88k.");
     const toggle = await screen.findByRole("button", { name: "Switch project" });
     await waitFor(() => expect(toggle.getAttribute("title") ?? "").toContain(PROJECT.name));
     const word = within(toggle).getByText(PROJECT.name);
@@ -428,7 +437,11 @@ describe("the composer on a phone (phone-composer-cramped)", () => {
 
   it("CONTROL: the + and project menus still open upward with every row", async () => {
     withProject();
+    // v1.326.0 (W1-3): in a conversation, where the project chip is in the
+    // toolbar (a new chat's chip above the card opens its menu downward).
+    window.history.replaceState({}, "", "/chat?thread=tp");
     render(<ChatPage />);
+    await screen.findByText("Q3 ledger sums to 88k.");
     const box = await composerBox();
     const row = box.parentElement as HTMLElement;
     fireEvent.click(within(row).getByRole("button", { name: "Open the chat menu" }));
@@ -448,7 +461,9 @@ describe("the composer on a phone (phone-composer-cramped)", () => {
 describe("Jump to latest only where there is something to jump to (jump-pill-on-empty-state)", () => {
   it("an empty chat scrolled away from its bottom shows no pill", async () => {
     render(<ChatPage />);
-    const lead = await screen.findByText(/Start a conversation/);
+    // v1.326.0 (W1-3): the greeting is one line now; it is still in the
+    // transcript scroller.
+    const lead = await screen.findByText("What can I help with?");
     const scroller = scrollerOf(lead);
     scrollAwayFromBottom(scroller);
     await settle();
@@ -457,7 +472,9 @@ describe("Jump to latest only where there is something to jump to (jump-pill-on-
 
   it("an empty chat opens at its top: the transcript never scrolls to its bottom sentinel", async () => {
     render(<ChatPage />);
-    const lead = await screen.findByText(/Start a conversation/);
+    // v1.326.0 (W1-3): the greeting is one line now; it is still in the
+    // transcript scroller.
+    const lead = await screen.findByText("What can I help with?");
     await settle();
     const sentinel = scrollerOf(lead).lastElementChild as Element;
     expect(sentinel).toBeTruthy();

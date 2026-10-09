@@ -111,7 +111,13 @@ describe("the controls cannot be scrolled away", () => {
     expect(CODE).toContain('data-testid="chat-card"');
     // v1.326.0 (calm chat): still the same flex column, but NO card: the
     // `card-surface` fill/border/shadow is gone from the chat section.
-    expect(CODE).toMatch(/relative flex h-full min-h-0 flex-col overflow-hidden/);
+    // Calm chat W1-3: the overflow became the one switch in the class. In a
+    // conversation the section is overflow-hidden (only the transcript
+    // scrolls); on a new chat it is overflow-y-auto, so the centred greeting,
+    // card and suggestions can still be reached on a short screen.
+    expect(CODE).toMatch(
+      /relative flex h-full min-h-0 flex-col \$\{\s*emptyHero \? "overflow-y-auto" : "overflow-hidden"\s*\}/,
+    );
     const card = CODE.indexOf('data-testid="chat-card"');
     expect(CODE.slice(card, card + 400)).not.toContain("card-surface");
     // No <Card> left in this file at all — the rails are sections too.
@@ -138,11 +144,24 @@ describe("the controls cannot be scrolled away", () => {
 
   it("the transcript is the only thing in the card that scrolls", () => {
     const transcript = CODE.indexOf("ref={scrollRef}");
-    const cls = CODE.slice(transcript, transcript + 400);
-    expect(cls).toMatch(/min-h-0 flex-1[\s\S]*overflow-y-auto/);
+    expect(transcript).toBeGreaterThan(-1);
+    // Calm chat W1-3: the scroller's class is a template with one switch. The
+    // shared part keeps overflow-y-auto; the conversation branch (after `:`)
+    // is the one that fills the column (min-h-0 flex-1). The new-chat branch
+    // is flex-none on purpose: it holds only the greeting, so the group can
+    // centre. Read the first className template after the ref, wherever the
+    // explanatory comment above it ends.
+    const tpl = CODE.slice(transcript, transcript + 3000).match(/className=\{`([\s\S]*?)`\}/)?.[1] ?? "";
+    expect(tpl).not.toBe("");
+    const shared = tpl.replace(/\$\{[\s\S]*?\}/g, " ");
+    expect(shared.split(/\s+/)).toContain("overflow-y-auto");
+    const conversation = tpl.match(/emptyHero\s*\?\s*"[^"]*"\s*:\s*"([^"]*)"/)?.[1] ?? "";
+    const convClasses = conversation.split(/\s+/);
+    expect(convClasses).toContain("min-h-0");
+    expect(convClasses).toContain("flex-1");
     // The guessed viewport fraction is gone at md and up: it left dead space
     // under short conversations and a second scrollbar under long ones.
-    expect(cls).toContain("md:max-h-none");
+    expect(convClasses).toContain("md:max-h-none");
     expect(CODE).not.toContain("min-h-[24rem]");
   });
 });

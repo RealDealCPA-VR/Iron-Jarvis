@@ -220,9 +220,29 @@ describe("the chat page has one bottom target", () => {
     expect(sentinelTag).not.toBe("");
     const margin = sentinelTag.match(/\bscroll-mb-(\d+)\b/)?.[1];
     expect(margin, "the sentinel carries a scroll-mb-* class").toBeTruthy();
-    const scrollerTag = PAGE.match(/ref=\{scrollRef\}[\s\S]*?className="([^"]*)"/)?.[1] ?? "";
-    const pads = Array.from(scrollerTag.matchAll(/(?:^|\s)(?:sm:)?pb-(\d+)\b/g)).map((m) => m[1]);
+    // Calm chat W1-3: the scroller's class is a template with one switch,
+    // `${emptyHero ? "<new chat>" : "<conversation>"}`. Read THAT template
+    // (the first className after the ref), not the next plain-string class.
+    const tpl = PAGE.match(/ref=\{scrollRef\}[\s\S]*?className=\{`([\s\S]*?)`\}/)?.[1] ?? "";
+    expect(tpl).not.toBe("");
+    const branches = tpl.match(/emptyHero\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"/);
+    expect(branches, "the scroller's class switches on emptyHero").toBeTruthy();
+    const shared = tpl.replace(/\$\{[\s\S]*?\}/g, " ");
+    const conversation = branches?.[2] ?? "";
+    const padsOf = (cls: string) =>
+      Array.from(cls.matchAll(/(?:^|\s)(?:sm:)?pb-(\d+)\b/g)).map((m) => m[1]);
+    // No bottom padding in the shared part: each branch owns its own.
+    expect(padsOf(shared)).toEqual([]);
+    const pads = padsOf(conversation);
     expect(pads.length).toBeGreaterThan(0);
     for (const pad of pads) expect(pad).toBe(margin);
+    // The new-chat branch (branches[1]) is EXEMPT on purpose: it holds only
+    // the greeting and takes its own height, so nothing in it scrolls, and no
+    // bottom scroll aims at the sentinel then (the scroll effect, the scroll
+    // handler and the growth re-pin all return early on an empty chat; Jump
+    // to latest is hidden). Its smaller pb keeps the greeting near the card.
+    expect(branches?.[1] ?? "").toContain("flex-none");
+    expect(PAGE).toMatch(/if \(messages\.length === 0 && !busy\) \{\s*pinnedRef\.current = true;/);
+    expect(PAGE).toMatch(/pinnedRef\.current && !\(messagesRef\.current\.length === 0 && !busyRef\.current\)/);
   });
 });

@@ -158,7 +158,7 @@ import {
   decodeSuggestion,
   type ChatSuggestion,
 } from "@/lib/preferences";
-import { RecipesRow } from "@/components/chat/RecipesRow";
+import { NewChatSuggestions, NEW_CHAT_SUGGESTIONS } from "@/components/chat/NewChatSuggestions";
 import {
   ArtifactsRail,
   confirmUndoPrompt,
@@ -3132,16 +3132,17 @@ export default function ChatPage() {
   // Empty-state example chips (v1.198.0). The initializer must be
   // DETERMINISTIC: this page is prerendered, so a random initial render would
   // bake one trio into the build's HTML and hydration-mismatch nearly every
-  // live visit. We render the stable first four (anchor-led, same first chip
-  // as any pick), then rotate in an effect AFTER hydration.
+  // live visit. We render the stable first three (anchor-led, same first chip
+  // as any pick), then rotate in an effect AFTER hydration. Calm chat W1-3:
+  // three quiet pills under the card, not four.
   const [examples, setExamples] = useState<string[]>(() =>
-    CHAT_EXAMPLES.slice(0, 4),
+    CHAT_EXAMPLES.slice(0, NEW_CHAT_SUGGESTIONS),
   );
   useEffect(() => {
     // Rotate only after hydration (the roster-fold idiom, like approvalMode
     // below): server HTML and first client render must agree, and both lead
     // with the CHAT_EXAMPLES[0] anchor so no visible first-chip swap.
-    setExamples(pickExamples());
+    setExamples(pickExamples(NEW_CHAT_SUGGESTIONS));
   }, []);
   // "+" TOOLS MENU (chat mode): armed registry tool names — sent as `tools` on
   // every /chat turn and kept across turns until "New chat" / a thread switch.
@@ -8972,6 +8973,138 @@ export default function ChatPage() {
             </section>
   );
 
+  // Calm chat W1-3 (v1.326.0): a NEW chat (nothing said, nothing running) puts
+  // the composer in the middle of the screen. The SAME composer element moves
+  // to the bottom dock after the first message: only its containers change
+  // layout, so the typed text and the focus survive the move.
+  const emptyHero = messages.length === 0 && !busy;
+
+  // The project chip and its menu. ONE definition, drawn in one of two places:
+  // in the card's toolbar once the conversation has a message, and just above
+  // the card on a new chat (where it names the project, so a phone shows the
+  // name too, and the menu opens downward because the top of the screen is
+  // the greeting). Same label, same title, same menu either way.
+  const projectSwitch = (where: "toolbar" | "above") => {
+    const above = where === "above";
+    return (
+      <div ref={projPopRef} className={above ? "relative" : "sm:relative"}>
+        <button
+          type="button"
+          onClick={() => {
+            setProjMenuOpen((v) => !v);
+            setToolMenuOpen(false);
+          }}
+          aria-expanded={projMenuOpen}
+          aria-haspopup="true"
+          aria-label="Switch project"
+          title={
+            activeProject
+              ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
+              : "Work inside a project — replies ground in its files + knowledge"
+          }
+          className={
+            above
+              ? `inline-flex h-8 max-w-full items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 hover:bg-white/[0.06] ${
+                  activeProject ? "text-accent-soft" : "text-zinc-500 hover:text-zinc-200"
+                }`
+              : composerChipClass(Boolean(activeProject))
+          }
+        >
+          <FolderKanban size={14} className="shrink-0" />
+          {above ? (
+            <>
+              <span className="min-w-0 truncate">
+                {activeProject ? activeProject.name : "No project"}
+              </span>
+              <ChevronDown size={13} className="shrink-0 opacity-70" aria-hidden />
+            </>
+          ) : (
+            /* v1.315.0: icon-only on a phone (the title above and the top
+               bar's breadcrumb still name the project). */
+            activeProject && (
+              <span className="hidden max-w-[9rem] truncate sm:inline">
+                {activeProject.name}
+              </span>
+            )
+          )}
+        </button>
+        {projMenuOpen && (
+          <div
+            className={`absolute left-0 z-20 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40 ${
+              above ? "top-full mt-2" : "bottom-full mb-2"
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                chooseProject("");
+                setProjMenuOpen(false);
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
+                !projectId ? "text-accent-soft" : "text-zinc-300"
+              }`}
+            >
+              <MessageSquare size={13} className="shrink-0" />
+              Plain chat — no project
+            </button>
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  chooseProject(p.id);
+                  setProjMenuOpen(false);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
+                  projectId === p.id ? "text-accent-soft" : "text-zinc-300"
+                }`}
+              >
+                <FolderKanban size={13} className="shrink-0" />
+                <span className="min-w-0 truncate">{p.name}</span>
+              </button>
+            ))}
+            <Link
+              href="/projects"
+              onClick={() => setProjMenuOpen(false)}
+              className="flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+            >
+              <Plus size={13} className="shrink-0" />
+              New project / manage all ↗
+            </Link>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // The PreflightNote, built once: on a new chat it sits quietly UNDER the
+  // card (W1-3), in a conversation it stays in the notices tray above it.
+  const preflightNote = (
+    <PreflightNote
+      provider={splitChoice(choice).provider || health.defaultProvider}
+      available={
+        health.byProvider[
+          splitChoice(choice).provider || health.defaultProvider
+        ]
+      }
+      stale={health.stale}
+      cooldownS={
+        // Optional-chained on purpose (v1.232.0): this map is newer
+        // than the hook's other fields, and a caller holding an
+        // older shape must not take the whole composer down.
+        health.cooldownByProvider?.[
+          splitChoice(choice).provider || health.defaultProvider
+        ]
+      }
+      signedOut={
+        // v1.234.0: same optional-chain rule as cooldownS.
+        health.signedOutByProvider?.[
+          splitChoice(choice).provider || health.defaultProvider
+        ]
+      }
+    />
+  );
+
   return (
     <PageShell className="space-y-0">
       {/* NOTHING STANDS ABOVE THE WORK (v1.215.0). The page header and the
@@ -9406,9 +9539,12 @@ export default function ChatPage() {
               id={PROJECT_VIEW_CHAT_ID}
               role={activeProject ? "tabpanel" : undefined}
               aria-label={activeProject ? "Project chat" : undefined}
-              className={`relative flex h-full min-h-0 flex-col overflow-hidden ${
-                activeProject && projectView !== "chat" ? "hidden" : ""
-              }`}
+              // Calm chat W1-3: a new chat may be taller than a short window
+              // (the connect doors, the ideas), so it scrolls as a whole; a
+              // conversation scrolls only its transcript, as before.
+              className={`relative flex h-full min-h-0 flex-col ${
+                emptyHero ? "overflow-y-auto" : "overflow-hidden"
+              } ${activeProject && projectView !== "chat" ? "hidden" : ""}`}
             >
               {/* Drop affordance (v1.104.0). A 2px accent ring on the card edge
                   was the whole signal before, which read as "this card is
@@ -9457,6 +9593,20 @@ export default function ChatPage() {
                   onClose={() => setCompactionOpen(false)}
                 />
               )}
+              {/* Calm chat W1-3: the room ABOVE the new-chat group. With the
+                  matching spacer under the dock (grown a little more, so the
+                  card sits slightly above true centre) it centres greeting,
+                  project chip, card and suggestions in the screen. In a
+                  conversation both spacers shrink to nothing; flex-grow
+                  eases, so the card glides to the bottom (not under
+                  prefers-reduced-motion). Always mounted: the dock must keep
+                  its place among its siblings so the composer never remounts. */}
+              <div
+                aria-hidden
+                data-testid="chat-hero-spacer-top"
+                className="min-h-0 shrink-0 basis-0 transition-[flex-grow] duration-300 ease-out motion-reduce:transition-none"
+                style={{ flexGrow: emptyHero ? 1 : 0 }}
+              />
               {/* Message thread — THE ONLY SCROLLING PART of the card.
                   `min-h-0 flex-1` replaces `max-h-[60vh] min-h-[24rem]`: the
                   transcript now takes exactly the room the header and composer
@@ -9473,56 +9623,26 @@ export default function ChatPage() {
                 // the last 28px of the transcript FADE into it (a mask, so it
                 // fades into whatever the theme's page is), and the bottom
                 // padding keeps the newest line clear of the fade.
-                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 pb-8 sm:p-5 sm:pb-8 md:max-h-none [-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px]"
+                // Calm chat W1-3: on a new chat it holds only the greeting and
+                // takes its own height (`flex-none`), so the group can centre;
+                // there is nothing to fade there, so no mask and no fade room
+                // (the greeting would be faded, and sit far above the card).
+                className={`flex flex-col gap-4 overflow-y-auto [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px] ${
+                  emptyHero
+                    ? "flex-none px-4 pb-4 pt-4 sm:px-5"
+                    : "max-h-[60vh] min-h-0 flex-1 p-4 pb-8 sm:p-5 sm:pb-8 md:max-h-none [-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)]"
+                }`}
               >
-                {messages.length === 0 && !busy ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-6">
-                    {/* Redesign S11 (AUDIT §8, wireframe home.md): a calm
-                        greeting in the display step — the home is mostly
-                        whitespace around the composer. */}
-                    <div data-testid="chat-greeting" className="flex flex-col items-center gap-2 py-6 text-center">
-                      <p className="text-display font-semibold tracking-tight text-zinc-100">
-                        What can I help with?
-                      </p>
-                      <p className="max-w-md text-body text-zinc-500">
-                        Start a conversation. Ask a question or describe what you
-                        need — quick answers come straight back, and real work
-                        just gets done.
-                      </p>
-                    </div>
-                    {/* v1.310.0: the way forward comes BEFORE the demo
-                        prompts. Every chip answered by the offline demo is
-                        the same scripted sentence, so a first-timer must see
-                        how to get a real answer first (finding
-                        demo-mode-chat-nonsense; the scripted-reply half of
-                        that proposal was dropped by the verifier). */}
-                    {showConnectDoors && (
-                      // v1.314.0: wider card + the doors side by side, so the
-                      // starter prompts below reach the fold on a laptop. The
-                      // row layout is opt-in — the wizard keeps its stack.
-                      <div className="w-full max-w-2xl rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
-                        <p className="mb-2 text-sm font-semibold text-zinc-100">
-                          Connect a model for real answers
-                        </p>
-                        <ConnectDoors layout="row" />
-                      </div>
-                    )}
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {examples.map((ex) => (
-                        <button
-                          key={ex}
-                          onClick={() => prefill(ex)}
-                          className="rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
-                        >
-                          {ex}
-                        </button>
-                      ))}
-                    </div>
-                    {/* Recipes (v1.199.0): a static curated catalog of
-                        whole-job prompts. A click PREFILLS the composer and
-                        never sends — suggest-don't-act. The row renders its
-                        own heading. */}
-                    <RecipesRow onPick={prefill} />
+                {emptyHero ? (
+                  // Redesign S11 (AUDIT §8, wireframe home.md): a calm greeting
+                  // in the display step. Calm chat W1-3: one line; the
+                  // project chip, the card, the doors and the suggestions sit
+                  // in the dock below, so the composer is the same element
+                  // before and after the first message.
+                  <div data-testid="chat-greeting" className="flex flex-col items-center pt-2 text-center">
+                    <p className="text-display font-medium tracking-tight text-zinc-100">
+                      What can I help with?
+                    </p>
                   </div>
                 ) : (
                   <>
@@ -9697,6 +9817,13 @@ export default function ChatPage() {
                   </button>
                 )}
                 <div className="mx-auto w-full max-w-[792px]">
+                  {/* Calm chat W1-3: on a new chat the project chip sits just above
+                      the card (in a conversation it is in the card's toolbar). */}
+                  {emptyHero && (
+                    <div data-testid="chat-hero-project" className="mb-1.5 flex min-w-0 px-2">
+                      {projectSwitch("above")}
+                    </div>
+                  )}
                   {/* THE NOTICES TRAY: what is about the next message (a failed save,
                       an error and its Retry, the preflight warning, the compaction
                       offer, queued messages, the edit Undo, a held key, who the chat
@@ -9879,29 +10006,9 @@ export default function ChatPage() {
                         DEFAULT provider — the default is exactly where the mock
                         incident happened. "auto" resolves per-turn, so it is never
                         warned about (absent from the map → undefined → silent). */}
-                    <PreflightNote
-                      provider={splitChoice(choice).provider || health.defaultProvider}
-                      available={
-                        health.byProvider[
-                          splitChoice(choice).provider || health.defaultProvider
-                        ]
-                      }
-                      stale={health.stale}
-                      cooldownS={
-                        // Optional-chained on purpose (v1.232.0): this map is newer
-                        // than the hook's other fields, and a caller holding an
-                        // older shape must not take the whole composer down.
-                        health.cooldownByProvider?.[
-                          splitChoice(choice).provider || health.defaultProvider
-                        ]
-                      }
-                      signedOut={
-                        // v1.234.0: same optional-chain rule as cooldownS.
-                        health.signedOutByProvider?.[
-                          splitChoice(choice).provider || health.defaultProvider
-                        ]
-                      }
-                    />
+                    {/* Calm chat W1-3: on a new chat the note sits under the card
+                        instead (the same element, `preflightNote`). */}
+                    {!emptyHero && preflightNote}
                     {/* The compaction offer (v1.153.0). Sits directly above the
                         composer because it is about the message the user is about to
                         send. Suppressed once dismissed until the conversation grows
@@ -10563,74 +10670,10 @@ export default function ChatPage() {
                             </div>
                           )}
                         </div>
-                        <div ref={projPopRef} className="sm:relative">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setProjMenuOpen((v) => !v);
-                              setToolMenuOpen(false);
-                            }}
-                            aria-expanded={projMenuOpen}
-                            aria-haspopup="true"
-                            aria-label="Switch project"
-                            title={
-                              activeProject
-                                ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
-                                : "Work inside a project — replies ground in its files + knowledge"
-                            }
-                            className={composerChipClass(Boolean(activeProject))}
-                          >
-                            <FolderKanban size={14} className="shrink-0" />
-                            {/* v1.315.0: icon-only on a phone (the title above and the top
-                                bar's breadcrumb still name the project). */}
-                            {activeProject && (
-                              <span className="hidden max-w-[9rem] truncate sm:inline">
-                                {activeProject.name}
-                              </span>
-                            )}
-                          </button>
-                          {projMenuOpen && (
-                            <div className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  chooseProject("");
-                                  setProjMenuOpen(false);
-                                }}
-                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
-                                  !projectId ? "text-accent-soft" : "text-zinc-300"
-                                }`}
-                              >
-                                <MessageSquare size={13} className="shrink-0" />
-                                Plain chat — no project
-                              </button>
-                              {projects.map((p) => (
-                                <button
-                                  key={p.id}
-                                  type="button"
-                                  onClick={() => {
-                                    chooseProject(p.id);
-                                    setProjMenuOpen(false);
-                                  }}
-                                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
-                                    projectId === p.id ? "text-accent-soft" : "text-zinc-300"
-                                  }`}
-                                >
-                                  <FolderKanban size={13} className="shrink-0" />
-                                  <span className="min-w-0 truncate">{p.name}</span>
-                                </button>
-                              ))}
-                              <Link
-                                href="/projects"
-                                onClick={() => setProjMenuOpen(false)}
-                                className="flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
-                              >
-                                <Plus size={13} className="shrink-0" />
-                                New project / manage all ↗
-                              </Link>
-                            </div>
-                          )}
-                        </div>
+                        {/* The project chip. On a NEW chat it sits just above the card
+                            (calm chat W1-3, `projectSwitch("above")`); once the conversation
+                            has a message it lives here, in the toolbar. One chip at a time. */}
+                        {!emptyHero && projectSwitch("toolbar")}
                         {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves for this
                             conversation. v1.326.0: a quiet chip in the card, the native select
                             kept (its id, name and wire values are the contract) with a shield
@@ -11287,7 +11330,10 @@ export default function ChatPage() {
                     data-testid="composer-meta"
                     className="flex min-h-7 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pt-1.5 text-[12px] text-zinc-500"
                   >
-                    {/* v1.325.0: the conversation map — every question, one press away. */}
+                    {/* v1.325.0: the conversation map — every question, one press away.
+                        Calm chat W1-3: not on a new chat, where it could only be
+                        a disabled button pointing at questions nobody asked. */}
+                    {!emptyHero && (
                     <button
                       type="button"
                       data-testid="open-conversation-map"
@@ -11301,6 +11347,7 @@ export default function ChatPage() {
                       <ListTree size={13} />
                       <span>Map</span>
                     </button>
+                    )}
                     {mapOpen && (
                       <div className="fixed bottom-24 right-4 z-40 w-[min(26rem,calc(100vw-2rem))]">
                         <ConversationMap
@@ -11333,8 +11380,39 @@ export default function ChatPage() {
                         : composerKeyHint(busy, !commMeta)}
                     </span>
                   </div>
+                  {/* Calm chat W1-3: under the card on a NEW chat, quietly. The
+                      preflight warning, then (v1.310.0: the way forward comes
+                      BEFORE the demo prompts, because every chip the offline demo
+                      answers gets the same scripted sentence) the connect doors
+                      while replies are a demo, then three suggestions and the
+                      folded whole-job ideas. Each press only fills the box. */}
+                  {emptyHero && (
+                    <div data-testid="chat-hero-foot" className="flex flex-col items-center gap-4 px-1 sm:mt-3">
+                      {preflightNote}
+                      {showConnectDoors && (
+                        // v1.314.0: the doors side by side from sm. No box of its
+                        // own any more: the composer is the one card on screen.
+                        <div className="w-full max-w-2xl">
+                          <p className="mb-2 text-center text-[13px] text-zinc-400">
+                            Connect a model for real answers
+                          </p>
+                          <ConnectDoors layout="row" />
+                        </div>
+                      )}
+                      <NewChatSuggestions examples={examples} onPick={prefill} />
+                    </div>
+                  )}
                 </div>
               </div>
+              {/* Calm chat W1-3: the room UNDER the new-chat group (see the top
+                  spacer). A little more than above, so the card sits slightly
+                  above true centre. */}
+              <div
+                aria-hidden
+                data-testid="chat-hero-spacer-bottom"
+                className="min-h-0 shrink-0 basis-0 transition-[flex-grow] duration-300 ease-out motion-reduce:transition-none"
+                style={{ flexGrow: emptyHero ? 1.4 : 0 }}
+              />
             </section>
           </div>
 

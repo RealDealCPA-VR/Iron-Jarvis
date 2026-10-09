@@ -23,7 +23,8 @@ describe("CHAT_EXAMPLES curation", () => {
   });
 
   it("keeps the SSR slice contract: the prerendered slice(0, 4) and any pick lead with the same anchor", () => {
-    // chat/page.tsx initializes with CHAT_EXAMPLES.slice(0, 4) (deterministic,
+    // chat/page.tsx initializes with CHAT_EXAMPLES.slice(0, NEW_CHAT_SUGGESTIONS),
+    // which is 3 since calm chat W1-3 (deterministic,
     // hydration-safe on the prerendered route) and swaps to pickExamples()
     // after mount — both must start with the anchor or the first chip visibly
     // changes on hydration.
