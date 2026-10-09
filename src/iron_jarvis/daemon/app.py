@@ -2966,6 +2966,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import followups as _followups_routes
 
     _followups_routes.register(app, d)
+    # What a chat turn changed on disk (v1.328.0): POST /chat/changes.
+    from .routes import chat_changes as _chat_changes_routes
+
+    _chat_changes_routes.register(app, d)
 
     # Apps that talk back (v1.324.0): answer a pack's question / model request,
     # and list the packs' prompts and resources.
