@@ -111,3 +111,33 @@ def test_a_timezone_aware_stamp_compares_like_the_naive_one(tmp_path):
             json={"messages": _msgs(2), "if_updated_at": stamp + "+00:00"},
         )
         assert r.status_code == 200, r.text
+
+
+def test_two_saves_in_one_clock_tick_still_get_different_stamps(tmp_path, monkeypatch):
+    """v1.326.0: Windows' clock ticks every 15.6 ms, so two saves inside one
+    tick read the SAME time. The stamp is the version the stale-window check
+    compares, so it must still move — else tab B's stale copy (holding the
+    stamp tab A just overwrote) passes the check and wipes A's turn."""
+    from datetime import datetime, timezone
+
+    import iron_jarvis.core.ids as ids
+
+    frozen = datetime(2026, 10, 9, 12, 0, 0, tzinfo=timezone.utc)
+    app = create_app(str(tmp_path))
+    with TestClient(app) as c:
+        monkeypatch.setattr(ids, "utcnow", lambda: frozen)
+        r = c.put("/chat/threads/new", json={"messages": _msgs(2)})
+        assert r.status_code == 200, r.text
+        tid, first = r.json()["id"], r.json()["updated_at"]
+        r = c.put(
+            f"/chat/threads/{tid}",
+            json={"messages": _msgs(3), "if_updated_at": first},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["updated_at"] > first, "the stamp moved inside one tick"
+        r = c.put(
+            f"/chat/threads/{tid}",
+            json={"messages": _msgs(2), "if_updated_at": first},
+        )
+        assert r.status_code == 409, r.text
+        assert len(c.get(f"/chat/threads/{tid}").json()["messages"]) == 6

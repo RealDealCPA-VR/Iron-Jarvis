@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.325.6 (2026-10-04).*
+holds itself to. Current as of v1.326.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,52 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A calmer chat (v1.326.0)
+
+Ideas from DeepSeek Harness (MIT; ideas only, no code taken). The message box
+is now the only box on the chat page; everything else is plain text on the
+page.
+
+- **A new chat starts in the middle.** "What can I help with?", the project
+  you are in just above the message box, and three quiet suggestions under
+  it ("More ideas" shows the rest). After your first message the same box
+  moves to the bottom, keeping what you typed.
+- **Everything is inside the message box.** "+" (files and tools), the
+  project, approvals, tools, Web, the model, the microphone and Send all sit
+  in the box's bottom row. Under it, one quiet line of key hints; while Jarvis
+  answers it says what Enter, Ctrl+Enter and Esc do.
+- **A slim bar on top.** The conversation's name, the Chat / Tasks / Board /
+  Media tabs and, on the right, **Project** (opens the project's panel from
+  the side), **Share** and **⋯** (everything else). Esc closes the project
+  panel, except while you are typing in one of its boxes.
+- **Replies are just text.** No box around Jarvis's answers; your own
+  messages sit in a soft tinted bubble. Tables have thin lines and charts no
+  frame. The buttons under a reply (copy, try again, like, read aloud, keep)
+  are one quiet row.
+- **The work folds away.** While Jarvis works you see one grey line per step
+  (thinking, a tool, the current step); when it is done they fold into one
+  line, such as "Worked for 3.2 s · read 2 files, ran 1 tool", that opens
+  again on click.
+- **"answered by …" ends each reply.** The model that answered is named at
+  the end of the reply's button row; open it for the full details. Warnings
+  (a different model answered than the one you picked, or a stand-in
+  answered) still show in amber.
+- **A question takes the message box's place.** When Jarvis or an app needs
+  you (an approval, an app's question, an app asking to use the model), it
+  appears where the message box was. Enter allows or sends, Esc declines,
+  and "1 of 3" shows when several are waiting. What you were typing is kept
+  underneath.
+- **Your project's own rules are read.** When a chat is in a project whose
+  folder has `AGENTS.md` or `CLAUDE.md` (or `AGENTS.local.md` /
+  `CLAUDE.local.md`), Jarvis reads them on every message, checked for hidden
+  instructions like any attached file and kept to about 8,000 characters
+  together. Turn it off in Settings ("Read a project's AGENTS.md and
+  CLAUDE.md in chat").
+- **Fetch the models a custom server has.** Settings → Connections → a custom
+  endpoint now has a **Fetch available models** link: it asks that server
+  only when you press it, the list can be searched, and the key goes only to
+  that server. The automatic check while you typed the address is gone.
 
 ## Charts, versions and more in chat (v1.325.0)
 

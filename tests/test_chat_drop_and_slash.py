@@ -132,4 +132,8 @@ def test_the_picker_follows_the_caret_not_just_typing(src: str):
 def test_the_composer_advertises_the_slash_command(src: str):
     """Discoverability was the actual failure mode: the feature shipped, the
     user never learned it was there."""
-    assert "/ for skills" in src
+    # v1.326.0 (calm chat W1-2): the hint line moved into the composer's
+    # helper (lib/composerChips.composerKeyHint), which the page renders.
+    hint = (PAGE.parents[2] / "lib" / "composerChips.ts").read_text(encoding="utf-8")
+    assert "/ for skills" in hint
+    assert "composerKeyHint(" in src

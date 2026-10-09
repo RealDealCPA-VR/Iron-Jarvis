@@ -2912,6 +2912,48 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **The composer is the only card; a question takes its place; a project
+  folder's AGENTS.md / CLAUDE.md ride every chat turn** (v1.326.0, calm chat
+  wave 1 — DeepSeek Harness ideas only, MIT). PAGE (`app/chat/page.tsx`):
+  no outer card (the section keeps `data-testid="chat-card"`); a slim top
+  bar with the breadcrumb, `ProjectViewTabs` as text tabs, Project
+  (`components/chat/ProjectDrawer.tsx`, `returnFocusTo`, Escape skipped in
+  its text fields via `isTextEntry`), Share and ⋯ (`ChatMoreMenu.tsx`).
+  `emptyHero = messages.length === 0 && !busy` CENTRES the SAME composer
+  element (never a second one: draft and focus survive) with the greeting,
+  `projectSwitch("above")` and `NewChatSuggestions` (3 = `NEW_CHAT_SUGGESTIONS`).
+  Chip classes and the key-hint line live in `lib/composerChips.ts`
+  (`composerKeyHint` holds "/ for skills"; tests/test_chat_drop_and_slash.py
+  reads it there). ONE bottom: every scroll goes through
+  `lib/transcriptRepin.scrollToLatest(sentinel)` and the sentinel carries
+  `scroll-mb-8` = the scroller's pb-8 (a pin checks they match). Replies are
+  bare prose, the user bubble tinted; process detail is
+  `components/chat/WorkLine.tsx` ("Worked for …"); the receipt ends the action
+  row as "answered by <model>", amber kept. ASKS: `components/chat/DockAsk.tsx`
+  draws `lib/dockAsk.collectDockAsks` in the composer's place; Enter/Esc press
+  the card's OWN buttons via `data-dock-primary` / `data-dock-decline`; the
+  composer is hidden + `inert`, never unmounted. BACKEND B1:
+  `projects/folder_rules.read_rule_files` (fs_read_ok on folder + each file,
+  same-content dedupe, one shared 8,000-char cap with fair shares,
+  promptguard per file, never raises), injected right after the project block
+  in `_Grounding.before_attachments()` (both lanes), gated LIVE by
+  `config.chat_folder_rules` (default True; a Config field AND a settings
+  row), receipt key `folder_rules` on the POST response and the done frame.
+  `scheduling/knobs.folder_rules_block` is still a second reader (a test keeps
+  the two equal) — make it a wrapper. Shipped in the same commit range but NOT
+  wired into the page yet (wave 2/3 wiring): B2 thread running/waiting on GET
+  /chat/threads + `ThreadGroups.tsx` / `lib/threadStatus.ts`; B3
+  `PermissionChip.tsx` + `lib/permissionLevels.ts`; B4 `thread_refs` (≤3 saved
+  chats as fenced reference material, `daemon/chat_refs.py`, GET
+  /chat/threads/search-refs, receipt key on both lanes); B5 POST /chat/changes
+  + `ChangedFiles.tsx` / `DiffView.tsx`; B7 `archived_at` + POST
+  /chat/threads/{id}/archive|unarchive (409 lists running work; `{stop:true}`
+  stops then archives) and the list hides archived chats by default. B6 IS
+  live: Settings → Connections custom endpoint "Fetch available models"
+  (`components/connections/EndpointModelPicker.tsx`, POST
+  /connections/endpoints/models; no probe while typing). Pins: the
+  `*-v1326`, `*-v1327`, `*-v1328` files in dashboard/__tests__ and tests/.
+
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo
   borrow list — ideas only). VERSIONS: `lib/branches.ts` — a fork lives on the

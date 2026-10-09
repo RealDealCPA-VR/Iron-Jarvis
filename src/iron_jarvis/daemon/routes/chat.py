@@ -1193,7 +1193,7 @@ def register(app: FastAPI, d) -> None:
         unconditional contract for older clients. The response carries the
         new ``updated_at`` so the next save can hand it back.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
 
         from ...core.db import search_index
         from ...core.ids import utcnow as _now
@@ -1294,7 +1294,21 @@ def register(app: FastAPI, d) -> None:
                     kept = stored if isinstance(stored, list) else []
                 except Exception:  # noqa: BLE001 — a corrupt blob just skips
                     kept = []
-            r.updated_at = _now()
+            # The stamp is the stale-window check's version (v1.326.0): it must
+            # MOVE on every save. Windows' clock ticks every 15.6 ms, so two
+            # saves inside one tick got the same stamp and a stale copy's
+            # if_updated_at then passed the check.
+            new_stamp = _now()
+            prev_stamp = r.updated_at
+            if prev_stamp is not None:
+                # Compare as naive UTC (the row is stored naive; _now is aware).
+                if prev_stamp.tzinfo is not None:
+                    prev_stamp = prev_stamp.astimezone(timezone.utc).replace(tzinfo=None)
+                if new_stamp.astimezone(timezone.utc).replace(tzinfo=None) <= prev_stamp:
+                    new_stamp = (prev_stamp + timedelta(microseconds=1)).replace(
+                        tzinfo=timezone.utc,
+                    )
+            r.updated_at = new_stamp
             db.add(r)
             # NOTE: deliberately NO ``db.flush()`` here. There is no foreign key
             # from a doc back to the thread (``r.id`` is generated in Python), so

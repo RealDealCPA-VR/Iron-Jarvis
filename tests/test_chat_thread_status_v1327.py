@@ -414,7 +414,10 @@ async def test_an_apps_question_makes_the_chat_wait(tmp_path, monkeypatch):
     frames = await _run(app, _mcp_body(thread_id=tid), on_frame)
     assert seen["answer"][0] == 200, seen
     assert seen["asked"] == (True, True), "a chat parked on an app's question reads waiting"
-    assert seen["answered"] == (True, False), "answered, the turn is running again"
+    # Answered: no longer waiting. Whether it still reads RUNNING is a race
+    # (the fake turn can finish before this read lands), so only the
+    # waiting flag is pinned here; running-while-working is pinned above.
+    assert seen["answered"][1] is False, "answered, the chat no longer waits"
     assert any(ev == "done" for ev, _ in frames)
     assert _state(await _row(app, tid)) == (False, False)
 
