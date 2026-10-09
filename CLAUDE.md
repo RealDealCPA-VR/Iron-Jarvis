@@ -2954,6 +2954,12 @@ does not need a bump, stop and bump it.
   Known limits: a two-window 409 merge can lose a version switch (as an edit
   could); a Try again that escalates to an agent drops the old reply as before;
   hover values on a chart are mouse-only (the table view is the keyboard way).
+  v1.325.1 (test-only): the Release gate went red on `wave-d-page-v1325` — a
+  reply's TEXT is on screen before its turn ends (`setChatBusy(false)` is in
+  the finally), and a version is filed by the effect AFTER that; the test
+  asserted the picker on the text. `answered()` now waits for the text AND the
+  box to stop steering. Delaying the finally 300 ms reproduced CI's exact
+  error (6 tests red on the old waits, all green on the new).
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of

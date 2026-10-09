@@ -234,6 +234,13 @@ async function send(el: HTMLTextAreaElement, text: string) {
   fireEvent.keyDown(el, { key: "Enter" });
 }
 
+/** A reply is on screen BEFORE its turn ends (the release gate found the
+ *  gap): wait for the text AND for the box to stop steering. */
+async function answered(text: string | RegExp) {
+  await screen.findByText(text);
+  await waitFor(() => expect(screen.queryByPlaceholderText(/Steer Jarvis mid-turn/)).toBeNull());
+}
+
 function lastUserText(body: Record<string, unknown>): string {
   const msgs = body.messages as { role: string; content: string }[];
   return [...msgs].reverse().find((m) => m.role === "user")?.content ?? "";
@@ -260,7 +267,7 @@ describe("queued follow-ups (v1.325.0)", () => {
       H.stream.bump();
       H.stream.settle?.({ reply: "first answer" });
     });
-    await screen.findByText("second answer");
+    await answered("second answer");
     expect(H.stream.bodies.length).toBe(2);
     expect(lastUserText(H.stream.bodies[1])).toBe("second question");
     expect(screen.queryByTestId("queued-message")).toBeNull();
@@ -284,7 +291,7 @@ describe("queued follow-ups (v1.325.0)", () => {
     H.stream.hold = false;
     H.stream.replies.push("sent now");
     fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await screen.findByText("sent now");
+    await answered("sent now");
     expect(lastUserText(H.stream.bodies[1])).toBe("then this");
   });
 
@@ -309,18 +316,18 @@ describe("versions — an edit or a Try again keeps what it replaced (v1.325.0)"
     render(<ChatPage />);
     const el = await box();
     await send(el, "question one");
-    await screen.findByText("answer one");
+    await answered("answer one");
     fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
     await waitFor(() => expect(el.value).toBe("question one"));
     await send(el, "question two");
-    await screen.findByText("answer two");
+    await answered("answer two");
     expect(screen.queryByText("answer one")).toBeNull();
-    expect(screen.getByRole("group", { name: "Version 2 of 2" })).toBeTruthy();
+    expect(await screen.findByRole("group", { name: "Version 2 of 2" })).toBeTruthy();
     // The model was sent only the live version.
     expect((H.stream.bodies[1].messages as unknown[]).length).toBe(1);
     expect(JSON.stringify(H.stream.bodies[1])).not.toContain("answer one");
     fireEvent.click(screen.getByRole("button", { name: "Previous version" }));
-    await screen.findByText("answer one");
+    await answered("answer one");
     expect(screen.getByText("question one")).toBeTruthy();
     expect(screen.queryByText("answer two")).toBeNull();
     // The switch is saved with the thread.
@@ -333,15 +340,15 @@ describe("versions — an edit or a Try again keeps what it replaced (v1.325.0)"
     render(<ChatPage />);
     const el = await box();
     await send(el, "explain it");
-    await screen.findByText("first take");
+    await answered("first take");
     fireEvent.click(screen.getByRole("button", { name: "Regenerate reply" }));
-    await screen.findByText("second take");
-    expect(screen.getByRole("group", { name: "Version 2 of 2" })).toBeTruthy();
+    await answered("second take");
+    expect(await screen.findByRole("group", { name: "Version 2 of 2" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Previous version" }));
-    await screen.findByText("first take");
+    await answered("first take");
     expect(screen.queryByText("second take")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Next version" }));
-    await screen.findByText("second take");
+    await answered("second take");
   });
 
   it("a Try again that fails with nothing to show puts the earlier answer back", async () => {
@@ -349,11 +356,11 @@ describe("versions — an edit or a Try again keeps what it replaced (v1.325.0)"
     render(<ChatPage />);
     const el = await box();
     await send(el, "explain it");
-    await screen.findByText("keep me");
+    await answered("keep me");
     H.stream.reject = new H.FakeStreamError("the model is overloaded", 500);
     fireEvent.click(screen.getByRole("button", { name: "Regenerate reply" }));
-    await screen.findByText(/the model is overloaded/);
-    await screen.findByText("keep me");
+    await answered(/the model is overloaded/);
+    await answered("keep me");
     const saved = H.api.puts[H.api.puts.length - 1].body.messages as { content: string }[];
     expect(saved.map((m) => m.content)).toEqual(["explain it", "keep me"]);
   });
@@ -364,14 +371,14 @@ describe("versions — an edit or a Try again keeps what it replaced (v1.325.0)"
     render(<ChatPage />);
     const el = await box();
     await send(el, "summarize");
-    await screen.findByText("local answer");
+    await answered("local answer");
     fireEvent.click(await screen.findByRole("button", { name: "Try again with another model" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /claude-opus-5-5/ }));
-    await screen.findByText("cloud answer");
+    await answered("cloud answer");
     expect(H.stream.bodies[1].provider).toBe("anthropic");
     expect(H.stream.bodies[1].model).toBe("claude-opus-5-5");
     await send(el, "and next");
-    await screen.findByText("next answer");
+    await answered("next answer");
     expect(H.stream.bodies[2].provider).toBeUndefined();
   });
 });
@@ -385,7 +392,7 @@ describe("ask about a page (v1.325.0)", () => {
     expect((await screen.findByTestId("page-context-chip")).textContent).toContain("About: Clients");
     const el = await box();
     await send(el, "what needs doing here?");
-    await screen.findByText("about the page");
+    await answered("about the page");
     expect(H.stream.bodies[0].page_context).toEqual({
       title: "Clients",
       path: "/projects",
@@ -394,7 +401,7 @@ describe("ask about a page (v1.325.0)", () => {
     expect(screen.queryByTestId("page-context-chip")).toBeNull();
     expect(screen.getByText("About: Clients")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Regenerate reply" }));
-    await screen.findByText("again about it");
+    await answered("again about it");
     expect(H.stream.bodies[1].page_context).toEqual(H.stream.bodies[0].page_context);
   });
 });
@@ -405,7 +412,8 @@ describe("quote and map (v1.325.0)", () => {
     render(<ChatPage />);
     const el = await box();
     await send(el, "when?");
-    const reply = await screen.findByText("The deadline is April 15.");
+    await answered("The deadline is April 15.");
+    const reply = screen.getByText("The deadline is April 15.");
     const range = document.createRange();
     range.selectNodeContents(reply);
     const sel = window.getSelection()!;
@@ -424,9 +432,9 @@ describe("quote and map (v1.325.0)", () => {
     render(<ChatPage />);
     const el = await box();
     await send(el, "first topic");
-    await screen.findByText("a1");
+    await answered("a1");
     await send(el, "second topic");
-    await screen.findByText("a2");
+    await answered("a2");
     const spy = vi.fn();
     Element.prototype.scrollIntoView = spy;
     fireEvent.click(screen.getByTestId("open-conversation-map"));
