@@ -19,30 +19,39 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const page = readFileSync(join(process.cwd(), "app", "chat", "page.tsx"), "utf8");
+// v1.327.0: the words and values moved to ONE table the composer's permission
+// chip reads; the page imports it instead of keeping its own copy.
+const levels = readFileSync(join(process.cwd(), "lib", "permissionLevels.ts"), "utf8");
 
 describe("the posture vocabulary", () => {
   it("matches the daemon's, value for value", () => {
-    // Lock-step with chat_turn.APPROVAL_MODES — a renamed value here would
-    // send a string the daemon coerces to the default, and the dropdown
+    // Lock-step with chat_turn.APPROVAL_MODES: a renamed value here would
+    // send a string the daemon coerces to the default, and the control
     // would silently stop doing anything.
-    for (const value of ["always_ask", "approve_for_me", "yolo"]) {
-      expect(page).toContain(`value: "${value}"`);
-    }
-    // The labels the user asked for, verbatim intent.
-    expect(page).toContain("Ask for approval");
-    expect(page).toContain("Approve for me");
-    expect(page).toContain("Auto-approve");
+    expect(levels).toContain(
+      'export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "yolo"];',
+    );
+    // The page reads that table, never a second copy.
+    expect(page).toContain('from "@/lib/permissionLevels"');
+    expect(page).not.toContain("const APPROVAL_MODES = [");
+    // Plain names for each level (v1.327.0 replaced the v1.188.0 labels).
+    expect(levels).toContain('label: "Ask first"');
+    expect(levels).toContain('label: "Ask when risky"');
+    expect(levels).toContain(`label: "Don't ask"`);
     // Unknown → the DEFAULT, never yolo (mirrors normalize_approval_mode).
-    expect(page).toMatch(/asApprovalMode[\s\S]{0,200}"approve_for_me"/);
+    expect(levels).toContain('export const DEFAULT_PERMISSION_MODE: PermissionMode = "approve_for_me";');
+    expect(page).toContain("const asApprovalMode: (raw: unknown) => ApprovalMode = asPermissionMode;");
   });
 });
 
 describe("the control and its wiring", () => {
-  it("renders as a labelled select in the composer", () => {
-    expect(page).toContain('aria-label="Approval mode"');
-    // The window spans the select's onChange handler (persist + snapshot),
-    // which sits between the tag and its label in source order.
-    expect(page).toMatch(/<select[\s\S]{0,1500}aria-label="Approval mode"/);
+  it("renders as the permission chip in the composer, keeping the old id", () => {
+    // v1.327.0: the chip replaced the select. The window spans the chip's
+    // onChange handler (persist + snapshot).
+    expect(page).toMatch(
+      /<PermissionChip\s+id="chat-approval-mode"[\s\S]{0,120}value=\{approvalMode\}[\s\S]{0,700}markSetupChanged\(\);/,
+    );
+    expect(page).not.toContain('aria-label="Approval mode"');
   });
 
   it("rides the chat body — only the non-default", () => {
@@ -72,6 +81,10 @@ describe("the control and its wiring", () => {
   });
 
   it("marks YOLO visibly as the dangerous position", () => {
-    expect(page).toMatch(/approvalMode === "yolo"[\s\S]{0,80}text-amber-300/);
+    // v1.327.0: the chip reads the level's tone; yolo is the one warn level
+    // and warn is the amber tone token (rendered: ux-wave2-chat-words-v1314).
+    expect(levels).toMatch(/yolo: \{[\s\S]{0,200}tone: "warn"/);
+    const chip = readFileSync(join(process.cwd(), "components", "chat", "PermissionChip.tsx"), "utf8");
+    expect(chip).toMatch(/warn\s*\?\s*"text-tone-warn/);
   });
 });

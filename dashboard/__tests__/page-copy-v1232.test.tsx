@@ -139,10 +139,14 @@ describe("U8 — chat controls explain themselves", () => {
     expect(autoHint).toBeGreaterThan(auto);
   });
 
-  it("titles the approval-posture select as a posture, with the mode's hint", () => {
-    expect(chat).toContain("title={`Approval posture for this chat — ${");
-    const sel = chat.indexOf('aria-label="Approval mode"');
-    expect(chat.indexOf("Approval posture for this chat", sel)).toBeGreaterThan(sel);
+  it("the approval control explains itself: the chip's title is the level's one-line description", () => {
+    // v1.327.0: the composer's permission chip replaced the select. Its tooltip
+    // is what the current level does, and its menu shows every level's line.
+    expect(chat).toContain('id="chat-approval-mode"');
+    const chip = src("components/chat/PermissionChip.tsx");
+    expect(chip).toContain("title={level.description}");
+    expect(chip).toContain("aria-label={`Permissions: ${level.label}`}");
+    expect(chip).toContain("{row.description}");
   });
 
   it("the footer names the default model instead of saying 'default model'", () => {

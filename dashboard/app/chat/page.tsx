@@ -87,8 +87,6 @@ import {
   Save,
   Search,
   Share2,
-  Shield,
-  ShieldAlert,
   ListTree,
   Sparkles,
   Square,
@@ -172,6 +170,8 @@ import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
+import { PermissionChip } from "@/components/chat/PermissionChip";
+import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
 import {
   COMPOSER_CARD_EDGE,
   COMPOSER_ICON_BUTTON,
@@ -1055,37 +1055,16 @@ interface ThreadSetup {
   granted_tools?: string[];
 }
 
-/** The three approval postures (v1.188.0). Order = the dropdown's order,
- *  strictest first. The VALUE strings are the wire vocabulary the daemon
- *  validates — rename a label freely, never a value. */
-const APPROVAL_MODES = [
-  {
-    value: "always_ask",
-    label: "Ask for approval",
-    hint: "Always ask before editing files or using the internet",
-  },
-  {
-    value: "approve_for_me",
-    label: "Approve for me",
-    hint: "Only ask for actions detected as potentially unsafe",
-  },
-  {
-    value: "yolo",
-    label: "Auto-approve",
-    // v1.314.0: plain words that still warn — "YOLO" was slang to a busy
-    // professional; the amber select colour keeps the danger visible too.
-    hint: "Runs everything it can without asking you first — use with care",
-  },
-] as const;
-type ApprovalMode = (typeof APPROVAL_MODES)[number]["value"];
+/** The three approval postures (v1.188.0). Since v1.327.0 the words and the
+ *  values live in ONE place, `lib/permissionLevels.ts` (the composer's
+ *  permission chip reads the same table): the VALUE strings are the wire
+ *  vocabulary the daemon validates, and an unknown value falls back to the
+ *  default ("approve_for_me"), never to the no-ask level. */
+type ApprovalMode = PermissionMode;
 
 const APPROVAL_MODE_KEY = "ij_chat_approval_mode";
 
-function asApprovalMode(raw: unknown): ApprovalMode {
-  return APPROVAL_MODES.some((m) => m.value === raw)
-    ? (raw as ApprovalMode)
-    : "approve_for_me";
-}
+const asApprovalMode: (raw: unknown) => ApprovalMode = asPermissionMode;
 
 /** GET /chat/threads/{id}. */
 interface ThreadDetail {
@@ -10679,70 +10658,30 @@ export default function ChatPage() {
                             has a message it lives here, in the toolbar. One chip at a time. */}
                         {!emptyHero && projectSwitch("toolbar")}
                         {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves for this
-                            conversation. v1.326.0: a quiet chip in the card, the native select
-                            kept (its id, name and wire values are the contract) with a shield
-                            for its label. The no-ask position reads amber, so a conversation
-                            running without asks looks like one. On a phone only the shield
-                            shows; the select still opens from it. */}
-                        <span className="group relative inline-flex shrink-0 items-center">
-                          <label
-                            htmlFor="chat-approval-mode"
-                            title="Approvals"
-                            className={`pointer-events-none absolute left-2 flex items-center ${
-                              approvalMode === "yolo" ? "text-amber-300" : "text-zinc-500 group-hover:text-zinc-300"
-                            }`}
-                          >
-                            {approvalMode === "yolo" ? (
-                              <ShieldAlert size={14} aria-hidden />
-                            ) : (
-                              <Shield size={14} aria-hidden />
-                            )}
-                            <span className="sr-only">Approvals</span>
-                          </label>
-                          <select
-                            id="chat-approval-mode"
-                            value={approvalMode}
-                            onChange={(e) => {
-                              const mode = asApprovalMode(e.target.value);
-                              setApprovalMode(mode);
-                              // The pick is BOTH this conversation's posture (persists
-                              // with the thread via the setup snapshot) and the user's
-                              // new default for future chats — one dial, not two.
-                              try {
-                                localStorage.setItem(APPROVAL_MODE_KEY, mode);
-                              } catch {
-                                /* best-effort */
-                              }
-                              markSetupChanged();
-                            }}
-                                aria-label="Approval mode"
-                            title={`Approval posture for this chat — ${
-                              APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint ??
-                              "when the assistant asks before acting"
-                            }`}
-                                className={`h-[30px] max-w-[11rem] cursor-pointer appearance-none rounded-lg border-0 bg-transparent pl-7 pr-6 text-[13px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 max-sm:w-[30px] max-sm:px-0 max-sm:text-transparent ${
-                                  approvalMode === "yolo"
-                                    ? "text-amber-300"
-                                    : "text-zinc-400 hover:text-zinc-200"
-                                }`}
-                              >
-                            {APPROVAL_MODES.map((m) => (
-                              <option
-                                key={m.value}
-                                value={m.value}
-                                title={m.hint}
-                                className="bg-ink-900 text-zinc-200"
-                              >
-                                {m.label}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown
-                            size={12}
-                            aria-hidden
-                            className="pointer-events-none absolute right-2 text-zinc-500 max-sm:hidden"
-                          />
-                        </span>
+                            conversation. v1.327.0: ONE permission chip (a shield, the level's
+                            plain name, a chevron) whose small menu lists the levels with a line
+                            each; it replaced the native select and keeps its id. The values and
+                            words live in lib/permissionLevels.ts; the no-ask level reads amber,
+                            so a conversation running without asks looks like one. On a phone
+                            only the shield shows. */}
+                        <PermissionChip
+                          id="chat-approval-mode"
+                          iconOnlyOnPhone
+                          value={approvalMode}
+                          onChange={(picked) => {
+                            const mode = asApprovalMode(picked);
+                            setApprovalMode(mode);
+                            // The pick is BOTH this conversation's posture (persists
+                            // with the thread via the setup snapshot) and the user's
+                            // new default for future chats: one dial, not two.
+                            try {
+                              localStorage.setItem(APPROVAL_MODE_KEY, mode);
+                            } catch {
+                              /* best-effort */
+                            }
+                            markSetupChanged();
+                          }}
+                        />
                         {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
                             for this chat, counted so a pick leaves a trace. Its menu holds the
                             web and Auto tools switches with their plain lines, the armed tools

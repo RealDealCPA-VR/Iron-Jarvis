@@ -7,9 +7,10 @@ import { join } from "node:path";
  * v1.327.0 (Calm chat, B3): ONE permission chip with plain level names.
  *
  * Pinned here:
- *  - the levels table covers EXACTLY the modes the chat page's
- *    `#chat-approval-mode` select offers (and the daemon's vocabulary), in
- *    the same order: no invented level, none missing;
+ *  - the levels table covers EXACTLY the daemon's approval vocabulary, in the
+ *    old select's order, and is the chat page's only copy (v1.327.0 W2-2: the
+ *    page renders this chip as `#chat-approval-mode`): no invented level,
+ *    none missing;
  *  - the riskiest level (yolo) is the one amber level, in tone tokens only;
  *  - the chip: shield + plain name + chevron, a ghost (transparent at rest,
  *    a fill only on hover), 30px tall; an unknown value reads as the default;
@@ -20,7 +21,8 @@ import { join } from "node:path";
  *  - the menu fits the window: above by default, below when above has no room,
  *    right-aligned when it would run off the right edge, shifted inline when
  *    neither alignment fits (a phone), and placed again from its REAL measured
- *    box once it has rendered.
+ *    box once it has rendered. Since the W2-2 review it is fixed to the window
+ *    at the chip (permission-chip-clip-v1327 pins why).
  */
 
 import {
@@ -38,17 +40,6 @@ import {
 
 const read = (...parts: string[]) =>
   readFileSync(join(process.cwd(), ...parts), "utf8").replace(/\r\n/g, "\n");
-
-/** The `value:` strings inside the page's `const APPROVAL_MODES = [ ... ] as const;`. */
-function pageModes(): string[] {
-  const src = read("app", "chat", "page.tsx");
-  const start = src.indexOf("const APPROVAL_MODES = [");
-  expect(start, "page.tsx no longer declares APPROVAL_MODES").toBeGreaterThan(-1);
-  const end = src.indexOf("] as const;", start);
-  expect(end).toBeGreaterThan(start);
-  const block = src.slice(start, end);
-  return Array.from(block.matchAll(/value:\s*"([^"]+)"/g), (m) => m[1]);
-}
 
 /** The daemon's `APPROVAL_MODES = (...)` tuple in chat_turn.py. */
 function daemonModes(): string[] {
@@ -82,11 +73,15 @@ function openWithClick(chip: HTMLElement) {
 }
 
 describe("the levels table", () => {
-  it("covers exactly the modes the chat page's select offers, in its order", () => {
-    const fromPage = pageModes();
-    expect(fromPage.length).toBeGreaterThan(0);
-    expect([...PERMISSION_MODES]).toEqual(fromPage);
-    expect(Object.keys(PERMISSION_LEVELS).sort()).toEqual([...fromPage].sort());
+  it("is the chat page's ONE vocabulary: the page imports it and keeps no table of its own", () => {
+    // v1.327.0 (W2-2): the chip replaced the page's select, so the page's own
+    // APPROVAL_MODES table is gone and the levels table is the only one.
+    const src = read("app", "chat", "page.tsx");
+    expect(src).toContain('from "@/lib/permissionLevels"');
+    expect(src).not.toContain("const APPROVAL_MODES = [");
+    expect(src).toMatch(/<PermissionChip\s+id="chat-approval-mode"/);
+    expect(Object.keys(PERMISSION_LEVELS).sort()).toEqual([...PERMISSION_MODES].sort());
+    expect([...PERMISSION_MODES]).toEqual(["always_ask", "approve_for_me", "yolo"]);
   });
 
   it("covers exactly the daemon's approval vocabulary", () => {
@@ -315,8 +310,12 @@ describe("the menu", () => {
     const menu = openWithClick(chip);
     expect(menu.dataset.side).toBe("below");
     expect(menu.dataset.align).toBe("end");
-    expect(menu.className).toContain("top-full");
-    expect(menu.className).toContain("right-0");
+    // v1.327.0 W2-2 review: the menu is fixed to the window at the chip (it
+    // used to be absolutely placed inside the chat page, which clipped it):
+    // below = its top 6px under the chip, end = its right edge on the chip's.
+    expect(menu.style.position).toBe("fixed");
+    expect(menu.style.top).toBe("56px");
+    expect(menu.style.right).toBe("10px");
     expect(menu.className).toContain("max-w-[calc(100vw-2rem)]");
     fireEvent.keyDown(menu, { key: "Escape" });
     // Low on the left, where the composer sits: above, left-aligned.
@@ -325,8 +324,9 @@ describe("the menu", () => {
     const again = openWithClick(chip);
     expect(again.dataset.side).toBe("above");
     expect(again.dataset.align).toBe("start");
-    expect(again.className).toContain("bottom-full");
-    expect(again.className).toContain("left-0");
+    // Above = its bottom edge 6px over the chip; start = its left on the chip's.
+    expect(again.style.bottom).toBe("66px");
+    expect(again.style.left).toBe("20px");
   });
 });
 
@@ -444,7 +444,7 @@ describe("the menu, measured once it renders", () => {
       const { chip } = setup("approve_for_me");
       const menu = openWithClick(chip);
       expect(menu.dataset.side).toBe("above");
-      expect(menu.className).toContain("bottom-full");
+      expect(menu.style.bottom).not.toBe("");
     });
   });
 
@@ -455,7 +455,7 @@ describe("the menu, measured once it renders", () => {
       const { chip } = setup("approve_for_me");
       const menu = openWithClick(chip);
       expect(menu.dataset.side).toBe("below");
-      expect(menu.className).toContain("top-full");
+      expect(menu.style.top).toBe("276px");
     });
   });
 
@@ -467,8 +467,8 @@ describe("the menu, measured once it renders", () => {
         const { chip } = setup("approve_for_me");
         const menu = openWithClick(chip);
         expect(menu.dataset.align).toBe("shift");
-        expect(menu.className).not.toMatch(/(^|\s)(left-0|right-0)(\s|$)/);
-        const left = 150 + parseFloat(menu.style.left);
+        // Fixed at the window: style.left is the menu's left edge in window px.
+        const left = parseFloat(menu.style.left);
         // max-w-[calc(100vw-2rem)] holds the menu to 288px at 320 wide.
         expect(left).toBeGreaterThanOrEqual(8);
         expect(left + 288).toBeLessThanOrEqual(320 - 8);

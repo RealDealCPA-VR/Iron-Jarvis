@@ -176,6 +176,22 @@ async function returnWithGetHeld(): Promise<() => void> {
   return release;
 }
 
+/** The conversation's approval posture. v1.327.0: the composer's permission
+ *  chip (`#chat-approval-mode`, its level on `data-mode`) replaced the select
+ *  these tests used to drive with fireEvent.change; a pick is now a press on
+ *  the chip, then a press on the level in its menu. */
+function postureOf(): string | null {
+  return document.getElementById("chat-approval-mode")?.getAttribute("data-mode") ?? null;
+}
+function pickPosture(mode: string): void {
+  fireEvent.click(document.getElementById("chat-approval-mode") as HTMLElement);
+  const item = document.querySelector(
+    `[data-testid="permission-item"][data-mode="${mode}"]`,
+  ) as HTMLElement | null;
+  expect(item, `no "${mode}" level in the permission menu`).not.toBeNull();
+  fireEvent.click(item!);
+}
+
 async function sendOnThePaint(): Promise<void> {
   const box = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: ASK } });
@@ -331,14 +347,13 @@ describe("a send on the cached paint survives the late thread GET", () => {
   it("a setup change made on the paint is not undone by the stored setup the GET brings back", async () => {
     const releaseGet = await returnWithGetHeld();
     H.api.responses["/chat/threads/t9"] = { ...T9, setup: { approval_mode: "always_ask" } };
-    const posture = screen.getByLabelText("Approval mode") as HTMLSelectElement;
-    fireEvent.change(posture, { target: { value: "yolo" } });
-    expect(posture.value).toBe("yolo");
+    pickPosture("yolo");
+    expect(postureOf()).toBe("yolo");
     await act(async () => {
       releaseGet();
     });
     await settle();
-    expect((screen.getByLabelText("Approval mode") as HTMLSelectElement).value).toBe("yolo");
+    expect(postureOf()).toBe("yolo");
     // The edit was saved into the painted thread, not a new one.
     expect(H.api.puts.map((p) => p.path)).toEqual(["/chat/threads/t9"]);
   });
@@ -374,7 +389,7 @@ describe("a send on the cached paint survives the late thread GET", () => {
     await screen.findByText("asked in the other window");
     await screen.findByText(/didn.t get a reply/);
     // ...and the thread's stored setup is restored as on any open.
-    expect((screen.getByLabelText("Approval mode") as HTMLSelectElement).value).toBe("always_ask");
+    expect(postureOf()).toBe("always_ask");
     expect(H.api.puts.length).toBe(0);
   });
 });
@@ -397,7 +412,7 @@ describe("the paint carries the conversation's SETUP, not the reset defaults", (
 
   it("the posture painted from the cache is the stored one, before the GET answers", async () => {
     const releaseGet = await returnWithGetHeld();
-    expect((screen.getByLabelText("Approval mode") as HTMLSelectElement).value).toBe("always_ask");
+    expect(postureOf()).toBe("always_ask");
     await act(async () => {
       releaseGet();
     });
@@ -405,7 +420,7 @@ describe("the paint carries the conversation's SETUP, not the reset defaults", (
 
   it("an edit on the paint PUTs a setup that still carries the tools, the folder and the documents", async () => {
     const releaseGet = await returnWithGetHeld();
-    fireEvent.change(screen.getByLabelText("Approval mode"), { target: { value: "yolo" } });
+    pickPosture("yolo");
     await waitFor(() => expect(H.api.puts.length).toBe(1));
     const put = H.api.puts[0];
     expect(put.path).toBe("/chat/threads/t9");
@@ -420,12 +435,12 @@ describe("the paint carries the conversation's SETUP, not the reset defaults", (
     });
     await settle();
     // The acted branch keeps the user's screen: still yolo, still armed.
-    expect((screen.getByLabelText("Approval mode") as HTMLSelectElement).value).toBe("yolo");
+    expect(postureOf()).toBe("yolo");
   });
 
   it("a save's setup rides this window's cached copy, so the next paint is not older than the disk", async () => {
     const releaseGet = await returnWithGetHeld();
-    fireEvent.change(screen.getByLabelText("Approval mode"), { target: { value: "yolo" } });
+    pickPosture("yolo");
     await waitFor(() => expect(H.api.puts.length).toBe(1));
     await act(async () => {
       releaseGet();
@@ -436,7 +451,7 @@ describe("the paint carries the conversation's SETUP, not the reset defaults", (
     hold("/chat/threads/t9");
     render(<ChatPage />);
     await screen.findByText("The ledger totals 1.2M.");
-    expect((screen.getByLabelText("Approval mode") as HTMLSelectElement).value).toBe("yolo");
+    expect(postureOf()).toBe("yolo");
   });
 });
 
@@ -510,7 +525,7 @@ describe("the paint carries the conversation's PROJECT (review v1.311.0)", () =>
 
   it("an edit on the paint keeps the thread's project on the PUT", async () => {
     const release = await returnWithProjectsAndGetHeld();
-    fireEvent.change(screen.getByLabelText("Approval mode"), { target: { value: "yolo" } });
+    pickPosture("yolo");
     await waitFor(() => expect(H.api.puts.length).toBe(1));
     expect(H.api.puts[0].path).toBe("/chat/threads/t9");
     expect(H.api.puts[0].body.project_id).toBe("p2");

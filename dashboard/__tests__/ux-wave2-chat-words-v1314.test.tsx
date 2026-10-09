@@ -315,42 +315,48 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
     expect(reachable(trigger, `mock · ${RAW_MODEL}`)).toBe(true);
   });
 
-  it("the approval select has a VISIBLE label tied to it; the three modes and their wire values stay", async () => {
+  // v1.327.0: the composer's permission chip replaced the approval select (it
+  // kept the id). The contract these two tests guarded stays, read off the
+  // chip: a VISIBLE name for the current level, the same three modes and wire
+  // values in the same order, plain words that still warn, and amber for the
+  // no-ask level. The words are now the chip's (lib/permissionLevels.ts).
+  it("the permission chip shows its level in VISIBLE words; the three modes and their wire values stay", async () => {
     const { container } = render(<ChatPage />);
     await screen.findByTitle("Switch model");
-    const sel = container.querySelector('select option[value="yolo"]')?.closest("select") as HTMLSelectElement;
-    expect(sel).toBeTruthy();
-    // Unchanged contract (pinned by approval-mode-v1188 / page-copy-v1232).
-    expect(sel.getAttribute("aria-label")).toBe("Approval mode");
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["always_ask", "approve_for_me", "yolo"]);
-    expect(Array.from(sel.options).map((o) => o.textContent)).toEqual([
-      "Ask for approval",
-      "Approve for me",
-      "Auto-approve",
+    const chip = container.querySelector("#chat-approval-mode") as HTMLButtonElement;
+    expect(chip).toBeTruthy();
+    expect(chip.getAttribute("data-mode")).toBe("approve_for_me");
+    // The level's name is real text on the chip (not sr-only) and in its name.
+    const words = within(chip).getByText("Ask when risky");
+    expect(classes(words)).not.toContain("sr-only");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask when risky");
+    fireEvent.click(chip);
+    const items = within(screen.getByTestId("permission-menu")).getAllByTestId("permission-item");
+    expect(items.map((i) => i.getAttribute("data-mode"))).toEqual(["always_ask", "approve_for_me", "yolo"]);
+    expect(items.map((i) => i.querySelector("span.block")?.textContent)).toEqual([
+      "Ask first",
+      "Ask when risky",
+      "Don't ask",
     ]);
-    expect(sel.value).toBe("approve_for_me");
-    // NEW: a visible <label htmlFor> says what the select controls.
-    expect(sel.id).not.toBe("");
-    const label = container.querySelector(`label[for="${sel.id}"]`);
-    expect(label).not.toBeNull();
-    expect(label!.textContent).toMatch(/approv/i);
-    expect(classes(label!)).not.toContain("sr-only");
   });
 
-  it("the auto-approve hint is plain words that still warn (no 'YOLO'), and the amber tone stays", async () => {
+  it("the no-ask level is plain words that still warn (no 'YOLO'), and the amber tone stays", async () => {
     const { container } = render(<ChatPage />);
     await screen.findByTitle("Switch model");
-    const sel = container.querySelector('select option[value="yolo"]')?.closest("select") as HTMLSelectElement;
-    const yolo = sel.querySelector('option[value="yolo"]') as HTMLOptionElement;
-    expect(yolo.title).not.toMatch(/YOLO/);
-    expect(yolo.title).toMatch(/without asking/i);
-    expect(yolo.title).toMatch(/care/i); // a warning tone, per the verifier
-    fireEvent.change(sel, { target: { value: "yolo" } });
-    await waitFor(() => expect(sel.value).toBe("yolo"));
-    expect(sel.title).not.toMatch(/YOLO/);
-    expect(sel.title).toMatch(/without asking/i);
-    // CONTROL: the dangerous position still LOOKS dangerous.
-    expect(classes(sel)).toContain("text-amber-300");
+    const chip = container.querySelector("#chat-approval-mode") as HTMLButtonElement;
+    fireEvent.click(chip);
+    const yolo = within(screen.getByTestId("permission-menu"))
+      .getAllByTestId("permission-item")
+      .find((i) => i.getAttribute("data-mode") === "yolo") as HTMLElement;
+    expect(yolo.textContent).not.toMatch(/YOLO/);
+    expect(yolo.textContent).toMatch(/without asking/i);
+    expect(yolo.textContent).toMatch(/care/i); // a warning tone, per the verifier
+    fireEvent.click(yolo);
+    await waitFor(() => expect(chip.getAttribute("data-mode")).toBe("yolo"));
+    expect(chip.title).not.toMatch(/YOLO/);
+    expect(chip.title).toMatch(/without asking/i);
+    // CONTROL: the dangerous position still LOOKS dangerous (a tone token).
+    expect(classes(chip)).toContain("text-tone-warn");
   });
 
   it("share is a real target with a visible word; its name, dialog gate and explanation stay", async () => {

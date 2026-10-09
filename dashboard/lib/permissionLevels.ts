@@ -1,8 +1,9 @@
 /**
  * The chat's permission levels in plain words (Calm chat, v1.327.0).
  *
- * These are the SAME three approval postures the chat's `#chat-approval-mode`
- * select offers (v1.188.0) and the daemon validates
+ * These are the SAME three approval postures the chat has offered since
+ * v1.188.0 (the composer's `#chat-approval-mode` chip, a select until
+ * v1.327.0) and the daemon validates
  * (`chat_turn.APPROVAL_MODES`). Only the words are new: each level is named
  * for what it really does, read off the gate in `routes/chat.py`:
  *
@@ -16,7 +17,7 @@
  *                   A `deny` stays a deny in every level; no posture lifts it.
  *
  * The keys are the WIRE vocabulary: rename a label freely, never a key.
- * Order = strictest first, the select's order.
+ * Order = strictest first, the old select's order and the menu's.
  */
 
 export type PermissionMode = "always_ask" | "approve_for_me" | "yolo";

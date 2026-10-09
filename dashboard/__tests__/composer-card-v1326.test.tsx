@@ -273,13 +273,13 @@ describe("one card holds every control", () => {
     tb.getByTitle("Switch model");
     tb.getByRole("button", { name: "Start dictation" });
     tb.getByRole("button", { name: "Send" });
-    // Approvals: the same select (id, name, wire values), now inside the card,
-    // with its label inside the card too.
-    const sel = container.querySelector("#chat-approval-mode") as HTMLSelectElement;
-    expect(t.contains(sel)).toBe(true);
-    expect(sel.getAttribute("aria-label")).toBe("Approval mode");
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["always_ask", "approve_for_me", "yolo"]);
-    expect(t.contains(container.querySelector('label[for="chat-approval-mode"]'))).toBe(true);
+    // Approvals: v1.327.0 the permission chip replaced the select and kept its
+    // id; it sits in the card and names the level (the wire value on data-mode).
+    const chip = container.querySelector("#chat-approval-mode") as HTMLButtonElement;
+    expect(t.contains(chip)).toBe(true);
+    expect(chip.getAttribute("data-testid")).toBe("permission-chip");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask when risky");
+    expect(chip.getAttribute("data-mode")).toBe("approve_for_me");
     // Left group then right group: Send and the model sit after the web chip.
     const web = tb.getByRole("switch", { name: "Web research" });
     const send = tb.getByRole("button", { name: "Send" });
