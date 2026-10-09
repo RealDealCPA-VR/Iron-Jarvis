@@ -120,6 +120,8 @@ import {
 } from "@/components/chat/TurnReceipt";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { LiveToolRows, WorkLine, WorkRow } from "@/components/chat/WorkLine";
+import { ReplyChanges } from "@/components/chat/ReplyChanges";
+import { turnWindow } from "@/lib/turnChanges";
 import { FollowupChips } from "@/components/chat/FollowupChips";
 import { DockAsk } from "@/components/chat/DockAsk";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
@@ -2566,6 +2568,7 @@ const MessageRow = memo(function MessageRow({
   i,
   isLast,
   prevUser,
+  prevUserAt,
   canRegen,
   busy,
   threadId,
@@ -2580,6 +2583,9 @@ const MessageRow = memo(function MessageRow({
   i: number;
   isLast: boolean;
   prevUser: string;
+  /** v1.328.0 (W3-2): when the question before this reply was sent (ISO) —
+   *  the start of the turn's window when the reply carries no `timing`. */
+  prevUserAt?: string;
   canRegen: boolean;
   busy: boolean;
   threadId: string | null;
@@ -2874,6 +2880,12 @@ const MessageRow = memo(function MessageRow({
           <WorkflowRunChip runId={m.workflowRun.runId} name={m.workflowRun.name} />
         </div>
       )}
+      {/* Calm chat W3-2 (v1.328.0): WHAT THE REPLY CHANGED — "2 files changed
+          +14 −3", each file opening its diff, Undo through the receipt's own
+          handler. Only a reply whose turn reported files has a window; the
+          daemon is asked once, when the reply is on screen, by the turn's
+          stored start and end (so a reopened chat shows it too). */}
+      <ReplyChanges turn={turnWindow(m, prevUserAt)} undoFor={h.undoFor} onUndo={h.undoWrite} />
       {/* Calm chat W1-4 (v1.326.0): ONE quiet row of 28px ghost buttons right
           under the reply: Copy, Try again, 👍 / 👎, read aloud, save to the
           project, the versions a Try again kept ("‹ 1 / 2 ›") and the time.
@@ -9987,6 +9999,11 @@ export default function ChatPage() {
                             i > 0 && messages[i - 1].role === "user"
                               ? messages[i - 1].content
                               : ""
+                          }
+                          prevUserAt={
+                            i > 0 && messages[i - 1].role === "user"
+                              ? messages[i - 1].at
+                              : undefined
                           }
                           canRegen={canRegen}
                           busy={busy}
