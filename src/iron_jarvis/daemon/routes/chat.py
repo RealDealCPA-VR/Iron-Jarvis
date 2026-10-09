@@ -82,6 +82,7 @@ from ..chat_turn import (
     _run_tool_round,
     _trust_receipt,
     _DOC_WRITING_TOOLS,
+    _reports_document,
     _ESCALATE_SPEC,
     _ESCALATE_TOOL,
     _MAX_ARMED_TOOLS,
@@ -4000,8 +4001,11 @@ async def chat_stream(
                                         ).strip(),
                                     }
                             # Track created/edited documents for the preview
-                            # (mirrors chat_complete).
-                            if tc.name in _DOC_WRITING_TOOLS:
+                            # (mirrors chat_complete). v1.329.0: edit_file's
+                            # file too (`_reports_document`), so an edit-only
+                            # turn shows "N files changed". MIRROR NOTE
+                            # (lock-step): chat_turn.py's tool loop.
+                            if _reports_document(tc.name):
                                 _rel = str(
                                     (getattr(result, "data", None) or {}).get("path")
                                     or ""

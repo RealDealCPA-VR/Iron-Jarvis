@@ -537,7 +537,18 @@ class EditFileTool(Tool):
             return ToolResult(
                 ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
             )
-        return ToolResult(ok=True, output=f"edited {args['path']}")
+        # v1.329.0 (calm chat F4): name the edited file the way the document
+        # tools do (`path` as asked, `abs_path` resolved), so a chat turn that
+        # only EDITED files lists them in its `documents` and the reply can
+        # show "N files changed". `data` never reaches the model; the output
+        # text is unchanged. Deliberately NOT `created_paths`: that field
+        # means CREATED (the registry, the workflow engine and the run card
+        # all read it that way), and this file existed before the call.
+        return ToolResult(
+            ok=True,
+            output=f"edited {args['path']}",
+            data={"path": str(args["path"]), "abs_path": str(path)},
+        )
 
 
 def _case_only_rename(src: Path, dst: Path) -> bool:

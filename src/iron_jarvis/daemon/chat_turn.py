@@ -2829,6 +2829,26 @@ _DOC_WRITING_TOOLS = {
     "pdf_form_fill",
 }
 
+#: Tools that CHANGE an existing file in place and name it in ``data.path``
+#: (v1.329.0, calm chat F4). Their file belongs in the turn's ``documents``
+#: like a document tool's, so a turn that only edited files still shows
+#: "N files changed" under the reply. Kept OUT of ``_DOC_WRITING_TOOLS``
+#: on purpose: that set also decides the office round budget
+#: (``_is_office_turn``) and the pre-v1.91.0 thread recovery, and a code edit
+#: is neither. ``write_file`` is not here: it already reports its file through
+#: ``created_paths``. ``rename_file`` is not here either: a rename changes no
+#: content, and ``POST /chat/changes`` skips renames, so listing one would add
+#: a file to the rail and nothing to the line.
+_FILE_EDIT_TOOLS: frozenset[str] = frozenset({"edit_file"})
+
+
+def _reports_document(name: str) -> bool:
+    """Does this tool's ``data.path`` name a file the turn's ``documents``
+    should list? The ONE answer both chat lanes use. MIRROR NOTE (lock-step):
+    chat_complete's tool loop and routes/chat.py's stream loop both call it."""
+    return name in _DOC_WRITING_TOOLS or name in _FILE_EDIT_TOOLS
+
+
 #: A chat turn that can WRITE a document gets this many tool rounds instead
 #: of _MAX_TOOL_ROUNDS (v1.247.0). Office work is read → work out → write →
 #: check, often twice; six rounds ended such turns on the last-round
@@ -5252,7 +5272,10 @@ async def run_chat_turn(
                                 }
                         # Track created/edited documents (workspace-relative
                         # in the tool result) as ABSOLUTE paths for the preview.
-                        if tc.name in _DOC_WRITING_TOOLS:
+                        # v1.329.0: edit_file's file too (`_reports_document`),
+                        # so an edit-only turn shows "N files changed".
+                        # MIRROR NOTE (lock-step): routes/chat.py's stream loop.
+                        if _reports_document(tc.name):
                             _rel = str(
                                 (getattr(result, "data", None) or {}).get("path") or ""
                             )
