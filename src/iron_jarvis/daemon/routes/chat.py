@@ -89,10 +89,12 @@ from ..chat_turn import (
     _WORKFLOW_DRAFT_TOOL,
     _attachment_budgets,
     _browser_section,
+    _page_context_section,
     _prepare_attachments,
     _compose_recall_query,
     _connector_memory_block,  # noqa: F401 — re-exported; the lane reaches it via _gather_grounding (v1.311.0)
     _claimed_write_note,
+    CHART_BLOCK,
     DRAFT_BLOCK,
     _creation_honesty_note,
     _enforce_language,  # noqa: F401 — re-exported; POST keeps it (v1.311.0)
@@ -2239,6 +2241,9 @@ async def chat_stream(
     # an email; if the instruction reached only the non-streaming lane the
     # feature would look broken exactly where it is most used.
     system += DRAFT_BLOCK
+    # CHART FENCE (v1.325.0) — the lock-step copy of chat_turn's injection.
+    # MIRROR NOTE: edit both or neither. Before the planner, like DRAFT_BLOCK.
+    system += CHART_BLOCK
     # YOUR BROWSER (v1.236.0, D16/D21) — the lock-step copy of chat_turn's
     # injection. MIRROR NOTE: edit both or neither. This is the STREAMING
     # lane, which is the one the Build pane uses, so D16's own interaction
@@ -2315,6 +2320,14 @@ async def chat_stream(
     images, attach_block = _attached
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+    # THE PAGE THE USER IS ASKING ABOUT (v1.325.0) — the lock-step copy of
+    # chat_turn's: the ONE helper, at the attachments seam, under an
+    # attachment's policy, raced against Stop like the attachments.
+    if getattr(body, "page_context", None) is not None:
+        _page = await _prep_step(_page_context_section(d, body))
+        if _page is _PREP_STOPPED:
+            return
+        system += _page
     # RESOURCES FROM THE USER'S APPS (v1.324.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
     # like the attachments. Only a turn that carries resources pays anything.

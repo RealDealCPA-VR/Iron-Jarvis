@@ -2912,6 +2912,49 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A replaced answer is KEPT, a queued message waits for a clean finish,
+  and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo
+  borrow list — ideas only). VERSIONS: `lib/branches.ts` — a fork lives on the
+  FIRST message of the live tail (`ChatMessage.branch = {tails}`; `null` marks
+  the live slot), saved verbatim with the thread; `toRequestMessages` sends
+  role + content only, so stored versions never reach a model. An edit forks
+  in `sendChat` (only while the thread is still exactly the edit's cut — the
+  `editBefore` prefix check); a Try again records `pendingForkRef` and ONE
+  effect files it after the turn (new reply or kept partial → forked; failed
+  with nothing, or stopped before the first word → the old reply is put back),
+  and the turn-start save keeps the old reply on disk meanwhile.
+  `mergeContinuation` carries the cut reply's `branch`. Only top-level
+  messages are read by settle maps, the daemon's `at` stamping, search and
+  share — stored versions are frozen as they were. TRY AGAIN WITH: one turn's
+  model rides `turnChoiceRef` (read by `buildChatBody`/`servedByOther`);
+  `RegenerateMenu` keeps `quickLabel="Regenerate reply"` (two tests pin it) and
+  says when a local answer would be retried on a model that leaves the
+  computer. QUEUE: Ctrl/Cmd+Enter mid-turn (`ComposerInput.onQueue`) takes the
+  box — words, files, app and page chips — into `queued` (≤ 3); the effect on
+  `busy` falling sends the first ONLY after a clean finish (`stoppedRef`, set by
+  `stop()` and reset when a turn starts, because Stop before the first word
+  leaves a plain "Stopped." reply with no `interrupted` flag); a messaging
+  thread, an agent conversation, an @-mention or a pasted key goes back to the
+  box instead; leaving the conversation puts the words back in the box (the
+  draft keeps them). PAGE: the palette's "Ask Jarvis about this page"
+  (`lib/pageContext` capture → sessionStorage, 5 min) → `/chat?about=page` →
+  chip → `ChatMessage.pageContext` → `body.page_context` from the LAST USER
+  MESSAGE (so Try again re-sends it). The daemon (`ChatBody.page_context`,
+  cut not 422'd) injects it in BOTH lanes at the attachments seam under the
+  attachments' policy (`_page_context_section`: scanned, fenced, a flagged
+  title withheld, before the planner; trust unchanged — attachments do not
+  taint either). CHARTS: `CHART_BLOCK` (both lanes, after DRAFT_BLOCK) names
+  exactly the keys `lib/chartSpec.parseChartSpec` accepts (strict — an unknown
+  key renders as code); `tests/test_chart_block_v1325.py` is the agreement.
+  Tables: `MarkdownTable` reorders the row ELEMENTS (formatting kept); CSV has
+  the formula guard. New UI copy uses whole-pixel sizes (the v1313 half-pixel
+  ratchet). Pins: `tests/test_{chart_block,page_context}_v1325.py`,
+  `dashboard/__tests__/{wave-d-page,branches,branch-ui,chart-card,
+  markdown-table-tools,page-context,regenerate-menu}-v1325.test.ts(x)`.
+  Known limits: a two-window 409 merge can lose a version switch (as an edit
+  could); a Try again that escalates to an agent drops the old reply as before;
+  hover values on a chart are mouse-only (the table view is the keyboard way).
+
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of
   the assistant-ui/tambo borrow list — ideas only). `mcp/interact.py`:

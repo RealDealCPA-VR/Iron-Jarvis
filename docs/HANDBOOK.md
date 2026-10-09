@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.324.0 (2026-10-04).*
+holds itself to. Current as of v1.325.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,44 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Charts, versions and more in chat (v1.325.0)
+
+Ideas from assistant-ui and tambo (MIT; ideas only, no code taken).
+
+- **Charts in replies.** When numbers read better as a picture, Jarvis can
+  answer with a bar, line or pie chart drawn right in the reply. "Show as
+  table" flips it to the numbers and "Copy data" copies them for a
+  spreadsheet. A chart Jarvis could not draw shows as plain text instead.
+- **Tables you can work with.** Every table in a reply can be sorted by
+  pressing a column heading (press again for the other direction, a third time
+  for the original order), copied as CSV or downloaded as `table.csv`. What
+  you copy is what you see, in the order on screen.
+- **Ask Jarvis about this page.** On any page, press Ctrl K and type "explain
+  this page" (or "summarize this page", "what is this"). Chat opens with an
+  "About: <page>" chip; what that page showed goes with your next message only
+  (and again if you press Try again). Typed-in boxes, the Build terminal
+  screens and hidden parts of the page are never included, and the page text
+  is checked for hidden instructions like an attached file.
+- **Earlier versions are kept.** Editing a sent question, or pressing Try
+  again on an answer, no longer throws the old one away: a small "‹ 1 / 2 ›"
+  appears and flips between versions. Only the version on screen is sent to
+  the model. Up to 10 versions are kept per message (past that the oldest
+  goes). A Try again that fails before writing anything puts the earlier
+  answer back.
+- **Try again with another model.** The arrow beside Try again lists your
+  models; the one you pick answers THIS reply only, and the conversation keeps
+  its own model. When the answer came from a model on this computer and you
+  pick one that is not, the menu says the conversation will leave this
+  computer before you press it.
+- **Queue a message.** While Jarvis is answering, Enter still sends a steer
+  note; Ctrl+Enter instead holds your message (and its files) and sends it
+  when the answer finishes. Up to three can wait. After a Stop or an error
+  they wait for you: "Send now", "Edit" or ×.
+- **Quote a part of an answer.** Select some text in a reply and press Quote:
+  it goes into the message box as a quote, ready for your question.
+- **Conversation map.** "Map" under the message box lists every question in
+  the chat; pick one (arrow keys and Enter work) to jump back to it.
 
 ## Apps that talk back (v1.324.0)
 

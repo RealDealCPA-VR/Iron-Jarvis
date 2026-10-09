@@ -14,6 +14,8 @@
  */
 
 import {
+  Children,
+  cloneElement,
   createContext,
   isValidElement,
   memo,
@@ -24,11 +26,14 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { Check, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, Copy, Download } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API_BASE, ijToken } from "@/lib/api";
-import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
+import { DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
+import { ChartCard } from "@/components/chat/ChartCard";
+import { CHART_FENCE, parseChartSpec } from "@/lib/chartSpec";
+import { nextSort, rowsToCsv, sortOrder, type SortDir, type SortState } from "@/lib/tableData";
 
 /** Collect the plain text inside rendered markdown children (for copy buttons). */
 export function nodeText(node: ReactNode): string {
@@ -136,6 +141,14 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
         <Markdown content={draft.markdown} />
       </DraftCard>
     );
+  }
+  // v1.325.0: a ```chart fence whose JSON parses is drawn as a chart. One that
+  // does not parse — or is still streaming, so its JSON is half-written —
+  // falls through to the ordinary code block below, where the user can still
+  // read exactly what the model wrote.
+  if (fenceLang(children) === CHART_FENCE) {
+    const spec = parseChartSpec(text);
+    if (spec) return <ChartCard spec={spec} />;
   }
   return (
     <div className="group/code relative my-2">
@@ -303,6 +316,196 @@ function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
   );
 }
 
+/**
+ * TABLE TOOLS (v1.325.0). Every markdown table gets quiet tools on hover or
+ * focus — Copy as CSV, Download CSV — and a header press sorts its column
+ * (asc → desc → original; numbers by value, "$1,234.50" / "12%" / "(300)"
+ * included; blanks last). The pure parts live in `lib/tableData.ts`.
+ *
+ * Sorting REORDERS THE ROW ELEMENTS react-markdown built (each keeps its key,
+ * so React moves the DOM rows rather than rebuilding them) — never a
+ * flattened copy, so a bold cell or a link in a cell survives a sort.
+ *
+ * Every control here is a <button>: `DraftCard.cleanHtml` drops buttons when
+ * a draft is copied as rich text, so a table inside an email draft pastes
+ * without the tools or the sort arrow. The header's TEXT therefore sits
+ * OUTSIDE the button (a click anywhere on the header sorts); the button holds
+ * only the arrow and is the keyboard route.
+ */
+function cellsOf(row: ReactElement): ReactElement<{ children?: ReactNode }>[] {
+  const kids = (row.props as { children?: ReactNode }).children;
+  return Children.toArray(kids).filter(isValidElement) as ReactElement<{ children?: ReactNode }>[];
+}
+
+function downloadCsv(csv: string, name = "table.csv") {
+  try {
+    // A BOM so Excel reads the file as UTF-8 (without it, accents garble).
+    const url = URL.createObjectURL(new Blob(["﻿", csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  } catch {
+    /* no Blob URLs here — nothing useful to surface */
+  }
+}
+
+const TOOL_BTN =
+  "inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100";
+
+function TableCopyButton({ getText }: { getText: () => string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  function done(next: "copied" | "failed") {
+    setState(next);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setState("idle"), 1500);
+  }
+  function copy() {
+    try {
+      navigator.clipboard.writeText(getText()).then(
+        () => done("copied"),
+        () => done("failed"),
+      );
+    } catch {
+      done("failed");
+    }
+  }
+  return (
+    <button type="button" onClick={copy} className={TOOL_BTN} title="Copy the table as CSV (paste into a spreadsheet)">
+      {state === "copied" ? <Check size={11} aria-hidden className="text-tone-success" /> : <Copy size={11} aria-hidden />}
+      {state === "copied" ? "Copied" : state === "failed" ? "Couldn't copy" : "Copy as CSV"}
+    </button>
+  );
+}
+
+function MarkdownTable({ children }: { children?: ReactNode }) {
+  const [sort, setSort] = useState<SortState | null>(null);
+  const parts = Children.toArray(children).filter(isValidElement) as ReactElement<{ children?: ReactNode }>[];
+  const thead = parts.find((p) => p.type === "thead");
+  const tbody = parts.find((p) => p.type === "tbody");
+  const headRow = thead
+    ? (Children.toArray(thead.props.children).filter(isValidElement)[0] as ReactElement | undefined)
+    : undefined;
+  const headCells = headRow ? cellsOf(headRow) : [];
+  const bodyRows = tbody
+    ? (Children.toArray(tbody.props.children).filter(isValidElement) as ReactElement[])
+    : [];
+  const sortable = bodyRows.length > 1 && headCells.length > 0;
+  const active = sortable ? sort : null;
+  const order = active
+    ? sortOrder(
+        bodyRows.map((tr) => nodeText(cellsOf(tr)[active.col]?.props.children ?? null)),
+        active.dir,
+      )
+    : bodyRows.map((_, i) => i);
+  const rows = order.map((i) => bodyRows[i]);
+
+  const csv = () =>
+    rowsToCsv([
+      headCells.map((th) => nodeText(th.props.children).trim()),
+      ...rows.map((tr) => cellsOf(tr).map((td) => nodeText(td.props.children).trim())),
+    ]);
+
+  const head =
+    thead && headRow
+      ? cloneElement(
+          thead,
+          undefined,
+          cloneElement(
+            headRow,
+            undefined,
+            headCells.map((th, col) =>
+              cloneElement(th as ReactElement<MarkdownThProps>, {
+                sortDir: !sortable ? undefined : active?.col === col ? active.dir : null,
+                onSort: sortable ? () => setSort((s) => nextSort(s, col)) : undefined,
+              }),
+            ),
+          ),
+        )
+      : thead;
+  const body = tbody ? cloneElement(tbody, undefined, rows) : null;
+  const rest = parts.filter((p) => p !== thead && p !== tbody);
+
+  return (
+    <div className="group/table relative my-2" data-testid="md-table">
+      <div
+        data-testid="table-tools"
+        className="absolute right-1 top-1 z-10 flex gap-0.5 rounded-md border border-white/10 bg-ink-900/95 p-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/table:opacity-100 [@media(hover:none)]:static [@media(hover:none)]:mb-1 [@media(hover:none)]:ml-auto [@media(hover:none)]:w-fit [@media(hover:none)]:opacity-100"
+      >
+        <TableCopyButton getText={csv} />
+        <button
+          type="button"
+          className={TOOL_BTN}
+          onClick={() => downloadCsv(csv())}
+          title="Download the table as table.csv"
+        >
+          <Download size={11} aria-hidden />
+          Download CSV
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[13px]">
+          {head}
+          {body}
+          {rest}
+        </table>
+      </div>
+    </div>
+  );
+}
+
+interface MarkdownThProps {
+  children?: ReactNode;
+  /** undefined = not sortable; null = sortable, not sorted; else the order. */
+  sortDir?: SortDir | null;
+  onSort?: () => void;
+}
+
+function MarkdownTh({ children, sortDir, onSort }: MarkdownThProps) {
+  const base =
+    "border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-left font-medium text-zinc-100";
+  if (!onSort) return <th className={base}>{children}</th>;
+  const name = nodeText(children).trim() || "this column";
+  const next =
+    sortDir === "asc" ? "descending" : sortDir === "desc" ? "the original order" : "ascending";
+  const Icon = sortDir === "asc" ? ArrowUp : sortDir === "desc" ? ArrowDown : ArrowUpDown;
+  return (
+    <th
+      className={`${base} group/th cursor-pointer select-none hover:bg-white/[0.08]`}
+      aria-sort={sortDir === "asc" ? "ascending" : sortDir === "desc" ? "descending" : "none"}
+      onClick={onSort}
+    >
+      <span className="inline-flex items-center gap-1">
+        <span>{children}</span>
+        <button
+          type="button"
+          aria-label={`Sort by ${name}: ${next}`}
+          title={`Sort by ${name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSort();
+          }}
+          className={`grid h-4 w-4 shrink-0 place-items-center rounded transition-opacity hover:text-zinc-100 focus-visible:opacity-100 ${
+            sortDir ? "text-accent-soft opacity-100" : "text-zinc-500 opacity-40 group-hover/th:opacity-100"
+          }`}
+        >
+          <Icon size={11} aria-hidden />
+        </button>
+      </span>
+    </th>
+  );
+}
+
 // Explicit dark-theme element overrides (the app has no typography plugin, so
 // this is our "prose-invert").
 const MD_COMPONENTS: Components = {
@@ -331,16 +534,8 @@ const MD_COMPONENTS: Components = {
     <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>
   ),
   li: ({ children }) => <li className="leading-relaxed [&>p]:my-0">{children}</li>,
-  table: ({ children }) => (
-    <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-[13px]">{children}</table>
-    </div>
-  ),
-  th: ({ children }) => (
-    <th className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-left font-medium text-zinc-100">
-      {children}
-    </th>
-  ),
+  table: MarkdownTable,
+  th: MarkdownTh as Components["th"],
   td: ({ children }) => (
     <td className="border border-white/10 px-2.5 py-1.5 align-top text-zinc-300">
       {children}

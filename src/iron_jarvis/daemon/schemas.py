@@ -202,6 +202,55 @@ class ChatResourceRef(BaseModel):
     name: str = Field(default="", max_length=200)
 
 
+#: Bounds of :class:`PageContext` (v1.325.0). The dashboard caps the text at
+#: the same 12,000 with its own "…(cut)" marker; the daemon cuts again rather
+#: than trusting a client — and CUTS, never 422s, because a page that ran long
+#: is not a malformed request.
+PAGE_CONTEXT_TITLE_CHARS = 200
+PAGE_CONTEXT_PATH_CHARS = 300
+PAGE_CONTEXT_TEXT_CHARS = 12_000
+#: What a text the DAEMON had to cut ends with (inside the bound), so the
+#: model never reads a clipped page as the whole page.
+PAGE_CONTEXT_CUT_MARKER = "\n…(cut: the rest of the page was not included)"
+
+
+class PageContext(BaseModel):
+    """The dashboard page the user asked about ("Ask Jarvis about this page",
+    v1.325.0): its title, its path and its visible text, captured once and
+    sent with ONE message. Injected for that turn only, as untrusted data
+    (``chat_turn._page_context_section``). Every field is truncated to its
+    bound instead of refused."""
+
+    title: str = ""
+    path: str = ""
+    text: str = ""
+
+    @field_validator("title", "path", "text", mode="before")
+    @classmethod
+    def _none_is_empty(cls, v: Any) -> Any:
+        return "" if v is None else v
+
+    @field_validator("title")
+    @classmethod
+    def _cut_title(cls, v: str) -> str:
+        return v[:PAGE_CONTEXT_TITLE_CHARS]
+
+    @field_validator("path")
+    @classmethod
+    def _cut_path(cls, v: str) -> str:
+        return v[:PAGE_CONTEXT_PATH_CHARS]
+
+    @field_validator("text")
+    @classmethod
+    def _cut_text(cls, v: str) -> str:
+        if len(v) <= PAGE_CONTEXT_TEXT_CHARS:
+            return v
+        # The marker sits INSIDE the bound: a cut text must not come back
+        # longer than an uncut one is allowed to be.
+        keep = PAGE_CONTEXT_TEXT_CHARS - len(PAGE_CONTEXT_CUT_MARKER)
+        return v[:keep] + PAGE_CONTEXT_CUT_MARKER
+
+
 class TurnSteerBody(BaseModel):
     """``POST /chat/turns/{turn_id}/steer`` (v1.278.0): one note for a running turn."""
 
@@ -326,6 +375,11 @@ class ChatBody(BaseModel):
     #: Only then may a pack ask during the turn; every other caller (a Build
     #: pane, the browser sidebar, an older page) gets an instant decline.
     mcp_cards: bool = False
+    #: v1.325.0: the dashboard page the user asked about ("Ask Jarvis about
+    #: this page"). BOTH lanes inject it for THIS turn only, at the
+    #: attachments seam, scanned and fenced as untrusted data; empty or
+    #: whitespace text injects nothing. No receipt field.
+    page_context: PageContext | None = None
 
 
 class ChatCompactBody(BaseModel):

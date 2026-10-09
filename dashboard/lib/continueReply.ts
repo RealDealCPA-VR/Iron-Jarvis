@@ -62,8 +62,12 @@ export function mergeContinuation<T extends ContinuableMessage>(list: T[]): T[] 
     const all = [...(a ?? []), ...(b ?? [])];
     return all.length ? Array.from(new Set(all)) : undefined;
   };
+  // v1.325.0: the cut reply may hold other versions (a Try again) — the merged
+  // reply takes its place, so it keeps them.
+  const fork = (cut as T & { branch?: unknown }).branch;
   const merged: T = {
     ...reply,
+    ...(fork !== undefined ? { branch: fork } : {}),
     content: joinContinuation(cut.content, reply.content),
     toolsUsed: union(cut.toolsUsed, reply.toolsUsed),
     documents: union(cut.documents, reply.documents),

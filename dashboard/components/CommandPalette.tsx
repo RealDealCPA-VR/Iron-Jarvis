@@ -32,6 +32,7 @@ import {
   Palette,
   SlidersHorizontal,
   Gauge,
+  ScanText,
   type LucideIcon,
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
@@ -42,6 +43,12 @@ import { recordOpen } from "@/lib/appTiles";
 import { useDaemon } from "@/lib/daemon";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { allThemes, applyTheme, isLightTheme } from "@/lib/theme";
+import {
+  ABOUT_PAGE_HREF,
+  capturePageContext,
+  isChatSurface,
+  stashPageContext,
+} from "@/lib/pageContext";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -333,6 +340,44 @@ function themeItems(): PaletteRow[] {
     href: "/settings#appearance",
   });
   return rows;
+}
+
+// ── "Ask Jarvis about this page" (v1.325.0) ──────────────────────────────────
+// The user is looking at something and wants to ask about IT. The row reads
+// the page's text at the press (lib/pageContext — never what is typed in a
+// box, never the palette or another dialog), leaves it in sessionStorage for
+// the chat page, and opens `/chat?about=page`, which takes it for the next
+// turn. Not offered ON the chat surface: chat is not a page you ask about.
+//
+// SEARCHABLE, NOT ON THE EMPTY SCREEN. The empty-query list is the five verbs
+// (see ACTION_ITEMS) and its size is the point; a context row there would be a
+// sixth verb that means nothing on half the pages. It answers to what people
+// say out loud: "explain this page", "what is this", "summarize this page".
+const ABOUT_PAGE_ID = "action:ask-about-page";
+
+function aboutPageItem(go: (href: string) => void): PaletteRow {
+  return {
+    id: ABOUT_PAGE_ID,
+    kind: "action",
+    label: "Ask Jarvis about this page",
+    blurb: "Opens chat with what is on this page, ready for your question.",
+    aliases: [
+      "explain this page",
+      "summarize this page",
+      "summarise this page",
+      "what is this",
+      "what am i looking at",
+      "help with this page",
+      "ask about this page",
+    ],
+    icon: ScanText,
+    run: () => {
+      // Read the page NOW, while it is still the page on screen. A refused
+      // storage still opens chat — takePageContext() there then answers null.
+      stashPageContext(capturePageContext());
+      go(ABOUT_PAGE_HREF);
+    },
+  };
 }
 
 /** GET /settings/schema → `{settings: [...]}` (the one settings schema). */
@@ -1022,14 +1067,21 @@ export function CommandPalette() {
       ...PAGE_ITEMS,
       ...DEEP_LINK_ITEMS,
       ...ACTION_ITEMS,
+      // v1.325.0: read where we are when the palette OPENS (window.location,
+      // not usePathname — the palette tests mock next/navigation with
+      // useRouter alone, as HubTabs found in v1.318.0).
+      ...(open && typeof window !== "undefined" && !isChatSurface(window.location.pathname)
+        ? [aboutPageItem((href) => router.push(href))]
+        : []),
       ...themeItems(),
       ...settingItems,
       ...skillItems,
       ...threadItems,
       ...projectItems,
     ],
-    // `open`: theme rows are re-read each time the palette opens (v1.317.0).
-    [settingItems, skillItems, threadItems, projectItems, open],
+    // `open`: theme rows are re-read each time the palette opens (v1.317.0),
+    // and so is "about this page" (the page may have changed since).
+    [settingItems, skillItems, threadItems, projectItems, open, router],
   );
 
   /** id → row, so the pure scorer can hand back plain items and we can still

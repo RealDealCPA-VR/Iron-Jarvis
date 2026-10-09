@@ -87,6 +87,7 @@ import {
   Search,
   Send,
   Share2,
+  ListTree,
   Sparkles,
   Square,
   Store,
@@ -247,6 +248,13 @@ import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
+import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
+import { BranchPicker } from "@/components/chat/BranchPicker";
+import { ConversationMap } from "@/components/chat/ConversationMap";
+import { QuoteSelection } from "@/components/chat/QuoteSelection";
+import { RegenerateMenu } from "@/components/chat/RegenerateMenu";
+import { insertQuote, quoteBlock } from "@/lib/quote";
+import { takePageContext, type PageContext } from "@/lib/pageContext";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
@@ -534,7 +542,25 @@ interface ChatMessage {
   /** v1.323.0: the hidden "please continue" turn of a Continue press — never
    *  rendered; replaced by the merged reply once the continuation lands. */
   continuation?: boolean;
+  /** v1.325.0: other versions of the conversation from this message on — an
+   *  edit (on the user message) or a Try again (on the reply). Display-only:
+   *  `toRequestMessages` sends role + content, never this. */
+  branch?: BranchSet<ChatMessage>;
+  /** v1.325.0: the dashboard page this question was asked about ("Ask Jarvis
+   *  about this page") — sent with this turn, and again on a Try again. */
+  pageContext?: PageContext;
 }
+
+/** v1.325.0: a message written while a reply was running — sent after it. */
+interface QueuedMessage {
+  id: string;
+  text: string;
+  files: UploadedFile[];
+  appRes: PackResource[];
+  page: PageContext | null;
+}
+/** v1.325.0: at most this many messages wait for the running reply. */
+const MAX_QUEUED = 3;
 
 /** v1.323.0: how much of a reply's reasoning is kept on the message (the
  *  daemon caps the POST lane's at the same size). */
@@ -578,6 +604,7 @@ type ChatRequestBody = {
   connectors?: string[]; // toggled-on connectors: MCP tool groups + memory
   resources?: { pack: string; uri: string; name?: string }[]; // v1.324.0: "@" → from your apps
   mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
+  page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
 };
 interface ChatResponse {
   reply: string;
@@ -1781,6 +1808,7 @@ const ComposerInput = memo(function ComposerInput({
   onSend,
   onStop,
   onSteer,
+  onQueue,
   onOpened,
   onPickSkill,
   onTyped,
@@ -1800,6 +1828,9 @@ const ComposerInput = memo(function ComposerInput({
   /** v1.278.0: Enter while a turn runs sends the box as a STEER note — the
    *  turn reads it at its next step. Absent, Enter mid-turn does nothing. */
   onSteer?: (text: string) => void;
+  /** v1.325.0: Ctrl+Enter while a turn runs holds the box (words and files)
+   *  and sends it after the reply finishes. */
+  onQueue?: (text: string) => void;
   /** Called when a "/" token opens — the page fetches the skill catalog once
    *  (v1.250.0, S-05: it used to be an effect on a page-level `slashActive`,
    *  and the page no longer watches the text). Idempotent on its own side. */
@@ -1912,6 +1943,10 @@ const ComposerInput = memo(function ComposerInput({
     // next step — and the send path is not entered (it refuses mid-turn).
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (busy && onQueue && (e.ctrlKey || e.metaKey)) {
+        onQueue(store.get().text);
+        return;
+      }
       if (busy && onSteer) {
         onSteer(store.get().text);
         return;
@@ -1956,7 +1991,7 @@ const ComposerInput = memo(function ComposerInput({
       placeholder={
         busy && onSteer
           ? wide
-            ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Esc stops)"
+            ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Ctrl+Enter sends after this reply · Esc stops)"
             : "Steer Jarvis mid-turn…"
           : talkingTo
             ? wide
@@ -2302,7 +2337,10 @@ const VoiceAutoSend = memo(function VoiceAutoSend({
  *  (v1.250.0, S-05). */
 export interface RowHandlers {
   retryTask: (task: string) => void;
-  regenerate: () => void;
+  /** v1.325.0: `choice` = "Try again with…" another model, for this turn. */
+  regenerate: (choice?: string) => void;
+  /** v1.325.0: show version `to` of the conversation from message `index`. */
+  switchVersion: (index: number, to: number) => void;
   /** v1.323.0: carry on the newest reply where it was cut off. */
   continueReply: () => void;
   /** v1.323.0: read reply `index` aloud (a second press stops it). */
@@ -2352,6 +2390,7 @@ const MessageRow = memo(function MessageRow({
   projectId,
   crystallizingId,
   reading = false,
+  regen,
   h,
 }: {
   m: ChatMessage;
@@ -2367,11 +2406,14 @@ const MessageRow = memo(function MessageRow({
   crystallizingId: string | null;
   /** v1.323.0: this reply is being read aloud right now. */
   reading?: boolean;
+  /** v1.325.0: what "Try again with…" offers — given to the newest reply only. */
+  regen?: { models: ModelOption[]; recent: string[]; current: string };
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
   if (m.continuation) return null;
   const when = messageTime(m.at);
+  const versions = branchInfo(m);
   if (m.role === "user") {
     return (
       <div className="group/msg">
@@ -2395,7 +2437,21 @@ const MessageRow = memo(function MessageRow({
               names={m.appResources.map((r) => r.note || r.uri.split(/[\\/]/).pop() || r.uri)}
             />
           )}
+          {m.pageContext && (
+            <AttachmentFooter names={[`About: ${m.pageContext.title || m.pageContext.path}`]} />
+          )}
         </Bubble>
+        {/* v1.325.0: the versions an edit kept — always on screen. */}
+        {versions && (
+          <div className="mt-0.5 flex justify-end">
+            <BranchPicker
+              pos={versions.pos}
+              count={versions.count}
+              disabled={busy}
+              onSwitch={(to) => h.switchVersion(i, to)}
+            />
+          </div>
+        )}
         {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
             (it was read inside a turn; there is no "after it" to cut). */}
         {((!busy && !m.steer) || when.short) && (
@@ -2409,7 +2465,7 @@ const MessageRow = memo(function MessageRow({
               <button
                 type="button"
                 onClick={() => h.editMessage(i)}
-                title="Edit and resend — the messages after this one are removed"
+                title="Edit and resend — what follows is kept as an earlier version"
                 aria-label="Edit and resend"
                 className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
               >
@@ -2567,8 +2623,22 @@ const MessageRow = memo(function MessageRow({
       <Bubble role="assistant">
         {/* v1.323.0: the model's reasoning, folded above its answer. */}
         {m.thinking && <ThinkingDisclosure text={m.thinking} seconds={m.thinkingSeconds ?? null} />}
-        <MemoMarkdown content={m.content} />
+        {/* v1.325.0: a selection in here offers "Quote". */}
+        <div data-quote-source>
+          <MemoMarkdown content={m.content} />
+        </div>
       </Bubble>
+      {/* v1.325.0: the answers a Try again kept — always on screen. */}
+      {versions && (
+        <div className="ml-11 mt-1">
+          <BranchPicker
+            pos={versions.pos}
+            count={versions.count}
+            disabled={busy}
+            onSwitch={(to) => h.switchVersion(i, to)}
+          />
+        </div>
+      )}
       {/* v1.324.0: an app resource the user attached that could not be read
           says so here — the answer above was written without it. */}
       {(m.appResources ?? []).some((r) => !r.ok) && (
@@ -2718,10 +2788,23 @@ const MessageRow = memo(function MessageRow({
           disabledReason={projectId ? null : "bind this chat to a project first"}
           onPromote={() => h.promote(m.content)}
         />
-        {canRegen && (
+        {canRegen && regen && (
+          // v1.325.0: Try again — the same model, or "with…" another one for
+          // this turn only (the conversation's own pick is untouched).
+          <RegenerateMenu
+            models={regen.models}
+            recent={regen.recent}
+            current={regen.current}
+            answeredBy={m.route?.provider ? { provider: m.route.provider } : undefined}
+            onRegenerate={(c) => h.regenerate(c)}
+            disabled={busy}
+            quickLabel="Regenerate reply"
+          />
+        )}
+        {canRegen && !regen && (
           <button
             type="button"
-            onClick={h.regenerate}
+            onClick={() => h.regenerate()}
             title="Regenerate reply"
             aria-label="Regenerate reply"
             className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
@@ -2974,6 +3057,24 @@ export default function ChatPage() {
   // v1.287.0: set when the turn finished before reading a steer note — the
   // note is back in the box and this line says why. Cleared by the next turn.
   const [steerBack, setSteerBack] = useState(false);
+  // v1.325.0: "Try again with…" — the model ONE turn runs on ("provider::model");
+  // null = the conversation's own choice. Set by completeChat, cleared after.
+  const turnChoiceRef = useRef<string | null>(null);
+  // v1.325.0: messages written while a reply runs, sent one by one after it
+  // finishes cleanly (Ctrl+Enter). They carry the files that were in the box.
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const queuedRef = useRef<QueuedMessage[]>([]);
+  queuedRef.current = queued;
+  // v1.325.0: a Try again in flight — the reply it replaces, filed as another
+  // version once the new reply lands. `conv` is the conversation it belongs to
+  // (convGenRef: Stop does not move it, leaving the conversation does).
+  const pendingForkRef = useRef<{ conv: number; index: number; oldTail: ChatMessage[] } | null>(null);
+  // v1.325.0: the user pressed Stop on the running turn — its queued messages
+  // wait for a press, and a Try again stopped before its first word puts the
+  // earlier reply back. Reset when the next turn starts.
+  const stoppedRef = useRef(false);
+  // v1.325.0: the conversation map (a list of the questions to jump between).
+  const [mapOpen, setMapOpen] = useState(false);
   // The folder THIS conversation was given for its files (v1.244.0 — see
   // placeInWorkfolder): shown as a chip, and later attachments join it. The
   // ref is what the next attach reads; the state is what the chip renders.
@@ -3089,6 +3190,9 @@ export default function ChatPage() {
   const [packPrompts, setPackPrompts] = useState<PackPrompt[] | null>(null);
   const [packResources, setPackResources] = useState<PackResource[] | null>(null);
   const [appResources, setAppResources] = useState<PackResource[]>([]);
+  // v1.325.0: "Ask Jarvis about this page" — the page the next message asks
+  // about (a chip above the box; consumed by the send).
+  const [pageCtx, setPageCtx] = useState<PageContext | null>(null);
   const [promptForm, setPromptForm] = useState<PackPrompt | null>(null);
   const packListsAtRef = useRef<{ prompts: number; resources: number }>({ prompts: 0, resources: 0 });
   // TALKING TO AN AGENT (v1.284.0): after "@builder …" the follow-ups keep
@@ -3892,6 +3996,14 @@ export default function ChatPage() {
       const fresh = params.get("new") === "1";
       // Redesign S9: "Switch model" from another page lands here, menu open.
       const openModels = params.get("model") === "1";
+      // v1.325.0: "Ask Jarvis about this page" — the palette stashed the page
+      // it was opened on; it becomes a chip on the next message (one-shot).
+      const about = params.get("about") === "page";
+      if (about) {
+        const ctx = takePageContext();
+        if (ctx) setPageCtx(ctx);
+        inputRef.current?.focus();
+      }
       if (openModels) setModelMenuOpen(true);
       if (wantPersona) selectPersonaLocal(wantPersona);
       if (ask) {
@@ -3907,7 +4019,7 @@ export default function ChatPage() {
         inputRef.current?.focus();
       }
       if (thread) void openThread(thread);
-      else if (!ask && !skill && !wantPersona && !fresh) {
+      else if (!ask && !skill && !wantPersona && !fresh && !about) {
         // v1.311.0: no landing params — reopen the conversation this window
         // had open (a ?thread= link wins and becomes the remembered one; an
         // ask/skill/persona landing is the start of something new). Only
@@ -3915,7 +4027,7 @@ export default function ChatPage() {
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona || fresh || openModels) {
+      if (ask || skill || thread || wantPersona || fresh || openModels || about) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -3925,6 +4037,7 @@ export default function ChatPage() {
         url.searchParams.delete("persona");
         url.searchParams.delete("new");
         url.searchParams.delete("model");
+        url.searchParams.delete("about");
         window.history.replaceState(null, "", url.toString());
       }
     } catch {
@@ -6198,7 +6311,10 @@ export default function ChatPage() {
   /** Build the /chat request body for `history` (shared by the streaming attempt
    *  and the non-streaming POST fallback so the two can never drift). */
   function buildChatBody(history: ChatMessage[], atts: UploadedFile[]): ChatRequestBody {
-    const { provider, model } = splitChoice(choice);
+    // v1.325.0: "Try again with…" names a model for ONE turn; the
+    // conversation's own choice is untouched.
+    const turnChoice = turnChoiceRef.current ?? choice;
+    const { provider, model } = splitChoice(turnChoice);
     const personaValue = personaForSend();
     return {
       // Full conversation every turn — the backend is stateless here.
@@ -6253,7 +6369,7 @@ export default function ChatPage() {
       // v1.263.0: the reasoning level — only when the picked model offers it,
       // so a level chosen for one model never rides a request to another and
       // a pre-v1.263.0 daemon sees a body it already understands.
-      ...(reasoning && reasoningLevelsFor(choice).includes(reasoning) ? { reasoning } : {}),
+      ...(reasoning && reasoningLevelsFor(turnChoice).includes(reasoning) ? { reasoning } : {}),
     };
   }
 
@@ -6263,7 +6379,7 @@ export default function ChatPage() {
    *  honesty chip: a local-model turn silently served by a subscription CLI
    *  must never be invisible. */
   function servedByOther(served?: string): string {
-    const requested = splitChoice(choice).provider ?? "";
+    const requested = splitChoice(turnChoiceRef.current ?? choice).provider ?? "";
     if (!served || !requested || served === requested) return "";
     return served;
   }
@@ -6617,15 +6733,26 @@ export default function ChatPage() {
    * back to the direct /chat POST verbatim. On success the reply is appended and
    * the turn autosaved (the ONLY chat-mode save site).
    */
-  async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
+  async function completeChat(
+    history: ChatMessage[],
+    atts: UploadedFile[],
+    opts: { choice?: string } = {},
+  ) {
     const gen = chatGenRef.current;
+    // v1.325.0: "Try again with…" — this turn only; read by buildChatBody and
+    // servedByOther, cleared in the finally below.
+    turnChoiceRef.current = opts.choice ?? null;
+    stoppedRef.current = false;
     setFollowups(null); // they answered the reply this turn replaces or follows
     setMessages(history);
     // DURABLE AT SEND (v1.226.0): the typed message is on disk BEFORE the
     // model is asked — a reload or route change mid-stream aborted the fetch
     // and lost the question with the partial. The end-of-turn save below
     // still runs; the chain serializes, so it reuses the id this one mints.
-    queueSave(history);
+    // v1.325.0: a Try again keeps the reply it replaces on disk until the
+    // new one lands (the question is already saved).
+    const tryFork = pendingForkRef.current;
+    queueSave(tryFork && tryFork.index === history.length ? [...history, ...tryFork.oldTail] : history);
     pinnedRef.current = true; // a fresh turn always scrolls into view
     setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
@@ -6651,6 +6778,10 @@ export default function ChatPage() {
         ...(r.note ? { name: r.note } : {}),
       }));
     }
+    // v1.325.0: the page this question was asked about rides the same way —
+    // read from the message, so a Try again sends it again.
+    const turnPage = asked?.role === "user" ? asked.pageContext : undefined;
+    if (turnPage?.text.trim()) body.page_context = turnPage;
     // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
     const turnId = mintTurnId();
     body.turn_id = turnId;
@@ -7026,6 +7157,7 @@ export default function ChatPage() {
       restoreComposerDraft(history);
     } finally {
       sendingRef.current = false;
+      turnChoiceRef.current = null;
       if (chatGenRef.current === gen) {
         setChatBusy(false);
         // Return focus so the next message is type-ready without a click.
@@ -7122,18 +7254,27 @@ export default function ChatPage() {
   }
 
   /** CHAT MODE: append the user's message and run one completion. */
-  async function sendChat(message: string) {
+  async function sendChat(
+    message: string,
+    opts: { queued?: QueuedMessage; editBefore?: ChatMessage[] | null } = {},
+  ) {
     // v1.323.0: the draft's words are now a message — never restore them.
-    if (saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
-    const atts = attachments;
-    setAttachments([]); // chips are consumed by this message
+    if (!opts.queued && saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
+    // v1.325.0: a QUEUED message carries what was in the box when it was
+    // queued; the box now holds whatever the user has typed since.
+    const q = opts.queued;
+    const atts = q ? q.files : attachments;
+    if (!q) setAttachments([]); // chips are consumed by this message
     // v1.324.0: so are the apps' resources — read by the daemon for THIS turn.
-    const appRes = appResources;
-    setAppResources([]);
+    const appRes = q ? q.appRes : appResources;
+    if (!q) setAppResources([]);
+    const page = q ? q.page : pageCtx;
+    if (!q) setPageCtx(null);
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
       at: new Date().toISOString(),
+      ...(page ? { pageContext: page } : {}),
       ...(appRes.length
         ? { appResources: appRes.map((r) => ({ pack: r.pack, uri: r.uri, ok: true, note: r.title || r.name || "" })) }
         : {}),
@@ -7144,8 +7285,64 @@ export default function ChatPage() {
           }
         : {}),
     };
-    await completeChat([...messages, userMsg], atts);
+    // v1.325.0: an EDITED message keeps what it replaced as another version
+    // (‹ 1/2 ›) — only when the thread is still exactly the cut the edit made.
+    const before = opts.editBefore;
+    const history =
+      before && before.length > messages.length && messages.every((m, k) => m === before[k])
+        ? forkTail(before, messages.length, [userMsg]).messages
+        : [...messages, userMsg];
+    await completeChat(history, atts);
   }
+
+  // v1.325.0: FILE A TRY AGAIN once its turn is over. The new reply (or the
+  // partial a Stop kept) becomes the live version and the one it replaced is
+  // kept beside it; a try that failed with nothing to show puts the old reply
+  // back. A turn that handed itself to an agent keeps today's behaviour.
+  useEffect(() => {
+    const f = pendingForkRef.current;
+    if (!f || chatBusy) return;
+    pendingForkRef.current = null;
+    if (convGenRef.current !== f.conv) return;
+    const cur = messages;
+    const tail = cur.slice(f.index);
+    let next: ChatMessage[] | null = null;
+    const lastOfTail = tail[tail.length - 1];
+    if (tail.length > 0 && lastOfTail.role === "assistant" && stoppedRef.current && !lastOfTail.interrupted) {
+      // Stopped before the first word ("Stopped."): nothing new to keep.
+      next = [...cur.slice(0, f.index), ...f.oldTail];
+    } else if (tail.length > 0 && lastOfTail.role === "assistant") {
+      next = forkTail([...cur.slice(0, f.index), ...f.oldTail], f.index, tail).messages;
+    } else if (tail.length === 0 && failedTurn) {
+      next = [...cur, ...f.oldTail];
+      setFailedTurn(null); // the earlier reply is back; Try again is the way to retry
+    }
+    if (!next) return;
+    messagesRef.current = next;
+    setMessages(next);
+    queueSave(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatBusy, messages, failedTurn]);
+
+  // v1.325.0: SEND THE NEXT QUEUED MESSAGE when a reply finishes cleanly — not
+  // after a Stop (an interrupted reply), a failure or an offline daemon: then
+  // the queue waits for a press ("Send now").
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    const was = wasBusyRef.current;
+    wasBusyRef.current = busy;
+    if (!was || busy) return;
+    const next = queuedRef.current[0];
+    if (!next) return;
+    const last = messages[messages.length - 1];
+    if (stoppedRef.current || failedTurn || error || offline || !last || last.role !== "assistant" || last.interrupted)
+      return;
+    const rest = queuedRef.current.slice(1);
+    queuedRef.current = rest;
+    setQueued(rest);
+    sendQueued(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   /**
    * Drop the LAST assistant reply and re-run the completion over the history
@@ -7153,7 +7350,7 @@ export default function ChatPage() {
    * through the same single completeChat site, overwriting the thread with the
    * regenerated reply.
    */
-  function regenerate() {
+  function regenerate(choice?: string) {
     if (busy) return;
     const msgs = messages;
     const last = msgs[msgs.length - 1];
@@ -7163,9 +7360,124 @@ export default function ChatPage() {
     if (history.length === 0 || lastUser.role !== "user") return;
     setError(null);
     setOffline(false);
+    // v1.325.0: the reply being replaced is KEPT as another version — the
+    // effect below files it once the new one lands (or puts it back when the
+    // new one fails with nothing to show).
+    pendingForkRef.current = { conv: convGenRef.current, index: history.length, oldTail: [last] };
     // Re-ground on the SAME attachments the turn carried — otherwise the re-run
     // answers blind while the user bubble still shows the file chip.
-    void completeChat(history, attachmentsOf(lastUser));
+    // v1.325.0: `choice` = "Try again with…" another model, for this turn only.
+    void completeChat(history, attachmentsOf(lastUser), choice ? { choice } : {});
+  }
+
+  /** v1.325.0: a selection quoted from a reply joins the box (never sent). */
+  function quoteIntoBox(text: string) {
+    composer.setText(insertQuote(composer.get().text, quoteBlock(text)));
+    inputRef.current?.focus();
+  }
+
+  /** v1.325.0: the map's jump — bring message `index` into view. */
+  function jumpToMessage(index: number) {
+    setMapOpen(false);
+    pinnedRef.current = false; // reading back — don't snap to the bottom
+    const anchor = document.querySelector(`[data-msg-index="${index}"]`);
+    const el = anchor?.firstElementChild ?? null;
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /** v1.325.0: switch message `index` to another version of the conversation. */
+  function switchVersion(index: number, to: number) {
+    if (busy) return;
+    const next = switchBranch(messagesRef.current, index, to);
+    if (next === messagesRef.current) return;
+    setFollowups(null); // they answered the version being put away
+    messagesRef.current = next;
+    setMessages(next);
+    queueSave(next);
+  }
+
+  /** v1.325.0: Ctrl+Enter mid-turn — hold the box (words, files, the app and
+   *  page chips) and send it after this reply finishes cleanly. */
+  function queueFollowup(text: string) {
+    const words = text.trim();
+    if (!words && attachmentsRef.current.length === 0) return;
+    if (uploadingRef.current) {
+      setError("Wait for the files to finish uploading, then queue the message.");
+      return;
+    }
+    if (queuedRef.current.length >= MAX_QUEUED) {
+      setError(`Up to ${MAX_QUEUED} messages can wait for this reply — send or remove one first.`);
+      return;
+    }
+    const item: QueuedMessage = {
+      id: mintTurnId(),
+      text: words,
+      files: attachmentsRef.current,
+      appRes: appResources,
+      page: pageCtx,
+    };
+    const next = [...queuedRef.current, item];
+    queuedRef.current = next;
+    setQueued(next);
+    setAttachments([]);
+    setAppResources([]);
+    setPageCtx(null);
+    composer.reset();
+  }
+
+  /** v1.325.0: take a queued message out — back into the box ("Edit") or gone. */
+  function unqueue(id: string, toBox: boolean) {
+    const item = queuedRef.current.find((x) => x.id === id);
+    if (!item) return;
+    const next = queuedRef.current.filter((x) => x.id !== id);
+    queuedRef.current = next;
+    setQueued(next);
+    if (toBox) putBackInBox([item]);
+  }
+
+  /** Queued messages that cannot go out on their own return to the box, ahead
+   *  of anything typed since — nothing the user wrote is dropped silently. */
+  function putBackInBox(items: QueuedMessage[]) {
+    if (!items.length) return;
+    const cur = composer.get().text.trim();
+    const words = items.map((x) => x.text).filter(Boolean);
+    composer.setText([...words, ...(cur ? [cur] : [])].join("\n\n"));
+    const files = items.flatMap((x) => x.files);
+    if (files.length) setAttachments((prev) => [...files, ...prev]);
+    const res = items.flatMap((x) => x.appRes);
+    if (res.length) setAppResources((prev) => [...res, ...prev]);
+    const page = items.find((x) => x.page)?.page;
+    if (page) setPageCtx(page);
+  }
+
+  /** v1.325.0: send one queued message — the chat lane only. A messaging
+   *  thread, an agent conversation, an @-mention or a pasted key go back to
+   *  the box instead: those doors read the box, and the key guard asks first. */
+  function sendQueued(item: QueuedMessage) {
+    const text = item.text;
+    if (
+      commMetaRef.current ||
+      addresseeRef.current.length > 0 ||
+      liveMentionsIn(text).length > 0 ||
+      (text && looksLikeSecret(text)) ||
+      (!text && item.files.length === 0)
+    ) {
+      putBackInBox([item]);
+      inputRef.current?.focus();
+      return;
+    }
+    if (busy || sendingRef.current) {
+      const next = [item, ...queuedRef.current];
+      queuedRef.current = next;
+      setQueued(next);
+      return;
+    }
+    sendingRef.current = true;
+    pinnedRef.current = true;
+    setShowJump(false);
+    setError(null);
+    setOffline(false);
+    void sendChat(text, { queued: item });
   }
 
   /** v1.323.0: CONTINUE the newest reply, cut off by the model's output
@@ -7526,6 +7838,8 @@ export default function ChatPage() {
     }
     secretSendOkRef.current = false;
     setHeldSecret(null);
+    // v1.325.0: an edit being sent keeps what it replaced as another version.
+    const editBefore = editUndo?.before ?? null;
     setEditUndo(null);
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
@@ -7574,7 +7888,7 @@ export default function ChatPage() {
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
     // escalates itself when it needs the full agent (see completeChat), so the
     // user never routes their own request.
-    void sendChat(message);
+    void sendChat(message, { editBefore });
   }
 
   /**
@@ -7725,6 +8039,7 @@ export default function ChatPage() {
   // Stop the in-flight turn and keep whatever streamed so far as the answer.
   // Best-effort — even if the server-side cancel fails we stop waiting locally.
   function stop() {
+    stoppedRef.current = true; // v1.325.0: see the queue and Try again effects
     // CHAT: abort the stream. Bump the generation FIRST so the aborted
     // stream.run()'s throw lands in a torn-down completeChat (no POST fallback).
     if (chatBusy && stream.streaming) {
@@ -7795,6 +8110,17 @@ export default function ChatPage() {
    * Both doors call this one function so neither can forget a step.
    */
   function leaveConversation() {
+    // v1.325.0: messages waiting for a reply belong to THIS conversation —
+    // their words join the box first, so the draft below keeps them.
+    if (queuedRef.current.length) {
+      const words = queuedRef.current.map((x) => x.text).filter(Boolean);
+      const cur = composer.get().text.trim();
+      if (words.length) composer.setText([...words, ...(cur ? [cur] : [])].join("\n\n"));
+      queuedRef.current = [];
+      setQueued([]);
+    }
+    pendingForkRef.current = null;
+    setPageCtx(null);
     // v1.323.0: what is half-typed for a SAVED conversation is kept for it
     // (an empty box removes the old draft); an unsaved chat has nowhere to
     // come back to, so New chat still starts empty.
@@ -8104,7 +8430,8 @@ export default function ChatPage() {
       if (task) composer.setText(task);
       inputRef.current?.focus();
     },
-    regenerate: () => regenerate(),
+    regenerate: (choice) => regenerate(choice),
+    switchVersion: (index, to) => switchVersion(index, to),
     continueReply: () => continueReply(),
     readAloud: (index) => {
       const msg = messagesRef.current[index];
@@ -8169,12 +8496,19 @@ export default function ChatPage() {
     undoFor: (path) => undoForPath(path),
     undoWrite: (actionId, path) => undoWrite(actionId, path),
   };
+  // v1.325.0: what the newest reply's "Try again with…" offers. Recent picks
+  // are read when the catalog or the pick changes, never per keystroke.
+  const regenOptions = useMemo(
+    () => ({ models, recent: readRecentModels(), current: choice }),
+    [models, choice],
+  );
   const rowImplRef = useRef(rowImpl);
   rowImplRef.current = rowImpl;
   const rowHandlers = useMemo<RowHandlers>(
     () => ({
       retryTask: (task) => rowImplRef.current.retryTask(task),
-      regenerate: () => rowImplRef.current.regenerate(),
+      regenerate: (choice) => rowImplRef.current.regenerate(choice),
+      switchVersion: (index, to) => rowImplRef.current.switchVersion(index, to),
       continueReply: () => rowImplRef.current.continueReply(),
       readAloud: (index) => rowImplRef.current.readAloud(index),
       editMessage: (index) => rowImplRef.current.editMessage(index),
@@ -9005,6 +9339,7 @@ export default function ChatPage() {
                         before it, may it be regenerated) and one stable
                         handlers object, so typing or streaming no longer
                         re-renders every bubble in the thread. */}
+                    <QuoteSelection onQuote={quoteIntoBox} className="contents">
                     {messages.map((m, i) => {
                       // No regenerate on MESSAGING threads: the daemon owns the
                       // transcript, so a browser-side re-run could never be
@@ -9016,8 +9351,8 @@ export default function ChatPage() {
                         messages[i - 1].role === "user" &&
                         !busy;
                       return (
+                        <div key={i} data-msg-index={i} className="contents">
                         <MessageRow
-                          key={i}
                           m={m}
                           i={i}
                           isLast={i === messages.length - 1}
@@ -9032,10 +9367,13 @@ export default function ChatPage() {
                           projectId={projectId}
                           crystallizingId={crystallizingId}
                           reading={tts.readingKey === `reply-${i}`}
+                          regen={canRegen ? regenOptions : undefined}
                           h={rowHandlers}
                         />
+                        </div>
                       );
                     })}
+                    </QuoteSelection>
                     {/* v1.323.0: FOLLOW-UP QUESTIONS under the newest reply —
                         a press puts the question in the box, never sends it. */}
                     {!busy && followups && followups.forLen === messages.length && (
@@ -9384,6 +9722,7 @@ export default function ChatPage() {
                   stay chat-only because those are chat-loop mechanics. */}
               {(attachments.length > 0 ||
                 appResources.length > 0 ||
+                pageCtx !== null ||
                 workfolder !== null ||
                 activeSkill !== "" ||
                 selectedTools.length > 0 ||
@@ -9490,6 +9829,26 @@ export default function ChatPage() {
                       turn's receipt are THE lists, and saying it twice made
                       the composer row crowd out the send box at the new
                       30-doc cap. */}
+                  {/* v1.325.0: the page this message asks about. */}
+                  {pageCtx && (
+                    <span
+                      data-testid="page-context-chip"
+                      title={`${pageCtx.path} — what that page showed goes with your next message`}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
+                    >
+                      <FileText size={11} className="shrink-0 text-accent-soft" />
+                      <span className="max-w-[16rem] truncate">About: {pageCtx.title || pageCtx.path}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPageCtx(null)}
+                        aria-label="Don't send the page"
+                        title="Don't send the page"
+                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  )}
                   {appResources.map((r) => (
                     <span
                       key={`${r.pack}/${r.uri}`}
@@ -9583,6 +9942,56 @@ export default function ChatPage() {
               {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
                   conversation stays with builder: plain follow-ups go to the
                   panel, and this strip says so — with the way back. */}
+              {/* v1.325.0: messages waiting for the running reply (Ctrl+Enter).
+                  Sent one by one when a reply finishes cleanly; after a Stop
+                  or a failure they wait for "Send now". */}
+              {queued.length > 0 && (
+                <div data-testid="queued-messages" className="space-y-1 border-t hairline px-3 py-1.5">
+                  {queued.map((q, k) => (
+                    <div
+                      key={q.id}
+                      data-testid="queued-message"
+                      className="flex items-center gap-2 text-[12px] text-zinc-400"
+                    >
+                      <span className="shrink-0 text-zinc-500">
+                        {busy ? (k === 0 ? "Sends after this reply:" : "Then:") : "Waiting to send:"}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-zinc-300" title={q.text}>
+                        {q.text || q.files.map((f) => f.name).join(", ")}
+                        {q.text && q.files.length > 0 ? ` (+${q.files.length} file${q.files.length === 1 ? "" : "s"})` : ""}
+                      </span>
+                      {!busy && k === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            unqueue(q.id, false);
+                            sendQueued(q);
+                          }}
+                          className="rounded-md px-2 py-0.5 text-zinc-200 hover:bg-white/[0.06]"
+                        >
+                          Send now
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => unqueue(q.id, true)}
+                        className="rounded-md px-2 py-0.5 text-zinc-300 hover:bg-white/[0.06]"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => unqueue(q.id, false)}
+                        aria-label="Don't send this message"
+                        title="Don't send this message"
+                        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {editUndo && (
                 <div
                   data-testid="edit-undo"
@@ -9591,7 +10000,8 @@ export default function ChatPage() {
                 >
                   <span className="min-w-0 flex-1">
                     Editing a sent message — the {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
-                    {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed.
+                    {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed. Send keeps the earlier
+                    version one click away (‹ ›).
                   </span>
                   <button
                     type="button"
@@ -10274,6 +10684,7 @@ export default function ChatPage() {
                   onSend={send}
                   onStop={stop}
                   onSteer={(text) => void steerTurn(text)}
+                  onQueue={queueFollowup}
                   onOpened={onSlashOpened}
                   onPickSkill={pickSkill}
                   onTyped={() => {
@@ -10343,6 +10754,29 @@ export default function ChatPage() {
                   <Share2 size={13} />
                   <span className="hidden sm:inline">Share</span>
                 </button>
+                {/* v1.325.0: the conversation map — every question, one press away. */}
+                <button
+                  type="button"
+                  data-testid="open-conversation-map"
+                  onClick={() => setMapOpen((v) => !v)}
+                  disabled={messages.filter((x) => x.role === "user" && !x.continuation).length < 2}
+                  aria-expanded={mapOpen}
+                  aria-label="Conversation map"
+                  title="Jump to any question in this conversation"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                >
+                  <ListTree size={13} />
+                  <span className="hidden sm:inline">Map</span>
+                </button>
+                {mapOpen && (
+                  <div className="fixed bottom-24 right-4 z-40 w-[min(26rem,calc(100vw-2rem))]">
+                    <ConversationMap
+                      messages={messages}
+                      onJump={jumpToMessage}
+                      onClose={() => setMapOpen(false)}
+                    />
+                  </div>
+                )}
                 {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves
                     for this conversation. A native select at the footer's
                     quiet weight — one control, three positions, the current
