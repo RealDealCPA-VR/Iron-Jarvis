@@ -2711,6 +2711,10 @@ def register(app: FastAPI, d) -> None:
         for tool_name in d.platform.registry.mcp_names(name):
             if d.platform.registry.unregister(tool_name):
                 unloaded += 1
+        # v1.324.0: its prompts and resources go with it ("/" and "@").
+        from ...mcp.tools import forget_live_client
+
+        forget_live_client(name)
         return {"removed": name, "tools_unloaded": unloaded}
 
     @app.post("/mcp/suggest")

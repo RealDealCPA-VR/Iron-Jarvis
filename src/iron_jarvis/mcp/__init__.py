@@ -19,7 +19,14 @@ from .client import (
     MCPError,
     StdioTransport,
 )
-from .tools import MCPRemoteTool, SecretResolver, mcp_tools
+from .interact import (
+    InteractionScope,
+    check_elicitation_answer,
+    current_scope,
+    elicitation_fields,
+    interaction_scope,
+)
+from .tools import MCPRemoteTool, SecretResolver, live_client, live_clients, mcp_tools
 
 __all__ = [
     "MCPClient",
@@ -30,4 +37,11 @@ __all__ = [
     "HttpTransport",
     "SecretResolver",
     "mcp_tools",
+    "live_client",
+    "live_clients",
+    "InteractionScope",
+    "interaction_scope",
+    "current_scope",
+    "elicitation_fields",
+    "check_elicitation_answer",
 ]

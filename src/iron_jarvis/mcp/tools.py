@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
@@ -787,6 +788,70 @@ def clear_quarantine(home: "str | Path", registry: Any, server: str, tool: str) 
     return True
 
 
+#: One LIVE client per loaded pack (v1.324.0): prompts and resources are read
+#: through the pack's own connection, so the routes need the client even for
+#: a pack that loaded ZERO tools. Set by a recorded load (``record=True``) —
+#: a probe registers nothing here either — and a later load of the same name
+#: replaces the entry. Guarded: loads run on a thread pool.
+#:
+#: Each name keeps a SHORT STACK (newest last), not one slot: a background
+#: boot load and a Retry can finish in either order, and the platform then
+#: CLOSES the loser's client. The newest client that is not closed is the
+#: live one, so whichever load won, its client is the one handed out.
+_LIVE_CLIENTS: dict[str, list[MCPClient]] = {}
+_LIVE_LOCK = threading.Lock()
+_LIVE_DEPTH = 4
+
+
+def _is_closed(client: Any) -> bool:
+    return bool(getattr(client, "closed", False))
+
+
+def _set_live_client(name: str, client: MCPClient) -> None:
+    with _LIVE_LOCK:
+        stack = [c for c in _LIVE_CLIENTS.get(name, []) if c is not client and not _is_closed(c)]
+        stack.append(client)
+        _LIVE_CLIENTS[name] = stack[-_LIVE_DEPTH:]
+
+
+def forget_live_client(name: str) -> None:
+    """Drop a pack's live client(s) (its pack was removed or failed to load).
+    Never raises; does NOT close them — whoever unloads the pack's tools owns
+    that."""
+    with _LIVE_LOCK:
+        _LIVE_CLIENTS.pop(name, None)
+
+
+def _newest_open(name: str) -> MCPClient | None:
+    """Lock held. Prunes closed clients; the newest open one, or ``None``."""
+    stack = [c for c in _LIVE_CLIENTS.get(name, []) if not _is_closed(c)]
+    if stack:
+        _LIVE_CLIENTS[name] = stack
+        return stack[-1]
+    _LIVE_CLIENTS.pop(name, None)
+    return None
+
+
+def live_client(name: str) -> MCPClient | None:
+    """The live client of a loaded pack, or ``None``. A client that was
+    CLOSED (a Retry replaced it, a deferred load was discarded) is never
+    handed out — a closed stdio transport would respawn its server."""
+    with _LIVE_LOCK:
+        return _newest_open(name)
+
+
+def live_clients() -> dict[str, MCPClient]:
+    """Every loaded pack's live client, by pack name (a copy; closed ones
+    left out)."""
+    with _LIVE_LOCK:
+        out: dict[str, MCPClient] = {}
+        for name in list(_LIVE_CLIENTS):
+            client = _newest_open(name)
+            if client is not None:
+                out[name] = client
+        return out
+
+
 def _load_one_server(
     cfg: dict[str, Any],
     secret_resolver: SecretResolver | None,
@@ -812,7 +877,13 @@ def _load_one_server(
             # actionable (v1.256.0, R-02) — without it the classifier can
             # only echo the exception.
             _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
+            # The pack is not loaded: no prompts or resources either.
+            forget_live_client(name)
         return []
+    if record:
+        # Before the tool loop: a pack with ZERO tools may still serve
+        # prompts and resources (v1.324.0).
+        _set_live_client(name, client)
     tools: list[Tool] = []
     for spec in specs:
         if not isinstance(spec, dict) or not spec.get("name"):
@@ -897,6 +968,9 @@ __all__ = [
     "MCPRemoteTool",
     "SecretResolver",
     "mcp_tools",
+    "live_client",
+    "live_clients",
+    "forget_live_client",
     "load_status",
     "load_statuses",
     "mark_starting",

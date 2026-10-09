@@ -2912,6 +2912,46 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A pack can ASK only where someone can answer, and a pack's model
+  request is answered by THE TURN'S model or refused** (v1.324.0, wave C of
+  the assistant-ui/tambo borrow list — ideas only). `mcp/interact.py`:
+  `InteractionScope` in the ContextVar `MCP_SCOPE`, set by the stream lane
+  (`with interaction_scope(_ti.scope_for(tc.id))` INSIDE `_invoke(i)` — never
+  held across a generator `yield`) and READ ON THE TRANSPORT WORKER THREAD
+  (`asyncio.to_thread` copies the context). `serve_server_request` answers
+  ping, bridges `elicitation/create` / `sampling/createMessage` to the loop
+  (`run_coroutine_threadsafe`, 0.25 s slices, gives up on the stdio cancel
+  token or a stopped loop), declines / -1s with no scope, -32601s the rest;
+  `handle_notification` turns the scope's OWN progress token into frames (4/s).
+  Initialize declares `{elicitation: {}, sampling: {}}`; `tools/call` carries
+  `_meta.progressToken` only under a scope. A scope exists ONLY when the body
+  says `mcp_cards: true` (the chat page): a Build pane, the browser sidebar,
+  POST /chat, agents, schedules get an instant decline — a card nobody draws
+  would park the tool until Stop. `daemon/mcp_turn.TurnInteractions`: side
+  queue → `_run_tool_round(side=)` (`_with_side`, drained before `ready`) →
+  SSE `mcp_elicitation` / `mcp_sampling` / `mcp_progress` / `mcp_resolved`;
+  asks wait with NO clock (answer, Stop, disconnect, turn end); routes
+  `/chat/mcp/elicitations|sampling/{id}`, `/mcp/prompts[/get]`,
+  `/mcp/resources` (`routes/mcp_interact.py`, 60 s per-pack cache keyed on the
+  client). SAMPLING calls `router.complete(provider, model, pin=True)` — the
+  new per-call strict pin (both `complete` and `stream`), because without it
+  an explicit cloud pick could fail over and send the pack's text to a
+  provider the user never chose; low trust / mock / no text / Deny → -1, and
+  an answer from another provider is still refused as a backstop. Resources
+  (`ChatBody.resources`, ≤ 8) are read at the ATTACHMENTS seam in BOTH lanes
+  (`read_turn_resources`, promptguard-scanned, ≤ 20,000 chars) and both carry
+  `resources` on the done frame / POST response ALWAYS; the page derives the
+  turn's resources from the LAST USER MESSAGE (`appResources`) so Regenerate
+  re-reads them. `mcp.tools.live_client(s)` / `forget_live_client` keep a
+  client per pack (zero-tool packs too); delete and `_forget_load` forget it.
+  Pins: `tests/test_mcp_two_way_v1324.py` (+ `fixtures/mcp_two_way_server_v1324.py`),
+  `tests/test_mcp_chat_lane_v1324.py`, `tests/test_mcp_interact_routes_v1324.py`,
+  `tests/test_router_call_pin_v1324.py`,
+  `dashboard/__tests__/{mcp-two-way,mcp-page}-v1324.test.tsx`. Known limits:
+  url-mode elicitation is declined; a stdio pack waiting on the user holds its
+  transport lock (its "/" list waits); sampling `maxTokens` is shown, not
+  enforced (the router has no cap); an HTTP pack's wait has no cancel token.
+
 - **Thinking is a FRAME, never answer text; `truncated` is honest; a
   Continue is ONE reply** (v1.323.0, wave B of the assistant-ui/tambo borrow
   list — ideas only). ADAPTERS: a new stream frame `{"type": "thinking",

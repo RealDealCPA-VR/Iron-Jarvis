@@ -2966,6 +2966,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import followups as _followups_routes
 
     _followups_routes.register(app, d)
+
+    # Apps that talk back (v1.324.0): answer a pack's question / model request,
+    # and list the packs' prompts and resources.
+    from .routes import mcp_interact as _mcp_interact_routes
+
+    _mcp_interact_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

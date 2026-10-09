@@ -57,7 +57,9 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Blocks,
   Download,
+  FileText,
   ExternalLink,
   FolderKanban,
   FolderOpen,
@@ -118,6 +120,19 @@ import {
 } from "@/components/chat/TurnReceipt";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { FollowupChips } from "@/components/chat/FollowupChips";
+import { ElicitationCard } from "@/components/chat/ElicitationCard";
+import { SamplingCard } from "@/components/chat/SamplingCard";
+import { PackPromptForm } from "@/components/chat/PackPromptForm";
+import {
+  answerElicitation,
+  decideSampling,
+  decodeResourceReceipts,
+  fetchPackPrompts,
+  fetchPackResources,
+  type PackPrompt,
+  type PackResource,
+  type ResourceReceipt,
+} from "@/lib/mcpInteract";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
@@ -379,6 +394,9 @@ interface SessionAsk {
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** v1.324.0: what the user attached from their apps ("@"), and — on the
+   *  reply — whether each one could be read. */
+  appResources?: ResourceReceipt[];
   /** v1.278.0: a note the user sent MID-TURN that the turn read at a round
    *  boundary — kept as a user message because the model saw it as one. */
   steer?: boolean;
@@ -558,6 +576,8 @@ type ChatRequestBody = {
   project_id?: string; // context spine: grounds the reply in the project
   auto_tools?: boolean; // let the daemon arm safe tools from the request
   connectors?: string[]; // toggled-on connectors: MCP tool groups + memory
+  resources?: { pack: string; uri: string; name?: string }[]; // v1.324.0: "@" → from your apps
+  mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
 };
 interface ChatResponse {
   reply: string;
@@ -1564,6 +1584,17 @@ function AttachmentFooter({ names }: { names: string[] }) {
 // v1.257.0 (S-02): memoized. This renders inside the per-frame subtree, so
 // before this it remapped every tool card on EVERY flushed frame — while the
 // cards themselves only change on a tool_call frame.
+/** v1.324.0: an app's progress report in words — "40%" when it said how far
+ *  it has to go, else "step 3"; its own message after a dot, kept short. */
+function progressWords(p: { progress: number; total: number | null; message: string }): string {
+  const head =
+    p.total && p.total > 0
+      ? `${Math.max(0, Math.min(100, Math.round((p.progress / p.total) * 100)))}%`
+      : `step ${Math.round(p.progress)}`;
+  const msg = (p.message || "").trim();
+  return msg ? `${head} · ${msg.length > 80 ? `${msg.slice(0, 79)}…` : msg}` : head;
+}
+
 const ToolCardList = memo(function ToolCardList({
   cards,
 }: {
@@ -1595,6 +1626,12 @@ const ToolCardList = memo(function ToolCardList({
               {!running && c.startedAt && c.endedAt ? (
                 <span data-testid="tool-elapsed" className="ml-1.5 text-[11px] text-zinc-500">
                   {secondsText(c.endedAt - c.startedAt)}
+                </span>
+              ) : null}
+              {/* v1.324.0: an app reporting how far along it is. */}
+              {running && c.progress ? (
+                <span data-testid="tool-progress" className="ml-1.5 text-[11px] text-zinc-500">
+                  {progressWords(c.progress)}
                 </span>
               ) : null}
               {c.output && (
@@ -1948,6 +1985,8 @@ const SlashPicker = memo(function SlashPicker({
   inputRef,
   onOpened,
   onPick,
+  prompts,
+  onPickPrompt,
 }: {
   store: ComposerStore;
   busy: boolean;
@@ -1957,6 +1996,10 @@ const SlashPicker = memo(function SlashPicker({
    *  open token first wins, and the page's ref makes the other a no-op. */
   onOpened: () => void;
   onPick: (name: string) => void;
+  /** v1.324.0: the prompts the user's apps offer (null = not loaded yet). */
+  prompts: PackPrompt[] | null;
+  /** Picking one consumes the "/token" and opens its little form. */
+  onPickPrompt: (p: PackPrompt) => void;
 }) {
   const { text, caret, slashDismissed, skillIndex } = useComposer(store);
   const slashToken = busy || slashDismissed ? null : slashTokenAt(text, caret);
@@ -1982,9 +2025,46 @@ const SlashPicker = memo(function SlashPicker({
           (s.description || "").toLowerCase().includes(slashQuery),
       )
     : list;
+  const promptMatches = (prompts ?? []).filter(
+    (p) =>
+      !slashQuery ||
+      p.name.toLowerCase().includes(slashQuery) ||
+      (p.title || "").toLowerCase().includes(slashQuery) ||
+      (p.description || "").toLowerCase().includes(slashQuery),
+  );
+  function pickPrompt(p: PackPrompt) {
+    const cur = store.get();
+    store.setText(spliceToken(cur.text, slashToken), slashToken ? slashToken.start : 0);
+    store.setSlashDismissed(false);
+    onPickPrompt(p);
+  }
 
   return (
     <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+      {promptMatches.length > 0 && (
+        <div role="listbox" aria-label="Prompts from your apps" className="max-h-40 overflow-y-auto border-b border-white/[0.06] p-1">
+          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            From your apps
+          </div>
+          {promptMatches.map((p) => (
+            <button
+              key={`${p.pack}/${p.name}`}
+              type="button"
+              role="option"
+              aria-selected={false}
+              data-testid="pack-prompt-option"
+              onClick={() => pickPrompt(p)}
+              title={p.description}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
+            >
+              <Blocks size={12} className="shrink-0 text-accent-soft/70" />
+              <span className="shrink-0 text-[12px]">{p.title || p.name}</span>
+              <span className="shrink-0 text-[10px] text-zinc-600">{p.pack}</span>
+              <span className="truncate text-[11px] text-zinc-500">{p.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {skills === null ? (
         <p className="px-3 py-2.5 text-xs text-zinc-500">Loading skills…</p>
       ) : skillMatches.length === 0 ? (
@@ -2028,15 +2108,30 @@ const AtPicker = memo(function AtPicker({
   store,
   busy,
   mentionable,
+  resources,
+  onOpened,
+  onPickResource,
 }: {
   store: ComposerStore;
   busy: boolean;
   mentionable: MentionableAgent[] | null;
+  /** v1.324.0: files and records the user's apps offer (null = not loaded). */
+  resources: PackResource[] | null;
+  /** The "@" token opened — the page loads the apps' list (cached). */
+  onOpened: () => void;
+  /** Picking one consumes the "@token" and attaches it to the next message. */
+  onPickResource: (r: PackResource) => void;
 }) {
   const { text, caret, slashDismissed, atDismissed } = useComposer(store);
   const atToken = busy || atDismissed ? null : tokenAt(text, caret, "@");
   const slashOpen =
     !(busy || slashDismissed) && slashTokenAt(text, caret) !== null;
+  const open = atToken !== null && !slashOpen;
+  const openedRef = useRef(onOpened);
+  openedRef.current = onOpened;
+  useEffect(() => {
+    if (open) openedRef.current();
+  }, [open]);
   if (atToken === null || slashOpen) return null;
   const atQuery = atToken.query ?? "";
   const list = mentionable ?? [];
@@ -2047,9 +2142,47 @@ const AtPicker = memo(function AtPicker({
           (a.description || "").toLowerCase().includes(atQuery),
       )
     : list;
+  const resourceMatches = (resources ?? [])
+    .filter(
+      (r) =>
+        !atQuery ||
+        (r.name || "").toLowerCase().includes(atQuery) ||
+        (r.title || "").toLowerCase().includes(atQuery) ||
+        r.uri.toLowerCase().includes(atQuery),
+    )
+    .slice(0, 50);
 
   return (
     <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+      {resourceMatches.length > 0 && (
+        <div role="listbox" aria-label="From your apps" className="max-h-40 overflow-y-auto border-b border-white/[0.06] p-1">
+          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            From your apps — attach to your next message
+          </div>
+          {resourceMatches.map((r) => (
+            <button
+              key={`${r.pack}/${r.uri}`}
+              type="button"
+              role="option"
+              aria-selected={false}
+              data-testid="pack-resource-option"
+              onClick={() => {
+                const cur = store.get();
+                store.setText(spliceToken(cur.text, atToken), atToken.start);
+                store.setAtDismissed(false);
+                onPickResource(r);
+              }}
+              title={r.description || r.uri}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
+            >
+              <FileText size={12} className="shrink-0 text-accent-soft/70" />
+              <span className="shrink-0 text-[12px]">{r.title || r.name || r.uri}</span>
+              <span className="shrink-0 text-[10px] text-zinc-600">{r.pack}</span>
+              <span className="truncate text-[11px] text-zinc-500">{r.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {mentionable === null ? (
         <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
       ) : agentMatches.length === 0 ? (
@@ -2257,6 +2390,11 @@ const MessageRow = memo(function MessageRow({
           {m.attachmentNames && m.attachmentNames.length > 0 && (
             <AttachmentFooter names={m.attachmentNames} />
           )}
+          {m.appResources && m.appResources.length > 0 && (
+            <AttachmentFooter
+              names={m.appResources.map((r) => r.note || r.uri.split(/[\\/]/).pop() || r.uri)}
+            />
+          )}
         </Bubble>
         {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
             (it was read inside a turn; there is no "after it" to cut). */}
@@ -2431,6 +2569,16 @@ const MessageRow = memo(function MessageRow({
         {m.thinking && <ThinkingDisclosure text={m.thinking} seconds={m.thinkingSeconds ?? null} />}
         <MemoMarkdown content={m.content} />
       </Bubble>
+      {/* v1.324.0: an app resource the user attached that could not be read
+          says so here — the answer above was written without it. */}
+      {(m.appResources ?? []).some((r) => !r.ok) && (
+        <div data-testid="app-resource-failed" className="ml-11 mt-1 text-[11px] text-amber-400/80">
+          {(m.appResources ?? [])
+            .filter((r) => !r.ok)
+            .map((r) => `Couldn't read ${r.uri} from ${r.pack}${r.note ? `: ${r.note}` : ""}`)
+            .join(" · ")}
+        </div>
+      )}
       {(m.interrupted || m.truncated) && (
         <div className="ml-11 mt-1 flex flex-wrap items-center gap-2 text-[11px] italic text-amber-400/80">
           <span data-testid="reply-cut-note">
@@ -2682,6 +2830,19 @@ function LiveReply({
           onConversation={armFromApproval}
         />
       )}
+      {/* v1.324.0: an app asking the user a question, or asking to use the
+          turn's model — answered here, while its tool waits. */}
+      {(stream.mcpAsks ?? []).map((a) =>
+        a.kind === "elicitation" ? (
+          <ElicitationCard
+            key={a.id}
+            ask={a}
+            onAnswer={(act, content) => answerElicitation(a.id, act, content)}
+          />
+        ) : (
+          <SamplingCard key={a.id} ask={a} onDecide={(dec) => decideSampling(a.id, dec)} />
+        ),
+      )}
     </Bubble>
   );
 }
@@ -2922,6 +3083,14 @@ export default function ChatPage() {
   // alone when they change.
   // "@" agent picker (v1.150.0): the catalog + whether Esc closed the dropdown.
   const [mentionable, setMentionable] = useState<MentionableAgent[] | null>(null);
+  // v1.324.0: what the user's apps offer under "/" (prompts) and "@"
+  // (resources), the resources picked for the NEXT message, and the prompt
+  // whose little form is open.
+  const [packPrompts, setPackPrompts] = useState<PackPrompt[] | null>(null);
+  const [packResources, setPackResources] = useState<PackResource[] | null>(null);
+  const [appResources, setAppResources] = useState<PackResource[]>([]);
+  const [promptForm, setPromptForm] = useState<PackPrompt | null>(null);
+  const packListsAtRef = useRef<{ prompts: number; resources: number }>({ prompts: 0, resources: 0 });
   // TALKING TO AN AGENT (v1.284.0): after "@builder …" the follow-ups keep
   // going to builder — participant keys ("builtin:builder"); [] = Iron Jarvis.
   // Set after every round, restored from the saved conversation on open,
@@ -5390,6 +5559,37 @@ export default function ChatPage() {
    *  `slashActive`, because the page no longer watches the composer's text —
    *  the textarea and the picker both call it when the token opens, and the
    *  ref makes the second call a no-op. */
+  /** v1.324.0: the apps' prompts / resources, re-read at most once a minute
+   *  (the daemon caches each app's list for as long). A failure lists none. */
+  const loadPackPrompts = useCallback(() => {
+    const now = Date.now();
+    if (now - packListsAtRef.current.prompts < 60_000) return;
+    packListsAtRef.current.prompts = now;
+    fetchPackPrompts()
+      .then((d) => setPackPrompts(d.prompts))
+      .catch(() => setPackPrompts([]));
+  }, []);
+  const loadPackResources = useCallback(() => {
+    const now = Date.now();
+    if (now - packListsAtRef.current.resources < 60_000) return;
+    packListsAtRef.current.resources = now;
+    fetchPackResources()
+      .then((d) => setPackResources(d.resources))
+      .catch(() => setPackResources([]));
+  }, []);
+  const onSlashOpened = useCallback(() => {
+    loadSkillsOnce();
+    loadPackPrompts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadPackPrompts]);
+  const pickAppResource = useCallback((r: PackResource) => {
+    setAppResources((cur) =>
+      cur.some((x) => x.pack === r.pack && x.uri === r.uri) || cur.length >= 8
+        ? cur
+        : [...cur, r],
+    );
+  }, []);
+
   const loadSkillsOnce = useCallback(() => {
     if (skillsFetchedRef.current) return;
     skillsFetchedRef.current = true;
@@ -6438,6 +6638,19 @@ export default function ChatPage() {
     // completion later fails. Persists via the same setup save made-docs use.
     if (atts.length) rememberThreadDocs(atts.map((a) => a.path));
     const body = buildChatBody(history, atts);
+    // v1.324.0: this page draws the apps' cards, and carries what the user
+    // attached from their apps to the message being answered — read from that
+    // message, so a Regenerate reads them again (as attachments re-ground).
+    body.mcp_cards = true;
+    const asked = history[history.length - 1];
+    const turnRes = asked?.role === "user" ? (asked.appResources ?? []) : [];
+    if (turnRes.length) {
+      body.resources = turnRes.map((r) => ({
+        pack: r.pack,
+        uri: r.uri,
+        ...(r.note ? { name: r.note } : {}),
+      }));
+    }
     // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
     const turnId = mintTurnId();
     body.turn_id = turnId;
@@ -6563,6 +6776,7 @@ export default function ChatPage() {
           ...(streamRes.truncated ? { truncated: true } : {}),
           ...(turnSteps.length ? { steps: turnSteps } : {}),
           ...(streamRes.timing ? { timing: streamRes.timing } : {}),
+          ...(streamRes.resources?.length ? { appResources: streamRes.resources } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -6711,6 +6925,10 @@ export default function ChatPage() {
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
         ...((res as { truncated?: unknown }).truncated === true ? { truncated: true } : {}),
         ...(res.route ? { route: res.route } : {}),
+        // v1.324.0: the apps' resources this turn read (whitelisted).
+        ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
+          ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
+          : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.remembered?.length ? { remembered: res.remembered } : {}),
@@ -6909,10 +7127,16 @@ export default function ChatPage() {
     if (saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
     const atts = attachments;
     setAttachments([]); // chips are consumed by this message
+    // v1.324.0: so are the apps' resources — read by the daemon for THIS turn.
+    const appRes = appResources;
+    setAppResources([]);
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
       at: new Date().toISOString(),
+      ...(appRes.length
+        ? { appResources: appRes.map((r) => ({ pack: r.pack, uri: r.uri, ok: true, note: r.title || r.name || "" })) }
+        : {}),
       ...(atts.length
         ? {
             attachmentNames: atts.map((a) => a.name),
@@ -7580,6 +7804,10 @@ export default function ChatPage() {
     queuedSendRef.current = false;
     if (dictation.listening) dictation.stop();
     setEditUndo(null);
+    // v1.324.0: an app resource picked for one conversation is not sent in
+    // another.
+    setAppResources([]);
+    setPromptForm(null);
   }
 
   /** v1.323.0: keep the box's text as the open saved conversation's draft. */
@@ -9155,6 +9383,7 @@ export default function ChatPage() {
                   indistinguishable from one that failed. Armed tools/connectors
                   stay chat-only because those are chat-loop mechanics. */}
               {(attachments.length > 0 ||
+                appResources.length > 0 ||
                 workfolder !== null ||
                 activeSkill !== "" ||
                 selectedTools.length > 0 ||
@@ -9261,6 +9490,29 @@ export default function ChatPage() {
                       turn's receipt are THE lists, and saying it twice made
                       the composer row crowd out the send box at the new
                       30-doc cap. */}
+                  {appResources.map((r) => (
+                    <span
+                      key={`${r.pack}/${r.uri}`}
+                      data-testid="app-resource-chip"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
+                    >
+                      <FileText size={11} className="shrink-0 text-accent-soft" />
+                      <span className="max-w-[14rem] truncate">{r.title || r.name || r.uri}</span>
+                      <span className="text-zinc-500">{r.pack}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAppResources((cur) =>
+                            cur.filter((x) => !(x.pack === r.pack && x.uri === r.uri)),
+                          )
+                        }
+                        aria-label={`Remove ${r.title || r.name || r.uri}`}
+                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
                   {attachments.map((a, i) => (
                     <span
                       key={`${a.path}-${i}`}
@@ -9408,15 +9660,53 @@ export default function ChatPage() {
                 {/* "/" skill picker — floats above the composer */}
                 {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
                     below — one affordance grammar for both. */}
-                <AtPicker store={composer} busy={busy} mentionable={mentionable} />
+                <AtPicker
+                  store={composer}
+                  busy={busy}
+                  mentionable={mentionable}
+                  resources={packResources}
+                  onOpened={loadPackResources}
+                  onPickResource={pickAppResource}
+                />
                 <SlashPicker
                   store={composer}
                   busy={busy}
                   skills={skills}
                   inputRef={inputRef}
-                  onOpened={loadSkillsOnce}
+                  onOpened={onSlashOpened}
                   onPick={pickSkill}
+                  prompts={packPrompts}
+                  onPickPrompt={setPromptForm}
                 />
+                {/* v1.324.0: an app's prompt — fill its blanks, and its text
+                    lands in the box (never sent by itself). */}
+                {promptForm && (
+                  <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-white/10 bg-zinc-900 p-3 shadow-lg shadow-black/40">
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="text-[12px] text-zinc-300">
+                        {promptForm.title || promptForm.name}
+                      </span>
+                      <span className="text-[11px] text-zinc-500">from {promptForm.pack}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPromptForm(null)}
+                        aria-label="Close"
+                        className="ml-auto text-zinc-500 transition-colors hover:text-zinc-300"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <PackPromptForm
+                      prompt={promptForm}
+                      onInsert={(t) => {
+                        const cur = composer.get().text.trimEnd();
+                        composer.setText(cur ? `${cur}\n\n${t}` : t);
+                        setPromptForm(null);
+                        inputRef.current?.focus();
+                      }}
+                    />
+                  </div>
+                )}
                 <input
                   ref={fileRef}
                   type="file"
@@ -9984,7 +10274,7 @@ export default function ChatPage() {
                   onSend={send}
                   onStop={stop}
                   onSteer={(text) => void steerTurn(text)}
-                  onOpened={loadSkillsOnce}
+                  onOpened={onSlashOpened}
                   onPickSkill={pickSkill}
                   onTyped={() => {
                     inputFromVoiceRef.current = false; // typed — never auto-send

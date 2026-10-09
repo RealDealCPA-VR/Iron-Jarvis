@@ -175,7 +175,7 @@ def test_http_a_server_ping_inside_the_stream_is_answered_while_the_server_waits
 def test_http_an_unknown_server_request_gets_method_not_found():
     def sampling_and_wait(rid, server):
         def stream():
-            yield _sse({"jsonrpc": "2.0", "id": 7, "method": "sampling/createMessage",
+            yield _sse({"jsonrpc": "2.0", "id": 7, "method": "roots/list",
                         "params": {}})
             if server.replied.wait(_SERVER_WAIT_S):
                 yield _sse(_text_result(rid, "done"))
@@ -321,7 +321,7 @@ _STDIO_SERVER = textwrap.dedent(
                 text = "ping answered: " + json.dumps(reply)
             elif name == "needs_sampling":
                 # The server's request id COLLIDES with ours on purpose.
-                send({"jsonrpc": "2.0", "id": mid, "method": "sampling/createMessage",
+                send({"jsonrpc": "2.0", "id": mid, "method": "roots/list",
                       "params": {}})
                 reply = wait_reply(mid)
                 text = "sampling reply: " + json.dumps(reply)

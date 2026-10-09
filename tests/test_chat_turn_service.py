@@ -442,6 +442,10 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # pinned by tests/test_chat_thinking_v1323.py and
         # tests/test_chat_truncated_v1323.py.
         "thinking", "truncated",
+        # v1.324.0: one more — "resources" ([{pack, uri, ok, note}], always
+        # present): what the user attached from their apps this turn. Same
+        # key in the SSE done frame; tests/test_mcp_chat_lane_v1324.py.
+        "resources",
     }
     assert body["remembered"] == []
     assert body["suggestion"] is None

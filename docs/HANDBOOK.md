@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.323.1 (2026-10-04).*
+holds itself to. Current as of v1.324.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,40 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Apps that talk back (v1.324.0)
+
+Apps you added (on the Tools page) can now do more than answer a tool call.
+Ideas from assistant-ui and tambo (MIT; ideas only) and the app standard
+itself:
+
+- **An app can ask you a question.** While one of its tools runs, an app may
+  need something from you (which year, which account). A small form appears
+  in the reply, saying which app is asking: fill it in and press **Send**, or
+  **Decline** / **Not now**. The tool waits for you, with no time limit,
+  until you answer or press Stop. Only answer apps you trust, and never type
+  a password into one of these forms.
+- **An app can ask to use your model, only with your OK.** Some apps want a
+  model to write or summarize something for them. A card shows what the app
+  wants to ask and which model would answer. Nothing is sent until you press
+  **Allow once**, and only the model already answering this chat is used —
+  never another one, never as a fallback. A demo model, a conversation that
+  was marked low-trust, or **Deny** all answer the app with a plain no.
+- **Progress.** A tool from an app that reports how far along it is shows it
+  on its line ("40% · reading").
+- **An app's prompts under "/".** Type **/** in the box: below your skills,
+  **From your apps** lists the ready-made prompts your apps offer. Pick one,
+  fill in its blanks, and its text lands in the box for you to edit. Nothing
+  is sent until you press Enter.
+- **An app's files under "@".** Type **@**: **From your apps** lists what
+  your apps can hand over (notes, records, files). Pick one and it is
+  attached to your next message, like a file. Iron Jarvis reads it when you
+  send, checks it for hidden instructions, and says under the reply if it
+  could not be read. Regenerate reads it again.
+- These questions and requests only reach you in the main chat window. In a
+  Build pane, the browser sidebar, a schedule or an agent run, an app that
+  asks is told "no" straight away, so nothing waits for an answer nobody can
+  give.
 
 ## Chat polish (v1.323.0)
 

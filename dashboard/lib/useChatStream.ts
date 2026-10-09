@@ -18,6 +18,10 @@
 //   thinking  {"text":"…"}  reasoning deltas, display-only, any round (v1.323.0)
 //   (done also carries "truncated": bool since v1.323.0 — the answer ran out
 //    of output tokens)
+//   mcp_elicitation {id,call_id,pack,message,fields}   an app asks the user
+//   mcp_sampling    {id,call_id,pack,system,messages,max_tokens,model,model_id,more?}
+//   mcp_progress    {call_id,pack,progress,total,message}
+//   mcp_resolved    {id,kind,outcome}                  (all four: v1.324.0)
 //
 // with a ": keepalive" comment every ~15s of idle. This library turns that raw
 // byte stream into typed events (`streamSSE`) and drives one chat turn from a
@@ -29,6 +33,27 @@ import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 import { turnUsageFrom, type TurnUsage, type WorkflowDraft } from "@/lib/types";
 import { decodeSuggestion, type ChatSuggestion } from "./preferences";
 import { decodeConfigCards, type ConfigCard } from "./configCards";
+import {
+  decodeElicitation,
+  decodeProgress,
+  decodeResolved,
+  decodeResourceReceipts,
+  decodeSampling,
+  foldToolProgress,
+  resolveAsk,
+  settleAsks,
+  upsertAsk,
+  type McpAsk,
+  type McpElicitationAsk,
+  type McpProgress,
+  type McpResolvedFrame,
+  type McpSamplingAsk,
+  type ResourceReceipt,
+} from "./mcpInteract";
+
+// v1.324.0: type-only re-exports (they erase — a mock of this module with a
+// fixed export list is unaffected). The runtime helpers live in mcpInteract.
+export type { McpAsk, McpProgress, ResourceReceipt } from "./mcpInteract";
 
 // ------------------------------------------------------------------ wire types
 
@@ -154,8 +179,26 @@ export type SSEEvent =
       /** v1.323.0: the answer stopped because it ran out of output tokens.
        *  Only a real `true` decodes; anything else leaves the key absent. */
       truncated?: boolean;
+      /** v1.324.0: the app resources attached to this turn, as read — the
+       *  daemon sends the key on every turn (possibly []). */
+      resources?: ResourceReceipt[];
     }
-  | { type: "error"; detail: string; status?: number; offline?: boolean };
+  | { type: "error"; detail: string; status?: number; offline?: boolean }
+  /** v1.324.0: an installed app asks the USER something (MCP elicitation)
+   *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
+  | { type: "mcp_elicitation"; ask: McpElicitationAsk }
+  | { type: "mcp_sampling"; ask: McpSamplingAsk }
+  /** v1.324.0: a running app tool's progress, keyed by the tool call id. */
+  | {
+      type: "mcp_progress";
+      call_id: string;
+      pack: string;
+      progress: number;
+      total: number | null;
+      message: string;
+    }
+  /** v1.324.0: an app's ask ended (answered, refused, or the turn stopped). */
+  | ({ type: "mcp_resolved" } & McpResolvedFrame);
 
 /** A tool invocation as shown live in the UI — one card per tool call id,
  *  upgraded in place from `running` (started frame) to `done` (finished frame). */
@@ -172,6 +215,9 @@ export interface ToolCard {
   startedAt?: number;
   /** v1.323.0: CLIENT clock when the finished frame arrived. */
   endedAt?: number;
+  /** v1.324.0: the app's latest progress report for this call (an
+   *  `mcp_progress` frame with this call id). Absent when none came. */
+  progress?: McpProgress;
 }
 
 /** One tool step of a finished turn, in call order (v1.323.0): the receipt
@@ -267,6 +313,9 @@ export interface ChatStreamResult {
    *  finished first. The caller hands them back to the user; they are not
    *  part of the conversation (the model never saw them). */
   unreadSteers?: string[];
+  /** v1.324.0: the app resources this turn read (the done frame's receipt);
+   *  absent when no done frame arrived or the daemon sent none. */
+  resources?: ResourceReceipt[];
   /** v1.323.0: the turn's reasoning text ("" when the model sent none). */
   thinking: string;
   /** v1.323.0: how long the model thought, in ms — first thinking frame to
@@ -510,6 +559,9 @@ export function sseEventFrom(
       }
       // v1.323.0: whitelisted — only a real boolean true says "cut short".
       if (data.truncated === true) ev.truncated = true;
+      // v1.324.0: the attached app resources' receipt — whitelisted per row
+      // (lib/mcpInteract); kept even when empty, so "none" is a fact.
+      if (Array.isArray(data.resources)) ev.resources = decodeResourceReceipts(data.resources);
       return ev;
     }
     case "error": {
@@ -519,6 +571,33 @@ export function sseEventFrom(
       };
       if (typeof data.status === "number") ev.status = data.status;
       return ev;
+    }
+    // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
+    // and a frame without its id is no frame at all.
+    case "mcp_elicitation": {
+      const ask = decodeElicitation(data);
+      return ask ? { type: "mcp_elicitation", ask } : null;
+    }
+    case "mcp_sampling": {
+      const ask = decodeSampling(data);
+      return ask ? { type: "mcp_sampling", ask } : null;
+    }
+    case "mcp_progress": {
+      const fr = decodeProgress(data);
+      return fr
+        ? {
+            type: "mcp_progress",
+            call_id: fr.callId,
+            pack: fr.pack,
+            progress: fr.progress,
+            total: fr.total,
+            message: fr.message,
+          }
+        : null;
+    }
+    case "mcp_resolved": {
+      const fr = decodeResolved(data);
+      return fr ? { type: "mcp_resolved", ...fr } : null;
     }
     default:
       return null;
@@ -898,6 +977,12 @@ export interface UseChatStream {
    *  answering goes through POST /chat/approvals/{id} — this hook only holds
    *  the state, so the decision has exactly one write path. */
   approval: PendingApproval | null;
+  /** v1.324.0: what installed apps asked during this turn — open questions
+   *  (no `outcome`) and the ones that ended, with how they ended, so the card
+   *  can say so. Cleared when the next turn starts; asks still open when the
+   *  turn ends become "stopped". Optional so a hand-built test double need
+   *  not carry it. Answering goes through lib/mcpInteract's fetchers. */
+  mcpAsks?: McpAsk[];
   /** Where the running turn is (v1.246.0): `preparing` until the daemon has
    *  read the attachments and begun the response, then `working`; null when
    *  no turn is running. */
@@ -1013,6 +1098,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   }, [textInState, notifyThinking]);
   const [tools, setTools] = useState<ToolCard[]>([]);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
+  const [mcpAsks, setMcpAsks] = useState<McpAsk[]>([]);
   const [phase, setPhase] = useState<TurnPhase | null>(null);
   const [withFiles, setWithFiles] = useState(false);
   const [prepStep, setPrepStep] = useState<PrepStep | null>(null);
@@ -1049,6 +1135,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       }
       setTools([]);
       setApproval(null);
+      setMcpAsks([]);
       const t0 = Date.now();
       setPhase("preparing");
       setWithFiles(carriesFiles(body));
@@ -1083,6 +1170,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       let firstTokenAt: number | null = null;
       let truncated = false;
       let cards: ToolCard[] = [];
+      // v1.324.0: the ids of the app asks THIS turn raised — the settle at the
+      // end stops only these, so a newer turn's open question is never eaten.
+      const askIds = new Set<string>();
 
       try {
         for await (const ev of streamSSE(
@@ -1168,6 +1258,37 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // must not eat a NEWER question.
               setApproval((prev) => (prev && prev.id === ev.id ? null : prev));
               break;
+            case "mcp_elicitation":
+            case "mcp_sampling": {
+              // v1.324.0: an app asks the user (or to use the model) from
+              // inside a running tool call — the turn waits on it. Work was
+              // already chosen, so committed, like an approval.
+              committed = true;
+              const ask = ev.ask;
+              askIds.add(ask.id);
+              setMcpAsks((prev) => upsertAsk(prev, ask));
+              break;
+            }
+            case "mcp_resolved": {
+              // Only the ask this frame names; a stale id changes nothing.
+              const fr: McpResolvedFrame = { id: ev.id, kind: ev.kind, outcome: ev.outcome };
+              setMcpAsks((prev) => resolveAsk(prev, fr));
+              break;
+            }
+            case "mcp_progress": {
+              // Folded onto the tool card with this call id — on the screen's
+              // list and the result's copy alike; no card, no invented one.
+              const fr = {
+                callId: ev.call_id,
+                pack: ev.pack,
+                progress: ev.progress,
+                total: ev.total,
+                message: ev.message,
+              };
+              cards = foldToolProgress(cards, fr);
+              setTools((prev) => foldToolProgress(prev, fr));
+              break;
+            }
             case "meta":
               provider = ev.provider;
               model = ev.model;
@@ -1210,6 +1331,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.unread_steers?.length
                   ? { unreadSteers: [...ev.unread_steers] }
                   : {}),
+                ...(ev.resources ? { resources: ev.resources } : {}),
               };
               break;
             case "error":
@@ -1238,6 +1360,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         setStreaming(false);
         // A turn that ends however it ends leaves no live question behind.
         setApproval(null);
+        // v1.324.0: nor an app's open question — it is shown as "stopped"
+        // (kept on screen so the user can see what happened to it).
+        if (askIds.size) setMcpAsks((prev) => settleAsks(prev, askIds));
         if (!superseded) {
           setPhase(null);
           setPrepStep(null);
@@ -1271,6 +1396,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     thinkingStore: thinkingStoreRef.current,
     tools,
     approval,
+    mcpAsks,
     phase,
     withFiles,
     prepStep,

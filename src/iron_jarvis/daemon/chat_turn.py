@@ -70,6 +70,7 @@ from ..core.trust import (
     taint_reason,
 )
 from .doors import collect_doors, door_for
+from .mcp_turn import read_turn_resources as _read_turn_resources
 
 log = logging.getLogger(__name__)
 
@@ -1350,10 +1351,49 @@ def _batchable_call(name: str, args: object) -> bool:
     return not (isinstance(args, dict) and "_store_as" in args)
 
 
-async def _run_tool_round(batched: list[bool], invoke, settle):
+async def _with_side(aw, side: asyncio.Queue, box: list):
+    """Await ``aw`` while yielding every frame queued on ``side`` (v1.324.0).
+
+    An async generator: each queued item is yielded AS IT ARRIVES while the
+    awaitable is still running (a pack's question or progress reaches the
+    page while its tool waits); when it finishes, the queue is DRAINED —
+    frame order kept, nothing lost — and only then is its result appended to
+    ``box``. A failure (or a cancel) of ``aw`` propagates unchanged; leaving
+    early cancels it, as an abandoned ``await`` would."""
+    task = asyncio.ensure_future(aw)
+    getter: "asyncio.Future | None" = None
+    try:
+        while not task.done():
+            getter = asyncio.ensure_future(side.get())
+            await asyncio.wait({task, getter}, return_when=asyncio.FIRST_COMPLETED)
+            if getter.done():
+                item = getter.result()
+                getter = None
+                yield item
+            else:
+                getter.cancel()
+                getter = None
+        while not side.empty():
+            yield side.get_nowait()
+        box.append(task.result())
+    finally:
+        if getter is not None and not getter.done():
+            getter.cancel()
+        if not task.done():
+            task.cancel()
+
+
+async def _run_tool_round(batched: list[bool], invoke, settle, side: "asyncio.Queue | None" = None):
     """Run one tool round. An async generator of ``("started", i)`` — call
     ``i`` is about to begin — and ``("ready", i)`` — call ``i`` is settled AND
     so is every call before it.
+
+    ``side`` (v1.324.0, the stream lane's ``TurnInteractions.side``): while
+    an ``invoke`` is in flight, every frame a pack queues there (a question
+    for the user, a sampling card, progress) is yielded as ``("side",
+    frame)``, in order, and the queue is drained before that call settles —
+    so its frames always come before its ``ready``. ``None`` (POST /chat and
+    every other caller) is byte-identical to v1.311.0.
 
     THE WAIT THIS REMOVES: three web_fetch/read_document calls in one round
     (the common shape of a research or "compare these files" turn) cost the
@@ -1393,7 +1433,17 @@ async def _run_tool_round(batched: list[bool], invoke, settle):
     if batch:
         for i in batch:
             yield ("started", i)
-        if len(batch) == 1:
+        if side is not None:
+            _box: list = []
+            _aw = (
+                invoke(batch[0]) if len(batch) == 1
+                else asyncio.gather(*(invoke(i) for i in batch))
+            )
+            async with contextlib.aclosing(_with_side(_aw, side, _box)) as _frames:
+                async for _frame in _frames:
+                    yield ("side", _frame)
+            outcomes = [_box[0]] if len(batch) == 1 else _box[0]
+        elif len(batch) == 1:
             outcomes = [await invoke(batch[0])]
         else:
             outcomes = await asyncio.gather(*(invoke(i) for i in batch))
@@ -1406,7 +1456,14 @@ async def _run_tool_round(batched: list[bool], invoke, settle):
         if batched[i]:
             continue
         yield ("started", i)
-        outcome = await invoke(i)
+        if side is not None:
+            _box = []
+            async with contextlib.aclosing(_with_side(invoke(i), side, _box)) as _frames:
+                async for _frame in _frames:
+                    yield ("side", _frame)
+            outcome = _box[0]
+        else:
+            outcome = await invoke(i)
         await settle(i, outcome)
         settled[i] = True
         for j in _ready():
@@ -4313,6 +4370,18 @@ async def run_chat_turn(
     )
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+    # RESOURCES FROM THE USER'S APPS (v1.324.0): what the user picked with "@"
+    # from a pack rides THIS message like an attachment — read off the loop
+    # through the pack's client (≤15 s each), promptguard-scanned, injected
+    # at the attachments seam. A read that fails is `ok: false` in the
+    # receipt and the turn goes on. MIRROR NOTE (lock-step): routes/chat.py's
+    # stream lane calls the same helper at the same seam.
+    _res_block, resources_receipt = (
+        await _read_turn_resources(d, body)
+        if getattr(body, "resources", None) else ("", [])
+    )
+    if _res_block:
+        system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
 
     # "/" skill invocation: the chosen skill's playbook rides the system
     # prompt (provider-agnostic, same as the terminal assist).
@@ -5198,6 +5267,10 @@ async def run_chat_turn(
             "why": getattr(route, "why", ""),
         },
         "attached": len(body.attachments or []),
+        # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user
+        # attached from their apps — ALWAYS present (possibly []). MIRROR
+        # NOTE (lock-step): the stream done-frame carries the identical key.
+        "resources": resources_receipt,
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,

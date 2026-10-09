@@ -105,9 +105,6 @@ vi.mock("@/lib/useChatStream", async () => {
   const abort = () => {
     const s = H.stream.settle;
     H.stream.settle = null;
-  H.stream.extra.length = 0;
-  TTS.readAloud.mockClear();
-  TTS.readingKey = null;
     H.stream.streaming = false;
     H.stream.bump();
     s?.({ reply: "" });
@@ -166,6 +163,9 @@ beforeEach(() => {
   H.stream.hold = false;
   H.stream.streaming = false;
   H.stream.settle = null;
+  H.stream.extra.length = 0;
+  TTS.readAloud.mockClear();
+  TTS.readingKey = null;
   for (const k of Object.keys(H.api.postResponses)) delete H.api.postResponses[k];
   H.api.getResponses = {
     "/models": { models: [] },

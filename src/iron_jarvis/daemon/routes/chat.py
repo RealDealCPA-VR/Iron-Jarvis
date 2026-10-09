@@ -142,6 +142,8 @@ from ..chat_turn import (
     _validated_escalate_agent,
     run_chat_turn,
 )
+# v1.324.0: apps that talk back — the per-turn side channel + resources.
+from ..mcp_turn import TurnInteractions, interaction_scope, read_turn_resources
 
 log = logging.getLogger(__name__)
 
@@ -2313,6 +2315,17 @@ async def chat_stream(
     images, attach_block = _attached
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+    # RESOURCES FROM THE USER'S APPS (v1.324.0) — the lock-step copy of
+    # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
+    # like the attachments. Only a turn that carries resources pays anything.
+    resources_receipt: list[dict[str, Any]] = []
+    if getattr(body, "resources", None):
+        _res = await _prep_step(read_turn_resources(d, body))
+        if _res is _PREP_STOPPED:
+            return
+        _res_block, resources_receipt = _res
+        if _res_block:
+            system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
 
     if (body.skill or "").strip():
         sk = d.platform.skills.get(body.skill.strip())
@@ -2879,6 +2892,17 @@ async def chat_stream(
     card_grants |= _conv_grants
     # (provider_choice/model_choice were resolved above the attachments.)
 
+    # APPS THAT TALK BACK (v1.324.0): ONE side channel per attended stream
+    # turn. A pack's question for the user, its request to ask the turn's
+    # model, and its progress arrive here (via the InteractionScope set
+    # around each `registry.invoke` below) and are yielded as SSE frames
+    # while its tool runs. A parked ask waits with no clock and checks the
+    # same `_stop` the approval wait does; the turn's end resolves whatever
+    # is left as "stopped". POST /chat builds none (packs get decline / -1).
+    _ti = TurnInteractions(
+        d, stop=_stop, low_trust=lambda: bool(_trust_state["low"]), poll_s=_ASK_POLL_S,
+    )
+
     # ------------------------------------------------------------------ #
     # STREAM — the round + tool loop, emitting SSE frames as it goes.
     # ------------------------------------------------------------------ #
@@ -2926,6 +2950,9 @@ async def chat_stream(
         route_why = ""
         # v1.263.0: the reasoning level the router actually APPLIED ("" = none).
         route_reasoning = ""
+        # v1.324.0: a pack's sampling request is answered ONLY by what the
+        # turn's last round routed to — read live from these locals.
+        _ti.route = lambda: (route_provider, route_model)
         # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
         # goes through this helper, so the cancellation guards can run
         # unconditionally without ever writing a second row for the same
@@ -3521,36 +3548,50 @@ async def chat_stream(
                         # refused — the common path stays byte-identical
                         # with every existing caller (and every test
                         # double) of this five-argument invoke.
-                        result = await d.platform.registry.invoke(
-                            tc.name,
-                            # ``shell`` isolates under low trust (v1.298.0)
-                            # — lock-step with chat_turn.
-                            _low_trust_args(_trust_state, tc.name, tc.arguments),
-                            ctx, d.platform.permissions,
-                            overrides,
-                            session_allow=(armed_grant | _p["grant_extra"]),
-                            allowed_names=_turn_tools,
-                            # v1.246.0 — lock-step with chat_turn.
-                            deadline_s=chat_tool_deadline(d.platform),
-                            # STANDING GRANTS (v1.299.0) — lock-step with
-                            # chat_turn: the store + scopes, only when a
-                            # store exists, so the registry's gate lifts a
-                            # covered ask and records the grant id.
-                            **_grant_invoke_kwargs(d.platform, _grant_scopes),
-                            **(
-                                {"deny_reason": _deny_reason}
-                                if _deny_reason
-                                else {}
-                            ),
-                            # v1.298.0: the low-trust refusal names itself
-                            # on the ledger; a human refusal keeps the
-                            # registry's default label (nothing passed).
-                            **(
-                                {"deny_label": _deny_label}
-                                if _deny_reason and _deny_label
-                                else {}
-                            ),
-                        )
+                        # v1.324.0: inside THIS call's InteractionScope, so
+                        # a pack can ask the user / the turn's model and
+                        # report progress (the transport's worker thread
+                        # inherits the scope through `asyncio.to_thread`).
+                        # ONLY for a client that draws the cards
+                        # (`mcp_cards`): a Build pane, the browser sidebar or
+                        # an older page would leave the ask parked until
+                        # Stop — with no scope the pack gets an instant
+                        # decline / -1 instead.
+                        with (
+                            interaction_scope(_ti.scope_for(tc.id))
+                            if body.mcp_cards
+                            else contextlib.nullcontext()
+                        ):
+                            result = await d.platform.registry.invoke(
+                                tc.name,
+                                # ``shell`` isolates under low trust (v1.298.0)
+                                # — lock-step with chat_turn.
+                                _low_trust_args(_trust_state, tc.name, tc.arguments),
+                                ctx, d.platform.permissions,
+                                overrides,
+                                session_allow=(armed_grant | _p["grant_extra"]),
+                                allowed_names=_turn_tools,
+                                # v1.246.0 — lock-step with chat_turn.
+                                deadline_s=chat_tool_deadline(d.platform),
+                                # STANDING GRANTS (v1.299.0) — lock-step with
+                                # chat_turn: the store + scopes, only when a
+                                # store exists, so the registry's gate lifts a
+                                # covered ask and records the grant id.
+                                **_grant_invoke_kwargs(d.platform, _grant_scopes),
+                                **(
+                                    {"deny_reason": _deny_reason}
+                                    if _deny_reason
+                                    else {}
+                                ),
+                                # v1.298.0: the low-trust refusal names itself
+                                # on the ledger; a human refusal keeps the
+                                # registry's default label (nothing passed).
+                                **(
+                                    {"deny_label": _deny_label}
+                                    if _deny_reason and _deny_label
+                                    else {}
+                                ),
+                            )
                         return result, ""
                     except Exception as exc:  # noqa: BLE001
                         return None, f"{type(exc).__name__}: {exc}"
@@ -3577,9 +3618,18 @@ async def chat_stream(
                     _slots[i] = {"result": result, "content": content, "ran": ran}
 
                 async with contextlib.aclosing(
-                    _run_tool_round(_batched, _invoke, _settle)
+                    # v1.324.0: the turn's side queue — a pack's frames are
+                    # yielded WHILE its tool runs, drained before it settles.
+                    _run_tool_round(_batched, _invoke, _settle, side=_ti.side)
                 ) as _round_events:
                     async for _kind, _i in _round_events:
+                        if _kind == "side":
+                            # (event, data) queued by TurnInteractions:
+                            # mcp_elicitation / mcp_sampling / mcp_progress /
+                            # mcp_resolved.
+                            _side_event, _side_data = _i
+                            yield _sse(_side_event, _side_data)
+                            continue
                         tc = calls[_i]
                         if _kind == "started":
                             yield _sse("tool_call", {
@@ -3965,6 +4015,10 @@ async def chat_stream(
                 "reasoning": route_reasoning,
             },
             "tools_used": tools_used,
+            # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present
+            # (possibly []). MIRROR NOTE (lock-step): chat_turn.py's response
+            # carries the identical key — edit both or neither.
+            "resources": resources_receipt,
             # TRUNCATED (v1.323.0): true iff the FINAL answering model call
             # stopped for running out of output tokens (a tool round never
             # counts) — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
@@ -4034,6 +4088,12 @@ async def chat_stream(
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404
     # are `_eager_checks`, before the stream exists); the loop's frames follow
     # here, and the loop is closed promptly however the caller leaves.
-    async with contextlib.aclosing(gen()) as _loop:
-        async for _chunk in _loop:
-            yield _chunk
+    try:
+        async with contextlib.aclosing(gen()) as _loop:
+            async for _chunk in _loop:
+                yield _chunk
+    finally:
+        # v1.324.0: the turn is over however it ended (done, error, Stop, a
+        # dropped connection) — every ask still parked is resolved "stopped"
+        # so no pack waits on a card nobody can answer any more.
+        _ti.close()

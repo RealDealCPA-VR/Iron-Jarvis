@@ -30,12 +30,21 @@ from types import EllipsisType
 from typing import Any, Callable
 
 from ..core.logging import get_logger
+from .interact import current_scope, handle_notification, plain_reply, serve_server_request
 
 log = get_logger("mcp")
 
 #: MCP protocol revision advertised in the ``initialize`` handshake.
 PROTOCOL_VERSION = "2024-11-05"
 _CLIENT_INFO = {"name": "iron-jarvis", "version": "0"}
+
+
+def client_capabilities() -> dict[str, Any]:
+    """What this client tells a server it can do (v1.324.0), on BOTH
+    transports: a pack may ask the user (``elicitation`` — ``{}`` is form mode
+    per spec) and ask a model (``sampling``). Whether anyone ANSWERS is
+    decided per call by ``mcp/interact`` (an attended stream turn only)."""
+    return {"elicitation": {}, "sampling": {}}
 
 #: How long :class:`StdioTransport` waits for ONE answer before it kills the
 #: server (v1.291.0, io-02) — the default for a transport built with no
@@ -112,6 +121,9 @@ def _extract_result(response: dict[str, Any]) -> dict[str, Any]:
 # their requests in their own id space, so one can collide with ours.
 # --------------------------------------------------------------------------- #
 _RESPONSE, _SERVER_REQUEST, _SKIP = "response", "request", "skip"
+#: A server notification (v1.324.0): no reply, handed to
+#: ``interact.handle_notification`` (progress for the call in flight).
+_NOTIFICATION = "notification"
 
 
 def _route_message(msg: Any, expected_id: Any) -> str:
@@ -120,7 +132,7 @@ def _route_message(msg: Any, expected_id: Any) -> str:
         return _SKIP
     if "method" in msg:
         # A request carries an id; a notification has none and takes no reply.
-        return _SERVER_REQUEST if msg.get("id") is not None else _SKIP
+        return _SERVER_REQUEST if msg.get("id") is not None else _NOTIFICATION
     if "id" not in msg or msg["id"] is None:
         return _SKIP
     rid = msg["id"]
@@ -132,25 +144,18 @@ def _route_message(msg: Any, expected_id: Any) -> str:
 
 
 def _server_request_reply(msg: dict[str, Any]) -> dict[str, Any]:
-    """The reply this client owes a server→client request.
+    """The reply this client owes a server→client request WITHOUT an
+    interaction scope (the v1.322.0 behaviour, kept as the fallback).
 
     ``ping`` is answered with the empty result the spec prescribes. Anything
     else is refused with -32601 so the server is never left WAITING on an
     answer that will not come (a server that awaits its request before it
-    finishes ours would otherwise hang the call until the deadline).
+    finishes ours would otherwise hang the call until the deadline). The
+    transports now answer through ``interact.serve_server_request``, which
+    adds elicitation and sampling (v1.324.0) and falls back to this for
+    everything else.
     """
-    method = str(msg.get("method", ""))
-    if method == "ping":
-        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
-    log.info("mcp server sent a %r request this client does not serve; refused it", method)
-    return {
-        "jsonrpc": "2.0",
-        "id": msg.get("id"),
-        "error": {
-            "code": _METHOD_NOT_FOUND,
-            "message": f"Method not found: {method} (this client does not serve it)",
-        },
-    }
+    return plain_reply(msg)
 
 
 def _decode_sse_event(data: list[str]) -> list[Any]:
@@ -277,6 +282,18 @@ class MCPClient:
     def __init__(self, transport: Any, name: str = "server") -> None:
         self.transport = transport
         self.name = name
+        #: Set by :meth:`close`. A closed stdio transport RESPAWNS its server
+        #: on the next call, so ``mcp.tools.live_client`` never hands out a
+        #: client that was closed (a replaced or discarded pack).
+        self.closed = False
+        # The transport answers the pack's own requests (v1.324.0) and the
+        # card says WHICH app is asking: it needs the pack's name, which only
+        # the client knows. Best-effort: a transport that takes no attribute
+        # still works, it just reads as "mcp".
+        try:
+            transport.pack_name = name
+        except Exception:  # noqa: BLE001 — __slots__, a read-only double
+            pass
 
     async def _request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         params = params or {}
@@ -324,45 +341,98 @@ class MCPClient:
         repeats, or :data:`MAX_TOOL_LIST_PAGES` is reached (logged — a capped
         list is never passed off as complete in the log).
         """
-        tools: list[dict[str, Any]] = []
+        return await self._paged("tools/list", "tools")
+
+    async def _paged(
+        self, method: str, key: str, *, absent_ok: bool = False
+    ) -> list[dict[str, Any]]:
+        """Every item of a PAGINATED list method (``tools/list``,
+        ``prompts/list``, ``resources/list``), following ``nextCursor`` under
+        one cap and one log rule. ``absent_ok``: a server that answers
+        -32601 / "Method not found" simply has none (an empty list, not an
+        error) — prompts and resources are optional capabilities."""
+        items: list[dict[str, Any]] = []
         params: dict[str, Any] = {}
         seen: set[str] = set()
         for _page in range(MAX_TOOL_LIST_PAGES):
-            result = await self._request("tools/list", params)
-            batch = result.get("tools", [])
+            try:
+                result = await self._request(method, params)
+            except MCPError as exc:
+                if absent_ok and _is_method_not_found(exc):
+                    return items
+                raise
+            batch = result.get(key, [])
             if isinstance(batch, list):
-                tools.extend(batch)
+                items.extend(b for b in batch if isinstance(b, dict))
             cursor = result.get("nextCursor")
             if cursor is None or cursor == "":
-                return tools
-            key = str(cursor)
-            if key in seen:
+                return items
+            ckey = str(cursor)
+            if ckey in seen:
                 log.warning(
-                    "pack %r: tools/list repeated cursor %r; stopped paging with %d tools",
-                    self.name, key, len(tools),
+                    "pack %r: %s repeated cursor %r; stopped paging with %d %s",
+                    self.name, method, ckey, len(items), key,
                 )
-                return tools
-            seen.add(key)
+                return items
+            seen.add(ckey)
             params = {"cursor": cursor}
         log.warning(
-            "pack %r: tools/list still had more pages after %d pages; stopped there "
-            "with %d tools — any tools on later pages are NOT loaded",
-            self.name, MAX_TOOL_LIST_PAGES, len(tools),
+            "pack %r: %s still had more pages after %d pages; stopped there "
+            "with %d %s — any %s on later pages are NOT loaded",
+            self.name, method, MAX_TOOL_LIST_PAGES, len(items), key, key,
         )
-        return tools
+        return items
+
+    async def list_prompts(self) -> list[dict[str, Any]]:
+        """The pack's prompts (raw MCP dicts: name/title/description/arguments);
+        ``[]`` when it has none or does not serve prompts at all (v1.324.0)."""
+        return await self._paged("prompts/list", "prompts", absent_ok=True)
+
+    async def get_prompt(
+        self, name: str, arguments: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """One prompt filled in with ``arguments`` (raw MCP result:
+        ``{description?, messages: [{role, content}]}``)."""
+        return await self._request(
+            "prompts/get", {"name": name, "arguments": dict(arguments or {})}
+        )
+
+    async def list_resources(self) -> list[dict[str, Any]]:
+        """The pack's resources (raw MCP dicts: uri/name/title/description/
+        mimeType); ``[]`` when it has none or does not serve resources."""
+        return await self._paged("resources/list", "resources", absent_ok=True)
+
+    async def read_resource(self, uri: str) -> dict[str, Any]:
+        """One resource's contents (raw MCP result: ``{contents: [{uri,
+        mimeType?, text | blob}]}``)."""
+        return await self._request("resources/read", {"uri": uri})
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Invoke a remote tool; return the raw MCP result ({content, isError})."""
-        return await self._request(
-            "tools/call", {"name": name, "arguments": arguments or {}}
-        )
+        """Invoke a remote tool; return the raw MCP result ({content, isError}).
+
+        Inside an interaction scope (an attended stream turn, v1.324.0) the
+        call carries ``_meta.progressToken`` = the model's tool-call id, so
+        the pack's progress reaches that call's card. Without one it carries
+        none — nobody would see the progress."""
+        params: dict[str, Any] = {"name": name, "arguments": arguments or {}}
+        scope = current_scope()
+        if scope is not None and scope.call_id:
+            params["_meta"] = {"progressToken": str(scope.call_id)}
+        return await self._request("tools/call", params)
 
     def close(self) -> None:
+        self.closed = True
         closer = getattr(self.transport, "close", None)
         if callable(closer):
             closer()
+
+
+def _is_method_not_found(exc: BaseException) -> bool:
+    """Whether a transport error is the server's -32601 / "Method not found"."""
+    text = str(exc).strip().lower()
+    return text.startswith(str(_METHOD_NOT_FOUND)) or "method not found" in text
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +555,9 @@ class StdioTransport:
         self._inflight: threading.Event | None = None
         #: How many times a server process was spawned (diagnostics + pins).
         self.spawn_count = 0
+        #: The pack's name, set by ``MCPClient`` (v1.324.0): the card that
+        #: shows a pack's question says which app is asking.
+        self.pack_name: str | None = None
 
     # -- lifecycle ----------------------------------------------------------
     @property
@@ -564,7 +637,7 @@ class StdioTransport:
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
+                "capabilities": client_capabilities(),
                 "clientInfo": _CLIENT_INFO,
             },
         )
@@ -741,9 +814,24 @@ class StdioTransport:
                 # v1.322.0: a server→client request (``ping``, ``roots/list``
                 # …) was DROPPED here, and a server that waits for its answer
                 # before finishing ours hung the call. Answer on the same
-                # pipe and keep reading for our own response.
-                self._write(_server_request_reply(msg))
-            # Notifications and answers to other ids are skipped.
+                # pipe and keep reading for our own response. v1.324.0: the
+                # answer comes from ``interact`` — an elicitation or sampling
+                # request may wait for the USER, giving up when this call's
+                # own cancel token is set (Stop / the registry deadline).
+                started = time.monotonic()
+                reply = serve_server_request(self._pack(), msg, self._inflight)
+                if deadline is not None:
+                    # Time spent waiting on the user is not the server being
+                    # wedged: the transport floor does not run meanwhile.
+                    deadline += time.monotonic() - started
+                self._write(reply)
+            elif route == _NOTIFICATION:
+                handle_notification(self._pack(), msg)
+            # Answers to other ids are skipped.
+
+    def _pack(self) -> str:
+        """The pack's name for ``interact`` (the client sets it)."""
+        return self.pack_name or "mcp"
 
     def _rpc(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
         self._id += 1
@@ -838,6 +926,8 @@ class HttpTransport:
         #: The pack's name, for error text. The URL is NOT used in errors: a
         #: pack URL can carry a key in its query string.
         self.name = name
+        #: Set by ``MCPClient`` (v1.324.0) — the name a pack's question shows.
+        self.pack_name: str | None = None
         self._client_factory = client_factory
         self._client: Any | None = None
         self._id = 0
@@ -903,22 +993,28 @@ class HttpTransport:
         messages: Any,
         request_id: Any,
         on_request: Callable[[dict[str, Any]], None] | None,
+        on_notification: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any] | None:
         """The first message answering ``request_id`` (``None`` = the first
         RESPONSE of any id — the pre-v1.322.0 single-message callers);
-        server requests go to ``on_request``; notifications are skipped."""
+        server requests go to ``on_request``; notifications go to
+        ``on_notification`` (v1.324.0) and are otherwise skipped."""
         for msg in messages:
             if request_id is None:
                 if isinstance(msg, dict) and "method" not in msg:
                     return msg
                 if isinstance(msg, dict) and msg.get("id") is not None and on_request:
                     on_request(msg)
+                elif isinstance(msg, dict) and on_notification is not None:
+                    on_notification(msg)
                 continue
             route = _route_message(msg, request_id)
             if route == _RESPONSE:
                 return msg
             if route == _SERVER_REQUEST and on_request is not None:
                 on_request(msg)
+            elif route == _NOTIFICATION and on_notification is not None:
+                on_notification(msg)
         return None
 
     @staticmethod
@@ -927,6 +1023,7 @@ class HttpTransport:
         request_id: Any = None,
         on_request: Callable[[dict[str, Any]], None] | None = None,
         label: str = "the MCP server",
+        on_notification: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """A WHOLE (already read) response body → the JSON-RPC answer.
 
@@ -936,7 +1033,8 @@ class HttpTransport:
         list is searched for ``request_id``)."""
         if HttpTransport._is_sse(response):
             msg = HttpTransport._pick(
-                _sse_messages(response.text.splitlines()), request_id, on_request
+                _sse_messages(response.text.splitlines()), request_id, on_request,
+                on_notification,
             )
             if msg is None:
                 raise MCPError(
@@ -947,11 +1045,15 @@ class HttpTransport:
             return msg
         body = response.json()
         if isinstance(body, list):
-            msg = HttpTransport._pick(body, request_id, on_request)
+            msg = HttpTransport._pick(body, request_id, on_request, on_notification)
             if msg is None:
                 raise MCPError(f"{label} sent a batch without the answer to request {request_id}")
             return msg
         return body
+
+    def _pack(self) -> str:
+        """The pack's name for ``interact`` (the client sets it)."""
+        return self.pack_name or self.name or "mcp"
 
     def _base_headers(self) -> dict[str, str]:
         headers = {
@@ -975,8 +1077,11 @@ class HttpTransport:
     def _answer(self, client: Any, msg: dict[str, Any]) -> None:
         """POST our reply to a server→client request back to the endpoint.
         Best-effort: a failed reply is logged, never fails OUR call (the
-        server may still answer it)."""
-        reply = _server_request_reply(msg)
+        server may still answer it). The reply comes from ``interact``
+        (v1.324.0): an elicitation / sampling request may wait for the user;
+        HTTP has no cancel token (``cancel=None``) — the turn's own end
+        resolves the pending ask, and a closed loop gives up."""
+        reply = serve_server_request(self._pack(), msg, None)
         try:
             response = client.post(
                 self.url,
@@ -1008,6 +1113,9 @@ class HttpTransport:
         def on_request(msg: dict[str, Any]) -> None:
             self._answer(client, msg)
 
+        def on_notification(msg: dict[str, Any]) -> None:
+            handle_notification(self._pack(), msg)
+
         stream = getattr(client, "stream", None)
         if callable(stream):
             with stream("POST", self.url, json=payload, headers=headers, timeout=timeout) as response:
@@ -1015,7 +1123,9 @@ class HttpTransport:
                 if capture_session:
                     self._capture_session(response)
                 if self._is_sse(response):
-                    msg = self._pick(_sse_messages(response.iter_lines()), rid, on_request)
+                    msg = self._pick(
+                        _sse_messages(response.iter_lines()), rid, on_request, on_notification
+                    )
                     if msg is None:
                         raise MCPError(
                             f"{self.label} ended its event stream without answering "
@@ -1023,12 +1133,12 @@ class HttpTransport:
                         )
                     return msg
                 response.read()
-                return self._parse_body(response, rid, on_request, self.label)
+                return self._parse_body(response, rid, on_request, self.label, on_notification)
         response = client.post(self.url, json=payload, headers=headers, timeout=timeout)
         response.raise_for_status()
         if capture_session:
             self._capture_session(response)
-        return self._parse_body(response, rid, on_request, self.label)
+        return self._parse_body(response, rid, on_request, self.label, on_notification)
 
     def _timed(self, fn: Callable[[], Any], read: float | None) -> Any:
         """Run ``fn``; an httpx timeout becomes an :class:`MCPError` that NAMES
@@ -1061,7 +1171,7 @@ class HttpTransport:
             "initialize",
             {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
+                "capabilities": client_capabilities(),
                 "clientInfo": {"name": "iron-jarvis", "version": "1.0"},
             },
         )

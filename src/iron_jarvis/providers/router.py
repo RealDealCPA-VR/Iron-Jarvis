@@ -1465,6 +1465,7 @@ class ModelRouter:
         session_id: str | None = None,
         task_class: str | None = None,
         reasoning: str = "",
+        pin: bool = False,
     ) -> RouteResult:
         # AUTO ROUTING: only when the resolved provider is the "auto" pseudo-
         # provider (the user selected Auto). Any other path is byte-for-byte the
@@ -1495,7 +1496,10 @@ class ModelRouter:
         # `downgraded` is set only when a REAL provider was wanted and is not
         # available, so an intentional mock default (offline demos, the test
         # suite) is untouched.
-        pinned = bool(provider) and provider != "auto" and self._strict_pin()
+        # ``pin`` (v1.324.0) is the strict pin for ONE call: a pack's model
+        # request (MCP sampling) is answered by the turn's own model or not
+        # at all — never sent to a fallback. MIRROR NOTE (lock-step).
+        pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
             raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
@@ -1890,6 +1894,7 @@ class ModelRouter:
         session_id: str | None = None,
         task_class: str | None = None,
         reasoning: str = "",
+        pin: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-streaming twin of :meth:`complete` (FX-01).
 
@@ -1935,7 +1940,10 @@ class ModelRouter:
         # complete() carries the identical guard — edit both or neither. This
         # lane matters MORE, not less: it is the one the user watches token by
         # token, so a fabricated stream reads as a model genuinely working.
-        pinned = bool(provider) and provider != "auto" and self._strict_pin()
+        # ``pin`` (v1.324.0) is the strict pin for ONE call: a pack's model
+        # request (MCP sampling) is answered by the turn's own model or not
+        # at all — never sent to a fallback. MIRROR NOTE (lock-step).
+        pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
             raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))

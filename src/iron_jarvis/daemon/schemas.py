@@ -191,6 +191,17 @@ class ChatMessageBody(BaseModel):
     content: str
 
 
+class ChatResourceRef(BaseModel):
+    """One resource the user attached from a pack (v1.324.0, the "@" picker's
+    "From your apps"): read when the message is sent, scanned, injected like
+    an attachment. ``name`` is optional — only the label the receipt and the
+    scan source use (the URI otherwise)."""
+
+    pack: str = Field(min_length=1, max_length=200)
+    uri: str = Field(min_length=1, max_length=2000)
+    name: str = Field(default="", max_length=200)
+
+
 class TurnSteerBody(BaseModel):
     """``POST /chat/turns/{turn_id}/steer`` (v1.278.0): one note for a running turn."""
 
@@ -306,6 +317,15 @@ class ChatBody(BaseModel):
     #: way to keep that answer was to arm the tool, which did nothing at all
     #: once six tools were already in the composer.
     granted_tools: list[str] = []
+    #: v1.324.0: resources the user attached from their apps ("@" → "From
+    #: your apps"), at most 8. BOTH lanes read them (off the loop, ≤15 s
+    #: each), scan them and inject them at the attachments seam; the done
+    #: frame / POST response carry ``resources: [{pack, uri, ok, note}]``.
+    resources: list[ChatResourceRef] = Field(default_factory=list, max_length=8)
+    #: v1.324.0: this client renders the apps' question/model-request cards.
+    #: Only then may a pack ask during the turn; every other caller (a Build
+    #: pane, the browser sidebar, an older page) gets an instant decline.
+    mcp_cards: bool = False
 
 
 class ChatCompactBody(BaseModel):
