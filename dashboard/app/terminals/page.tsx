@@ -1163,7 +1163,7 @@ export default function TerminalsPage() {
                             <div
                               data-testid={`chat-layer-${t.id}`}
                               style={{ visibility: view === "chat" ? "visible" : "hidden" }}
-                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
+                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-ink-900 shadow-card transition-colors ${
                                 focusedId === t.id
                                   ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
                                   : "border-white/[0.07] hover:border-white/[0.14]"

@@ -34,25 +34,39 @@ import {
   type DragEvent as ReactDragEvent,
 } from "react";
 import {
+  ArrowUp,
+  ChevronDown,
   CircleAlert,
   FileText,
   FolderKanban,
   Loader2,
   Paperclip,
   Play,
-  Send,
   Undo2,
   Wrench,
   X,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { get, post, put, ApiError } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useChatStream, StreamError, type ToolCard } from "@/lib/useChatStream";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
-import { ApprovalCard } from "@/components/chat/ApprovalCard";
+// v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
+// wait for a press (RemoteMediaGate, v1.322.0), a ```chart fence draws a
+// chart, a draft fence is the draft card. The pane used to run its own
+// ReactMarkdown, which loaded a model-written image URL with no press.
+import { Markdown, MemoMarkdown } from "@/components/Markdown";
+import { composerChipClass } from "@/lib/composerChips";
+import { PaneAsk, onScreen } from "@/components/terminal/PaneAsk";
+import {
+  PANE_COMPOSER_BOX,
+  PANE_COMPOSER_CARD,
+  PANE_GHOST_BUTTON,
+  PANE_QUIET_ROW,
+  PANE_REPLY_PROSE,
+  PANE_USER_BUBBLE,
+  paneSendClass,
+} from "@/components/terminal/paneChatLook";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
 import {
@@ -172,12 +186,12 @@ function storedThreadId(paneId: string): string | null {
   }
 }
 
-/** One live tool row under the streaming bubble. */
+/** One live tool row under the streaming reply: a quiet line, no box. */
 function ToolRow({ card }: { card: ToolCard }) {
   return (
     <div
       data-testid="pane-tool-card"
-      className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-zinc-400"
+      className="flex items-center gap-2 px-0.5 py-0.5 text-[11px] text-zinc-500"
     >
       {card.status === "running" ? (
         <Loader2 size={11} className="shrink-0 animate-spin text-accent-soft" />
@@ -195,11 +209,13 @@ function ToolRow({ card }: { card: ToolCard }) {
   );
 }
 
-/** Assistant markdown, minimally styled for a narrow pane. */
-function PaneMarkdown({ text }: { text: string }) {
+/** A reply: prose with no box, through the app's ONE markdown renderer (the
+ *  chat page's). A settled reply is memoized on its text; the live one is
+ *  re-parsed as it grows. Tables read as part of the text (PANE_REPLY_PROSE). */
+function PaneMarkdown({ text, live = false }: { text: string; live?: boolean }) {
   return (
-    <div className="min-w-0 text-sm leading-relaxed text-zinc-200 [&_a]:text-accent-soft [&_a]:underline [&_code]:font-mono [&_code]:text-[12px] [&_h1]:mt-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1.5 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-white/[0.06] [&_pre]:bg-black/40 [&_pre]:p-3 [&_table]:my-2 [&_table]:text-xs [&_td]:border [&_td]:border-white/10 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-white/10 [&_th]:px-2 [&_th]:py-1 [&_ul]:list-disc [&_ul]:pl-5">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    <div data-testid="pane-reply" className={PANE_REPLY_PROSE}>
+      {live ? <Markdown content={text} /> : <MemoMarkdown content={text} />}
     </div>
   );
 }
@@ -278,6 +294,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const saveTargetRef = useRef<{ id: string | null }>({ id: null });
   const endRef = useRef<HTMLDivElement | null>(null);
+  // The pane chat's root and its box: an approval takes the composer's place
+  // and gives the caret back when it is answered (PaneAsk).
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const boxRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ------------------------------------------------------------- thread load
   useEffect(() => {
@@ -867,6 +887,20 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     endRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, [messages, stream.text]);
 
+  // v1.329.0: the approval sits in the composer's place. When it is
+  // answered, the composer comes back; give it the caret when the card took
+  // the focus with it (focus fell to the page) and this pane is on screen.
+  // A pane hidden behind its terminal never takes the focus.
+  const hadAskRef = useRef(false);
+  useEffect(() => {
+    const had = hadAskRef.current;
+    hadAskRef.current = approvalPending;
+    if (!had || approvalPending) return;
+    const ae = document.activeElement;
+    const pageHasIt = !ae || ae === document.body || ae === document.documentElement;
+    if (pageHasIt && onScreen(rootRef.current)) boxRef.current?.focus({ preventScroll: true });
+  }, [approvalPending]);
+
   const engines = engineOptions(daemon.health?.providers);
   // A restored pick whose provider is currently offline still shows as ITSELF
   // (labelled), never silently swapped to Default — the no-auto-switch rule.
@@ -874,9 +908,16 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     provider !== "" && !engines.some((e) => e.id === provider);
   const folder = paneBasename(cwd) || cwd;
   const offline = !daemon.checking && !daemon.online;
+  const sendReady = canCompose && !busy && !uploading && !!input.trim();
+  const engineName =
+    provider === ""
+      ? "Default"
+      : (engines.find((e) => e.id === provider)?.label ??
+        `${engineLabel(provider)} (offline)`);
 
   return (
     <div
+      ref={rootRef}
       data-testid="pane-chat"
       className={`relative flex h-full min-h-0 flex-col ${
         dragging ? "ring-1 ring-accent/50" : ""
@@ -899,7 +940,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       onPaste={onPaste}
     >
       {/* ------------------------------------------------------- transcript */}
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+      <div
+        data-testid="pane-chat-transcript"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3"
+      >
         {offline ? <OfflineHint /> : null}
         {loadError ? (
           <div className="space-y-2">
@@ -907,7 +951,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             <button
               type="button"
               onClick={() => setLoadNonce((n) => n + 1)}
-              className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+              className={PANE_GHOST_BUTTON}
             >
               Retry loading
             </button>
@@ -921,14 +965,16 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         {messages.map((m, i) =>
           m.role === "user" ? (
             <div key={i} className="flex justify-end">
-              <div className="max-w-[92%] rounded-2xl rounded-br-md border border-accent/20 bg-accent/[0.08] px-3 py-2 text-sm whitespace-pre-wrap text-zinc-100">
+              {/* Calm chat (v1.329.0): your message is a tinted bubble with
+                  no border, the chat page's look at pane scale. */}
+              <div data-testid="pane-user-bubble" className={PANE_USER_BUBBLE}>
                 {m.content}
                 {m.attachmentNames?.length ? (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {m.attachmentNames.map((n) => (
                       <span
                         key={n}
-                        className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-zinc-400"
+                        className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] text-zinc-400"
                       >
                         <Paperclip size={9} /> {n}
                       </span>
@@ -961,7 +1007,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                       <div key={key} className="mt-1.5">
                         <div
                           data-testid="pane-run-block"
-                          className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+                          className={`flex items-center gap-2 ${PANE_QUIET_ROW}`}
                         >
                           <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-400">
                             {first}
@@ -970,7 +1016,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                           <button
                             type="button"
                             onClick={() => runBlock(key, b.code)}
-                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 py-1 text-[11px] text-accent-soft transition-colors hover:bg-accent/20"
+                            className={`${PANE_GHOST_BUTTON} text-accent-soft hover:bg-accent/10 hover:text-accent-soft`}
                           >
                             <Play size={10} /> Run in terminal
                           </button>
@@ -1008,18 +1054,18 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                       <div
                         key={p}
                         data-testid="pane-file-card"
-                        className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+                        className={PANE_QUIET_ROW}
                       >
-                        <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                           <FileText
                             size={12}
                             className="shrink-0 text-accent-soft/80"
                           />
-                          <span className="truncate text-xs text-zinc-200">
+                          <span className="min-w-0 truncate text-xs text-zinc-200">
                             {paneBasename(p)}
                           </span>
                           <span
-                            className="hidden truncate text-[10px] text-zinc-500 sm:inline"
+                            className="hidden min-w-0 truncate text-[11px] text-zinc-500 sm:inline"
                             title={p}
                           >
                             {parentDir(p)}
@@ -1027,15 +1073,15 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                           {outside ? (
                             // The receipt is truth — a path outside the
                             // pane's folder still renders, flagged.
-                            <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/[0.06] px-1.5 py-px text-[10px] text-amber-300">
+                            <span className="shrink-0 rounded-full bg-amber-500/[0.08] px-1.5 py-px text-[11px] text-amber-300">
                               outside this folder
                             </span>
                           ) : null}
-                          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                          <div className="ml-auto flex shrink-0 items-center gap-1">
                             <button
                               type="button"
                               onClick={() => void openDoc(p)}
-                              className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                              className={PANE_GHOST_BUTTON}
                             >
                               Open
                             </button>
@@ -1055,14 +1101,14 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                                 onClick={() =>
                                   void undoWrite(row.action_id, p)
                                 }
-                                className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-rose-400/40 hover:text-rose-300 disabled:opacity-40"
+                                className={`${PANE_GHOST_BUTTON} hover:bg-rose-500/10 hover:text-rose-300`}
                               >
                                 <Undo2 size={10} />
                                 {undone ? "Undone" : "Undo newest write"}
                               </button>
                             ) : null}
                             {newerInThread ? (
-                              <span className="shrink-0 text-[10px] text-amber-400/80">
+                              <span className="shrink-0 text-[11px] text-amber-400/80">
                                 (newer than this message)
                               </span>
                             ) : null}
@@ -1101,14 +1147,14 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         {stream.streaming ? (
           <div className="min-w-0" data-testid="pane-chat-live">
             {stream.tools.length > 0 ? (
-              <div className="mb-2 space-y-1">
+              <div className="mb-2 space-y-0.5">
                 {stream.tools.map((t) => (
                   <ToolRow key={t.id} card={t} />
                 ))}
               </div>
             ) : null}
             {stream.text ? (
-              <PaneMarkdown text={stream.text} />
+              <PaneMarkdown text={stream.text} live />
             ) : (
               <div className="flex items-center gap-2 text-xs text-zinc-500">
                 <Loader2 size={12} className="animate-spin" /> Thinking…
@@ -1118,31 +1164,21 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             )}
           </div>
         ) : null}
-        {/* MID-TURN APPROVAL (BC1 D1): the daemon paused this turn on an
-            ask-tier tool — npm/git/docker asks are EXACTLY Build-pane
-            language, and auto_tools arms them. Without this card the pause
-            is invisible for up to 180s and the model answers around a
-            refusal the user never saw. Same component, same POST, same
-            grant store as the big page; the hook clears it on the
-            approval_resolved frame (or when the stream ends). */}
-        {stream.approval ? (
-          <ApprovalCard
-            approval={stream.approval}
-            onConversation={armFromApproval}
-          />
-        ) : null}
         {error ? <ErrorNote>{error}</ErrorNote> : null}
         <div ref={endRef} />
       </div>
 
-      {/* --------------------------------------------------------- composer */}
-      <div className="border-t border-white/[0.06] px-3 pb-3 pt-2">
+      {/* --------------------------------------------------------- composer
+          v1.329.0 (calm chat): ONE card holds the box, the Engine chip, the
+          folder / project chip and a round send button. No border line above
+          it. A mid-turn approval takes the card's place (below). */}
+      <div className="flex max-h-[75%] min-h-0 shrink-0 flex-col px-3 pb-3 pt-1">
         {/* AUTOSAVE FAILED (v1.226.0): persistent + dismissible — what is on
             screen is NOT on disk until Retry succeeds. */}
         {saveFailure ? (
           <div
             role="status"
-            className="mb-2 flex items-center gap-2 text-[11px] text-amber-300"
+            className="mb-1.5 flex items-center gap-2 px-1 text-[11px] text-amber-300"
           >
             <span className="min-w-0 flex-1">
               Couldn&apos;t save this conversation: {saveFailure.detail}
@@ -1154,7 +1190,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 setSaveFailure(null);
                 queueSave(msgs);
               }}
-              className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+              className={PANE_GHOST_BUTTON}
             >
               Retry
             </button>
@@ -1168,36 +1204,59 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             </button>
           </div>
         ) : null}
-        {attachments.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {attachments.map((a, i) => (
-              <span
-                key={a.path}
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-zinc-300"
-              >
-                <Paperclip size={10} className="text-accent-soft" />
-                <span className="max-w-[160px] truncate">{a.name}</span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${a.name}`}
-                  className="text-zinc-500 hover:text-zinc-200"
-                  onClick={() =>
-                    setAttachments((prev) => prev.filter((_, j) => j !== i))
-                  }
+        {/* MID-TURN APPROVAL (BC1 D1): the daemon paused this turn on an
+            ask-tier tool — npm/git/docker asks are EXACTLY Build-pane
+            language, and auto_tools arms them. Without this card the pause
+            is invisible for up to 180s and the model answers around a
+            refusal the user never saw. Same component, same POST, same
+            grant store as the big page; the hook clears it on the
+            approval_resolved frame (or when the stream ends).
+            v1.329.0: drawn in the composer's place, like the chat page's
+            dock. The composer stays mounted (hidden + inert), so the draft
+            is exactly as it was when the question is answered. */}
+        {stream.approval ? (
+          <PaneAsk
+            approval={stream.approval}
+            onConversation={armFromApproval}
+            paneRoot={rootRef}
+          />
+        ) : null}
+        <div
+          data-testid="pane-chat-composer"
+          inert={approvalPending}
+          aria-hidden={approvalPending || undefined}
+          className={`${approvalPending ? "hidden" : "flex"} ${PANE_COMPOSER_CARD}`}
+        >
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
+              {attachments.map((a, i) => (
+                <span
+                  key={a.path}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
                 >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {uploading ? (
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <Loader2 size={10} className="animate-spin" /> Uploading…
-          </div>
-        ) : null}
-        <div className="flex items-end gap-2">
+                  <Paperclip size={10} className="text-accent-soft" />
+                  <span className="max-w-[160px] truncate">{a.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${a.name}`}
+                    className="text-zinc-500 hover:text-zinc-200"
+                    onClick={() =>
+                      setAttachments((prev) => prev.filter((_, j) => j !== i))
+                    }
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {uploading ? (
+            <div className="flex items-center gap-1.5 px-3.5 pt-2 text-[11px] text-zinc-500">
+              <Loader2 size={10} className="animate-spin" /> Uploading…
+            </div>
+          ) : null}
           <textarea
+            ref={boxRef}
             aria-label="Message"
             placeholder={`Build in ${folder}…`}
             value={input}
@@ -1205,76 +1264,97 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             rows={2}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
               }
             }}
-            className="min-h-[40px] flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
+            className={PANE_COMPOSER_BOX}
           />
-          <button
-            type="button"
-            aria-label="Send"
-            disabled={!canCompose || busy || uploading || !input.trim()}
-            onClick={() => void send()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent/30 bg-accent/15 text-accent-soft transition-colors hover:bg-accent/25 disabled:opacity-40"
-          >
-            {busy ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : (
-              <Send size={15} />
-            )}
-          </button>
-        </div>
-        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-zinc-500">
-          <select
-            aria-label="Engine"
-            value={provider}
-            onChange={(e) => pickEngine(e.target.value)}
-            className="max-w-[180px] rounded-lg border border-white/10 bg-white/[0.03] px-1.5 py-1 text-[11px] text-zinc-300 focus:border-accent/40 focus:outline-none"
-          >
-            <option value="">Default</option>
-            {engines.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label}
-              </option>
-            ))}
-            {pickedUnavailable ? (
-              <option value={provider}>{engineLabel(provider)} (offline)</option>
-            ) : null}
-          </select>
-          {project ? (
+          <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
+            {/* The Engine choice: a quiet chip, transparent at rest, that
+                hugs its words. The native select stays (keyboard, screen
+                reader, the same value the tests and the save path read),
+                laid invisibly over the chip so a press opens it. */}
             <span
-              data-testid="pane-chat-project"
-              className="inline-flex min-w-0 items-center gap-1 rounded-full border border-accent/20 bg-accent/[0.06] px-2 py-0.5 text-accent-soft"
-              title={`Grounded in project ${project.name}`}
+              data-testid="pane-chat-engine"
+              className={`${composerChipClass(provider !== "")} relative min-w-0 max-w-[45%] pr-1.5 text-[12px] focus-within:ring-1 focus-within:ring-accent/50`}
             >
-              <FolderKanban size={10} className="shrink-0" />
-              <span className="truncate">{project.name}</span>
+              <span className="min-w-0 truncate">{engineName}</span>
+              <ChevronDown size={12} aria-hidden className="shrink-0 text-zinc-500" />
+              <select
+                aria-label="Engine"
+                value={provider}
+                onChange={(e) => pickEngine(e.target.value)}
+                title={`Which model answers here: ${engineName}`}
+                className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
+              >
+                <option value="">Default</option>
+                {engines.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+                {pickedUnavailable ? (
+                  <option value={provider}>{engineLabel(provider)} (offline)</option>
+                ) : null}
+              </select>
             </span>
-          ) : (
-            <>
-              <span className="truncate" title={cwd}>
-                {folder}
-              </span>
-              {cwd ? (
-                <button
-                  type="button"
-                  data-testid="pane-chat-make-project"
-                  onClick={() => void makeProject()}
-                  disabled={makingProject}
-                  title="Creates a project rooted in this folder, so this chat, the assist bar and any agent handed work here are grounded in it"
-                  className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10.5px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+            <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+              {project ? (
+                <span
+                  data-testid="pane-chat-project"
+                  className="inline-flex h-[30px] min-w-0 items-center gap-1 rounded-lg px-2 text-[12px] text-accent-soft"
+                  title={`Grounded in project ${project.name}`}
                 >
-                  <FolderKanban size={10} className="shrink-0" />
-                  {makingProject ? "Making…" : "Make this a project"}
-                </button>
+                  <FolderKanban size={12} className="shrink-0" />
+                  <span className="truncate">{project.name}</span>
+                </span>
+              ) : (
+                <>
+                  <span
+                    className="min-w-0 shrink-[4] truncate px-1 text-[12px] text-zinc-500"
+                    title={cwd}
+                  >
+                    {folder}
+                  </span>
+                  {cwd ? (
+                    <button
+                      type="button"
+                      data-testid="pane-chat-make-project"
+                      onClick={() => void makeProject()}
+                      disabled={makingProject}
+                      title="Creates a project rooted in this folder, so this chat, the assist bar and any agent handed work here are grounded in it"
+                      className="inline-flex h-[30px] min-w-[30px] shrink items-center gap-1.5 overflow-hidden rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <FolderKanban size={12} className="shrink-0" />
+                      <span className="min-w-0 truncate">
+                        {makingProject ? "Making…" : "Make this a project"}
+                      </span>
+                    </button>
+                  ) : null}
+                </>
+              )}
+              {threadId ? (
+                <span className="shrink-0 px-1 text-[11px] text-zinc-600">saved</span>
               ) : null}
-            </>
-          )}
-          {threadId ? (
-            <span className="ml-auto shrink-0 text-zinc-600">saved</span>
-          ) : null}
+            </div>
+            <button
+              type="button"
+              aria-label="Send"
+              title="Send (Enter)"
+              disabled={!canCompose || busy || uploading || !input.trim()}
+              onClick={() => void send()}
+              className={paneSendClass(sendReady)}
+            >
+              {busy ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <ArrowUp size={15} strokeWidth={2.4} />
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

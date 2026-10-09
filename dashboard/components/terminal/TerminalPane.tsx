@@ -1434,7 +1434,7 @@ export function TerminalPane({
         }
         acceptSnips(files);
       }}
-      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
+      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-ink-900 shadow-card transition-colors ${
         dragOver
           ? "border-accent shadow-glow-sm ring-2 ring-accent/40"
           : focused
@@ -2006,8 +2006,10 @@ export function TerminalPane({
         </div>
       )}
 
-      {/* Terminal surface */}
-      <div className="relative flex-1 overflow-hidden px-2 py-1.5">
+      {/* Terminal surface. It stays dark in every theme (xterm draws with its
+          own dark palette); the frame around it and the strips above it use
+          theme tokens, so they read in Daylight too (v1.329.0). */}
+      <div className="relative flex-1 overflow-hidden bg-[#0a0c11] px-2 py-1.5">
         <div ref={holderRef} className="h-full w-full" />
         {(state === "reconnecting" || state === "closed") && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center bg-[#0a0c11]/70 backdrop-blur-[1px]">
