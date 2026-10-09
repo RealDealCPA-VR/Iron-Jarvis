@@ -2979,6 +2979,14 @@ does not need a bump, stop and bump it.
   unarchives + opens). `lib/archiveChat.ts` uses fetch directly because
   lib/api's post keeps only `detail` from an error body (the 409's `running`
   list would be lost).
+  v1.328.1 (fix): v1.328.0's Tests went red on
+  `test_a_pack_deleted_while_starting_never_registers_its_tools` — a REAL
+  leak: DELETE /mcp/servers/{name} on a pack that had FINISHED loading
+  unregistered its tools but never closed their client (the stdio child
+  ran until restart). The slow runner lost the test's 3 s gate, so the load
+  landed first and the delete took the unclosed path. The route now closes
+  what it unregisters (`_close_mcp_tools`, like the Retry route); pin
+  `test_deleting_a_pack_that_already_loaded_closes_its_client`.
 
 - **The chat list is grouped and lit, one permission chip, the receipt names
   its rules and refs** (v1.327.0, calm chat wave 2). W2-1: the rail

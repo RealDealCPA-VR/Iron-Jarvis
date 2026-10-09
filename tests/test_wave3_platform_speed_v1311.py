@@ -294,6 +294,33 @@ def test_a_pack_deleted_while_starting_never_registers_its_tools(tmp_path, monke
     assert record is None, record
 
 
+def test_deleting_a_pack_that_already_loaded_closes_its_client(tmp_path, monkeypatch):
+    """v1.328.1: DELETE /mcp/servers/{name} on a pack that had FINISHED
+    loading unregistered its tools but never closed their client, so the
+    pack's stdio child ran on until the app restarted. CI found it when the
+    test above lost its 3 s gate on a slow runner (the load landed first)."""
+    from iron_jarvis.daemon.app import create_app
+
+    _write_pack_config(tmp_path)
+    gate, built = _one_gated_then_instant(monkeypatch)
+    gate.set()  # no window: the boot load lands before the delete
+    try:
+        app = create_app(str(tmp_path))
+        platform = app.state.platform
+        with TestClient(app) as c:
+            assert _wait_for(lambda: _loaded(platform)), "mcp.loaded never arrived"
+            assert platform.registry.mcp_names(PACK), "the pack's tools never registered"
+            assert built[0].closed == 0
+            gone = c.delete(f"/mcp/servers/{PACK}")
+            names = platform.registry.mcp_names(PACK)
+    finally:
+        gate.set()
+
+    assert gone.status_code == 200 and gone.json()["tools_unloaded"] >= 1
+    assert names == []
+    assert built[0].closed >= 1, "the deleted pack's client is still open (a live child leaks)"
+
+
 def test_a_retry_pressed_while_starting_wins_over_the_late_boot_load(tmp_path, monkeypatch):
     """REVIEW (v1.311.0): POST /mcp/servers/{name}/reload during the window
     registers a fresh connection; the boot load landing afterwards used to

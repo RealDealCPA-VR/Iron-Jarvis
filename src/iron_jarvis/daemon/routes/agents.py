@@ -2708,9 +2708,19 @@ def register(app: FastAPI, d) -> None:
         # loadout immediately (they won't come back on restart either — the
         # config no longer lists the server).
         unloaded = 0
+        removed = []
         for tool_name in d.platform.registry.mcp_names(name):
+            live = d.platform.registry.get(tool_name)
             if d.platform.registry.unregister(tool_name):
                 unloaded += 1
+                if live is not None:
+                    removed.append(live)
+        # v1.328.1: and CLOSE their client, like a Retry closes what it
+        # replaces. Unregistering alone left the pack's stdio child running
+        # until the app restarted, with no surface left that could stop it.
+        from ...platform import _close_mcp_tools
+
+        _close_mcp_tools(removed)
         # v1.324.0: its prompts and resources go with it ("/" and "@").
         from ...mcp.tools import forget_live_client
 
