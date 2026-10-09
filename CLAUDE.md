@@ -2985,6 +2985,22 @@ does not need a bump, stop and bump it.
   clears `archived_at` on an inbound message. NOTE: v1.326.1's push carried
   2d3d7e1/58a189f/d9a1d22 un-gated (reviewers commit to the shared master);
   push hotfixes from a branch cut at origin/master while a workflow runs.
+  v1.327.1 (test-only): v1.327.0's Release gate went red on
+  `mission-wave1-v1309` "the coordinator's narration ..." with NO
+  mission-report at all. Only the INTERVALS are faked there, so a waitFor
+  can never fire the next 130 ms flush; on a slow runner the report needed
+  one more tick than the single flush gave. The five flush-then-waitFor
+  reads now use `flushUntil` (flush, check, up to 10 ticks = 1.3 s of fake
+  time, under the 2 s poll). Shipped from a worktree at origin/master so
+  the running wave 3 commits stayed out.
+  v1.327.2 (test-only): v1.327.1 was red AGAIN on the same test — the real
+  cause: MissionOutput (where mission-report lives) is a LAZY next/dynamic
+  module; on a slow runner it lands after the cards, so the report had
+  nowhere to show (v1.327.1's flushUntil only shortened the wait). Both
+  openStream helpers now `findByTestId("mission-tab-report", {}, {timeout:
+  10_000})` first. Reproduced by delaying loadMissionOutput 1.5 s: the
+  v1.327.1 test fails with CI's exact error, the fix passes 35/35. Rule: a
+  test on a page with a next/dynamic panel waits for the PANEL first.
 
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo

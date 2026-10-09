@@ -458,6 +458,27 @@ describe("a link opens Your team on one agent (contract 8)", () => {
 
 /* -------------------------------------------- the live centre (stream) --- */
 
+/** v1.327.1: flush, check, and flush again while the check fails. Only the
+ *  intervals are faked, so a waitFor alone can never fire the next flush: on
+ *  a slow runner the report can need one more tick than a single flush gives
+ *  (see openStream for the lazy panel this used to be blamed for). Ten ticks = 1.3 s of
+ *  fake time, under the 2 s poll, so nothing else is set off. */
+async function flushUntil(check: () => void, tries = 10): Promise<void> {
+  for (let i = 0; ; i += 1) {
+    await act(async () => {
+      vi.advanceTimersByTime(130);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    try {
+      check();
+      return;
+    } catch (e) {
+      if (i + 1 >= tries) throw e;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
+
 describe("while the team works", () => {
   beforeEach(() => {
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -471,6 +492,10 @@ describe("while the team works", () => {
   async function openStream() {
     render(<AgentsPage />);
     await screen.findByTestId("mission-card-researcher");
+    // v1.327.2: the result panel (MissionOutput) is a LAZY module
+    // (next/dynamic); on a slow runner it arrives well after the cards, and
+    // a report has nowhere to show until it does. Wait for it, generously.
+    await screen.findByTestId("mission-tab-report", {}, { timeout: 10_000 });
     await waitFor(() => expect(H.es.filter((e) => !e.closed)).toHaveLength(1));
     return H.es.filter((e) => !e.closed)[0];
   }
@@ -495,8 +520,7 @@ describe("while the team works", () => {
         data: { text: "# Strategy draft\n\nThe first section" },
       });
     });
-    await flush();
-    await waitFor(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("draft"));
+    await flushUntil(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("draft"));
     const report = screen.getByTestId("mission-report");
     expect(report.textContent).toContain("The first section");
     // Red today: data-source "live" with "I'll split this …" as your result.
@@ -508,8 +532,7 @@ describe("while the team works", () => {
       es.emit("round", { round: 2 });
       es.emit("token", { text: "# Final report\n\nAll three competitors" });
     });
-    await flush();
-    await waitFor(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("live"));
+    await flushUntil(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("live"));
     const final = screen.getByTestId("mission-report");
     expect(final.textContent).toContain("All three competitors");
     expect(final.textContent).not.toContain("I'll split this");
@@ -860,6 +883,10 @@ describe("a teammate's narration is not its draft (coordinator-narration-hijacks
   async function openStream() {
     render(<AgentsPage />);
     await screen.findByTestId("mission-card-researcher");
+    // v1.327.2: the result panel (MissionOutput) is a LAZY module
+    // (next/dynamic); on a slow runner it arrives well after the cards, and
+    // a report has nowhere to show until it does. Wait for it, generously.
+    await screen.findByTestId("mission-tab-report", {}, { timeout: 10_000 });
     await waitFor(() => expect(H.es.filter((e) => !e.closed)).toHaveLength(1));
     return H.es.filter((e) => !e.closed)[0];
   }
@@ -882,8 +909,7 @@ describe("a teammate's narration is not its draft (coordinator-narration-hijacks
       es.emit("member", frame("c2", "custom:writer", "tool_call", { id: "w1", name: "web_search", status: "started" }));
       es.emit("member", frame("c2", "custom:writer", "token", { text: "# Draft" }));
     });
-    await flush();
-    await waitFor(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("draft"));
+    await flushUntil(() => expect(screen.getByTestId("mission-report").getAttribute("data-source")).toBe("draft"));
     const report = screen.getByTestId("mission-report");
     expect(report.textContent).toBe("# Draft");
     expect(report.textContent).not.toContain("I'll look this up");
@@ -894,16 +920,14 @@ describe("a teammate's narration is not its draft (coordinator-narration-hijacks
     act(() => {
       es.emit("member", frame("c2", "custom:writer", "token", { text: "I'll look this up" }));
     });
-    await flush();
-    await waitFor(() => expect(screen.getByTestId("mission-report").textContent).toBe("I'll look this up"));
+    await flushUntil(() => expect(screen.getByTestId("mission-report").textContent).toBe("I'll look this up"));
     act(() => {
       // the writer's words were narration (its own tool call follows) …
       es.emit("member", frame("c2", "custom:writer", "tool_call", { id: "w1", name: "web_search", status: "started" }));
       // … and the researcher writes real text meanwhile
       es.emit("member", frame("c1", "researcher", "token", { text: "# Research notes" }));
     });
-    await flush();
-    await waitFor(() => expect(screen.getByTestId("mission-report").textContent).toBe("# Research notes"));
+    await flushUntil(() => expect(screen.getByTestId("mission-report").textContent).toBe("# Research notes"));
     expect(screen.getByTestId("mission-draft-note").textContent).toContain("Researcher");
   });
 });
