@@ -2985,6 +2985,14 @@ does not need a bump, stop and bump it.
   clears `archived_at` on an inbound message. NOTE: v1.326.1's push carried
   2d3d7e1/58a189f/d9a1d22 un-gated (reviewers commit to the shared master);
   push hotfixes from a branch cut at origin/master while a workflow runs.
+  v1.327.1 (test-only): v1.327.0's Release gate went red on
+  `mission-wave1-v1309` "the coordinator's narration ..." with NO
+  mission-report at all. Only the INTERVALS are faked there, so a waitFor
+  can never fire the next 130 ms flush; on a slow runner the report needed
+  one more tick than the single flush gave. The five flush-then-waitFor
+  reads now use `flushUntil` (flush, check, up to 10 ticks = 1.3 s of fake
+  time, under the 2 s poll). Shipped from a worktree at origin/master so
+  the running wave 3 commits stayed out.
 
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo
