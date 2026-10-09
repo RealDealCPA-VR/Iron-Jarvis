@@ -164,7 +164,7 @@ export function MissionComposer({
           value={objective}
           onChange={(e) => setObjective(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
               e.preventDefault();
               void start();
             }

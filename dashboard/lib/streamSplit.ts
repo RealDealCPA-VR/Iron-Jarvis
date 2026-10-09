@@ -23,13 +23,20 @@ export function settledSplit(content: string): number {
   let lastBlank = 0;
   let pos = 0;
   const lines = content.split("\n");
+  // v1.322.0: "real text after this blank line" is "a non-blank line at a
+  // higher index" — found once, instead of re-joining the rest of the reply
+  // at every blank line on every frame (quadratic on a long answer).
+  let lastText = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].trim() !== "") {
+      lastText = i;
+      break;
+    }
+  }
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-    if (!fence && line.trim() === "" && i > 0) {
-      const rest = lines.slice(i + 1).join("\n");
-      if (rest.trim() !== "") lastBlank = pos + line.length + 1;
-    }
+    if (!fence && line.trim() === "" && i > 0 && i < lastText) lastBlank = pos + line.length + 1;
     pos += line.length + 1;
   }
   return lastBlank;

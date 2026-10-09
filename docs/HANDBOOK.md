@@ -1837,6 +1837,42 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Safer chat and apps (v1.322.0)
+
+Ideas borrowed from two open-source chat projects (assistant-ui and tambo,
+both MIT; ideas only, no code copied), first the ones about safety:
+
+- **A picture from the web waits for you.** When a reply contains an image
+  hosted on some website, the chat shows a button that names the site
+  ("Load image from example.com?") instead of fetching it. Loading it would
+  tell that site you read the reply, and a web address can carry text out of
+  the conversation. Your own images (files on this PC, Creative output,
+  inline pictures) still show at once.
+- **Fetching a web page cannot reach inside your network.** The web-page
+  tool now looks up where a site's name really points and refuses addresses
+  on your own network or PC, including through a redirect, before anything
+  is sent.
+- **Files belong to the chat they were added to.** If you start a new chat
+  (or open another one) while a file is still uploading, it is not attached
+  to the new chat, and a message you had queued behind it is not sent there.
+  One file that fails to upload no longer stops the others; the chat names
+  the one that failed.
+- **Deleting a chat takes two presses.** The first press says "Delete for
+  good? Press again".
+- **Stop and Edit give your words back.** Stop before the first word puts
+  your question back in the box. After **Edit** on a sent message, an
+  **Undo** brings the conversation back as it was.
+- **Typing with an input method** (Japanese, Chinese, Korean…): pressing
+  Enter to confirm a character no longer sends the message.
+- **On a touch screen** the copy, rate and other reply buttons are always
+  shown (there is no hover).
+- **Apps (MCP packs) are more reliable.** A pack that sends progress notes
+  before its answer no longer reads as an empty success; a pack that pings
+  is answered; packs with more than one page of tools load them all; a long
+  call to an online pack is no longer cut off at 30 seconds (it follows the
+  tool time limit in Settings); and a document or picture a pack returns is
+  described instead of showing as "[resource]".
+
 ## What the deep review fixed (v1.286.0 →)
 
 A review of the whole app, in eight parts: chat, agents, the daemon, packs

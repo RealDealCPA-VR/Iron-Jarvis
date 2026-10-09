@@ -9,9 +9,26 @@ Safety (mirrors :mod:`iron_jarvis.tools.websearch` / ``computeruse``):
 * **SSRF guard** — only ``http``/``https`` URLs are fetched, and private /
   loopback / link-local hosts (localhost, 127.*, 10.*, 172.16-31.*, 192.168.*,
   169.254.*, ``*.local``, IPv6 equivalents) are refused BEFORE any network I/O.
-  The final post-redirect URL is re-checked so a redirect can't tunnel inward.
-  (We do not resolve DNS here, so a public hostname pointing at a private IP is
-  out of scope for this lightweight guard — same stance as the browse tool.)
+  v1.322.0 closed the two holes this guard used to admit:
+  - **DNS**: the production fetch RESOLVES the hostname (on the worker
+    thread, never the event loop) and refuses it when ANY address it
+    resolves to is not globally routable — private, loopback, link-local
+    (incl. the 169.254.169.254 cloud metadata service), CGNAT, reserved,
+    multicast, unspecified; IPv6 too, and IPv4-mapped / 6to4 / Teredo
+    addresses are judged by the IPv4 they carry. The connection is then
+    PINNED to the vetted address (the URL's host is replaced by the IP;
+    ``Host`` and TLS SNI/certificate checks keep the real name), so a DNS
+    answer that changes between the check and the connect (rebinding)
+    cannot redirect it. Exception: when a proxy is configured for the
+    scheme the proxy makes the connection, so the IP is not pinned (the
+    pre-check still ran); see ``_proxied``.
+  - **Redirects** are followed MANUALLY, hop by hop (cap 5): each Location
+    is vetted (string + DNS) BEFORE its request is sent. httpx's
+    ``follow_redirects=True`` had already SENT the request to an internal
+    address by the time the final URL was checked.
+  The final URL is still re-checked as a backstop (and for an injected
+  ``http_get``, which owns its own network and is NOT DNS-vetted here).
+  There is no allowlist / opt-in for local addresses: none existed before.
 * Page text is fetched from the open web and is therefore **UNTRUSTED data,
   never instructions**. The extracted text is run through
   :func:`detect_injection`; on a hit the tool STOPS (returns ``ok=False``)
@@ -98,17 +115,108 @@ def _refusal_reason(url: str) -> str | None:
         # Pure-decimal hosts (http://2130706433/) are decoded too.
         ip = ipaddress.ip_address(int(host)) if host.isdigit() else ipaddress.ip_address(host)
     except ValueError:
-        return None  # a public hostname (no DNS resolution here — see module doc)
-    if (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    ):
-        return f"IP {host!r} is private/loopback/link-local"
+        return None  # a hostname: vetted by DNS in the production fetch (_vet_url)
+    why = _ip_refusal(ip)
+    if why:
+        return f"IP {host!r} is {why}"
     return None
+
+
+def _ip_refusal(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> str | None:
+    """Why ``ip`` must not be connected to (``None`` = globally routable)."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        # An IPv6 address that CARRIES an IPv4 one is judged by that IPv4:
+        # ::ffff:127.0.0.1 reaches loopback on a dual-stack socket.
+        inner = ip.ipv4_mapped or ip.sixtofour or (ip.teredo[1] if ip.teredo else None)
+        if inner is not None:
+            why = _ip_refusal(inner)
+            if why:
+                return f"{why} (via {ip})"
+    if ip.is_loopback:
+        return "private/loopback/link-local (loopback)"
+    if ip.is_link_local:
+        return "private/loopback/link-local (link-local, incl. cloud metadata)"
+    if ip.is_unspecified:
+        return "private/loopback/link-local (unspecified)"
+    if ip.is_multicast:
+        return "private/loopback/link-local (multicast)"
+    if ip.is_private or ip.is_reserved or not ip.is_global:
+        return "private/loopback/link-local (not publicly routable)"
+    return None
+
+
+class FetchRefused(Exception):
+    """The production fetch refused a URL before sending to it (SSRF)."""
+
+    def __init__(self, reason: str, url: str, hop: int) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.url = url
+        #: 0 = the URL asked for; N = the Nth redirect target.
+        self.hop = hop
+
+
+def _resolve_host(host: str) -> list[str]:
+    """Every address ``host`` resolves to (blocking — call off the loop)."""
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise OSError(f"could not resolve host {host!r}: {exc}") from exc
+    # ``%scope`` suffixes (fe80::1%3) are not part of the address.
+    return list(dict.fromkeys(str(info[4][0]).split("%")[0] for info in infos))
+
+
+def _proxied(scheme: str, host: str) -> bool:
+    """Will httpx send this request through a proxy (env / Windows settings)?
+    Mirrors what httpx reads (``urllib.request.getproxies``)."""
+    import urllib.request
+
+    try:
+        proxies = urllib.request.getproxies()
+        if not (proxies.get(scheme) or proxies.get("all")):
+            return False
+        return not urllib.request.proxy_bypass(host)
+    except Exception:  # noqa: BLE001 — unknown ⇒ assume a direct connect (pin)
+        return False
+
+
+def _vet_url(url: str, resolver: Callable[[str], list[str]], hop: int) -> str:
+    """Refuse ``url`` (raise :class:`FetchRefused`) unless its host and EVERY
+    address it resolves to is public; return the address to connect to."""
+    reason = _refusal_reason(url)
+    if reason:
+        raise FetchRefused(reason, url, hop)
+    host = (urlparse(url).hostname or "").strip().rstrip(".").lower()
+    try:
+        literal = ipaddress.ip_address(int(host)) if host.isdigit() else ipaddress.ip_address(host)
+        return str(literal)
+    except ValueError:
+        pass
+    addresses = resolver(host)
+    if not addresses:
+        raise FetchRefused(f"host {host!r} did not resolve to any address", url, hop)
+    for raw in addresses:
+        try:
+            ip = ipaddress.ip_address(str(raw).split("%")[0])
+        except ValueError:
+            raise FetchRefused(f"host {host!r} resolved to an unreadable address {raw!r}", url, hop)
+        why = _ip_refusal(ip)
+        if why:
+            raise FetchRefused(f"host {host!r} resolves to {ip}, which is {why}", url, hop)
+    return str(ipaddress.ip_address(str(addresses[0]).split("%")[0]))
+
+
+class _Page:
+    """What the production fetch hands back: the LOGICAL final URL (the
+    hostname the user and the redirects named — never the pinned IP)."""
+
+    def __init__(self, url: str, status_code: int, headers: Any, text: str) -> None:
+        self.url = url
+        self.status_code = status_code
+        self.headers = headers
+        self.text = text
 
 
 def _content_type(resp: Any) -> str:
@@ -225,27 +333,79 @@ class WebFetchTool(Tool):
         "required": ["url"],
     }
 
-    def __init__(self, http_get: HttpGet | None = None) -> None:
+    def __init__(
+        self,
+        http_get: HttpGet | None = None,
+        *,
+        resolver: Callable[[str], list[str]] | None = None,
+        transport: Any | None = None,
+    ) -> None:
         # Injected fetch for offline tests; production default uses httpx lazily.
         self._http_get: HttpGet = http_get or self._default_http_get
+        #: ``host -> [ip, ...]`` for the production fetch's DNS vetting.
+        self._resolver: Callable[[str], list[str]] = resolver or _resolve_host
+        #: An httpx transport for the production fetch (tests: MockTransport).
+        self._transport = transport
 
     def _default_http_get(self, url: str) -> Any:
         """Production fetch — httpx imported lazily so import stays dependency-light.
 
-        Follows redirects (capped at 5 — httpx raises ``TooManyRedirects``
-        beyond that, surfaced as an honest error), 20s total / 5s connect
-        timeout, browser-like UA (same as web_search).
+        Runs on a worker thread (``execute`` offloads it), so the DNS lookups
+        here never block the event loop. Each hop (the URL, then every
+        redirect target, at most ``_MAX_REDIRECTS``) is vetted by
+        :func:`_vet_url` BEFORE its request is sent, and the request goes to
+        the vetted IP (see :meth:`_send_pinned`). 20 s per request / 5 s
+        connect, browser-like UA (same as web_search). Cookies are not carried
+        across hops (each hop is its own client — see ``_send_pinned``).
+        """
+        import httpx
+        from urllib.parse import urljoin
+
+        current = url
+        for hop in range(_MAX_REDIRECTS + 1):
+            ip = _vet_url(current, self._resolver, hop)
+            resp = self._send_pinned(current, ip)
+            location = resp.headers.get("location") if resp.status_code in (
+                301, 302, 303, 307, 308
+            ) else None
+            if not location:
+                return _Page(current, resp.status_code, resp.headers, resp.text)
+            current = urljoin(current, location)
+        raise httpx.TooManyRedirects(f"more than {_MAX_REDIRECTS} redirects (last: {current})")
+
+    def _send_pinned(self, url: str, ip: str) -> Any:
+        """GET ``url`` with the TCP connection made to ``ip`` — the address
+        :func:`_vet_url` just vetted — so DNS cannot be asked a second time
+        (and answer differently) between the check and the connect.
+
+        The URL's host is swapped for the IP; the ``Host`` header keeps the
+        real ``host[:port]`` and, for https, httpcore's ``sni_hostname``
+        extension makes the TLS handshake send the real name AND verify the
+        certificate against it (``server_hostname``). A fresh client per hop:
+        a pooled TLS connection to the same IP opened for ANOTHER name must
+        not be reused for this one. Not pinned when a proxy will carry the
+        request (the proxy, not this process, connects; httpx's proxy tunnel
+        verifies TLS against the URL host, which would then be the IP).
         """
         import httpx
 
-        timeout = httpx.Timeout(20.0, connect=5.0)
-        with httpx.Client(
-            follow_redirects=True,
-            max_redirects=_MAX_REDIRECTS,
-            headers={"User-Agent": _UA},
-            timeout=timeout,
-        ) as client:
-            return client.get(url)
+        target = httpx.URL(url)
+        headers = {"User-Agent": _UA}
+        extensions: dict[str, Any] = {}
+        literal = target.host.strip("[]")
+        if ip and ip != literal and not _proxied(target.scheme, target.host):
+            headers["Host"] = target.netloc.decode("ascii")
+            if target.scheme == "https":
+                extensions["sni_hostname"] = target.raw_host.decode("ascii")
+            target = target.copy_with(host=ip)
+        client_kw: dict[str, Any] = {
+            "follow_redirects": False,
+            "timeout": httpx.Timeout(20.0, connect=5.0),
+        }
+        if self._transport is not None:
+            client_kw["transport"] = self._transport
+        with httpx.Client(**client_kw) as client:
+            return client.get(target, headers=headers, extensions=extensions)
 
     # -- execution ----------------------------------------------------------
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -276,6 +436,10 @@ class WebFetchTool(Tool):
             import asyncio
 
             final_url, ctype, status, html = await asyncio.to_thread(_fetch)
+        except FetchRefused as exc:
+            # Refused BEFORE the request to ``exc.url`` was sent (SSRF).
+            where = "refused after redirect" if exc.hop else "refused"
+            return ToolResult(ok=False, error=f"{where}: {exc.reason}", data={"url": exc.url})
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 

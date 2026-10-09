@@ -2905,6 +2905,51 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **A web image waits for a press; web_fetch is vetted by DNS and pinned;
+  an MCP answer is the message with OUR id** (v1.322.0, wave A of the
+  assistant-ui/tambo borrow list — ideas only, MIT). DASHBOARD:
+  `components/Markdown.isTrustedMediaUrl` — only a local path, a raster
+  `data:image/*` (never svg) or the DAEMON's own origin loads at once;
+  anything else renders `RemoteMediaGate` ("Load image from <host>?") — a
+  model-written URL is a zero-click leak otherwise. `mediaUrlTransform`
+  keeps a `C:/` media src (react-markdown's default transform blanks it; a
+  `C:` LINK is still filtered). Chat page: `leaveConversation()` is the ONE
+  leave step (New chat AND openThread): bumps `convGenRef` (separate from
+  `chatGenRef`, which Stop also bumps), drops `queuedSendRef`, stops
+  dictation, clears the Edit Undo; `addFiles` captures the generation and
+  checks it after the uploads AND after `placeInWorkfolder` (no folder is
+  made for a conversation that was left); each file's upload settles on its
+  own (`failed[]`, one sentence). Delete is two presses (`pressDelete`,
+  `deleteArmedId`); Stop with no partial calls `restoreComposerDraft`; Edit
+  records `editUndo {before, text, files}` and its Undo restores + saves;
+  the composer ignores keyCode 229 (IME); reply actions carry
+  `[@media(hover:none)]:opacity-100`; `settledSplit` finds the last text
+  line ONCE (it re-joined the tail per blank line). Keep the long delete
+  comment OUTSIDE the button: `test_chat_thread_menu` reads 600 chars
+  before "Delete chat". BACKEND: `mcp/client._route_message` — a message
+  with `method` is a server request (answered: `ping` → `{}`, else -32601,
+  on the same pipe / POSTed back with the session id) CHECKED BEFORE the id
+  (server ids collide with ours); only our id answers; `HttpTransport`
+  reads SSE AS IT STREAMS and an event stream that ends unanswered is an
+  `MCPError` naming the pack (never the URL — keys ride query strings);
+  `list_tools` follows `nextCursor` (cap `MAX_TOOL_LIST_PAGES`, logged); the
+  HTTP read timeout is the registry deadline left + 5 s
+  (`_call_read_timeout` reads `registry._DEADLINE_SCOPE`; 0 = unbounded; no
+  scope = the 30 s default), connect is 10 s; `tools._block_to_text` names
+  resources/images/audio and `structuredContent` is appended when no block
+  had text. `tools/webfetch`: `_vet_url` resolves the host off the loop and
+  refuses ANY non-global address (`_ip_refusal`, incl. mapped/6to4/Teredo
+  IPv6, CGNAT, metadata); redirects are followed BY HAND, each hop vetted
+  before it is sent; `_send_pinned` connects to the vetted IP with `Host` +
+  `sni_hostname` keeping the real name (not pinned through a proxy). An
+  injected `http_get` (tests) is not DNS-vetted. Known limits: an HTTP pack
+  call cannot be aborted mid-flight (its thread unwinds at deadline + 5 s);
+  cookies do not cross redirect hops. Pins:
+  `tests/test_mcp_protocol_fixes_v1322.py`, `tests/test_webfetch_ssrf_v1322.py`,
+  `dashboard/__tests__/borrow-wave-a-v1322.test.tsx` (15 dashboard + 21
+  backend mutations; M6b — the IPv6 unwrap — survives because 3.12's
+  `ipaddress` already calls those addresses non-global).
+
 - **The calm UI: ONE settings schema, ONE writer, chat changes with Undo, a
   four-item sidebar** (v1.321.0, the calm UI redesign — docs/redesign/BRIEF.md,
   AUDIT.md, APPROVED.md, REPORT.md). SETTINGS: `settings/schema.py` declares

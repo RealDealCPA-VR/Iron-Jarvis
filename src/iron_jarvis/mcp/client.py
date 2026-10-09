@@ -54,6 +54,27 @@ DEFAULT_REQUEST_TIMEOUT_S = 120.0
 #: Grace given to a killed server before its pipes are closed under it.
 _KILL_GRACE_S = 2.0
 
+#: How many ``tools/list`` pages :meth:`MCPClient.list_tools` follows before it
+#: stops (v1.322.0). A server whose ``nextCursor`` never runs out would
+#: otherwise page for ever; past the cap the tools already listed are kept and
+#: the stop is LOGGED with the count, never passed off as the whole catalogue.
+MAX_TOOL_LIST_PAGES = 50
+
+#: Seconds an :class:`HttpTransport` may spend ESTABLISHING a connection
+#: (TCP + TLS) — short on purpose: an unreachable host says so quickly. The
+#: READ timeout is separate and follows the caller's deadline (v1.322.0).
+HTTP_CONNECT_TIMEOUT_S = 10.0
+
+#: Slack added to the registry deadline when it becomes an HTTP read timeout
+#: (v1.322.0): the registry's ``asyncio.timeout`` must fire FIRST, so the user
+#: reads "did not finish within N s" (the deadline they set) rather than an
+#: httpx timeout that raced it; the worker thread unwinds this long after.
+_DEADLINE_GRACE_S = 5.0
+
+#: JSON-RPC "method not found" — the answer to a server→client request this
+#: client does not serve (v1.322.0).
+_METHOD_NOT_FOUND = -32601
+
 
 # --------------------------------------------------------------------------- #
 # JSON-RPC helpers (shared by the real transports).
@@ -78,6 +99,144 @@ def _extract_result(response: dict[str, Any]) -> dict[str, Any]:
         raise MCPError(str(err))
     result = response.get("result")
     return result if isinstance(result, dict) else {}
+
+
+# --------------------------------------------------------------------------- #
+# Message routing (v1.322.0) — shared by the stdio and HTTP transports.
+#
+# Between sending a request and reading its answer a server may send OTHER
+# messages: notifications (``notifications/progress``, ``notifications/message``
+# logging) and even its own REQUESTS to the client (``ping``, ``roots/list``,
+# ``sampling/createMessage``). Only the message that carries OUR id and no
+# ``method`` is the answer. A server request is checked FIRST: servers number
+# their requests in their own id space, so one can collide with ours.
+# --------------------------------------------------------------------------- #
+_RESPONSE, _SERVER_REQUEST, _SKIP = "response", "request", "skip"
+
+
+def _route_message(msg: Any, expected_id: Any) -> str:
+    """Classify one incoming JSON-RPC message against the id we are waiting on."""
+    if not isinstance(msg, dict):
+        return _SKIP
+    if "method" in msg:
+        # A request carries an id; a notification has none and takes no reply.
+        return _SERVER_REQUEST if msg.get("id") is not None else _SKIP
+    if "id" not in msg or msg["id"] is None:
+        return _SKIP
+    rid = msg["id"]
+    if rid == expected_id or (
+        isinstance(rid, str) and not isinstance(expected_id, str) and rid == str(expected_id)
+    ):
+        return _RESPONSE
+    return _SKIP  # an answer to some other id (a stale or foreign response)
+
+
+def _server_request_reply(msg: dict[str, Any]) -> dict[str, Any]:
+    """The reply this client owes a server→client request.
+
+    ``ping`` is answered with the empty result the spec prescribes. Anything
+    else is refused with -32601 so the server is never left WAITING on an
+    answer that will not come (a server that awaits its request before it
+    finishes ours would otherwise hang the call until the deadline).
+    """
+    method = str(msg.get("method", ""))
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+    log.info("mcp server sent a %r request this client does not serve; refused it", method)
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {
+            "code": _METHOD_NOT_FOUND,
+            "message": f"Method not found: {method} (this client does not serve it)",
+        },
+    }
+
+
+def _decode_sse_event(data: list[str]) -> list[Any]:
+    """The JSON-RPC message(s) carried by one SSE event's ``data:`` lines.
+
+    Per the SSE spec the lines of ONE event join with ``\\n`` into a single
+    payload. A server that instead wrote one complete message per ``data:``
+    line inside one event is tolerated by decoding the lines one by one. A
+    JSON-RPC batch (a list) yields its members.
+    """
+    if not data:
+        return []
+    joined = "\n".join(data).strip()
+    if not joined or joined == "[DONE]":
+        return []
+    decoded: list[Any] = []
+    try:
+        decoded.append(json.loads(joined))
+    except json.JSONDecodeError:
+        for piece in data:
+            piece = piece.strip()
+            if not piece or piece == "[DONE]":
+                continue
+            try:
+                decoded.append(json.loads(piece))
+            except json.JSONDecodeError:
+                continue
+    out: list[Any] = []
+    for item in decoded:
+        if isinstance(item, list):
+            out.extend(item)
+        else:
+            out.append(item)
+    return out
+
+
+def _sse_messages(lines: Any) -> Any:
+    """Yield every JSON-RPC message in a ``text/event-stream`` body, in order,
+    as each event COMPLETES — so a streaming reader can act on a server
+    request before the stream ends."""
+    data: list[str] = []
+    for raw in lines:
+        line = (raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)).strip()
+        if not line:  # a blank line ends the event
+            yield from _decode_sse_event(data)
+            data = []
+            continue
+        if line.startswith(":"):
+            continue  # an SSE comment / keep-alive
+        if line.startswith("data:"):
+            chunk = line[len("data:"):]
+            data.append(chunk[1:] if chunk.startswith(" ") else chunk)
+        # event:/id:/retry: fields carry nothing this client needs.
+    yield from _decode_sse_event(data)
+
+
+def _call_read_timeout() -> "float | None | EllipsisType":
+    """The read timeout the CURRENT call's registry deadline implies (v1.322.0).
+
+    ``ToolRegistry.invoke`` publishes its ``asyncio.timeout`` scope in
+    ``tools.registry._DEADLINE_SCOPE`` for exactly the duration of the tool's
+    ``execute``. Returns:
+
+    * ``...``  — no registry scope (a boot ``tools/list``, the LTM brain, a
+      direct caller): the transport keeps its own default;
+    * ``None`` — a scope with no deadline (the user set
+      ``tool_call_timeout_s`` to 0): unbounded, exactly as the stdio path
+      waits with ``request_timeout=None``;
+    * seconds — what is LEFT of the deadline plus :data:`_DEADLINE_GRACE_S`,
+      so the registry's own deadline fires first and reports it honestly.
+    """
+    try:
+        from ..tools.registry import _DEADLINE_SCOPE
+    except Exception:  # noqa: BLE001 — a client outside the app (scripts, tests)
+        return ...
+    scope = _DEADLINE_SCOPE.get()
+    if scope is None:
+        return ...
+    when = scope.when()
+    if when is None:
+        return None
+    try:
+        now = asyncio.get_running_loop().time()
+    except RuntimeError:  # pragma: no cover — always called from a coroutine
+        return ...
+    return max(0.0, float(when) - now) + _DEADLINE_GRACE_S
 
 
 class MCPError(RuntimeError):
@@ -143,16 +302,54 @@ class MCPClient:
                     pass
                 raise
         else:
-            result = await asyncio.to_thread(self.transport.request, method, params)
+            kw: dict[str, Any] = {}
+            # A transport that takes a per-call read timeout (HttpTransport)
+            # is handed the one the registry deadline implies (v1.322.0).
+            if getattr(self.transport, "accepts_call_timeout", False):
+                read = _call_read_timeout()
+                if read is not ...:
+                    kw["timeout"] = read
+            result = await asyncio.to_thread(self.transport.request, method, params, **kw)
             if inspect.isawaitable(result):
                 result = await result
         return result if isinstance(result, dict) else {}
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        """Return the server's tool specs (raw MCP dicts: name/description/inputSchema)."""
-        result = await self._request("tools/list", {})
-        tools = result.get("tools", [])
-        return list(tools) if isinstance(tools, list) else []
+        """Return the server's tool specs (raw MCP dicts: name/description/inputSchema).
+
+        Follows ``nextCursor`` (v1.322.0): ``tools/list`` is PAGINATED in the
+        spec, and reading only the first page silently hid every tool past it.
+        The first request carries no cursor (``{}``), each later one sends the
+        previous page's ``nextCursor``; paging stops when the cursor is absent,
+        repeats, or :data:`MAX_TOOL_LIST_PAGES` is reached (logged — a capped
+        list is never passed off as complete in the log).
+        """
+        tools: list[dict[str, Any]] = []
+        params: dict[str, Any] = {}
+        seen: set[str] = set()
+        for _page in range(MAX_TOOL_LIST_PAGES):
+            result = await self._request("tools/list", params)
+            batch = result.get("tools", [])
+            if isinstance(batch, list):
+                tools.extend(batch)
+            cursor = result.get("nextCursor")
+            if cursor is None or cursor == "":
+                return tools
+            key = str(cursor)
+            if key in seen:
+                log.warning(
+                    "pack %r: tools/list repeated cursor %r; stopped paging with %d tools",
+                    self.name, key, len(tools),
+                )
+                return tools
+            seen.add(key)
+            params = {"cursor": cursor}
+        log.warning(
+            "pack %r: tools/list still had more pages after %d pages; stopped there "
+            "with %d tools — any tools on later pages are NOT loaded",
+            self.name, MAX_TOOL_LIST_PAGES, len(tools),
+        )
+        return tools
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any] | None = None
@@ -537,9 +734,16 @@ class StdioTransport:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue  # ignore non-JSON log noise on stdout
-            # Skip notifications / responses to other ids.
-            if isinstance(msg, dict) and msg.get("id") == expected_id:
+            route = _route_message(msg, expected_id)
+            if route == _RESPONSE:
                 return msg
+            if route == _SERVER_REQUEST:
+                # v1.322.0: a server→client request (``ping``, ``roots/list``
+                # …) was DROPPED here, and a server that waits for its answer
+                # before finishing ours hung the call. Answer on the same
+                # pipe and keep reading for our own response.
+                self._write(_server_request_reply(msg))
+            # Notifications and answers to other ids are skipped.
 
     def _rpc(self, method: str, params: dict[str, Any] | None) -> dict[str, Any]:
         self._id += 1
@@ -584,22 +788,63 @@ class StdioTransport:
 class HttpTransport:
     """POST JSON-RPC to an MCP HTTP endpoint. The ``httpx`` client is created
     lazily on first use so no socket/connection pool exists until a real call.
+
+    v1.322.0:
+
+    * **The answer is the message with OUR id.** A Streamable-HTTP server may
+      stream ``notifications/progress``, ``notifications/message`` (logging)
+      or its own requests BEFORE the response; taking the first ``data:``
+      payload returned a notification, which unwrapped to ``{}`` and read as a
+      successful call with empty output. A stream that ends without our id is
+      an :class:`MCPError` naming the server.
+    * **The body is READ AS IT STREAMS** (``client.stream``) so a server
+      request inside the stream is answered while the server still waits:
+      ``ping`` gets an empty result, anything else -32601, each POSTed back to
+      the endpoint (with the session id) — the Streamable-HTTP way a client
+      answers. A client object without ``stream`` (a minimal test double)
+      falls back to reading the whole body, where server requests are still
+      answered, but only after the stream has ended.
+    * **The read timeout follows the caller's deadline.** ``timeout`` is only
+      the DEFAULT for calls that carry no registry deadline (the LTM brain, a
+      boot ``tools/list`` — itself bounded by the connect probe). A registry
+      tool call passes ``timeout=`` per call (see :func:`_call_read_timeout`):
+      what is left of ``config.tool_call_timeout_s`` plus a grace, or ``None``
+      when the user disabled the deadline. It used to be a flat 30 s, so a
+      remote pack call longer than that died with ``ReadTimeout`` under a
+      600 s deadline. CONNECTING stays bounded by ``connect_timeout``.
+      There is no ``abort``: a cancelled call's worker thread is NOT
+      interrupted, it unwinds when its read timeout (deadline + grace) lapses.
     """
+
+    #: ``MCPClient`` passes the per-call read timeout to transports with this.
+    accepts_call_timeout = True
 
     def __init__(
         self,
         url: str,
         *,
         headers: dict[str, str] | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
+        connect_timeout: float = HTTP_CONNECT_TIMEOUT_S,
         client_factory: Callable[[], Any] | None = None,
+        name: str | None = None,
     ) -> None:
         self.url = url
         self.headers = dict(headers or {})
+        #: Default READ timeout (seconds; ``None`` = unbounded) for a call that
+        #: carries no deadline of its own.
         self.timeout = timeout
+        self.connect_timeout = connect_timeout
+        #: The pack's name, for error text. The URL is NOT used in errors: a
+        #: pack URL can carry a key in its query string.
+        self.name = name
         self._client_factory = client_factory
         self._client: Any | None = None
         self._id = 0
+        #: Serialises the handshake and id allocation: ``MCPClient`` runs
+        #: calls on worker threads, and two first calls must not both
+        #: handshake or share an id.
+        self._lock = threading.Lock()
         # Streamable-HTTP session state: servers (FastMCP et al.) REQUIRE an
         # `initialize` handshake and echo an `Mcp-Session-Id` header that every
         # later request must carry — without it they 400 on tools/list. (The
@@ -608,6 +853,26 @@ class HttpTransport:
         self._session_id: "str | None" = None
         self._initialized = False
 
+    @property
+    def label(self) -> str:
+        """How errors name this server: the pack name, else the URL's host."""
+        if self.name:
+            return f"pack {self.name!r}"
+        try:
+            from urllib.parse import urlparse
+
+            host = urlparse(self.url).hostname or "?"
+        except Exception:  # noqa: BLE001 — a label never raises
+            host = "?"
+        return f"the MCP server at {host}"
+
+    def _timeout(self, read: float | None) -> Any:
+        """An ``httpx.Timeout``: ``read`` for reading (and writing / pool),
+        ``connect_timeout`` for establishing the connection."""
+        import httpx  # lazy import — keeps module import cheap/offline
+
+        return httpx.Timeout(read, connect=self.connect_timeout)
+
     def _ensure_client(self) -> Any:
         if self._client is None:
             if self._client_factory is not None:
@@ -615,7 +880,7 @@ class HttpTransport:
             else:
                 import httpx  # lazy import — keeps module import cheap/offline
 
-                self._client = httpx.Client(timeout=self.timeout)
+                self._client = httpx.Client(timeout=self._timeout(self.timeout))
         return self._client
 
     def close(self) -> None:
@@ -626,25 +891,67 @@ class HttpTransport:
             self._client = None
 
     @staticmethod
-    def _parse_body(response: Any) -> dict[str, Any]:
-        ctype = ""
+    def _is_sse(response: Any) -> bool:
         try:
-            ctype = response.headers.get("content-type", "")
+            ctype = response.headers.get("content-type", "") or ""
         except Exception:  # pragma: no cover - defensive
             ctype = ""
-        if "text/event-stream" in ctype:
-            # Server-Sent Events: the JSON-RPC payload rides on ``data:`` lines.
-            for raw in response.text.splitlines():
-                line = raw.strip()
-                if line.startswith("data:"):
-                    chunk = line[len("data:"):].strip()
-                    if chunk and chunk != "[DONE]":
-                        try:
-                            return json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-            raise MCPError("no JSON-RPC payload in SSE response")
-        return response.json()
+        return "text/event-stream" in ctype
+
+    @staticmethod
+    def _pick(
+        messages: Any,
+        request_id: Any,
+        on_request: Callable[[dict[str, Any]], None] | None,
+    ) -> dict[str, Any] | None:
+        """The first message answering ``request_id`` (``None`` = the first
+        RESPONSE of any id — the pre-v1.322.0 single-message callers);
+        server requests go to ``on_request``; notifications are skipped."""
+        for msg in messages:
+            if request_id is None:
+                if isinstance(msg, dict) and "method" not in msg:
+                    return msg
+                if isinstance(msg, dict) and msg.get("id") is not None and on_request:
+                    on_request(msg)
+                continue
+            route = _route_message(msg, request_id)
+            if route == _RESPONSE:
+                return msg
+            if route == _SERVER_REQUEST and on_request is not None:
+                on_request(msg)
+        return None
+
+    @staticmethod
+    def _parse_body(
+        response: Any,
+        request_id: Any = None,
+        on_request: Callable[[dict[str, Any]], None] | None = None,
+        label: str = "the MCP server",
+    ) -> dict[str, Any]:
+        """A WHOLE (already read) response body → the JSON-RPC answer.
+
+        SSE: the message whose ``id`` is ``request_id`` — notifications and
+        other ids are skipped, server requests go to ``on_request``; none =
+        :class:`MCPError`. ``application/json``: the object as sent (a batch
+        list is searched for ``request_id``)."""
+        if HttpTransport._is_sse(response):
+            msg = HttpTransport._pick(
+                _sse_messages(response.text.splitlines()), request_id, on_request
+            )
+            if msg is None:
+                raise MCPError(
+                    f"{label} sent no JSON-RPC answer"
+                    + (f" to request {request_id}" if request_id is not None else "")
+                    + " in its event stream"
+                )
+            return msg
+        body = response.json()
+        if isinstance(body, list):
+            msg = HttpTransport._pick(body, request_id, on_request)
+            if msg is None:
+                raise MCPError(f"{label} sent a batch without the answer to request {request_id}")
+            return msg
+        return body
 
     def _base_headers(self) -> dict[str, str]:
         headers = {
@@ -656,7 +963,95 @@ class HttpTransport:
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
-    def _handshake(self, client: Any) -> None:
+    def _capture_session(self, response: Any) -> None:
+        sid = None
+        try:
+            sid = response.headers.get("mcp-session-id")
+        except Exception:  # pragma: no cover — defensive
+            sid = None
+        if sid:
+            self._session_id = sid
+
+    def _answer(self, client: Any, msg: dict[str, Any]) -> None:
+        """POST our reply to a server→client request back to the endpoint.
+        Best-effort: a failed reply is logged, never fails OUR call (the
+        server may still answer it)."""
+        reply = _server_request_reply(msg)
+        try:
+            response = client.post(
+                self.url,
+                json=reply,
+                headers=self._base_headers(),
+                timeout=self._timeout(self.connect_timeout),
+            )
+            status = getattr(response, "status_code", 200)
+            if isinstance(status, int) and status >= 400:
+                log.warning("%s refused our reply to its %r request (HTTP %s)",
+                            self.label, msg.get("method"), status)
+        except Exception as exc:  # noqa: BLE001 — best-effort, see above
+            log.warning("could not answer %s's %r request: %s",
+                        self.label, msg.get("method"), exc)
+
+    def _exchange(
+        self,
+        client: Any,
+        payload: dict[str, Any],
+        read: float | None,
+        *,
+        capture_session: bool = False,
+    ) -> dict[str, Any]:
+        """POST one request; return the JSON-RPC message that answers it."""
+        rid = payload["id"]
+        headers = self._base_headers()
+        timeout = self._timeout(read)
+
+        def on_request(msg: dict[str, Any]) -> None:
+            self._answer(client, msg)
+
+        stream = getattr(client, "stream", None)
+        if callable(stream):
+            with stream("POST", self.url, json=payload, headers=headers, timeout=timeout) as response:
+                response.raise_for_status()
+                if capture_session:
+                    self._capture_session(response)
+                if self._is_sse(response):
+                    msg = self._pick(_sse_messages(response.iter_lines()), rid, on_request)
+                    if msg is None:
+                        raise MCPError(
+                            f"{self.label} ended its event stream without answering "
+                            f"request {rid} ({payload.get('method')})"
+                        )
+                    return msg
+                response.read()
+                return self._parse_body(response, rid, on_request, self.label)
+        response = client.post(self.url, json=payload, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        if capture_session:
+            self._capture_session(response)
+        return self._parse_body(response, rid, on_request, self.label)
+
+    def _timed(self, fn: Callable[[], Any], read: float | None) -> Any:
+        """Run ``fn``; an httpx timeout becomes an :class:`MCPError` that NAMES
+        the server and the bound that was hit."""
+        try:
+            return fn()
+        except Exception as exc:
+            try:
+                import httpx
+            except ImportError:  # pragma: no cover — httpx is a dependency
+                raise exc from None
+            if isinstance(exc, httpx.ConnectTimeout):
+                raise MCPError(
+                    f"could not connect to {self.label} within {self.connect_timeout:g} s"
+                ) from exc
+            if isinstance(exc, httpx.TimeoutException):
+                bound = "" if read is None else f" within {float(read):g} s"
+                raise MCPError(
+                    f"{self.label} did not respond{bound} ({type(exc).__name__})"
+                ) from exc
+            raise
+
+    def _handshake(self, client: Any, read: float | None) -> None:
         """The streamable-HTTP session dance: initialize → capture the session
         id → notifications/initialized. Best-effort on the notification (some
         servers 202/204/405 it); the session id is the part that matters."""
@@ -670,32 +1065,33 @@ class HttpTransport:
                 "clientInfo": {"name": "iron-jarvis", "version": "1.0"},
             },
         )
-        response = client.post(self.url, json=payload, headers=self._base_headers())
-        response.raise_for_status()
-        sid = None
-        try:
-            sid = response.headers.get("mcp-session-id")
-        except Exception:  # pragma: no cover — defensive
-            sid = None
-        if sid:
-            self._session_id = sid
-        _extract_result(self._parse_body(response))  # surface protocol errors
+        msg = self._exchange(client, payload, read, capture_session=True)
+        _extract_result(msg)  # surface protocol errors
         try:
             client.post(
                 self.url,
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                 headers=self._base_headers(),
+                timeout=self._timeout(self.connect_timeout),
             )
         except Exception:  # noqa: BLE001 — notification delivery is best-effort
             pass
         self._initialized = True
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None | EllipsisType = ...,
+    ) -> dict[str, Any]:
+        """One JSON-RPC call. ``timeout`` is this call's READ timeout
+        (``...`` = the transport default, ``None`` = unbounded)."""
+        read = self.timeout if timeout is ... else timeout
         client = self._ensure_client()
-        if not self._initialized and method != "initialize":
-            self._handshake(client)
-        self._id += 1
-        payload = _envelope(self._id, method, params)
-        response = client.post(self.url, json=payload, headers=self._base_headers())
-        response.raise_for_status()
-        return _extract_result(self._parse_body(response))
+        with self._lock:
+            if not self._initialized and method != "initialize":
+                self._timed(lambda: self._handshake(client, read), read)
+            self._id += 1
+            payload = _envelope(self._id, method, params)
+        return _extract_result(self._timed(lambda: self._exchange(client, payload, read), read))

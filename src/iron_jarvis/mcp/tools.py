@@ -18,7 +18,13 @@ from typing import Any, Callable
 
 from ..core.logging import get_logger
 from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
-from .client import FakeTransport, HttpTransport, MCPClient, StdioTransport
+from .client import (
+    HTTP_CONNECT_TIMEOUT_S,
+    FakeTransport,
+    HttpTransport,
+    MCPClient,
+    StdioTransport,
+)
 
 log = get_logger("mcp")
 
@@ -26,25 +32,85 @@ log = get_logger("mcp")
 SecretResolver = Callable[[str], "str | None"]
 
 
-def _content_to_text(content: Any) -> str:
-    """Flatten MCP ``content`` blocks into plain text for ``ToolResult.output``."""
+def _b64_size(blob: Any) -> int | None:
+    """Decoded byte count of a base64 string, without decoding it."""
+    if not isinstance(blob, str):
+        return None
+    s = "".join(blob.split())
+    return max(0, len(s) * 3 // 4 - s.count("="))
+
+
+def _block_to_text(block: dict[str, Any]) -> tuple[str, bool]:
+    """One MCP content block → (text, carries_text). ``carries_text`` is True
+    when the block delivered actual TEXT (not just a description of a binary)."""
+    btype = block.get("type")
+    if btype == "text" and "text" in block:
+        return str(block["text"]), bool(str(block["text"]).strip())
+    if btype == "resource" and isinstance(block.get("resource"), dict):
+        # An EMBEDDED resource: its text lives under ``resource`` — the flat
+        # ``"text" in block`` test never saw it and printed "[resource]".
+        res = block["resource"]
+        uri = str(res.get("uri") or "(no uri)")
+        mime = res.get("mimeType")
+        if "text" in res:
+            head = f"[resource: {uri}" + (f" ({mime})" if mime else "") + "]"
+            text = str(res["text"])
+            return f"{head}\n{text}", bool(text.strip())
+        if "blob" in res:
+            size = _b64_size(res.get("blob"))
+            what = ", ".join(
+                p for p in (str(mime) if mime else "unknown type",
+                            f"{size} bytes" if size is not None else "") if p
+            )
+            return f"[resource: {uri} ({what}, binary content not shown)]", False
+        return f"[resource: {uri}]", False
+    if btype == "resource_link":
+        uri = str(block.get("uri") or "(no uri)")
+        name = block.get("name")
+        return f"[resource link: {name + ' ' if name else ''}{uri}]", False
+    if btype in ("image", "audio"):
+        # Vision/audio pass-through is a later wave: say WHAT arrived.
+        return f"[{btype}: {block.get('mimeType') or 'unknown type'}]", False
+    if "text" in block:
+        return str(block["text"]), bool(str(block["text"]).strip())
+    return f"[{btype or 'content'}]", False  # other — describe, don't drop
+
+
+def _content_to_text(content: Any, structured: Any = None) -> str:
+    """Flatten MCP ``content`` blocks into plain text for ``ToolResult.output``.
+
+    v1.322.0: an embedded ``resource`` block's TEXT passes through under a
+    ``[resource: <uri>]`` header line (a blob is described by uri, mimeType
+    and size); images and audio read ``[image: <mimeType>]``. When no block
+    carried text and the result has ``structuredContent`` (passed as
+    ``structured``), its JSON is appended — a tool answering only in
+    structured form no longer reads as empty. The caller's untrusted-content
+    fence applies to all of it (``MCPRemoteTool.returns_untrusted_content``).
+    """
     if content is None:
-        return ""
+        content = []
     if isinstance(content, str):
-        return content
+        content = [{"type": "text", "text": content}]
     if isinstance(content, dict):  # a single block
         content = [content]
     parts: list[str] = []
-    for block in content:
+    has_text = False
+    for block in content if isinstance(content, (list, tuple)) else [content]:
         if isinstance(block, dict):
-            if block.get("type") == "text" and "text" in block:
-                parts.append(str(block["text"]))
-            elif "text" in block:
-                parts.append(str(block["text"]))
-            else:  # image / resource / other — describe, don't drop
-                parts.append(f"[{block.get('type', 'content')}]")
+            text, carries = _block_to_text(block)
+            parts.append(text)
+            has_text = has_text or carries
         else:
             parts.append(str(block))
+            has_text = has_text or bool(str(block).strip())
+    if structured is not None and not has_text:
+        import json
+
+        try:
+            rendered = json.dumps(structured, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            rendered = str(structured)
+        parts.append(rendered)
     return "\n".join(parts)
 
 
@@ -205,7 +271,7 @@ class MCPRemoteTool(Tool):
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
         result = result if isinstance(result, dict) else {}
-        text = _content_to_text(result.get("content"))
+        text = _content_to_text(result.get("content"), result.get("structuredContent"))
         if result.get("isError"):
             return ToolResult(
                 ok=False, output=text, error=text or "remote MCP tool error", data=result
@@ -263,7 +329,19 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
                 header = auth.get("header", "Authorization")
                 fmt = auth.get("format", "Bearer {value}")
                 headers[header] = fmt.format(value=value)
-        return HttpTransport(cfg["url"], headers=headers)
+        # The READ timeout is per call (v1.322.0): `MCPClient` hands the
+        # transport what is left of the registry deadline (`config.
+        # tool_call_timeout_s`) — the same single bound a stdio pack obeys —
+        # so a long remote call is no longer killed by httpx at a flat 30 s.
+        # `timeout` here is only the default for deadline-less calls (the
+        # boot `tools/list`, itself bounded by `_connect_with_timeout`).
+        # Connecting stays short; `name` lets every error NAME the pack.
+        return HttpTransport(
+            cfg["url"],
+            headers=headers,
+            connect_timeout=HTTP_CONNECT_TIMEOUT_S,
+            name=str(cfg.get("name") or "") or None,
+        )
 
     # Default: stdio subprocess.
     #
