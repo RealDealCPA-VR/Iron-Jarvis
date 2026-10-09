@@ -2960,6 +2960,18 @@ does not need a bump, stop and bump it.
   asserted the picker on the text. `answered()` now waits for the text AND the
   box to stop steering. Delaying the finally 300 ms reproduced CI's exact
   error (6 tests red on the old waits, all green on the new).
+  v1.325.2 (test-only): v1.325.1's gates went red on THREE older tests, none
+  wave D's, on runners taking 31-41 min: `test_reliability_v1226_loop` counted
+  heartbeats in a FIXED 0.4 s window (0 and 2 ticks on an offloaded call) — an
+  offloaded stub now waits until the heartbeat REACHES 3 (15 s cap), the
+  on-loop case keeps the fixed sleep and still reads 0 (putting `ground` back
+  on the loop: both lane tests red); `ux-wave2-work-surfaces-build-v1314`
+  read the floating button with `getByTitle` right after a proxy wait — now
+  `findByTitle` (a 300 ms GET delay reproduced CI's exact error); and
+  `test_wave3_packs_starting_v1311` asserted an exact starting-pack list
+  against the PROCESS-wide `_LOAD_STATUS`, which another test on the worker
+  left holding "brave" — the fixture now clears and restores it (a planted
+  "brave" reproduces the failure on the old fixture).
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of

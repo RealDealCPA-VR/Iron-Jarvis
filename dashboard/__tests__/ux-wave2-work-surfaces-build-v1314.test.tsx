@@ -215,7 +215,7 @@ describe("Canvas shape: the floating button is 'New terminal', not 'Add'", () =>
     render(<TerminalsPage />);
     await screen.findByTestId("shape-rail");
     expect(screen.queryByRole("button", { name: /^\s*Add\s*$/ })).toBeNull();
-    const floating = screen.getByTitle("Open a new terminal");
+    const floating = await screen.findByTitle("Open a new terminal");
     expect(floating.textContent ?? floating.getAttribute("aria-label") ?? "").toMatch(/New terminal/);
     fireEvent.click(floating);
     await waitFor(() => expect(api.posts.filter((p) => p.path === "/terminals")).toHaveLength(1));

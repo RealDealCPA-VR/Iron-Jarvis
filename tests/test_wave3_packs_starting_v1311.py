@@ -26,8 +26,15 @@ PACK = "slowpack-v1311"
 
 @pytest.fixture(autouse=True)
 def _clean_status():
+    # v1.325.2: `_LOAD_STATUS` is PROCESS-wide, and another test on the same
+    # xdist worker once left a pack ("brave") marked starting — this file's
+    # exact-list asserts then read it as their own. Each test starts from an
+    # empty record and the worker's record is put back after.
+    saved = dict(mcp_tools._LOAD_STATUS)
+    mcp_tools._LOAD_STATUS.clear()
     yield
-    mcp_tools._LOAD_STATUS.pop(PACK, None)
+    mcp_tools._LOAD_STATUS.clear()
+    mcp_tools._LOAD_STATUS.update(saved)
 
 
 class _Plat:

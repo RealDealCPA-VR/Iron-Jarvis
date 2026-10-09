@@ -40,6 +40,7 @@ from iron_jarvis.tools.base import ToolContext, ToolResult
 _BLOCK_S = 0.4
 _TICK_S = 0.01
 _MIN_TICKS = 3
+_REACH_S = 15.0  # the most an OFFLOADED stub waits for the heartbeat
 
 
 class _Ticks:
@@ -60,14 +61,29 @@ class _Ticks:
         self._stop = True
 
     def block(self, seconds: float = _BLOCK_S) -> None:
-        """What every slow stub does: note the ticks before/after the stall."""
+        """What every slow stub does: note the ticks before/after the stall.
+
+        v1.325.2: OFF the loop the stall lasts until the heartbeat REACHES
+        ``_MIN_TICKS`` (or ``_REACH_S`` passes) instead of a fixed 0.4 s — a
+        release runner running 31-41 min suites saw 0 and 2 ticks in 0.4 s on
+        an offloaded call. ON the loop the ticker cannot move at all, so that
+        case keeps the fixed sleep (and still reads exactly 0 — fast and red).
+        """
         try:
             asyncio.get_running_loop()
             self.on_loop.append(True)
+            on_loop = True
         except RuntimeError:
             self.on_loop.append(False)
+            on_loop = False
         before = self.n
-        time.sleep(seconds)
+        if on_loop:
+            time.sleep(seconds)
+        else:
+            deadline = time.monotonic() + max(seconds, _REACH_S)
+            time.sleep(seconds)
+            while self.n - before < _MIN_TICKS and time.monotonic() < deadline:
+                time.sleep(_TICK_S)
         self.windows.append(self.n - before)
 
 
