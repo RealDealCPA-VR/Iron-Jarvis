@@ -9,11 +9,14 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import json
+import time
+from urllib.parse import urlsplit
 
 from ...providers.reasoning import reasoning_levels
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from typing import Any
 
 from ..schemas import ConnectionKeyBody, EndpointModelsBody, OAuthCompleteBody
@@ -300,6 +303,170 @@ def _with_claude_catalog(d, models: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
+# --------------------------------------------------------------------------- #
+#  "Fetch available models" for a custom endpoint (v1.328.0)
+# --------------------------------------------------------------------------- #
+
+#: The whole probe's bound, every path it tries included. A model list is one
+#: small GET; a server that needs longer than this is not one to wait on.
+_ENDPOINT_PROBE_TIMEOUT_S = 5.0
+#: Most ids kept from one listing (a gateway can list thousands).
+_ENDPOINT_PROBE_MAX_MODELS = 1000
+#: Protocols a SAVED endpoint can actually speak. A saved endpoint is a fleet
+#: node, and a fleet node is an OpenAI-compatible adapter (fleet/adapter.py),
+#: so listing an Anthropic-style server would offer models it cannot call.
+_ENDPOINT_PROTOCOLS = ("openai",)
+
+
+class EndpointModelsProbeBody(BaseModel):
+    """``POST /connections/endpoints/models``. Every field has a default and is
+    checked in the handler: a pydantic 422 echoes the offending input, and for
+    a missing field that input is the whole body, key included."""
+
+    base_url: str = ""
+    api_key: str = ""
+    protocol: str = "openai"
+
+
+def _probe_words(kind: str) -> str:
+    """The one sentence the form shows for a failed probe. Never the URL or
+    the key, never an exception's text (it can carry either)."""
+    secs = max(1, round(_ENDPOINT_PROBE_TIMEOUT_S))
+    return {
+        "unreachable": "Could not reach that address. Check the URL and that the server is running.",
+        "timeout": f"The server did not answer within {secs} second{'' if secs == 1 else 's'}.",
+        "refused_key": "The server refused this key. Check the key and try again.",
+        "needs_key": "The server asks for a key. Paste it in the API key box and try again.",
+        "not_model_server": (
+            "That address answered, but it does not look like a model server. "
+            "Check the URL (it often ends in /v1)."
+        ),
+        "no_models": "The server answered but lists no models. Type the model id yourself.",
+        "server_error": (
+            "The server answered with an error. Try again in a moment, "
+            "or type the model id yourself."
+        ),
+        "bad_address": "That is not a web address this app can open.",
+    }.get(kind, "Could not ask that server for its models. Type the model id yourself.")
+
+
+def _probe_fail(kind: str) -> dict[str, Any]:
+    return {"models": [], "error": _probe_words(kind), "reason": kind}
+
+
+def _model_list_urls(base_url: str) -> list[str]:
+    """Where a server keeps its model list, most likely first: the
+    OpenAI-compatible ``<base>/v1/models`` (or ``<base>/models`` when the base
+    already ends in /v1), then ``<base>/models``, then Ollama's own
+    ``/api/tags`` for a host that predates its /v1 shim. A pasted chat or
+    models URL is cut back to its base first."""
+    u = base_url.strip().rstrip("/")
+    for suffix in ("/chat/completions", "/completions", "/models"):
+        if u.endswith(suffix):
+            u = u[: -len(suffix)].rstrip("/")
+            break
+    if u.endswith("/v1"):
+        host = u[: -len("/v1")].rstrip("/")
+        urls = [f"{u}/models"]
+    else:
+        host = u
+        urls = [f"{u}/v1/models", f"{u}/models"]
+    urls.append(f"{host}/api/tags")
+    return list(dict.fromkeys(urls))
+
+
+def _model_ids(payload: Any) -> list[str] | None:
+    """The model ids in one listing, or None when *payload* is not a listing.
+    OpenAI shape ``{"data": [{"id"}]}``, Ollama ``{"models": [{"name"}]}``,
+    or a bare list of ids / rows."""
+    rows: Any = None
+    if isinstance(payload, dict):
+        for k in ("data", "models"):
+            if isinstance(payload.get(k), list):
+                rows = payload[k]
+                break
+    elif isinstance(payload, list):
+        rows = payload
+    if rows is None:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        mid: Any = row
+        if isinstance(row, dict):
+            mid = next(
+                (row[k] for k in ("id", "name", "model") if isinstance(row.get(k), str) and row[k].strip()),
+                "",
+            )
+        if not isinstance(mid, str):
+            continue
+        mid = mid.strip()
+        if not mid or len(mid) > 256 or any(ord(c) < 32 for c in mid) or mid in seen:
+            continue
+        seen.add(mid)
+        out.append(mid)
+        if len(out) >= _ENDPOINT_PROBE_MAX_MODELS:
+            break
+    if rows and not out:
+        return None  # a list, but of nothing that names a model
+    return out
+
+
+def _probe_endpoint_models(base_url: str, key: str, *, timeout_s: float) -> dict[str, Any]:
+    """BLOCKING: ask one server for its model list (the route runs this in a
+    worker thread). Stops at the first decisive answer: unreachable, timed
+    out, or a refused key end the probe; a 404 / not-JSON / not-a-listing
+    moves on to the next likely path. Redirects are not followed, so the key
+    never travels to a host the user did not type."""
+    import httpx
+
+    deadline = time.monotonic() + timeout_s
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    saw: set[str] = set()
+    with httpx.Client(follow_redirects=False) as client:
+        for url in _model_list_urls(base_url):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return _probe_fail("timeout")
+            try:
+                resp = client.get(url, headers=headers, timeout=left)
+            except httpx.TimeoutException:
+                return _probe_fail("timeout")
+            except httpx.ConnectError:
+                return _probe_fail("unreachable")
+            except (httpx.InvalidURL, httpx.UnsupportedProtocol):
+                return _probe_fail("bad_address")
+            except httpx.HTTPError:
+                saw.add("not_model_server")  # dropped mid-answer, odd protocol
+                continue
+            if resp.status_code in (401, 403):
+                return _probe_fail("refused_key" if key else "needs_key")
+            if resp.status_code >= 500:
+                saw.add("server_error")
+                continue
+            if resp.status_code != 200:
+                saw.add("not_model_server")
+                continue
+            try:
+                payload = resp.json()
+            except ValueError:
+                saw.add("not_model_server")
+                continue
+            ids = _model_ids(payload)
+            if ids is None:
+                saw.add("not_model_server")
+            elif not ids:
+                saw.add("no_models")
+            else:
+                return {"models": ids, "error": None, "reason": None}
+    for kind in ("no_models", "server_error", "not_model_server"):
+        if kind in saw:
+            return _probe_fail(kind)
+    return _probe_fail("not_model_server")
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/providers")
@@ -524,3 +691,54 @@ def register(app: FastAPI, d) -> None:
         except Exception as exc:  # noqa: BLE001 — unreachable/odd server, be honest
             return {"models": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
         return {"models": models}
+
+    @app.post("/connections/endpoints/models")
+    async def endpoint_models_probe(body: EndpointModelsProbeBody) -> dict[str, Any]:
+        """The custom-endpoint form's "Fetch available models" (v1.328.0).
+
+        Asks the server the user typed for its own model list, bounded by
+        ``_ENDPOINT_PROBE_TIMEOUT_S`` and run in a worker thread (a dead host
+        must never park the event loop). Probe-only: nothing is saved. The key
+        rides one ``Authorization`` header to that server and is never logged,
+        stored or returned. Always 200 for a server's answer, with ``error``
+        in plain words and ``reason`` (unreachable / timeout / refused_key /
+        needs_key / not_model_server / no_models / server_error /
+        bad_address); 400 only for input the form should not have sent."""
+        url = (body.base_url or "").strip()
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname
+        except ValueError:
+            parts, host = None, None
+        if parts is None or parts.scheme.lower() not in ("http", "https") or not host:
+            raise HTTPException(
+                status_code=400,
+                detail="Enter the endpoint address first, starting with http:// or https://.",
+            )
+        protocol = (body.protocol or "openai").strip().lower()
+        if protocol not in _ENDPOINT_PROTOCOLS:
+            raise HTTPException(
+                status_code=400,
+                detail="Only OpenAI-compatible endpoints can be added here.",
+            )
+        key = (body.api_key or "").strip()
+        if len(key) > 8192 or any(not 32 <= ord(c) < 127 for c in key):
+            raise HTTPException(
+                status_code=400,
+                detail="That key has characters a web request cannot carry. Paste it again.",
+            )
+        timeout_s = _ENDPOINT_PROBE_TIMEOUT_S
+        try:
+            # The thread's own per-request timeouts already sum under the
+            # bound; this outer one is the backstop, and only ITS expiry earns
+            # the timeout words.
+            async with asyncio.timeout(timeout_s + 1.0) as cm:
+                return await asyncio.to_thread(
+                    _probe_endpoint_models, url, key, timeout_s=timeout_s
+                )
+        except TimeoutError:
+            if cm.expired():
+                return _probe_fail("timeout")
+            return _probe_fail("failed")
+        except Exception:  # noqa: BLE001 — a probe fault is data, never a 500
+            return _probe_fail("failed")

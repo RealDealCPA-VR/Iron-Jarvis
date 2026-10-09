@@ -33,6 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { get, post, put, patch, del, ApiError } from "@/lib/api";
+import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
@@ -509,14 +510,11 @@ function ConnectionCard({
   const [key, setKey] = useState("");
   // Custom (OpenAI-compatible) endpoint config — lives in /settings, not the vault.
   const [baseUrl, setBaseUrl] = useState("");
+  // The model id. v1.328.0 (B6): its list comes from the server only when
+  // the user presses "Fetch available models" (EndpointModelPicker) — the old
+  // probe ran on every keystroke of the address AND the key, sending a
+  // half-typed key to a half-typed host.
   const [model, setModel] = useState("");
-  // Live model discovery for the endpoint being typed: the server can list its
-  // own models (/v1/models or Ollama /api/tags) — nobody should have to know
-  // model ids by heart. null = not probed yet.
-  const [detected, setDetected] = useState<string[] | null>(null);
-  const [detecting, setDetecting] = useState(false);
-  const [detectError, setDetectError] = useState<string | null>(null);
-  const [manualModel, setManualModel] = useState(false); // "type it myself" escape
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
@@ -695,52 +693,6 @@ function ConnectionCard({
       setEpBusy(null);
     }
   }
-
-  // Probe the endpoint for ITS OWN model list as the user types (debounced) —
-  // /v1/models (or Ollama's /api/tags) knows the ids, the user shouldn't have
-  // to. The optional key rides along: some gateways guard /v1/models too.
-  useEffect(() => {
-    if (!isCustom || !open) return;
-    const url = baseUrl.trim();
-    if (!/^https?:\/\/.+/i.test(url)) {
-      setDetected(null);
-      setDetectError(null);
-      return;
-    }
-    let cancelled = false;
-    setDetecting(true);
-    setDetectError(null);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await post<{ models: string[]; error?: string }>(
-          "/providers/endpoint-models",
-          { base_url: url, api_key: key.trim() },
-        );
-        if (cancelled) return;
-        if (res.error || res.models.length === 0) {
-          setDetected([]);
-          setDetectError(res.error || "the endpoint reported no models");
-        } else {
-          setDetected(res.models);
-          setDetectError(null);
-          // Zero-typing path: an empty model field auto-picks the first one.
-          setModel((m) => m || res.models[0]);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setDetected([]);
-          setDetectError(err instanceof ApiError ? err.message : String(err));
-        }
-      } finally {
-        if (!cancelled) setDetecting(false);
-      }
-    }, 700);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      setDetecting(false);
-    };
-  }, [isCustom, open, baseUrl, key]);
 
   /* --- API key connect ----------------------------------------------------- */
   async function connectKey(e: React.FormEvent) {
@@ -1372,70 +1324,15 @@ function ConnectionCard({
                         className="field font-mono text-xs"
                       />
                     </label>
-                    <label className="block space-y-1">
-                      <span className="flex items-center justify-between text-[11px] font-medium text-zinc-400">
-                        <span>Model</span>
-                        <span className="font-normal text-zinc-500">
-                          {detecting
-                            ? "checking endpoint…"
-                            : detected && detected.length > 0
-                              ? `${detected.length} model${detected.length === 1 ? "" : "s"} on this endpoint`
-                              : null}
-                        </span>
-                      </span>
-                      {detected && detected.length > 0 && !manualModel ? (
-                        <>
-                          <select
-                            value={model}
-                            onChange={(e) => setModel(e.target.value)}
-                            className="field w-full font-mono text-xs"
-                          >
-                            {model && !detected.includes(model) && (
-                              <option value={model}>{model} (saved)</option>
-                            )}
-                            {detected.map((m) => (
-                              <option key={m} value={m}>
-                                {m}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => setManualModel(true)}
-                            className="text-[10px] text-zinc-500 transition-colors hover:text-zinc-300"
-                          >
-                            type a model id manually instead
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <input
-                            type="text"
-                            value={model}
-                            onChange={(e) => setModel(e.target.value)}
-                            placeholder="e.g. glm-4.7-flash / llama3"
-                            autoComplete="off"
-                            className="field font-mono text-xs"
-                          />
-                          {detected && detected.length > 0 && manualModel && (
-                            <button
-                              type="button"
-                              onClick={() => setManualModel(false)}
-                              className="text-[10px] text-zinc-500 transition-colors hover:text-zinc-300"
-                            >
-                              pick from the {detected.length} detected model
-                              {detected.length === 1 ? "" : "s"}
-                            </button>
-                          )}
-                          {detectError && (
-                            <p className="text-[10px] leading-relaxed text-amber-300/80">
-                              Couldn&apos;t list this endpoint&apos;s models ({detectError}) —
-                              type the id manually.
-                            </p>
-                          )}
-                        </>
-                      )}
-                    </label>
+                    {/* v1.328.0 (B6): the Model field + "Fetch available
+                        models" — the server lists its own models on request,
+                        a searchable list fills the field, typing still works. */}
+                    <EndpointModelPicker
+                      baseUrl={baseUrl}
+                      apiKey={key}
+                      value={model}
+                      onChange={setModel}
+                    />
                   </>
                 )}
                 <input
