@@ -19,7 +19,7 @@
  *    can switch back; a plain chat has no tablist (no dead row). Chat stays
  *    mounted across a detour (the typed draft survives).
  *  - thread-rail-scope-silent: a project-scoped rail says "Threads in
- *    {project}", the phone toggle says "Chats in {project} (n)", the empty
+ *    {project}", the phone's Chats door says "Chats in {project} (n)", the empty
  *    scope says "No chats in this project yet.", and "All chats" widens the
  *    RAIL ONLY — no write to the open thread, the project stays selected — with
  *    a one-press way back ("Only {project}").
@@ -624,7 +624,10 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
     expect(await within(rail).findByText("No chats in this project yet.")).toBeTruthy();
   });
 
-  it("the phone toggle names the scope: 'Chats in {project} (n)'", async () => {
+  // v1.329.0 (calm chat W4 F2): the boxy in-page toggle is gone; the phone's
+  // door to the list is the top bar's quiet "Chats" (it opens the nav drawer,
+  // which holds this same rail). It keeps naming its scope.
+  it("the phone's Chats door names the scope: 'Chats in {project} (n)'", async () => {
     withProject();
     render(<ChatPage />);
     expect(await screen.findByRole("button", { name: /Chats in Q3 Bookkeeping \(1\)/ })).toBeTruthy();

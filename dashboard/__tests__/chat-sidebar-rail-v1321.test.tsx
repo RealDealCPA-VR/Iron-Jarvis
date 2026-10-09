@@ -172,7 +172,10 @@ describe("Chat's thread list in the app sidebar (redesign S7, AUDIT Q5)", () => 
     }
   });
 
-  it("without a slot (a phone, a pop-out) the rail stays in the page", async () => {
+  // v1.329.0 (calm chat W4 F2): with no slot the rail sits beside the chat
+  // from md up only (a pop-out, a collapsed sidebar); a phone reaches it in
+  // the nav drawer (sidebar-chats-v1329.test.tsx pins both halves).
+  it("without a slot (a pop-out, a collapsed sidebar) the rail stays in the page", async () => {
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
     expect(rail.getAttribute("data-in-sidebar")).toBeNull();

@@ -70,7 +70,6 @@ import {
   FolderPen,
   GitBranch,
   Globe,
-  History,
   Loader2,
   MessageSquare,
   Mic,
@@ -171,7 +170,7 @@ import {
   type ConfigCard,
 } from "@/lib/configCards";
 import { getDeviceId } from "@/lib/device";
-import { NEW_CHAT_EVENT, useChatSlot } from "@/lib/sidebarSlot";
+import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import {
   applySettled,
   decodeSuggestion,
@@ -3490,7 +3489,6 @@ export default function ChatPage() {
   commMetaRef.current = commMeta;
   // Share dialog for the OPEN thread (full transcript / compacted digest).
   const [shareOpen, setShareOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
   // v1.322.0: what an "Edit and resend" cut away, until the next send, so a
   // stray press can be undone (borrowed idea: assistant-ui's edit composer,
   // which changes nothing until Send — here the cut stays immediate, as
@@ -3646,8 +3644,13 @@ export default function ChatPage() {
     const onDown = (e: MouseEvent) => {
       if (!threadMenuRef.current?.contains(e.target as Node)) close();
     };
+    // v1.329.0: caught first (capture) and kept there, so Escape closes the
+    // menu ONLY. On a phone the list sits in the nav drawer, which closes on
+    // its own Escape listener.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      close();
     };
     // Any scroll OUTSIDE the menu strands a fixed popout at stale coordinates
     // — close instead of drifting. Scrolls INSIDE it (the project list) are
@@ -3657,12 +3660,12 @@ export default function ChatPage() {
       close();
     };
     document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
@@ -5252,7 +5255,7 @@ export default function ChatPage() {
    *  vanished thread is not an error the user made. */
   async function openThread(id: string, opts: { restore?: boolean } = {}) {
     if (id === threadId) {
-      setSidebarOpen(false);
+      closeChatSlot(); // the phone drawer, when it holds the list
       return;
     }
     leaveConversation();
@@ -5400,7 +5403,7 @@ export default function ChatPage() {
         void refreshCompaction(t.id);
         followThreadProject(t, false);
         noteOpenThread();
-        setSidebarOpen(false);
+        closeChatSlot(); // the phone drawer, when it holds the list
         return;
       }
       setMessages(msgs);
@@ -5469,7 +5472,7 @@ export default function ChatPage() {
       // truth, so it is applied again (a copy that had a setup the disk no
       // longer has goes back to the defaults the open started from).
       applyThreadSetup(t, seeded && Boolean(cached?.setup));
-      setSidebarOpen(false);
+      closeChatSlot(); // the phone drawer, when it holds the list
       inputRef.current?.focus();
     } catch (e) {
       const offlineNow = e instanceof ApiError && e.status === 0;
@@ -8858,6 +8861,25 @@ export default function ChatPage() {
       data-testid="chat-topbar"
       className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 sm:h-12 sm:flex-nowrap sm:py-0"
     >
+      {/* v1.329.0 (calm chat W4 F2): on a phone the chat list lives in the
+          nav drawer (the same list the sidebar holds on a wide screen), and
+          this quiet ghost opens it. Its name says which chats it opens on
+          (the v1.315.0 rule). Not drawn while a sidebar holds the list. */}
+      {!chatSlot && (
+        <button
+          type="button"
+          data-testid="chat-open-chats"
+          onClick={() => window.dispatchEvent(new CustomEvent("ij:toggle-nav"))}
+          aria-label={`Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
+            threads.length ? ` (${threads.length})` : ""
+          }`}
+          title="Your chats"
+          className="-ml-1.5 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-1.5 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 md:hidden"
+        >
+          <MessageSquare size={14} aria-hidden />
+          Chats
+        </button>
+      )}
       {crumbTitle ? (
         <nav
           aria-label="Breadcrumb"
@@ -9252,9 +9274,11 @@ export default function ChatPage() {
               data-testid="chat-thread-rail"
               data-in-sidebar={chatSlot ? "true" : undefined}
               className={
+                // v1.329.0: no card around it beside the chat either (a
+                // pop-out, a collapsed sidebar): one hairline divides it.
                 chatSlot
                   ? "flex min-h-0 flex-1 flex-col"
-                  : "card-surface flex h-full min-h-0 flex-col overflow-hidden"
+                  : "flex h-full min-h-0 flex-col overflow-hidden border-r hairline pr-2"
               }
             >
               {/* THE MODULE'S NAME, TOP LEFT, INSIDE THIS CARD (v1.215.0) —
@@ -9270,7 +9294,7 @@ export default function ChatPage() {
                   iconSize={11}
                 />
               </div>
-              <div className="shrink-0 border-b hairline px-3 pb-2 pt-1.5">
+              <div className="shrink-0 px-3 pb-2 pt-1.5">
                 <div className="flex items-center justify-between gap-2">
                   {/* v1.315.0 (thread-rail-scope-silent): a project-scoped
                       rail SAYS so — the other chats are not gone, they are
@@ -9300,7 +9324,7 @@ export default function ChatPage() {
                   <button
                     type="button"
                     onClick={newChat}
-                    className={`btn-ghost shrink-0 whitespace-nowrap px-2 py-1 text-[12px] ${chatSlot ? "hidden" : ""}`}
+                    className={`inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${chatSlot ? "hidden" : ""}`}
                     title="Start a new conversation"
                   >
                     <Plus size={13} /> New chat
@@ -9321,10 +9345,12 @@ export default function ChatPage() {
                   </button>
                 )}
                 {threads.length > 0 && (
-                  <div className="relative mt-2">
+                  // `isolate` + `z-[1]` (the v1.313.0 rule): the icon must
+                  // paint OVER the field, not under its fill.
+                  <div className="relative isolate mt-2">
                     <Search
                       size={12}
-                      className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+                      className="pointer-events-none absolute left-2.5 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
                     />
                     <input
                       value={threadQuery}
@@ -9339,9 +9365,9 @@ export default function ChatPage() {
               {/* THE ONLY SCROLLING PART of the rail. `min-h-0` is load-bearing:
                   a flex child's default `min-height:auto` refuses to shrink
                   below its content, so without it the list grows the card past
-                  the bottom of the window. The `max-h` is the narrow-width
-                  floor, where the card has no height to fill. */}
-              <div className={`min-h-0 flex-1 overflow-y-auto p-1.5 ${chatSlot ? "" : "max-h-[50vh] md:max-h-none"}`}>
+                  the bottom of the window. (v1.329.0: no `max-h` floor any
+                  more; below md the rail is only ever in the phone drawer.) */}
+              <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
                 {archivedView ? (
                   /* v1.328.0 (calm chat W3-3): the ARCHIVED view, in the
                      list's place. Every project's archived chats, one plain
@@ -9431,6 +9457,9 @@ export default function ChatPage() {
                               e.preventDefault();
                               void renameThread(t.id, renameDraft);
                             } else if (e.key === "Escape") {
+                              // Only the rename: never the phone drawer the
+                              // list may be sitting in (it closes on Escape).
+                              e.stopPropagation();
                               setRenamingId(null);
                             }
                           }}
@@ -9647,31 +9676,18 @@ export default function ChatPage() {
           data-testid="chat-room"
           className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
         >
-          {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
-          {!chatSlot && (
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((v) => !v)}
-            aria-expanded={sidebarOpen}
-            className="btn-ghost self-start py-1.5 text-[13px] md:hidden"
-          >
-            <History size={14} />{" "}
-            {/* v1.315.0: the toggle names the scope it opens on. */}
-            {sidebarOpen
-              ? "Hide chats"
-              : `Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
-                  threads.length ? ` (${threads.length})` : ""
-                }`}
-          </button>
-          )}
-
-          {/* Threads sidebar — in the app sidebar on a wide screen
-              (redesign S7, portaled), here on a phone. */}
+          {/* Threads: in the app sidebar on a wide screen (redesign S7) and
+              in the phone nav drawer while it is open (v1.329.0, calm chat W4
+              F2), portaled. With no slot (a pop-out, a collapsed sidebar) the
+              rail sits beside the chat from md up; on a phone it never sits
+              in the page: the top bar's Chats opens the drawer, which holds
+              this same list (one list, not two). */}
           {chatSlot ? (
             createPortal(threadRail, chatSlot)
           ) : (
           <aside
-            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:h-full md:w-60`}
+            data-testid="chat-rail-aside"
+            className="hidden shrink-0 md:block md:h-full md:w-60"
           >
             {threadRail}
           </aside>

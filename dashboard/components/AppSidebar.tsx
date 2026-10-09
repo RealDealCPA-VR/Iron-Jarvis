@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -13,16 +13,16 @@ import {
   MoveUpRight,
   Plus,
 } from "lucide-react";
-import { get } from "@/lib/api";
 import { recordOpen } from "@/lib/appTiles";
 import { popoutBridge, type PopoutBridge } from "@/lib/desktopShell";
 import { useDaemon } from "@/lib/daemon";
-import { useEvents } from "@/lib/useEvents";
-import { NEW_CHAT_EVENT, setChatSlot } from "@/lib/sidebarSlot";
+import { useChatProjects } from "@/lib/chatList";
+import { NEW_CHAT_EVENT, claimChatSlot, releaseChatSlot } from "@/lib/sidebarSlot";
 import { EVERYTHING_TAB_EVENT, PINS_EVENT, SIDEBAR_HREFS, readPins, surfaceFor, type Surface } from "@/lib/surfaces";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
+import SidebarChats from "@/components/chat/SidebarChats";
 
 /**
  * THE CALM SIDEBAR (calm UI redesign S7, AUDIT §4.2, wireframe sidebar.md).
@@ -34,7 +34,9 @@ import { MoodOrb } from "@/components/MoodOrb";
  *   Build · Projects · Everything · Settings      four items, never more
  *   (your pins, up to three)           added on Everything; none by default
  *   CHATS                              on the chat surface: Chat's own thread
- *                                      list (portaled in — layout only)
+ *                                      list (portaled in, the drawer too);
+ *                                      elsewhere the same grouped list
+ *                                      (SidebarChats: projects, dots, ages)
  *   PROJECTS
  *   ● Running · v1.x   Help ▾          status, version, the Help menu (Q17)
  *
@@ -165,82 +167,15 @@ function NavRow({
   );
 }
 
-interface ThreadRow {
-  id: string;
-  title?: string;
-  updated_at?: string;
-}
-interface ProjectRow {
-  id: string;
-  name: string;
-  status?: string;
-}
-
-function dayBucket(iso?: string): "Today" | "Previous 7 days" | "Older" {
-  const t = iso ? Date.parse(iso.endsWith("Z") || /[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`) : NaN;
-  if (!Number.isFinite(t)) return "Older";
-  const age = Date.now() - t;
-  if (age < 24 * 3600_000 && new Date(t).toDateString() === new Date().toDateString()) return "Today";
-  if (age < 7 * 24 * 3600_000) return "Previous 7 days";
-  return "Older";
-}
-
-/** The conversation list away from the chat surface: the newest chats, by
- *  day. Opening one goes to the chat surface, where Chat's own list (with
- *  rename, pin, move and delete) takes over this space. */
-function RecentChats({ onNavigate }: { onNavigate?: () => void }) {
-  const [threads, setThreads] = useState<ThreadRow[] | null>(null);
-  const { events } = useEvents(20, { types: ["chat.thread_updated"] });
-  const load = useCallback(() => {
-    Promise.resolve(get<{ threads?: ThreadRow[] }>("/chat/threads"))
-      .then((d) => setThreads((d?.threads ?? []).slice(0, 12)))
-      .catch(() => setThreads((t) => t ?? []));
-  }, []);
-  useEffect(() => {
-    load();
-  }, [load, events.length]);
-  if (threads === null) return null;
-  if (threads.length === 0) {
-    return <p className="px-2.5 py-1 text-[12px] text-zinc-500">Your chats appear here.</p>;
-  }
-  const groups: Record<string, ThreadRow[]> = {};
-  for (const t of threads) (groups[dayBucket(t.updated_at)] ??= []).push(t);
-  return (
-    <div className="space-y-2" data-testid="sidebar-recent-chats">
-      {(["Today", "Previous 7 days", "Older"] as const)
-        .filter((g) => groups[g]?.length)
-        .map((g) => (
-          <div key={g}>
-            <div className="px-2.5 pb-0.5 text-[11px] text-zinc-600">{g}</div>
-            {groups[g].map((t) => (
-              <Link
-                key={t.id}
-                href={`/chat?thread=${encodeURIComponent(t.id)}`}
-                onClick={() => onNavigate?.()}
-                title={t.title || "Untitled chat"}
-                className="block truncate rounded-lg px-2.5 py-1.5 text-[13px] text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"
-              >
-                {t.title || "Untitled chat"}
-              </Link>
-            ))}
-          </div>
-        ))}
-      <Link href="/chat" onClick={() => onNavigate?.()} className="block px-2.5 py-1 text-[12px] text-zinc-500 hover:text-accent-soft">
-        Show all chats
-      </Link>
-    </div>
-  );
-}
-
+/** The projects under the chats: the active ones, newest first as the daemon
+ *  lists them, at most six. The list comes from the same store as the chats
+ *  (lib/chatList), so the sidebar reads /projects once, and it reads NO chats
+ *  (on the chat surface the page's rail holds them). */
 function SidebarProjects({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname() ?? "";
-  const [projects, setProjects] = useState<ProjectRow[] | null>(null);
-  useEffect(() => {
-    Promise.resolve(get<{ projects?: ProjectRow[] }>("/projects"))
-      .then((d) => setProjects((d?.projects ?? []).filter((p) => p.status !== "archived").slice(0, 6)))
-      .catch(() => setProjects([]));
-  }, []);
-  if (!projects || projects.length === 0) return null;
+  const all = useChatProjects();
+  const projects = (all ?? []).filter((p) => p.status !== "archived").slice(0, 6);
+  if (projects.length === 0) return null;
   return (
     <div data-testid="sidebar-projects">
       <div className="px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Projects</div>
@@ -379,28 +314,30 @@ export function SidebarBody({
   const onChat = CHAT_PATHS.includes(pathname);
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
-  // Chat's own list takes the CHATS space on the chat surface — but only in
-  // the persistent rail on a wide screen (a phone keeps Chat's in-page list).
-  const slotRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (variant !== "rail") return;
-      if (!node) {
-        setChatSlot(null);
-        return;
-      }
-      const mq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 768px)") : null;
-      setChatSlot(!mq || mq.matches ? node : null);
-    },
-    [variant],
-  );
+  // On the chat surface the CHATS space is the chat page's OWN thread rail
+  // (search, the row options, the project scope, the archive), portaled in:
+  // in the persistent rail while the screen is wide, and (v1.329.0, calm chat
+  // W4 F2) in the phone drawer while it is open, so a phone has ONE chat list
+  // too. The drawer's slot carries its close, so opening a chat shuts it.
+  // Elsewhere the space is SidebarChats: the same grouped list, read-only.
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
   useEffect(() => {
-    if (variant !== "rail" || !onChat || typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(min-width: 768px)");
-    const el = document.getElementById("ij-sidebar-chat-slot");
-    const sync = () => setChatSlot(mq.matches ? el : null);
-    mq.addEventListener?.("change", sync);
-    return () => mq.removeEventListener?.("change", sync);
-  }, [variant, onChat]);
+    if (!slotEl) return;
+    if (variant === "drawer") {
+      claimChatSlot(slotEl, () => navigateRef.current?.());
+      return () => releaseChatSlot(slotEl);
+    }
+    const mq = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 768px)") : null;
+    const sync = () => (!mq || mq.matches ? claimChatSlot(slotEl) : releaseChatSlot(slotEl));
+    sync();
+    mq?.addEventListener?.("change", sync);
+    return () => {
+      mq?.removeEventListener?.("change", sync);
+      releaseChatSlot(slotEl);
+    };
+  }, [slotEl, variant]);
 
   function newChat() {
     onNavigate?.();
@@ -447,10 +384,14 @@ export function SidebarBody({
           <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
             <MessageSquare size={11} aria-hidden /> Chats
           </div>
-          {onChat && variant === "rail" ? (
-            <div id="ij-sidebar-chat-slot" ref={slotRef} className="flex min-h-[12rem] flex-1 flex-col" />
+          {onChat ? (
+            <div
+              id={variant === "rail" ? "ij-sidebar-chat-slot" : "ij-drawer-chat-slot"}
+              ref={setSlotEl}
+              className="flex min-h-[12rem] flex-1 flex-col"
+            />
           ) : (
-            <RecentChats onNavigate={onNavigate} />
+            <SidebarChats onNavigate={onNavigate} />
           )}
           <SidebarProjects onNavigate={onNavigate} />
         </div>

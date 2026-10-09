@@ -114,12 +114,18 @@ describe("New chat", () => {
 });
 
 describe("the conversation list", () => {
-  it("away from chat: recent chats by day, each opening its thread", async () => {
+  // v1.329.0 (calm chat W4 F2): the flat "Today / Previous 7 days" list is
+  // gone. Away from chat the sidebar draws the chat page's own grouped list
+  // (ThreadGroups: project headings, dots, ages) and a row opens its chat.
+  // Pinned in depth by sidebar-chats-v1329.test.tsx.
+  it("away from chat: the grouped chat list, each row opening its thread", async () => {
     render(<AppSidebar />);
     const list = await screen.findByTestId("sidebar-recent-chats");
-    expect(within(list).getByRole("link", { name: "Quarterly numbers" }).getAttribute("href")).toBe("/chat?thread=t1");
-    expect(list.textContent).toContain("Today");
-    expect(list.textContent).toContain("Older");
+    const row = await within(list).findByTitle("Quarterly numbers");
+    expect(list.textContent).not.toContain("Previous 7 days");
+    expect(within(list).getByTestId("thread-groups")).toBeTruthy();
+    fireEvent.click(row);
+    expect(nav.push).toHaveBeenCalledWith("/chat?thread=t1");
   });
 
   it("on chat, on a wide screen: the slot for Chat's own list is published", async () => {
@@ -134,7 +140,9 @@ describe("the conversation list", () => {
     expect(screen.queryByTestId("sidebar-recent-chats")).toBeNull();
   });
 
-  it("on chat, on a phone: no slot — Chat keeps its list in the page", async () => {
+  // v1.329.0: the persistent rail (hidden on a phone) still publishes no
+  // slot there; the phone's slot is the nav drawer's (sidebar-chats-v1329).
+  it("on chat, on a phone: the hidden rail publishes no slot", async () => {
     nav.pathname = "/chat";
     setWide(false);
     render(
