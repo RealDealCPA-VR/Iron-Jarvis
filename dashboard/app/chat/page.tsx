@@ -135,6 +135,7 @@ import {
   type PackResource,
   type ResourceReceipt,
 } from "@/lib/mcpInteract";
+import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "@/lib/turnReads";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
@@ -564,6 +565,13 @@ interface ChatMessage {
   /** v1.325.0: the dashboard page this question was asked about ("Ask Jarvis
    *  about this page") — sent with this turn, and again on a Try again. */
   pageContext?: PageContext;
+  /** v1.327.0 (calm chat W2-3): the project folder's instruction files this
+   *  turn followed ("AGENTS.md", "CLAUDE.md") — the receipt says them. Absent
+   *  when none were read and on older messages. */
+  folderRules?: string[];
+  /** v1.327.0: the saved chats this message pointed to with "@", read or
+   *  left out (`{id, title, chars, ok, note}`) — the receipt says them. */
+  threadRefs?: ThreadRefReceipt[];
 }
 
 /** v1.325.0: a message written while a reply was running — sent after it. */
@@ -2576,6 +2584,7 @@ const MessageRow = memo(function MessageRow({
       deniedTools: m.deniedTools,
       remembered: m.remembered,
       trust: m.trust,
+      threadRefs: m.threadRefs,
     });
   return (
     <div className="group/msg" data-testid="reply">
@@ -2746,6 +2755,8 @@ const MessageRow = memo(function MessageRow({
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
             onUndo={h.undoWrite}
+            folderRules={m.folderRules}
+            threadRefs={m.threadRefs}
           />
         )}
       </div>
@@ -6963,6 +6974,12 @@ export default function ChatPage() {
         // (or an older hook) may resolve with the reply alone.
         const thinkingText = (streamRes.thinking ?? "").slice(0, THINKING_CAP);
         const turnSteps = streamRes.steps ?? [];
+        // v1.327.0: what the turn read besides the conversation (folder
+        // rules, @-referenced chats) — decoded again because a test double
+        // or an older hook may hand back anything. MIRROR NOTE: the POST
+        // lane's receiptPost below carries the same two fields, last.
+        const folderRules = decodeFolderRules(streamRes.folderRules);
+        const threadRefs = decodeThreadRefs(streamRes.threadRefs);
         const receipt = {
           at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
           ...(route ? { route } : {}),
@@ -6997,6 +7014,9 @@ export default function ChatPage() {
           ...(turnSteps.length ? { steps: turnSteps } : {}),
           ...(streamRes.timing ? { timing: streamRes.timing } : {}),
           ...(streamRes.resources?.length ? { appResources: streamRes.resources } : {}),
+          // v1.327.0 (kept last, the receipt rule): folder rules + chats read.
+          ...(folderRules.length ? { folderRules } : {}),
+          ...(threadRefs.length ? { threadRefs } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -7140,6 +7160,10 @@ export default function ChatPage() {
         typeof (res as { thinking?: unknown }).thinking === "string"
           ? ((res as { thinking?: string }).thinking ?? "").slice(0, THINKING_CAP)
           : "";
+      // v1.327.0: the POST lane's copy of the stream lane's folder rules and
+      // chats read. MIRROR NOTE: keep in step with the stream path above.
+      const folderRulesPost = decodeFolderRules((res as { folder_rules?: unknown }).folder_rules);
+      const threadRefsPost = decodeThreadRefs((res as { thread_refs?: unknown }).thread_refs);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -7170,6 +7194,10 @@ export default function ChatPage() {
         ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
           ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }
           : {}),
+        // v1.327.0 — the POST lane's copy of the stream lane's folder rules
+        // and chats read (whitelisted, kept last). MIRROR NOTE: keep in step.
+        ...(folderRulesPost.length ? { folderRules: folderRulesPost } : {}),
+        ...(threadRefsPost.length ? { threadRefs: threadRefsPost } : {}),
       };
       const full: ChatMessage[] = [
         ...history,

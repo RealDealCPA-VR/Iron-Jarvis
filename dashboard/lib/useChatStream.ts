@@ -17,7 +17,7 @@
 //   error     {"detail","status"?}
 //   thinking  {"text":"…"}  reasoning deltas, display-only, any round (v1.323.0)
 //   (done also carries "truncated": bool since v1.323.0 — the answer ran out
-//    of output tokens)
+//    of output tokens; "folder_rules" and "thread_refs" since v1.326.0)
 //   mcp_elicitation {id,call_id,pack,message,fields}   an app asks the user
 //   mcp_sampling    {id,call_id,pack,system,messages,max_tokens,model,model_id,more?}
 //   mcp_progress    {call_id,pack,progress,total,message}
@@ -50,6 +50,7 @@ import {
   type McpSamplingAsk,
   type ResourceReceipt,
 } from "./mcpInteract";
+import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./turnReads";
 
 // v1.324.0: type-only re-exports (they erase — a mock of this module with a
 // fixed export list is unaffected). The runtime helpers live in mcpInteract.
@@ -182,6 +183,12 @@ export type SSEEvent =
       /** v1.324.0: the app resources attached to this turn, as read — the
        *  daemon sends the key on every turn (possibly []). */
       resources?: ResourceReceipt[];
+      /** v1.326.0 (wired v1.327.0): the project folder's instruction files
+       *  this turn followed (["AGENTS.md", "CLAUDE.md"]) — lib/turnReads. */
+      folder_rules?: string[];
+      /** v1.326.0 (wired v1.327.0): the saved chats this message pointed to
+       *  with "@", read or left out — lib/turnReads. */
+      thread_refs?: ThreadRefReceipt[];
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
@@ -316,6 +323,12 @@ export interface ChatStreamResult {
   /** v1.324.0: the app resources this turn read (the done frame's receipt);
    *  absent when no done frame arrived or the daemon sent none. */
   resources?: ResourceReceipt[];
+  /** v1.327.0: the project folder's instruction files this turn followed
+   *  (the done frame's `folder_rules`); absent when none were. */
+  folderRules?: string[];
+  /** v1.327.0: the saved chats this message pointed to (the done frame's
+   *  `thread_refs`); absent when there were none. */
+  threadRefs?: ThreadRefReceipt[];
   /** v1.323.0: the turn's reasoning text ("" when the model sent none). */
   thinking: string;
   /** v1.323.0: how long the model thought, in ms — first thinking frame to
@@ -562,6 +575,15 @@ export function sseEventFrom(
       // v1.324.0: the attached app resources' receipt — whitelisted per row
       // (lib/mcpInteract); kept even when empty, so "none" is a fact.
       if (Array.isArray(data.resources)) ev.resources = decodeResourceReceipts(data.resources);
+      // v1.327.0: what the turn read besides the conversation — whitelisted
+      // (lib/turnReads), or the receipt never hears of it (the denied_tools
+      // lesson). Empty lists leave the key absent: "none" says nothing.
+      {
+        const rules = decodeFolderRules(data.folder_rules);
+        if (rules.length) ev.folder_rules = rules;
+        const refs = decodeThreadRefs(data.thread_refs);
+        if (refs.length) ev.thread_refs = refs;
+      }
       return ev;
     }
     case "error": {
@@ -1332,6 +1354,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   ? { unreadSteers: [...ev.unread_steers] }
                   : {}),
                 ...(ev.resources ? { resources: ev.resources } : {}),
+                ...(ev.folder_rules?.length ? { folderRules: ev.folder_rules } : {}),
+                ...(ev.thread_refs?.length ? { threadRefs: ev.thread_refs } : {}),
               };
               break;
             case "error":

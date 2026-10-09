@@ -57,7 +57,9 @@ import {
   FileText,
   Gauge,
   Loader2,
+  MessagesSquare,
   Route as RouteIcon,
+  ScrollText,
   ShieldAlert,
   ShieldCheck,
   Timer,
@@ -66,6 +68,12 @@ import {
 } from "lucide-react";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 import { providerDisplay } from "@/lib/onboarding";
+import {
+  folderRulesLine,
+  refWarningCount,
+  threadRefLines,
+  type ThreadRefReceipt,
+} from "@/lib/turnReads";
 
 /** The capability envelope's adaptation disclosure (v1.202.0): the daemon
  *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
@@ -309,6 +317,14 @@ export interface TurnReceiptProps {
   /** v1.326.0: the model's name for the "answered by" words (the catalog's
    *  label, else its id), chosen by the caller. Absent: the provider's name. */
   modelName?: string | null;
+  /** Calm chat W2-3 (v1.327.0): the project folder's instruction files this
+   *  turn followed (["AGENTS.md", "CLAUDE.md"]) — a quiet line in the
+   *  expanded receipt. Absent on older messages: nothing is said. */
+  folderRules?: string[] | null;
+  /** v1.327.0: the saved chats this message pointed to with "@", read or
+   *  left out — quiet lines in the expanded receipt; a left-out one that
+   *  warns is amber, and a small amber count rides the collapsed line. */
+  threadRefs?: ThreadRefReceipt[] | null;
 }
 
 /**
@@ -320,7 +336,10 @@ export interface TurnReceiptProps {
  * older reply's row otherwise shows only on hover.
  */
 export function receiptWantsAttention(
-  p: Pick<TurnReceiptProps, "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked">,
+  p: Pick<
+    TurnReceiptProps,
+    "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked" | "threadRefs"
+  >,
 ): boolean {
   return (
     routeWarning(p.route) !== null ||
@@ -328,7 +347,10 @@ export function receiptWantsAttention(
     names(p.remembered ?? []).length > 0 ||
     p.trust === "low" ||
     adaptedLabel(p.adapted) !== null ||
-    blockedRows(p.blocked).length > 0
+    blockedRows(p.blocked).length > 0 ||
+    // v1.327.0: an earlier chat the user pointed to was left out — the
+    // answer was written without it, so that is never behind a hover.
+    refWarningCount(p.threadRefs) > 0
   );
 }
 
@@ -501,6 +523,8 @@ export function TurnReceipt({
   outputTokens,
   inline = false,
   modelName,
+  folderRules,
+  threadRefs,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -547,6 +571,12 @@ export function TurnReceipt({
   const blockedOut = blockedRows(blocked);
   // v1.300.0: the turn's cache share and list-price cost — quiet, optional.
   const used = usageWords(usage);
+  // v1.327.0: what the turn read besides the conversation — the project's
+  // instruction files and the earlier chats it was pointed to. Decoded here
+  // because a reopened chat hands back whatever the disk held.
+  const rulesText = folderRulesLine(folderRules);
+  const refLines = threadRefLines(threadRefs);
+  const refWarnings = refLines.notes.filter((n) => n.warn).length;
   if (
     !used.cache &&
     !used.cost &&
@@ -557,7 +587,10 @@ export function TurnReceipt({
     !adaptedText &&
     !kept.length &&
     !lowTrust &&
-    !blockedOut.length
+    !blockedOut.length &&
+    !rulesText &&
+    !refLines.read &&
+    !refLines.notes.length
   ) {
     return null;
   }
@@ -634,6 +667,16 @@ export function TurnReceipt({
   }
   if (docs.length > 0) {
     parts.push(<span key="docs">{count(docs.length, "file")}</span>);
+  }
+  if (refWarnings > 0) {
+    // v1.327.0: the only part of "what the turn read" on the collapsed line
+    // — an earlier chat the user pointed to was left out, so the answer was
+    // written without it. A small count; the reason is in the detail.
+    parts.push(
+      <span key="refs-left-out" data-testid="turn-refs-left-out" className="text-tone-warn">
+        {count(refWarnings, "chat")} left out
+      </span>,
+    );
   }
   if (kept.length > 0) {
     // v1.282.0: VISIBLE WITHOUT EXPANDING, in the accent — this is the app
@@ -770,6 +813,41 @@ export function TurnReceipt({
                     <span className="text-zinc-500"> ({rt.reason})</span>
                   )
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* v1.327.0: what the answer drew on besides the conversation —
+              the project's own instruction files, and the earlier chats the
+              message pointed to. Quiet plain lines; a chat left out for a
+              reason the user should see is amber. */}
+          {rulesText && (
+            <div className="flex items-start gap-2">
+              <ScrollText size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-folder-rules" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
+                {rulesText}
+              </div>
+            </div>
+          )}
+          {(refLines.read || refLines.notes.length > 0) && (
+            <div className="flex items-start gap-2">
+              <MessagesSquare size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div className="min-w-0 space-y-0.5 text-[12px] leading-relaxed">
+                {refLines.read && (
+                  <div data-testid="turn-thread-refs" className="break-words text-zinc-400">
+                    {refLines.read}
+                  </div>
+                )}
+                {refLines.notes.map((n) => (
+                  <div
+                    key={n.key}
+                    data-testid="turn-thread-ref-note"
+                    data-warn={n.warn ? "true" : "false"}
+                    className={`break-words ${n.warn ? "text-tone-warn" : "text-zinc-500"}`}
+                  >
+                    {n.text}
+                  </div>
+                ))}
               </div>
             </div>
           )}
