@@ -276,13 +276,19 @@ async def test_the_call_after_a_kill_works_and_admits_the_state_loss(session):
 async def test_slow_code_does_not_block_the_event_loop(session):
     """A slow child must not park the daemon's single loop.
 
-    A tick COUNT proves nothing here (``gather`` waits for both sides either
-    way) and a heartbeat started alongside the blocking call proves nothing
-    either — both mistakes have shipped green in this repo. So: start the
-    heartbeat FIRST, prove it is already ticking, then measure the MAXIMUM GAP
-    between ticks across a call that occupies 2 full seconds of wall time. The
-    two outcomes are ~2.0s apart from the 0.5s assertion, so a loaded CI runner
-    cannot land between them.
+    A tick count taken across a ``gather`` proves nothing (it waits for both
+    sides either way), and a heartbeat started alongside the blocking call
+    proves nothing either — both mistakes have shipped green in this repo. So:
+    start the heartbeat FIRST and wait until it is REALLY ticking, then count
+    the ticks that land WHILE the awaited 2-second call is in flight. A call
+    run on the loop leaves the heartbeat no turn at all (0-1 ticks); an
+    offloaded one gives it ~100.
+
+    v1.325.2: this used to sleep a fixed 0.3 s before checking the heartbeat
+    and then bar the MAXIMUM gap at 0.5 s — both measure the runner (the
+    v1.286.0 rule: never a max-gap bar), and the release gate's 33-minute
+    runner failed the first. Now the wait is for the heartbeat itself and the
+    assertion is the count the loop could not produce while blocked.
     """
     await session.execute("warm = 1", timeout=30)  # spawn cost out of the way
 
@@ -298,20 +304,24 @@ async def test_slow_code_does_not_block_the_event_loop(session):
             previous = now
 
     beat = asyncio.create_task(heartbeat())
-    await asyncio.sleep(0.3)
+    deadline = time.monotonic() + 15
+    while len(gaps) <= 5 and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
     assert len(gaps) > 5, "the heartbeat must already be running before we measure"
 
+    before = len(gaps)
     started = time.monotonic()
     payload = await session.execute("import time; time.sleep(2)", timeout=30)
     elapsed = time.monotonic() - started
+    during = len(gaps) - before
 
     stop.set()
     await beat
 
     assert payload["ok"], payload
     assert elapsed >= 1.5, f"the call only took {elapsed:.2f}s — it did not really block"
-    assert max(gaps) < 0.5, (
-        f"the event loop stalled for {max(gaps):.2f}s during a {elapsed:.2f}s call — "
+    assert during >= 5, (
+        f"the event loop ticked {during} time(s) during a {elapsed:.2f}s call — "
         f"blocking pipe I/O is running on the loop"
     )
 

@@ -2972,6 +2972,13 @@ does not need a bump, stop and bump it.
   against the PROCESS-wide `_LOAD_STATUS`, which another test on the worker
   left holding "brave" — the fixture now clears and restores it (a planted
   "brave" reproduces the failure on the old fixture).
+  v1.325.3 (test-only): v1.325.2's Release gate (33-min runner) went red on a
+  FOURTH: `test_repl_session::test_slow_code_does_not_block_the_event_loop`
+  slept a fixed 0.3 s before checking its heartbeat and then barred the MAX
+  GAP at 0.5 s. It now waits for the heartbeat itself and asserts the ticks
+  that land DURING the awaited 2 s call (>= 5; a call on the loop leaves 0-1;
+  `_exchange` put back on the loop: both variants red). No max-gap bars remain
+  in tests/.
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of
