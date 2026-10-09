@@ -2993,6 +2993,14 @@ does not need a bump, stop and bump it.
   reads now use `flushUntil` (flush, check, up to 10 ticks = 1.3 s of fake
   time, under the 2 s poll). Shipped from a worktree at origin/master so
   the running wave 3 commits stayed out.
+  v1.327.2 (test-only): v1.327.1 was red AGAIN on the same test — the real
+  cause: MissionOutput (where mission-report lives) is a LAZY next/dynamic
+  module; on a slow runner it lands after the cards, so the report had
+  nowhere to show (v1.327.1's flushUntil only shortened the wait). Both
+  openStream helpers now `findByTestId("mission-tab-report", {}, {timeout:
+  10_000})` first. Reproduced by delaying loadMissionOutput 1.5 s: the
+  v1.327.1 test fails with CI's exact error, the fix passes 35/35. Rule: a
+  test on a page with a next/dynamic panel waits for the PANEL first.
 
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo

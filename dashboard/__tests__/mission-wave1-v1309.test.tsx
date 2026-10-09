@@ -461,7 +461,7 @@ describe("a link opens Your team on one agent (contract 8)", () => {
 /** v1.327.1: flush, check, and flush again while the check fails. Only the
  *  intervals are faked, so a waitFor alone can never fire the next flush: on
  *  a slow runner the report can need one more tick than a single flush gives
- *  (CI went red here with no mission-report at all). Ten ticks = 1.3 s of
+ *  (see openStream for the lazy panel this used to be blamed for). Ten ticks = 1.3 s of
  *  fake time, under the 2 s poll, so nothing else is set off. */
 async function flushUntil(check: () => void, tries = 10): Promise<void> {
   for (let i = 0; ; i += 1) {
@@ -492,6 +492,10 @@ describe("while the team works", () => {
   async function openStream() {
     render(<AgentsPage />);
     await screen.findByTestId("mission-card-researcher");
+    // v1.327.2: the result panel (MissionOutput) is a LAZY module
+    // (next/dynamic); on a slow runner it arrives well after the cards, and
+    // a report has nowhere to show until it does. Wait for it, generously.
+    await screen.findByTestId("mission-tab-report", {}, { timeout: 10_000 });
     await waitFor(() => expect(H.es.filter((e) => !e.closed)).toHaveLength(1));
     return H.es.filter((e) => !e.closed)[0];
   }
@@ -879,6 +883,10 @@ describe("a teammate's narration is not its draft (coordinator-narration-hijacks
   async function openStream() {
     render(<AgentsPage />);
     await screen.findByTestId("mission-card-researcher");
+    // v1.327.2: the result panel (MissionOutput) is a LAZY module
+    // (next/dynamic); on a slow runner it arrives well after the cards, and
+    // a report has nowhere to show until it does. Wait for it, generously.
+    await screen.findByTestId("mission-tab-report", {}, { timeout: 10_000 });
     await waitFor(() => expect(H.es.filter((e) => !e.closed)).toHaveLength(1));
     return H.es.filter((e) => !e.closed)[0];
   }
