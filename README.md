@@ -3,409 +3,158 @@
 # ⚡ IRON JARVIS
 
 [![Tests](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/RealDealCPA-VR/Iron-Jarvis?label=release)](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)
+![Windows](https://img.shields.io/badge/desktop-Windows-0078D4)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-blue)](LICENSE)
 
-### Your own local-first AI operating system.
+### The AI operating system you actually own.
 
-**Agents that plan, build, review, schedule, remember, and wire themselves into your world — running on *your* machine, under *your* control.**
+**One chat. A team of agents behind it. Your files, your models, your machine.**
 
-No cloud lock-in. No black boxes. Every action logged, every change reviewable, every secret encrypted on your disk.
+Every action logged. Every change reviewable. Every secret encrypted on your disk.
 
 </div>
 
 ---
 
-> **TL;DR** — Iron Jarvis turns a fleet of AI agents into a real operating system: **one chat surface** that answers in seconds and silently escalates to a full tool-using agent when the request needs real work, a **search bar in the title bar** that reaches every page, skill, and buried control by plain English, and a supervisor that delegates to specialist subagents in sandboxed git worktrees **you approve before merge**. Memory isn't a bullet point — it's a **3D constellation you can orbit**, wire together, and prune. A frontier-style desktop app (custom title bar, native window controls that follow your theme) wraps an **n8n-style workflow canvas**, **voice chat**, a **creative studio**, and a **live dashboard for the GPUs you own**. Runs **fully offline** with a deterministic mock model; bring your own key, your own subscription CLI, or your own hardware when you want the real thing.
-
-> **Platform support:** the packaged desktop app (installer + auto-update + multi-terminal ConPTY) ships for **Windows**. On macOS/Linux you can run the daemon + dashboard **from source** (`uv run ironjarvis serve` + `pnpm dev`); no installer is published for those yet.
+Iron Jarvis is a desktop app that turns AI models into a working system: **a chat that answers in seconds and quietly hands real work to a full tool-using agent**, a team of specialist agents you give one objective to, terminals running Claude Code or Codex side by side, schedules, workflows, memory, and documents. It runs on **your** computer. Bring an API key, your existing Claude or ChatGPT subscription login, or your own GPUs. Or run it fully offline with a built-in demo model.
 
 <div align="center">
 
-![Chat — one surface, frontier chrome](dashboard/proof/readme-chat.png)
+![Chat with a chart, a sortable table and a kept earlier version](dashboard/proof/readme-chat.png)
 
-*One surface. Ask anything — quick answers come straight back; real work escalates to a full agent by itself. No mode picker anywhere.*
+*A reply with a chart and a sortable table. "‹ 2 / 2 ›" means the earlier answer was kept, not thrown away. (Sample data.)*
 
 </div>
 
----
+## 🔥 Why it's different
 
-## 🔥 Why Iron Jarvis
-
-You've used AI chat. This is the next thing: **AI that does the work and shows you exactly what it did.**
-
-- **It's an OS, not a chatbot.** A Supervisor decomposes your goal, spins up specialist subagents (Planner, Builder, Reviewer, Researcher…), and each works in an isolated, disposable workspace.
-- **One surface, zero routing.** There is no chat-vs-agent switch: every message starts as a fast answer, and when a request needs sustained tool work the turn hands itself to a full agent — visibly, with a reason — instead of ever telling *you* to go flip a mode.
-- **You stay in control.** Every tool call passes a **fail-closed permission engine**. Risky actions ask first. Code changes land on a git branch and **never auto-merge** — you review the diff and approve.
-- **It remembers — and shows you.** Four-layer memory (session → project → user → org) plus **memory bases** you plug in: a folder or Obsidian vault, Notion, a cloud drive, a machine over SSH, or an MCP memory server — bindable **per project**, so a client engagement recalls that client's notes and nothing else. The whole thing renders as a **3D graph** you can orbit, connect, and prune.
-- **It plugs into your world.** Encrypted secrets vault, integrations, Slack/Telegram/Discord alerts, inbound + outbound webhooks, cron-scheduled tasks, cross-drive file search.
-- **Agents extend themselves.** They can create new agents, schedule their own jobs, add webhooks, write to long-term memory, and **build workflows you then see and edit on a visual canvas.**
-- **Local-first & private.** SQLite by default, secrets encrypted at rest, sandboxed execution. The network is optional.
+- **It does the work and shows its receipts.** Every reply says which model answered it, which tools ran, and which files it made. A tool the turn wasn't given is refused and recorded, never quietly run.
+- **There's no mode picker.** You just ask. A quick question gets a quick answer, and a job that needs files, tools and several steps turns into a full agent run on its own, with the reason shown.
+- **It never moves your data behind your back.** If your local model is down, it says so **by name** instead of quietly sending your conversation to a cloud API. Only **Auto**, if you pick it, may switch providers.
+- **You approve what matters.** Risky actions ask first. Code changes land on a git branch and **never auto-merge**. Reversible actions (file writes, documents, notes, settings) have an **Undo**.
+- **Local-first.** SQLite on your disk, secrets encrypted at rest, sandboxed execution. The network is optional.
 
 ---
 
 ## ✨ Highlights
 
-| | |
-|---|---|
-| 🧠 **Multi-agent orchestration** | Supervisor → subagents, isolated context, summarized results |
-| 🙋 **One Iron Jarvis, however you reach it** | a **You** page holds who you are, how you want answers written (length, reading level, formatting, tone, an **accessibility mode** for dyslexic reading), and which language they come back in — injected into **every** model, in chat, on your phone, and inside agent runs. Switching from a 14B local model to a cloud one changes what it can do, not how it talks to you |
-| 🖋️ **Train it on you** | paste things you've written and it describes **how you write** — style only, never what the samples were about — then proposes a voice card you edit before it is saved. Nothing is fine-tuned: your notes, wiki, past conversations, and folders stay on your machine and become retrieval context |
-| 📐 **Context it can't overflow** | every turn is budgeted against the answering model's real context window — stale tool output trimmed first, older turns condensed into a labelled recap, the newest question never sacrificed — and the composer shows the headroom before you hit it |
-| 🔒 **Fail-closed permissions** | allow / ask / deny on every tool; `shell` stays locked down |
-| 🌳 **Git-native sessions** | branch → work → diff → **you approve** → merge (no auto-merge) |
-| 🧩 **n8n-style workflows** | drag step-nodes, wire them, run the graph — agents can build them too |
-| 📁 **Projects as a context spine** | a brief, custom instructions, a real folder, and a knowledge base — every chat, task, and agent run inside a project inherits all of it |
-| 💬 **One chat surface** | no chat/agent toggle — answers come back in seconds, and a turn that needs real multi-step work escalates itself to a full agent with a visible reason. Type **/** anywhere in a message to invoke a skill; drop files anywhere on the page; armed tools, skill, workspace, and model persist **per thread**. Each thread's ⋯ menu renames, pins, commits to memory, **adds it to a project**, or deletes. One-click **Share**: verbatim transcript or an AI-compacted digest |
-| 📱 **Chat from your phone** | make a Telegram destination **two-way** ("Chat with Iron Jarvis from this destination") and text your bot like a person — same brain, same memory, full tools, behind a fail-closed sender allowlist. The conversation lands in the desktop **Chat** page's shared history, a desktop reply goes back out to your phone, and `/new` starts a fresh thread |
-| 🌐 **Your own browser, as a capability** | the installer ships a small **browser add-on**; load it into the Chrome or Edge you already use, pair it from inside Iron Jarvis, and ask about the page in front of you — no copy-pasting a URL. It can click, type and navigate too, and anything that changes a page is gated: a target that looks destructive or transactional, or that cannot be identified at all, stops and asks you first. Whatever harness you pick in **Build** drives the *same* browser through the same gates. Ships **off**, and looking is a separate setting from acting. Page text is untrusted data, so a page cannot give Jarvis orders, and no field value is ever collected, so a password never leaves your browser |
-| 🖥️ **Your own GPUs, watched live** | a **Local fleet** page for the machines you own: tokens/sec, concurrency, queue depth, models loaded, VRAM, context windows — and a metric it *can't* read says so instead of showing a fake zero |
-| 🎬 **Creative studio** | generate images, video, music, and speech; browse your own media folders in a Library; and drive an AI coding CLI in a managed terminal that saves straight into the folder you picked |
-| 🧪 **The code agents write, kept** | when an agent solves something by writing a script, that script used to die with its disposable workspace. Now it lands in **Artifacts** — read the source, see its real exit code and output, and **run it again** in its own durable folder, months later |
-| 🎙️ **Voice chat** | hands-free in Chat: speak, it answers out loud — with **offline speech-to-text bundled** (Vosk), so dictation works in the desktop app with no key and no cloud |
-| 🗝️ **Encrypted secrets vault** | API keys / OAuth / tokens, shared by every subsystem, never shown to agents |
-| 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
-| 🔭 **Observability** | live event stream, traces, per-run evaluation metrics |
-| 🕰️ **Audit + time-travel** | one replayable **Activity** timeline of every action, tool, token & decision — and **undo** any reversible action (file writes, documents, notes, settings) with a since-changed guard so a rollback never clobbers newer work |
-| 🖥️ **Frontier desktop chrome** | a custom title bar with **native window controls that follow your theme** (five arc-reactor Marks, including a full light mode), a hamburger nav drawer, and real-time everything |
-| 🔭 **Search as the front door** | the search field lives **in the title bar**: type "redact", "rename endpoint", or "auto-approve" and land on the exact card, mid-page, highlighted — pages, skills, chats, and projects in one index, with an **"Ask Iron Jarvis"** fallback so no query ever dead-ends |
-| 🕸️ **A 3D memory you can touch** | the memory graph is a WebGL constellation — bloom-lit nodes (text on **hover**, not clutter), your hand-drawn links glowing with particles against the similarity mesh, an ambient orbit that yields the moment you grab it, and a sidecar that shows any node's **full contents** with one-click connect / delete |
-| 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
-| 🔍 **Scans, found page by page** | a scanned document gets transcribed automatically — and a PDF that is mostly typed text with a **scanned page stapled into the middle** is caught too: the pages that are pictures are located individually (deterministically, in milliseconds, no model) and only those are transcribed, so the page cap is spent on scans instead of on the typed pages in front of them |
-| 🕶️ **PII redaction** | say "redact the PII" (or invoke the **/pii** skill) and get a privacy-safe copy in the **same format and styling** — SSNs/EINs, emails, phones, cards, accounts, DOBs, addresses blacked out (█), labeled, or removed; deterministic detection, the original file never touched, and PDFs **rebuilt** rather than cosmetically painted over (fake black boxes leave text extractable — this refuses to do that) |
-| 🌱 **Self-correcting** | feedback + reflections become lessons — deduped and **distilled by a real model** into short reusable guidance injected into future runs |
-| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic / OpenAI / xAI / OpenRouter), log in with your **Google account for Gemini**, or just be logged into the **`claude` / `codex` CLI** and Iron Jarvis **inherits that subscription login automatically** (it never logs in for you) |
-| 🦙 **Or stay fully local** | point it at **Ollama**, vLLM, LM Studio, a LiteLLM proxy — any OpenAI-compatible endpoint. Add as many as you own; each becomes its own provider. The **OpenCode CLI** connects too, deliberately restricted to models your own hardware serves |
-| 🔎 **Real web research + MCP** | keyless `web_search` (Brave → DuckDuckGo fallback ladder, freshness filters) **plus `web_fetch`** to read the actual page, so answers ground in content rather than snippets — and an **MCP client** to consume external MCP servers as native tools |
-| 🛠️ **Edits itself** | an opt-in **Maintainer** agent can read/edit/test/fix Iron Jarvis's own source on a review-gated worktree |
-| ⏹️ **Full session control** | stop, rerun, continue (multi-turn), delete, and export any run; per-run **token usage** is tracked |
-| 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
-| 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
-| 🚀 **Guided first run** | a **code-signing-ready** Windows installer + an in-app onboarding wizard — connect a model, test your mic, run your first task, all before you leave the window |
-| 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
-| 🧾 **The roster is the contract, no cloud by fallback, honest outcomes** | an agent or a chat can only call the tools it was armed with — any other call is refused and ledgered as *not armed*; a local model that is down or answers with an error refuses **by name** instead of quietly failing over to a cloud API (`local_primary_policy = refuse` by default; Auto is the one route that may substitute); and every finished run carries an outcome beside its status — *completed*, *with failures*, or *needs you* — derived from the ledger, never from the model's closing paragraph |
-| ✅ **Tested offline, enforced in CI** | the whole suite runs green with no network and no API keys — the live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml), not hand-edited here |
+### 💬 Chat that keeps up with you
+- **One surface for everything.** Type **/** for a skill, drop files anywhere, and pick a project so every reply grounds in its brief, instructions, folder and knowledge.
+- **Charts and tables in replies.** Answers can include bar, line and pie charts you can flip to a table. Tables sort when you press a column heading and copy or download as CSV.
+- **Nothing gets lost.** Editing a question or pressing Try again keeps the old answer, and **‹ 1 / 2 ›** flips between them. You can also retry one reply with a different model.
+- **Keeps up while it works.** Steer a reply mid-answer, or queue your next message (**Ctrl+Enter**) to send when this one finishes. You can also quote part of an answer, **Continue** a reply that was cut off, and see the model's thinking separately from its answer.
+- **Ask about this page.** Press **Ctrl K** on any screen and type "explain this page". What that page shows goes along with your next question.
+- **Change settings by asking.** Say "turn on follow-up suggestions" and a card shows what changed, with **Undo**. Protected settings always ask first, and keys go into a secure box instead of the chat.
+- **Voice, offline.** Speech-to-text is bundled (Vosk), so dictation works with no key and no cloud.
+
+### 🤖 Agents that do real work
+- **Missions.** Give the team one objective. Jarvis splits it among specialist agents (planner, builder, reviewer, researcher and so on). Progress only shows a number when it counts finished steps, and the finished deliverable is shown first.
+- **Agents you can hire.** A custom agent gets a job card, a monthly budget that pauses it when spent, its own notes folder, and a coach that suggests better instructions for you to accept or decline.
+- **Build.** Tiled live terminals for Claude Code, Codex, Grok and your shells. A pane keeps running when you leave the page.
+- **Many accounts, one switch.** The bundled [Iron-Proxy](https://github.com/RealDealCPA-VR/Iron-Proxy) holds several Claude, Codex or Grok logins. When one hits its limit, the next one takes over, but never a different provider. In Build, **Continue on the next account** carries a Claude Code conversation over.
+- **Automations without cron.** Schedules, a visual workflow canvas, webhooks, and triggers that start work from email, calendar or Slack. Agents can create schedules, workflows and webhooks too, and you can see and edit what they made.
+- **Fixes itself.** An opt-in Maintainer agent edits Iron Jarvis's own source on a review-gated branch.
+
+### 🧠 It knows you and your stuff
+- **One you, every model.** A **You** page sets who you are, how answers should read, and the language they come back in. Every model in chat, on your phone and inside agents gets it.
+- **It learns what you prefer.** Say "from now on…" and it remembers, then shows that on the receipt. Correct it the same way twice and it asks once whether to keep the rule. It can also share your profile with Claude Code and Codex in Build if you switch that on.
+- **Memory you can touch.** Four memory layers, plus bases you plug in with **Add a memory base**: a folder or Obsidian vault, Notion, cloud drives, a machine over SSH, or an MCP memory server. Each project picks its own. All of it renders as a 3D graph.
+- **Every file type.** Read and write PDF, Word, Excel, PowerPoint, CSV and Markdown. Scanned pages are found page by page. **PII redaction** really deletes the text from a PDF and re-reads the result to prove it's gone.
+- **Creative studio.** Generate images, video, music and speech, and browse your own media folders.
+
+### 🔌 It plugs into your world
+- 🌐 **Your own browser, as a capability.** The installer ships a small browser **add-on** for Chrome or Edge. Pair it and ask about the page in front of you, or let it click, type and navigate. Anything that looks destructive or transactional stops and asks first. Page text is treated as data, so a page can't give Jarvis orders, and form values are never collected. Whatever harness you pick in **Build** drives the *same* browser through the same gates.
+- 📱 **Chat from your phone.** Text your Telegram bot like a person. It has the same memory and tools behind a sender allowlist, and the conversation shows up in the desktop chat.
+- 🧩 **MCP apps.** MCP servers become tools in chat and in agents. A server can ask you a question or report progress, and you answer it right in the chat. A tool a server adds later that can write is held until you approve it.
+- 🖥️ **Your own GPUs, watched live.** Tokens/sec, queue, VRAM and context windows for every local server you run. A number it can't read says so rather than showing zero.
+
+### 🛡️ Trust you can check
+- 🧾 **The roster is the contract, no cloud by fallback, honest outcomes.** An agent or chat can only call the tools it was given; anything else is refused and logged as *not armed*. A local model that is down or errors refuses **by name** instead of failing over to a cloud API (`local_primary_policy = refuse` by default; Auto is the one route that may substitute). And every finished run carries an outcome beside its status (*completed*, *with failures* or *needs you*) taken from the ledger, never from the model's closing paragraph.
+- **The bell** lists every run that is waiting for you, and an ask nobody answered ends up on the session's outcome (*needs you*), not in a forgotten corner.
+- **Context is screened.** Project notes, attachments, outside skills, memory and tool results are scanned for hidden instructions before a model sees them. Work that arrives from your phone, or touches flagged content, runs with fewer powers.
+- **Safety checks** run rules over what Jarvis did, and over your Claude Code and Codex history, which it reads but never changes. **Activity** replays every action, token and decision, and is where you Undo.
 
 <div align="center">
 
-![Global search](dashboard/proof/readme-search.png)
+![Ctrl K search](dashboard/proof/readme-search.png)
 
-*The front door: one search over pages, skills, chats, and buried controls — with card-level deep links and an ask-the-AI fallback.*
+*Ctrl K reaches every page, skill, chat and buried setting, and always ends with "Ask Iron Jarvis".*
 
 </div>
 
 ---
 
-## 📦 Installation
+## 📦 Install
 
-**Two ways to run it. Most people want Option A.**
+### 🪟 Windows desktop app (recommended, no dependencies)
 
-### 🪟 Option A — the Windows desktop app (recommended · zero dependencies)
+1. **Download** `Iron-Jarvis-Setup-<version>.exe` from the **[latest release](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)**. Ignore the `.blockmap` and `latest.yml` files; the updater uses those.
+2. **Install.** The app isn't code-signed yet ([why](docs/SIGNING.md)), so SmartScreen shows *"Windows protected your PC"*. Click **More info → Run anyway**.
+3. **Connect a model.** The app opens on chat. If you're signed in to the `claude` or `codex` CLI, or Ollama is running, the composer offers that model with one tap. It never picks one for you. You can also paste an API key (Anthropic, OpenAI, xAI, OpenRouter), point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server, or connect Gemini with your own Google OAuth app under **Settings → Connections**. Until you choose a model, a **Simulated mode** strip reminds you that replies come from the offline demo.
 
-A single self-contained installer that bundles a PyInstaller-frozen daemon **and** the Next.js dashboard. **No Python, Node, uv, or pnpm needed on the machine** — install it and it opens in a native window.
+Iron Jarvis inherits your subscription through the logged-in CLI. It never performs an account login itself and never sees that credential.
 
-#### 1 · Download
+**Day to day**
+- **Closing the window doesn't quit.** It goes to the tray so schedules and triggers keep running. Reopen it with **Ctrl+Shift+J** (or **Ctrl+Alt+J** if another app holds that). **Ctrl+Shift+Space** opens a quick ask from anywhere.
+- **Updates install themselves.** New versions download in the background and install when you click **Restart to update**.
+- **Your data lives in `%APPDATA%\Iron Jarvis`** and survives updates and reinstalls.
 
-Go to the **[Releases page](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)** and download the one file named **`Iron-Jarvis-Setup-<version>.exe`** (ignore `.blockmap` and `latest.yml` — those are for the auto-updater). Your browser may warn about an uncommonly-downloaded file — choose **Keep**.
+**If something looks wrong:** *"Daemon offline"* only appears after two missed polls. If it stays, quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then go to **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why. `ironjarvis doctor`, `repair`, `rollback`, `reset-config` and `backup`/`restore` are one-command recoveries that work even when the daemon won't start.
 
-#### 2 · Install
+### 💻 From source (macOS / Linux / Windows)
 
-Run the installer. Windows SmartScreen will show *"Windows protected your PC"* because the app isn't code-signed yet ([why, and what signing would take → docs/SIGNING.md](docs/SIGNING.md)) — click **More info → Run anyway**. This happens **once per download**, not every launch. Pick an install folder (or keep the default) and finish; Iron Jarvis appears in the Start menu.
-
-#### 3 · First launch
-
-The app boots its own private daemon on loopback `127.0.0.1:8787` (token-protected, per-install — nothing is exposed to your network) and opens the dashboard in a native window. A **first-run guide** walks you through the two steps that matter:
-
-1. **Connect a model** — on the **Connections** page, either paste an **API key** (Anthropic / OpenAI), point it at a **local Ollama** (free, fully private), or simply be logged into the **`claude` / `codex` CLI** and Iron Jarvis inherits that subscription automatically. (Google Gemini connects with an account login there too.) Until a model is available, a persistent **"Simulated mode"** banner reminds you that replies come from an offline mock.
-2. **Run one real task** — type anything ("summarize the files on my desktop") and watch it work.
-
-You can skip the guide and explore in demo mode — the banner keeps you honest.
-
-#### 4 · Daily use
-
-- **Closing the window doesn't quit.** Iron Jarvis minimizes to the **system tray** so schedules, webhooks, sentinels, and integrations keep running for weeks. Reopen with the tray icon or **Ctrl+Shift+J** (or **Ctrl+Alt+J** when another app holds it — the tray menu and the Overview tips card show the live key); **Ctrl+Shift+Space** opens Spotlight (quick ask) from anywhere. To fully stop it: tray icon → **Quit Iron Jarvis**.
-- **Updates are automatic.** The app checks GitHub Releases at launch and every 30 minutes, downloads new versions in the background, and installs only when you click **Restart to update** (tray menu, notification, or the Updates page).
-- **Your data lives in `%APPDATA%\Iron Jarvis`** — config, the SQLite database, encrypted secrets, memory, and backups. It survives every update and reinstall. Uninstalling from Windows Settings removes the app but leaves that folder (delete it manually for a full wipe).
-
-#### If something looks wrong
-
-- *"Daemon offline" in the dashboard* → the app supervises and restarts its daemon automatically, and the banner needs two missed polls before it shows. If it stays: quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why.
-- *"Port 8787 already in use" on launch* → another program (or a second Iron Jarvis) owns the port; close it and relaunch.
-- The **System health** card on the Overview page (with **Advanced** switched on in the nav) and the doctor checks in the setup card show exactly what's unhappy — errors are always shown honestly, never papered over.
-
-#### Build the installer yourself (optional — needs Node 20 + pnpm + uv)
-
-```powershell
-pnpm --dir desktop run dist:full     # → desktop/release/Iron-Jarvis-Setup-<version>.exe
-```
-> Use **`dist:full`**, not bare `pnpm dist` (which ships a broken, daemon-less installer). Building locally needs **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — electron-builder unpacks a cache containing macOS symlinks. You only need this to *build* the installer, not to *run* it. Or let CI do it: bump the version in `pyproject.toml` + `src/iron_jarvis/__init__.py` + `desktop/package.json` and push to master — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and publishes the installer on a GitHub runner.
-
-### 💻 Option B — run from source (for developers)
-
-**Prerequisites:** **Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, **Node 20+**, **[pnpm](https://pnpm.io/)** (and **git** for git-native sessions).
+Needs **Python 3.12+**, [uv](https://docs.astral.sh/uv/), **Node 20+** and [pnpm](https://pnpm.io/).
 
 ```bash
 git clone https://github.com/RealDealCPA-VR/Iron-Jarvis && cd Iron-Jarvis
-uv run ironjarvis doctor                              # verify the machine is ready
-uv sync --extra dev                                   # install the daemon + Python deps
-cd dashboard && pnpm install && pnpm build && cd ..   # build the dashboard once
-uv run ironjarvis up                                  # daemon :8787 + dashboard :3000, opens your browser
+uv sync --extra dev
+cd dashboard && pnpm install && pnpm build && cd ..
+uv run ironjarvis up          # daemon + dashboard, opens your browser
 ```
 
-Prefer two terminals? `uv run ironjarvis serve` + `cd dashboard && pnpm start`. Want a native window over the source checkout? `cd desktop && pnpm install && pnpm start`.
-
-> **Try it with zero setup / zero keys:** `uv run ironjarvis demo` runs end-to-end **offline** with a deterministic mock model, and `uv run pytest -q` runs the full offline suite — all green with no network.
-
-### 🧠 One brain across every project
-
-By default each working directory gets its **own** isolated `.ironjarvis/` home (DB, secrets, memory) — projects stay fully separate. To use **one shared brain — the same keys, memory, and history — across every project** you work in, point `IRONJARVIS_HOME` at a fixed location:
-
-```bash
-export IRONJARVIS_HOME="$HOME/.ironjarvis"                     # macOS / Linux
-# PowerShell:  setx IRONJARVIS_HOME "$env:USERPROFILE\.ironjarvis"
-```
-
-Now `ironjarvis serve` from any folder shares one vault + memory while still operating on that folder's files. (The desktop app already pins one per-install home.)
-
-Open the dashboard, hit **New Session**, and watch agents work in real time.
-
-**Connect a real model** — in the dashboard's **Connections** page or the CLI:
-```bash
-uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
-# the provider flips to "available" instantly — sessions route to it, no env vars
-```
-- **Use your Claude / ChatGPT subscription — by inheriting your CLI login.** Iron Jarvis **never performs an account login itself**. If you're already signed into the **Claude CLI** (`claude`) or **Codex CLI** (`codex`) on this machine, that subscription login is inherited automatically: a Claude/OpenAI request with no API key runs through the logged-in CLI, which owns the credential (Iron Jarvis never sees or stores it). This is the sanctioned way to use a Pro/Max or ChatGPT plan programmatically. Installed is not connected (v1.234.0): the app asks the CLI whether it is signed in, and a logged-out CLI reads **Installed — not signed in** with the exact command to fix it instead of failing your first message. Claude-backed agent sessions, workflows, and armed chat work the same on the inherited login as on an API key — just slightly slower (a fresh CLI process per step), and inline image analysis needs an API key.
-- **API key** — paste one for **Anthropic or OpenAI** (xAI and OpenRouter work too) on the Connections page (or `ironjarvis connect anthropic sk-ant-...`); it's stored encrypted in the vault and used directly against the provider's API. **Google Gemini** uses an account login instead of a key — see the OAuth note below. A stored key always takes the direct-API path, unaffected by the CLI inheritance above.
-- **Memory sources (Google Drive / Dropbox / OneDrive) and Gemini** connect with your **own** registered OAuth app (you bring the client id) — a standard OAuth 2.0 + PKCE flow used only for the accounts and files you point it at. Tokens live only in the encrypted vault.
-- **Fully local?** Point it at **Ollama**, vLLM, LM Studio, or a LiteLLM proxy on the Connections page — no key, no network. Add as many machines as you own: each becomes its own provider with its own health, and the **Local fleet** page shows what they're doing. The **OpenCode CLI** connects too, restricted on purpose to models your own hardware serves so a hosted tier can never bill you by surprise.
+No keys? `uv run ironjarvis demo` runs end to end with the offline demo model. To run it on a server, see [`DEPLOY.md`](DEPLOY.md) (Docker Compose, Render, Railway, DigitalOcean, AWS, Azure). The API runs code by design, so read the security checklist there first.
 
 ---
 
-## ☁️ Deploy to your own server (optional)
-
-Want it always-on? Ship it to a VPS in a couple of clicks — **full guide + one-click buttons in [`DEPLOY.md`](DEPLOY.md)** (Render, Railway, DigitalOcean, AWS, Azure).
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis) [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis/tree/master)
-
-*(The Render and DigitalOcean buttons carry this repo. **Railway** works too — follow the manual steps in [`DEPLOY.md`](DEPLOY.md); the generic "deploy on Railway" button doesn't carry a repo, so we link the guide instead of a one-click that wouldn't.)*
-
-```bash
-docker compose up        # daemon + dashboard, locally or on any Docker host
-```
-
-> 🔒 **Before exposing it publicly:** set `IRONJARVIS_TOKEN` (protects the API — it's RCE-by-design), serve over HTTPS, set `IRONJARVIS_CORS_ORIGINS` to your dashboard origin, persist `.ironjarvis/` on a volume, and keep **computer use off** unless you run it in a disposable VM. The `DEPLOY.md` security checklist walks through it.
-
----
-
-## 📖 Using Iron Jarvis — a practical guide
-
-> **The full documentation set** lives in `docs/`:
-> **[The Handbook](docs/HANDBOOK.md)** (every surface, the trust model,
-> troubleshooting) · **[Recommended Settings](docs/RECOMMENDED-SETTINGS.md)**
-> (a tuned daily-driver profile) · **[Local Models by RAM
-> Tier](docs/LOCAL-MODELS.md)** (what to run at 8/16/32/64/128 GB and how to
-> wire it) · **[The Comprehensive To-Do](docs/TODO.md)** (everything open,
-> consolidated).
-
-### Update, recover & self-heal 🔄
-
-**Stay current.**
-- **Installed app:** it **auto-updates** from GitHub Releases on launch (electron-updater). Cut a release by **bumping the version in `pyproject.toml` + `src/iron_jarvis/__init__.py` + `desktop/package.json` and pushing to master** — CI creates the tag, builds the frozen daemon + installer, and publishes them; the desktop app picks it up on next launch and rolls back automatically if a bad update won't boot.
-- **From source:** `uv run ironjarvis self-update` (or the dashboard's **Updates** page) does `git pull` + `uv sync` + a dashboard rebuild, gated behind the test suite, then asks you to restart; `ironjarvis update-check` just reports whether you're behind upstream.
-
-**When something breaks, fix it from within.** Iron Jarvis is built to self-correct — every recovery is a single command (or a dashboard button), and they work **even when the daemon won't boot**:
-
-| Command | What it does |
-|---|---|
-| `ironjarvis doctor` | Diagnose the install (missing model, DB issue, secrets-key mismatch) with an actionable fix for each. |
-| `ironjarvis repair` | Re-sync deps + check/recover the database — restores your latest backup if the DB is corrupt. |
-| `ironjarvis rollback` | Undo a bad self-update: reset to the exact pre-update commit + re-sync. |
-| `ironjarvis reset-config` | Restore a wedged `config.toml` to defaults (keeps a `.bak`). |
-| `ironjarvis backup` · `ironjarvis restore <file>` | Snapshot / restore your whole state. An automatic backup also runs every 24h. |
-
-On top of that it self-heals silently: a **corrupt database is quarantined at boot** and a fresh one created so the daemon **always starts**, a mistyped `config.toml` **falls back to defaults** instead of bricking boot, and interrupted **sessions, reviews, and schedules rehydrate** on restart.
-
-> The packaged app bundles everything except the two opt-in *advanced* features — **computer-use** browser automation and the **Docker** sandbox — which need extra local setup; everything else (models, Ollama, memory, schedules, workflows, terminals…) works out of the box.
-
-### Work inside a project 📁
-**Dashboard → Projects.** A project is the context spine: give it a **brief**, **custom instructions**, a **folder on disk**, and a **knowledge base** (upload documents or paste notes). Everything you do inside it inherits that context — chats scoped to it, file tasks that write deliverables straight into the folder, and any agent session tagged to it. Conversations happen in the main **Chat** with the project selected in its panel (hit **Open in Chat** from the hub); the hub keeps the management surfaces — tasks, board, media, knowledge. Sessions, threads, and terminals carry the project badge, so a month later you can see exactly what happened for which client.
-
-### Chat with your tools armed 💬
-**Dashboard → Chat.** One surface: ask anything and quick answers come straight back; when a request needs sustained multi-step work, the turn **escalates itself to a full agent** and says why — you never pick a mode. Type **/** anywhere in a message to invoke a skill (its playbook arms its own tools). Leave **Auto** on and each request **arms the tools it needs by itself** — mention a spreadsheet and document tools arm, paste a link and web fetch arms, ask for a report and document writing arms (from a safe set only: files, documents, web, images — never shell, browser, or paid media). Or arm exactly what a turn may touch from the **+** menu; explicit picks always win, and every reply lists which tools actually ran. Pick a skill or persona — that setup **sticks to the thread**, so round two of a recurring job starts where round one left off. The right-hand **Project panel** scopes the whole surface: pick a project (or any folder — one click turns it into a project) and replies ground in its instructions + knowledge, threads filter to it, and file tools aim at its folder. One click flips **Web** research on. Replies that used the web show their **sources**. Hit **Share** to hand someone the whole conversation or an AI-compacted digest, as Markdown or a standalone web page.
-
-### Watch the machines you own 🖥️
-**Dashboard → Local fleet** (Advanced). Every local inference server in one place: what's **loaded**, **tokens/sec**, **running vs queued** requests, **KV-cache pressure**, **VRAM**, and **context windows** — with a live sparkline per node. A LiteLLM-style proxy expands into the backends behind it. Anything that can't be read from this machine says so with the one command that fixes it, and a local-vs-cloud strip shows what your own hardware saved you against a **named** baseline model. Endpoints you already configured appear automatically.
-
-### Make media (and drive a coding CLI) 🎬
-**Dashboard → Creative.** Generate images, video, music, and speech, then browse everything in a gallery — plus a **Library** that reads your own media folders (`D:\Videos` and friends). The **Studio** tab is the interesting one: pick an engine (Claude Code, Codex, Grok, OpenCode…), a skill, and a destination folder, and Iron Jarvis opens a real managed terminal, launches that CLI hands-off, and types your brief in — new files land in the folder you chose. Share any result straight to X, WhatsApp, Telegram, email, or a copied link.
-
-### Manage multiple terminals (and pick a project) 🖥️
-**Dashboard → Terminals.** A tiled workspace of **live terminal sessions** — click the **`+` tile** to open another, so you can run/watch several agents or shells side by side. The **directory tree on the right** browses your computer (drives → folders, with git/python/node project badges); pick a folder and hit **"Open terminal here →"** to launch a terminal already `cd`'d into that project. Real PTYs (ConPTY on Windows), streamed over WebSocket.
-
-### Run a session (and dictate it 🎙️)
-**Dashboard → Sessions → New session.** Type a task — or **click an example chip**, **click the mic and speak it**, or **attach a file** for the agent to read. Pick an agent type (`builder`, `supervisor`, …) and a provider, then **Run**. The run streams its tool calls and events **live** on the session page. You can **Stop** a runaway run, **Rerun** it, **Continue** it (a multi-turn follow-up that reuses the workspace), **Export** the transcript (Markdown/JSON), or **Delete** it — and every run shows its **token usage**. Or from the terminal:
-```bash
-uv run ironjarvis run "Summarize the quarterly financials and draft an email"
-uv run ironjarvis cancel <session-id>     # stop a background run
-uv run ironjarvis rerun  <session-id>     # clone its inputs and run again
-```
-
-### Agents that build their own tools 🔧
-Iron Jarvis can **grow new capabilities at runtime**. From **Dashboard → Tools** (or when an agent calls `tool_create`), you define a reusable tool: a name, typed parameters, and a command template whose `{param}` placeholders are filled from the call arguments — e.g. `wc_lines(file)` → `["wc", "-l", "{file}"]`. The tool is **persisted and instantly available to every future agent and session** (it's advertised to agents via a `custom:*` capability), so a tool one agent builds, the next agent can use. Each runs argv-style (no shell, so a parameter value can't inject commands) inside the session workspace, gated under its own `custom:<name>` permission (defaults to *ask* — you approve the first use, like `shell`). Manage them on the Tools page.
-
-### Reuse tasks & watch your spend 📝💰
-**Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. The **search field in the title bar** (or **⌘K / Ctrl+K**) jumps to any page, skill, chat, or buried control — "redact" lands you on the Redact card itself, highlighted — and always ends with an **Ask Iron Jarvis** row so a query can never dead-end.
-
-### Settings, Self-development & Help
-**Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and every run that is waiting for you (a permission ask, a workflow question) — the same runs wear an amber **Waiting for you** chip; an ask nobody answered ends up on the session's outcome (*needs you*), not in the bell.
-
-### Watch it on the Kanban board
-**Dashboard → Kanban.** Sessions flow across **Active → In Review → Completed / Failed** lanes. For git-native sessions, **drag a card from In Review onto Completed to approve** (merge) or onto Failed to reject. Approve/Reject buttons are on each review card too.
-
-### Build a workflow visually (n8n-style)
-**Dashboard → Workflows.** Drag step-nodes onto the canvas, wire `Trigger → Gather → Draft → Review`, set each node's agent + task (mic included), and hit **Run workflow** — each step spawns a session. **Load** a saved workflow to edit it, **Save** your own. *Agents can create workflows here too — when one does, it appears on your canvas to inspect and manipulate.*
-
-### Let agents extend themselves
-Agents have self-service tools, so a single high-level task can ripple out:
-- `schedule_create` — an agent schedules a recurring job for itself
-- `webhook_add` — an agent wires an inbound/outbound webhook
-- `ltm_append` / `ltm_search` — an agent writes to & queries long-term memory
-- `file_search` — an agent searches across your drives
-- `workflow_create` — an agent authors a workflow **you then see and edit visually**
-- `create_agent` / `spawn_agent` — agents that add more agents (now on the **same model** as the parent, not the mock)
-- `web_search` / `web_fetch` — keyless search with a provider fallback ladder, then **read the page** so an answer is grounded in content, not snippets
-- **MCP tools** — any configured MCP server's tools appear as `mcp__<server>__<tool>` and are callable like native tools
-
-### Fix Iron Jarvis with Iron Jarvis (self-development)
-Opt-in (`self_dev_enabled` in config, or `--enable`): a **Maintainer** agent edits Iron Jarvis's *own* source on a git worktree. Changes are **review-gated — never auto-merged**; you approve the diff. Surfaces: `ironjarvis self-dev "fix X" --enable`, the **Self-development** dashboard page, or `POST /sessions {self_dev:true}`.
-
-### Run it locally, no cloud (Ollama)
-Set `ollama_base_url` in config (e.g. `http://localhost:11434/v1/chat/completions`) to route sessions through a local **Ollama** / OpenAI-compatible model — real intelligence with **no API key and no network**.
-
-### Schedules (no cron required)
-**Dashboard → Schedules.** Pick a **Repeat** preset (Hourly, Daily 9am, Weekdays 9am…) or choose **Once at a specific time** with a date picker. Each fire can run a workflow or emit an event.
-```bash
-uv run ironjarvis schedule-add nightly-books "0 2 * * *" --kind workflow
-```
-
-### Long-term memory (bring your own bases)
-**Dashboard → Memory → Long-term.** Search and append notes, or open the **Graph** view and orbit the whole thing in 3D. **Add a memory base** from a plain-English chooser — a folder on this PC (or Obsidian vault), Notion, Google Drive / OneDrive / Dropbox, a machine over SSH, an MCP memory server, or your own search endpoint — each tile says exactly what it will ask for. Then, **per project**, tick which bases that project reads: a client engagement recalls that client's notes without the rest of your memory bleeding in.
-```bash
-uv run ironjarvis ltm-append "Client checklist" "EIN, prior returns, bank statements"
-uv run ironjarvis ltm-search "onboarding"
-```
-
-### Secrets, connections & notifications
-- **Secrets** — encrypted vault; values are write-only and never shown to agents or the UI.
-- **Connections** — every account and endpoint in one place: AI accounts, local endpoints (rename them, remove dead ones), REST hookups, and plug-ins (MCP), each testable.
-- **Notifications** — where alerts go: Slack / Telegram / Discord / email destinations; Iron Jarvis auto-alerts on review-requested, workflow-completed, and provider-failed events.
-
-### Webhooks & file search
-- **Webhooks** — **+ Add webhook** (inbound or outbound, HMAC-signed); inbound gives you a `POST /webhooks/{slug}` trigger URL.
-- **File Search** — pick a **drive** (C:, D:, Home…) or a folder and search by name, content, or semantics.
-
-> **CLI cheat sheet:** `init · serve · up · run · self-dev · demo · cancel · rerun · delete-session · backup · restore · doctor · repair · rollback · reset-config · rotate-keys · prune-events · prune-worktrees · migrate · metrics · evaluate · memory-search · ltm-search · ltm-append · file-search · schedule-add · schedules · secrets · integrations · agents · create-agent · notify · workflow · connect · status`
-
----
-
-## 🏗️ Architecture
+## 🏗️ Under the hood
 
 ```
-Dashboard (Next.js)  ──REST + WebSocket──►  Daemon (FastAPI)
-                                              │  owns the Orchestrator + Event Bus
-        ┌─────────────────────────────────────┼───────────────────────────────┐
-   Orchestrator → Agent Runtime          Model Router → Provider Manager → Vault
-        │                                      │
-   Tool Registry + Permission Engine     Memory · Long-term Memory · Retrieval
-        │                                      │
-   Sandbox · Git/Review · Workflows · Scheduler · Webhooks · Integrations · Comm
-        └──────────────── Event Bus · Evaluation · Observability ──────────────┘
-                  Persistence: SQLite (WAL, self-healing additive migrations)
-                  — the only backend today; Postgres+pgvector is a planned
-                  engine-URL swap, not yet implemented.
+Desktop (Electron) ── tray · updates · hotkeys · pop-out windows
+   ├─ Dashboard (Next.js 15) ── chat, Build, projects, missions, memory graph, settings
+   └─ Daemon (FastAPI, 127.0.0.1:8787, token-protected)
+        ├─ Router ── providers · strict local refusal · breaker · Iron-Proxy accounts
+        ├─ Agents ── runtime · missions · assignments · coach · trust posture
+        ├─ Tools ── fail-closed permissions · undo journal · sandbox · MCP
+        ├─ Memory ── 4 layers · memory bases · lessons · graph
+        └─ Automations ── schedules · workflows · webhooks · triggers
+   SQLite (WAL, self-healing migrations) · Fernet-encrypted vault
 ```
 
-```
-src/iron_jarvis/
-  core/        config, events, db, models, logging, ids
-  tools/       registry, permissions (fail-closed), builtins, websearch, webfetch
-  providers/   manager, router, vault, opencode,
-               adapters/{mock,anthropic,openai,google,grok_cli,subprocess_cli,opencode_cli}
-  agents/      runtime, orchestrator, supervisor, dynamic + remote agents
-  fleet/       local GPU fleet: probes, Prometheus parser, sampler, registry
-  projects/    the context spine (brief, instructions, knowledge)
-  documents/   readers + writers for PDF / Word / Excel / PowerPoint / CSV / MD
-  creative/    media generation, gallery + library, the AI-CLI Studio
-  terminals/   real PTYs (ConPTY on Windows), restart-survival, AI-CLI launch
-  skills/  personas/  templates.py    reusable instructions, voices, saved tasks
-  sandbox/     native + Docker execution, §17 policies
-  memory/      4-layer memory + numpy retrieval          ltm/  Obsidian / Notion
-  secrets/     Fernet-encrypted shared vault             mcp/  MCP client
-  integrations/ comm/ webhooks/ scheduling/ filesearch/  connections/ connectors/
-  reflex/ triggers/    inbound email, calendar & Slack start work
-  motivation/ sentinels/ improvement/ learning/   the opt-in autonomy layer
-  git/         worktree sessions + review engine
-  workflows/   engine + triggers + persisted defs
-  eval/        evaluation, pricing + observability
-  daemon/      FastAPI app (REST + WS, ~24 route modules) + Typer CLI
-dashboard/     Next.js 15 control center — 41 pages (one-surface Chat, Projects,
-               Kanban, n8n canvas, Creative, Local fleet, 3D memory graph, voice)
-               + frontier chrome: TitleBar, nav drawer, global search
-```
-
-Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [`docs/`](docs/) for the build log and audit history.
-
----
-
-## 🛡️ Security & privacy
-
-- **Local-first.** All state lives under `.ironjarvis/` on your machine. The network is opt-in.
-- **Fail-closed.** Unknown or unconfigured tool → denied. `shell` and other dangerous tools never auto-run headless.
-- **Secrets encrypted at rest** (Fernet); agents can set/list names but **never read values**.
-- **No auto-merge.** Agents stop at the diff; humans approve.
-- **Sandboxed execution.** Structured file tools are workspace-confined; the **Docker** runtime adds a real filesystem/network/resource boundary (workspace-only mount, fail-closed network, CPU/memory/pid caps). The **native** runtime is best-effort (env scrubbing + timeouts only) — when an isolating policy is set, the shell tool prefers Docker and clearly flags any native fallback as unconfined. `shell` itself stays permission-gated (fail-closed headless).
-
----
-
-## ✅ Proof it works
-
-- **The full offline suite passes in CI on every push** (`uv run pytest -q`) — no network, no keys; the [Tests workflow](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml) is the source of truth for the count.
-- Live daemon serves every endpoint; the dashboard has a clean production build.
-- Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
+**Proof, not promises:** more than 11,000 backend tests and 4,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
 
 <div align="center">
 
 ![3D memory graph](dashboard/proof/readme-memory-graph.png)
 
-*The memory graph: hover for text, click for full contents, connect or prune from the sidecar — while the scene idles in a slow orbit.*
+*The memory graph: lessons, memories and notes as nodes. Solid lines are links you drew; dashed ones are computed similarity. Click a node to read it, connect it or prune it.*
 
 </div>
 
----
+## 📚 Learn more
 
-## 🗺️ Roadmap
-
-**Packs** — hand your whole working setup (skills, personas, permissions, a memory base) to a teammate as one installable bundle. A guided three-question first run. A recipes gallery of one-click automations. A mobile companion, distributed agent clusters, and team-shared org memory. The foundation is built — everything else stacks on top.
+- **[The Handbook](docs/HANDBOOK.md)** covers every surface, the trust model and troubleshooting.
+- **[Recommended settings](docs/RECOMMENDED-SETTINGS.md)** is a tuned daily-driver setup.
+- **[Local models by RAM tier](docs/LOCAL-MODELS.md)** says what to run at 8–128 GB and how to connect it.
+- **[What's next](docs/TODO.md)** lists everything still open.
 
 ## License
 
-Iron Jarvis is **free to use** — personally or inside your business — under the
-[Apache License 2.0 with the Commons Clause](LICENSE). In plain language:
-
-- ✅ **Use it** — run the app, for anything, including at work.
-- ✅ **Modify it** — fork it, change it, build on it.
-- ✅ **Share it** — redistribute copies and improvements (keep the license notice).
-- ❌ **Don't sell it** — you may not sell the software or any part of it, offer it
-  as a paid/hosted service, or charge for products whose value substantially
-  comes from Iron Jarvis.
-
-Because of the no-selling condition this is *source-available* software, not
-OSI-certified open source. If you want to do something commercial with it, open
-an issue and ask.
-
----
+**Free to use**, personally or inside your business, under [Apache 2.0 with the Commons Clause](LICENSE). You may use, modify and share it. You may **not sell it**, offer it as a paid or hosted service, or sell products whose value comes substantially from it. That makes it *source-available*, not OSI open source. Want to do something commercial? Open an issue and ask.
 
 <div align="center">
 
-**Iron Jarvis** — *the AI operating system you actually own.*
+**Iron Jarvis**: *the AI operating system you actually own.*
 
 Built with [Claude Code](https://claude.com/claude-code).
 

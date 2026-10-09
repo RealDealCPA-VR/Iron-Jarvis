@@ -2979,6 +2979,14 @@ does not need a bump, stop and bump it.
   that land DURING the awaited 2 s call (>= 5; a call on the loop leaves 0-1;
   `_exchange` put back on the loop: both variants red). No max-gap bars remain
   in tests/.
+  v1.325.4 (docs-only): README rewritten for the current app (412 → ~160
+  lines; the long how-to moved out — the Handbook owns it) and the three
+  `dashboard/proof/readme-*.png` re-shot from a SCRATCH stack (daemon 8797 +
+  `next dev` 8798, fictional seeded data, captions say "sample data"). README
+  wording is pinned by `test_browser_copy_v1235` (the browser line),
+  `test_handbook_current_v1232` (roster line, bell line, daemon-offline
+  phrases) and `vocabulary.test.ts` (no mode picker, no marketplace word,
+  the three screenshot names, "Add a memory base") — run them after any edit.
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of
