@@ -350,7 +350,14 @@ describe("the reply's reasoning, steps and timing are kept (v1.323.0)", () => {
       timing: { startedAt: 1000, firstTokenAt: 2200, endedAt: 4200 },
     });
     await send("when is it due?", "April 15.");
-    const fold = screen.getByTestId("thinking-disclosure");
+    // Calm chat W1-5 (v1.326.0): the reasoning now folds inside the reply's
+    // ONE work line ("Worked for … · read 1 file") with the steps, so the
+    // line is opened first; the reasoning itself is still folded inside it.
+    const work = await screen.findByTestId("work-line");
+    expect(within(work).getByTestId("work-summary").textContent).toBe("Worked for 3.2 s · read 1 file");
+    expect(within(work).queryByTestId("thinking-disclosure")).toBeNull();
+    fireEvent.click(within(work).getByRole("button", { expanded: false }));
+    const fold = within(work).getByTestId("thinking-disclosure");
     expect(fold.textContent).toMatch(/Thought for 2 s/);
     expect(fold.textContent).not.toMatch(/due dates/); // folded by default
     await waitFor(() => expect(savedMessages().at(-1)?.thinking).toBe("First I check the due dates."));

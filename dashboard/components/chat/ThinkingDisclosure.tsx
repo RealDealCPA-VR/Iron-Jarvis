@@ -3,7 +3,8 @@
 /**
  * The model's REASONING, folded away (v1.323.0). A model that thinks before it
  * answers streams that thinking as `thinking` frames; this is where it goes —
- * one quiet line under the bubble, closed by default, that opens onto the raw
+ * one quiet grey row (live: above the reply; settled: inside the reply's
+ * "Worked for …" fold since v1.326.0), closed by default, that opens onto the raw
  * text. It is never part of the reply and never rendered as markdown: it is
  * the model talking to itself, shown as it was written.
  *
@@ -40,32 +41,41 @@ export function ThinkingDisclosure({ text, live = false, seconds }: ThinkingDisc
   const [open, setOpen] = useState(false);
   const panelId = useId();
   if (!text || !text.trim()) return null;
+  // Calm chat W1-5 (v1.326.0): a grey one-line row like every other piece of
+  // process detail (components/chat/WorkLine) — a 14px icon, the words, a
+  // chevron — and the text opens under a hairline, never inside a box. While
+  // live the brain pulses softly; reduced motion keeps it still.
   return (
-    <div data-testid="thinking-disclosure" className="mb-1.5 text-xs text-zinc-500">
+    <div data-testid="thinking-disclosure" className="min-w-0 text-[13px] leading-5 text-zinc-500">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 transition-colors hover:text-zinc-300"
+        className="inline-flex max-w-full items-center gap-2 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none"
       >
-        {open ? (
-          <ChevronDown size={11} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight size={11} className="shrink-0" aria-hidden="true" />
-        )}
         <Brain
-          size={11}
-          className={`shrink-0 ${live ? "animate-pulse" : ""}`}
+          size={14}
+          className={`shrink-0 ${live ? "animate-pulse motion-reduce:animate-none" : ""}`}
           aria-hidden="true"
         />
-        <span data-testid="thinking-summary">{thinkingSummary(live, seconds)}</span>
+        <span
+          data-testid="thinking-summary"
+          className={live ? "animate-pulse text-zinc-300 motion-reduce:animate-none" : "text-zinc-400"}
+        >
+          {thinkingSummary(live, seconds)}
+        </span>
+        {open ? (
+          <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRight size={14} className="shrink-0" aria-hidden="true" />
+        )}
       </button>
       {open && (
         <div
           id={panelId}
           data-testid="thinking-text"
-          className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-xs leading-relaxed text-zinc-500"
+          className="ml-[7px] mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-l border-white/[0.08] py-0.5 pl-3 text-[13px] leading-relaxed text-zinc-500"
         >
           {text}
         </div>

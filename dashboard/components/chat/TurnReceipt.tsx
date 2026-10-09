@@ -23,6 +23,11 @@
  * files) renders NOTHING — zero-noise on trivial turns is a feature, not an
  * omission.
  *
+ * Since v1.326.0 (calm chat W1-5) the chat page draws it `inline`: the END of
+ * the reply's quiet action row, reading "answered by <model> · 1 file", with
+ * the same warnings in the same tones; the page keeps that row on screen
+ * whenever `receiptWantsAttention` says a warning is on it.
+ *
  * WIRE CONTRACT (routes/chat.py "route" object, v1.165.0): `requested` is ""
  * — not undefined — on chat's default path, so the mismatch check must treat
  * empty as "didn't ask". The reason vocabulary is "explicit" | "default" |
@@ -292,6 +297,39 @@ export interface TurnReceiptProps {
    * look like it happened.
    */
   onUndo?: (actionId: string, path: string) => void | Promise<void>;
+  /**
+   * Calm chat W1-5 (v1.326.0): the chat page draws the receipt INSIDE the
+   * reply's quiet action row. The collapsed line then reads "answered by
+   * <model> · 2 files · 1 tool" as a ghost control (chevron at the end) and
+   * the full receipt opens on its own line under the row (the caller's row
+   * must `flex-wrap`). Every warning keeps its tone on the line. Other
+   * surfaces (Build pane, missions) keep the stand-alone line.
+   */
+  inline?: boolean;
+  /** v1.326.0: the model's name for the "answered by" words (the catalog's
+   *  label, else its id), chosen by the caller. Absent: the provider's name. */
+  modelName?: string | null;
+}
+
+/**
+ * Calm chat W1-5 (v1.326.0): does the collapsed line carry something that
+ * must be SEEN without a hover or a click — a mock answer, a failover or a
+ * mismatch, blocked tools, a low-trust turn, a kept preference, an adapted
+ * turn or context kept out? The chat page keeps the reply's action row on
+ * screen when this is true, because that row now holds the receipt and an
+ * older reply's row otherwise shows only on hover.
+ */
+export function receiptWantsAttention(
+  p: Pick<TurnReceiptProps, "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked">,
+): boolean {
+  return (
+    routeWarning(p.route) !== null ||
+    names(p.deniedTools ?? []).length > 0 ||
+    names(p.remembered ?? []).length > 0 ||
+    p.trust === "low" ||
+    adaptedLabel(p.adapted) !== null ||
+    blockedRows(p.blocked).length > 0
+  );
 }
 
 /** The journal row matched to one of this turn's documents. */
@@ -461,6 +499,8 @@ export function TurnReceipt({
   steps,
   timing,
   outputTokens,
+  inline = false,
+  modelName,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -544,6 +584,15 @@ export function TurnReceipt({
         >
           <AlertTriangle size={10} className="shrink-0" />
           {warning}
+        </span>
+      ) : inline ? (
+        // v1.326.0: in the reply's action row the line names the MODEL that
+        // answered ("answered by Opus 5.5"); the raw ids stay in the title.
+        <span key="who" data-testid="turn-answered-by" title={rawRoute(rt)}>
+          answered by{" "}
+          <span className="text-zinc-400">
+            {(modelName ?? "").trim() || providerDisplay(rt.provider)}
+          </span>
         </span>
       ) : (
         <span key="who" className="text-zinc-400" title={rawRoute(rt)}>
@@ -649,32 +698,25 @@ export function TurnReceipt({
     );
   }
 
-  return (
-    <div className="mt-1 text-[11px] text-zinc-500">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        onClick={() => setOpen((v) => !v)}
-        className="group inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-1 text-left transition-colors hover:text-zinc-300"
-      >
-        {open ? (
-          <ChevronDown size={10} className="shrink-0" />
-        ) : (
-          <ChevronRight size={10} className="shrink-0" />
-        )}
-        {parts.map((p, i) => (
-          <span key={i} className="inline-flex min-w-0 items-center gap-1.5">
-            {i > 0 && <span aria-hidden="true">·</span>}
-            {p}
-          </span>
-        ))}
-      </button>
+  const joined = parts.map((p, i) => (
+    <span key={i} className="inline-flex min-w-0 items-center gap-1.5">
+      {i > 0 && <span aria-hidden="true">·</span>}
+      {p}
+    </span>
+  ));
 
-      {open && (
+  // The full receipt — ONE body for both shapes. The stand-alone line opens
+  // it in a soft panel; inside the chat's action row (v1.326.0) it opens on
+  // its own line under the row, behind a hairline instead of a box.
+  const panel = open ? (
         <div
           id={panelId}
-          className="mt-1.5 max-w-[560px] space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5"
+          data-testid="turn-receipt-detail"
+          className={
+            inline
+              ? "ml-1.5 mt-1 max-w-[560px] basis-full space-y-2 border-l border-white/[0.08] py-1 pl-3 text-[11px] text-zinc-500"
+              : "mt-1.5 max-w-[560px] space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5"
+          }
         >
           {rt && (
             <div className="flex items-start gap-2">
@@ -881,7 +923,51 @@ export function TurnReceipt({
             </div>
           )}
         </div>
-      )}
+  ) : null;
+
+  if (inline) {
+    // Two flex items of the caller's row: the ghost toggle, then (when open)
+    // the detail on a line of its own (`basis-full`).
+    return (
+      <>
+        <button
+          type="button"
+          data-testid="turn-receipt"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => setOpen((v) => !v)}
+          title={open ? "Hide the receipt" : "Show the receipt: who answered, tools, files"}
+          className="inline-flex min-h-7 min-w-0 max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md px-1.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+        >
+          {joined}
+          <ChevronDown
+            size={12}
+            aria-hidden="true"
+            className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+        {panel}
+      </>
+    );
+  }
+
+  return (
+    <div className="mt-1 text-[11px] text-zinc-500">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        onClick={() => setOpen((v) => !v)}
+        className="group inline-flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-1 text-left transition-colors hover:text-zinc-300"
+      >
+        {open ? (
+          <ChevronDown size={10} className="shrink-0" />
+        ) : (
+          <ChevronRight size={10} className="shrink-0" />
+        )}
+        {joined}
+      </button>
+      {panel}
     </div>
   );
 }

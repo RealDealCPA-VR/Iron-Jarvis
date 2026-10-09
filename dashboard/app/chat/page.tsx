@@ -116,11 +116,12 @@ import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
 import {
   TurnReceipt,
-  secondsText,
+  receiptWantsAttention,
   type TurnAdapted,
   type TurnRoute,
 } from "@/components/chat/TurnReceipt";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
+import { LiveToolRows, WorkLine, WorkRow } from "@/components/chat/WorkLine";
 import { FollowupChips } from "@/components/chat/FollowupChips";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
@@ -1631,74 +1632,9 @@ function AttachmentFooter({ names }: { names: string[] }) {
 
 // --------------------------------------------------------------- streaming UI
 
-/** A compact list of live tool calls (the streaming hooks' `ToolCard`s, already
- *  redacted server-side): spinner while running, check/✗ when done, each with
- *  the tool name and a short output preview. */
-// v1.257.0 (S-02): memoized. This renders inside the per-frame subtree, so
-// before this it remapped every tool card on EVERY flushed frame — while the
-// cards themselves only change on a tool_call frame.
-/** v1.324.0: an app's progress report in words — "40%" when it said how far
- *  it has to go, else "step 3"; its own message after a dot, kept short. */
-function progressWords(p: { progress: number; total: number | null; message: string }): string {
-  const head =
-    p.total && p.total > 0
-      ? `${Math.max(0, Math.min(100, Math.round((p.progress / p.total) * 100)))}%`
-      : `step ${Math.round(p.progress)}`;
-  const msg = (p.message || "").trim();
-  return msg ? `${head} · ${msg.length > 80 ? `${msg.slice(0, 79)}…` : msg}` : head;
-}
-
-const ToolCardList = memo(function ToolCardList({
-  cards,
-}: {
-  cards: readonly ToolCard[];
-}) {
-  if (!cards.length) return null;
-  return (
-    <div className="mt-1.5 flex flex-col gap-1">
-      {cards.map((c) => {
-        const running = c.status !== "done";
-        const ok = c.ok !== false;
-        return (
-          <div
-            key={c.id}
-            className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
-          >
-            <span className="mt-0.5 shrink-0">
-              {running ? (
-                <Loader2 size={12} className="animate-spin text-accent-soft" />
-              ) : ok ? (
-                <Check size={12} className="text-emerald-400" />
-              ) : (
-                <X size={12} className="text-rose-400" />
-              )}
-            </span>
-            <div className="min-w-0 flex-1">
-              <span className="font-mono text-[12px] text-zinc-200">{c.name}</span>
-              {/* v1.323.0: how long a finished step took. */}
-              {!running && c.startedAt && c.endedAt ? (
-                <span data-testid="tool-elapsed" className="ml-1.5 text-[11px] text-zinc-500">
-                  {secondsText(c.endedAt - c.startedAt)}
-                </span>
-              ) : null}
-              {/* v1.324.0: an app reporting how far along it is. */}
-              {running && c.progress ? (
-                <span data-testid="tool-progress" className="ml-1.5 text-[11px] text-zinc-500">
-                  {progressWords(c.progress)}
-                </span>
-              ) : null}
-              {c.output && (
-                <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11px] text-zinc-500">
-                  {c.output}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-});
+// Calm chat W1-5 (v1.326.0): the live tool calls are grey one-line rows now
+// (LiveToolRows in components/chat/WorkLine.tsx, memoized there for the same
+// per-frame reason this list was: v1.257.0 S-02), never a stack of boxes.
 
 /** Drop the agent-lane wait mark (v1.226.0) — every path that ENDS a turn
  *  (finalize, Stop, a hard finalize failure) saves through this, so the mark
@@ -2419,6 +2355,7 @@ const MessageRow = memo(function MessageRow({
   crystallizingId,
   reading = false,
   regen,
+  answeredName,
   h,
 }: {
   m: ChatMessage;
@@ -2436,6 +2373,10 @@ const MessageRow = memo(function MessageRow({
   reading?: boolean;
   /** v1.325.0: what "Try again with…" offers — given to the newest reply only. */
   regen?: { models: ModelOption[]; recent: string[]; current: string };
+  /** v1.326.0: the name of the model that answered (the catalog's label, else
+   *  its id) for the receipt's "answered by …" words. A string, so the memo
+   *  holds while the catalog is unchanged. */
+  answeredName?: string;
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
@@ -2640,11 +2581,32 @@ const MessageRow = memo(function MessageRow({
     );
   const suggestion = decodeSuggestion(m.suggestion);
   const configCards = decodeConfigCards(m.configCards);
+  // Calm chat W1-5 (v1.326.0): the receipt lives in the action row below, and
+  // that row shows on hover only for an older reply. A warning (mock answer,
+  // failover, blocked tools, low trust, "Remembered: …") must never wait for
+  // a hover, so a reply whose receipt carries one keeps its row on screen.
+  const receiptLoud =
+    !!m.route &&
+    receiptWantsAttention({
+      route: m.route,
+      adapted: m.adapted,
+      deniedTools: m.deniedTools,
+      remembered: m.remembered,
+      trust: m.trust,
+    });
   return (
     <div className="group/msg" data-testid="reply">
+      {/* Calm chat W1-5 (v1.326.0): the work behind the answer — tools, steps,
+          the model's reasoning — folded into ONE quiet line above it ("Worked
+          for 3.2 s · read 2 files"). Nothing at all for a reply with none. */}
+      <WorkLine
+        steps={m.steps}
+        toolsUsed={m.toolsUsed}
+        timing={m.timing}
+        thinking={m.thinking}
+        thinkingSeconds={m.thinkingSeconds}
+      />
       <Bubble role="assistant">
-        {/* v1.323.0: the model's reasoning, folded above its answer. */}
-        {m.thinking && <ThinkingDisclosure text={m.thinking} seconds={m.thinkingSeconds ?? null} />}
         {/* v1.325.0: a selection in here offers "Quote". */}
         <div data-quote-source>
           <MemoMarkdown content={m.content} />
@@ -2695,13 +2657,16 @@ const MessageRow = memo(function MessageRow({
           project, the versions a Try again kept ("‹ 1 / 2 ›") and the time.
           The newest reply keeps it on screen; an older one shows it on hover
           or focus, and always on a touch screen (no hover there). A 👎 that
-          is asking "what should be different?" keeps the row open. */}
+          is asking "what should be different?" keeps the row open.
+          W1-5: the receipt ends the row ("answered by …"); an open receipt
+          or menu keeps the row open, and a receipt with a warning keeps it on
+          screen without a hover (receiptLoud above). */}
       <div
         data-testid="reply-actions"
         className={`-ml-1.5 mt-1 flex flex-wrap items-center text-zinc-500 ${
-          isLast
+          isLast || receiptLoud
             ? ""
-            : "opacity-0 transition-opacity focus-within:opacity-100 has-[form]:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
+            : "opacity-0 transition-opacity focus-within:opacity-100 has-[form]:opacity-100 has-[[aria-expanded=true]]:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
         }`}
       >
         <CopyIconButton text={m.content} title="Copy message" className={REPLY_ACTION_BTN} />
@@ -2773,29 +2738,34 @@ const MessageRow = memo(function MessageRow({
             {when.short}
           </time>
         )}
+        {/* TURN RECEIPT (v1.165.0): server-side accountability — who answered
+            and why, tools run/denied, files. Supersedes the legacy viaProvider
+            chip below whenever the message carries a route. Calm chat W1-5
+            (v1.326.0): it is the END of this row, "answered by <model> ·
+            2 files", and opens onto the full receipt on its own line; every
+            warning keeps its amber (or accent) tone on the row. */}
+        {m.route && (
+          <TurnReceipt
+            inline
+            modelName={answeredName}
+            route={m.route}
+            adapted={m.adapted}
+            toolsUsed={m.toolsUsed}
+            deniedTools={m.deniedTools}
+            remembered={m.remembered}
+            trust={m.trust}
+            trustReason={m.trustReason}
+            trustNote={m.trustNote}
+            usage={m.usage}
+            steps={m.steps}
+            timing={m.timing}
+            documents={m.documents}
+            onOpenDocument={h.openDocument}
+            undoFor={h.undoFor}
+            onUndo={h.undoWrite}
+          />
+        )}
       </div>
-      {/* TURN RECEIPT (v1.165.0): server-side accountability — who answered and
-          why, tools run/denied, files. Supersedes the legacy viaProvider chip
-          below whenever the message carries a route. */}
-      {m.route && (
-        <TurnReceipt
-          route={m.route}
-          adapted={m.adapted}
-          toolsUsed={m.toolsUsed}
-          deniedTools={m.deniedTools}
-          remembered={m.remembered}
-          trust={m.trust}
-          trustReason={m.trustReason}
-          trustNote={m.trustNote}
-          usage={m.usage}
-          steps={m.steps}
-          timing={m.timing}
-          documents={m.documents}
-          onOpenDocument={h.openDocument}
-          undoFor={h.undoFor}
-          onUndo={h.undoWrite}
-        />
-      )}
       {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
           a standing preference in the receipt's own quiet voice — directly
           under it, with Keep · Edit · Not this. Decoded again here because a
@@ -2907,29 +2877,35 @@ function LiveReply({
   }, [text, onGrow]);
   return (
     <Bubble role="assistant">
-      <ThinkingDisclosure text={thinking} live={!text} />
-      {text ? (
-        <StreamingText content={text} />
-      ) : (
-        <span className="inline-flex items-center gap-2 text-zinc-400">
-          <Loader2 size={14} className="animate-spin text-accent-soft" />
-          {/* v1.246.0: WHAT it is waiting on, and for how long — a working
-              turn and a stuck one used to show the same pulsing word. */}
-          <span className="animate-pulse">
-            {/* v1.312.0 (W4-3): a current daemon NAMES each preparation
-                stage (a `phase` frame) — that wins. An older one sends
-                nothing until it has prepared, so the v1.246.0 inference
-                stays for it. */}
-            {stream.prepStep
-              ? PREP_WORDS[stream.prepStep]
-              : stream.phase === "preparing" && stream.withFiles
-                ? "Reading your files…"
-                : "Thinking…"}
-          </span>
-          <TurnClock since={stream.startedAt ?? null} />
-        </span>
-      )}
-      {stream.tools.length > 0 && <ToolCardList cards={stream.tools} />}
+      {/* Calm chat W1-5 (v1.326.0): the work in progress is grey one-line
+          rows ABOVE the answer: the model's thinking, each tool call, and the
+          step the turn is on (spinning, softly pulsing; still under reduced
+          motion). When the answer lands they fold into the reply's "Worked
+          for …" line. Empty (no thinking, no tools, words flowing) = hidden. */}
+      <div data-testid="live-work" className="mb-2 grid gap-1 empty:hidden">
+        <ThinkingDisclosure text={thinking} live={!text} />
+        <LiveToolRows cards={stream.tools} />
+        {!text && (
+          <WorkRow
+            icon={Loader2}
+            running
+            // v1.246.0: WHAT it is waiting on, and for how long — a working
+            // turn and a stuck one used to show the same pulsing word.
+            // v1.312.0 (W4-3): a current daemon NAMES each preparation stage
+            // (a `phase` frame) — that wins. An older one sends nothing until
+            // it has prepared, so the v1.246.0 inference stays for it.
+            title={
+              stream.prepStep
+                ? PREP_WORDS[stream.prepStep]
+                : stream.phase === "preparing" && stream.withFiles
+                  ? "Reading your files…"
+                  : "Thinking…"
+            }
+            meta={<TurnClock since={stream.startedAt ?? null} />}
+          />
+        )}
+      </div>
+      {text && <StreamingText content={text} />}
       {text && <QuietNote since={stream.lastEventAt ?? null} />}
       {/* MID-TURN APPROVAL (v1.187.0): the daemon paused this turn on an
           ask-tier tool and is waiting for a decision. "Allow for this
@@ -8712,6 +8688,20 @@ export default function ChatPage() {
     () => ({ models, recent: readRecentModels(), current: choice }),
     [models, choice],
   );
+  // Calm chat W1-5 (v1.326.0): what the receipt's "answered by …" calls the
+  // model — the catalog's own label when it has one ("Opus 5.5", the words the
+  // model menu uses), else the model id. No model on the route: undefined, and
+  // the receipt names the provider instead. Returns a STRING so each memoized
+  // row re-renders only when its own name changes.
+  const answeredModelName = useCallback(
+    (route: TurnRoute | undefined): string | undefined => {
+      const model = (route?.model ?? "").trim();
+      if (!route || !model) return undefined;
+      const row = models.find((x) => x.provider === route.provider && x.model === model);
+      return row ? modelText(row) : model;
+    },
+    [models],
+  );
   const rowImplRef = useRef(rowImpl);
   rowImplRef.current = rowImpl;
   const rowHandlers = useMemo<RowHandlers>(
@@ -9571,6 +9561,7 @@ export default function ChatPage() {
                           crystallizingId={crystallizingId}
                           reading={tts.readingKey === `reply-${i}`}
                           regen={canRegen ? regenOptions : undefined}
+                          answeredName={answeredModelName(m.route)}
                           h={rowHandlers}
                         />
                         </div>
@@ -9627,35 +9618,31 @@ export default function ChatPage() {
                     {awaiting && (
                       <Bubble role="assistant">
                         <div className="flex flex-col gap-1.5" aria-live="polite" aria-busy="true">
-                          <span className="inline-flex items-center gap-2 text-zinc-300">
-                            <Loader2 size={14} className="animate-spin text-accent-soft" />
+                          {/* Calm chat W1-5 (v1.326.0): the run's work as grey
+                              one-line rows above its words, oldest first: the
+                              last few steps it finished, its tool calls, then
+                              the step it is on now (spinning, softly pulsing). */}
+                          <div data-testid="live-work" className="grid gap-1">
+                            {progress.slice(1, 4).reverse().map((s, i) => (
+                              <WorkRow key={`${i}-${s}`} icon={Check} title={s.replace(/…$/, "")} />
+                            ))}
+                            <LiveToolRows cards={runStream.tools} />
                             {/* v1.149.0: the run's OWN phase, straight from the
                                 daemon, in place of a generic "Thinking…". A run
                                 that is planning now says so — it used to be
                                 indistinguishable from one that was stuck. */}
-                            {runStream.phase
-                              ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
-                              : (progress[0] ?? "Thinking…")}
-                          </span>
-                          {runStream.phase?.detail && (
-                            <span className="ml-[22px] text-xs text-zinc-500">
-                              {runStream.phase.detail}
-                            </span>
-                          )}
+                            <WorkRow
+                              icon={Loader2}
+                              running
+                              title={
+                                runStream.phase
+                                  ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
+                                  : (progress[0] ?? "Thinking…")
+                              }
+                              detail={runStream.phase?.detail || null}
+                            />
+                          </div>
                           <AgentLiveText stream={runStream} onGrow={scrollLiveIntoView} />
-                          {runStream.tools.length > 0 && (
-                            <ToolCardList cards={runStream.tools} />
-                          )}
-                          {progress.length > 1 && (
-                            <ul className="ml-[22px] space-y-0.5 text-xs text-zinc-500">
-                              {progress.slice(1, 4).map((s, i) => (
-                                <li key={i} className="flex items-center gap-1.5">
-                                  <span className="h-1 w-1 shrink-0 rounded-full bg-zinc-600" />
-                                  {s}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
                           {/* MID-RUN APPROVAL (v1.189.0): the escalated run is
                               PAUSED on an ask-tier tool. Same card, same
                               answer route as chat's own mid-turn ask —
