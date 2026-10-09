@@ -164,6 +164,10 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("default_persona", "Default persona", "models", "string",
       "Used whenever a chat doesn't pick one — including from your phone.", tier="allow",
       aliases=("persona", "assistant style")),
+    S("chat_followups", "Suggest follow-up questions", "models", "bool",
+      "Show up to three short questions you might ask next under a reply. "
+      "This makes one extra short call to the same model after each reply.",
+      tier="allow", aliases=("follow-up questions", "suggested questions", "follow ups")),
     S("strict_model_pin", "Strict model pin", "models", "bool",
       "When on, a chat that explicitly picks a model must be answered by THAT model — never silently substituted. Applies only to explicit picks.",
       tier="ask", advanced=True, section="Routing"),

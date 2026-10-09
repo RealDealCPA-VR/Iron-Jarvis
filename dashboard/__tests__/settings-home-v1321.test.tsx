@@ -247,7 +247,9 @@ describe("390 px: the groups are a drill-down list (AUDIT §8, redesign S11)", (
     const list = await screen.findByTestId("settings-groups-phone");
     // The group's page waits behind the list on a phone (shown again from md up).
     expect(screen.getByTestId("settings-group").className).toContain("hidden md:block");
-    fireEvent.click(within(list).getByRole("button", { name: /Agents & automation/ }));
+    // v1.323.0: wait for the BUTTON, not the list — the list box renders
+    // before the schema's groups land (went red under a loaded full run).
+    fireEvent.click(await within(list).findByRole("button", { name: /Agents & automation/ }));
     expect(screen.queryByTestId("settings-groups-phone")).toBeNull();
     expect(screen.getByTestId("settings-group").className).not.toContain("hidden");
     expect(screen.getByTestId("settings-group").getAttribute("data-group")).toBe("automation");

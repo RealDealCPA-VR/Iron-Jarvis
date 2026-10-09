@@ -112,9 +112,14 @@ import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
 import {
   TurnReceipt,
+  secondsText,
   type TurnAdapted,
   type TurnRoute,
 } from "@/components/chat/TurnReceipt";
+import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
+import { FollowupChips } from "@/components/chat/FollowupChips";
+import { fetchFollowups } from "@/lib/followups";
+import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
@@ -220,6 +225,8 @@ import {
   useComposer,
   type ComposerStore,
 } from "@/lib/composerStore";
+import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
+import { CONTINUE_PROMPT, mergeContinuation } from "@/lib/continueReply";
 import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
 import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
@@ -489,6 +496,44 @@ interface ChatMessage {
   /** v1.285.0: the room entry's timestamp the line was mirrored from — the
    *  dedupe key, so a live event and a reopen never show one line twice. */
   panelAt?: string;
+  /** v1.323.0: when this message was sent (user) or settled (assistant), ISO.
+   *  Shown quietly on hover; older messages simply carry none. */
+  at?: string;
+  /** v1.323.0: the model's own reasoning, shown folded above the reply.
+   *  Display-only — `toRequestMessages` never sends it back to a model. */
+  thinking?: string;
+  /** v1.323.0: seconds the turn thought before its first word (the
+   *  disclosure's "Thought for N s"). */
+  thinkingSeconds?: number;
+  /** v1.323.0: the answer stopped because the model ran out of output room —
+   *  the reply offers Continue. */
+  truncated?: boolean;
+  /** v1.323.0: the turn's tool steps with how long each took (receipt). */
+  steps?: { name: string; ok: boolean | null; ms: number | null }[];
+  /** v1.323.0: when the turn started, said its first word, and finished (ms
+   *  epoch) — the receipt's speed line. */
+  timing?: { startedAt: number; firstTokenAt: number | null; endedAt: number };
+  /** v1.323.0: the hidden "please continue" turn of a Continue press — never
+   *  rendered; replaced by the merged reply once the continuation lands. */
+  continuation?: boolean;
+}
+
+/** v1.323.0: how much of a reply's reasoning is kept on the message (the
+ *  daemon caps the POST lane's at the same size). */
+const THINKING_CAP = 20_000;
+
+/** v1.323.0: a message's time in the user's own words — "10:42", or with the
+ *  day when it is not today. Empty for a missing or unreadable stamp. */
+function messageTime(at: string | undefined): { short: string; full: string } {
+  if (!at) return { short: "", full: "" };
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return { short: "", full: "" };
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = new Date().toDateString() === d.toDateString();
+  return {
+    short: today ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`,
+    full: d.toLocaleString(),
+  };
 }
 
 /** What POST /chat expects. */
@@ -1546,6 +1591,12 @@ const ToolCardList = memo(function ToolCardList({
             </span>
             <div className="min-w-0 flex-1">
               <span className="font-mono text-[12px] text-zinc-200">{c.name}</span>
+              {/* v1.323.0: how long a finished step took. */}
+              {!running && c.startedAt && c.endedAt ? (
+                <span data-testid="tool-elapsed" className="ml-1.5 text-[11px] text-zinc-500">
+                  {secondsText(c.endedAt - c.startedAt)}
+                </span>
+              ) : null}
               {c.output && (
                 <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11px] text-zinc-500">
                   {c.output}
@@ -2119,6 +2170,10 @@ const VoiceAutoSend = memo(function VoiceAutoSend({
 export interface RowHandlers {
   retryTask: (task: string) => void;
   regenerate: () => void;
+  /** v1.323.0: carry on the newest reply where it was cut off. */
+  continueReply: () => void;
+  /** v1.323.0: read reply `index` aloud (a second press stops it). */
+  readAloud: (index: number) => void;
   /** v1.278.0: put a sent message back in the box (with its files) and drop
    *  everything after it — the resend is a fresh turn over what preceded it. */
   editMessage: (index: number) => void;
@@ -2163,6 +2218,7 @@ const MessageRow = memo(function MessageRow({
   threadId,
   projectId,
   crystallizingId,
+  reading = false,
   h,
 }: {
   m: ChatMessage;
@@ -2176,8 +2232,13 @@ const MessageRow = memo(function MessageRow({
    *  promote button turns a missing project into its own disabled reason. */
   projectId: string | null;
   crystallizingId: string | null;
+  /** v1.323.0: this reply is being read aloud right now. */
+  reading?: boolean;
   h: RowHandlers;
 }) {
+  // v1.323.0: the hidden "please continue" turn of a Continue press.
+  if (m.continuation) return null;
+  const when = messageTime(m.at);
   if (m.role === "user") {
     return (
       <div className="group/msg">
@@ -2199,17 +2260,24 @@ const MessageRow = memo(function MessageRow({
         </Bubble>
         {/* v1.278.0: EDIT AND RESEND — never mid-turn, never on a steer note
             (it was read inside a turn; there is no "after it" to cut). */}
-        {!busy && !m.steer && (
-          <div className="mt-0.5 flex justify-end opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
-            <button
-              type="button"
-              onClick={() => h.editMessage(i)}
-              title="Edit and resend — the messages after this one are removed"
-              aria-label="Edit and resend"
-              className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-            >
-              <Pencil size={12} />
-            </button>
+        {((!busy && !m.steer) || when.short) && (
+          <div className="mt-0.5 flex items-center justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
+            {when.short && (
+              <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[11px] text-zinc-500">
+                {when.short}
+              </time>
+            )}
+            {!busy && !m.steer && (
+              <button
+                type="button"
+                onClick={() => h.editMessage(i)}
+                title="Edit and resend — the messages after this one are removed"
+                aria-label="Edit and resend"
+                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+              >
+                <Pencil size={12} />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -2359,11 +2427,28 @@ const MessageRow = memo(function MessageRow({
   return (
     <div className="group/msg">
       <Bubble role="assistant">
+        {/* v1.323.0: the model's reasoning, folded above its answer. */}
+        {m.thinking && <ThinkingDisclosure text={m.thinking} seconds={m.thinkingSeconds ?? null} />}
         <MemoMarkdown content={m.content} />
       </Bubble>
-      {m.interrupted && (
-        <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
-          interrupted — the reply was cut off
+      {(m.interrupted || m.truncated) && (
+        <div className="ml-11 mt-1 flex flex-wrap items-center gap-2 text-[11px] italic text-amber-400/80">
+          <span data-testid="reply-cut-note">
+            {m.truncated
+              ? "stopped — the reply ran out of room"
+              : "interrupted — the reply was cut off"}
+          </span>
+          {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn. */}
+          {isLast && !busy && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
+            <button
+              type="button"
+              data-testid="continue-reply"
+              onClick={h.continueReply}
+              className="not-italic rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
+            >
+              Continue
+            </button>
+          )}
         </div>
       )}
       {/* v1.170.0: the turn RAN a workflow (the model via the workflow_run
@@ -2391,6 +2476,8 @@ const MessageRow = memo(function MessageRow({
             trustReason={m.trustReason}
             trustNote={m.trustNote}
             usage={m.usage}
+            steps={m.steps}
+            timing={m.timing}
             documents={m.documents}
             onOpenDocument={h.openDocument}
             undoFor={h.undoFor}
@@ -2464,6 +2551,21 @@ const MessageRow = memo(function MessageRow({
       )}
       <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100">
         <CopyIconButton text={m.content} title="Copy message" />
+        {/* v1.323.0: READ ALOUD — this one reply, on a press, whether or
+            not spoken replies are on; a second press stops it. */}
+        {m.content.trim() && (
+          <button
+            type="button"
+            data-testid="read-aloud"
+            onClick={() => h.readAloud(i)}
+            aria-pressed={reading}
+            title={reading ? "Stop reading" : "Read aloud"}
+            aria-label={reading ? "Stop reading" : "Read aloud"}
+            className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] hover:text-zinc-200 ${reading ? "text-accent-soft" : "text-zinc-500"}`}
+          >
+            {reading ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
+        )}
         <PromoteKnowledgeButton
           disabledReason={projectId ? null : "bind this chat to a project first"}
           onPromote={() => h.promote(m.content)}
@@ -2478,6 +2580,11 @@ const MessageRow = memo(function MessageRow({
           >
             <RefreshCw size={12} />
           </button>
+        )}
+        {when.short && (
+          <time dateTime={m.at} title={when.full} data-testid="message-time" className="px-1 text-[11px] text-zinc-500">
+            {when.short}
+          </time>
         )}
       </div>
       {/* v1.320.0: 👍 / 👎 — a reply can be rated where it was read. Not on
@@ -2532,6 +2639,8 @@ function LiveReply({
   armFromApproval: (tool: string) => void;
 }) {
   const text = useLiveText(stream);
+  // v1.323.0: the model's reasoning, folded — read HERE, never on the page.
+  const thinking = useLiveThinking(stream);
   // Keep the newest line in view as the reply grows — the page's scroll effect
   // can no longer see this text, so the growth reports itself.
   useEffect(() => {
@@ -2539,6 +2648,7 @@ function LiveReply({
   }, [text, onGrow]);
   return (
     <Bubble role="assistant">
+      <ThinkingDisclosure text={thinking} live={!text} />
       {text ? (
         <StreamingText content={text} />
       ) : (
@@ -2746,6 +2856,10 @@ export default function ChatPage() {
   // started — never on Stop — so an upload that finishes after the user left
   // never lands in the conversation they moved to.
   const convGenRef = useRef(0);
+  // v1.323.0: FOLLOW-UP QUESTIONS (setting chat_followups, off by default) —
+  // fetched after a finished reply, shown only while that reply is the newest.
+  const followupsOnRef = useRef(false);
+  const [followups, setFollowups] = useState<{ forLen: number; items: string[] } | null>(null);
   const [dragging, setDragging] = useState(false);
   // v1.250.0 (S-05): the composer's text/caret/dismissals/highlight live in a
   // store, not in this component — a keystroke re-renders the textarea, the
@@ -3520,22 +3634,23 @@ export default function ChatPage() {
     } catch {
       /* ignore */
     }
-    if (!saved) {
-      get<{ settings: { default_persona?: string } }>("/settings")
-        .then((d) => {
-          const dp = (d.settings?.default_persona || "").trim();
-          // Seed only — never over an explicit pick / restored thread persona
-          // that landed while this fetch was in flight, and never persisted to
-          // localStorage (only the user's own choices are, via choosePersona).
-          if (!cancelled && dp && !personaTouchedRef.current) {
-            setPersona(dp);
-            prevPersonaRef.current = dp;
-          }
-        })
-        .catch(() => {
-          /* keep "assistant" */
-        });
-    }
+    get<{ settings: { default_persona?: string; chat_followups?: boolean } }>("/settings")
+      .then((d) => {
+        // v1.323.0: follow-up questions only when the user switched them on.
+        followupsOnRef.current = d.settings?.chat_followups === true;
+        if (saved) return;
+        const dp = (d.settings?.default_persona || "").trim();
+        // Seed only — never over an explicit pick / restored thread persona
+        // that landed while this fetch was in flight, and never persisted to
+        // localStorage (only the user's own choices are, via choosePersona).
+        if (!cancelled && dp && !personaTouchedRef.current) {
+          setPersona(dp);
+          prevPersonaRef.current = dp;
+        }
+      })
+      .catch(() => {
+        /* keep "assistant"; no follow-ups */
+      });
     return () => {
       cancelled = true;
     };
@@ -4553,6 +4668,12 @@ export default function ChatPage() {
     setToolQuery("");
     setActiveSkill(""); // so is the active skill
     composer.reset(); // and so is anything half-typed for the old thread
+    // v1.323.0: ...and what was half-typed for THIS one comes back.
+    const draft = readDraft(id);
+    if (draft) {
+      inputFromVoiceRef.current = false; // a restore is never voice input
+      composer.setText(draft);
+    }
     setSteerBack(false); // a returned steer note went with the box
     setError(null);
     setOffline(false);
@@ -6261,6 +6382,23 @@ export default function ChatPage() {
     });
   }
 
+  /** v1.323.0: ask the model that wrote the reply for up to three follow-up
+   *  questions — only when the user switched them on. Shown while that reply
+   *  is still the newest; a newer turn, Stop or a switch drops them. */
+  function askFollowups(list: ChatMessage[], route?: TurnRoute | null) {
+    if (!followupsOnRef.current) return;
+    const gen = chatGenRef.current;
+    const len = list.length;
+    void fetchFollowups(
+      toRequestMessages(list.filter((x) => !x.continuation)),
+      route?.provider || undefined,
+      route?.model || undefined,
+    ).then((items) => {
+      if (chatGenRef.current !== gen || !items.length) return;
+      setFollowups({ forLen: len, items });
+    });
+  }
+
   /** Put a failed turn's typed message back in the composer — but only when
    *  it's empty (never clobber text typed while the turn was in flight). The
    *  restore is programmatic, so it must never count as voice input: Voice
@@ -6281,6 +6419,7 @@ export default function ChatPage() {
    */
   async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
+    setFollowups(null); // they answered the reply this turn replaces or follows
     setMessages(history);
     // DURABLE AT SEND (v1.226.0): the typed message is on disk BEFORE the
     // model is asked — a reload or route change mid-stream aborted the fetch
@@ -6387,7 +6526,12 @@ export default function ChatPage() {
         // receiptPost below — this exact merge line is where done-frame
         // fields have died silently before (denied_tools, doors — measured).
         const adapted = adaptedFrom(streamRes.adapted);
+        // v1.323.0: the reply's own details — guarded, because a test double
+        // (or an older hook) may resolve with the reply alone.
+        const thinkingText = (streamRes.thinking ?? "").slice(0, THINKING_CAP);
+        const turnSteps = streamRes.steps ?? [];
         const receipt = {
+          at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
           ...(route ? { route } : {}),
           ...(adapted ? { adapted } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
@@ -6410,6 +6554,15 @@ export default function ChatPage() {
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
           ...(doors ? { doors } : {}),
+          // v1.323.0: the reply's own details (kept last: the trust pin reads
+          // the head of this object).
+          ...(thinkingText ? { thinking: thinkingText } : {}),
+          ...(thinkingText && streamRes.thinkingMs
+            ? { thinkingSeconds: Math.max(1, Math.round(streamRes.thinkingMs / 1000)) }
+            : {}),
+          ...(streamRes.truncated ? { truncated: true } : {}),
+          ...(turnSteps.length ? { steps: turnSteps } : {}),
+          ...(streamRes.timing ? { timing: streamRes.timing } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -6466,8 +6619,10 @@ export default function ChatPage() {
           });
           return;
         }
-        setMessages(full);
-        queueSave(full); // the turn is complete — persist it
+        const settled = mergeContinuation(full);
+        setMessages(settled);
+        queueSave(settled); // the turn is complete — persist it
+        askFollowups(settled, route);
         showDocPreview(madeDocs); // a generated doc appears beside the chat
         return; // streamed successfully
       } catch (e) {
@@ -6546,7 +6701,15 @@ export default function ChatPage() {
       const suggestionPost = decodeSuggestion(res.suggestion);
       // Settings cards (redesign S3/S4) — MIRROR NOTE: keep in step.
       const configCardsPost = decodeConfigCards(res.config_cards);
+      // v1.323.0: the POST lane's copy of the stream lane's reply details.
+      const thinkingPost =
+        typeof (res as { thinking?: unknown }).thinking === "string"
+          ? ((res as { thinking?: string }).thinking ?? "").slice(0, THINKING_CAP)
+          : "";
       const receiptPost = {
+        at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
+        ...(thinkingPost ? { thinking: thinkingPost } : {}),
+        ...((res as { truncated?: unknown }).truncated === true ? { truncated: true } : {}),
         ...(res.route ? { route: res.route } : {}),
         ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
@@ -6624,11 +6787,11 @@ export default function ChatPage() {
         });
         return;
       }
-      setMessages(full);
+      setMessages(mergeContinuation(full));
       // Nothing streamed on this path (endpoint absent), so this is the first and
       // only speak — no risk of re-voicing sentences speakMore already spoke.
       if (!ttsStreamStartedRef.current) tts.speak(reply);
-      queueSave(full); // the turn is complete — persist it
+      queueSave(mergeContinuation(full)); // the turn is complete — persist it
       showDocPreview(res.documents); // a generated doc appears beside the chat
     } catch (e) {
       if (chatGenRef.current !== gen) return;
@@ -6742,11 +6905,14 @@ export default function ChatPage() {
 
   /** CHAT MODE: append the user's message and run one completion. */
   async function sendChat(message: string) {
+    // v1.323.0: the draft's words are now a message — never restore them.
+    if (saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
     const atts = attachments;
     setAttachments([]); // chips are consumed by this message
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
+      at: new Date().toISOString(),
       ...(atts.length
         ? {
             attachmentNames: atts.map((a) => a.name),
@@ -6776,6 +6942,25 @@ export default function ChatPage() {
     // Re-ground on the SAME attachments the turn carried — otherwise the re-run
     // answers blind while the user bubble still shows the file chip.
     void completeChat(history, attachmentsOf(lastUser));
+  }
+
+  /** v1.323.0: CONTINUE the newest reply, cut off by the model's output
+   *  limit or by Stop — a hidden "carry on" turn whose answer is merged into
+   *  it (lib/continueReply). Plain chat replies only. */
+  function continueReply() {
+    if (busy) return;
+    const msgs = messages;
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== "assistant" || !(last.truncated || last.interrupted)) return;
+    setError(null);
+    setOffline(false);
+    const ask: ChatMessage = {
+      role: "user",
+      content: CONTINUE_PROMPT,
+      continuation: true,
+      at: new Date().toISOString(),
+    };
+    void completeChat([...msgs, ask], []);
   }
 
   /** The attachments a saved user bubble carried, as a re-run needs them. */
@@ -7386,11 +7571,33 @@ export default function ChatPage() {
    * Both doors call this one function so neither can forget a step.
    */
   function leaveConversation() {
+    // v1.323.0: what is half-typed for a SAVED conversation is kept for it
+    // (an empty box removes the old draft); an unsaved chat has nowhere to
+    // come back to, so New chat still starts empty.
+    saveDraftNow();
+    setFollowups(null);
     convGenRef.current += 1;
     queuedSendRef.current = false;
     if (dictation.listening) dictation.stop();
     setEditUndo(null);
   }
+
+  /** v1.323.0: keep the box's text as the open saved conversation's draft. */
+  function saveDraftNow() {
+    const id = saveTargetRef.current.id;
+    if (id) writeDraft(id, composer.get().text);
+  }
+
+  // Leaving the chat page (another module, a reload) keeps the draft too.
+  useEffect(() => {
+    const onHide = () => saveDraftNow();
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      saveDraftNow();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs only
+  }, []);
 
   // Redesign S7: the sidebar's "New chat" while this page is open.
   const newChatRef = useRef<() => void>(() => {});
@@ -7670,6 +7877,11 @@ export default function ChatPage() {
       inputRef.current?.focus();
     },
     regenerate: () => regenerate(),
+    continueReply: () => continueReply(),
+    readAloud: (index) => {
+      const msg = messagesRef.current[index];
+      if (msg?.content) tts.readAloud(msg.content, `reply-${index}`);
+    },
     editMessage: (index) => {
       // v1.278.0: the message goes back into the box with its files and the
       // conversation is cut BEFORE it. The cut is saved at once when anything
@@ -7735,6 +7947,8 @@ export default function ChatPage() {
     () => ({
       retryTask: (task) => rowImplRef.current.retryTask(task),
       regenerate: () => rowImplRef.current.regenerate(),
+      continueReply: () => rowImplRef.current.continueReply(),
+      readAloud: (index) => rowImplRef.current.readAloud(index),
       editMessage: (index) => rowImplRef.current.editMessage(index),
       crystallize: (id) => rowImplRef.current.crystallize(id),
       handOff: (index) => rowImplRef.current.handOff(index),
@@ -8589,10 +8803,24 @@ export default function ChatPage() {
                           threadId={threadId}
                           projectId={projectId}
                           crystallizingId={crystallizingId}
+                          reading={tts.readingKey === `reply-${i}`}
                           h={rowHandlers}
                         />
                       );
                     })}
+                    {/* v1.323.0: FOLLOW-UP QUESTIONS under the newest reply —
+                        a press puts the question in the box, never sends it. */}
+                    {!busy && followups && followups.forLen === messages.length && (
+                      <FollowupChips
+                        suggestions={followups.items}
+                        onPick={(q) => {
+                          inputFromVoiceRef.current = false;
+                          composer.setText(q);
+                          setFollowups(null);
+                          inputRef.current?.focus();
+                        }}
+                      />
+                    )}
                     {/* CHAT MODE: the live streaming bubble. Streamed markdown +
                         a blinking caret once the first token lands (a Thinking
                         shimmer until then), with any live tool calls below. */}

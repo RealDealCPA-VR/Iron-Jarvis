@@ -242,7 +242,9 @@ async def test_http_read_timeout_follows_the_registry_deadline(ctx):
     t = seen_timeouts[-1]
     # What httpx was told for THIS request: read = what was left of the 300 s
     # deadline plus the grace; connecting stays at the short bound.
-    assert 300 - 5 < t["read"] <= 300 + mcp_client._DEADLINE_GRACE_S, t
+    # (+0.01: the loop clock is coarse on Windows, so "what is left" can read a
+    # hair ABOVE 300 — measured 305.00000000001 on the full suite.)
+    assert 300 - 5 < t["read"] <= 300 + mcp_client._DEADLINE_GRACE_S + 0.01, t
     assert t["connect"] == mcp_client.HTTP_CONNECT_TIMEOUT_S == 10.0
 
     # No deadline configured (registry passes None): unbounded, like stdio.

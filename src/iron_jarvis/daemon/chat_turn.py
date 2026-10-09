@@ -1070,9 +1070,12 @@ async def _enforce_language(
     provider: str,
     model: str,
     tally: UsageTally | None = None,
+    outcome: dict | None = None,
 ) -> tuple[str, str, int, int, int]:
     """Guard the reply's language. Returns
-    ``(text, note, usage_in, usage_out, completions)``.
+    ``(text, note, usage_in, usage_out, completions)``. ``outcome`` (v1.323.0,
+    optional): when given and the rewrite was ADOPTED, receives ``response``
+    (the rewrite's final response — it is the reply now).
 
     ONE corrective completion, never a loop:
 
@@ -1121,6 +1124,8 @@ async def _enforce_language(
     if tally is not None:
         tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
     out_text, note = _rewrite_verdict(text, route.response.text or "", code, user_text)
+    if outcome is not None and out_text != text:
+        outcome["response"] = route.response
     return (out_text, note, u_in, u_out, 1)
 
 
@@ -1242,11 +1247,14 @@ async def _final_answer_after_tools(
     model: str,
     instruction: str = "",
     tally: UsageTally | None = None,
+    outcome: dict | None = None,
 ) -> tuple[str, int, int, int]:
     """Ask the SAME model once, WITHOUT tools, for the answer it never wrote.
     Returns ``(text, usage_in, usage_out, completions)`` — ``text`` is "" when
     the nudge failed, timed out or came back empty, and the caller's honest
-    fallback takes over.
+    fallback takes over. ``outcome`` (v1.323.0, optional): when given and the
+    nudge answered, receives ``response`` (the model's final response) so the
+    caller can read its reasoning and whether it was cut off.
 
     THE SILENT FAILURE THIS PREVENTS (v1.246.0): "a completed screen with
     absolutely no output". A local model regularly ends its tool loop with an
@@ -1273,6 +1281,8 @@ async def _final_answer_after_tools(
     usage = route.response.usage or {}
     if tally is not None:  # v1.300.0 — see _enforce_language
         tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), usage)
+    if outcome is not None:
+        outcome["response"] = route.response
     return (
         (route.response.text or "").strip(),
         int(usage.get("input_tokens", 0) or 0),
@@ -1634,6 +1644,37 @@ def _trust_receipt(state: dict[str, Any]) -> dict[str, Any]:
         "trust_reason": str(state.get("reason") or "") if low else "",
         "trust_note": low_trust_note(len(kept)) if kept else None,
     }
+
+
+#: v1.323.0 — the most reasoning text POST /chat hands back (display-only).
+THINKING_CAP = 20_000
+
+
+def _truncated_by(response) -> bool:
+    """True when ``response`` — an answering model call's final response —
+    stopped because the provider ran out of OUTPUT TOKENS (v1.323.0).
+
+    A round that asked for tools is never a truncation, whatever its finish
+    word. ``getattr`` defaults: a test double's response without the
+    attributes reads as "not truncated". Shared by both chat lanes (lock-step).
+    """
+    if response is None:
+        return False
+    if getattr(response, "tool_calls", None):
+        return False
+    return getattr(response, "finish_reason", "") == "max_tokens"
+
+
+def _thinking_of(response) -> str:
+    """The reasoning text a model call returned, or "" (v1.323.0)."""
+    thought = getattr(response, "thinking", "") if response is not None else ""
+    return thought if isinstance(thought, str) else ""
+
+
+def _joined_thinking(parts: list[str]) -> str:
+    """The turn's reasoning for POST /chat's ``thinking`` key: every answering
+    call's, in order, capped at :data:`THINKING_CAP` characters (v1.323.0)."""
+    return "\n\n".join(p for p in parts if p)[:THINKING_CAP]
 
 
 def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
@@ -4688,6 +4729,13 @@ async def run_chat_turn(
     # v1.300.0: the whole usage per completion (cache counts, the provider's
     # own cost) — priced per step. Lock-step: the stream lane keeps one too.
     _tally = UsageTally()
+    # THINKING + TRUNCATED (v1.323.0): every answering call's reasoning, in
+    # order (display-only — it never joins `msgs`, the reply or the saved
+    # history), and whether the FINAL answering call ran out of output tokens.
+    # MIRROR NOTE (lock-step): routes/chat.py streams the reasoning as
+    # `thinking` frames and carries `truncated` on `done`.
+    _thinking_parts: list[str] = []
+    _truncated = False
     stopped_note = ""  # honest note when the round budget cuts off tool calls
     escalate = False        # the turn asked for the full agent
     escalate_reason = ""
@@ -4728,6 +4776,8 @@ async def run_chat_turn(
             usage_out += int(_u.get("output_tokens", 0) or 0)
             _tally.add(getattr(route, "provider", ""), getattr(route, "model", ""), _u)
             completions += 1
+            _thinking_parts.append(_thinking_of(route.response))
+            _truncated = _truncated_by(route.response)
             calls = route.response.tool_calls or []
             # THE DRAFT, THREE WAYS (v1.225.0): the workflow_draft exit; an
             # unarmed workflow_create call (same shape, same intent); or the
@@ -5010,6 +5060,7 @@ async def run_chat_turn(
     if _cut_office or _wants_final_answer(
         model_text, workflow_draft, escalate, completions,
     ):
+        _f_outcome: dict = {}
         _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
             d.platform,
             system=_send_system,
@@ -5020,11 +5071,17 @@ async def run_chat_turn(
             # the browser wording when it acted in a browser.
             **({"instruction": _out_of_rounds_instruction(armed)} if _cut_office else {}),
             tally=_tally,
+            outcome=_f_outcome,
         )
+        if "response" in _f_outcome:
+            # v1.323.0: the nudge was the final answering call.
+            _thinking_parts.append(_thinking_of(_f_outcome["response"]))
+            _truncated = _truncated_by(_f_outcome["response"])
         model_text = _f_text or model_text
         usage_in += _f_in
         usage_out += _f_out
         completions += _f_n
+    _l_outcome: dict = {}
     model_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
         d.platform,
         text=model_text,
@@ -5034,7 +5091,11 @@ async def run_chat_turn(
         provider=provider_choice,
         model=model_choice,
         tally=_tally,
+        outcome=_l_outcome,
     )
+    if "response" in _l_outcome:
+        # v1.323.0: an ADOPTED rewrite is the reply now — its ending counts.
+        _truncated = _truncated_by(_l_outcome["response"])
     usage_in += _l_in
     usage_out += _l_out
     completions += _l_n
@@ -5140,6 +5201,16 @@ async def run_chat_turn(
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,
+        # THINKING (v1.323.0): the model's reasoning for this turn — every
+        # answering call's, in order, capped at THINKING_CAP characters; ""
+        # when none. DISPLAY-ONLY: never part of `reply`. The stream lane
+        # sends the same text live as `thinking` frames instead (its done
+        # frame does not repeat it). MIRROR NOTE (lock-step): routes/chat.py.
+        "thinking": _joined_thinking(_thinking_parts),
+        # TRUNCATED (v1.323.0): true iff the FINAL answering model call
+        # stopped for running out of output tokens — ALWAYS present. MIRROR
+        # NOTE (lock-step): the stream done-frame carries the identical key.
+        "truncated": bool(_truncated),
         # REMEMBERED (v1.282.0): the preference sentences this turn kept —
         # ALWAYS present (possibly empty), like doors, so clients never branch
         # on absence. MIRROR NOTE (lock-step): the stream done-frame carries

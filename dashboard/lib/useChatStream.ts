@@ -15,6 +15,9 @@
 //              "adapted": {model,changes}|null, "unread_steers"?: [text],
 //              ...}                                   (unread_steers: v1.287.0)
 //   error     {"detail","status"?}
+//   thinking  {"text":"…"}  reasoning deltas, display-only, any round (v1.323.0)
+//   (done also carries "truncated": bool since v1.323.0 — the answer ran out
+//    of output tokens)
 //
 // with a ": keepalive" comment every ~15s of idle. This library turns that raw
 // byte stream into typed events (`streamSSE`) and drives one chat turn from a
@@ -32,6 +35,10 @@ import { decodeConfigCards, type ConfigCard } from "./configCards";
 /** A single decoded SSE frame. Discriminated on `type` (the event name). */
 export type SSEEvent =
   | { type: "token"; text: string }
+  /** v1.323.0: a REASONING delta — the model's thinking, shown in its own
+   *  quiet disclosure and never part of the reply. May arrive in any round,
+   *  interleaved with tokens. Not work (no side effects), so not `committed`. */
+  | { type: "thinking"; text: string }
   /** v1.311.0 (W3-1): "discard the reply text streamed so far; the tokens
    *  that follow replace it" — the daemon's streamed language rewrite. The
    *  daemon may send a `reason`; nothing here needs it. */
@@ -144,6 +151,9 @@ export type SSEEvent =
       /** v1.287.0: steer notes the turn accepted but never READ (it ended
        *  before another step came round). Absent when there were none. */
       unread_steers?: string[];
+      /** v1.323.0: the answer stopped because it ran out of output tokens.
+       *  Only a real `true` decodes; anything else leaves the key absent. */
+      truncated?: boolean;
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
 
@@ -156,6 +166,41 @@ export interface ToolCard {
   ok?: boolean;
   args?: Record<string, unknown>;
   output?: string;
+  /** v1.323.0: CLIENT clock (Date.now()) when the started frame arrived —
+   *  kept when the finished frame merges in. Absent when no started frame
+   *  was seen. */
+  startedAt?: number;
+  /** v1.323.0: CLIENT clock when the finished frame arrived. */
+  endedAt?: number;
+}
+
+/** One tool step of a finished turn, in call order (v1.323.0): the receipt
+ *  shows each with its duration. `ok` null = the daemon never said; `ms` null
+ *  = a start or end was not seen. */
+export interface TurnStep {
+  name: string;
+  ok: boolean | null;
+  ms: number | null;
+}
+
+/** When a turn started, said its first word, and ended — CLIENT clock (ms
+ *  epoch). `firstTokenAt` is null when no token frame arrived. */
+export interface TurnTiming {
+  startedAt: number;
+  firstTokenAt: number | null;
+  endedAt: number;
+}
+
+/** The steps of a turn from its tool cards, in order (v1.323.0). */
+export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
+  return cards.map((c) => ({
+    name: c.name,
+    ok: typeof c.ok === "boolean" ? c.ok : null,
+    ms:
+      typeof c.startedAt === "number" && typeof c.endedAt === "number"
+        ? Math.max(0, c.endedAt - c.startedAt)
+        : null,
+  }));
 }
 
 /** What one chat turn resolves to. `reply` is authoritative (from the `done`
@@ -222,7 +267,23 @@ export interface ChatStreamResult {
    *  finished first. The caller hands them back to the user; they are not
    *  part of the conversation (the model never saw them). */
   unreadSteers?: string[];
+  /** v1.323.0: the turn's reasoning text ("" when the model sent none). */
+  thinking: string;
+  /** v1.323.0: how long the model thought, in ms — first thinking frame to
+   *  first token (or to the end when no token came); null when no thinking
+   *  arrived. For "Thought for N s". */
+  thinkingMs: number | null;
+  /** v1.323.0: the answer stopped because it ran out of output tokens
+   *  (the done frame's flag; false when absent or when no done arrived). */
+  truncated: boolean;
+  /** v1.323.0: client-clock timing of the turn. */
+  timing: TurnTiming;
+  /** v1.323.0: the turn's tool steps, in order, with durations. */
+  steps: TurnStep[];
 }
+
+/** The v1.323.0 fields every result carries, done frame or not. */
+type TurnExtras = "thinking" | "thinkingMs" | "truncated" | "timing" | "steps";
 
 /** What one turn cost against the answering model's window (v1.146.0). The
  *  daemon computes it — the client only renders it, so the number the user
@@ -292,6 +353,10 @@ export function sseEventFrom(
   switch (event) {
     case "token":
       return { type: "token", text: str(data.text) };
+    case "thinking":
+      // v1.323.0: reasoning deltas, display-only. Text only — a junk payload
+      // is an empty delta, never "[object Object]" in the disclosure.
+      return { type: "thinking", text: typeof data.text === "string" ? data.text : "" };
     case "reset":
       return { type: "reset" };
     case "tool_call": {
@@ -323,6 +388,12 @@ export function sseEventFrom(
         ev.examples = data.examples.filter(
           (e): e is Record<string, unknown> => !!e && typeof e === "object",
         );
+      // v1.299.0 fields, decoded since v1.323.0: run() always read
+      // `ev.can_always`, but the whitelist dropped it, so "Always allow" was
+      // never offered on the streaming lane. A real `true` and a non-empty
+      // hash only.
+      if (data.can_always === true) ev.can_always = true;
+      if (typeof data.args_hash === "string" && data.args_hash) ev.args_hash = data.args_hash;
       return ev;
     }
     case "approval_resolved": {
@@ -437,6 +508,8 @@ export function sseEventFrom(
         );
         if (unread.length) ev.unread_steers = unread;
       }
+      // v1.323.0: whitelisted — only a real boolean true says "cut short".
+      if (data.truncated === true) ev.truncated = true;
       return ev;
     }
     case "error": {
@@ -682,23 +755,34 @@ export async function* streamSSE(
 /** Merge a `tool_call` frame into the live card list (keyed by id). A `started`
  *  frame adds a `running` card; a `finished` frame flips it to `done` while
  *  preserving the args the started frame carried if the finished one omitted
- *  them. */
+ *  them.
+ *
+ *  v1.323.0: stamps the CLIENT clock — `startedAt` on a started frame (kept
+ *  through the merge; a repeated started frame never moves it), `endedAt` on
+ *  a finished one — so the receipt can say how long each step took. `now` is
+ *  a parameter so a caller applying one frame to two lists stamps both alike. */
 export function upsertTool(
   prev: ToolCard[],
   ev: Extract<SSEEvent, { type: "tool_call" }>,
+  now: number = Date.now(),
 ): ToolCard[] {
+  const finished = ev.status === "finished";
   const patch: ToolCard = {
     id: ev.id,
     name: ev.name,
-    status: ev.status === "finished" ? "done" : "running",
+    status: finished ? "done" : "running",
   };
   if (ev.ok !== undefined) patch.ok = ev.ok;
   if (ev.args !== undefined) patch.args = ev.args;
   if (ev.output !== undefined) patch.output = ev.output;
+  if (finished) patch.endedAt = now;
+  else patch.startedAt = now;
   const idx = prev.findIndex((t) => t.id === patch.id);
   if (idx === -1) return [...prev, patch];
   const next = prev.slice();
-  next[idx] = { ...next[idx], ...patch };
+  const merged = { ...next[idx], ...patch };
+  if (next[idx].startedAt !== undefined) merged.startedAt = next[idx].startedAt;
+  next[idx] = merged;
   return next;
 }
 
@@ -791,6 +875,9 @@ export function useLiveText(stream: Pick<UseChatStream, "text" | "textStore">): 
   return store ? live : stream.text;
 }
 
+/** v1.323.0: lives in its own module (see lib/liveThinking.ts). */
+export { useLiveThinking } from "./liveThinking";
+
 export interface UseChatStream {
   /** True while a turn is in flight. */
   streaming: boolean;
@@ -799,6 +886,12 @@ export interface UseChatStream {
   text: string;
   /** The live reply, readable without re-rendering this hook's caller. */
   textStore?: TextStore;
+  /** v1.323.0: the turn's reasoning so far, in state only when the caller
+   *  keeps text in state (else "" — read `thinkingStore` / `useLiveThinking`).
+   *  Optional so a hand-built test double need not carry it. */
+  thinking?: string;
+  /** v1.323.0: the live reasoning, published with the live text. */
+  thinkingStore?: TextStore;
   /** Live tool cards for this turn, keyed by call id. */
   tools: ToolCard[];
   /** The approval the turn is paused on, or null. The page renders the card;
@@ -873,6 +966,25 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       },
     };
   }
+  // v1.323.0: the reasoning text rides the SAME mechanism — its own ref and
+  // listeners, published by the same once-a-frame flush.
+  const [thinking, setThinking] = useState("");
+  const thinkingRef = useRef("");
+  const thinkingListenersRef = useRef<Set<() => void>>(new Set());
+  const thinkingStoreRef = useRef<TextStore | null>(null);
+  if (thinkingStoreRef.current === null) {
+    thinkingStoreRef.current = {
+      get: () => thinkingRef.current,
+      subscribe: (cb: () => void) => {
+        thinkingListenersRef.current.add(cb);
+        return () => thinkingListenersRef.current.delete(cb);
+      },
+    };
+  }
+  const notifyThinking = useCallback(() => {
+    if (textInState) setThinking(thinkingRef.current);
+    for (const cb of [...thinkingListenersRef.current]) cb();
+  }, [textInState]);
   const flushText = useCallback(() => {
     if (frameRef.current !== null) {
       cancelAnimationFrame(frameRef.current);
@@ -880,7 +992,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     }
     if (textInState) setText(textRef.current);
     for (const cb of [...listenersRef.current]) cb();
-  }, [textInState]);
+    notifyThinking();
+  }, [textInState, notifyThinking]);
   const scheduleText = useCallback(() => {
     if (frameRef.current !== null) return; // a flush is already queued
     frameRef.current =
@@ -889,13 +1002,15 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
             frameRef.current = null;
             if (textInState) setText(textRef.current);
             for (const cb of [...listenersRef.current]) cb();
+            notifyThinking();
           })
         : (setTimeout(() => {
             frameRef.current = null;
             if (textInState) setText(textRef.current);
             for (const cb of [...listenersRef.current]) cb();
+            notifyThinking();
           }, 16) as unknown as number);
-  }, [textInState]);
+  }, [textInState, notifyThinking]);
   const [tools, setTools] = useState<ToolCard[]>([]);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [phase, setPhase] = useState<TurnPhase | null>(null);
@@ -926,6 +1041,12 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       setStreaming(true);
       setText("");
       textRef.current = "";
+      // v1.323.0: the reasoning resets per turn. A store reader that showed
+      // the LAST turn's thinking hears the reset now, not at the first flush.
+      if (thinkingRef.current) {
+        thinkingRef.current = "";
+        notifyThinking();
+      }
       setTools([]);
       setApproval(null);
       const t0 = Date.now();
@@ -943,13 +1064,25 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       };
 
       let acc = "";
-      let done: ChatStreamResult | null = null;
+      let done: Omit<ChatStreamResult, TurnExtras> | null = null;
       let provider: string | undefined;
       let model: string | undefined;
       // Did the server do real work for this turn (streamed a token or ran a
       // tool)? If so, a non-streaming re-POST on failure would re-execute it.
       let committed = false;
       const steered: string[] = [];
+      // v1.323.0: this turn's reasoning, timing and tool cards (a local copy
+      // of the cards — the state list belongs to the screen; the result needs
+      // them in order the moment the loop ends).
+      let thought = "";
+      // Thinking time = the sum of each run of thinking frames, from its
+      // first delta to the next frame of any other kind (or the end) — so a
+      // second round's thinking after the first round's words still counts.
+      let thinkingSince: number | null = null;
+      let thinkingMs: number | null = null;
+      let firstTokenAt: number | null = null;
+      let truncated = false;
+      let cards: ToolCard[] = [];
 
       try {
         for await (const ev of streamSSE(
@@ -960,6 +1093,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         )) {
           // A real frame moved the turn (keepalives never reach here).
           if (ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
+          if (ev.type !== "thinking" && thinkingSince !== null) {
+            thinkingMs = (thinkingMs ?? 0) + Math.max(0, Date.now() - thinkingSince);
+            thinkingSince = null;
+          }
           // v1.312.0: anything but a stage name means preparation is over —
           // the bubble's stage words must not outlive it. (A `meta` frame is
           // routing, not progress; it leaves the words alone.)
@@ -968,6 +1105,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           switch (ev.type) {
             case "token":
               committed = true;
+              if (firstTokenAt === null) firstTokenAt = Date.now();
               acc += ev.text;
               // v1.250.0 (S-03): the ref is the truth; the screen catches up
               // once a frame. `onToken` still sees EVERY token (the TTS feed
@@ -989,10 +1127,25 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               scheduleText();
               onReset?.();
               break;
-            case "tool_call":
-              committed = true;
-              setTools((prev) => upsertTool(prev, ev));
+            case "thinking":
+              // v1.323.0: display-only reasoning. NOT `committed` (no side
+              // effects — a re-POST after thinking alone replays nothing) and
+              // never part of `acc`/the reply. Same once-a-frame publish.
+              if (!ev.text) break;
+              if (thinkingSince === null) thinkingSince = Date.now();
+              thought += ev.text;
+              thinkingRef.current = thought;
+              scheduleText();
               break;
+            case "tool_call": {
+              committed = true;
+              // One clock reading for both lists, so the screen's card and
+              // the result's step agree to the millisecond.
+              const now = Date.now();
+              cards = upsertTool(cards, ev, now);
+              setTools((prev) => upsertTool(prev, ev, now));
+              break;
+            }
             case "approval":
               // The turn is PAUSED server-side; render the card. Counts as
               // committed work — the model has already chosen this call, so a
@@ -1029,6 +1182,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               setPrepStep(ev.phase);
               break;
             case "done":
+              truncated = ev.truncated === true;
               done = {
                 reply: ev.reply || acc,
                 tools_used: ev.tools_used,
@@ -1094,7 +1248,17 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
 
       // done.reply is authoritative; fall back to the accumulated text if the
       // stream dropped (or was aborted) before a `done` frame arrived.
-      return done ?? { reply: acc, provider, model };
+      const endedAt = Date.now();
+      if (thinkingSince !== null)
+        thinkingMs = (thinkingMs ?? 0) + Math.max(0, endedAt - thinkingSince);
+      const extras: Pick<ChatStreamResult, TurnExtras> = {
+        thinking: thought,
+        thinkingMs: thought ? thinkingMs : null,
+        truncated,
+        timing: { startedAt: t0, firstTokenAt, endedAt },
+        steps: stepsFromTools(cards),
+      };
+      return done ? { ...done, ...extras } : { reply: acc, provider, model, ...extras };
     },
     [],
   );
@@ -1103,6 +1267,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     streaming,
     text,
     textStore: storeRef.current,
+    thinking,
+    thinkingStore: thinkingStoreRef.current,
     tools,
     approval,
     phase,

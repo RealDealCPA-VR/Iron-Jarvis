@@ -436,6 +436,12 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # for. Same key in the SSE done frame; semantics pinned by
         # tests/test_settings_chat_tools_v1321.py.
         "config_cards",
+        # v1.323.0: two more — "thinking" (the model's display-only reasoning,
+        # "" when none, capped at 20,000 chars) and "truncated" (bool, always
+        # present: the final answer ran out of output tokens). Semantics
+        # pinned by tests/test_chat_thinking_v1323.py and
+        # tests/test_chat_truncated_v1323.py.
+        "thinking", "truncated",
     }
     assert body["remembered"] == []
     assert body["suggestion"] is None

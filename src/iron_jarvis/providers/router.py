@@ -40,6 +40,7 @@ Reliability spine (best-in-class routing):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import math
 import random
 import re
@@ -439,6 +440,168 @@ def _disclosed_reason(reason: str, serving_provider: str) -> str:
     "Done. Wrote RESULT.md" read as finished work. The mock never gets to be
     ordinary."""
     return "mock" if serving_provider == "mock" else reason
+
+
+# ---------------------------------------------------------------------------
+# THINKING (v1.323.0) — a local model's `<think>…</think>` block is REASONING,
+# not answer. Many local reasoning models (DeepSeek-R1 distills, Qwen3, QwQ…)
+# served through an OpenAI-compatible endpoint write it inline at the very
+# start of the reply. Split HERE, once, so both chat lanes, every agent run and
+# every one-shot caller see the answer alone and the reasoning as display-only
+# `thinking` frames / `LLMResponse.thinking`. Only a LEADING block counts (after
+# optional whitespace): a `<think>` later in a reply is the model talking ABOUT
+# the tag and stays text. An unterminated block (the model ran out of tokens
+# while still thinking) is ALL thinking — the answer is then honestly empty.
+# ---------------------------------------------------------------------------
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def split_think_text(text: str) -> tuple[str, str] | None:
+    """``(thinking, answer)`` when ``text`` opens with a ``<think>`` block, else
+    ``None`` (leave the text alone). The non-streamed twin of
+    :class:`ThinkSplitter` — the two agree on every input."""
+    if not isinstance(text, str):
+        return None
+    body = text.lstrip()
+    if not body.startswith(_THINK_OPEN):
+        return None
+    body = body[len(_THINK_OPEN):]
+    end = body.find(_THINK_CLOSE)
+    if end < 0:
+        return body, ""
+    return body[:end], body[end + len(_THINK_CLOSE):].lstrip()
+
+
+class ThinkSplitter:
+    """Streaming twin of :func:`split_think_text`: fed text deltas in order,
+    returns ``[(kind, piece), ...]`` with ``kind`` ``"thinking"`` or ``"text"``.
+
+    Tags split across deltas are handled by holding back only what could
+    still be the start of a tag: before the first visible character, a prefix
+    of ``<think>``; inside the block, a suffix that could open ``</think>``.
+    Whitespace between ``</think>`` and the answer is dropped, as the
+    non-streamed split drops it. :meth:`flush` releases what is held at the
+    end of the stream."""
+
+    def __init__(self) -> None:
+        self._state = "start"  # start | think | answer
+        self._buf = ""
+        self._trim = False  # drop leading whitespace of the answer
+
+    def feed(self, text: str) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        if not text:
+            return out
+        if self._state == "answer":
+            self._emit_answer(text, out)
+            return out
+        self._buf += text
+        if self._state == "start":
+            body = self._buf.lstrip()
+            if not body or _THINK_OPEN.startswith(body):
+                return out  # still undecided: nothing visible, or a tag prefix
+            if not body.startswith(_THINK_OPEN):
+                self._state = "answer"
+                held, self._buf = self._buf, ""
+                self._emit_answer(held, out)
+                return out
+            self._state = "think"
+            self._buf = body[len(_THINK_OPEN):]
+        # state == "think"
+        end = self._buf.find(_THINK_CLOSE)
+        if end >= 0:
+            if end:
+                out.append(("thinking", self._buf[:end]))
+            rest = self._buf[end + len(_THINK_CLOSE):]
+            self._buf = ""
+            self._state = "answer"
+            self._trim = True
+            self._emit_answer(rest, out)
+            return out
+        keep = 0
+        for n in range(min(len(_THINK_CLOSE) - 1, len(self._buf)), 0, -1):
+            if _THINK_CLOSE.startswith(self._buf[-n:]):
+                keep = n
+                break
+        ready = self._buf[: len(self._buf) - keep]
+        self._buf = self._buf[len(self._buf) - keep:]
+        if ready:
+            out.append(("thinking", ready))
+        return out
+
+    def _emit_answer(self, text: str, out: list[tuple[str, str]]) -> None:
+        if self._trim:
+            text = text.lstrip()
+            if not text:
+                return
+            self._trim = False
+        if text:
+            out.append(("text", text))
+
+    def flush(self) -> list[tuple[str, str]]:
+        held, self._buf = self._buf, ""
+        if not held:
+            return []
+        if self._state == "think":
+            return [("thinking", held)]
+        if self._state == "start":
+            # Never became a block: what was held is the answer (whitespace,
+            # or a lone "<thi" the model really wrote).
+            self._state = "answer"
+            return [("text", held)]
+        return []
+
+
+def _with_split_thinking(response: Any) -> Any:
+    """``response`` with a leading ``<think>`` block moved out of ``text`` and
+    into ``thinking`` (appended to any the adapter already set). Anything that
+    is not an LLMResponse-like object, or whose text has no such block, comes
+    back as the SAME object. Never mutates: a new LLMResponse is built."""
+    split = split_think_text(getattr(response, "text", None))
+    if split is None or not isinstance(response, LLMResponse):
+        return response
+    thought, answer = split
+    prior = response.thinking or ""
+    joined = f"{prior}\n\n{thought}" if prior and thought else (prior or thought)
+    return dataclasses.replace(response, text=answer, thinking=joined)
+
+
+def _is_answer_frame(frame: Any) -> bool:
+    """Every frame commits a stream EXCEPT ``thinking`` (v1.323.0): reasoning
+    is display-only, so a provider that dies after thinking but before a word
+    of answer has not answered — retry and failover stay open. (What the user
+    saw of its reasoning was display-only, too.)"""
+    return not (isinstance(frame, dict) and frame.get("type") == "thinking")
+
+
+async def _split_think_frames(frames: Any) -> AsyncIterator[dict[str, Any]]:
+    """An adapter's frames with a leading ``<think>`` block re-labelled as
+    ``thinking`` frames (deltas) and removed from the ``final`` response's
+    text. Every other frame passes through untouched; the adapter's stream is
+    closed when this one is."""
+    splitter = ThinkSplitter()
+    try:
+        async for frame in frames:
+            kind = frame.get("type") if isinstance(frame, dict) else None
+            if kind == "text":
+                for piece_kind, piece in splitter.feed(frame.get("text") or ""):
+                    yield {"type": piece_kind, "text": piece}
+                continue
+            if kind == "final":
+                for piece_kind, piece in splitter.flush():
+                    yield {"type": piece_kind, "text": piece}
+                response = frame.get("response")
+                fixed = _with_split_thinking(response)
+                if fixed is not response:
+                    frame = {**frame, "response": fixed}
+            yield frame
+        for piece_kind, piece in splitter.flush():
+            yield {"type": piece_kind, "text": piece}
+    finally:
+        close = getattr(frames, "aclose", None)
+        if close is not None:
+            await close()
 
 
 class RouteResult:
@@ -1237,7 +1400,9 @@ class ModelRouter:
             _routing.LATENCY.record(adapter.provider, adapter.model, self._clock() - t0)
         except Exception:  # noqa: BLE001 — telemetry must never break a request
             pass
-        return resp
+        # v1.323.0: a leading `<think>` block is reasoning, not answer — the
+        # stream twin is `_split_think_frames` in `_stream_one`.
+        return _with_split_thinking(resp)
 
     async def _attempt_with_retry(
         self, adapter: LLMAdapter, *, system, messages, tools, deadline: float,
@@ -1633,10 +1798,13 @@ class ModelRouter:
         :meth:`_timed_complete`) it is a single straight pass-through."""
         # v1.263.0: the level rides only when set (byte-identical otherwise).
         _kw: dict[str, Any] = {"reasoning": reasoning} if reasoning else {}
+        # v1.323.0: every attempt's frames go through the `<think>` splitter
+        # (a fresh one per attempt), and only an ANSWER frame commits the
+        # attempt — a `thinking` frame is display-only (`_is_answer_frame`).
         if not retry:
-            async for frame in adapter.stream(
+            async for frame in _split_think_frames(adapter.stream(
                 system=system, messages=messages, tools=tools, **_kw
-            ):
+            )):
                 yield frame
             return
         delay = 1.5
@@ -1644,10 +1812,11 @@ class ModelRouter:
         while True:
             yielded = False
             try:
-                async for frame in adapter.stream(
+                async for frame in _split_think_frames(adapter.stream(
                     system=system, messages=messages, tools=tools, **_kw
-                ):
-                    yielded = True
+                )):
+                    if _is_answer_frame(frame):
+                        yielded = True
                     yield frame
                 return
             except Exception as exc:  # noqa: BLE001 — classified below
@@ -1841,7 +2010,10 @@ class ModelRouter:
                 adapter, system=system, messages=messages, tools=tools,
                 deadline=deadline, retry=True, reasoning=applied,
             ):
-                committed = True
+                # v1.323.0: a `thinking` frame is display-only and commits
+                # nothing — only an answer frame closes the failover window.
+                if _is_answer_frame(frame):
+                    committed = True
                 # Route disclosure rides the final frame (v1.165.0) — the
                 # stream twin of complete()'s RouteResult fields.
                 yield self._enrich_final(
@@ -1924,16 +2096,19 @@ class ModelRouter:
                 and (not need_tools or _supports_tools(alt))
             ):
                 t0 = self._clock()
+                moved = False  # v1.323.0: announced ≠ committed (thinking)
                 try:
                     async for frame in self._stream_one(
                         alt, system=system, messages=messages, tools=tools,
                         deadline=deadline, retry=False,
                     ):
-                        if not committed:
-                            committed = True
+                        if not moved:
+                            moved = True
                             # The turn has MOVED: say so before the first frame
                             # leaves (v1.232.0) — a disconnect cannot lose it.
                             await self._publish_failover(adapter, alt, why, session_id)
+                        if _is_answer_frame(frame):
+                            committed = True
                         # A failover answered — disclose it as such (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (A).
                         yield self._enrich_final(
@@ -1941,7 +2116,7 @@ class ModelRouter:
                         )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
-                    if not committed:  # an empty stream still served the turn
+                    if not moved:  # an empty stream still served the turn
                         await self._publish_failover(adapter, alt, why, session_id)
                     return
                 except Exception as dexc:  # noqa: BLE001 — the default failed too
@@ -1976,14 +2151,17 @@ class ModelRouter:
                 if need_tools and not _supports_tools(alt):
                     continue
                 t0 = self._clock()
+                moved = False  # v1.323.0: announced ≠ committed (thinking)
                 try:
                     async for frame in self._stream_one(
                         alt, system=system, messages=messages, tools=tools,
                         deadline=deadline, retry=False,
                     ):
-                        if not committed:
-                            committed = True
+                        if not moved:
+                            moved = True
                             await self._publish_failover(adapter, alt, why, session_id)
+                        if _is_answer_frame(frame):
+                            committed = True
                         # Sideways failover answered — disclose it (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (B).
                         yield self._enrich_final(
@@ -1991,7 +2169,7 @@ class ModelRouter:
                         )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
-                    if not committed:  # an empty stream still served the turn
+                    if not moved:  # an empty stream still served the turn
                         await self._publish_failover(adapter, alt, why, session_id)
                     return
                 except Exception as sexc:  # noqa: BLE001 — try the next candidate
@@ -2018,9 +2196,9 @@ class ModelRouter:
         fallback = self.manager.get("mock")
         if fallback is adapter:
             raise primary_exc
-        async for frame in fallback.stream(
+        async for frame in _split_think_frames(fallback.stream(
             system=system, messages=messages, tools=tools
-        ):
+        )):
             # The mock answered after the chosen mock failed — still "mock"
             # (v1.165.0). MIRROR NOTE (lock-step): complete()'s mock tail.
             yield self._enrich_final(frame, fallback, provider or "", "mock")

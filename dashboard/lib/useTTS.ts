@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { plainText } from "@/components/Markdown";
 
 /* -------------------------------------------------------------------------- */
 /*  Voice output (Web Speech Synthesis) — hear Iron Jarvis reply               */
@@ -71,6 +72,20 @@ export function takeCompleteSentences(
   };
 }
 
+/**
+ * A reply as words to READ ALOUD (v1.323.0): markdown stripped LINE BY LINE
+ * (`plainText` collapses all whitespace, which would run a list's items and
+ * a heading into one breathless sentence), blank lines dropped, one line per
+ * spoken line — `splitSentences` breaks on the newlines. Pure.
+ */
+export function speakableText(md: string): string {
+  return (md || "")
+    .split(/\r?\n/)
+    .map((line) => plainText(line))
+    .filter((line) => line.length > 0)
+    .join("\n");
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Hook                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -122,8 +137,17 @@ export interface UseTTS {
    * fragment. No-op while voice is off.
    */
   speakMore: (fullText: string, flush?: boolean) => void;
-  /** Stop and clear the queue immediately. */
+  /** Stop and clear the queue immediately (and end any read-aloud). */
   cancel: () => void;
+  /**
+   * v1.323.0: read ONE reply aloud on an explicit press — REGARDLESS of
+   * `enabled` (the press is the consent). Markdown is stripped to plain
+   * words; anything already speaking is cancelled first. Pressing it again
+   * with the same `key` while that reply is being read stops it (a toggle).
+   */
+  readAloud: (text: string, key: string) => void;
+  /** v1.323.0: the key of the reply being read aloud, or null. */
+  readingKey: string | null;
 }
 
 /**
@@ -136,6 +160,13 @@ export function useTTS(): UseTTS {
   const [supported, setSupported] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  // v1.323.0: the reply being read aloud. The ref is the truth for the
+  // toggle (a press must not wait for a render); the token retires the
+  // callbacks of a read that was cancelled or replaced, so its late
+  // onend/onerror can never clear a NEWER read's key.
+  const [readingKey, setReadingKey] = useState<string | null>(null);
+  const readingKeyRef = useRef<string | null>(null);
+  const readTokenRef = useRef(0);
 
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const lastSpokenRef = useRef<string>(""); // dedupe identical re-speak calls
@@ -190,6 +221,9 @@ export function useTTS(): UseTTS {
     setSpeaking(false);
     lastSpokenRef.current = "";
     streamConsumedRef.current = 0;
+    readTokenRef.current += 1;
+    readingKeyRef.current = null;
+    setReadingKey(null);
   }, []);
 
   const persist = useCallback((on: boolean) => {
@@ -222,7 +256,7 @@ export function useTTS(): UseTTS {
   // The per-utterance body shared by speak() (whole reply) and speakMore()
   // (streaming). `speaking` tracks the queue: true on any utterance start, false
   // once the queue drains (`pending` is false when this is the last one).
-  const enqueueUtterance = useCallback((sentence: string) => {
+  const enqueueUtterance = useCallback((sentence: string, onDone?: () => void) => {
     const s = synth();
     if (!s) return;
     const u = new SpeechSynthesisUtterance(sentence);
@@ -231,8 +265,14 @@ export function useTTS(): UseTTS {
     u.pitch = VOICE_PERSONA.pitch;
     u.volume = VOICE_PERSONA.volume;
     u.onstart = () => setSpeaking(true);
-    u.onend = () => setSpeaking(s.pending);
-    u.onerror = () => setSpeaking(s.pending);
+    u.onend = () => {
+      setSpeaking(s.pending);
+      onDone?.();
+    };
+    u.onerror = () => {
+      setSpeaking(s.pending);
+      onDone?.();
+    };
     try {
       s.speak(u);
     } catch {
@@ -252,6 +292,12 @@ export function useTTS(): UseTTS {
         s.cancel(); // replace any in-flight speech with the newest output
       } catch {
         /* ignore */
+      }
+      // v1.323.0: that cancel ended any read-aloud too — its key goes with it.
+      if (readingKeyRef.current !== null) {
+        readTokenRef.current += 1;
+        readingKeyRef.current = null;
+        setReadingKey(null);
       }
 
       const sentences = splitSentences(clean);
@@ -283,6 +329,44 @@ export function useTTS(): UseTTS {
     [enqueueUtterance],
   );
 
+  const readAloud = useCallback(
+    (text: string, key: string) => {
+      const s = synth();
+      if (!s) return;
+      // The same reply pressed again while it is being read: stop (toggle).
+      if (readingKeyRef.current !== null && readingKeyRef.current === key) {
+        cancel();
+        return;
+      }
+      const sentences = splitSentences(speakableText(text));
+      if (!sentences.length) return;
+      try {
+        s.cancel(); // an explicit press replaces whatever is speaking
+      } catch {
+        /* ignore */
+      }
+      // A later auto-speak of the same reply is not a duplicate of this.
+      lastSpokenRef.current = "";
+      const token = ++readTokenRef.current;
+      readingKeyRef.current = key;
+      setReadingKey(key);
+      const last = sentences.length - 1;
+      sentences.forEach((sentence, i) =>
+        enqueueUtterance(
+          sentence,
+          i === last
+            ? () => {
+                if (readTokenRef.current !== token) return; // retired read
+                readingKeyRef.current = null;
+                setReadingKey(null);
+              }
+            : undefined,
+        ),
+      );
+    },
+    [cancel, enqueueUtterance],
+  );
+
   return {
     supported,
     enabled,
@@ -294,5 +378,7 @@ export function useTTS(): UseTTS {
     resetStream,
     speakMore,
     cancel,
+    readAloud,
+    readingKey,
   };
 }

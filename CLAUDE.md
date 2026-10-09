@@ -2905,6 +2905,55 @@ does not need a bump, stop and bump it.
   USERPROFILE/HOME; a teardown check that the REAL files are untouched),
   `dashboard/__tests__/profile-share-v1306.test.tsx`.
 
+- **Thinking is a FRAME, never answer text; `truncated` is honest; a
+  Continue is ONE reply** (v1.323.0, wave B of the assistant-ui/tambo borrow
+  list — ideas only). ADAPTERS: a new stream frame `{"type": "thinking",
+  "text"}` (anthropic thinking_delta, openai `reasoning_content`/`reasoning`
+  + Responses reasoning deltas — NOT requested, only passed through —,
+  google `thought` parts (includeThoughts is NOT sent: the v1263 pin fixes
+  thinkingConfig), claude_native thinking deltas, base default stream);
+  `LLMResponse.thinking`. `finish_reason="max_tokens"` is now mapped by every
+  adapter (anthropic max_tokens, openai length, Responses incomplete
+  max_output_tokens — which used to RAISE —, google MAX_TOKENS; a function
+  call is still tool_use). ROUTER: `ThinkSplitter`/`split_think_text` move a
+  LEADING `<think>` block out of the answer in stream() AND complete(); ONLY
+  AN ANSWER FRAME COMMITS (`_is_answer_frame`) — a provider that dies after
+  thinking and before any answer is retried / failed over under the SAME
+  rules as before the first token (the local-refusal check still applies),
+  and the thinking may show twice. LANES (lock-step): SSE `event: thinking`
+  `{text}` from every round and the nudge; `done.truncated` and POST
+  `{thinking (≤20,000), truncated}` always present (`test_chat_turn_service`
+  key pin updated); thinking never reaches `reply`, the next round or saved
+  history. FOLLOW-UPS: `Config.chat_followups` (schema row, default off),
+  `POST /chat/followups` (`routes/followups.py`) — off/no assistant/mock →
+  `[]` with a reason and NO call; otherwise `router.complete` with the
+  reply's OWN provider/model (no `_one_shot_complete`: it walks failover
+  candidates), billed via `_persist_chat_usage`, promptguard-screened, ≤3,
+  never a 500. DASHBOARD: `useChatStream` decodes `thinking` (own ref +
+  frame-throttled store), stamps tool cards `startedAt/endedAt` client-side,
+  and resolves `thinking/thinkingMs/truncated/timing/steps` (also fixed: the
+  approval decode dropped `can_always`/`args_hash`). `useLiveThinking` lives
+  in `lib/liveThinking.ts` (re-exported) because ~50 tests mock
+  `@/lib/useChatStream` with a FIXED export list. `useTTS.readAloud(text,
+  key)`/`readingKey` speak regardless of `enabled`. The page: `ChatMessage`
+  gains `at`, `thinking`, `thinkingSeconds`, `truncated`, `steps`, `timing`,
+  `continuation`; `at` rides both receipts (and the user message);
+  new detail fields go at the END of `receipt` (the trust pin reads its
+  first 1,200 chars). Continue = a hidden `continuation` user turn
+  (`CONTINUE_PROMPT`) through the normal completeChat, merged by
+  `lib/continueReply.mergeContinuation` at BOTH commit points
+  (`joinContinuation` restores the space the trim removed); the hidden turn
+  never renders. Drafts: `lib/chatDrafts` (localStorage `ij.chat.drafts`,
+  LRU 50) — saved in `leaveConversation()` and on `pagehide`/unmount for a
+  SAVED thread only, restored after `composer.reset()` in openThread,
+  cleared on send. Follow-ups read `settings.chat_followups` from the page's
+  one `/settings` GET into a ref; the chip puts the text in the box (never
+  sends). Pins: `tests/test_chat_{thinking,truncated,followups}_v1323.py`,
+  `dashboard/__tests__/{chat-polish,borrow-wave-b}-v1323.test.tsx` (43 + 19
+  dashboard mutations, 25 + 23 backend, all red). Known limits: Gemini
+  thoughts and Responses summaries are not requested; a `<think>` block
+  whose opening tag lives in the prompt template is not split.
+
 - **A web image waits for a press; web_fetch is vetted by DNS and pinned;
   an MCP answer is the message with OUR id** (v1.322.0, wave A of the
   assistant-ui/tambo borrow list — ideas only, MIT). DASHBOARD:

@@ -413,6 +413,9 @@ class Config(BaseModel):
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
     # `chat_files_dir`; see documents/workfolder.py for why it exists.
     chat_files_root: str = ""
+    #: Follow-up questions under a chat reply (v1.323.0): one extra short call
+    #: to the same model after each reply. Off by default.
+    chat_followups: bool = False
     # A SECOND copy of every backup (v1.249.0, R-05): after each automatic or
     # manual backup the newest archive is copied here and pruned to the same
     # keep count, and — with backup_mirror_media — the generated-media library

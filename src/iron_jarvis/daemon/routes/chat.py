@@ -283,6 +283,11 @@ async def _router_frames(router, **kwargs):
             yield frame
         return
     route = await router.complete(**kwargs)
+    # v1.323.0: the response's reasoning (display-only) as ONE thinking chunk,
+    # exactly as the adapters' single-chunk default stream does.
+    _thought = getattr(route.response, "thinking", "") or ""
+    if isinstance(_thought, str) and _thought:
+        yield {"type": "thinking", "text": _thought}
     if route.response.text:
         yield {"type": "text", "text": route.response.text}
     yield {
@@ -2902,6 +2907,12 @@ async def chat_stream(
         made_docs: list[str] = []           # documents created/edited (preview)
         workflow_run_info = None    # v1.170.0: workflow this turn STARTED (contract 2)
         reply_text = ""
+        # TRUNCATED (v1.323.0): did the FINAL answering model call stop for
+        # running out of output tokens? Set from every answering call's final
+        # response (each round, the final-answer nudge, an adopted language
+        # rewrite) — the last one wins. MIRROR NOTE (lock-step):
+        # chat_turn.run_chat_turn tracks the same.
+        _truncated = False
         route_provider = provider_choice or ""
         route_model = model_choice or ""
         # ROUTE DISCLOSURE (v1.165.0): filled from the router's final
@@ -3017,6 +3028,15 @@ async def chat_stream(
                             txt = frame.get("text") or ""
                             if txt:
                                 yield _sse("token", {"text": txt})
+                        elif ftype == "thinking":
+                            # THINKING (v1.323.0): the model's reasoning, as
+                            # it streams, from EVERY round. DISPLAY-ONLY: it
+                            # never joins the reply, the saved history,
+                            # `done.reply` or the next turn's messages — the
+                            # reply is built from the final response's text.
+                            txt = frame.get("text") or ""
+                            if txt:
+                                yield _sse("thinking", {"text": txt})
                         elif ftype == "meta":
                             route_provider = frame.get("provider") or route_provider
                             route_model = frame.get("model") or route_model
@@ -3053,6 +3073,7 @@ async def chat_stream(
                     )
                     return
                 reply_text = final_resp.text or ""
+                _truncated = _chat_turn._truncated_by(final_resp)
                 _u = final_resp.usage or {}
                 usage_in += int(_u.get("input_tokens", 0) or 0)
                 usage_out += int(_u.get("output_tokens", 0) or 0)
@@ -3753,6 +3774,12 @@ async def chat_stream(
                                 txt = frame.get("text") or ""
                                 if txt:
                                     yield _sse("token", {"text": txt})
+                            elif ftype == "thinking":
+                                # v1.323.0: the nudge is an answering call —
+                                # its reasoning shows like a round's.
+                                txt = frame.get("text") or ""
+                                if txt:
+                                    yield _sse("thinking", {"text": txt})
                             elif ftype == "reset":
                                 # A pre-first-token failover inside the nudge.
                                 yield _sse("reset", {"reason": frame.get("reason", "")})
@@ -3771,6 +3798,8 @@ async def chat_stream(
                     _tally.add(_f_route[0], _f_route[1], _fu)
                     completions += 1
                     reply_text = (_f_resp.text or "").strip() or reply_text
+                    # v1.323.0: the nudge was the final answering call.
+                    _truncated = _chat_turn._truncated_by(_f_resp)
             _l_in = _l_out = _l_n = 0
             lang_note = ""
             _user_text = _last_user_text(body.messages)
@@ -3827,9 +3856,14 @@ async def chat_stream(
                     _l_out = int(_ru.get("output_tokens", 0) or 0)
                     _l_n = 1
                     _tally.add(_r_route[0], _r_route[1], _ru)
+                    _before_rewrite = reply_text or ""
                     reply_text, lang_note = _rewrite_verdict(
                         reply_text or "", _r_resp.text or "", _code, _user_text,
                     )
+                    if reply_text != _before_rewrite:
+                        # v1.323.0: an ADOPTED rewrite is the reply now — its
+                        # ending is the one that counts.
+                        _truncated = _chat_turn._truncated_by(_r_resp)
         except BaseException:
             # The awaits between the last billed round and the COMPLETED row
             # below (each may call a model): a Stop delivered HERE drops
@@ -3931,6 +3965,11 @@ async def chat_stream(
                 "reasoning": route_reasoning,
             },
             "tools_used": tools_used,
+            # TRUNCATED (v1.323.0): true iff the FINAL answering model call
+            # stopped for running out of output tokens (a tool round never
+            # counts) — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
+            # response carries the identical key — edit both or neither.
+            "truncated": bool(_truncated),
             # REMEMBERED (v1.282.0) — MIRROR NOTE (lock-step): chat_turn.py's
             # response carries the identical key — edit both or neither.
             "remembered": remembered,

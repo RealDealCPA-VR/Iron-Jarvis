@@ -899,8 +899,14 @@ def assemble(
         assistants, text,
         [{"id": c.id, "name": c.name, "input": c.arguments} for c in calls],
     )
+    # v1.323.0: the thinking blocks' text, display-only (the carrier above
+    # still holds the signed blocks for replay).
+    thinking = "\n\n".join(
+        str(b.get("thinking")) for b in blocks
+        if b.get("type") == "thinking" and isinstance(b.get("thinking"), str) and b.get("thinking")
+    )
     return LLMResponse(text=text, tool_calls=calls, finish_reason=finish, usage=usage,
-                       raw_blocks=[raw]), remainder
+                       raw_blocks=[raw], thinking=thinking), remainder
 
 
 # --------------------------------------------------------------------------- #
@@ -1073,7 +1079,14 @@ async def run(
                 if delta.get("type") == "text_delta" and isinstance(piece, str) and piece:
                     got.emitted += piece
                     yield {"type": "text", "text": piece}
-                # thinking deltas are not part of our stream contract: dropped.
+                elif delta.get("type") == "thinking_delta":
+                    # v1.323.0: reasoning streams as a `thinking` frame —
+                    # display-only. NOT `got.emitted` (that is the ANSWER text
+                    # the final is checked against, and what decides whether
+                    # an account retry is still allowed).
+                    thought = delta.get("thinking")
+                    if isinstance(thought, str) and thought:
+                        yield {"type": "thinking", "text": thought}
         returncode = await source.returncode()
         response, remainder = assemble(
             got, returncode=returncode, admission=res.admission, names=call.names,

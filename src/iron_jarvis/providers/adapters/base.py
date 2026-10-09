@@ -150,6 +150,14 @@ class LLMResponse:
     #: v1.263.0: see ``LLMMessage.raw_blocks`` — set only by an adapter whose
     #: next call needs these blocks back verbatim (Anthropic with thinking on).
     raw_blocks: list[dict[str, Any]] = field(default_factory=list)
+    #: v1.323.0: the model's REASONING text for this call (Anthropic thinking
+    #: blocks, a ``reasoning_content`` / ``reasoning`` field, Gemini thought
+    #: parts, a local model's leading ``<think>`` block once the router has
+    #: split it off). DISPLAY-ONLY: never part of ``text``, never replayed as
+    #: an assistant turn, never saved into a conversation's history. ``""``
+    #: when the provider sent none. ``finish_reason == "max_tokens"`` means the
+    #: provider stopped the answer because it ran out of output tokens.
+    thinking: str = ""
 
     @property
     def wants_tools(self) -> bool:
@@ -216,10 +224,13 @@ class LLMAdapter(ABC):
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-stream a completion (FX-01). Yields frames:
 
+            {"type": "thinking", "text": <delta>}      — reasoning text (v1.323.0;
+                                                         display-only, never answer)
             {"type": "text", "text": <delta>}          — an incremental text chunk
             {"type": "final", "response": LLMResponse}  — the complete aggregate
 
-        The DEFAULT runs the non-streaming :meth:`complete` and emits the whole
+        The DEFAULT runs the non-streaming :meth:`complete` and emits its
+        ``thinking`` (when any) as ONE ``thinking`` chunk, then the whole
         answer as ONE ``text`` chunk followed by ``final`` — so EVERY adapter
         streams (degrading gracefully to a single chunk) and only real streamers
         override this. The ``final`` ``response`` MUST be identical to what
@@ -243,6 +254,10 @@ class LLMAdapter(ABC):
         if reasoning:
             kw["reasoning"] = reasoning
         resp = await self.complete(system=system, messages=messages, tools=tools, **kw)
+        # getattr: a test double may hand back a response object of its own.
+        thinking = getattr(resp, "thinking", "") or ""
+        if isinstance(thinking, str) and thinking:
+            yield {"type": "thinking", "text": thinking}
         if resp.text:
             yield {"type": "text", "text": resp.text}
         yield {"type": "final", "response": resp}

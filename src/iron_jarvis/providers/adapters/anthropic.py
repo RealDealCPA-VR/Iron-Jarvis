@@ -72,6 +72,29 @@ def _raw_blocks(content: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _finish(stop_reason: Any) -> str:
+    """The provider-neutral finish reason (v1.323.0): ``tool_use``, ``max_tokens``
+    when Anthropic stopped the answer for running out of output tokens (or of
+    context window), else ``stop``. Shared by complete() and stream()."""
+    if stop_reason == "tool_use":
+        return "tool_use"
+    if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+        return "max_tokens"
+    return "stop"
+
+
+def _thinking_text(content: Any) -> str:
+    """The ``thinking`` blocks' text, joined (v1.323.0) — display-only. A
+    ``redacted_thinking`` block carries no readable text and adds nothing."""
+    parts: list[str] = []
+    for block in content or []:
+        if getattr(block, "type", None) == "thinking":
+            text = getattr(block, "thinking", "")
+            if isinstance(text, str) and text:
+                parts.append(text)
+    return "\n\n".join(parts)
+
+
 #: The ``raw_blocks`` entry the claude-cli adapter writes (v1.300.0,
 #: ``claude_native.CARRIER``). Spelled here, not imported, so this adapter
 #: never loads the CLI transport.
@@ -276,7 +299,7 @@ class AnthropicAdapter(LLMAdapter):
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
                 )
-        finish = "tool_use" if resp.stop_reason == "tool_use" else "stop"
+        finish = _finish(resp.stop_reason)
         usage = getattr(resp, "usage", None)
         usage_dict = {
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
@@ -288,6 +311,7 @@ class AnthropicAdapter(LLMAdapter):
             finish_reason=finish,
             usage=usage_dict,
             raw_blocks=_raw_blocks(resp.content) if thinking_kw else [],
+            thinking=_thinking_text(resp.content),
         )
 
     def _thinking(self, reasoning: str) -> tuple[dict[str, Any], int]:
@@ -367,11 +391,14 @@ class AnthropicAdapter(LLMAdapter):
                 content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
         thinking_kw, max_tokens = self._thinking(reasoning)
         try:
-            # The SDK's streaming helper accumulates state for us: `text_stream`
-            # yields incremental text deltas (thinking deltas are NOT text, so
-            # they never reach the user's bubble), `get_final_message()` returns
-            # the SAME Message object messages.create() would have — so the
-            # aggregate below is identical to complete().
+            # The SDK's streaming helper accumulates state for us. The events
+            # are read the way the SDK's own `text_stream` reads them (a
+            # `content_block_delta` whose delta is `text_delta` -> answer text)
+            # and, since v1.323.0, a `thinking_delta` becomes a `thinking`
+            # frame — display-only, never answer text, so it still never
+            # reaches the reply. `get_final_message()` returns the SAME Message
+            # object messages.create() would have — so the aggregate below is
+            # identical to complete().
             async with client.messages.stream(
                 model=self.model,
                 max_tokens=max_tokens,
@@ -380,8 +407,19 @@ class AnthropicAdapter(LLMAdapter):
                 tools=tool_defs,
                 **thinking_kw,
             ) as s:
-                async for delta in s.text_stream:
-                    yield {"type": "text", "text": delta}
+                async for event in s:
+                    if getattr(event, "type", None) != "content_block_delta":
+                        continue
+                    delta = getattr(event, "delta", None)
+                    kind = getattr(delta, "type", None)
+                    if kind == "text_delta":
+                        piece = getattr(delta, "text", "")
+                        if piece:
+                            yield {"type": "text", "text": piece}
+                    elif kind == "thinking_delta":
+                        piece = getattr(delta, "thinking", "")
+                        if piece:
+                            yield {"type": "thinking", "text": piece}
                 final = await s.get_final_message()
         except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
             raise _anthropic_provider_error(exc) from exc
@@ -394,7 +432,7 @@ class AnthropicAdapter(LLMAdapter):
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
                 )
-        finish = "tool_use" if final.stop_reason == "tool_use" else "stop"
+        finish = _finish(final.stop_reason)
         usage = getattr(final, "usage", None)
         usage_dict = {
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
@@ -408,5 +446,6 @@ class AnthropicAdapter(LLMAdapter):
                 finish_reason=finish,
                 usage=usage_dict,
                 raw_blocks=_raw_blocks(final.content) if thinking_kw else [],
+                thinking=_thinking_text(final.content),
             ),
         }

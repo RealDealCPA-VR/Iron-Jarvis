@@ -50,7 +50,28 @@ def _thinking_config(body: dict[str, Any], reasoning: str) -> None:
     if not budget:
         return
     cfg = body.setdefault("generationConfig", {})
+    # v1.323.0: `includeThoughts` is deliberately NOT sent — the v1.263.0 pin
+    # (tests/test_reasoning_level_v1263.py) holds this object byte-for-byte.
+    # A part that nevertheless comes back flagged `thought: true` is routed to
+    # thinking, never to the answer (`_is_thought`).
     cfg["thinkingConfig"] = {"thinkingBudget": budget}
+
+
+def _is_thought(part: Any) -> bool:
+    """A Gemini part that is the model's THOUGHT, not its answer (v1.323.0)."""
+    return isinstance(part, dict) and part.get("thought") is True
+
+
+def _finish(finish_reason: Any, has_calls: bool) -> str:
+    """The provider-neutral finish reason (v1.323.0): a function call is
+    ``tool_use`` (MAX_TOKENS included — a call is a complete answer), a
+    ``MAX_TOKENS`` stop with no call is ``max_tokens``, everything else
+    ``stop``."""
+    if has_calls:
+        return "tool_use"
+    if str(finish_reason or "").upper() == "MAX_TOKENS":
+        return "max_tokens"
+    return "stop"
 
 
 class GoogleAdapter(LLMAdapter):
@@ -210,8 +231,14 @@ class GoogleAdapter(LLMAdapter):
         candidate = candidates[0] if candidates else {}
         parts = ((candidate.get("content") or {}).get("parts")) or []
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for part in parts:
+            if _is_thought(part):
+                # v1.323.0: a thought is display-only — never the answer.
+                if isinstance(part.get("text"), str) and part["text"]:
+                    thinking_parts.append(part["text"])
+                continue
             if "text" in part and part["text"] is not None:
                 text_parts.append(part["text"])
             fc = part.get("functionCall")
@@ -227,7 +254,7 @@ class GoogleAdapter(LLMAdapter):
             err = GoogleAdapter._no_content_error(candidates, data.get("promptFeedback"))
             if err is not None:
                 raise err
-        finish = "tool_use" if tool_calls else "stop"
+        finish = _finish(candidate.get("finishReason"), bool(tool_calls))
         meta = data.get("usageMetadata") or {}
         usage_dict = {
             "input_tokens": int(meta.get("promptTokenCount", 0) or 0),
@@ -238,6 +265,7 @@ class GoogleAdapter(LLMAdapter):
             tool_calls=tool_calls,
             finish_reason=finish,
             usage=usage_dict,
+            thinking="".join(thinking_parts),
         )
 
     # -- the interface ------------------------------------------------------
@@ -372,6 +400,8 @@ class GoogleAdapter(LLMAdapter):
             }
 
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        last_finish: Any = None
         tool_calls: list[ToolCall] = []
         usage_dict = {"input_tokens": 0, "output_tokens": 0}
         # Kept so a stream that produced nothing can say WHY (mirrors _parse).
@@ -417,8 +447,17 @@ class GoogleAdapter(LLMAdapter):
                 if isinstance(fb, dict) and fb.get("blockReason"):
                     prompt_feedback = fb
                 candidate = candidates[0] if candidates else {}
+                if candidate.get("finishReason"):
+                    last_finish = candidate.get("finishReason")
                 for part in ((candidate.get("content") or {}).get("parts")) or []:
                     text = part.get("text")
+                    if _is_thought(part):
+                        # v1.323.0: a thought streams as `thinking` — never
+                        # answer text, never in the final reply.
+                        if isinstance(text, str) and text:
+                            thinking_parts.append(text)
+                            yield {"type": "thinking", "text": text}
+                        continue
                     if text:
                         text_parts.append(text)
                         yield {"type": "text", "text": text}
@@ -453,7 +492,8 @@ class GoogleAdapter(LLMAdapter):
             "response": LLMResponse(
                 text=text,
                 tool_calls=tool_calls,
-                finish_reason="tool_use" if tool_calls else "stop",
+                finish_reason=_finish(last_finish, bool(tool_calls)),
                 usage=usage_dict,
+                thinking="".join(thinking_parts),
             ),
         }

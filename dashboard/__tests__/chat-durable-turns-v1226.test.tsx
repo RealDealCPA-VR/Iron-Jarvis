@@ -237,7 +237,9 @@ describe("F-D-1 — the in-flight turn is durable", () => {
     const putAt = H.timeline.indexOf("put /chat/threads/new");
     expect(putAt).toBeGreaterThanOrEqual(0);
     expect(putAt).toBeLessThan(H.timeline.indexOf("frame"));
-    expect(lastMsg(H.api.puts[0])).toEqual({ role: "user", content: "hello there" });
+    // v1.323.0: the saved user message also carries its send time (`at`).
+    expect(lastMsg(H.api.puts[0])).toMatchObject({ role: "user", content: "hello there" });
+    expect(typeof lastMsg(H.api.puts[0]).at).toBe("string");
     // The end-of-turn save still runs, onto the id the start save minted.
     await waitFor(() => expect(H.api.puts.length).toBeGreaterThanOrEqual(2));
     expect(H.api.puts[1].path).toBe("/chat/threads/t1");
@@ -258,7 +260,9 @@ describe("F-D-1 — the in-flight turn is durable", () => {
     );
     const sess = H.api.posts.find((p) => p.path === "/sessions")!;
     // The chat lane's own pre-save came first: the plain user bubble.
-    expect(lastMsg(H.api.puts[0])).toEqual({ role: "user", content: "do the long thing" });
+    // v1.323.0: the saved user message also carries its send time (`at`).
+    expect(lastMsg(H.api.puts[0])).toMatchObject({ role: "user", content: "do the long thing" });
+    expect(typeof lastMsg(H.api.puts[0]).at).toBe("string");
     // sendAgent's OWN pre-save — the hand-off bubble, unmarked — was issued
     // BEFORE POST /sessions (the post-answer mark save cannot satisfy this).
     const handoff = H.api.puts.find(

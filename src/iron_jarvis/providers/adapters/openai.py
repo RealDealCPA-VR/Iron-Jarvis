@@ -124,6 +124,40 @@ def _error_detail(resp: Any) -> str:
         return (getattr(resp, "text", "") or "")[:300]
 
 
+#: v1.323.0: the field names an OpenAI-compatible server uses for the model's
+#: REASONING text — `reasoning_content` (DeepSeek, vLLM, LiteLLM) and
+#: `reasoning` (Ollama, OpenRouter, newer vLLM). Read from a message or a
+#: stream delta; only a STRING counts (a structured value is not display text).
+_REASONING_KEYS = ("reasoning_content", "reasoning")
+
+
+def _reasoning_of(part: Any) -> str:
+    """The reasoning text a chat-completions ``message`` / ``delta`` carries,
+    or ``""`` — display-only, never answer text."""
+    if not isinstance(part, dict):
+        return ""
+    for key in _REASONING_KEYS:
+        value = part.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+#: v1.323.0: the Responses-API stream events that carry reasoning text.
+_RESPONSES_REASONING_DELTAS = frozenset(
+    {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}
+)
+
+
+def _incomplete_for_tokens(response: Any) -> bool:
+    """True when a Responses-API ``response`` object is ``incomplete`` because
+    it ran out of output tokens (v1.323.0)."""
+    if not isinstance(response, dict) or response.get("status") != "incomplete":
+        return False
+    details = response.get("incomplete_details") or {}
+    return isinstance(details, dict) and details.get("reason") == "max_output_tokens"
+
+
 class OpenAIAdapter(LLMAdapter):
     provider = "openai"
 
@@ -279,7 +313,15 @@ class OpenAIAdapter(LLMAdapter):
             tool_calls.append(
                 ToolCall(id=raw.get("id", ""), name=fn.get("name", ""), arguments=args)
             )
-        finish = "tool_use" if choice.get("finish_reason") == "tool_calls" else "stop"
+        # v1.323.0: "length" is the server stopping the answer for running out
+        # of output tokens — `max_tokens`, so the chat lanes can say so.
+        raw_finish = choice.get("finish_reason")
+        if raw_finish == "tool_calls":
+            finish = "tool_use"
+        elif raw_finish == "length":
+            finish = "max_tokens"
+        else:
+            finish = "stop"
         usage = data.get("usage") or {}
         usage_dict = {
             "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
@@ -290,6 +332,7 @@ class OpenAIAdapter(LLMAdapter):
             tool_calls=tool_calls,
             finish_reason=finish,
             usage=usage_dict,
+            thinking=_reasoning_of(message),
         )
 
     # -- ChatGPT (Codex) backend shaping -------------------------------------
@@ -390,16 +433,37 @@ class OpenAIAdapter(LLMAdapter):
                 continue
             if event.get("type") == "response.completed":
                 completed = event.get("response") or {}
+            elif event.get("type") == "response.incomplete":
+                # v1.323.0: a response the backend stopped for running out of
+                # output tokens ends with `response.incomplete`, not
+                # `.completed` — that is a (truncated) answer, said as
+                # `max_tokens` below. Any OTHER incomplete reason (a content
+                # filter…) still ends in the honest "ended without" error.
+                resp_obj = event.get("response") or {}
+                if _incomplete_for_tokens(resp_obj):
+                    completed = resp_obj
         if completed is None:
             raise RuntimeError(
                 "openai (ChatGPT backend): stream ended without response.completed: "
                 + raw[:300]
             )
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for item in completed.get("output") or []:
             kind = item.get("type")
-            if kind == "message":
+            if kind == "reasoning":
+                # v1.323.0: a reasoning SUMMARY (or reasoning text) the backend
+                # chose to return — display-only. The encrypted content the
+                # request includes is opaque and never shown.
+                for part in (item.get("summary") or []) + (item.get("content") or []):
+                    if isinstance(part, dict) and part.get("type") in (
+                        "summary_text", "reasoning_text"
+                    ):
+                        piece = part.get("text")
+                        if isinstance(piece, str) and piece:
+                            thinking_parts.append(piece)
+            elif kind == "message":
                 for part in item.get("content") or []:
                     if part.get("type") == "output_text":
                         text_parts.append(part.get("text") or "")
@@ -426,14 +490,21 @@ class OpenAIAdapter(LLMAdapter):
                     )
                 )
         usage = completed.get("usage") or {}
+        if tool_calls:
+            finish = "tool_use"
+        elif _incomplete_for_tokens(completed):
+            finish = "max_tokens"
+        else:
+            finish = "stop"
         return LLMResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
-            finish_reason="tool_use" if tool_calls else "stop",
+            finish_reason=finish,
             usage={
                 "input_tokens": int(usage.get("input_tokens", 0) or 0),
                 "output_tokens": int(usage.get("output_tokens", 0) or 0),
             },
+            thinking="\n\n".join(thinking_parts),
         )
 
     async def _complete_chatgpt(
@@ -780,6 +851,7 @@ class OpenAIAdapter(LLMAdapter):
         non-streaming path.
         """
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_accum: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
@@ -808,6 +880,12 @@ class OpenAIAdapter(LLMAdapter):
             if not choices:
                 continue
             delta = choices[0].get("delta") or {}
+            # v1.323.0: reasoning text streams as `thinking` frames —
+            # display-only, never part of the answer.
+            reasoning_piece = _reasoning_of(delta)
+            if reasoning_piece:
+                thinking_parts.append(reasoning_piece)
+                yield {"type": "thinking", "text": reasoning_piece}
             content = delta.get("content")
             if content:
                 text_parts.append(content)
@@ -835,6 +913,8 @@ class OpenAIAdapter(LLMAdapter):
                 data = None
             if isinstance(data, dict) and data.get("choices"):
                 final = self._parse(data)
+                if final.thinking:
+                    yield {"type": "thinking", "text": final.thinking}
                 if final.text:
                     yield {"type": "text", "text": final.text}
                 yield {"type": "final", "response": final}
@@ -842,6 +922,8 @@ class OpenAIAdapter(LLMAdapter):
         # Reconstruct the aggregate message and route it through _parse so text,
         # tool calls, usage, and the finish-reason mapping match complete().
         message: dict[str, Any] = {"content": "".join(text_parts)}
+        if thinking_parts:
+            message["reasoning_content"] = "".join(thinking_parts)
         if tool_accum:
             message["tool_calls"] = [
                 {
@@ -997,9 +1079,19 @@ class OpenAIAdapter(LLMAdapter):
                 event = json.loads(payload)
             except json.JSONDecodeError:
                 continue
-            if event.get("type") == "response.output_text.delta":
+            etype = event.get("type")
+            if etype == "response.output_text.delta":
                 delta = event.get("delta")
                 if delta:
                     yield {"type": "text", "text": delta}
+            elif etype in _RESPONSES_REASONING_DELTAS:
+                # v1.323.0: reasoning (summary) text, display-only. This
+                # adapter does not ASK for summaries (no `reasoning.summary`
+                # in the request — a new parameter could 400 a backend that
+                # works today), so these arrive only when the backend sends
+                # them on its own.
+                delta = event.get("delta")
+                if isinstance(delta, str) and delta:
+                    yield {"type": "thinking", "text": delta}
         final = self._parse_sse("\n".join(raw_lines))
         yield {"type": "final", "response": final}

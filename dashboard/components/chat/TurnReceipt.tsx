@@ -55,6 +55,7 @@ import {
   Route as RouteIcon,
   ShieldAlert,
   ShieldCheck,
+  Timer,
   Undo2,
   Wrench,
 } from "lucide-react";
@@ -162,6 +163,77 @@ export interface TurnRoute {
   reasoning?: string;
 }
 
+/** One tool step with its duration (v1.323.0) — `useChatStream`'s TurnStep.
+ *  `ok` null = never said; `ms` null = a start or an end was not seen. */
+export interface ReceiptStep {
+  name: string;
+  ok: boolean | null;
+  ms: number | null;
+}
+
+/** Client-clock timing of the turn (v1.323.0) — `useChatStream`'s TurnTiming. */
+export interface ReceiptTiming {
+  startedAt: number;
+  firstTokenAt: number | null;
+  endedAt: number;
+}
+
+/** A duration in words: "0.3 s", "12 s", "2 min 5 s". Null for a value that
+ *  is not a finite, non-negative number. */
+export function secondsText(ms: number | null | undefined): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
+  const s = ms / 1000;
+  if (s < 10) return `${s.toFixed(1)} s`;
+  if (s < 60) return `${Math.round(s)} s`;
+  const whole = Math.round(s);
+  const min = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return rest ? `${min} min ${rest} s` : `${min} min`;
+}
+
+/**
+ * The expanded receipt's speed line (v1.323.0): "First word after 1.2 s ·
+ * 42 tokens/s". The rate is OUTPUT TOKENS over the time from the first word
+ * to the end — only when the token count is known and a first word came;
+ * never a guessed words/s. Null when there is nothing honest to say.
+ */
+export function speedLine(
+  timing: ReceiptTiming | null | undefined,
+  outputTokens?: number | null,
+): string | null {
+  if (!timing) return null;
+  const { startedAt, firstTokenAt, endedAt } = timing;
+  if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) return null;
+  const bits: string[] = [];
+  if (typeof firstTokenAt === "number" && Number.isFinite(firstTokenAt)) {
+    const first = secondsText(firstTokenAt - startedAt);
+    if (first) bits.push(`First word after ${first}`);
+    const span = (endedAt - firstTokenAt) / 1000;
+    const out = fin(outputTokens);
+    if (out != null && out > 0 && Number.isFinite(span) && span > 0) {
+      const rate = out / span;
+      bits.push(`${rate >= 10 ? Math.round(rate) : rate.toFixed(1)} tokens/s`);
+    }
+  }
+  return bits.length ? bits.join(" · ") : null;
+}
+
+/** The steps worth a chip: a non-blank name; ok/ms kept only when real. */
+function stepRows(steps: ReceiptStep[] | null | undefined): ReceiptStep[] {
+  if (!Array.isArray(steps)) return [];
+  const out: ReceiptStep[] = [];
+  for (const st of steps) {
+    if (!st || typeof st !== "object") continue;
+    if (typeof st.name !== "string" || !st.name.trim()) continue;
+    out.push({
+      name: st.name,
+      ok: typeof st.ok === "boolean" ? st.ok : null,
+      ms: fin(st.ms),
+    });
+  }
+  return out;
+}
+
 export interface TurnReceiptProps {
   /** May be absent on messages persisted before the route object existed. */
   route?: TurnRoute | null;
@@ -204,6 +276,16 @@ export interface TurnReceiptProps {
    * with the honest reason as its title. Requires `onUndo` too.
    */
   undoFor?: (path: string) => ReceiptUndoState | null | undefined;
+  /** v1.323.0: the turn's tool steps in order, with durations — the expanded
+   *  tool chips then say "read_file · 0.3 s" and mark a failed one. Absent →
+   *  today's names-only chips. Never a reason to render on its own. */
+  steps?: ReceiptStep[] | null;
+  /** v1.323.0: client-clock timing — the expanded view's speed line. Never
+   *  a reason to render on its own (a trivial turn stays silent). */
+  timing?: ReceiptTiming | null;
+  /** v1.323.0: output tokens of the turn, for the speed line's tokens/s
+   *  (falls back to `usage.output_tokens`). */
+  outputTokens?: number | null;
   /**
    * Performs the undo (the caller owns the explicit confirm + POST + refresh).
    * A rejection is shown inline under the file row — a failed undo must never
@@ -376,6 +458,9 @@ export function TurnReceipt({
   onOpenDocument,
   undoFor,
   onUndo,
+  steps,
+  timing,
+  outputTokens,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -441,6 +526,10 @@ export function TurnReceipt({
   const inTok = fin(usage?.input_tokens);
   const outTok = fin(usage?.output_tokens);
   const ctx = fin(contextPct);
+  // v1.323.0: the expanded view's step durations and speed line. Neither
+  // reaches the zero-noise guard above — timing alone is not a receipt.
+  const stepChips = stepRows(steps);
+  const speed = speedLine(timing, fin(outputTokens) ?? outTok);
 
   // The collapsed line, assembled as parts joined by "·". The warning chip is
   // its own styled element so it reads as a WARNING, not just another word.
@@ -643,7 +732,37 @@ export function TurnReceipt({
             </div>
           )}
 
-          {tools.length > 0 && (
+          {stepChips.length > 0 ? (
+            <div className="flex items-start gap-2">
+              <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
+                {stepChips.map((st, i) => {
+                  const dur = secondsText(st.ms);
+                  const failed = st.ok === false;
+                  const label = [st.name, dur, failed ? "failed" : null]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return (
+                    <code
+                      key={`${st.name}-${i}`}
+                      data-testid="turn-step"
+                      data-ok={st.ok === null ? "unknown" : String(st.ok)}
+                      title={label}
+                      className={
+                        failed
+                          ? "max-w-full truncate rounded border border-rose-500/20 bg-rose-500/[0.05] px-1.5 py-0.5 font-mono text-[11px] text-rose-300/90"
+                          : "max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
+                      }
+                    >
+                      {st.name}
+                      {dur && <span className="text-zinc-500"> · {dur}</span>}
+                      {failed && <span> · failed</span>}
+                    </code>
+                  );
+                })}
+              </div>
+            </div>
+          ) : tools.length > 0 && (
             <div className="flex items-start gap-2">
               <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
@@ -749,6 +868,15 @@ export function TurnReceipt({
                 ]
                   .filter(Boolean)
                   .join(" · ")}
+              </div>
+            </div>
+          )}
+
+          {speed && (
+            <div className="flex items-start gap-2">
+              <Timer size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-speed" className="min-w-0 text-[11.5px] text-zinc-500">
+                {speed}
               </div>
             </div>
           )}

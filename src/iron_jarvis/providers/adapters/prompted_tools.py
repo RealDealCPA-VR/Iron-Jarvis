@@ -372,7 +372,9 @@ class PromptedToolsAdapter(LLMAdapter):
             if error is None:
                 # Plain answer — pass the inner's text through untouched.
                 return LLMResponse(
-                    text=resp.text, finish_reason=resp.finish_reason, usage=usage
+                    text=resp.text, finish_reason=resp.finish_reason, usage=usage,
+                    # v1.323.0: display-only reasoning rides through untouched.
+                    thinking=getattr(resp, "thinking", "") or "",
                 )
             if round_no >= self._max_repairs:
                 break

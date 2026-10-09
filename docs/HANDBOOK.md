@@ -1837,6 +1837,36 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Chat polish (v1.323.0)
+
+More ideas from assistant-ui and tambo (MIT; ideas only):
+
+- **See how it thought.** When the model shares its reasoning (Claude with a
+  reasoning level set, many local models, some OpenAI-compatible servers),
+  a folded **Thinking…** line sits above the reply while it works and becomes
+  **Thought for N s** after. Press it to read the reasoning. It is never sent
+  back to a model and never part of the answer.
+- **Continue a cut-off answer.** When a reply stops because the model ran out
+  of room ("stopped — the reply ran out of room"), or you pressed Stop, the
+  newest reply offers **Continue**. The model carries on where it stopped and
+  the two parts become one reply.
+- **How long each step took.** Open the line under a reply: each tool shows
+  its time ("read_file · 0.3 s", a failed one marked), with "First word after
+  1.2 s · 42 tokens/s". While a reply runs, finished steps show their time
+  too.
+- **Times.** Hover a message to see when it was sent.
+- **Drafts stay with their chat.** Leave a saved conversation with something
+  half-typed, and it is back in the box when you open that conversation
+  again. A new, unsaved chat still starts empty.
+- **Read one reply aloud.** The speaker button under a reply reads just that
+  reply (press again to stop), whether or not spoken replies are on.
+- **Follow-up questions (off by default).** Turn on **Settings → Which AI
+  answers → Suggest follow-up questions**, or ask in chat. Up to three short
+  questions then appear under each new reply. Pressing one puts it in the box;
+  nothing is sent until you press Enter. It makes one extra short call to the
+  same model that answered (never a different one), and the demo model never
+  suggests.
+
 ## Safer chat and apps (v1.322.0)
 
 Ideas borrowed from two open-source chat projects (assistant-ui and tambo,
