@@ -380,6 +380,39 @@ class ChatBody(BaseModel):
     #: attachments seam, scanned and fenced as untrusted data; empty or
     #: whitespace text injects nothing. No receipt field.
     page_context: PageContext | None = None
+    #: v1.326.0: saved chats the user pointed to with "@" (thread ids). BOTH
+    #: lanes read at most 3 of them (``chat_refs.read_thread_refs``) at the
+    #: attachments seam as fenced reference material; extras, unknown ids and
+    #: the current chat are left out and REPORTED, never a 422. Cleaned here
+    #: (stripped, cut to 80 chars, blanks and duplicates dropped); the list
+    #: bound only keeps a request small. The done frame / POST response carry
+    #: ``thread_refs: [{id, title, chars, ok, note}]`` ALWAYS.
+    thread_refs: list[str] = Field(default_factory=list, max_length=20)
+    #: v1.326.0: the id of the saved chat this message is sent FROM ("" = a
+    #: chat not saved yet). Read only to keep that chat out of
+    #: ``thread_refs``; it grants and grounds nothing.
+    thread_id: str = ""
+
+    @field_validator("thread_refs", mode="before")
+    @classmethod
+    def _clean_thread_refs(cls, v: Any) -> Any:
+        if v is None:
+            return []
+        if not isinstance(v, (list, tuple)):
+            return v  # pydantic answers the wrong type
+        return [x for x in v if isinstance(x, str)]
+
+    @field_validator("thread_refs")
+    @classmethod
+    def _dedupe_thread_refs(cls, v: list[str]) -> list[str]:
+        from .chat_refs import clean_ids
+
+        return clean_ids(v)
+
+    @field_validator("thread_id", mode="before")
+    @classmethod
+    def _thread_id_text(cls, v: Any) -> Any:
+        return "" if v is None else str(v).strip()[:80]
 
 
 class ChatCompactBody(BaseModel):

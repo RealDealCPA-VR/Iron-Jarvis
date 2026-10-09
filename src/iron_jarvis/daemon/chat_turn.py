@@ -71,6 +71,7 @@ from ..core.trust import (
 )
 from .doors import collect_doors, door_for
 from .mcp_turn import read_turn_resources as _read_turn_resources
+from .chat_refs import read_thread_refs as _read_thread_refs
 
 log = logging.getLogger(__name__)
 
@@ -4497,6 +4498,17 @@ async def run_chat_turn(
     )
     if _res_block:
         system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+    # EARLIER CHATS THE USER POINTED TO (v1.326.0, "@ another chat"): up to
+    # three saved conversations, read off the loop, title + newest messages
+    # (role/content only), bounded, promptguard-scanned and fenced as
+    # reference material. Never the current chat. The receipt rides the
+    # response ALWAYS. MIRROR NOTE (lock-step): routes/chat.py's stream lane
+    # calls the same helper at the same seam.
+    _refs_block, thread_refs_receipt = (
+        await _read_thread_refs(d, body)
+        if getattr(body, "thread_refs", None) else ("", [])
+    )
+    system += _refs_block
 
     # "/" skill invocation: the chosen skill's playbook rides the system
     # prompt (provider-agnostic, same as the terminal assist).
@@ -5386,6 +5398,11 @@ async def run_chat_turn(
         # attached from their apps — ALWAYS present (possibly []). MIRROR
         # NOTE (lock-step): the stream done-frame carries the identical key.
         "resources": resources_receipt,
+        # EARLIER CHATS (v1.326.0): the saved chats this message pointed to
+        # with "@" — [{id, title, chars, ok, note}], ALWAYS present (possibly
+        # []). MIRROR NOTE (lock-step): the stream done-frame carries the
+        # identical key.
+        "thread_refs": thread_refs_receipt,
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,

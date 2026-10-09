@@ -146,6 +146,7 @@ from ..chat_turn import (
 )
 # v1.324.0: apps that talk back — the per-turn side channel + resources.
 from ..mcp_turn import TurnInteractions, interaction_scope, read_turn_resources
+from ..chat_refs import read_thread_refs, search_thread_refs
 
 log = logging.getLogger(__name__)
 
@@ -953,6 +954,17 @@ def register(app: FastAPI, d) -> None:
                  "updated_at": updated_at.isoformat()}
             )
         return {"threads": out}
+
+    # Registered BEFORE `/chat/threads/{thread_id}`, which would otherwise
+    # answer this path as a thread named "search-refs".
+    @app.get("/chat/threads/search-refs")
+    def chat_thread_search_refs(q: str = "", exclude: str = "") -> dict[str, Any]:
+        """The "@ another chat" menu (v1.326.0): saved chats whose TITLE
+        contains ``q`` (case-insensitive; blank = all), newest first, at most
+        8, ``exclude`` (the chat the menu is open in) left out. Rows carry
+        only ``id``, ``title`` and ``updated_at`` — no messages. A sync route,
+        so the query runs in FastAPI's thread pool, off the loop."""
+        return {"threads": search_thread_refs(d.platform.engine, q, exclude)}
 
     @app.get("/chat/threads/{thread_id}")
     def chat_thread(thread_id: str) -> dict[str, Any]:
@@ -2339,6 +2351,16 @@ async def chat_stream(
         _res_block, resources_receipt = _res
         if _res_block:
             system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+    # EARLIER CHATS THE USER POINTED TO (v1.326.0) — the lock-step copy of
+    # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
+    # like the attachments. Only a turn that carries thread_refs pays anything.
+    thread_refs_receipt: list[dict[str, Any]] = []
+    if getattr(body, "thread_refs", None):
+        _refs = await _prep_step(read_thread_refs(d, body))
+        if _refs is _PREP_STOPPED:
+            return
+        _refs_block, thread_refs_receipt = _refs
+        system += _refs_block
 
     if (body.skill or "").strip():
         sk = d.platform.skills.get(body.skill.strip())
@@ -4032,6 +4054,11 @@ async def chat_stream(
             # (possibly []). MIRROR NOTE (lock-step): chat_turn.py's response
             # carries the identical key — edit both or neither.
             "resources": resources_receipt,
+            # EARLIER CHATS (v1.326.0): the saved chats this message pointed
+            # to with "@" — [{id, title, chars, ok, note}], ALWAYS present
+            # (possibly []). MIRROR NOTE (lock-step): chat_turn.py's response
+            # carries the identical key.
+            "thread_refs": thread_refs_receipt,
             # TRUNCATED (v1.323.0): true iff the FINAL answering model call
             # stopped for running out of output tokens (a tool round never
             # counts) — ALWAYS present. MIRROR NOTE (lock-step): chat_turn.py's
