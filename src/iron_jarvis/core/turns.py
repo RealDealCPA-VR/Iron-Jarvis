@@ -55,7 +55,69 @@ because a double-click races the release and the second click must read as
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
+from typing import Any, Callable, Iterator
+
+#: How much of a thread id is kept (the ``ChatBody.thread_id`` validator cuts
+#: at the same length, so a key here always matches a saved row's id).
+THREAD_ID_CHARS = 80
+
+
+class ThreadTurn:
+    """One chat turn in flight FOR A SAVED CHAT (v1.327.0).
+
+    WHY: the chat list could not tell a chat that is still answering, or one
+    parked on a question for the user, from one that is idle. A thread's row
+    now carries ``running`` and ``waiting``, read from this live state — no
+    database read, nothing persisted (a turn cannot outlive its process, the
+    same argument as the rest of this module).
+
+    ``waiting`` is TRUE while the turn is parked on the user: an approval card
+    (``park``/``unpark``, counted, so a batch's asks nest) or an app's question
+    or model request (``watch`` — a probe the lane points at its own live ask
+    registry, read only when somebody lists the chats). A probe that raises
+    reads as "not waiting"; listing chats must never fail because of it.
+    """
+
+    __slots__ = ("thread_id", "_parked", "_probe", "_lock")
+
+    def __init__(self, thread_id: str) -> None:
+        self.thread_id = thread_id
+        self._parked = 0
+        self._probe: Callable[[], Any] | None = None
+        self._lock = threading.Lock()
+
+    def park(self) -> None:
+        with self._lock:
+            self._parked += 1
+
+    def unpark(self) -> None:
+        # Never below zero: an unbalanced release must not hide a real ask.
+        with self._lock:
+            self._parked = max(0, self._parked - 1)
+
+    def watch(self, probe: Callable[[], Any] | None) -> None:
+        """Point ``waiting`` at a live check (e.g. "has an app asked?")."""
+        self._probe = probe
+
+    @property
+    def waiting(self) -> bool:
+        if self._parked > 0:
+            return True
+        probe = self._probe
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 — a broken probe never breaks a listing
+            return False
+
+
+def thread_key(thread_id: Any) -> str:
+    """The registry key for ``thread_id`` ("" = no saved chat: counts for
+    nothing)."""
+    return str(thread_id or "").strip()[:THREAD_ID_CHARS]
 
 
 class TurnHandle:
@@ -172,6 +234,11 @@ class TurnRegistry:
         # loop/thread; a plain lock is enough because every critical section
         # is a single dict operation.
         self._lock = threading.Lock()
+        #: v1.327.0: saved-chat id -> the turns in flight for it, NAMED OR
+        #: NOT (a turn with no ``turn_id`` still runs for its chat). Separate
+        #: from ``_turns`` because a thread can run without a turn name and
+        #: two windows can run two turns on one chat at once.
+        self._threads: dict[str, list[ThreadTurn]] = {}
 
     def register(self, turn_id: str) -> TurnHandle:
         """Claim ``turn_id`` for a turn that is about to run.
@@ -241,6 +308,57 @@ class TurnRegistry:
         """Snapshot of the addressable turns (read-only)."""
         with self._lock:
             return list(self._turns)
+
+    # -- per-chat state (v1.327.0) ---------------------------------------- #
+
+    @staticmethod
+    def new_thread_turn(thread_id: Any) -> ThreadTurn | None:
+        """A NOT-YET-ENTERED entry for ``thread_id``; None for a turn with no
+        saved chat (it counts for nothing). Made before the turn starts so
+        the lane can hold it; entered by :meth:`enter_thread` when it runs."""
+        key = thread_key(thread_id)
+        return ThreadTurn(key) if key else None
+
+    def enter_thread(self, entry: ThreadTurn | None) -> None:
+        if entry is None:
+            return
+        with self._lock:
+            self._threads.setdefault(entry.thread_id, []).append(entry)
+
+    def leave_thread(self, entry: ThreadTurn | None) -> None:
+        """Remove exactly ``entry`` (by identity); the chat stops reading as
+        running once its last turn has left."""
+        if entry is None:
+            return
+        with self._lock:
+            rows = self._threads.get(entry.thread_id)
+            if not rows:
+                return
+            self._threads[entry.thread_id] = [e for e in rows if e is not entry]
+            if not self._threads[entry.thread_id]:
+                self._threads.pop(entry.thread_id, None)
+
+    @contextlib.contextmanager
+    def thread_turn(self, thread_id: Any) -> Iterator[ThreadTurn | None]:
+        """``with TURNS.thread_turn(body.thread_id):`` — the chat reads as
+        running for the block's lifetime, however it ends."""
+        entry = self.new_thread_turn(thread_id)
+        self.enter_thread(entry)
+        try:
+            yield entry
+        finally:
+            self.leave_thread(entry)
+
+    def thread_states(self) -> dict[str, dict[str, bool]]:
+        """``{thread id: {"running": True, "waiting": bool}}`` for every chat
+        with a turn in flight — ONE snapshot for a whole listing. The probes
+        run OUTSIDE the lock (they read other registries)."""
+        with self._lock:
+            snap = {tid: list(rows) for tid, rows in self._threads.items() if rows}
+        return {
+            tid: {"running": True, "waiting": any(e.waiting for e in rows)}
+            for tid, rows in snap.items()
+        }
 
 
 #: THE process-local registry. One per daemon process, like the approval

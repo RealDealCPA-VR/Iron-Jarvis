@@ -938,9 +938,15 @@ def register(app: FastAPI, d) -> None:
                 stmt = stmt.where(T.project_id == pid)
             stmt = stmt.order_by(T.updated_at.desc()).limit(100)  # type: ignore[attr-defined]
             rows = list(db.exec(stmt))
+        # v1.327.0: is a turn in flight for the chat, and is it parked on the
+        # user (an approval card, an app's question)? ONE snapshot of the
+        # live turn registry for the whole list — no database read per row.
+        # A turn sent with no ``thread_id`` counts for nothing.
+        live = TURNS.thread_states()
         out = []
         for (tid, title, persona, proj, owner, comm_channel, comm_display,
              updated_at, count, has_setup) in rows:
+            state = live.get(tid) or {}
             out.append(
                 {"id": tid, "title": title or "(untitled)",
                  "persona": persona, "messages": int(count or 0),
@@ -951,7 +957,9 @@ def register(app: FastAPI, d) -> None:
                  "owner": owner or "user",
                  "comm_channel": comm_channel or "",
                  "comm_display": comm_display or "",
-                 "updated_at": updated_at.isoformat()}
+                 "updated_at": updated_at.isoformat(),
+                 "running": bool(state.get("running")),
+                 "waiting": bool(state.get("waiting"))}
             )
         return {"threads": out}
 
@@ -1974,6 +1982,12 @@ async def stream_chat_turn(
         # it. The sidebar keeps passing its own socket-backed source.
         def steer_source() -> str:  # type: ignore[no-redef]
             return "\n".join(handle.take_steers())
+    # v1.327.0: the saved chat this turn runs for (``body.thread_id``; "" =
+    # none, counts for nothing). Made here, ENTERED when the stream starts
+    # (`_counted_for_thread`), so a stream that is never iterated never reads
+    # as running. MIRROR NOTE (lock-step): chat_turn.run_chat_turn counts the
+    # POST lane through the same registry.
+    thread_turn = TURNS.new_thread_turn(getattr(body, "thread_id", ""))
     # v1.312.0: chat_stream is an async GENERATOR now — calling it runs
     # nothing, so it cannot raise here; the eager checks above already did,
     # BEFORE the id was registered, so a refused turn never holds one.
@@ -1981,8 +1995,10 @@ async def stream_chat_turn(
         platform, personas, body, should_stop=should_stop,
         steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
         arm_family=arm_family, trust=trust, trust_reason=trust_reason,
-        suggest_preferences=suggest_preferences,
+        suggest_preferences=suggest_preferences, thread_turn=thread_turn,
     ))
+    if thread_turn is not None:
+        inner = _counted_for_thread(inner, thread_turn)
     if handle is None:
         # NO turn_id: nothing registered, nothing to release, the generator
         # handed back bare — as before v1.241.0.
@@ -2001,6 +2017,34 @@ async def stream_chat_turn(
             TURNS.release(turn_id, handle)
 
     return _tracked()
+
+
+async def _counted_for_thread(frames, entry):
+    """``frames``, with ``entry`` in the turn registry's per-chat state from
+    the first frame to the last, however the stream ends — finished, Stop,
+    an error frame, the client gone (v1.327.0). That is what makes the chat
+    list's "running" dot true exactly while the turn is."""
+    TURNS.enter_thread(entry)
+    try:
+        async with contextlib.aclosing(frames):
+            async for chunk in frames:
+                yield chunk
+    finally:
+        TURNS.leave_thread(entry)
+
+
+def _pack_asks_open(ti) -> bool:
+    """True while an app's question or model request from THIS turn is
+    waiting on the user (v1.327.0) — read off ``mcp_turn.PENDING``, the live
+    registry the answer routes resolve through. Called only when somebody
+    lists the chats."""
+    from ..mcp_turn import PENDING
+
+    try:
+        asks = list(PENDING.values())
+    except RuntimeError:  # resized mid-copy by another thread: ask next time
+        return False
+    return any(a.turn is ti and not a.answered for a in asks)
 
 
 def _eager_checks(platform, body) -> None:
@@ -2066,6 +2110,7 @@ async def chat_stream(
     trust: str = "full",
     trust_reason: str = "",
     suggest_preferences: bool = False,
+    thread_turn=None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -2937,6 +2982,10 @@ async def chat_stream(
     _ti = TurnInteractions(
         d, stop=_stop, low_trust=lambda: bool(_trust_state["low"]), poll_s=_ASK_POLL_S,
     )
+    # v1.327.0: the chat list's "waiting" reads this turn's open app asks
+    # live; an approval card parks it below (`thread_turn.park`).
+    if thread_turn is not None:
+        thread_turn.watch(lambda: _pack_asks_open(_ti))
 
     # ------------------------------------------------------------------ #
     # STREAM — the round + tool loop, emitting SSE frames as it goes.
@@ -3433,6 +3482,12 @@ async def chat_stream(
                             else:
                                 _ap_id, _fut = _apr.request(tc.name, safe_args)
                             _frame["id"] = _ap_id
+                            # v1.327.0: the chat reads "waiting on you" from
+                            # BEFORE the card goes out until it is answered
+                            # (unparked in the `finally` below; the entry
+                            # leaves with the turn however it ends).
+                            if thread_turn is not None:
+                                thread_turn.park()
                             yield _sse("approval", _frame)
                             _decision = "timeout"
                             _stopped = False
@@ -3477,6 +3532,8 @@ async def chat_stream(
                                             yield ": keepalive\n\n"
                             finally:
                                 _apr.pop(_ap_id)
+                                if thread_turn is not None:
+                                    thread_turn.unpark()
                             if _stopped:
                                 # Completed rounds were billed; the ledger
                                 # says CANCELLED through the one writer, and

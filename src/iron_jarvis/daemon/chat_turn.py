@@ -4331,6 +4331,30 @@ async def _gather_grounding(
     return out
 
 
+def _counts_for_its_chat(turn):
+    """The POST lane's half of the chat list's "running" dot (v1.327.0).
+
+    While the turn runs, its saved chat (``body.thread_id``; "" = none, counts
+    for nothing) is in the turn registry's per-chat state, and it leaves
+    however the turn ends — a reply, a 4xx/5xx, a cancel. A decorator so the
+    turn's body (which several pins read with ``inspect.getsource``) is not
+    re-indented. MIRROR NOTE (lock-step): ``routes/chat.stream_chat_turn``
+    counts the stream lane through the same registry. This lane never parks
+    on a card, so it is never "waiting".
+    """
+    import functools
+
+    from ..core.turns import TURNS
+
+    @functools.wraps(turn)
+    async def counted(platform, personas, body, *args, **kwargs):
+        with TURNS.thread_turn(getattr(body, "thread_id", "")):
+            return await turn(platform, personas, body, *args, **kwargs)
+
+    return counted
+
+
+@_counts_for_its_chat
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
     suggest_preferences: bool = False,

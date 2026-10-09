@@ -1072,7 +1072,9 @@ def _legacy_listing(platform, project_id: str = "") -> dict:
                     "owner": getattr(r, "owner", "user") or "user",
                     "comm_channel": getattr(r, "comm_channel", "") or "",
                     "comm_display": getattr(r, "comm_display", "") or "",
-                    "updated_at": r.updated_at.isoformat()})
+                    "updated_at": r.updated_at.isoformat(),
+                    # v1.327.0: live turn state (no turn in flight here).
+                    "running": False, "waiting": False})
     return {"threads": out}
 
 
