@@ -341,9 +341,12 @@ describe("the mission screen", () => {
       objective: "write a market report",
       project_id: "p1",
     });
-    expect(await screen.findByTestId("mission-objective")).toHaveProperty(
-      "textContent",
-      "write a market report",
+    // v1.325.6: the box is drawn before the mission view answers (it holds
+    // nothing until then), so wait for the words, not for the element.
+    await waitFor(() =>
+      expect(screen.getByTestId("mission-objective").textContent).toBe(
+        "write a market report",
+      ),
     );
   });
 
@@ -477,7 +480,10 @@ describe("a project's mission screen", () => {
   it("is the project's: its name, its team, its objectives, its work — and no project picker", async () => {
     at("?project=p1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-project-header")).textContent).toContain("Acme");
+    // the header is drawn before the project answers ("…"), so wait for the name
+    await waitFor(() =>
+      expect(screen.getByTestId("mission-project-header").textContent).toContain("Acme"),
+    );
     expect(screen.getByText("What should the Acme team get done?")).toBeTruthy();
     expect(screen.queryByTestId("mission-project")).toBeNull();
     const team = screen.getByTestId("mission-project-team");

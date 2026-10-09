@@ -2993,6 +2993,15 @@ does not need a bump, stop and bump it.
   the status was read before the fresh GET landed. Both reads now wait for
   the line itself. A 300 ms delay on the mocked GET reproduced CI's exact
   error; the whole file passes under that delay.
+  v1.325.6 (test-only): v1.325.5's Release gate went red on
+  `agents-mission-v1307` "Start posts ONE objective" — `findByTestId(
+  "mission-objective")` found the box BEFORE the mission view answered (it
+  is drawn empty) and read its text at once. Now a `waitFor` on the words; a
+  300 ms delay on the mocked GET reproduced CI's exact error. The project
+  header read in the same file got the same wait (defensive — it did not
+  fail under the delay). ~20 other `findBy…` + immediate-text reads remain in
+  __tests__; most render their text with the element, but that shape is the
+  first suspect when the Release gate reddens.
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of
