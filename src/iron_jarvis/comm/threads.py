@@ -219,6 +219,9 @@ class CommThreadStore:
         this same lock, BEFORE the commit — so a phone conversation is as
         searchable as a desktop one, and the transcript can never commit
         without its docs.
+
+        v1.327.0: a ``user`` line on an archived daemon-owned chat un-archives
+        it in this same session (:meth:`_revive_if_archived`).
         """
         entry: dict[str, Any] = {
             "role": role,
@@ -242,12 +245,37 @@ class CommThreadStore:
             msgs = msgs[-_MAX_MESSAGES:]
             r.messages_json = json.dumps(msgs)
             r.updated_at = utcnow()
+            self._revive_if_archived(r, role)
             db.add(r)
             self._index_thread(db, r, msgs)
             db.commit()
             count = len(msgs)
         self._publish_updated(thread_id, count)
         return count
+
+    @staticmethod
+    def _revive_if_archived(record: ChatThreadRecord, role: str) -> None:
+        """A message FROM the person (role ``user``) on an ARCHIVED
+        daemon-owned chat clears ``archived_at`` (v1.327.0), so the chat comes
+        back into the desktop list and a phone message is not missed. It rides
+        the caller's session, so it commits with the append or not at all.
+
+        Only the person's own line revives: Jarvis's reply, a job summary or a
+        remote agent's line arriving after the user archived the chat leaves it
+        archived (they reach the phone anyway, and an in-flight reply must not
+        undo an archive the user just made). Never raises: an append must never
+        fail over the list.
+        """
+        try:
+            if (
+                role == "user"
+                and (record.owner or "user") == "daemon"
+                and getattr(record, "archived_at", None) is not None
+            ):
+                record.archived_at = None
+        except Exception:  # noqa: BLE001 — the message matters more than the list
+            log.warning("could not un-archive comm thread %s",
+                        getattr(record, "id", "?"), exc_info=True)
 
     def _index_thread(self, db: Any, record: ChatThreadRecord, msgs: list) -> None:
         """Re-index this comm thread for history search, in the CALLER's

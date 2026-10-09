@@ -34,7 +34,8 @@ RULES (binding, pinned in ``tests/test_chat_thread_refs_v1326.py``):
 
 :func:`search_thread_refs` answers the "@" menu
 (``GET /chat/threads/search-refs``): id, title and updated_at, newest first,
-at most :data:`THREAD_REFS_SEARCH_LIMIT`.
+at most :data:`THREAD_REFS_SEARCH_LIMIT`, archived chats left out (an id the
+user already picked is still read, archived or not).
 """
 
 from __future__ import annotations
@@ -295,8 +296,8 @@ def search_thread_refs(engine: Any, q: str = "", exclude: str = "") -> list[dict
     """The "@" menu rows: ``[{id, title, updated_at}]`` whose title contains
     ``q`` (case-insensitive, wildcards literal; blank = every chat), newest
     first, at most :data:`THREAD_REFS_SEARCH_LIMIT`, ``exclude`` (the chat the
-    menu is open in) left out. Blocking: a sync route, so FastAPI runs it in
-    its thread pool."""
+    menu is open in) and archived chats left out. Blocking: a sync route, so
+    FastAPI runs it in its thread pool."""
     from sqlalchemy import func
     from sqlmodel import select
 
@@ -305,7 +306,12 @@ def search_thread_refs(engine: Any, q: str = "", exclude: str = "") -> list[dict
 
     needle = " ".join(str(q or "").split())[:THREAD_REF_TITLE_CHARS].lower()
     skip = str(exclude or "").strip()[:THREAD_REF_ID_CHARS]
-    stmt = select(T.id, T.title, T.updated_at)
+    # An ARCHIVED chat is not offered (v1.327.0): the user put it away, and
+    # the menu follows the chat list, which hides it too. Resolving an id the
+    # user already picked (``read_thread_refs`` / ``_load``) still reads it.
+    stmt = select(T.id, T.title, T.updated_at).where(
+        T.archived_at.is_(None)  # type: ignore[union-attr]
+    )
     if needle:
         stmt = stmt.where(func.lower(T.title).contains(needle, autoescape=True))
     if skip:
