@@ -335,6 +335,13 @@ does not need a bump, stop and bump it.
   record that claims to make resume honest must be written per step, not
   per batch (`_exec_step` writes its own output; `_update_record` snapshots
   the dict because siblings now mutate it). `tests/test_workflow_engine_v1231.py`.
+  ORDER (v1.323.1): every async write goes through `WorkflowEngine._persist`,
+  which stamps it on the loop; `_update_record` (under one process-wide lock)
+  drops `outputs`/`session_ids` from a write older than one already committed
+  for that run — a worker thread delayed by SQLite's busy back-off once put a
+  crashed run's `{Tell}` back over the resume's final record (Tests gate red,
+  `KeyError: 'Work'`). Never add a bare `to_thread(self._update_record, …)`;
+  `tests/test_workflow_write_order_v13231.py`.
 - **A cancel goes to the task's OWN loop, and a fire that did not happen is
   written where the user reads** (v1.231.0, audit Wave 5, AE2/AE9/AE11/
   AE12). A schedule fire runs under `asyncio.run` on the APScheduler thread;

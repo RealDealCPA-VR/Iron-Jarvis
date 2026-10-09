@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.323.0 (2026-10-04).*
+holds itself to. Current as of v1.323.1 (2026-10-04).*
 
 ---
 
@@ -648,7 +648,9 @@ with the request typed in.
   with the reason on the row. **Finished steps survive a restart**: each
   step is written to the run record the moment it completes, so a Resume
   after the daemon died mid-way never re-runs (or re-notifies) work that
-  was done. A later step that references a failed-and-skipped step gets
+  was done. Since v1.323.1 those writes land in the order the run made
+  them: a slow write can no longer arrive after a newer one and put an
+  older list of finished steps back on the record. A later step that references a failed-and-skipped step gets
   `[step Name failed: reason]` in place of `{{Name}}` — never the error
   text passed off as the step's output — while `{{Name.data}}` of a failed
   step is empty (a failed tool records no data). Saving refuses a

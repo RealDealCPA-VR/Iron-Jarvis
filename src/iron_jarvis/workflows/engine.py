@@ -31,9 +31,11 @@ TOML authoring shape (matches SPEC §24's example flavour)::
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import re
 import tempfile
+import threading
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +51,15 @@ from .models import WorkflowRunRecord
 #: injected block is capped so a long-running workflow can't blow up the prompt.
 _MAX_STEP_SUMMARY = 1500
 _MAX_CONTEXT = 4000
+
+#: Write ordering (v1.323.1, see ``WorkflowEngine._persist``). Process-wide,
+#: not per engine: the daemon, a tool and a resume may each hold their own
+#: engine for the same run. ``_LAST_SEQ`` is bounded; a run old enough to fall
+#: off it has no write in flight.
+_WRITE_SEQ = itertools.count()
+_WRITE_LOCK = threading.Lock()
+_LAST_SEQ: dict[str, int] = {}
+_LAST_SEQ_CAP = 4096
 
 #: v1.170.0 bounds: a pre-seeded run input's value, and a tool step's
 #: structured ``data`` (serialized JSON) persisted on the run record.
@@ -453,9 +464,7 @@ class WorkflowEngine:
         # UNCONDITIONALLY (v1.231.0, AE16): a resume whose folder is back
         # must clear the original run's "no folder" note, or the record keeps
         # telling the user this resume's files went to a scratch dir.
-        await asyncio.to_thread(
-            self._update_record, run_id, notes=[folder_note] if folder_note else []
-        )
+        await self._persist(run_id, notes=[folder_note] if folder_note else [])
         # Tool steps share ONE workspace per run (not one per step/retry): a
         # write_document -> read_file chain must see its own files, and a per-
         # step mkdtemp litters %TEMP% forever. Lazy so agent-only runs make none.
@@ -480,7 +489,7 @@ class WorkflowEngine:
             # settled, so a daemon death during the first step lost any
             # in-memory-only seed and the resumed run silently rendered
             # {{Trigger}} as '' — different behavior from the original run.
-            await asyncio.to_thread(self._update_record, run_id, outputs=outputs)
+            await self._persist(run_id, outputs=outputs)
 
         def _completed_chain() -> list[tuple[str, str]]:
             chain = []
@@ -556,8 +565,7 @@ class WorkflowEngine:
                 elif st == "failed" and not res.get("handled"):
                     batch_failed = True
 
-            await asyncio.to_thread(
-                self._update_record,
+            await self._persist(
                 run_id,
                 current_session_id=None,
                 session_ids=session_ids,
@@ -574,8 +582,7 @@ class WorkflowEngine:
                         outputs.setdefault(s.name, {"status": "skipped"})
                     break
                 # PARK (v1.121.0): the run waits durably for the user.
-                await asyncio.to_thread(
-                    self._update_record,
+                await self._persist(
                     run_id,
                     status="waiting",
                     waiting_json=dumps(
@@ -617,8 +624,7 @@ class WorkflowEngine:
         latest = self._get_record(run_id)
         if latest is not None and latest.status == "cancelling":
             final_status = "cancelled"
-        final = await asyncio.to_thread(
-            self._update_record,
+        final = await self._persist(
             run_id,
             status=final_status,
             current_session_id=None,
@@ -684,8 +690,7 @@ class WorkflowEngine:
             # The user cancelled between answering and the resume starting —
             # the answer must not resurrect the run.
             if latest.status == "cancelling":
-                await asyncio.to_thread(
-                    self._update_record,
+                await self._persist(
                     record.id, status="cancelled", finished_at=utcnow(), waiting_json=""
                 )
             return latest
@@ -700,8 +705,7 @@ class WorkflowEngine:
                     question = str(waiting.get("question") or "") or (
                         f"Continue past “{name}”?"
                     )
-                    await asyncio.to_thread(
-                        self._update_record,
+                    await self._persist(
                         record.id,
                         status="waiting",
                         waiting_json=dumps(
@@ -759,8 +763,7 @@ class WorkflowEngine:
             # halt (or an exhausted retry): the run fails, the tail never ran.
             for s in wf.steps[idx + 1 :]:
                 outputs.setdefault(s.name, {"status": "skipped"})
-            final = await asyncio.to_thread(
-                self._update_record,
+            final = await self._persist(
                 record.id,
                 status="failed",
                 current_session_id=None,
@@ -778,8 +781,7 @@ class WorkflowEngine:
                 },
             )
             return final if final is not None else record
-        await asyncio.to_thread(
-            self._update_record,
+        await self._persist(
             record.id, status="running", outputs=outputs, waiting_json=""
         )
         return await self.run_record(
@@ -853,16 +855,14 @@ class WorkflowEngine:
         if latest is not None and latest.status in ("cancelling", "cancelled"):
             # A cancel must never be resurrected by a queued resume.
             if latest.status == "cancelling":
-                await asyncio.to_thread(
-                    self._update_record,
+                await self._persist(
                     record.id,
                     status="cancelled",
                     finished_at=utcnow(),
                     waiting_json="",
                 )
             return self._get_record(record.id) or latest
-        await asyncio.to_thread(
-            self._update_record,
+        await self._persist(
             record.id, status="running", finished_at=None, waiting_json=""
         )
         return await self.run_record(
@@ -946,9 +946,7 @@ class WorkflowEngine:
         # sibling is still running used to drop every finished member, so
         # Resume re-ran them — re-delivering a notify, re-writing files.
         outputs[step.name] = out
-        await asyncio.to_thread(
-            self._update_record, run_id, session_ids=session_ids, outputs=outputs
-        )
+        await self._persist(run_id, session_ids=session_ids, outputs=outputs)
 
         await self.platform.event_bus.publish(
             EventType.WORKFLOW_STEP_COMPLETED,
@@ -990,8 +988,7 @@ class WorkflowEngine:
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving
         # mid-step can find and stop it.
-        await asyncio.to_thread(
-            self._update_record,
+        await self._persist(
             run_id,
             current_session_id=session.id,
             session_ids=session_ids,
@@ -1343,11 +1340,28 @@ class WorkflowEngine:
             "the folder on the project page and run again"
         )
 
+    async def _persist(self, run_id: str, **fields: Any) -> WorkflowRunRecord | None:
+        """Write *fields* off the loop, in the ORDER the run asked (v1.323.1).
+
+        Each write is stamped here, on the loop, in the order the run asked.
+        Worker threads used to commit in whatever order they got the database:
+        a write held up by SQLite's busy back-off could commit AFTER a newer
+        one and put back an older ``outputs`` — on CI a crashed run's late
+        ``{Tell}`` landed after the resume's final write and wiped the
+        finished ``Work`` from the record, which is exactly what Resume reads
+        (the AE4 promise). Now a write whose stamp is older than one already
+        committed for the run keeps its other fields but drops ``outputs`` and
+        ``session_ids`` (see :meth:`_update_record`)."""
+        seq = next(_WRITE_SEQ)
+        return await asyncio.to_thread(self._update_record, run_id, _seq=seq, **fields)
+
     def _get_record(self, run_id: str) -> WorkflowRunRecord | None:
         with session_scope(self.platform.engine) as db:
             return db.get(WorkflowRunRecord, run_id)
 
-    def _update_record(self, run_id: str, **fields: Any) -> WorkflowRunRecord | None:
+    def _update_record(
+        self, run_id: str, _seq: int | None = None, **fields: Any
+    ) -> WorkflowRunRecord | None:
         """Apply the given fields to the record and persist. ``session_ids`` and
         ``outputs`` are JSON-encoded; other keys map straight onto the column.
 
@@ -1355,7 +1369,23 @@ class WorkflowEngine:
         through ``asyncio.to_thread`` (v1.226.0): a write that lands while
         another writer holds the file (Settings → Compact runs VACUUM; a big
         import) waits up to busy_timeout — 30s — and inline that wait parked
-        the daemon's one event loop, /health included ("Daemon offline")."""
+        the daemon's one event loop, /health included ("Daemon offline").
+
+        ``_seq`` comes from :meth:`_persist`; see there for the ordering rule.
+        The lock makes check-commit-record one step, so two writes can never
+        both pass the check and then commit in the wrong order."""
+        with _WRITE_LOCK:
+            if _seq is not None:
+                if _seq < _LAST_SEQ.get(run_id, -1):
+                    fields.pop("outputs", None)
+                    fields.pop("session_ids", None)
+                else:
+                    _LAST_SEQ[run_id] = _seq
+                    while len(_LAST_SEQ) > _LAST_SEQ_CAP:
+                        _LAST_SEQ.pop(next(iter(_LAST_SEQ)))
+            return self._write_fields(run_id, fields)
+
+    def _write_fields(self, run_id: str, fields: dict) -> WorkflowRunRecord | None:
         with session_scope(self.platform.engine) as db:
             rec = db.get(WorkflowRunRecord, run_id)
             if rec is None:
