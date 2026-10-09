@@ -475,6 +475,15 @@ class ChatShareBody(BaseModel):
     model: str = ""
 
 
+class ChatArchiveBody(BaseModel):
+    """``POST /chat/threads/{id}/archive`` (v1.328.0). ``stop`` = stop what
+    the chat is running first (the same stop the Stop button sends), then
+    archive. Without it, a chat with work in flight answers 409 and lists
+    what is running, so the user decides."""
+
+    stop: bool = False
+
+
 class ProjectCreate(BaseModel):
     """A context-spine project: brief + activity shared across all surfaces."""
 

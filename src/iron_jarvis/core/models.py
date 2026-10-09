@@ -390,6 +390,12 @@ class ChatThreadRecord(SQLModel, table=True):
     project_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    #: When the user ARCHIVED this chat (v1.328.0): hidden from the chat list
+    #: by default, kept whole (nothing deleted, still searchable, reopenable,
+    #: ``POST /chat/threads/{id}/unarchive`` brings it back). None = not
+    #: archived. Additive column (auto-reconciled): pre-existing rows read
+    #: NULL, which is "not archived", the zero-behavior-change default.
+    archived_at: datetime | None = None
 
 
 class SavedPromptRecord(SQLModel, table=True):

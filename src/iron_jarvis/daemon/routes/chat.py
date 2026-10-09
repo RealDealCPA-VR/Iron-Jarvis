@@ -12,9 +12,10 @@ import inspect
 import json
 import logging
 import re as _re
+import threading
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pathlib import Path
 from sqlmodel import select
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from typing import Any
 
 from ..schemas import (
     TurnSteerBody,
+    ChatArchiveBody,
     ChatBody,
     ChatCompactBody,
     ChatCrystallizeBody,
@@ -36,7 +38,7 @@ from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.grants import args_hash as _grant_hash
-from ...core.turns import CHAT_INFLIGHT, TURNS
+from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...eval.pricing import UsageTally
 from ...providers.reasoning import normalize_level
 from ..doors import collect_doors, door_for
@@ -166,6 +168,73 @@ log = logging.getLogger(__name__)
 #: SQLite's single writer. See ``core.db.CONVERSATION_WRITE_LOCK`` for the
 #: measurement (66s and two lost writes) that collapsed them into one.
 _THREAD_SAVE_LOCK = CONVERSATION_WRITE_LOCK
+
+# --------------------------------------------------------------------------- #
+# Archive a chat (v1.328.0)
+# --------------------------------------------------------------------------- #
+#: Saved-chat key (``core.turns.thread_key``) -> the stop handles of the NAMED
+#: stream-lane turns running for it. The turn registry's per-chat state says
+#: THAT a chat is running; this says WHICH handles a "Stop and archive" press
+#: must stop. Held from the first frame to the last, beside the per-chat entry
+#: (`_counted_for_thread`), so it never outlives the turn. A turn with no
+#: ``turn_id`` (and the POST lane, which has no Stop at all) holds none: it
+#: cannot be stopped from here, and the archive answer says so.
+_THREAD_HANDLES: dict[str, list] = {}
+_THREAD_HANDLES_LOCK = threading.Lock()
+#: How long "Stop and archive" waits for the stopped turns to end before it
+#: archives anyway and reports what is still finishing. Stop is cooperative
+#: (a tool already executing finishes first), so this is a bound, not a promise.
+ARCHIVE_STOP_GRACE_S = 3.0
+_ARCHIVE_POLL_S = 0.05
+#: The plain words for what a chat can be running (the 409 lists them).
+RUNNING_REPLY = "a reply in progress"
+RUNNING_QUESTION = "a question waiting for you"
+
+
+def _hold_thread_handle(key: str, handle) -> None:
+    if not key or handle is None:
+        return
+    with _THREAD_HANDLES_LOCK:
+        _THREAD_HANDLES.setdefault(key, []).append(handle)
+
+
+def _drop_thread_handle(key: str, handle) -> None:
+    """Remove exactly ``handle`` (by identity) from ``key``'s list."""
+    if not key or handle is None:
+        return
+    with _THREAD_HANDLES_LOCK:
+        rows = [h for h in _THREAD_HANDLES.get(key, []) if h is not handle]
+        if rows:
+            _THREAD_HANDLES[key] = rows
+        else:
+            _THREAD_HANDLES.pop(key, None)
+
+
+def _thread_handles(key: str) -> list:
+    with _THREAD_HANDLES_LOCK:
+        return list(_THREAD_HANDLES.get(key, []))
+
+
+def _running_for(thread_id: str) -> list[str]:
+    """What the chat is running right now, in plain words ([] = nothing).
+
+    Read off the live turn registry's per-chat state (v1.327.0): a turn in
+    flight is "a reply in progress"; a turn parked on the user (an approval
+    card, an app's question) adds "a question waiting for you"."""
+    state = TURNS.thread_states().get(thread_key(thread_id)) or {}
+    out: list[str] = []
+    if state.get("running"):
+        out.append(RUNNING_REPLY)
+    if state.get("waiting"):
+        out.append(RUNNING_QUESTION)
+    return out
+
+
+def _words(items: list[str]) -> str:
+    """"a", "a and b", "a, b and c"."""
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -899,13 +968,23 @@ def register(app: FastAPI, d) -> None:
         return {"approvals": listed}
 
     @app.get("/chat/threads")
-    def chat_threads(project_id: str = "") -> dict[str, Any]:
+    def chat_threads(project_id: str = "", archived: str = "") -> dict[str, Any]:
         """List saved threads (newest first). ``project_id`` (optional) scopes
         the list to ONE project's conversations — the in-project workspace fetches
-        only its own threads; empty returns every thread (unchanged behavior)."""
+        only its own threads; empty returns every thread (unchanged behavior).
+
+        ``archived`` (v1.328.0): "" (default) leaves archived chats OUT,
+        ``only`` lists just the archived ones, ``all`` lists both. Every row
+        carries ``archived``."""
         from sqlalchemy import and_, case, func
 
         from ...core.models import ChatThreadRecord as T
+
+        which = (archived or "").strip().lower()
+        if which not in ("", "only", "all"):
+            raise HTTPException(
+                status_code=400, detail="archived must be 'only' or 'all'"
+            )
 
         # v1.311.0 (W3-3): the sidebar re-lists after EVERY autosave, so this
         # read used to cost every transcript in the database per reply — it
@@ -932,10 +1011,14 @@ def register(app: FastAPI, d) -> None:
             stmt = select(
                 T.id, T.title, T.persona, T.project_id, T.owner,
                 T.comm_channel, T.comm_display, T.updated_at,
-                count_expr, setup_expr,
+                count_expr, setup_expr, T.archived_at,
             )
             if pid:
                 stmt = stmt.where(T.project_id == pid)
+            if which == "":
+                stmt = stmt.where(T.archived_at.is_(None))  # type: ignore[union-attr]
+            elif which == "only":
+                stmt = stmt.where(T.archived_at.is_not(None))  # type: ignore[union-attr]
             stmt = stmt.order_by(T.updated_at.desc()).limit(100)  # type: ignore[attr-defined]
             rows = list(db.exec(stmt))
         # v1.327.0: is a turn in flight for the chat, and is it parked on the
@@ -945,7 +1028,7 @@ def register(app: FastAPI, d) -> None:
         live = TURNS.thread_states()
         out = []
         for (tid, title, persona, proj, owner, comm_channel, comm_display,
-             updated_at, count, has_setup) in rows:
+             updated_at, count, has_setup, archived_at) in rows:
             state = live.get(tid) or {}
             out.append(
                 {"id": tid, "title": title or "(untitled)",
@@ -959,7 +1042,9 @@ def register(app: FastAPI, d) -> None:
                  "comm_display": comm_display or "",
                  "updated_at": updated_at.isoformat(),
                  "running": bool(state.get("running")),
-                 "waiting": bool(state.get("waiting"))}
+                 "waiting": bool(state.get("waiting")),
+                 # v1.328.0: hidden from the default list once archived.
+                 "archived": archived_at is not None}
             )
         return {"threads": out}
 
@@ -1012,6 +1097,9 @@ def register(app: FastAPI, d) -> None:
             "owner": getattr(r, "owner", "user") or "user",
             "comm_channel": getattr(r, "comm_channel", "") or "",
             "comm_display": getattr(r, "comm_display", "") or "",
+            # v1.328.0: an archived chat still opens; the page can offer
+            # to bring it back.
+            "archived": getattr(r, "archived_at", None) is not None,
         }
 
     @app.get("/chat/threads/{thread_id}/compaction")
@@ -1263,6 +1351,107 @@ def register(app: FastAPI, d) -> None:
                             exc_info=True)
             db.commit()
         return {"deleted": thread_id}
+
+    def _set_archived(thread_id: str, archive: bool) -> dict[str, Any] | None:
+        """Stamp (or clear) ``archived_at``; None = no such thread. Nothing
+        else on the row changes — not ``updated_at`` (archiving is not
+        activity, and the list's order must not jump), not the transcript,
+        not the search docs (an archived chat stays findable). An already
+        archived chat keeps its first stamp."""
+        from ...core.ids import utcnow as _now
+        from ...core.models import ChatThreadRecord
+
+        with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+            if r is None:
+                return None
+            if archive and r.archived_at is None:
+                r.archived_at = _now()
+            elif not archive:
+                r.archived_at = None
+            db.add(r)
+            db.commit()
+            db.refresh(r)
+            return {
+                "id": r.id,
+                "archived": r.archived_at is not None,
+                "archived_at": r.archived_at.isoformat() if r.archived_at else None,
+            }
+
+    def _thread_exists(thread_id: str) -> bool:
+        from ...core.models import ChatThreadRecord
+
+        with session_scope(d.platform.engine) as db:
+            return db.get(ChatThreadRecord, thread_id) is not None
+
+    @app.post("/chat/threads/{thread_id}/archive")
+    async def archive_chat_thread(
+        thread_id: str, body: ChatArchiveBody | None = None,
+    ) -> Any:
+        """Archive a chat: hide it from the chat list, keep all of it (v1.328.0).
+
+        IF THE CHAT IS RUNNING SOMETHING — a reply in progress, a question
+        waiting for the user (the live turn registry, v1.327.0) — the answer
+        is 409 with one plain sentence in ``detail`` and the list in
+        ``running``, and nothing changes: archiving must never quietly leave
+        work running in a chat the user can no longer see. ``{"stop": true}``
+        stops those turns first with the SAME stop the Stop button sends
+        (``TurnHandle.stop``), waits up to ``ARCHIVE_STOP_GRACE_S`` for them
+        to end, then archives and reports ``stopped``. What could not be
+        stopped from here (the phone's lane, a turn with no name, a tool still
+        finishing) is archived anyway and NAMED in ``still_running`` with a
+        ``note`` — never claimed as stopped.
+
+        A daemon-owned (phone) chat can be archived too: it is only hidden.
+        Async because it may wait; every database touch is off the loop."""
+        stop = bool(body is not None and body.stop)
+        if not await asyncio.to_thread(_thread_exists, thread_id):
+            raise HTTPException(status_code=404, detail="no such thread")
+        running = _running_for(thread_id)
+        stopped: list[str] = []
+        still: list[str] = []
+        if running and not stop:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": (
+                        f"This chat is still working: {_words(running)}."
+                        " Stop it and archive, or wait until it finishes."
+                    ),
+                    "running": running,
+                },
+            )
+        if running:
+            key = thread_key(thread_id)
+            handles = _thread_handles(key)
+            for h in handles:
+                h.stop()
+            if handles:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + max(0.0, float(ARCHIVE_STOP_GRACE_S))
+                while _running_for(thread_id) and loop.time() < deadline:
+                    await asyncio.sleep(_ARCHIVE_POLL_S)
+            still = _running_for(thread_id)
+            stopped = [w for w in running if w not in still]
+        out = await asyncio.to_thread(_set_archived, thread_id, True)
+        if out is None:  # deleted while we stopped its turns
+            raise HTTPException(status_code=404, detail="no such thread")
+        out["stopped"] = stopped
+        out["still_running"] = still
+        if still:
+            out["note"] = (
+                f"Archived. This could not be stopped from here and will"
+                f" finish on its own: {_words(still)}."
+            )
+        return out
+
+    @app.post("/chat/threads/{thread_id}/unarchive")
+    def unarchive_chat_thread(thread_id: str) -> dict[str, Any]:
+        """Bring an archived chat back into the chat list (v1.328.0)."""
+        out = _set_archived(thread_id, False)
+        if out is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        return out
 
     @app.post("/chat/threads/{thread_id}/share")
     async def share_chat_thread(thread_id: str, body: ChatShareBody) -> dict[str, Any]:
@@ -1998,7 +2187,9 @@ async def stream_chat_turn(
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
     ))
     if thread_turn is not None:
-        inner = _counted_for_thread(inner, thread_turn)
+        # v1.328.0: the named turn's handle rides with the per-chat entry so
+        # "Stop and archive" can stop exactly the turns running for the chat.
+        inner = _counted_for_thread(inner, thread_turn, handle)
     if handle is None:
         # NO turn_id: nothing registered, nothing to release, the generator
         # handed back bare — as before v1.241.0.
@@ -2019,17 +2210,22 @@ async def stream_chat_turn(
     return _tracked()
 
 
-async def _counted_for_thread(frames, entry):
+async def _counted_for_thread(frames, entry, handle=None):
     """``frames``, with ``entry`` in the turn registry's per-chat state from
     the first frame to the last, however the stream ends — finished, Stop,
     an error frame, the client gone (v1.327.0). That is what makes the chat
-    list's "running" dot true exactly while the turn is."""
+    list's "running" dot true exactly while the turn is.
+
+    ``handle`` (v1.328.0): a NAMED turn's stop handle, held for the same
+    lifetime under the chat's key, so archiving the chat can stop it."""
     TURNS.enter_thread(entry)
+    _hold_thread_handle(entry.thread_id, handle)
     try:
         async with contextlib.aclosing(frames):
             async for chunk in frames:
                 yield chunk
     finally:
+        _drop_thread_handle(entry.thread_id, handle)
         TURNS.leave_thread(entry)
 
 

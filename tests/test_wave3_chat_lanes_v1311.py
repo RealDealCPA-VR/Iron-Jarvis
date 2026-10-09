@@ -1074,7 +1074,10 @@ def _legacy_listing(platform, project_id: str = "") -> dict:
                     "comm_display": getattr(r, "comm_display", "") or "",
                     "updated_at": r.updated_at.isoformat(),
                     # v1.327.0: live turn state (no turn in flight here).
-                    "running": False, "waiting": False})
+                    "running": False, "waiting": False,
+                    # v1.328.0: archive flag (none archived here; the
+                    # default list hides archived rows).
+                    "archived": False})
     return {"threads": out}
 
 
