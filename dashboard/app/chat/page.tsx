@@ -189,7 +189,6 @@ import { needsConnect, providerDisplay } from "@/lib/onboarding";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
 import { turnUsageFrom } from "@/lib/types";
-import { timeAgo } from "@/lib/format";
 import { slashTokenAt, tokenAt, spliceToken } from "@/lib/slash";
 
 /** An agent reachable with "@" from chat (GET /agents/mentionable). */
@@ -271,6 +270,9 @@ import { takePageContext, type PageContext } from "@/lib/pageContext";
 import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import ThreadGroups, { GROUP_LIMIT } from "@/components/chat/ThreadGroups";
+import { markViewed, readLastViewed, threadStatuses } from "@/lib/threadStatus";
+import { useThreadListPoll } from "@/lib/threadListPoll";
 import { appendDictation } from "@/components/VoiceInput";
 import { ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { ModuleTitle } from "@/components/PageHeader";
@@ -603,6 +605,8 @@ interface ChatRequestMessage {
 type ChatRequestBody = {
   messages: ChatRequestMessage[];
   turn_id?: string; // v1.278.0: names the turn so /chat/turns/{id}/steer can reach it
+  thread_id?: string; // v1.327.0 (W2-1): the open SAVED chat, so the list can light it
+  // as running / waiting; a new unsaved chat sends none
   device_id?: string; // redesign S3: a per-device setting changed in chat lands on THIS device
   granted_tools?: string[]; // v1.312.0 (W4-2): "Allow for this conversation" grants
   provider?: string;
@@ -1015,6 +1019,11 @@ interface ThreadSummary {
   comm_channel?: string;
   /** Human sender label (e.g. "Val") when daemon-owned. */
   comm_display?: string;
+  /** v1.327.0 (calm chat W2-1): a turn is in flight for this chat right now
+   *  (the daemon's live registry; an older daemon sends neither flag). */
+  running?: boolean;
+  /** v1.327.0: that turn is parked on the user (a card or an app's question). */
+  waiting?: boolean;
 }
 
 /** Per-thread setup the daemon stores alongside the transcript: what was armed
@@ -1445,11 +1454,6 @@ function fmtSize(bytes: number): string {
 
 function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-}
-
-/** Message count for a thread row (the list sends a number; tolerate an array). */
-function msgCount(t: ThreadSummary): number {
-  return typeof t.messages === "number" ? t.messages : t.messages.length;
 }
 
 // ------------------------------------------------------------------ markdown
@@ -3293,18 +3297,12 @@ export default function ChatPage() {
   const { events } = useEvents(150, CHAT_EVENTS_OPTS);
   // Threads are scoped to the selected project (the daemon filters by
   // project_id); with no project every saved conversation shows. The sidebar's
-  // title filter narrows client-side on top.
+  // title filter narrows client-side on top. v1.327.0: pinned chats are drawn
+  // first by ThreadGroups (its "Pinned" group), so no sort here.
   const visibleThreads = useMemo(() => {
     const q = threadQuery.trim().toLowerCase();
-    const filtered = q
-      ? threads.filter((t) => (t.title || "").toLowerCase().includes(q))
-      : threads;
-    // Pinned float to the top; the sort is stable so recency holds within
-    // each group.
-    return [...filtered].sort(
-      (a, b) => Number(pinnedIds.includes(b.id)) - Number(pinnedIds.includes(a.id)),
-    );
-  }, [threads, threadQuery, pinnedIds]);
+    return q ? threads.filter((t) => (t.title || "").toLowerCase().includes(q)) : threads;
+  }, [threads, threadQuery]);
 
   // Hydrate pins once (per-device preference, like the workspace defaults).
   useEffect(() => {
@@ -3823,6 +3821,30 @@ export default function ChatPage() {
 
   const awaiting = awaitingId !== null;
   const busy = awaiting || chatBusy;
+
+  // v1.327.0 (calm chat W2-1): the chat list's status dots. Running and
+  // waiting are the daemon's (each GET /chat/threads row); unread is this
+  // browser's last-viewed stamps (lib/threadStatus), so a stamp written by
+  // noteViewed bumps `viewedTick` to re-read them. The open chat is never
+  // unread, and while THIS page is answering in it, it reads running at once
+  // (the list it holds was fetched before the turn reached the daemon).
+  const [viewedTick, setViewedTick] = useState(0);
+  const threadStatusMap = useMemo(() => {
+    const map = threadStatuses(threads, readLastViewed(), threadId);
+    if (busy && threadId && map[threadId] !== "waiting") map[threadId] = "running";
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- viewedTick re-reads the stamps
+  }, [threads, threadId, busy, viewedTick]);
+  /** Stamp a chat as seen now (opened, or left). Never throws. */
+  function noteViewed(id: string | null | undefined, updatedAt?: string | null) {
+    if (!id) return;
+    markViewed(id, updatedAt);
+    setViewedTick((n) => n + 1);
+  }
+  // While a row is running or waiting, re-read the list every few seconds:
+  // those flags are live in the daemon and nothing pushes their change. Stops
+  // when no row is live, while the window is hidden, and on unmount.
+  useThreadListPoll(threads, () => void refreshThreads());
 
   // The model catalog for the header picker. v1.250.0 (S-02): through the
   // SHARED hook, so this page renders the catalog the title bar's switcher has
@@ -4943,6 +4965,8 @@ export default function ChatPage() {
       return;
     }
     leaveConversation();
+    // v1.327.0 (W2-1): opening a chat is looking at it — its unread dot goes.
+    noteViewed(id, threads.find((t) => t.id === id)?.updated_at);
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
     const openGen = chatGenRef.current;
@@ -6400,6 +6424,11 @@ export default function ChatPage() {
     return {
       // Full conversation every turn — the backend is stateless here.
       messages: toRequestMessages(history),
+      // v1.327.0 (calm chat W2-1): which saved chat this turn belongs to, so
+      // the daemon can show it as running / waiting in the chat list. Read
+      // from the save box (sends fire from stale closures); a new chat has
+      // no id until its first save lands, and sends none.
+      ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
       // Redesign S3: which device asked, so a per-device setting changed in
       // chat (the theme) lands here and not on every screen.
       device_id: getDeviceId(),
@@ -8191,6 +8220,10 @@ export default function ChatPage() {
    * Both doors call this one function so neither can forget a step.
    */
   function leaveConversation() {
+    // v1.327.0 (W2-1): the chat being left was seen up to now — its own
+    // messages moved its `updated_at` while it was open, and that must not
+    // read as "new since you last looked" once it is back in the list.
+    noteViewed(saveTargetRef.current.id, saveTargetRef.current.updatedAt);
     // v1.325.0: messages waiting for a reply belong to THIS conversation —
     // their words join the box first, so the draft below keeps them.
     if (queuedRef.current.length) {
@@ -8225,13 +8258,19 @@ export default function ChatPage() {
     if (id) writeDraft(id, composer.get().text);
   }
 
-  // Leaving the chat page (another module, a reload) keeps the draft too.
+  // Leaving the chat page (another module, a reload) keeps the draft too —
+  // and (v1.327.0) stamps the open chat as seen, like leaving it in place.
   useEffect(() => {
-    const onHide = () => saveDraftNow();
+    const seen = () => markViewed(saveTargetRef.current.id ?? "", saveTargetRef.current.updatedAt);
+    const onHide = () => {
+      saveDraftNow();
+      seen();
+    };
     window.addEventListener("pagehide", onHide);
     return () => {
       window.removeEventListener("pagehide", onHide);
       saveDraftNow();
+      seen();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs only
   }, []);
@@ -8855,119 +8894,84 @@ export default function ChatPage() {
                     No chats match “{threadQuery.trim()}”.
                   </p>
                 ) : (
-                  <div className="space-y-0.5">
-                    {visibleThreads.map((t) => {
-                      const active = t.id === threadId;
-                      const count = msgCount(t);
-                      return (
-                        <div
-                          key={t.id}
-                          className={`group/thread relative rounded-lg border transition-colors ${
-                            active
-                              ? "border-accent/25 bg-accent/[0.08]"
-                              : "border-transparent hover:bg-white/[0.04]"
+                  /* v1.327.0 (calm chat W2-1): grouped under projects, each
+                     row a status dot (running / waiting / unread), the title
+                     and a short age. A rail scoped to one project is one
+                     plain list (its header already names the project) and a
+                     search shows every match; otherwise five per group, then
+                     "Show more". Rename, pin and the ⋯ menu ride the rows'
+                     slots exactly as before. */
+                  <ThreadGroups
+                    threads={visibleThreads}
+                    projects={projects}
+                    activeId={threadId}
+                    onOpen={(id) => void openThread(id)}
+                    statuses={threadStatusMap}
+                    pinnedIds={pinnedIds}
+                    headings={!(railScoped && activeProject)}
+                    limit={(railScoped && activeProject) || threadQuery.trim() ? Infinity : GROUP_LIMIT}
+                    rowEditor={(t) =>
+                      renamingId === t.id ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void renameThread(t.id, renameDraft);
+                            } else if (e.key === "Escape") {
+                              setRenamingId(null);
+                            }
+                          }}
+                          onBlur={() => void renameThread(t.id, renameDraft)}
+                          aria-label="Rename chat"
+                          className="field my-0.5 w-full py-1 text-[13px]"
+                        />
+                      ) : null
+                    }
+                    rowBadge={(t) =>
+                      // A MESSAGING thread names where it comes from (the
+                      // v1.315.0 cue, now beside the title).
+                      t.owner === "daemon" ? (
+                        <span
+                          className="shrink-0 text-[11px] text-accent-soft/80"
+                          title="Messaging thread"
+                        >
+                          {capitalize(t.comm_channel || "linked")}
+                        </span>
+                      ) : null
+                    }
+                    rowAction={(t) => (
+                      /* v1.315.0: visible by default — a touch screen has no
+                         hover, so the old opacity-0 left an invisible target.
+                         Only a hover-capable pointer hides it until the row is
+                         hovered or focused (where it takes the age's place). */
+                      <span
+                        className={`absolute right-1 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:group-hover/thread:opacity-100 ${
+                          threadMenu?.id === t.id
+                            ? "opacity-100"
+                            : "[@media(hover:hover)]:opacity-0"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => openThreadMenu(e, t.id)}
+                          aria-label={`Options for ${t.title || "chat"}`}
+                          aria-haspopup="menu"
+                          aria-expanded={threadMenu?.id === t.id}
+                          title="Chat options"
+                          className={`grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-white/[0.06] md:h-6 md:w-6 ${
+                            threadMenu?.id === t.id
+                              ? "bg-white/[0.06] text-zinc-200"
+                              : "text-zinc-500 hover:text-zinc-200"
                           }`}
                         >
-                          {renamingId === t.id ? (
-                            <input
-                              autoFocus
-                              value={renameDraft}
-                              onChange={(e) => setRenameDraft(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  void renameThread(t.id, renameDraft);
-                                } else if (e.key === "Escape") {
-                                  setRenamingId(null);
-                                }
-                              }}
-                              onBlur={() => void renameThread(t.id, renameDraft)}
-                              aria-label="Rename chat"
-                              className="field mx-1.5 my-1.5 w-[calc(100%-0.75rem)] py-1 text-[13px]"
-                            />
-                          ) : (
-                          <button
-                            type="button"
-                            onClick={() => void openThread(t.id)}
-                            className="w-full px-2.5 py-2 pr-9 text-left"
-                            title={t.title || "Untitled chat"}
-                          >
-                            <span
-                              className={`flex items-center gap-1.5 text-[13px] ${
-                                active ? "text-accent-soft" : "text-zinc-200"
-                              }`}
-                            >
-                              {pinnedIds.includes(t.id) && (
-                                <Pin size={11} className="shrink-0 text-accent-soft/80" />
-                              )}
-                              <span className="min-w-0 truncate">
-                                {t.title || "Untitled chat"}
-                              </span>
-                            </span>
-                            {/* v1.315.0 (thread-options-invisible-on-touch):
-                                the origin rides the META line, in readable
-                                sentence case — the 9px uppercase chip was cut
-                                to "Q3 BOOKKEEPI…", and the ⋯ that is now
-                                always visible on touch would sit on top of
-                                it. A MESSAGING thread names where it comes
-                                from (the stronger signal, so it wins);
-                                otherwise, while the rail shows every chat,
-                                a project thread names its project. */}
-                            <span className="block truncate text-[11px] text-zinc-500">
-                              {timeAgo(t.updated_at)} · {count} msg
-                              {count === 1 ? "" : "s"}
-                              {t.owner === "daemon" ? (
-                                <>
-                                  {" · "}
-                                  <span className="text-accent-soft/80" title="Messaging thread">
-                                    {capitalize(t.comm_channel || "linked")}
-                                  </span>
-                                </>
-                              ) : !railScoped && t.project_id ? (
-                                <>
-                                  {" · "}
-                                  <span title="Project thread">
-                                    {projects.find((p) => p.id === t.project_id)?.name ??
-                                      "Project"}
-                                  </span>
-                                </>
-                              ) : null}
-                            </span>
-                          </button>
-                          )}
-                          {renamingId !== t.id && (
-                            /* v1.315.0: visible by default — a touch screen has
-                               no hover, so the old opacity-0 left an invisible
-                               target. Only a hover-capable pointer hides it
-                               until the row is hovered or focused. */
-                            <span
-                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:group-hover/thread:opacity-100 ${
-                                threadMenu?.id === t.id
-                                  ? "opacity-100"
-                                  : "[@media(hover:hover)]:opacity-0"
-                              }`}
-                            >
-                              <button
-                                type="button"
-                                onClick={(e) => openThreadMenu(e, t.id)}
-                                aria-label={`Options for ${t.title || "chat"}`}
-                                aria-haspopup="menu"
-                                aria-expanded={threadMenu?.id === t.id}
-                                title="Chat options"
-                                className={`grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-white/[0.06] md:h-6 md:w-6 ${
-                                  threadMenu?.id === t.id
-                                    ? "bg-white/[0.06] text-zinc-200"
-                                    : "text-zinc-500 hover:text-zinc-200"
-                                }`}
-                              >
-                                <MoreHorizontal size={14} />
-                              </button>
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                          <MoreHorizontal size={14} />
+                        </button>
+                      </span>
+                    )}
+                  />
                 )}
               </div>
             </section>

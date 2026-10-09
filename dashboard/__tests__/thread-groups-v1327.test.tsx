@@ -238,7 +238,15 @@ describe("ThreadGroups", () => {
     expect(screen.getByTestId("thread-dot-c1").getAttribute("data-status")).toBe("running");
     expect(cls("c1")).toContain("bg-accent");
     expect(cls("c2")).toContain("bg-tone-warn");
-    expect(cls("c3")).toContain("bg-tone-violet");
+    // W2-1 (v1.327.0): unread is a small ACCENT dot (it was violet in B2);
+    // running is the accent too, told apart by its halo and a calm pulse that
+    // only runs when motion is allowed.
+    expect(cls("c3")).toContain("bg-accent");
+    expect(cls("c3")).not.toContain("animate-pulse");
+    expect(cls("c3")).not.toContain("ring-");
+    expect(cls("c1")).toContain("motion-safe:animate-pulse");
+    expect(cls("c1")).not.toMatch(/(^|\s)animate-pulse/);
+    expect(cls("c1")).toContain("ring-accent/25");
     expect(cls("c4")).toContain("bg-transparent");
     // A chat the statuses do not mention has no dot colour either.
     expect(screen.getByTestId("thread-dot-n1").getAttribute("data-status")).toBe("idle");

@@ -673,35 +673,38 @@ describe("thread options are reachable on touch (thread-options-invisible-on-tou
     expect(classes(b).some((c) => /^(min-)?w-(7|8|9|10|11|\[(2[8-9]|[3-9]\d)px\])$/.test(c))).toBe(true);
   });
 
-  it("a project chat names its project in the meta line, readable and uncapped", async () => {
+  // v1.327.0 (calm chat W2-1): the list is GROUPED under projects, and a row
+  // is a status dot, the title and a short age — the "6h ago · 2 msgs ·
+  // {project}" meta line is gone. A project chat is named by its group's
+  // heading now (the readable, uncapped part of this pin is unchanged: the
+  // row itself carries no uppercase and no capped chip); a messaging chat's
+  // channel rides beside the title, with its cue.
+  it("a project chat sits under its project's heading, the row readable and uncapped", async () => {
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
     const row = await within(rail).findByTitle("Ledger totals");
-    await waitFor(() => expect(row.textContent).toContain(PROJECT.name));
-    const meta = Array.from(row.querySelectorAll("span"))
-      .filter((s) => /\d+ msgs?/.test(s.textContent ?? ""))
-      .sort((a, b) => (a.textContent ?? "").length - (b.textContent ?? "").length)[0];
-    expect(meta).toBeTruthy();
-    expect(meta.textContent).toContain(PROJECT.name);
+    await waitFor(() =>
+      expect(row.closest("section")?.querySelector("h3")?.textContent).toBe(PROJECT.name),
+    );
     expect(row.querySelectorAll(".uppercase")).toHaveLength(0);
     expect(row.innerHTML).not.toContain("max-w-[5.5rem]");
   });
 
-  it("a messaging chat names its channel in the meta line", async () => {
+  it("a messaging chat names its channel beside its title", async () => {
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
     const row = await within(rail).findByTitle("Email draft to client");
-    const meta = Array.from(row.querySelectorAll("span"))
-      .filter((s) => /\d+ msgs?/.test(s.textContent ?? ""))
-      .sort((a, b) => (a.textContent ?? "").length - (b.textContent ?? "").length)[0];
-    expect(meta.textContent ?? "").toMatch(/telegram/i);
+    expect(row.textContent ?? "").toMatch(/telegram/i);
     expect(row.querySelectorAll(".uppercase")).toHaveLength(0);
     // The "this is a messaging thread" cue stays reachable.
     expect(row.querySelector('[title="Messaging thread"]')).not.toBeNull();
   });
 
   it("CONTROL: the same menu, the open-menu reveal, and title room clear of the ⋯", async () => {
-    const [b] = await optionButtons();
+    await optionButtons();
+    // v1.327.0: groups reorder the rows (the project's group first), so the
+    // ⋯ is picked by its chat's name rather than by position.
+    const b = screen.getByRole("button", { name: "Options for Quick question" });
     const row = b.parentElement?.parentElement as HTMLElement;
     const open = within(row).getByTitle("Quick question");
     expect(classes(open).some((c) => /^pr-(9|10|11|12)$/.test(c))).toBe(true);
