@@ -50,6 +50,7 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import Link from "next/link";
 import {
+  ArrowUp,
   AudioLines,
   BookmarkPlus,
   Bot,
@@ -85,8 +86,9 @@ import {
   RotateCcw,
   Save,
   Search,
-  Send,
   Share2,
+  Shield,
+  ShieldAlert,
   ListTree,
   Sparkles,
   Square,
@@ -166,7 +168,17 @@ import {
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { HomeLine } from "@/components/chat/HomeLine";
+import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
+import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
+import {
+  COMPOSER_CARD_EDGE,
+  COMPOSER_ICON_BUTTON,
+  composerChipClass,
+  composerKeyHint,
+  toolsChipWords,
+} from "@/lib/composerChips";
+import { scrollToLatest, useRepinOnGrowth } from "@/lib/transcriptRepin";
 import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
@@ -1205,6 +1217,16 @@ function clampRailW(w: number): number {
   return Math.max(RAIL_MIN_W, Math.min(max, w));
 }
 
+/** Below Tailwind's `md` (768px): where the project drawer covers the whole
+ *  chat. False when the browser cannot say (no matchMedia). */
+function isPhoneWidth(): boolean {
+  try {
+    return typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 767.98px)").matches;
+  } catch {
+    return false;
+  }
+}
+
 // Agent-mode handoff: escalating a chat conversation to a NEW agent session
 // otherwise starts the agent blind (a fresh session carries no chat history),
 // so we prepend a compact recap of the last few turns to the task.
@@ -1277,9 +1299,10 @@ const PERSONA_KEY = "ij_chat_persona";
 // Sentinel select value for the "+ New persona" entry (opens a blank editor).
 const NEW_PERSONA = "__new__";
 
-// Workspace panel persistence (chat mode). The chosen folder + expanded state.
+// Workspace panel persistence (chat mode): the chosen folder. Since v1.326.0
+// the panel is a drawer opened on demand, so its open state is not restored
+// (the old "ij_chat_workspace_open" key is no longer read or written).
 const WORKSPACE_KEY = "ij_chat_workspace";
-const WORKSPACE_OPEN_KEY = "ij_chat_workspace_open";
 // The right-panel project selection persists across visits (like the folder).
 const PROJECT_KEY = "ij_chat_project";
 // v1.311.0: the conversation THIS WINDOW had open, so Chat → Overview → Chat
@@ -1528,13 +1551,11 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
 }
 
 /** v1.315.0 (project-tabs-shift-and-not-tabs): the project's views as a REAL
- *  tablist — role=tab, aria-selected, aria-controls, roving tabindex — in the
- *  same underline style as the Agents page's project tabs. It used to be a
- *  row of chip buttons ABOVE the chat card that pushed the card ~52px down
- *  whenever the open chat belonged to a project. Now it sits inline in the
- *  card's own header (no row added, nothing shifts), and the same tablist is
- *  drawn above the project surface so Tasks/Board/Media can switch back.
- *  Arrow keys move focus only (wrapping); a click, Enter or Space selects —
+ *  tablist: role=tab, aria-selected, aria-controls, roving tabindex. It used
+ *  to be a row of chip buttons ABOVE the chat card that pushed the card ~52px
+ *  down whenever the open chat belonged to a project. Since v1.326.0 it is
+ *  plain text tabs in the chat TOP BAR, which every view shares, so there is
+ *  one tablist on screen whatever is showing and nothing shifts. Arrow keys move focus only (wrapping); a click, Enter or Space selects —
  *  manual activation, because selecting mounts a whole surface. */
 const PROJECT_VIEWS = ["chat", "tasks", "board", "media"] as const;
 const PROJECT_VIEW_CHAT_ID = "project-view-chat";
@@ -1558,7 +1579,7 @@ function ProjectViewTabs({
     refs.current[next]?.focus();
   }
   return (
-    <div role="tablist" aria-label="Project views" className="flex items-center gap-0.5">
+    <div role="tablist" aria-label="Project views" className="flex items-center gap-2">
       {PROJECT_VIEWS.map((v, i) => {
         const selected = view === v;
         return (
@@ -1574,10 +1595,12 @@ function ProjectViewTabs({
             tabIndex={selected ? 0 : -1}
             onClick={() => onSelect(v)}
             onKeyDown={(e) => onKeyDown(e, i)}
-            className={`-mb-px border-b-2 px-2.5 py-1 text-[13px] capitalize transition-colors ${
+            // v1.326.0 (calm chat): plain text tabs in the top bar, the open
+            // one in ink and the rest muted; no underline, no chip.
+            className={`rounded-md px-1.5 py-1 text-[13px] capitalize transition-colors ${
               selected
-                ? "border-accent font-semibold text-zinc-100"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
+                ? "font-medium text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-200"
             }`}
           >
             {v}
@@ -1988,24 +2011,22 @@ const ComposerInput = memo(function ComposerInput({
       autoFocus
       rows={1}
       aria-label="Message"
+      // v1.326.0 (calm chat): the keys moved to the quiet line under the
+      // card (from sm up), so the box only says who it talks to.
       placeholder={
         busy && onSteer
-          ? wide
-            ? "Steer Jarvis mid-turn…  (Enter sends a note it reads at its next step · Ctrl+Enter sends after this reply · Esc stops)"
-            : "Steer Jarvis mid-turn…"
+          ? "Steer Jarvis mid-turn…"
           : talkingTo
             ? wide
-              ? `Message ${talkingTo}…  (Enter to send · @ to bring in someone else · Back to Jarvis above)`
+              ? `Message ${talkingTo}…  (@ to bring in someone else · Back to Jarvis above)`
               : `Message ${talkingTo}…`
-            : wide
-              ? "Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
-              : "Message Iron Jarvis…"
+            : "Message Iron Jarvis…"
       }
-      // v1.315.0 (phone-composer-cramped): below sm the composer row wraps and
-      // the box takes the whole first line (basis-full, shown first), so the
-      // + / project / mic presses sit on the line under it instead of
-      // squeezing the box to ~95px. From sm up it is the old flex-1 again.
-      className="field order-first max-h-40 min-h-[2.75rem] flex-1 basis-full resize-none sm:order-none sm:basis-0"
+      // v1.326.0 (calm chat W1-2): the box is the top of the composer card,
+      // not a field of its own: no border, no fill, no focus ring (the caret
+      // is the cue; the card's edge does not change on focus). It takes the
+      // whole width above the toolbar at every size.
+      className="block max-h-40 min-h-[2.75rem] w-full resize-none bg-transparent px-[18px] pb-1 pt-3 text-sm leading-6 text-zinc-100 caret-accent outline-none placeholder:text-zinc-500"
     />
   );
 });
@@ -2264,9 +2285,10 @@ const AtPicker = memo(function AtPicker({
   );
 });
 
-/** The send ARROW: invisible until there is something to send (text or an
- *  attachment) — then it materializes. Subscribed because its presence is a
- *  function of the text. */
+/** The send ARROW: a round button at the right end of the composer's toolbar.
+ *  v1.326.0 (calm chat): always in its place, quiet and disabled until there
+ *  is something to send (text or an attachment), then the accent. Subscribed
+ *  because its look is a function of the text. */
 const SendArrow = memo(function SendArrow({
   store,
   busy,
@@ -2279,19 +2301,22 @@ const SendArrow = memo(function SendArrow({
   onSend: (text: string) => void;
 }) {
   const { text } = useComposer(store);
-  if (!(text.trim() || hasAttachments || busy)) return null;
+  // v1.275.0: a file alone is a message.
+  const ready = !busy && Boolean(text.trim() || hasAttachments);
   return (
     <button
+      type="button"
       onClick={() => onSend(store.get().text)}
-      // v1.275.0: a file alone is a message.
-      disabled={busy || !(text.trim() || hasAttachments)}
+      disabled={!ready}
       aria-label="Send"
       title="Send (Enter)"
-      // v1.315.0: ml-auto pins Send to the right end of the phone's controls
-      // line; from sm up the flex-1 box beside it leaves nothing to push.
-      className="btn-accent ml-auto h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
+      // ml-auto pins Send to the right end of the toolbar whatever wraps.
+      // Only a message ready to go wears the accent (one primary per view).
+      className={`ml-auto grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full p-0 ${
+        ready ? "btn-accent" : "cursor-not-allowed bg-white/[0.06] text-zinc-500"
+      }`}
     >
-      {busy ? <LoaderInline /> : <Send size={16} />}
+      {busy ? <LoaderInline /> : <ArrowUp size={16} strokeWidth={2.4} />}
     </button>
   );
 });
@@ -3015,6 +3040,17 @@ export default function ChatPage() {
   // tools write there (and their output surfaces live in the panel).
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  // v1.326.0: whether the open drawer was opened by a PRESS (it takes focus
+  // and gives it back) or by the app (a reply made a file: no focus steal).
+  const [drawerTakeFocus, setDrawerTakeFocus] = useState(false);
+  // v1.326.0: where focus goes when the drawer closes and its opener is gone
+  // (the "⋯" row unmounts in the press that opens it): the "⋯" button when
+  // the menu opened it, else the top bar's Project button.
+  const drawerReturnRef = useRef<HTMLElement | null>(null);
+  const projectButtonRef = useRef<HTMLButtonElement>(null);
+  // v1.326.0: the title of the thread this window opened, for the top bar's
+  // breadcrumb when the thread is not in the loaded list (an older one).
+  const [openedTitle, setOpenedTitle] = useState<{ id: string; title: string } | null>(null);
   // DOCUMENT PREVIEW (right rail): set when a turn creates/edits a document —
   // the chat column shifts over and the file renders beside the conversation.
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -3481,6 +3517,12 @@ export default function ChatPage() {
   // True while the reader is pinned to (near) the bottom. Only then do streamed
   // tokens auto-scroll; scrolling up releases the pin until they return.
   const pinnedRef = useRef(true);
+  // v1.326.0 (calm chat W1-2): true until the transcript is first filled after
+  // the page opens or a conversation is left (leaveConversation). That first
+  // fill lands at the bottom AT ONCE: a smooth glide from the top of a long
+  // chat fired scroll events far from the bottom (each one releasing the pin)
+  // while it was still aimed at a bottom a late chart had already moved.
+  const openingRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Synchronous send guard: `busy` is React state and lags a frame, so two
@@ -3489,9 +3531,16 @@ export default function ChatPage() {
   const sendingRef = useRef(false);
   // "+" popover container — outside-click detection needs the DOM node.
   const toolsPopRef = useRef<HTMLDivElement>(null);
+  // The "+" button itself: where focus goes back when the project drawer it
+  // opened ("Choose a working folder") closes (v1.326.0).
+  const plusBtnRef = useRef<HTMLButtonElement>(null);
   // Composer project quick-toggle popover (the cowork switch).
   const projPopRef = useRef<HTMLDivElement>(null);
   const [projMenuOpen, setProjMenuOpen] = useState(false);
+  // v1.326.0 (calm chat W1-2): the composer's tools chip and its menu (Auto
+  // tools, web, the tools armed by hand, connections).
+  const toolMenuRef = useRef<HTMLDivElement>(null);
+  const [toolMenuOpen, setToolMenuOpen] = useState(false);
   // The rail IS the project workspace now (Projects left the nav): Files or
   // Knowledge inline; the wide surfaces (tasks/board/media) open from here.
   const [railTab, setRailTab] = useState<"files" | "knowledge">("files");
@@ -3901,8 +3950,6 @@ export default function ChatPage() {
       }
       const wd = window.localStorage.getItem(WORKSPACE_KEY);
       if (wd) setWorkspaceDir(wd);
-      const wo = window.localStorage.getItem(WORKSPACE_OPEN_KEY);
-      if (wo === "1") setWorkspaceOpen(true);
       if (window.localStorage.getItem(AUTO_TOOLS_KEY) === "0") setAutoTools(false);
     } catch {
       /* ignore */
@@ -4226,13 +4273,30 @@ export default function ChatPage() {
     }
   }
 
-  function setWorkspaceOpenPersisted(open: boolean) {
-    setWorkspaceOpen(open);
-    try {
-      window.localStorage.setItem(WORKSPACE_OPEN_KEY, open ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
+  /** v1.326.0: the project panel is a DRAWER opened on demand. A press
+   *  ("user") opens it with focus, and the drawer gives focus back on close.
+   *  The app opening it ("app": a reply or a batch made a file, so its
+   *  preview shows) never takes the caret from the composer, and does
+   *  nothing on a phone, where the drawer would cover the reply it is
+   *  about: the file's chip in that reply is one tap away. `returnTo` is
+   *  where focus goes back on close if the opener is gone by then. */
+  function showProjectPanel(by: "user" | "app", returnTo: HTMLElement | null = null) {
+    if (workspaceOpen) return;
+    if (by === "app" && isPhoneWidth()) return;
+    drawerReturnRef.current = returnTo;
+    setDrawerTakeFocus(by === "user");
+    setWorkspaceOpen(true);
+  }
+
+  /** The drawer's return target, read when it closes. */
+  function drawerReturnTarget(): HTMLElement | null {
+    const named = drawerReturnRef.current;
+    if (named && named.isConnected) return named;
+    return projectButtonRef.current;
+  }
+
+  function hideProjectPanel() {
+    setWorkspaceOpen(false);
   }
 
   // ------------------------------------------------------------------ project
@@ -5051,6 +5115,7 @@ export default function ChatPage() {
           seedTarget.updatedAt = t.updated_at ?? undefined;
         }
         setThreadId(t.id);
+        setOpenedTitle({ id: t.id, title: t.title ?? "" });
         setCommMeta(
           isDaemon ? { channel: t.comm_channel ?? "", display: t.comm_display ?? "" } : null,
         );
@@ -5062,6 +5127,7 @@ export default function ChatPage() {
       }
       setMessages(msgs);
       setThreadId(t.id);
+      setOpenedTitle({ id: t.id, title: t.title ?? "" });
       setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
       // A remote may have messaged back while this was closed (v1.285.0).
       const room = roomOf(msgs);
@@ -5751,6 +5817,16 @@ export default function ChatPage() {
     return () => document.removeEventListener("mousedown", onDown);
   }, [projMenuOpen]);
 
+  // Close the composer's tools menu on any outside click (v1.326.0).
+  useEffect(() => {
+    if (!toolMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!toolMenuRef.current?.contains(e.target as Node)) setToolMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [toolMenuOpen]);
+
   function toggleTool(name: string) {
     setSelectedTools((prev) =>
       prev.includes(name)
@@ -5774,6 +5850,10 @@ export default function ChatPage() {
   const webRoom =
     selectedTools.filter((n) => !WEB_TOOLS.includes(n)).length + WEB_TOOLS.length <=
     MAX_TOOLS;
+  // v1.326.0: the tools armed by hand, web research apart (it has its own
+  // chip), and the composer's tools chip words.
+  const armedTools = selectedTools.filter((n) => !WEB_TOOLS.includes(n));
+  const toolsChip = toolsChipWords(autoTools, armedTools.length);
 
   function toggleWeb() {
     setSelectedTools((prev) => {
@@ -5855,7 +5935,9 @@ export default function ChatPage() {
       return;
     }
     if (!pinnedRef.current) return;
-    bottomRef.current?.scrollIntoView({ behavior: busy ? "auto" : "smooth", block: "end" });
+    const opening = openingRef.current;
+    openingRef.current = false;
+    scrollToLatest(bottomRef.current, busy || opening ? "auto" : "smooth");
     // v1.257.0 (S-02): `runStream.text` is deliberately NOT a dependency any
     // more. It used to be, and because scrollIntoView walks every scrollable
     // ancestor, each agent token cost a whole page render plus a synchronous
@@ -5871,10 +5953,7 @@ export default function ChatPage() {
   busyRef.current = busy;
   const scrollLiveIntoView = useCallback(() => {
     if (!pinnedRef.current) return;
-    bottomRef.current?.scrollIntoView({
-      behavior: busyRef.current ? "auto" : "smooth",
-      block: "end",
-    });
+    scrollToLatest(bottomRef.current, busyRef.current ? "auto" : "smooth");
   }, []);
 
   // Track the reader's pin state; releasing the pin surfaces a "Jump to latest"
@@ -5890,10 +5969,21 @@ export default function ChatPage() {
     setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
   }
 
+  // A chart or table that finishes laying out after the scroll grows the
+  // transcript under a reader who is following it: keep them at the bottom
+  // (never one who scrolled up, and never over the empty state). It scrolls to
+  // the same sentinel as every other bottom scroll here (`scrollToLatest`):
+  // two different bottoms made a streaming reply bounce on every line.
+  useRepinOnGrowth(
+    scrollRef,
+    bottomRef,
+    () => pinnedRef.current && !(messagesRef.current.length === 0 && !busyRef.current),
+  );
+
   function jumpToLatest() {
     pinnedRef.current = true;
     setShowJump(false);
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    scrollToLatest(bottomRef.current, "smooth");
   }
 
   // The composer's auto-grow moved into ComposerInput with the text it keys
@@ -6475,13 +6565,13 @@ export default function ChatPage() {
     if (!last) return;
     rememberThreadDocs(docs);
     setPreviewPath((cur) => (docs.length > 1 ? cur : last));
-    setWorkspaceOpenPersisted(true);
+    showProjectPanel("app");
   }
 
   /** Reopen a remembered document's preview (the chip's click). */
   function openDocPreview(path: string) {
     setPreviewPath(path);
-    setWorkspaceOpenPersisted(true);
+    showProjectPanel("user");
   }
 
   /** Drag the rail's left edge: wider preview when wanted, default when not.
@@ -8127,6 +8217,8 @@ export default function ChatPage() {
     saveDraftNow();
     setFollowups(null);
     convGenRef.current += 1;
+    // The next conversation opens at its bottom at once (see openingRef).
+    openingRef.current = true;
     queuedSendRef.current = false;
     if (dictation.listening) dictation.stop();
     setEditUndo(null);
@@ -8269,153 +8361,268 @@ export default function ChatPage() {
     !!curPersona &&
     (!curPersona.builtin || curPersona.overridden);
 
+  /** v1.326.0 (calm chat): the breadcrumb's last part is the SAVED thread's
+   *  title. An empty new chat shows no crumb, and neither does a first turn
+   *  before its save lands (a moment): echoing the question there would put
+   *  the same words on screen twice, right above the bubble that holds them. */
+  const crumbTitle =
+    threads.find((t) => t.id === threadId)?.title?.trim() ||
+    (threadId && openedTitle?.id === threadId ? openedTitle.title.trim() : "");
+
   /**
-   * THE MODULE'S CONTROLS, which used to be the page header's `actions`
-   * (v1.215.0). Reported: "the buttons that sit above the chat window to
-   * the right, they can be contained in the chat card at the top right and
-   * fixed so scrolling doesnt remove them".
+   * THE CHAT TOP BAR (v1.326.0, calm chat W1-1). It replaces the chat card's
+   * header row of buttons (v1.215.0: Voice, read aloud, Persona, edit,
+   * Project) and the vertical project strip on the right.
    *
-   * They now ride in the chat card's own header row — which is a `shrink-0`
-   * child of a flex COLUMN whose only scrolling child is the transcript. So
-   * "fixed" is structural rather than `position: sticky`: there is no
-   * scroll for them to be carried out of.
+   * LEFT: where you are. "<project> / <thread title>", just the title with
+   * no project, nothing on an empty new chat; then, in a project, its
+   * Chat / Tasks / Board / Media views as plain text tabs (the same
+   * ProjectViewTabs, so the tab roles and ids are unchanged).
+   * RIGHT: a quiet Project button (opens the project panel drawer), Share
+   * (moved here from under the composer) and "⋯", which holds hands-free
+   * Voice chat, Read replies aloud, the Persona choice + its editor, and the
+   * project panel toggle. Every control the old header had is one press (or
+   * one press and the menu) away.
+   *
+   * It sits OUTSIDE the chat card, above both the conversation and a
+   * project's Tasks/Board/Media surface, so one bar (and one tablist) serves
+   * every view and nothing moves when the view changes. `shrink-0` in a flex
+   * column whose only scrolling child is the transcript: never scrolled away,
+   * and not `sticky` (v1.215.0's reason still holds). No border: the calm
+   * look is hairlines at most, and the bar needs none.
    */
-  const chatActions = (
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Voice: hands-free Voice Chat + spoken-replies toggle.
-              v1.315.0 (phone-chrome-eats-transcript): icon-only below sm so
-              the header fits one row on a phone; its name stays "Voice chat"
-              (aria-pressed says whether it is on). */}
+  const menuRow =
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  const chatTopBar = (
+    <div
+      data-testid="chat-topbar"
+      className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 py-1 sm:h-12 sm:flex-nowrap sm:py-0"
+    >
+      {crumbTitle ? (
+        <nav
+          aria-label="Breadcrumb"
+          data-testid="chat-breadcrumb"
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] text-zinc-500 sm:flex-initial"
+        >
+          {activeProject && (
+            <>
+              <span className="min-w-0 max-w-[14rem] shrink truncate" title={activeProject.name}>
+                {activeProject.name}
+              </span>
+              <span aria-hidden className="shrink-0 text-zinc-600">
+                /
+              </span>
+            </>
+          )}
+          <span
+            aria-current="page"
+            className="min-w-0 truncate font-medium text-zinc-100"
+            title={crumbTitle}
+          >
+            {crumbTitle}
+          </span>
+        </nav>
+      ) : (
+        // Keeps the right-hand controls at the right on an empty new chat.
+        <span aria-hidden className="flex-1 sm:hidden" />
+      )}
+      {activeProject && (
+        // On a phone the tabs take their own line under the crumb; from sm
+        // they sit beside it.
+        <div className="order-last w-full sm:order-none sm:w-auto">
+          <ProjectViewTabs view={projectView} onSelect={setProjectView} />
+        </div>
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        {voiceMode && (
+          // Hands-free voice is ON: say so where the user is looking and keep
+          // its off switch one press away (the old header's red button).
           <button
             type="button"
             onClick={toggleVoiceMode}
-            disabled={!dictation.supported}
-            aria-pressed={voiceMode}
-            // The visible word joins the name when it shows ("Voice on"), so
-            // the accessible name contains what a sighted user reads.
-            aria-label={voiceMode ? "Voice on" : "Voice chat"}
-            title={
-              voiceMode
-                ? "End voice chat"
-                : dictation.supported
-                  ? "Voice chat — speak, hear replies, hands-free"
-                  : dictation.reason || "Voice isn't available here yet"
-            }
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
-              voiceMode
-                ? "border-rose-500/50 bg-rose-500/15 text-rose-300 shadow-[0_0_18px_-4px_rgba(244,63,94,0.7)]"
-                : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-accent/50 hover:text-accent-soft"
-            }`}
+            aria-label="End voice chat"
+            title="End voice chat"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-tone-danger transition-colors hover:bg-white/[0.06]"
           >
-            <AudioLines size={14} />{" "}
-            <span className="hidden sm:inline">{voiceMode ? "Voice on" : "Voice"}</span>
+            <AudioLines size={14} />
+            <span className="hidden sm:inline">Voice on</span>
           </button>
-          {tts.supported && (
-            <button
-              type="button"
-              onClick={tts.toggle}
-              aria-pressed={tts.enabled}
-              title={
-                tts.enabled
-                  ? "Spoken replies on — click to mute"
-                  : "Read replies aloud"
-              }
-              className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
-                tts.enabled ? "text-accent-soft" : ""
-              }`}
-            >
-              {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-            </button>
-          )}
-          {(
-            <div className="flex items-center gap-1">
-              {/* v1.315.0: a quiet visible "Persona" so the select reads as a
-                  persona picker, not a stray "Assistant" (sm+; on a phone the
-                  row has no room and the select keeps its name). */}
-              <label
-                htmlFor="chat-persona-select"
-                className="mr-0.5 hidden text-[11px] text-zinc-500 sm:inline"
-              >
-                Persona
-              </label>
-              <select
-                id="chat-persona-select"
-                aria-label="Persona"
-                value={persona}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setPersonaEditorOpen(false);
-                  if (v === NEW_PERSONA) startNewPersona();
-                  else choosePersona(v);
-                }}
-                disabled={busy}
-                title={
-                  persona === NEW_PERSONA
-                    ? "Create a new persona"
-                    : selectedPersonaDesc || "Persona for replies"
-                }
-                className="field w-auto py-1.5 text-[13px]"
-              >
-                {/* Tolerate a saved persona the daemon no longer lists. */}
-                {!personaNames.includes(persona) && persona !== NEW_PERSONA && (
-                  <option value={persona}>{personaTitle(persona)}</option>
-                )}
-                {personas.map((p) => (
-                  <option key={p.name} value={p.name} title={p.description}>
-                    {p.title || capitalize(p.name)}
-                    {p.overridden ? " ·" : ""}
-                  </option>
-                ))}
-                <option value={NEW_PERSONA}>+ New persona…</option>
-              </select>
+        )}
+        {/* v1.315.0's rule kept: icon-only below sm and NAMED with the
+            project, so on a phone the button still says which one. */}
+        <button
+          ref={projectButtonRef}
+          type="button"
+          data-testid="chat-project-button"
+          onClick={() => (workspaceOpen ? hideProjectPanel() : showProjectPanel("user"))}
+          aria-expanded={workspaceOpen}
+          aria-haspopup="dialog"
+          aria-label={activeProject ? `Project: ${activeProject.name}` : "Project"}
+          title={
+            activeProject
+              ? `Project: ${activeProject.name}. Its folder, files and knowledge`
+              : "Pick a project (or just a folder). Armed file tools run there"
+          }
+          className={`inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] transition-colors hover:bg-white/[0.06] hover:text-zinc-100 ${
+            workspaceOpen ? "bg-white/[0.06] text-zinc-100" : "text-zinc-400"
+          }`}
+        >
+          {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}
+          <span className="hidden sm:inline">Project</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setShareOpen(true)}
+          disabled={!threadId}
+          aria-label="Share this chat"
+          title={
+            threadId
+              ? "Share this chat: the full transcript or a compacted digest"
+              : "A chat can be shared after its first reply (it saves automatically)"
+          }
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <Share2 size={14} />
+          <span className="hidden sm:inline">Share</span>
+        </button>
+        <ChatMoreMenu>
+          {(closeMenu, menuTrigger) => (
+            <>
               <button
                 type="button"
-                onClick={() =>
-                  personaEditorOpen ? closePersonaEditor() : openPersonaEditor()
+                onClick={() => {
+                  closeMenu();
+                  toggleVoiceMode();
+                }}
+                disabled={!dictation.supported}
+                aria-pressed={voiceMode}
+                // The visible words are the name, so the accessible name holds
+                // what a sighted user reads.
+                aria-label={voiceMode ? "Voice on" : "Voice chat"}
+                title={
+                  voiceMode
+                    ? "End voice chat"
+                    : dictation.supported
+                      ? "Speak, hear the replies, hands-free"
+                      : dictation.reason || "Voice isn't available here yet"
                 }
-                disabled={busy || persona === NEW_PERSONA}
-                aria-pressed={personaEditorOpen}
-                title="Modify this persona"
-                aria-label="Modify persona"
-                className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
-                  personaEditorOpen ? "text-accent-soft" : ""
-                }`}
+                className={menuRow}
               >
-                <Pencil size={14} />
+                <AudioLines
+                  size={15}
+                  className={`shrink-0 ${voiceMode ? "text-tone-danger" : "text-zinc-400"}`}
+                />
+                <span className="min-w-0 flex-1">{voiceMode ? "Voice on" : "Voice chat"}</span>
+                {voiceMode && <span className="text-[12px] text-tone-danger">On</span>}
               </button>
-            </div>
+              {tts.supported && (
+                <button
+                  type="button"
+                  onClick={tts.toggle}
+                  aria-pressed={tts.enabled}
+                  title={tts.enabled ? "Spoken replies are on. Press to mute" : "Read replies aloud"}
+                  className={menuRow}
+                >
+                  {tts.enabled ? (
+                    <Volume2 size={15} className="shrink-0 text-accent-soft" />
+                  ) : (
+                    <VolumeX size={15} className="shrink-0 text-zinc-400" />
+                  )}
+                  <span className="min-w-0 flex-1">Read replies aloud</span>
+                  <span className="text-[12px] text-zinc-500">{tts.enabled ? "On" : "Off"}</span>
+                </button>
+              )}
+              <div className="my-1 h-px bg-white/[0.06]" />
+              <div className="px-2.5 pb-1 pt-1.5">
+                <label
+                  htmlFor="chat-persona-select"
+                  className="mb-1 block text-[12px] text-zinc-500"
+                >
+                  Persona
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    id="chat-persona-select"
+                    aria-label="Persona"
+                    value={persona}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPersonaEditorOpen(false);
+                      if (v === NEW_PERSONA) {
+                        // The editor opens below the bar; get out of its way.
+                        closeMenu();
+                        startNewPersona();
+                      } else choosePersona(v);
+                    }}
+                    disabled={busy}
+                    title={
+                      persona === NEW_PERSONA
+                        ? "Create a new persona"
+                        : selectedPersonaDesc || "Persona for replies"
+                    }
+                    className="field min-w-0 flex-1 py-1.5 text-[13px]"
+                  >
+                    {/* Tolerate a saved persona the daemon no longer lists. */}
+                    {!personaNames.includes(persona) && persona !== NEW_PERSONA && (
+                      <option value={persona}>{personaTitle(persona)}</option>
+                    )}
+                    {personas.map((p) => (
+                      <option key={p.name} value={p.name} title={p.description}>
+                        {p.title || capitalize(p.name)}
+                        {p.overridden ? " ·" : ""}
+                      </option>
+                    ))}
+                    <option value={NEW_PERSONA}>+ New persona…</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeMenu();
+                      if (personaEditorOpen) closePersonaEditor();
+                      else openPersonaEditor();
+                    }}
+                    disabled={busy || persona === NEW_PERSONA}
+                    aria-pressed={personaEditorOpen}
+                    title="Modify this persona"
+                    aria-label="Modify persona"
+                    className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50 ${
+                      personaEditorOpen ? "text-accent-soft" : "text-zinc-400"
+                    }`}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="my-1 h-px bg-white/[0.06]" />
+              <button
+                type="button"
+                onClick={() => {
+                  closeMenu();
+                  if (workspaceOpen) hideProjectPanel();
+                  // This row unmounts with the menu, so name the "⋯"
+                  // button as where focus comes back on close.
+                  else showProjectPanel("user", menuTrigger());
+                }}
+                aria-pressed={workspaceOpen}
+                className={menuRow}
+              >
+                {workspaceOpen ? (
+                  <PanelRightClose size={15} className="shrink-0 text-zinc-400" />
+                ) : (
+                  <PanelRightOpen size={15} className="shrink-0 text-zinc-400" />
+                )}
+                <span className="min-w-0 flex-1">
+                  {workspaceOpen ? "Hide project panel" : "Show project panel"}
+                </span>
+              </button>
+            </>
           )}
-          {/* v1.315.0: icon-only below sm, NAMED with the project — on a
-              phone this button is the card's only cue of the active project. */}
-          <button
-            type="button"
-            onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
-            aria-pressed={workspaceOpen}
-            aria-label={activeProject ? `Project: ${activeProject.name}` : "Project"}
-            title={
-              activeProject
-                ? `Project: ${activeProject.name} — replies ground in its knowledge; the panel holds its folder + files`
-                : workspaceOpen
-                  ? "Hide the project panel"
-                  : "Pick a project (or just a folder) — armed file tools run there"
-            }
-            className={`btn-ghost py-1.5 text-[13px] ${
-              workspaceOpen || workspaceDir || activeProject ? "text-accent-soft" : ""
-            }`}
-          >
-            {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}{" "}
-            <span className="hidden max-w-[9rem] truncate sm:inline">
-              {activeProject ? activeProject.name : "Project"}
-            </span>
-          </button>
-          {/* NO "New chat" HERE (v1.215.0). The thread rail's header already
-              carries one, and with both surfaces on screen at once that is two
-              buttons doing one thing — the exact duplication the user called
-              out in the Agents module ("there are 2 areas to start a new
-              thread and it should be one"). Starting a conversation is a LIST
-              operation; its control belongs on the list, which is visible at
-              every width and in every state. */}
-        </div>
+        </ChatMoreMenu>
+        {/* NO "New chat" HERE (v1.215.0). The thread rail's header already
+            carries one; two buttons doing one thing is the duplication the
+            user called out in the Agents module. */}
+      </div>
+    </div>
   );
 
   // v1.250.0 (S-05): ONE handlers object for every MessageRow, identity-stable
@@ -9009,7 +9216,15 @@ export default function ChatPage() {
               the card inside it can put a fixed header above a scrolling
               transcript above a fixed composer — "the cards can be pushed up
               making the chat seem more minimalistic". */}
-          <div className="flex min-w-0 flex-1 flex-col gap-3 md:min-h-0">
+          <div
+            className={`flex min-w-0 flex-1 flex-col gap-3 md:min-h-0 ${
+              // v1.326.0: on a wide screen an open project drawer takes its
+              // own room instead of covering the end of the conversation.
+              workspaceOpen ? "xl:pr-[var(--rail-w)]" : ""
+            }`}
+            style={{ "--rail-w": `${railW}px` } as CSSProperties}
+          >
+            {chatTopBar}
             {/* Both of these are CONDITIONAL and both moved in here
                 (v1.215.0). Left in the page flow above the row, either one
                 appearing would push a `100vh`-tall layout off the bottom of
@@ -9150,16 +9365,9 @@ export default function ChatPage() {
             {/* Project surfaces — the old project screen's views, inside the
                 chat module. Chat stays mounted (hidden) so the thread and
                 composer state survive a Tasks/Board detour untouched.
-                v1.315.0: the tabs live in the chat card's header while Chat
-                is showing (no row above the card, so nothing shifts between a
-                project chat and a plain one); on Tasks/Board/Media the card is
-                hidden, so the same tablist sits above the surface to come
-                back. One tablist is visible at a time. */}
-            {activeProject && projectView !== "chat" && (
-              <div className="flex items-center border-b hairline">
-                <ProjectViewTabs view={projectView} onSelect={setProjectView} />
-              </div>
-            )}
+                v1.326.0: the one tablist lives in the top bar above, which
+                every view shares, so coming back from Tasks needs no second
+                copy here. */}
             {activeProject && (
               <div
                 id={PROJECT_VIEW_SURFACE_ID}
@@ -9176,21 +9384,25 @@ export default function ChatPage() {
                 )}
               </div>
             )}
-            {/* `card-surface` DIRECTLY, not <Card> (v1.215.0). Card wraps its
+            {/* A plain section, not <Card> (v1.215.0). Card wraps its
                 children in an unstyled `<div>` (`ui.tsx`: `{pad ? "p-4" : ""}`),
                 so a flex column declared on the Card had exactly ONE flex child
                 — that wrapper — which sized to its content and left the rest of
                 the column empty. Measured: the card was 828px tall and its
                 content stopped at 740, with 144px of dead space under the
-                composer. The header, the transcript and the composer have to be
-                DIRECT children of the flex column for `flex-1` to divide the
-                height between them. */}
+                composer. The transcript and the composer have to be DIRECT
+                children of the flex column for `flex-1` to divide the height
+                between them.
+                v1.326.0 (calm chat): NO CARD. No border, fill or shadow
+                (`card-surface` is gone): the conversation sits on the page
+                background and the composer is the one card on the screen.
+                The testid keeps its old name; tests and tools find it by it. */}
             <section
               data-testid="chat-card"
               id={PROJECT_VIEW_CHAT_ID}
               role={activeProject ? "tabpanel" : undefined}
               aria-label={activeProject ? "Project chat" : undefined}
-              className={`card-surface relative flex h-full min-h-0 flex-col overflow-hidden transition-shadow ${
+              className={`relative flex h-full min-h-0 flex-col overflow-hidden ${
                 activeProject && projectView !== "chat" ? "hidden" : ""
               }`}
             >
@@ -9241,33 +9453,6 @@ export default function ChatPage() {
                   onClose={() => setCompactionOpen(false)}
                 />
               )}
-              {/* THE CONTROLS, TOP RIGHT, AND THEY DO NOT MOVE (v1.215.0).
-                  Reported: "the buttons that sit above the chat window to the
-                  right, they can be contained in the chat card at the top
-                  right and fixed so scrolling doesnt remove them."
-
-                  NOT `position: sticky` — `shrink-0` in a flex column whose
-                  only scrolling child is the transcript below. There is no
-                  scroll for them to be carried out of, so there is no sticky
-                  edge case to get wrong either (a sticky header inside an
-                  `overflow-hidden` card with a `backdrop-filter` is exactly
-                  the kind of thing this codebase has been bitten by).
-
-                  `justify-end` puts them right; they wrap rather than
-                  overflow, because the persona <select> alone can be wide. */}
-              {/* v1.315.0: a project chat's view tabs sit at the LEFT of this
-                  same header row; the controls keep the right (ml-auto), and
-                  `max-w-full` lets them wrap inside the row on a narrow card
-                  instead of overflowing it. */}
-              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b hairline px-3 py-2">
-                {activeProject && projectView === "chat" && (
-                  <ProjectViewTabs view={projectView} onSelect={setProjectView} />
-                )}
-                <div className="ml-auto flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
-                  {chatActions}
-                </div>
-              </div>
-
               {/* Message thread — THE ONLY SCROLLING PART of the card.
                   `min-h-0 flex-1` replaces `max-h-[60vh] min-h-[24rem]`: the
                   transcript now takes exactly the room the header and composer
@@ -9280,7 +9465,11 @@ export default function ChatPage() {
                 onScroll={onThreadScroll}
                 // Redesign S11 (AUDIT §8): the conversation reads in a 760 px
                 // column, centred — each row is held to it, no new wrapper.
-                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 md:max-h-none [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px]"
+                // v1.326.0 (calm chat W1-2): no divider above the composer;
+                // the last 28px of the transcript FADE into it (a mask, so it
+                // fades into whatever the theme's page is), and the bottom
+                // padding keeps the newest line clear of the fade.
+                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 pb-8 sm:p-5 sm:pb-8 md:max-h-none [-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-28px),transparent)] [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[760px]"
               >
                 {messages.length === 0 && !busy ? (
                   <div className="flex flex-1 flex-col items-center justify-center gap-6">
@@ -9479,1613 +9668,1660 @@ export default function ChatPage() {
                     )}
                   </>
                 )}
-                {/* v1.315.0: never over the empty state (the same condition as
-                    its branch above) — a pill pointing at messages that do not
-                    exist covered the "I have an API key" door on a phone. A
-                    first reply still streaming is not the empty state. */}
+                {/* The "Jump to latest" pill is NOT here: it lives in the dock
+                    below, out of this scroller's flow (see there).
+                    The sentinel's scroll margin EQUALS the scroller's bottom
+                    padding (pb-8), so scrolling it into view lands at the true
+                    bottom: the newest line stays clear of the fade, and every
+                    bottom scroll (scrollToLatest) agrees on one target. */}
+                <div ref={bottomRef} data-testid="chat-bottom" className="scroll-mb-8" />
+              </div>
+
+              {/* v1.326.0 (calm chat W1-2): THE DOCK. Everything under the transcript
+                  lives here: the notices tray, the ONE composer card (every control
+                  inside it) and a quiet line of text under it. The column is the
+                  transcript's reading column plus 16px a side, so the text typed in the
+                  card lines up with the replies above it. The transcript fades into
+                  this area (a mask on the scroller) instead of a divider line. */}
+              <div data-testid="chat-dock" className="relative shrink-0 px-3 pb-2 pt-1 sm:px-5 sm:pb-3">
+                {/* "Jump to latest" floats just above the dock, over the
+                    transcript's faded foot. It must stay OUT of the scroller's
+                    flow: in there its own height (plus the gap) was added to
+                    the very distance onThreadScroll compares with 80, so once a
+                    scroll during a chat's opening showed it, it kept itself on
+                    for good over a chat resting at its bottom; and the
+                    scroller's `[&>*]:w-full` stretched it to the column.
+                    v1.315.0: never over the empty state (the same condition as
+                    that branch) — a pill pointing at messages that do not exist
+                    covered the "I have an API key" door on a phone. A first
+                    reply still streaming is not the empty state. */}
                 {showJump && !(messages.length === 0 && !busy) && (
                   <button
                     type="button"
+                    data-testid="jump-to-latest"
                     onClick={jumpToLatest}
-                    className="sticky bottom-1 z-10 mx-auto flex items-center gap-1.5 rounded-full border border-accent/40 bg-ink-850/90 px-3 py-1 text-[12px] font-medium text-accent-soft shadow-glow-sm backdrop-blur transition-colors hover:bg-ink-800"
+                    className="absolute bottom-full left-1/2 z-10 mb-2 flex w-auto -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/40 bg-ink-850/90 px-3 py-1 text-[12px] font-medium text-accent-soft shadow-glow-sm backdrop-blur transition-colors hover:bg-ink-800"
                     title="Scroll to the latest message"
                   >
                     <ChevronDown size={13} /> Jump to latest
                   </button>
                 )}
-                <div ref={bottomRef} />
-              </div>
-
-              {/* AUTOSAVE FAILED (v1.226.0): persistent + dismissible. What
-                  is on screen is NOT on disk until Retry succeeds; a silent
-                  catch was the bug. Offline (status 0) never lands here —
-                  the OfflineHint above already says it. */}
-              {saveFailure && (
-                <div
-                  role="status"
-                  className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2 text-[12px]"
-                >
-                  <span className="min-w-0 flex-1 text-amber-300">
-                    Couldn&apos;t save this conversation: {saveFailure.detail}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={saveFailure.retrying}
-                    onClick={() => {
-                      // The chip stays until the retry LANDS (CL2): clearing
-                      // it here claimed a save that had not happened yet.
-                      setSaveFailure({ ...saveFailure, retrying: true });
-                      saveFailure.retry();
-                    }}
-                    title="Save this conversation again"
-                    className="btn-ghost shrink-0 py-1 text-[12px]"
+                <div className="mx-auto w-full max-w-[792px]">
+                  {/* THE NOTICES TRAY: what is about the next message (a failed save,
+                      an error and its Retry, the preflight warning, the compaction
+                      offer, queued messages, the edit Undo, a held key, who the chat
+                      is talking to) sits ABOVE the card and attached to it: narrower,
+                      tucked under its top edge. Empty, it takes no room at all. */}
+                  <div
+                    data-testid="composer-notices"
+                    className="relative mx-4 -mb-4 flex flex-col rounded-t-2xl bg-ink-875 px-1 pb-4 pt-0.5 shadow-[0_0_0_0.5px_rgb(var(--white)/0.08)] empty:hidden sm:mx-7 [&>*+*]:border-t [&>*+*]:border-white/[0.06]"
                   >
-                    <RefreshCw size={12} />{" "}
-                    {saveFailure.retrying ? "Retrying…" : "Retry"}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Dismiss save warning"
-                    onClick={() => setSaveFailure(null)}
-                    className="btn-ghost shrink-0 py-1 text-[12px]"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-
-              {/* v1.312.0 (W4-2): "Allow for this conversation" at the
-                  6-tool cap. The grant is kept and sent every turn, but the
-                  tool could not also be armed — say so, and say how to keep
-                  it on hand, instead of the old silent no-op. At the cap the
-                  + picker's rows are disabled, so the way forward names the
-                  real path (free a slot first), and "won't ask again" is
-                  scoped to when the tool is in use: a grant never arms. */}
-              {grantCapNote && (
-                <div
-                  data-testid="grant-cap-note"
-                  className="flex items-center gap-2 border-t hairline px-3 py-2 text-[12px] text-zinc-400"
-                >
-                  <span className="min-w-0 flex-1">
-                    Allowed for this conversation — {grantCapNote} won&apos;t ask
-                    again here when it&apos;s in use. All {MAX_TOOLS} tool slots
-                    are in use: remove one, then add it from + to keep it
-                    available.
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Dismiss"
-                    onClick={() => setGrantCapNote(null)}
-                    className="btn-ghost shrink-0 py-1 text-[12px]"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-
-              {(error || steerBack || (failedTurn && !busy)) && (
-                <div className="flex flex-wrap items-center gap-2 border-t hairline p-3">
-                  {steerBack && (
-                    <div
-                      data-testid="steer-unread"
-                      className="min-w-0 flex-1 text-[12px] text-zinc-400"
-                    >
-                      Jarvis finished before reading this — press Enter to send it.
-                    </div>
-                  )}
-                  {error && (
-                    <div className="min-w-0 flex-1">
-                      <ErrorNote>{error}</ErrorNote>
-                    </div>
-                  )}
-                  {compactNote && (
-                    <div className="min-w-0 flex-1 text-[12px] text-zinc-400">
-                      {compactNote}
-                    </div>
-                  )}
-                  {/* A reopened thread ending on a question (CL5): no error
-                      text belongs to it, so say what happened. */}
-                  {!error && failedTurn && !busy && (
-                    <div className="min-w-0 flex-1 text-[12px] text-amber-300">
-                      This didn&apos;t get a reply.
-                    </div>
-                  )}
-                  {/* v1.312.0: while the provider this turn ran on is cooling
-                      down, a press could only be refused with the same words —
-                      so Retry says when it will work and counts down. When that
-                      provider (the pick, else the default) is known down or
-                      cooling, the button also offers "Choose another model…",
-                      which opens the model menu and nothing else: the page
-                      names no model and switches nothing (v1.162.0). */}
-                  {failedTurn && !busy && (
-                    <RetryTurnButton
-                      cooldownS={trouble.cooldownS}
-                      onRetry={retryTurn}
-                      provider={trouble.provider}
-                      down={trouble.down}
-                      onChooseModel={() => {
-                        setModelSub(null);
-                        setModelMenuOpen(true);
-                      }}
-                    />
-                  )}
-                  {/* v1.275.0: the page already knows the explicit pick's
-                      provider is down and the default is up — one press,
-                      instead of the model menu after a typed request. Only
-                      that case: a different provider is the user's choice,
-                      never a fallback the page makes (the v1.162.0 rule). */}
-                  {failedTurn && !busy && canRetryWithDefault(choice, health) && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setChoice("");
-                        retryTurn();
-                      }}
-                      title={`${splitChoice(choice).provider} is not reachable; ${health.defaultProvider} is. Re-send with the default model.`}
-                      className="btn-ghost shrink-0 py-1.5 text-[13px]"
-                    >
-                      Retry with the default model
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* A FOLDER BECOMES ONE SUMMARY SHEET (v1.251.0, C-04). Sits with
-                  the other pre-send notes above the composer, because it is
-                  about the folder this conversation is already pointed at. The
-                  card states the document count and the spend BEFORE the click:
-                  one press runs the batch, so the number has to be honest. */}
-              {batchPreview && batchDismissed !== batchPreview.folder && (
-                <BatchSuggestCard
-                  preview={batchPreview}
-                  events={events}
-                  // Whatever the user has typed is what the sheet should cover
-                  // — read AT THE PRESS, not at render (v1.255.0). This arrived
-                  // from a branch cut before v1.250.0 (S-05) moved the composer
-                  // into its own store, and `input` no longer exists here: the
-                  // page deliberately does not re-render per keystroke, which is
-                  // exactly why a render-time read would hand the card stale
-                  // text. `get()` is the store's own non-reactive read — the
-                  // same one this page already uses on send.
-                  getInstructions={() => composer.get().text}
-                  // The sheet lands in this conversation's own folder when it
-                  // has one (v1.244.0), else beside the documents themselves.
-                  workspaceDir={workfolder ?? workspaceDir}
-                  onDone={(made) => {
-                    // The Files rail is how a made file is ever found again.
-                    if (made.length) {
-                      rememberThreadDocs(made);
-                      setWorkspaceOpenPersisted(true);
-                    }
-                  }}
-                  onDismiss={() => setBatchDismissed(batchPreview.folder)}
-                />
-              )}
-
-              {/* THE ONE CONDITIONAL LINE (redesign S8, AUDIT R2): restart-cut
-                  jobs, failing background work, or running / waiting work —
-                  the most urgent only, Open → Everything › Status. */}
-              <HomeLine />
-
-              {/* PREFLIGHT (v1.165.0): the active model is known-unreachable
-                  BEFORE the user types a paragraph into it. The app always had
-                  this fact (/health) and used to reveal it only after the turn
-                  failed. Watches the EXPLICIT pick when there is one, else the
-                  DEFAULT provider — the default is exactly where the mock
-                  incident happened. "auto" resolves per-turn, so it is never
-                  warned about (absent from the map → undefined → silent). */}
-              <PreflightNote
-                provider={splitChoice(choice).provider || health.defaultProvider}
-                available={
-                  health.byProvider[
-                    splitChoice(choice).provider || health.defaultProvider
-                  ]
-                }
-                stale={health.stale}
-                cooldownS={
-                  // Optional-chained on purpose (v1.232.0): this map is newer
-                  // than the hook's other fields, and a caller holding an
-                  // older shape must not take the whole composer down.
-                  health.cooldownByProvider?.[
-                    splitChoice(choice).provider || health.defaultProvider
-                  ]
-                }
-                signedOut={
-                  // v1.234.0: same optional-chain rule as cooldownS.
-                  health.signedOutByProvider?.[
-                    splitChoice(choice).provider || health.defaultProvider
-                  ]
-                }
-              />
-
-              {/* The compaction offer (v1.153.0). Sits directly above the
-                  composer because it is about the message the user is about to
-                  send. Suppressed once dismissed until the conversation grows
-                  another ~8 points — the daemon keeps reporting `suggest`
-                  every turn, and re-asking on each one would train the user to
-                  ignore it well before the automatic threshold arrives. */}
-              {(compactDismissedAt === null ||
-                (contextUsage?.percent ?? 0) >= compactDismissedAt + 8) && (
-                <CompactionOffer
-                  usage={contextUsage}
-                  busy={compactBusy}
-                  onCompact={compactNow}
-                  onDismiss={() => setCompactDismissedAt(contextUsage?.percent ?? 0)}
-                />
-              )}
-
-              {/* Chips queued for the next message — active skill + armed tools
-                  (chat mode) share the row with attachment chips. The skill
-                  chip is NOT mode-gated (v1.104.0): Agent mode can pick a skill
-                  now, and a picker whose selection leaves no trace on screen is
-                  indistinguishable from one that failed. Armed tools/connectors
-                  stay chat-only because those are chat-loop mechanics. */}
-              {(attachments.length > 0 ||
-                appResources.length > 0 ||
-                pageCtx !== null ||
-                workfolder !== null ||
-                activeSkill !== "" ||
-                selectedTools.length > 0 ||
-                selectedConnectors.length > 0) && (
-                <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
-                  {/* THIS CONVERSATION'S FOLDER (v1.244.0, placeInWorkfolder) —
-                      where the files it was handed were copied and where what
-                      it makes is saved. On screen because an output nobody can
-                      find is exactly the defect this exists to fix. */}
-                  {workfolder !== null && (
-                    <span
-                      data-testid="workfolder-chip"
-                      title={`This chat saves its work in ${workfolder}`}
-                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                    >
-                      <FolderOpen size={11} className="shrink-0 text-accent-soft" />
-                      <span className="max-w-[18rem] truncate">
-                        {workfolder.split(/[\\/]/).filter(Boolean).pop() ?? workfolder}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void post("/documents/open", { path: workfolder }).catch((e) =>
-                            setError(e instanceof ApiError ? e.message : String(e)),
-                          );
-                        }}
-                        aria-label="Open this chat's folder"
-                        title="Open this folder"
-                        className="text-accent-soft/80 transition-colors hover:text-accent"
+                    {/* AUTOSAVE FAILED (v1.226.0): persistent + dismissible. What
+                        is on screen is NOT on disk until Retry succeeds; a silent
+                        catch was the bug. Offline (status 0) never lands here —
+                        the OfflineHint above already says it. */}
+                    {saveFailure && (
+                      <div
+                        role="status"
+                        className="flex flex-wrap items-center gap-2 px-3 py-2 text-[12px]"
                       >
-                        Open
-                      </button>
-                    </span>
-                  )}
-                  {workfolderNote && (
-                    <span
-                      data-testid="workfolder-note"
-                      className="max-w-full truncate text-[11px] text-amber-300"
-                      title={workfolderNote}
-                    >
-                      {workfolderNote}
-                    </span>
-                  )}
-                  {activeSkill !== "" && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
-                      <Sparkles size={11} className="shrink-0 text-accent-soft" />
-                      <span className="max-w-[14rem] truncate font-mono">
-                        {activeSkill}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveSkill("");
-                          markSetupChanged();
-                        }}
-                        aria-label={`Clear skill ${activeSkill}`}
-                        title="Clear skill"
-                        className="text-zinc-500 transition-colors hover:text-rose-300"
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  )}
-                  {selectedTools.map((name) => (
-                      <span
-                        key={name}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                      >
-                        <Wrench size={11} className="shrink-0 text-accent-soft" />
-                        <span className="max-w-[14rem] truncate font-mono">
-                          {name}
+                        <span className="min-w-0 flex-1 text-amber-300">
+                          Couldn&apos;t save this conversation: {saveFailure.detail}
                         </span>
                         <button
                           type="button"
-                          onClick={() => disarmTool(name)}
-                          aria-label={`Disarm ${name}`}
-                          title="Disarm tool"
-                          className="text-zinc-500 transition-colors hover:text-rose-300"
+                          disabled={saveFailure.retrying}
+                          onClick={() => {
+                            // The chip stays until the retry LANDS (CL2): clearing
+                            // it here claimed a save that had not happened yet.
+                            setSaveFailure({ ...saveFailure, retrying: true });
+                            saveFailure.retry();
+                          }}
+                          title="Save this conversation again"
+                          className="btn-ghost shrink-0 py-1 text-[12px]"
                         >
-                          <X size={11} />
+                          <RefreshCw size={12} />{" "}
+                          {saveFailure.retrying ? "Retrying…" : "Retry"}
                         </button>
-                      </span>
-                    ))}
-                  {selectedConnectors.map((id) => (
-                      <span
-                        key={`conn-${id}`}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                      >
-                        <PlugZap size={11} className="shrink-0 text-accent-soft" />
-                        <span className="max-w-[14rem] truncate">{id}</span>
                         <button
                           type="button"
-                          onClick={() => toggleConnector(id)}
-                          aria-label={`Turn off connection ${id}`}
-                          title="Turn off for this chat"
-                          className="text-zinc-500 transition-colors hover:text-rose-300"
+                          aria-label="Dismiss save warning"
+                          onClick={() => setSaveFailure(null)}
+                          className="btn-ghost shrink-0 py-1 text-[12px]"
                         >
-                          <X size={11} />
+                          <X size={12} />
                         </button>
-                      </span>
-                    ))}
-                  {/* Thread documents used to render duplicate chips here too
-                      (v1.91.0) — gone in v1.166.0: the ArtifactsRail and each
-                      turn's receipt are THE lists, and saying it twice made
-                      the composer row crowd out the send box at the new
-                      30-doc cap. */}
-                  {/* v1.325.0: the page this message asks about. */}
-                  {pageCtx && (
-                    <span
-                      data-testid="page-context-chip"
-                      title={`${pageCtx.path} — what that page showed goes with your next message`}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                    >
-                      <FileText size={11} className="shrink-0 text-accent-soft" />
-                      <span className="max-w-[16rem] truncate">About: {pageCtx.title || pageCtx.path}</span>
-                      <button
-                        type="button"
-                        onClick={() => setPageCtx(null)}
-                        aria-label="Don't send the page"
-                        title="Don't send the page"
-                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                      </div>
+                    )}
+                    {/* v1.312.0 (W4-2): "Allow for this conversation" at the
+                        6-tool cap. The grant is kept and sent every turn, but the
+                        tool could not also be armed — say so, and say how to keep
+                        it on hand, instead of the old silent no-op. At the cap the
+                        + picker's rows are disabled, so the way forward names the
+                        real path (free a slot first), and "won't ask again" is
+                        scoped to when the tool is in use: a grant never arms. */}
+                    {grantCapNote && (
+                      <div
+                        data-testid="grant-cap-note"
+                        className="flex items-center gap-2 px-3 py-2 text-[12px] text-zinc-400"
                       >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  )}
-                  {appResources.map((r) => (
-                    <span
-                      key={`${r.pack}/${r.uri}`}
-                      data-testid="app-resource-chip"
-                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                    >
-                      <FileText size={11} className="shrink-0 text-accent-soft" />
-                      <span className="max-w-[14rem] truncate">{r.title || r.name || r.uri}</span>
-                      <span className="text-zinc-500">{r.pack}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAppResources((cur) =>
-                            cur.filter((x) => !(x.pack === r.pack && x.uri === r.uri)),
-                          )
-                        }
-                        aria-label={`Remove ${r.title || r.name || r.uri}`}
-                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                        <span className="min-w-0 flex-1">
+                          Allowed for this conversation — {grantCapNote} won&apos;t ask
+                          again here when it&apos;s in use. All {MAX_TOOLS} tool slots
+                          are in use: remove one, then add it from + to keep it
+                          available.
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Dismiss"
+                          onClick={() => setGrantCapNote(null)}
+                          className="btn-ghost shrink-0 py-1 text-[12px]"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                    {(error || steerBack || (failedTurn && !busy)) && (
+                      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+                        {steerBack && (
+                          <div
+                            data-testid="steer-unread"
+                            className="min-w-0 flex-1 text-[12px] text-zinc-400"
+                          >
+                            Jarvis finished before reading this — press Enter to send it.
+                          </div>
+                        )}
+                        {error && (
+                          <div className="min-w-0 flex-1">
+                            <ErrorNote>{error}</ErrorNote>
+                          </div>
+                        )}
+                        {compactNote && (
+                          <div className="min-w-0 flex-1 text-[12px] text-zinc-400">
+                            {compactNote}
+                          </div>
+                        )}
+                        {/* A reopened thread ending on a question (CL5): no error
+                            text belongs to it, so say what happened. */}
+                        {!error && failedTurn && !busy && (
+                          <div className="min-w-0 flex-1 text-[12px] text-amber-300">
+                            This didn&apos;t get a reply.
+                          </div>
+                        )}
+                        {/* v1.312.0: while the provider this turn ran on is cooling
+                            down, a press could only be refused with the same words —
+                            so Retry says when it will work and counts down. When that
+                            provider (the pick, else the default) is known down or
+                            cooling, the button also offers "Choose another model…",
+                            which opens the model menu and nothing else: the page
+                            names no model and switches nothing (v1.162.0). */}
+                        {failedTurn && !busy && (
+                          <RetryTurnButton
+                            cooldownS={trouble.cooldownS}
+                            onRetry={retryTurn}
+                            provider={trouble.provider}
+                            down={trouble.down}
+                            onChooseModel={() => {
+                              setModelSub(null);
+                              setModelMenuOpen(true);
+                            }}
+                          />
+                        )}
+                        {/* v1.275.0: the page already knows the explicit pick's
+                            provider is down and the default is up — one press,
+                            instead of the model menu after a typed request. Only
+                            that case: a different provider is the user's choice,
+                            never a fallback the page makes (the v1.162.0 rule). */}
+                        {failedTurn && !busy && canRetryWithDefault(choice, health) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setChoice("");
+                              retryTurn();
+                            }}
+                            title={`${splitChoice(choice).provider} is not reachable; ${health.defaultProvider} is. Re-send with the default model.`}
+                            className="btn-ghost shrink-0 py-1.5 text-[13px]"
+                          >
+                            Retry with the default model
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {/* A FOLDER BECOMES ONE SUMMARY SHEET (v1.251.0, C-04). Sits with
+                        the other pre-send notes above the composer, because it is
+                        about the folder this conversation is already pointed at. The
+                        card states the document count and the spend BEFORE the click:
+                        one press runs the batch, so the number has to be honest. */}
+                    {batchPreview && batchDismissed !== batchPreview.folder && (
+                      <BatchSuggestCard
+                        preview={batchPreview}
+                        events={events}
+                        // Whatever the user has typed is what the sheet should cover
+                        // — read AT THE PRESS, not at render (v1.255.0). This arrived
+                        // from a branch cut before v1.250.0 (S-05) moved the composer
+                        // into its own store, and `input` no longer exists here: the
+                        // page deliberately does not re-render per keystroke, which is
+                        // exactly why a render-time read would hand the card stale
+                        // text. `get()` is the store's own non-reactive read — the
+                        // same one this page already uses on send.
+                        getInstructions={() => composer.get().text}
+                        // The sheet lands in this conversation's own folder when it
+                        // has one (v1.244.0), else beside the documents themselves.
+                        workspaceDir={workfolder ?? workspaceDir}
+                        onDone={(made) => {
+                          // The Files rail is how a made file is ever found again.
+                          if (made.length) {
+                            rememberThreadDocs(made);
+                            showProjectPanel("app");
+                          }
+                        }}
+                        onDismiss={() => setBatchDismissed(batchPreview.folder)}
+                      />
+                    )}
+                    {/* THE ONE CONDITIONAL LINE (redesign S8, AUDIT R2): restart-cut
+                        jobs, failing background work, or running / waiting work —
+                        the most urgent only, Open → Everything › Status. */}
+                    <HomeLine />
+                    {/* PREFLIGHT (v1.165.0): the active model is known-unreachable
+                        BEFORE the user types a paragraph into it. The app always had
+                        this fact (/health) and used to reveal it only after the turn
+                        failed. Watches the EXPLICIT pick when there is one, else the
+                        DEFAULT provider — the default is exactly where the mock
+                        incident happened. "auto" resolves per-turn, so it is never
+                        warned about (absent from the map → undefined → silent). */}
+                    <PreflightNote
+                      provider={splitChoice(choice).provider || health.defaultProvider}
+                      available={
+                        health.byProvider[
+                          splitChoice(choice).provider || health.defaultProvider
+                        ]
+                      }
+                      stale={health.stale}
+                      cooldownS={
+                        // Optional-chained on purpose (v1.232.0): this map is newer
+                        // than the hook's other fields, and a caller holding an
+                        // older shape must not take the whole composer down.
+                        health.cooldownByProvider?.[
+                          splitChoice(choice).provider || health.defaultProvider
+                        ]
+                      }
+                      signedOut={
+                        // v1.234.0: same optional-chain rule as cooldownS.
+                        health.signedOutByProvider?.[
+                          splitChoice(choice).provider || health.defaultProvider
+                        ]
+                      }
+                    />
+                    {/* The compaction offer (v1.153.0). Sits directly above the
+                        composer because it is about the message the user is about to
+                        send. Suppressed once dismissed until the conversation grows
+                        another ~8 points — the daemon keeps reporting `suggest`
+                        every turn, and re-asking on each one would train the user to
+                        ignore it well before the automatic threshold arrives. */}
+                    {(compactDismissedAt === null ||
+                      (contextUsage?.percent ?? 0) >= compactDismissedAt + 8) && (
+                      <CompactionOffer
+                        usage={contextUsage}
+                        busy={compactBusy}
+                        onCompact={compactNow}
+                        onDismiss={() => setCompactDismissedAt(contextUsage?.percent ?? 0)}
+                      />
+                    )}
+                    {/* v1.325.0: messages waiting for the running reply (Ctrl+Enter).
+                        Sent one by one when a reply finishes cleanly; after a Stop
+                        or a failure they wait for "Send now". */}
+                    {queued.length > 0 && (
+                      <div data-testid="queued-messages" className="space-y-1 px-3 py-1.5">
+                        {queued.map((q, k) => (
+                          <div
+                            key={q.id}
+                            data-testid="queued-message"
+                            className="flex items-center gap-2 text-[12px] text-zinc-400"
+                          >
+                            <span className="shrink-0 text-zinc-500">
+                              {busy ? (k === 0 ? "Sends after this reply:" : "Then:") : "Waiting to send:"}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-zinc-300" title={q.text}>
+                              {q.text || q.files.map((f) => f.name).join(", ")}
+                              {q.text && q.files.length > 0 ? ` (+${q.files.length} file${q.files.length === 1 ? "" : "s"})` : ""}
+                            </span>
+                            {!busy && k === 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  unqueue(q.id, false);
+                                  sendQueued(q);
+                                }}
+                                className="rounded-md px-2 py-0.5 text-zinc-200 hover:bg-white/[0.06]"
+                              >
+                                Send now
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => unqueue(q.id, true)}
+                              className="rounded-md px-2 py-0.5 text-zinc-300 hover:bg-white/[0.06]"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => unqueue(q.id, false)}
+                              aria-label="Don't send this message"
+                              title="Don't send this message"
+                              className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {editUndo && (
+                      <div
+                        data-testid="edit-undo"
+                        role="status"
+                        className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-zinc-400"
                       >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  ))}
-                  {attachments.map((a, i) => (
-                    <span
-                      key={`${a.path}-${i}`}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                    >
-                      <Paperclip size={11} className="shrink-0 text-accent-soft" />
-                      <span className="max-w-[14rem] truncate">{a.name}</span>
-                      <span className="text-zinc-500">{fmtSize(a.bytes)}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeAttachment(i)}
-                        aria-label={`Remove ${a.name}`}
-                        className="text-zinc-500 transition-colors hover:text-rose-300"
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Voice status strip — live mic/speech feedback for both the
-                  composer mic and hands-free Voice Chat. */}
-              {(voiceMode ||
-                dictation.listening ||
-                dictation.processing ||
-                dictation.error) && (
-                <div className="flex items-center gap-2 border-t hairline px-3 py-2 text-xs">
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      dictation.listening
-                        ? "animate-pulse bg-rose-400 shadow-[0_0_8px_2px_rgba(244,63,94,0.5)]"
-                        : "bg-zinc-600"
-                    }`}
-                  />
-                  {dictation.error ? (
-                    <span className="truncate text-rose-300">{dictation.error}</span>
-                  ) : tts.speaking ? (
-                    <span className="text-accent-soft/80">
-                      speaking — mic resumes when done
-                    </span>
-                  ) : dictation.processing ? (
-                    <span className="text-accent-soft/80">transcribing…</span>
-                  ) : dictation.interim ? (
-                    <span className="truncate italic text-zinc-400">
-                      {dictation.interim}
-                    </span>
-                  ) : dictation.listening ? (
-                    <span className="text-zinc-400">
-                      listening…{voiceMode ? " pause to send" : ""}
-                    </span>
-                  ) : busy ? (
-                    <span className="text-zinc-500">thinking…</span>
-                  ) : (
-                    <span className="text-zinc-500">voice chat on</span>
-                  )}
-                  {voiceMode && (
-                    <button
-                      type="button"
-                      onClick={toggleVoiceMode}
-                      className="ml-auto shrink-0 text-zinc-500 transition-colors hover:text-zinc-300"
-                    >
-                      end voice chat
-                    </button>
-                  )}
-                </div>
-              )}
-              {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
-                  conversation stays with builder: plain follow-ups go to the
-                  panel, and this strip says so — with the way back. */}
-              {/* v1.325.0: messages waiting for the running reply (Ctrl+Enter).
-                  Sent one by one when a reply finishes cleanly; after a Stop
-                  or a failure they wait for "Send now". */}
-              {queued.length > 0 && (
-                <div data-testid="queued-messages" className="space-y-1 border-t hairline px-3 py-1.5">
-                  {queued.map((q, k) => (
-                    <div
-                      key={q.id}
-                      data-testid="queued-message"
-                      className="flex items-center gap-2 text-[12px] text-zinc-400"
-                    >
-                      <span className="shrink-0 text-zinc-500">
-                        {busy ? (k === 0 ? "Sends after this reply:" : "Then:") : "Waiting to send:"}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-zinc-300" title={q.text}>
-                        {q.text || q.files.map((f) => f.name).join(", ")}
-                        {q.text && q.files.length > 0 ? ` (+${q.files.length} file${q.files.length === 1 ? "" : "s"})` : ""}
-                      </span>
-                      {!busy && k === 0 && (
+                        <span className="min-w-0 flex-1">
+                          Editing a sent message — the {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
+                          {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed. Send keeps the earlier
+                          version one click away (‹ ›).
+                        </span>
                         <button
                           type="button"
                           onClick={() => {
-                            unqueue(q.id, false);
-                            sendQueued(q);
+                            const back = editUndo;
+                            setEditUndo(null);
+                            messagesRef.current = back.before;
+                            setMessages(back.before);
+                            queueSave(back.before);
+                            composer.setText(back.text);
+                            setAttachments(back.files);
                           }}
                           className="rounded-md px-2 py-0.5 text-zinc-200 hover:bg-white/[0.06]"
                         >
-                          Send now
+                          Undo
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => unqueue(q.id, true)}
-                        className="rounded-md px-2 py-0.5 text-zinc-300 hover:bg-white/[0.06]"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => unqueue(q.id, false)}
-                        aria-label="Don't send this message"
-                        title="Don't send this message"
-                        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {editUndo && (
-                <div
-                  data-testid="edit-undo"
-                  role="status"
-                  className="flex items-center gap-2 border-t hairline px-3 py-1.5 text-[12px] text-zinc-400"
-                >
-                  <span className="min-w-0 flex-1">
-                    Editing a sent message — the {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
-                    {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed. Send keeps the earlier
-                    version one click away (‹ ›).
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const back = editUndo;
-                      setEditUndo(null);
-                      messagesRef.current = back.before;
-                      setMessages(back.before);
-                      queueSave(back.before);
-                      composer.setText(back.text);
-                      setAttachments(back.files);
-                    }}
-                    className="rounded-md px-2 py-0.5 text-zinc-200 hover:bg-white/[0.06]"
-                  >
-                    Undo
-                  </button>
-                </div>
-              )}
-              {heldSecret !== null && (
-                <SecretPasteNotice
-                  message={heldSecret}
-                  onSaved={(rest) => {
-                    setHeldSecret(null);
-                    composer.setText(rest);
-                    inputRef.current?.focus();
-                  }}
-                  onSendAnyway={() => {
-                    const text = heldSecret;
-                    secretSendOkRef.current = true;
-                    setHeldSecret(null);
-                    send(text);
-                  }}
-                  onCancel={() => setHeldSecret(null)}
-                />
-              )}
-              {addressee.length > 0 && !commMeta && (
-                <div
-                  data-testid="addressee-strip"
-                  className="flex items-center gap-2 border-t hairline px-3 py-1.5 text-[11.5px]"
-                >
-                  <Bot size={12} className="shrink-0 text-accent-soft" />
-                  <span className="min-w-0 truncate text-zinc-300">
-                    Talking to{" "}
-                    <span className="font-medium text-accent-soft">
-                      {addressee.map(agentDisplayName).join(", ")}
-                    </span>
-                    <span className="text-zinc-500">
-                      {" "}
-                      — replies come from {addressee.length > 1 ? "them" : "it"}, not Iron
-                      Jarvis. Use @ to bring in someone else.
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setAddressee([])}
-                    className="ml-auto shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
-                  >
-                    Back to Jarvis
-                  </button>
-                </div>
-              )}
-              {/* Composer */}
-              {/* v1.315.0: flex-wrap below sm — the box takes the first line,
-                  the presses the second (phone-composer-cramped). */}
-              <div className="relative flex flex-wrap items-end gap-2 border-t hairline p-3 sm:flex-nowrap">
-                {/* "/" skill picker — floats above the composer */}
-                {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
-                    below — one affordance grammar for both. */}
-                <AtPicker
-                  store={composer}
-                  busy={busy}
-                  mentionable={mentionable}
-                  resources={packResources}
-                  onOpened={loadPackResources}
-                  onPickResource={pickAppResource}
-                />
-                <SlashPicker
-                  store={composer}
-                  busy={busy}
-                  skills={skills}
-                  inputRef={inputRef}
-                  onOpened={onSlashOpened}
-                  onPick={pickSkill}
-                  prompts={packPrompts}
-                  onPickPrompt={setPromptForm}
-                />
-                {/* v1.324.0: an app's prompt — fill its blanks, and its text
-                    lands in the box (never sent by itself). */}
-                {promptForm && (
-                  <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-white/10 bg-zinc-900 p-3 shadow-lg shadow-black/40">
-                    <div className="mb-2 flex items-center gap-2">
-                      <span className="text-[12px] text-zinc-300">
-                        {promptForm.title || promptForm.name}
-                      </span>
-                      <span className="text-[11px] text-zinc-500">from {promptForm.pack}</span>
-                      <button
-                        type="button"
-                        onClick={() => setPromptForm(null)}
-                        aria-label="Close"
-                        className="ml-auto text-zinc-500 transition-colors hover:text-zinc-300"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                    <PackPromptForm
-                      prompt={promptForm}
-                      onInsert={(t) => {
-                        const cur = composer.get().text.trimEnd();
-                        composer.setText(cur ? `${cur}\n\n${t}` : t);
-                        setPromptForm(null);
-                        inputRef.current?.focus();
-                      }}
-                    />
-                  </div>
-                )}
-                <input
-                  ref={fileRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={onPickFiles}
-                />
-                {/* The "+" menu — the composer stays minimal (+ · project ·
-                    mic); attach, skills, connectors and the web/auto toggles
-                    all live in here. */}
-                <div ref={toolsPopRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setToolsOpen((v) => !v);
-                      setPlusSub(null);
-                    }}
-                    aria-expanded={toolsOpen}
-                    aria-haspopup="true"
-                    aria-label="Open the chat menu"
-                    title="Attach · skills · connections · web & auto"
-                    className={`btn-ghost h-[2.75rem] px-3 py-0 ${
-                      toolsOpen ||
-                      selectedTools.length > 0 ||
-                      selectedConnectors.length > 0 ||
-                      activeSkill
-                        ? "text-accent-soft"
-                        : ""
-                    }`}
-                  >
-                    {uploading ? <LoaderInline /> : <Plus size={16} />}
-                  </button>
-                  {toolsOpen && (
-                    <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setToolsOpen(false);
-                          fileRef.current?.click();
+                      </div>
+                    )}
+                    {heldSecret !== null && (
+                      <SecretPasteNotice
+                        message={heldSecret}
+                        onSaved={(rest) => {
+                          setHeldSecret(null);
+                          composer.setText(rest);
+                          inputRef.current?.focus();
                         }}
-                        disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
+                        onSendAnyway={() => {
+                          const text = heldSecret;
+                          secretSendOkRef.current = true;
+                          setHeldSecret(null);
+                          send(text);
+                        }}
+                        onCancel={() => setHeldSecret(null)}
+                      />
+                    )}
+                    {/* TALKING TO AN AGENT (v1.284.0). After "@builder …" the
+                        conversation stays with builder: plain follow-ups go to the
+                        panel, and this strip says so — with the way back. */}
+                    {addressee.length > 0 && !commMeta && (
+                      <div
+                        data-testid="addressee-strip"
+                        className="flex items-center gap-2 px-3 py-1.5 text-[12px]"
                       >
-                        <Paperclip size={14} className="shrink-0 text-zinc-400" />
-                        Attach files or photos
-                      </button>
-                      {/* Add this chat to a project — files the open thread
-                          into the project (and the context follows), same
-                          machinery as the composer toggle. */}
-                      <div className="relative">
+                        <Bot size={12} className="shrink-0 text-accent-soft" />
+                        <span className="min-w-0 truncate text-zinc-300">
+                          Talking to{" "}
+                          <span className="font-medium text-accent-soft">
+                            {addressee.map(agentDisplayName).join(", ")}
+                          </span>
+                          <span className="text-zinc-500">
+                            {" "}
+                            — replies come from {addressee.length > 1 ? "them" : "it"}, not Iron
+                            Jarvis. Use @ to bring in someone else.
+                          </span>
+                        </span>
                         <button
                           type="button"
-                          onClick={() =>
-                            setPlusSub(plusSub === "project" ? null : "project")
-                          }
-                          aria-expanded={plusSub === "project"}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                          onClick={() => setAddressee([])}
+                          className="ml-auto shrink-0 rounded-md px-2 py-0.5 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
                         >
-                          <FolderKanban size={14} className="shrink-0 text-zinc-400" />
-                          Add to project
-                          {activeProject && (
-                            <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
-                              {activeProject.name}
-                            </span>
-                          )}
-                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                          Back to Jarvis
                         </button>
-                        {/* bottom-0, NOT top-0 (v1.100.0). The thread +
-                            composer live inside a Card with overflow-hidden, so
-                            an absolute child that extends past it is CLIPPED
-                            whatever its z-index. These flyouts hang off a menu
-                            already anchored at the bottom of the chat, so
-                            growing downward ran them straight off the bottom
-                            edge and cut off the list. Growing upward keeps them
-                            inside the Card — the same fix the model flyout got
-                            in v1.87.0. */}
-                        {plusSub === "project" && (
-                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                            {projectId && (
+                      </div>
+                    )}
+                  </div>
+                  {/* THE COMPOSER: the one card on the chat screen. The box on top,
+                      then ONE toolbar row. Left: "+", the project, approvals, tools and
+                      web. Right: reasoning, the model, the mic and Send (Stop while a
+                      turn runs). Chips are ghosts that fill only on hover; the card has
+                      a hairline edge and no focus ring (the caret is the cue). */}
+                  <div
+                    data-testid="chat-composer"
+                    className={`relative z-[1] flex flex-col rounded-[24px] bg-ink-800 ${COMPOSER_CARD_EDGE}`}
+                  >
+                    {/* "/" skill picker — floats above the composer */}
+                    {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
+                        below — one affordance grammar for both. */}
+                    <AtPicker
+                      store={composer}
+                      busy={busy}
+                      mentionable={mentionable}
+                      resources={packResources}
+                      onOpened={loadPackResources}
+                      onPickResource={pickAppResource}
+                    />
+                    <SlashPicker
+                      store={composer}
+                      busy={busy}
+                      skills={skills}
+                      inputRef={inputRef}
+                      onOpened={onSlashOpened}
+                      onPick={pickSkill}
+                      prompts={packPrompts}
+                      onPickPrompt={setPromptForm}
+                    />
+                    {/* v1.324.0: an app's prompt — fill its blanks, and its text
+                        lands in the box (never sent by itself). */}
+                    {promptForm && (
+                      <div className="absolute bottom-full left-3 right-3 z-30 mb-2 rounded-xl border border-white/10 bg-zinc-900 p-3 shadow-lg shadow-black/40">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="text-[12px] text-zinc-300">
+                            {promptForm.title || promptForm.name}
+                          </span>
+                          <span className="text-[11px] text-zinc-500">from {promptForm.pack}</span>
+                          <button
+                            type="button"
+                            onClick={() => setPromptForm(null)}
+                            aria-label="Close"
+                            className="ml-auto text-zinc-500 transition-colors hover:text-zinc-300"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                        <PackPromptForm
+                          prompt={promptForm}
+                          onInsert={(t) => {
+                            const cur = composer.get().text.trimEnd();
+                            composer.setText(cur ? `${cur}\n\n${t}` : t);
+                            setPromptForm(null);
+                            inputRef.current?.focus();
+                          }}
+                        />
+                      </div>
+                    )}
+                    {/* What goes with the next message, INSIDE the card above the
+                        box (v1.326.0): this chat's folder, the skill, connections,
+                        the page and app files it asks about, and attachments. The
+                        skill chip is NOT mode-gated (v1.104.0): a picker whose
+                        selection leaves no trace on screen is indistinguishable
+                        from one that failed. Tools armed by hand are counted on the
+                        toolbar's tools chip and listed (with Disarm) in its menu. */}
+                    {(attachments.length > 0 ||
+                      appResources.length > 0 ||
+                      pageCtx !== null ||
+                      workfolder !== null ||
+                      activeSkill !== "" ||
+                      selectedConnectors.length > 0) && (
+                      <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3">
+                        {/* THIS CONVERSATION'S FOLDER (v1.244.0, placeInWorkfolder) —
+                            where the files it was handed were copied and where what
+                            it makes is saved. On screen because an output nobody can
+                            find is exactly the defect this exists to fix. */}
+                        {workfolder !== null && (
+                          <span
+                            data-testid="workfolder-chip"
+                            title={`This chat saves its work in ${workfolder}`}
+                            className="max-w-full inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <FolderOpen size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[18rem] truncate">
+                              {workfolder.split(/[\\/]/).filter(Boolean).pop() ?? workfolder}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void post("/documents/open", { path: workfolder }).catch((e) =>
+                                  setError(e instanceof ApiError ? e.message : String(e)),
+                                );
+                              }}
+                              aria-label="Open this chat's folder"
+                              title="Open this folder"
+                              className="text-accent-soft/80 transition-colors hover:text-accent"
+                            >
+                              Open
+                            </button>
+                          </span>
+                        )}
+                        {workfolderNote && (
+                          <span
+                            data-testid="workfolder-note"
+                            className="max-w-full truncate text-[11px] text-amber-300"
+                            title={workfolderNote}
+                          >
+                            {workfolderNote}
+                          </span>
+                        )}
+                        {activeSkill !== "" && (
+                          <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300">
+                            <Sparkles size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[14rem] truncate font-mono">
+                              {activeSkill}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveSkill("");
+                                markSetupChanged();
+                              }}
+                              aria-label={`Clear skill ${activeSkill}`}
+                              title="Clear skill"
+                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        )}
+                        {selectedConnectors.map((id) => (
+                            <span
+                              key={`conn-${id}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                            >
+                              <PlugZap size={11} className="shrink-0 text-accent-soft" />
+                              <span className="max-w-[14rem] truncate">{id}</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleConnector(id)}
+                                aria-label={`Turn off connection ${id}`}
+                                title="Turn off for this chat"
+                                className="text-zinc-500 transition-colors hover:text-rose-300"
+                              >
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ))}
+                        {/* Thread documents used to render duplicate chips here too
+                            (v1.91.0) — gone in v1.166.0: the ArtifactsRail and each
+                            turn's receipt are THE lists, and saying it twice made
+                            the composer row crowd out the send box at the new
+                            30-doc cap. */}
+                        {/* v1.325.0: the page this message asks about. */}
+                        {pageCtx && (
+                          <span
+                            data-testid="page-context-chip"
+                            title={`${pageCtx.path} — what that page showed goes with your next message`}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <FileText size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[16rem] truncate">About: {pageCtx.title || pageCtx.path}</span>
+                            <button
+                              type="button"
+                              onClick={() => setPageCtx(null)}
+                              aria-label="Don't send the page"
+                              title="Don't send the page"
+                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        )}
+                        {appResources.map((r) => (
+                          <span
+                            key={`${r.pack}/${r.uri}`}
+                            data-testid="app-resource-chip"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <FileText size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[14rem] truncate">{r.title || r.name || r.uri}</span>
+                            <span className="text-zinc-500">{r.pack}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAppResources((cur) =>
+                                  cur.filter((x) => !(x.pack === r.pack && x.uri === r.uri)),
+                                )
+                              }
+                              aria-label={`Remove ${r.title || r.name || r.uri}`}
+                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        ))}
+                        {attachments.map((a, i) => (
+                          <span
+                            key={`${a.path}-${i}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <Paperclip size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[14rem] truncate">{a.name}</span>
+                            <span className="text-zinc-500">{fmtSize(a.bytes)}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeAttachment(i)}
+                              aria-label={`Remove ${a.name}`}
+                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {/* Voice status strip — live mic/speech feedback for both the
+                        composer mic and hands-free Voice Chat. */}
+                    {(voiceMode ||
+                      dictation.listening ||
+                      dictation.processing ||
+                      dictation.error) && (
+                      <div className="flex items-center gap-2 px-4 pt-2.5 text-xs">
+                        <span
+                          className={`h-2 w-2 shrink-0 rounded-full ${
+                            dictation.listening
+                              ? "animate-pulse bg-tone-danger"
+                              : "bg-zinc-600"
+                          }`}
+                        />
+                        {dictation.error ? (
+                          <span className="truncate text-tone-danger">{dictation.error}</span>
+                        ) : tts.speaking ? (
+                          <span className="text-accent-soft/80">
+                            speaking — mic resumes when done
+                          </span>
+                        ) : dictation.processing ? (
+                          <span className="text-accent-soft/80">transcribing…</span>
+                        ) : dictation.interim ? (
+                          <span className="truncate italic text-zinc-400">
+                            {dictation.interim}
+                          </span>
+                        ) : dictation.listening ? (
+                          <span className="text-zinc-400">
+                            listening…{voiceMode ? " pause to send" : ""}
+                          </span>
+                        ) : busy ? (
+                          <span className="text-zinc-500">thinking…</span>
+                        ) : (
+                          <span className="text-zinc-500">voice chat on</span>
+                        )}
+                        {voiceMode && (
+                          <button
+                            type="button"
+                            onClick={toggleVoiceMode}
+                            className="ml-auto shrink-0 text-zinc-500 transition-colors hover:text-zinc-300"
+                          >
+                            end voice chat
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={onPickFiles}
+                    />
+                    <ComposerInput
+                      store={composer}
+                      inputRef={inputRef}
+                      busy={busy}
+                      skills={skills}
+                      onSend={send}
+                      onStop={stop}
+                      onSteer={(text) => void steerTurn(text)}
+                      onQueue={queueFollowup}
+                      onOpened={onSlashOpened}
+                      onPickSkill={pickSkill}
+                      onTyped={() => {
+                        inputFromVoiceRef.current = false; // typed — never auto-send
+                      }}
+                      onPasteFiles={(files) => void addFilesRef.current(files)}
+                      talkingTo={addressee.map(agentDisplayName).join(", ")}
+                    />
+                    <div
+                      data-testid="composer-toolbar"
+                      className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-2 pt-1"
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-1">
+                        {/* The "+" menu (v1.326.0): what you ADD to a message. Attach, a
+                            working folder for the files the chat makes, a skill (the same list
+                            "/" opens) and a saved workflow. Persona lives in the top bar's "⋯";
+                            tools, web and connections in the tools chip. Its lists open in
+                            place (no side flyouts) so a phone never loses them off the edge.
+                            `sm:relative`: on a phone the menu hangs off the card, not the chip. */}
+                        <div ref={toolsPopRef} className="sm:relative">
+                          <button
+                            ref={plusBtnRef}
+                            type="button"
+                            onClick={() => {
+                              setToolsOpen((v) => !v);
+                              setPlusSub(null);
+                              setToolMenuOpen(false);
+                            }}
+                            aria-expanded={toolsOpen}
+                            aria-haspopup="true"
+                            aria-label="Open the chat menu"
+                            title="Attach files, a working folder, skills and workflows"
+                            className={`grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-white/[0.07] transition-colors hover:bg-white/[0.12] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+                              toolsOpen || activeSkill ? "text-accent-soft" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            {uploading ? <LoaderInline /> : <Plus size={16} />}
+                          </button>
+                          {toolsOpen && (
+                            <div className="absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setToolsOpen(false);
+                                  fileRef.current?.click();
+                                }}
+                                disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
+                              >
+                                <Paperclip size={14} className="shrink-0 text-zinc-400" />
+                                Attach files or photos
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setToolsOpen(false);
+                                  setPreviewPath(null);
+                                  setRailTab("files");
+                                  setPickingFolder(Boolean(workspaceDir));
+                                  showProjectPanel("user", plusBtnRef.current);
+                                }}
+                                title={
+                                  workspaceDir
+                                    ? `Files this chat's tools make land in ${workspaceDir}`
+                                    : "Pick a folder for the files this chat's tools make"
+                                }
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                              >
+                                <FolderOpen size={14} className="shrink-0 text-zinc-400" />
+                                {workspaceDir ? "Change the working folder" : "Choose a working folder"}
+                              </button>
+                              {/* Skills sit OUTSIDE the chat-only group (v1.104.0):
+                                  Agent mode can invoke one now, so hiding the menu
+                                  route would leave "/" as the only way in — findable
+                                  only by someone who already knew. Armed tools and
+                                  connectors stay chat-only; an agent already holds the
+                                  whole registry, so arming a subset means nothing. */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusSub(plusSub === "skills" ? null : "skills");
+                                    ensureSkills();
+                                  }}
+                                  aria-expanded={plusSub === "skills"}
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                                >
+                                  <Sparkles size={14} className="shrink-0 text-zinc-400" />
+                                  Skills
+                                  {activeSkill && (
+                                    <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
+                                      {activeSkill}
+                                    </span>
+                                  )}
+                                  <ChevronDown size={13} className="ml-auto shrink-0 text-zinc-500" />
+                                </button>
+                                {plusSub === "skills" && (
+                                  <div className="mb-1 ml-4 max-h-56 overflow-y-auto border-l hairline pl-1">
+                                    {activeSkill && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveSkill("");
+                                          markSetupChanged();
+                                        }}
+                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                                      >
+                                        <X size={12} /> Clear “{activeSkill}”
+                                      </button>
+                                    )}
+                                    {skills === null ? (
+                                      <div className="px-2.5 py-2">
+                                        <LoaderInline />
+                                      </div>
+                                    ) : skills.length === 0 ? (
+                                      <p className="px-2.5 py-2 text-[11px] text-zinc-500">
+                                        No skills installed.
+                                      </p>
+                                    ) : (
+                                      skills.map((s) => (
+                                        <button
+                                          key={s.name}
+                                          type="button"
+                                          onClick={() => {
+                                            pickSkill(s.name);
+                                            setToolsOpen(false);
+                                            setPlusSub(null);
+                                          }}
+                                          title={s.description}
+                                          className={`flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
+                                            activeSkill === s.name ? "text-accent-soft" : "text-zinc-200"
+                                          }`}
+                                        >
+                                          <span className="truncate text-[13px]">{s.name}</span>
+                                          <span className="truncate text-[11px] text-zinc-500">
+                                            {s.description}
+                                          </span>
+                                        </button>
+                                      ))
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              {/* Run a SAVED workflow from where the user is standing
+                                  (v1.170.0): one click starts it name-only (contract 1
+                                  — the daemon resolves stored steps + project pin) and
+                                  the live chip lands in the thread as a card row.
+                                  DISABLED on MESSAGING threads: the daemon owns those
+                                  transcripts (queueSave no-ops and every
+                                  chat.thread_updated refetch is replace-only), so the
+                                  card row would be silently deleted mid-run — same
+                                  guard regenerate uses. */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusSub(
+                                      plusSub === "workflows" ? null : "workflows",
+                                    );
+                                    ensureWorkflows();
+                                  }}
+                                  aria-expanded={plusSub === "workflows"}
+                                  disabled={Boolean(commMeta)}
+                                  title={
+                                    commMeta
+                                      ? "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead."
+                                      : undefined
+                                  }
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                                >
+                                  <GitBranch size={14} className="shrink-0 text-zinc-400" />
+                                  Run a workflow…
+                                  <ChevronDown size={13} className="ml-auto shrink-0 text-zinc-500" />
+                                </button>
+                                {plusSub === "workflows" && (
+                                  <div className="mb-1 ml-4 max-h-56 overflow-y-auto border-l hairline pl-1">
+                                    {savedWorkflows === null ? (
+                                      <div className="px-2.5 py-2">
+                                        <LoaderInline />
+                                      </div>
+                                    ) : savedWorkflows === "error" ? (
+                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-amber-300/90">
+                                        Couldn&apos;t load workflows — reopen to retry.
+                                      </p>
+                                    ) : savedWorkflows.length === 0 ? (
+                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
+                                        No saved workflows yet — draft one by asking,
+                                        or open the editor.
+                                      </p>
+                                    ) : (
+                                      savedWorkflows.map((w) => (
+                                        <button
+                                          key={w.name}
+                                          type="button"
+                                          onClick={() => void runSavedWorkflow(w.name)}
+                                          title={w.description || `Run “${w.name}” now`}
+                                          className="flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                                        >
+                                          <span className="truncate text-[13px]">
+                                            {w.name}
+                                          </span>
+                                          {w.description && (
+                                            <span className="truncate text-[11px] text-zinc-500">
+                                              {w.description}
+                                            </span>
+                                          )}
+                                        </button>
+                                      ))
+                                    )}
+                                    <Link
+                                      href="/workflows"
+                                      onClick={() => setToolsOpen(false)}
+                                      className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                    >
+                                      <ExternalLink size={13} className="shrink-0" />
+                                      Open the editor ↗
+                                    </Link>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div ref={projPopRef} className="sm:relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProjMenuOpen((v) => !v);
+                              setToolMenuOpen(false);
+                            }}
+                            aria-expanded={projMenuOpen}
+                            aria-haspopup="true"
+                            aria-label="Switch project"
+                            title={
+                              activeProject
+                                ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
+                                : "Work inside a project — replies ground in its files + knowledge"
+                            }
+                            className={composerChipClass(Boolean(activeProject))}
+                          >
+                            <FolderKanban size={14} className="shrink-0" />
+                            {/* v1.315.0: icon-only on a phone (the title above and the top
+                                bar's breadcrumb still name the project). */}
+                            {activeProject && (
+                              <span className="hidden max-w-[9rem] truncate sm:inline">
+                                {activeProject.name}
+                              </span>
+                            )}
+                          </button>
+                          {projMenuOpen && (
+                            <div className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
                               <button
                                 type="button"
                                 onClick={() => {
                                   chooseProject("");
-                                  setToolsOpen(false);
-                                  setPlusSub(null);
+                                  setProjMenuOpen(false);
                                 }}
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
+                                  !projectId ? "text-accent-soft" : "text-zinc-300"
+                                }`}
                               >
-                                <X size={12} /> Remove from project
+                                <MessageSquare size={13} className="shrink-0" />
+                                Plain chat — no project
                               </button>
-                            )}
-                            {projects.length === 0 ? (
-                              <p className="px-2.5 py-2 text-[11px] text-zinc-500">
-                                No projects yet.
-                              </p>
-                            ) : (
-                              projects.map((p) => (
+                              {projects.map((p) => (
                                 <button
                                   key={p.id}
                                   type="button"
                                   onClick={() => {
                                     chooseProject(p.id);
-                                    setToolsOpen(false);
-                                    setPlusSub(null);
+                                    setProjMenuOpen(false);
                                   }}
-                                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
-                                    projectId === p.id
-                                      ? "text-accent-soft"
-                                      : "text-zinc-200"
+                                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
+                                    projectId === p.id ? "text-accent-soft" : "text-zinc-300"
                                   }`}
                                 >
                                   <FolderKanban size={13} className="shrink-0" />
                                   <span className="min-w-0 truncate">{p.name}</span>
-                                  {projectId === p.id && (
-                                    <Check size={12} className="ml-auto shrink-0" />
-                                  )}
                                 </button>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      {/* Skills sit OUTSIDE the chat-only group (v1.104.0):
-                          Agent mode can invoke one now, so hiding the menu
-                          route would leave "/" as the only way in — findable
-                          only by someone who already knew. Armed tools and
-                          connectors stay chat-only; an agent already holds the
-                          whole registry, so arming a subset means nothing. */}
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPlusSub(plusSub === "skills" ? null : "skills");
-                            ensureSkills();
-                          }}
-                          aria-expanded={plusSub === "skills"}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
-                        >
-                          <Sparkles size={14} className="shrink-0 text-zinc-400" />
-                          Skills
-                          {activeSkill && (
-                            <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
-                              {activeSkill}
-                            </span>
+                              ))}
+                              <Link
+                                href="/projects"
+                                onClick={() => setProjMenuOpen(false)}
+                                className="flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                              >
+                                <Plus size={13} className="shrink-0" />
+                                New project / manage all ↗
+                              </Link>
+                            </div>
                           )}
-                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
-                        </button>
-                        {plusSub === "skills" && (
-                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                            {activeSkill && (
+                        </div>
+                        {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves for this
+                            conversation. v1.326.0: a quiet chip in the card, the native select
+                            kept (its id, name and wire values are the contract) with a shield
+                            for its label. The no-ask position reads amber, so a conversation
+                            running without asks looks like one. On a phone only the shield
+                            shows; the select still opens from it. */}
+                        <span className="group relative inline-flex shrink-0 items-center">
+                          <label
+                            htmlFor="chat-approval-mode"
+                            title="Approvals"
+                            className={`pointer-events-none absolute left-2 flex items-center ${
+                              approvalMode === "yolo" ? "text-amber-300" : "text-zinc-500 group-hover:text-zinc-300"
+                            }`}
+                          >
+                            {approvalMode === "yolo" ? (
+                              <ShieldAlert size={14} aria-hidden />
+                            ) : (
+                              <Shield size={14} aria-hidden />
+                            )}
+                            <span className="sr-only">Approvals</span>
+                          </label>
+                          <select
+                            id="chat-approval-mode"
+                            value={approvalMode}
+                            onChange={(e) => {
+                              const mode = asApprovalMode(e.target.value);
+                              setApprovalMode(mode);
+                              // The pick is BOTH this conversation's posture (persists
+                              // with the thread via the setup snapshot) and the user's
+                              // new default for future chats — one dial, not two.
+                              try {
+                                localStorage.setItem(APPROVAL_MODE_KEY, mode);
+                              } catch {
+                                /* best-effort */
+                              }
+                              markSetupChanged();
+                            }}
+                                aria-label="Approval mode"
+                            title={`Approval posture for this chat — ${
+                              APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint ??
+                              "when the assistant asks before acting"
+                            }`}
+                                className={`h-[30px] max-w-[11rem] cursor-pointer appearance-none rounded-lg border-0 bg-transparent pl-7 pr-6 text-[13px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 max-sm:w-[30px] max-sm:px-0 max-sm:text-transparent ${
+                                  approvalMode === "yolo"
+                                    ? "text-amber-300"
+                                    : "text-zinc-400 hover:text-zinc-200"
+                                }`}
+                              >
+                            {APPROVAL_MODES.map((m) => (
+                              <option
+                                key={m.value}
+                                value={m.value}
+                                title={m.hint}
+                                className="bg-ink-900 text-zinc-200"
+                              >
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown
+                            size={12}
+                            aria-hidden
+                            className="pointer-events-none absolute right-2 text-zinc-500 max-sm:hidden"
+                          />
+                        </span>
+                        {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
+                            for this chat, counted so a pick leaves a trace. Its menu holds the
+                            web and Auto tools switches with their plain lines, the armed tools
+                            (each with Disarm) and the chat's connections. */}
+                        <div ref={toolMenuRef} className="sm:relative">
+                          <button
+                            type="button"
+                            data-testid="composer-tools"
+                            onClick={() => {
+                              setToolMenuOpen((v) => !v);
+                              setPlusSub(null);
+                              setToolsOpen(false);
+                              setProjMenuOpen(false);
+                            }}
+                            aria-expanded={toolMenuOpen}
+                            aria-haspopup="true"
+                            aria-label={`Tools: ${toolsChip.text}`}
+                            title={toolsChip.title}
+                            className={composerChipClass(toolsChip.on)}
+                          >
+                            <Wrench size={14} className="shrink-0" />
+                            <span className="hidden sm:inline">{toolsChip.text}</span>
+                            {toolsChip.armed > 0 && <span className="sm:hidden">{toolsChip.armed}</span>}
+                          </button>
+                          {toolMenuOpen && (
+                            <div
+                              data-testid="composer-tools-menu"
+                              className="absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                            >
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setActiveSkill("");
-                                  markSetupChanged();
-                                }}
-                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                                onClick={toggleWeb}
+                                disabled={!webArmed && !webRoom}
+                                role="switch"
+                                aria-checked={webArmed}
+                                title={
+                                  webArmed
+                                    ? "Web research armed — click to disarm"
+                                    : webRoom
+                                      ? "Arm web research for this chat"
+                                      : `All ${MAX_TOOLS} tool slots armed — disarm one first`
+                                }
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
                               >
-                                <X size={12} /> Clear “{activeSkill}”
-                              </button>
-                            )}
-                            {skills === null ? (
-                              <div className="px-2.5 py-2">
-                                <LoaderInline />
-                              </div>
-                            ) : skills.length === 0 ? (
-                              <p className="px-2.5 py-2 text-[11px] text-zinc-500">
-                                No skills installed.
-                              </p>
-                            ) : (
-                              skills.map((s) => (
-                                <button
-                                  key={s.name}
-                                  type="button"
-                                  onClick={() => {
-                                    pickSkill(s.name);
-                                    setToolsOpen(false);
-                                    setPlusSub(null);
-                                  }}
-                                  title={s.description}
-                                  className={`flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
-                                    activeSkill === s.name ? "text-accent-soft" : "text-zinc-200"
+                                <Globe size={14} className="shrink-0 text-zinc-400" />
+                                Web &amp; research
+                                <span
+                                  className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
+                                    webArmed
+                                      ? "justify-end border-accent/40 bg-accent/20"
+                                      : "justify-start border-white/10 bg-white/[0.03]"
                                   }`}
                                 >
-                                  <span className="truncate text-[12.5px]">{s.name}</span>
-                                  <span className="truncate text-[10.5px] text-zinc-500">
-                                    {s.description}
-                                  </span>
+                                  <span
+                                    className={`h-2.5 w-2.5 rounded-full ${
+                                      webArmed ? "bg-accent" : "bg-zinc-600"
+                                    }`}
+                                  />
+                                </span>
+                              </button>
+                              {/* v1.232.0 (audit U8): one plain line under each
+                                  switch — the title attribute only shows on hover,
+                                  and a switch named "Auto tools" says nothing about
+                                  what it does until then. */}
+                              <p className="-mt-1 px-2.5 pb-1.5 text-[11px] leading-snug text-zinc-500">
+                                Lets this chat search the web and read pages.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={toggleAutoTools}
+                                role="switch"
+                                aria-checked={autoTools}
+                                title="Each request arms the safe tools it needs (files, documents, web, images)"
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                              >
+                                <Sparkles size={14} className="shrink-0 text-zinc-400" />
+                                Auto tools
+                                <span
+                                  className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
+                                    autoTools
+                                      ? "justify-end border-accent/40 bg-accent/20"
+                                      : "justify-start border-white/10 bg-white/[0.03]"
+                                  }`}
+                                >
+                                  <span
+                                    className={`h-2.5 w-2.5 rounded-full ${
+                                      autoTools ? "bg-accent" : "bg-zinc-600"
+                                    }`}
+                                  />
+                                </span>
+                              </button>
+                              <p className="-mt-1 px-2.5 pb-1.5 text-[11px] leading-snug text-zinc-500">
+                                Each request picks the safe tools it needs (files, documents, web, images).
+                              </p>
+                              {armedTools.length > 0 && (
+                                <div className="mt-1 border-t hairline pt-1">
+                                  <p className="px-2.5 pb-0.5 pt-1 text-[10px] uppercase tracking-wide text-zinc-500">
+                                    Turned on for this chat
+                                  </p>
+                                  {armedTools.map((name) => (
+                                    <div
+                                      key={name}
+                                      className="flex items-center gap-2 rounded-lg px-2.5 py-1 text-[12px] text-zinc-300"
+                                    >
+                                      <Wrench size={12} className="shrink-0 text-accent-soft" />
+                                      <span className="min-w-0 flex-1 truncate font-mono">{name}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => disarmTool(name)}
+                                        aria-label={`Disarm ${name}`}
+                                        title="Disarm tool"
+                                        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-danger"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="my-1 border-t hairline" />
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPlusSub(
+                                      plusSub === "connectors" ? null : "connectors",
+                                    );
+                                    ensureConnectorCatalog();
+                                  }}
+                                  aria-expanded={plusSub === "connectors"}
+                                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                                >
+                                  <PlugZap size={14} className="shrink-0 text-zinc-400" />
+                                  Connections
+                                  <ChevronDown size={13} className="ml-auto shrink-0 text-zinc-500" />
                                 </button>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      {/* Run a SAVED workflow from where the user is standing
-                          (v1.170.0): one click starts it name-only (contract 1
-                          — the daemon resolves stored steps + project pin) and
-                          the live chip lands in the thread as a card row.
-                          DISABLED on MESSAGING threads: the daemon owns those
-                          transcripts (queueSave no-ops and every
-                          chat.thread_updated refetch is replace-only), so the
-                          card row would be silently deleted mid-run — same
-                          guard regenerate uses. */}
-                      <div className="relative">
+                                {plusSub === "connectors" && (
+                                  <div className="mb-1 ml-4 max-h-56 overflow-y-auto border-l hairline pl-1">
+                                    {connCatalog === null ? (
+                                      <div className="px-2.5 py-2">
+                                        <LoaderInline />
+                                      </div>
+                                    ) : connectedConnectors.length === 0 ? (
+                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
+                                        Nothing connected yet — pick one below.
+                                      </p>
+                                    ) : (
+                                      connectedConnectors.map((c) => {
+                                        const on = selectedConnectors.includes(c.id);
+                                        const atCap =
+                                          !on &&
+                                          selectedConnectors.length >= MAX_CONNECTORS;
+                                        const isMemory = c.connect_via === "memory";
+                                        return (
+                                          <button
+                                            key={c.id}
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={on}
+                                            disabled={atCap}
+                                            onClick={() => toggleConnector(c.id)}
+                                            title={
+                                              isMemory
+                                                ? `${c.name} — grounds replies with this memory`
+                                                : `${c.name} — arms its tools for this chat`
+                                            }
+                                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
+                                              atCap ? "opacity-40" : "hover:bg-white/[0.06]"
+                                            }`}
+                                          >
+                                            <span className="w-4 shrink-0 text-center text-[13px]">
+                                              {c.glyph || (isMemory ? "🧠" : "🔌")}
+                                            </span>
+                                            <span
+                                              className={`min-w-0 truncate text-[12px] ${
+                                                on ? "text-accent-soft" : "text-zinc-200"
+                                              }`}
+                                            >
+                                              {c.name}
+                                            </span>
+                                            <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-zinc-600">
+                                              {isMemory
+                                                ? "memory"
+                                                : `${c.tools_loaded ?? 0} tools`}
+                                            </span>
+                                            <span
+                                              aria-hidden
+                                              className={`flex h-3.5 w-6 shrink-0 items-center rounded-full border px-0.5 transition-colors ${
+                                                on
+                                                  ? "justify-end border-accent/60 bg-accent/25"
+                                                  : "justify-start border-white/20 bg-white/[0.04]"
+                                              }`}
+                                            >
+                                              <span
+                                                className={`h-2 w-2 rounded-full ${
+                                                  on ? "bg-accent-soft" : "bg-zinc-500"
+                                                }`}
+                                              />
+                                            </span>
+                                          </button>
+                                        );
+                                      })
+                                    )}
+                                    {marketplaceTeasers.length > 0 && (
+                                      <div className="mt-0.5 border-t hairline pt-1">
+                                        <p className="px-2.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                                          From the Directory
+                                        </p>
+                                        {marketplaceTeasers.map((c) => (
+                                          <Link
+                                            key={c.id}
+                                            href="/marketplace"
+                                            onClick={() => setToolMenuOpen(false)}
+                                            title={`Connect ${c.name} in the Directory`}
+                                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                          >
+                                            <span className="w-4 shrink-0 text-center text-[13px]">
+                                              {c.glyph || "🔌"}
+                                            </span>
+                                            <span className="min-w-0 truncate">{c.name}</span>
+                                            <span className="ml-auto shrink-0 text-[10px] text-zinc-600">
+                                              connect ↗
+                                            </span>
+                                          </Link>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <Link
+                                      href="/marketplace"
+                                      onClick={() => setToolMenuOpen(false)}
+                                      className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                    >
+                                      <Store size={13} className="shrink-0" />
+                                      Directory ↗
+                                    </Link>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {/* Web research, one press (v1.326.0). The same switch, with its
+                            plain line, is in the tools menu. */}
                         <button
                           type="button"
-                          onClick={() => {
-                            setPlusSub(
-                              plusSub === "workflows" ? null : "workflows",
-                            );
-                            ensureWorkflows();
-                          }}
-                          aria-expanded={plusSub === "workflows"}
-                          disabled={Boolean(commMeta)}
+                          data-testid="composer-web"
+                          onClick={toggleWeb}
+                          disabled={!webArmed && !webRoom}
+                          role="switch"
+                          aria-checked={webArmed}
+                          aria-label="Web research"
                           title={
-                            commMeta
-                              ? "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead."
-                              : undefined
+                            webArmed
+                              ? "Web research is on for this chat. Press to turn it off."
+                              : webRoom
+                                ? "Let this chat search the web and read pages"
+                                : `All ${MAX_TOOLS} tool slots are in use. Turn one off first.`
                           }
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                          className={composerChipClass(webArmed)}
                         >
-                          <GitBranch size={14} className="shrink-0 text-zinc-400" />
-                          Run a workflow…
-                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                          <Globe size={14} className="shrink-0" />
+                          <span className="hidden sm:inline">Web</span>
                         </button>
-                        {plusSub === "workflows" && (
-                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                            {savedWorkflows === null ? (
-                              <div className="px-2.5 py-2">
-                                <LoaderInline />
-                              </div>
-                            ) : savedWorkflows === "error" ? (
-                              <p className="px-2.5 py-2 text-[11px] leading-relaxed text-amber-300/90">
-                                Couldn&apos;t load workflows — reopen to retry.
-                              </p>
-                            ) : savedWorkflows.length === 0 ? (
-                              <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                No saved workflows yet — draft one by asking,
-                                or open the editor.
-                              </p>
-                            ) : (
-                              savedWorkflows.map((w) => (
-                                <button
-                                  key={w.name}
-                                  type="button"
-                                  onClick={() => void runSavedWorkflow(w.name)}
-                                  title={w.description || `Run “${w.name}” now`}
-                                  className="flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left text-zinc-200 transition-colors hover:bg-white/[0.06]"
-                                >
-                                  <span className="truncate text-[12.5px]">
-                                    {w.name}
-                                  </span>
-                                  {w.description && (
-                                    <span className="truncate text-[10.5px] text-zinc-500">
-                                      {w.description}
-                                    </span>
-                                  )}
-                                </button>
-                              ))
-                            )}
-                            <Link
-                              href="/workflows"
-                              onClick={() => setToolsOpen(false)}
-                              className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
-                            >
-                              <ExternalLink size={13} className="shrink-0" />
-                              Open the editor ↗
-                            </Link>
-                          </div>
-                        )}
                       </div>
-                      {(
-                        <>
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPlusSub(
-                                  plusSub === "connectors" ? null : "connectors",
-                                );
-                                ensureConnectorCatalog();
+                      <div className="ml-auto flex shrink-0 items-center gap-1">
+                        {/* v1.263.0: the reasoning level, ONLY for a model that offers
+                            one (the daemon's catalog says which). A control that does
+                            nothing for the picked model is not drawn at all. */}
+                        {reasoningLevelsFor(choice).length > 0 && (
+                          <span className="relative inline-flex shrink-0 items-center">
+                            <select
+                              aria-label="Reasoning level"
+                              data-testid="reasoning-level"
+                              value={reasoningLevelsFor(choice).includes(reasoning) ? reasoning : ""}
+                              onChange={(e) => {
+                                setReasoning(e.target.value);
+                                markSetupChanged();
                               }}
-                              aria-expanded={plusSub === "connectors"}
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                              disabled={awaiting && sessionId !== null}
+                              title="How hard the model thinks before answering — higher is slower and costs more"
+                              className="h-[30px] max-w-[10rem] cursor-pointer appearance-none rounded-lg border-0 bg-transparent pl-2 pr-6 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40"
                             >
-                              <PlugZap size={14} className="shrink-0 text-zinc-400" />
-                              Connections
-                              <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
-                            </button>
-                            {plusSub === "connectors" && (
-                              <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                                {connCatalog === null ? (
-                                  <div className="px-2.5 py-2">
-                                    <LoaderInline />
-                                  </div>
-                                ) : connectedConnectors.length === 0 ? (
-                                  <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                    Nothing connected yet — pick one below.
-                                  </p>
+                              {/* v1.326.0: short words for a chip beside the
+                                  model ("High"); the select's name says what
+                                  they measure. */}
+                              <option value="" className="bg-ink-900 text-zinc-200">
+                                Reasoning
+                              </option>
+                              {reasoningLevelsFor(choice).map((lvl) => (
+                                <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">
+                                  {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown
+                              size={12}
+                              aria-hidden
+                              className="pointer-events-none absolute right-2 text-zinc-500"
+                            />
+                          </span>
+                        )}
+                        <div ref={modelPopRef} className="relative">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setModelMenuOpen((v) => !v);
+                              setModelSub(null);
+                            }}
+                            disabled={awaiting && sessionId !== null}
+                            aria-expanded={modelMenuOpen}
+                            aria-haspopup="true"
+                            title={
+                              awaiting && sessionId !== null
+                                ? "Start a new chat to switch models"
+                                : "Switch model"
+                            }
+                            className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
+                          >
+                            <span className="min-w-0 truncate font-medium text-zinc-200" title={modelTriggerRaw || undefined}>
+                              {modelTriggerText}
+                            </span>
+                            <ChevronDown size={12} className="shrink-0 opacity-70" />
+                          </button>
+                          {modelMenuOpen && (
+                            <div
+                              data-testid="model-menu"
+                              className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                            >
+                              {/* v1.277.0: type to find a model across every provider. */}
+                              <input
+                                data-testid="model-filter"
+                                value={modelFilter}
+                                onChange={(e) => setModelFilter(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && modelMatches[0]) {
+                                    e.preventDefault();
+                                    pickModel(`${modelMatches[0].provider}::${modelMatches[0].model}`);
+                                  } else if (e.key === "Escape") {
+                                    setModelMenuOpen(false);
+                                    setModelSub(null);
+                                  }
+                                }}
+                                placeholder="Type to find a model…"
+                                aria-label="Find a model"
+                                autoFocus
+                                className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+                              />
+                              {modelFilter.trim() ? (
+                                modelMatches.length === 0 ? (
+                                  <p className="px-2.5 py-1.5 text-[12px] text-zinc-500">No model matches.</p>
                                 ) : (
-                                  connectedConnectors.map((c) => {
-                                    const on = selectedConnectors.includes(c.id);
-                                    const atCap =
-                                      !on &&
-                                      selectedConnectors.length >= MAX_CONNECTORS;
-                                    const isMemory = c.connect_via === "memory";
+                                  modelMatches.map((m) => {
+                                    const v = `${m.provider}::${m.model}`;
                                     return (
                                       <button
-                                        key={c.id}
+                                        key={`match-${v}`}
                                         type="button"
-                                        role="switch"
-                                        aria-checked={on}
-                                        disabled={atCap}
-                                        onClick={() => toggleConnector(c.id)}
-                                        title={
-                                          isMemory
-                                            ? `${c.name} — grounds replies with this memory`
-                                            : `${c.name} — arms its tools for this chat`
-                                        }
-                                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
-                                          atCap ? "opacity-40" : "hover:bg-white/[0.06]"
+                                        data-testid="model-match"
+                                        onClick={() => pickModel(v)}
+                                        disabled={m.available === false}
+                                        title={m.available === false ? `${m.name || m.provider} isn't connected` : undefined}
+                                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                                          choice === v ? "text-accent-soft" : "text-zinc-300"
                                         }`}
                                       >
-                                        <span className="w-4 shrink-0 text-center text-[13px]">
-                                          {c.glyph || (isMemory ? "🧠" : "🔌")}
+                                        <span className="min-w-0 truncate" title={m.label ? m.model : undefined}>
+                                          {modelText(m)}
                                         </span>
-                                        <span
-                                          className={`min-w-0 truncate text-[12px] ${
-                                            on ? "text-accent-soft" : "text-zinc-200"
-                                          }`}
-                                        >
-                                          {c.name}
-                                        </span>
-                                        <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide text-zinc-600">
-                                          {isMemory
-                                            ? "memory"
-                                            : `${c.tools_loaded ?? 0} tools`}
-                                        </span>
-                                        <span
-                                          aria-hidden
-                                          className={`flex h-3.5 w-6 shrink-0 items-center rounded-full border px-0.5 transition-colors ${
-                                            on
-                                              ? "justify-end border-accent/60 bg-accent/25"
-                                              : "justify-start border-white/20 bg-white/[0.04]"
-                                          }`}
-                                        >
-                                          <span
-                                            className={`h-2 w-2 rounded-full ${
-                                              on ? "bg-accent-soft" : "bg-zinc-500"
-                                            }`}
-                                          />
+                                        <ModelRowChips m={m} />
+                                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                                          {m.name || m.provider}
                                         </span>
                                       </button>
                                     );
                                   })
-                                )}
-                                {marketplaceTeasers.length > 0 && (
-                                  <div className="mt-0.5 border-t hairline pt-1">
-                                    <p className="px-2.5 pb-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-zinc-600">
-                                      From the Directory
-                                    </p>
-                                    {marketplaceTeasers.map((c) => (
-                                      <Link
-                                        key={c.id}
-                                        href="/marketplace"
-                                        onClick={() => setToolsOpen(false)}
-                                        title={`Connect ${c.name} in the Directory`}
-                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                )
+                              ) : (
+                                <>
+                              {recentModels.length > 0 && (
+                                <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
+                                  <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
+                                  {recentModels.map((v) => {
+                                    const { provider, model } = splitChoice(v);
+                                    const row = models.find((m) => m.provider === provider && m.model === model);
+                                    if (!row) return null;
+                                    return (
+                                      <button
+                                        key={`recent-${v}`}
+                                        type="button"
+                                        onClick={() => pickModel(v)}
+                                        disabled={row.available === false}
+                                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
+                                          choice === v ? "text-accent-soft" : "text-zinc-300"
+                                        }`}
                                       >
-                                        <span className="w-4 shrink-0 text-center text-[13px]">
-                                          {c.glyph || "🔌"}
+                                        <span className="min-w-0 truncate" title={row.label ? model : undefined}>
+                                          {modelText(row)}
                                         </span>
-                                        <span className="min-w-0 truncate">{c.name}</span>
-                                        <span className="ml-auto shrink-0 text-[10px] text-zinc-600">
-                                          connect ↗
+                                        <ModelRowChips m={row} />
+                                        <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
+                                          {row.name || row.provider}
                                         </span>
-                                      </Link>
-                                    ))}
-                                  </div>
-                                )}
-                                <Link
-                                  href="/marketplace"
-                                  onClick={() => setToolsOpen(false)}
-                                  className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
-                                >
-                                  <Store size={13} className="shrink-0" />
-                                  Directory ↗
-                                </Link>
-                              </div>
-                            )}
-                          </div>
-                          <div className="my-1 border-t hairline" />
-                          <button
-                            type="button"
-                            onClick={toggleWeb}
-                            disabled={!webArmed && !webRoom}
-                            role="switch"
-                            aria-checked={webArmed}
-                            title={
-                              webArmed
-                                ? "Web research armed — click to disarm"
-                                : webRoom
-                                  ? "Arm web research for this chat"
-                                  : `All ${MAX_TOOLS} tool slots armed — disarm one first`
-                            }
-                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
-                          >
-                            <Globe size={14} className="shrink-0 text-zinc-400" />
-                            Web &amp; research
-                            <span
-                              className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
-                                webArmed
-                                  ? "justify-end border-accent/40 bg-accent/20"
-                                  : "justify-start border-white/10 bg-white/[0.03]"
-                              }`}
-                            >
-                              <span
-                                className={`h-2.5 w-2.5 rounded-full ${
-                                  webArmed ? "bg-accent" : "bg-zinc-600"
-                                }`}
-                              />
-                            </span>
-                          </button>
-                          {/* v1.232.0 (audit U8): one plain line under each
-                              switch — the title attribute only shows on hover,
-                              and a switch named "Auto tools" says nothing about
-                              what it does until then. */}
-                          <p className="-mt-1 px-2.5 pb-1.5 text-[10.5px] leading-snug text-zinc-500">
-                            Lets this chat search the web and read pages.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={toggleAutoTools}
-                            role="switch"
-                            aria-checked={autoTools}
-                            title="Each request arms the safe tools it needs (files, documents, web, images)"
-                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
-                          >
-                            <Sparkles size={14} className="shrink-0 text-zinc-400" />
-                            Auto tools
-                            <span
-                              className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
-                                autoTools
-                                  ? "justify-end border-accent/40 bg-accent/20"
-                                  : "justify-start border-white/10 bg-white/[0.03]"
-                              }`}
-                            >
-                              <span
-                                className={`h-2.5 w-2.5 rounded-full ${
-                                  autoTools ? "bg-accent" : "bg-zinc-600"
-                                }`}
-                              />
-                            </span>
-                          </button>
-                          <p className="-mt-1 px-2.5 pb-1.5 text-[10.5px] leading-snug text-zinc-500">
-                            Each request picks the safe tools it needs (files, documents, web, images).
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {/* Project quick-toggle — flip between plain chat and a
-                    project right from the composer (the cowork feel), without
-                    opening the side panel. Selection logic is the panel's own
-                    chooseProject/clearProject; this is just a nearer handle. */}
-                <div ref={projPopRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setProjMenuOpen((v) => !v)}
-                    aria-expanded={projMenuOpen}
-                    aria-haspopup="true"
-                    aria-label="Switch project"
-                    title={
-                      activeProject
-                        ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
-                        : "Work inside a project — replies ground in its files + knowledge"
-                    }
-                    className={`btn-ghost h-[2.75rem] gap-1.5 px-3 py-0 ${
-                      activeProject ? "text-accent-soft" : ""
-                    }`}
-                  >
-                    <FolderKanban size={15} />
-                    {/* v1.315.0: icon-only on a phone (the title above and
-                        the card header still name the project). */}
-                    {activeProject && (
-                      <span className="hidden max-w-[7rem] truncate text-[12px] sm:inline">
-                        {activeProject.name}
-                      </span>
-                    )}
-                  </button>
-                  {projMenuOpen && (
-                    <div className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          chooseProject("");
-                          setProjMenuOpen(false);
-                        }}
-                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
-                          !projectId ? "text-accent-soft" : "text-zinc-300"
-                        }`}
-                      >
-                        <MessageSquare size={13} className="shrink-0" />
-                        Plain chat — no project
-                      </button>
-                      {projects.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => {
-                            chooseProject(p.id);
-                            setProjMenuOpen(false);
-                          }}
-                          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
-                            projectId === p.id ? "text-accent-soft" : "text-zinc-300"
-                          }`}
-                        >
-                          <FolderKanban size={13} className="shrink-0" />
-                          <span className="min-w-0 truncate">{p.name}</span>
-                        </button>
-                      ))}
-                      <Link
-                        href="/projects"
-                        onClick={() => setProjMenuOpen(false)}
-                        className="flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
-                      >
-                        <Plus size={13} className="shrink-0" />
-                        New project / manage all ↗
-                      </Link>
-                    </div>
-                  )}
-                </div>
-                {/* Mic — dictate into the composer (daemon-transcribed in the
-                    desktop app, Web Speech in a browser). */}
-                <button
-                  type="button"
-                  onClick={micToggle}
-                  disabled={!dictation.supported}
-                  aria-pressed={dictation.listening}
-                  aria-label={
-                    dictation.listening ? "Stop dictation" : "Start dictation"
-                  }
-                  title={
-                    dictation.supported
-                      ? dictation.listening
-                        ? "Stop dictation"
-                        : "Dictate your message"
-                      : dictation.reason || "Voice input isn't available here yet"
-                  }
-                  className={`relative h-[2.75rem] shrink-0 px-3 py-0 ${
-                    dictation.listening ? "btn-ghost text-rose-300" : "btn-ghost"
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  {dictation.listening && (
-                    <span className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_2px_rgba(244,63,94,0.6)]" />
-                  )}
-                  {dictation.supported ? <Mic size={15} /> : <MicOff size={15} />}
-                </button>
-                <ComposerInput
-                  store={composer}
-                  inputRef={inputRef}
-                  busy={busy}
-                  skills={skills}
-                  onSend={send}
-                  onStop={stop}
-                  onSteer={(text) => void steerTurn(text)}
-                  onQueue={queueFollowup}
-                  onOpened={onSlashOpened}
-                  onPickSkill={pickSkill}
-                  onTyped={() => {
-                    inputFromVoiceRef.current = false; // typed — never auto-send
-                  }}
-                  onPasteFiles={(files) => void addFilesRef.current(files)}
-                  talkingTo={addressee.map(agentDisplayName).join(", ")}
-                />
-                {(awaiting || (chatBusy && stream.streaming)) && (
-                  <button
-                    onClick={stop}
-                    className="btn-ghost h-[2.75rem] px-3 py-0 text-[13px]"
-                    title="Stop this turn"
-                  >
-                    <Square size={14} /> Stop
-                  </button>
-                )}
-                {/* The send ARROW — see SendArrow (v1.250.0, S-05): its
-                    presence is a function of the text, so it subscribes to the
-                    composer store instead of the page re-rendering for it. */}
-                <SendArrow
-                  store={composer}
-                  busy={busy}
-                  hasAttachments={attachments.length > 0}
-                  onSend={send}
-                />
-                {/* v1.250.0 (S-05): headless — Voice Chat's auto-send watches
-                    the dictated text without the page watching it. */}
-                <VoiceAutoSend
-                  store={composer}
-                  armed={
-                    voiceMode &&
-                    !busy &&
-                    !tts.speaking &&
-                    inputFromVoiceRef.current &&
-                    !dictation.interim &&
-                    !dictation.processing &&
-                    !dictation.error
-                  }
-                  delayMs={dictation.engine === "server" ? 350 : 1500}
-                  onSend={send}
-                />
-              </div>
-              {/* Composer footer: share on the left (under the project
-                  control), the model switcher on the right. Both are the same
-                  quiet weight — present when wanted, silent otherwise. */}
-              {/* v1.314.0: the footer WRAPS on a phone — the plain-words
-                  labels ("Approvals:", "Default: Claude Opus 4.8") are longer
-                  than the old ids, and a row that runs off a 390px screen
-                  hides the model it names. */}
-              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pb-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShareOpen(true)}
-                  disabled={!threadId}
-                  aria-label="Share this chat"
-                  title={
-                    threadId
-                      ? "Share this chat — full transcript or a compacted digest"
-                      : "A chat can be shared after its first reply (it saves automatically)"
-                  }
-                  // v1.314.0: a real 28px target with the word, not a bare
-                  // 12px glyph; on a phone the icon stands alone (the
-                  // aria-label still names it).
-                  className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11.5px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  <Share2 size={13} />
-                  <span className="hidden sm:inline">Share</span>
-                </button>
-                {/* v1.325.0: the conversation map — every question, one press away. */}
-                <button
-                  type="button"
-                  data-testid="open-conversation-map"
-                  onClick={() => setMapOpen((v) => !v)}
-                  disabled={messages.filter((x) => x.role === "user" && !x.continuation).length < 2}
-                  aria-expanded={mapOpen}
-                  aria-label="Conversation map"
-                  title="Jump to any question in this conversation"
-                  className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                >
-                  <ListTree size={13} />
-                  <span className="hidden sm:inline">Map</span>
-                </button>
-                {mapOpen && (
-                  <div className="fixed bottom-24 right-4 z-40 w-[min(26rem,calc(100vw-2rem))]">
-                    <ConversationMap
-                      messages={messages}
-                      onJump={jumpToMessage}
-                      onClose={() => setMapOpen(false)}
-                    />
-                  </div>
-                )}
-                {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves
-                    for this conversation. A native select at the footer's
-                    quiet weight — one control, three positions, the current
-                    one readable at a glance. YOLO reads amber because a
-                    conversation running without asks should look like one. */}
-                {/* v1.314.0: a visible label says what the select controls —
-                    "Approve for me" alone did not say approvals of what. */}
-                <span className="inline-flex items-center gap-1.5">
-                <label
-                  htmlFor="chat-approval-mode"
-                  className="text-[11.5px] text-zinc-500"
-                >
-                  Approvals:
-                </label>
-                <select
-                  id="chat-approval-mode"
-                  value={approvalMode}
-                  onChange={(e) => {
-                    const mode = asApprovalMode(e.target.value);
-                    setApprovalMode(mode);
-                    // The pick is BOTH this conversation's posture (persists
-                    // with the thread via the setup snapshot) and the user's
-                    // new default for future chats — one dial, not two.
-                    try {
-                      localStorage.setItem(APPROVAL_MODE_KEY, mode);
-                    } catch {
-                      /* best-effort */
-                    }
-                    markSetupChanged();
-                  }}
-                  aria-label="Approval mode"
-                  title={`Approval posture for this chat — ${
-                    APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint ??
-                    "when the assistant asks before acting"
-                  }`}
-                  className={`cursor-pointer rounded-lg border border-white/10 bg-transparent px-1.5 py-0.5 text-[11.5px] transition-colors hover:border-white/20 ${
-                    approvalMode === "yolo"
-                      ? "text-amber-300"
-                      : "text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {APPROVAL_MODES.map((m) => (
-                    <option
-                      key={m.value}
-                      value={m.value}
-                      title={m.hint}
-                      className="bg-ink-900 text-zinc-200"
-                    >
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-                </span>
-                {/* Context headroom (v1.146.0). Deliberately quiet until it
-                    matters: nobody needs a gauge at 12% of a 200k window, and
-                    a permanent meter is the kind of chrome that gets ignored
-                    exactly when it starts mattering. */}
-                <ContextMeter usage={contextUsage} />
-                {/* Redesign S9 (Q7): a detected model, one tap — never picked
-                    silently. Silent once a real model answers, and absent
-                    while the empty state's connect doors make the same offer
-                    (one offer on screen at a time). */}
-                {messages.length > 0 && (
-                  <ModelSuggestChip
-                    onOther={() => {
-                      setModelMenuOpen(true);
-                      setModelSub(null);
-                    }}
-                  />
-                )}
-                {/* v1.263.0: the reasoning level, ONLY for a model that offers
-                    one (the daemon's catalog says which). A control that does
-                    nothing for the picked model is not drawn at all. */}
-                {reasoningLevelsFor(choice).length > 0 && (
-                  <select
-                    aria-label="Reasoning level"
-                    data-testid="reasoning-level"
-                    value={reasoningLevelsFor(choice).includes(reasoning) ? reasoning : ""}
-                    onChange={(e) => {
-                      setReasoning(e.target.value);
-                      markSetupChanged();
-                    }}
-                    disabled={awaiting && sessionId !== null}
-                    title="How hard the model thinks before answering — higher is slower and costs more"
-                    className="rounded-md border border-white/10 bg-transparent px-1.5 py-0.5 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
-                  >
-                    <option value="" className="bg-ink-900 text-zinc-200">
-                      reasoning: default
-                    </option>
-                    {reasoningLevelsFor(choice).map((lvl) => (
-                      <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">
-                        reasoning: {lvl}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <div ref={modelPopRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setModelMenuOpen((v) => !v);
-                      setModelSub(null);
-                    }}
-                    disabled={awaiting && sessionId !== null}
-                    aria-expanded={modelMenuOpen}
-                    aria-haspopup="true"
-                    title={
-                      awaiting && sessionId !== null
-                        ? "Start a new chat to switch models"
-                        : "Switch model"
-                    }
-                    className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
-                  >
-                    <span className="max-w-[14rem] truncate" title={modelTriggerRaw || undefined}>
-                      {modelTriggerText}
-                    </span>
-                    <ChevronDown size={11} className="shrink-0" />
-                  </button>
-                  {modelMenuOpen && (
-                    <div
-                      data-testid="model-menu"
-                      className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
-                    >
-                      {/* v1.277.0: type to find a model across every provider. */}
-                      <input
-                        data-testid="model-filter"
-                        value={modelFilter}
-                        onChange={(e) => setModelFilter(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && modelMatches[0]) {
-                            e.preventDefault();
-                            pickModel(`${modelMatches[0].provider}::${modelMatches[0].model}`);
-                          } else if (e.key === "Escape") {
-                            setModelMenuOpen(false);
-                            setModelSub(null);
-                          }
-                        }}
-                        placeholder="Type to find a model…"
-                        aria-label="Find a model"
-                        autoFocus
-                        className="mb-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-[11.5px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
-                      />
-                      {modelFilter.trim() ? (
-                        modelMatches.length === 0 ? (
-                          <p className="px-2.5 py-1.5 text-[11.5px] text-zinc-500">No model matches.</p>
-                        ) : (
-                          modelMatches.map((m) => {
-                            const v = `${m.provider}::${m.model}`;
-                            return (
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                               <button
-                                key={`match-${v}`}
                                 type="button"
-                                data-testid="model-match"
-                                onClick={() => pickModel(v)}
-                                disabled={m.available === false}
-                                title={m.available === false ? `${m.name || m.provider} isn't connected` : undefined}
-                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
-                                  choice === v ? "text-accent-soft" : "text-zinc-300"
+                                onClick={() => pickModel("")}
+                                className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                                  !choice ? "text-accent-soft" : "text-zinc-300"
                                 }`}
                               >
-                                <span className="min-w-0 truncate" title={m.label ? m.model : undefined}>
-                                  {modelText(m)}
-                                </span>
-                                <ModelRowChips m={m} />
-                                <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
-                                  {m.name || m.provider}
-                                </span>
+                                default model
                               </button>
-                            );
-                          })
-                        )
-                      ) : (
-                        <>
-                      {recentModels.length > 0 && (
-                        <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
-                          <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
-                          {recentModels.map((v) => {
-                            const { provider, model } = splitChoice(v);
-                            const row = models.find((m) => m.provider === provider && m.model === model);
-                            if (!row) return null;
-                            return (
-                              <button
-                                key={`recent-${v}`}
-                                type="button"
-                                onClick={() => pickModel(v)}
-                                disabled={row.available === false}
-                                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
-                                  choice === v ? "text-accent-soft" : "text-zinc-300"
-                                }`}
-                              >
-                                <span className="min-w-0 truncate" title={row.label ? model : undefined}>
-                                  {modelText(row)}
-                                </span>
-                                <ModelRowChips m={row} />
-                                <span className="ml-auto shrink-0 font-sans text-[10px] text-zinc-500">
-                                  {row.name || row.provider}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => pickModel("")}
-                        className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
-                          !choice ? "text-accent-soft" : "text-zinc-300"
-                        }`}
-                      >
-                        default model
-                      </button>
-                      {modelProviders.map((p) => (
-                        <div key={p.id} className="relative">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setModelSub(modelSub === p.id ? null : p.id)
-                            }
-                            disabled={!p.available}
-                            title={
-                              p.available
-                                ? undefined
-                                : `${p.label} isn't connected — set it up on Connections`
-                            }
-                            aria-expanded={modelSub === p.id}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
-                              splitChoice(choice).provider === p.id
-                                ? "text-accent-soft"
-                                : "text-zinc-300"
-                            }`}
-                          >
-                            <span className="min-w-0 truncate">{p.label}</span>
-                            {/* Where it runs — the whole point of the reorder:
-                                a list you can act on without knowing which of
-                                your providers costs money. */}
-                            <span
-                              className={`shrink-0 text-[10px] ${
-                                (KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls
-                              }`}
-                            >
-                              {p.available
-                                ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).text
-                                : "offline"}
-                            </span>
-                            <ChevronRight
-                              size={12}
-                              className="ml-auto shrink-0 text-zinc-500"
-                            />
-                          </button>
-                          {modelSub === p.id && (
-                            /* Anchored to the BOTTOM so a long catalog
-                               (OpenRouter) grows UPWARD over the chat area
-                               instead of being clipped at the card edge. */
-                            <div className="absolute bottom-0 right-full z-30 mr-1 max-h-[24rem] w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                              {models
-                                .filter((m) => m.provider === p.id)
-                                .map((m) => {
-                                  const v = `${m.provider}::${m.model}`;
-                                  return (
-                                    <button
-                                      key={v}
-                                      type="button"
-                                      onClick={() => pickModel(v)}
-                                      className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] ${
-                                        choice === v
-                                          ? "text-accent-soft"
-                                          : "text-zinc-300"
+                              {modelProviders.map((p) => (
+                                <div key={p.id} className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setModelSub(modelSub === p.id ? null : p.id)
+                                    }
+                                    disabled={!p.available}
+                                    title={
+                                      p.available
+                                        ? undefined
+                                        : `${p.label} isn't connected — set it up on Connections`
+                                    }
+                                    aria-expanded={modelSub === p.id}
+                                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+                                      splitChoice(choice).provider === p.id
+                                        ? "text-accent-soft"
+                                        : "text-zinc-300"
+                                    }`}
+                                  >
+                                    <span className="min-w-0 truncate">{p.label}</span>
+                                    {/* Where it runs — the whole point of the reorder:
+                                        a list you can act on without knowing which of
+                                        your providers costs money. */}
+                                    <span
+                                      className={`shrink-0 text-[10px] ${
+                                        (KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls
                                       }`}
                                     >
-                                      <span
-                                        className="min-w-0 truncate"
-                                        title={m.label ? m.model : undefined}
-                                      >
-                                        {modelText(m)}
-                                      </span>
-                                      <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
-                                        <ModelRowChips m={m} />
-                                      </span>
-                                      {choice === v && (
-                                        <Check size={11} className="ml-auto shrink-0" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
+                                      {p.available
+                                        ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).text
+                                        : "offline"}
+                                    </span>
+                                    <ChevronRight
+                                      size={12}
+                                      className="ml-auto shrink-0 text-zinc-500"
+                                    />
+                                  </button>
+                                  {modelSub === p.id && (
+                                    /* Anchored to the BOTTOM so a long catalog
+                                       (OpenRouter) grows UPWARD over the chat area
+                                       instead of being clipped at the card edge. */
+                                    <div className="absolute bottom-0 right-full z-30 mr-1 max-h-[24rem] w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                                      {models
+                                        .filter((m) => m.provider === p.id)
+                                        .map((m) => {
+                                          const v = `${m.provider}::${m.model}`;
+                                          return (
+                                            <button
+                                              key={v}
+                                              type="button"
+                                              onClick={() => pickModel(v)}
+                                              className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] ${
+                                                choice === v
+                                                  ? "text-accent-soft"
+                                                  : "text-zinc-300"
+                                              }`}
+                                            >
+                                              <span
+                                                className="min-w-0 truncate"
+                                                title={m.label ? m.model : undefined}
+                                              >
+                                                {modelText(m)}
+                                              </span>
+                                              <span className="ml-1.5 inline-flex shrink-0 items-center gap-1">
+                                                <ModelRowChips m={m} />
+                                              </span>
+                                              {choice === v && (
+                                                <Check size={11} className="ml-auto shrink-0" />
+                                              )}
+                                            </button>
+                                          );
+                                        })}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                                </>
+                              )}
+                              {splitChoice(choice).provider && (
+                                <div className="mt-1 border-t border-white/[0.06] pt-1">
+                                  <button
+                                    type="button"
+                                    data-testid="model-make-default"
+                                    onClick={() => void makeDefault()}
+                                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+                                  >
+                                    Make this my default
+                                  </button>
+                                  {defaultNote && (
+                                    <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
+                                      {defaultNote}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
-                      ))}
-                        </>
-                      )}
-                      {splitChoice(choice).provider && (
-                        <div className="mt-1 border-t border-white/[0.06] pt-1">
+                        {/* Mic — dictate into the composer (daemon-transcribed in the
+                            desktop app, Web Speech in a browser). */}
+                        <button
+                          type="button"
+                          onClick={micToggle}
+                          disabled={!dictation.supported}
+                          aria-pressed={dictation.listening}
+                          aria-label={
+                            dictation.listening ? "Stop dictation" : "Start dictation"
+                          }
+                          title={
+                            dictation.supported
+                              ? dictation.listening
+                                ? "Stop dictation"
+                                : "Dictate your message"
+                              : dictation.reason || "Voice input isn't available here yet"
+                          }
+                          className={`${COMPOSER_ICON_BUTTON} ${
+                            dictation.listening
+                              ? "text-tone-danger hover:bg-white/[0.06]"
+                              : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200"
+                          }`}
+                        >
+                          {dictation.listening && (
+                            <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-tone-danger" />
+                          )}
+                          {dictation.supported ? <Mic size={16} /> : <MicOff size={16} />}
+                        </button>
+                        {/* Send, round and in the accent; while a reply streams the same
+                            spot is Stop (v1.326.0). SendArrow subscribes to the box's text
+                            (v1.250.0, S-05) so the page never re-renders per keystroke. */}
+                        {awaiting || (chatBusy && stream.streaming) ? (
                           <button
                             type="button"
-                            data-testid="model-make-default"
-                            onClick={() => void makeDefault()}
-                            className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-300 hover:bg-white/[0.06]"
+                            onClick={stop}
+                            aria-label="Stop"
+                            title="Stop this turn"
+                            className="ml-auto grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-accent text-ink-950 transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                           >
-                            Make this my default
+                            <Square size={12} fill="currentColor" aria-hidden />
                           </button>
-                          {defaultNote && (
-                            <p role="status" className="px-2.5 pb-1 text-[11px] text-zinc-500">
-                              {defaultNote}
-                            </p>
-                          )}
-                        </div>
-                      )}
+                        ) : (
+                          <SendArrow
+                            store={composer}
+                            busy={busy}
+                            hasAttachments={attachments.length > 0}
+                            onSend={send}
+                          />
+                        )}
+                      </div>
                     </div>
-                  )}
+                    {/* v1.250.0 (S-05): headless — Voice Chat's auto-send watches
+                        the dictated text without the page watching it. */}
+                    <VoiceAutoSend
+                      store={composer}
+                      armed={
+                        voiceMode &&
+                        !busy &&
+                        !tts.speaking &&
+                        inputFromVoiceRef.current &&
+                        !dictation.interim &&
+                        !dictation.processing &&
+                        !dictation.error
+                      }
+                      delayMs={dictation.engine === "server" ? 350 : 1500}
+                      onSend={send}
+                    />
+                  </div>
+                  {/* Under the card, small and muted (v1.326.0): the conversation
+                      map, the context gauge, a detected-model offer and the keys. The
+                      old footer row (Share, Map, Approvals, Default model) is gone:
+                      Share is in the top bar, the rest is in the card. */}
+                  <div
+                    data-testid="composer-meta"
+                    className="flex min-h-7 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 pt-1.5 text-[12px] text-zinc-500"
+                  >
+                    {/* v1.325.0: the conversation map — every question, one press away. */}
+                    <button
+                      type="button"
+                      data-testid="open-conversation-map"
+                      onClick={() => setMapOpen((v) => !v)}
+                      disabled={messages.filter((x) => x.role === "user" && !x.continuation).length < 2}
+                      aria-expanded={mapOpen}
+                      aria-label="Conversation map"
+                      title="Jump to any question in this conversation"
+                      className="inline-flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ListTree size={13} />
+                      <span>Map</span>
+                    </button>
+                    {mapOpen && (
+                      <div className="fixed bottom-24 right-4 z-40 w-[min(26rem,calc(100vw-2rem))]">
+                        <ConversationMap
+                          messages={messages}
+                          onJump={jumpToMessage}
+                          onClose={() => setMapOpen(false)}
+                        />
+                      </div>
+                    )}
+                    {/* Context headroom (v1.146.0). Deliberately quiet until it
+                        matters: nobody needs a gauge at 12% of a 200k window, and
+                        a permanent meter is the kind of chrome that gets ignored
+                        exactly when it starts mattering. */}
+                    <ContextMeter usage={contextUsage} />
+                    {/* Redesign S9 (Q7): a detected model, one tap — never picked
+                        silently. Silent once a real model answers, and absent
+                        while the empty state's connect doors make the same offer
+                        (one offer on screen at a time). */}
+                    {messages.length > 0 && (
+                      <ModelSuggestChip
+                        onOther={() => {
+                          setModelMenuOpen(true);
+                          setModelSub(null);
+                        }}
+                      />
+                    )}
+                    <span className="hidden sm:inline">
+                      {composerKeyHint(busy, !commMeta)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </section>
@@ -11096,28 +11332,21 @@ export default function ChatPage() {
               its folder — or just browse to any folder for an ad-hoc workspace.
               The chosen folder rides along as workspace_dir so the chat's
               armed file tools write here and their output surfaces live below. */}
-          {workspaceOpen ? (
-            <aside
-              className="relative w-full shrink-0 md:h-full md:w-[var(--rail-w)]"
-              style={{ "--rail-w": `${railW}px` } as CSSProperties}
+          {/* v1.326.0 (calm chat): a DRAWER opened from the top bar's
+              Project button or its "⋯" menu, no longer a permanent column.
+              Its contents are unchanged; ProjectDrawer owns the shell (the
+              portal, Escape, focus in and back, the phone scrim, the resize
+              grip). */}
+          {workspaceOpen && (
+            <ProjectDrawer
+              width={railW}
+              takeFocus={drawerTakeFocus}
+              returnFocusTo={drawerReturnTarget}
+              onClose={hideProjectPanel}
+              onResizeStart={startRailDrag}
+              onResizeReset={resetRailW}
             >
-              {/* Drag grip (desktop): widen the preview/workspace column or
-                  keep it as is — double-click resets to the default width. */}
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize the side panel"
-                title="Drag to resize — double-click to reset"
-                onPointerDown={startRailDrag}
-                onDoubleClick={resetRailW}
-                className="group/resize absolute -left-2.5 top-0 z-10 hidden h-full w-3 cursor-col-resize touch-none items-center justify-center md:flex"
-              >
-                <span className="h-12 w-1 rounded-full bg-white/10 transition-colors group-hover/resize:bg-accent/60" />
-              </div>
-              {/* `md:h-full` (was `md:h-[60vh]`): the third column takes the
-                  row's height like the other two, so the three line up top and
-                  bottom instead of ending at three different places. */}
-              <div className="flex h-[26rem] flex-col gap-2 md:h-full">
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
                 <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <FolderKanban size={13} className="shrink-0 text-accent-soft/80" />
@@ -11185,7 +11414,12 @@ export default function ChatPage() {
                         <button
                           key={t}
                           type="button"
-                          onClick={() => setProjectView(t)}
+                          onClick={() => {
+                            setProjectView(t);
+                            // On a phone the drawer covers the view just
+                            // opened; get out of its way.
+                            if (isPhoneWidth()) hideProjectPanel();
+                          }}
                           className="rounded-lg border border-white/10 px-2 py-1 text-[10.5px] capitalize text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
                           title={`Open ${t} in the chat column`}
                         >
@@ -11284,7 +11518,7 @@ export default function ChatPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setWorkspaceOpenPersisted(false)}
+                          onClick={hideProjectPanel}
                           title="Collapse workspace"
                           aria-label="Collapse workspace"
                           className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
@@ -11310,7 +11544,7 @@ export default function ChatPage() {
                       // acts as "cancel → back to files"; otherwise it hides the
                       // whole project panel.
                       if (pickingFolder && workspaceDir) setPickingFolder(false);
-                      else setWorkspaceOpenPersisted(false);
+                      else hideProjectPanel();
                     }}
                   />
                 )}
@@ -11318,30 +11552,7 @@ export default function ChatPage() {
                 </>
                 )}
               </div>
-            </aside>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setWorkspaceOpenPersisted(true)}
-              title={
-                activeProject
-                  ? `Show the project panel (${activeProject.name})`
-                  : "Show the project panel"
-              }
-              aria-label="Show project panel"
-              className="hidden shrink-0 self-stretch md:flex"
-            >
-              <span
-                className={`flex h-full flex-col items-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 px-2 py-3 transition-colors hover:text-accent-soft ${
-                  activeProject ? "text-accent-soft/80" : "text-zinc-500"
-                }`}
-              >
-                <PanelRightOpen size={16} />
-                <span className="text-[10px] uppercase tracking-wide [writing-mode:vertical-rl]">
-                  {activeProject ? activeProject.name.slice(0, 18) : "Project"}
-                </span>
-              </span>
-            </button>
+            </ProjectDrawer>
           )}
         </div>
       </Reveal>

@@ -266,7 +266,9 @@ describe("a follow-up message remembers the conversation's files", () => {
     // The rail lives in the project panel, which an ATTACHMENT does not open
     // (only a document a turn MADE does). So this walks the user's own route:
     // open the panel, then dismiss the file from the Files list.
-    fireEvent.click(await screen.findByLabelText("Show project panel"));
+    // v1.326.0 (calm chat): the panel is a drawer, opened from the chat top
+    // bar's Project button (the old "Show project panel" strip is gone).
+    fireEvent.click(await screen.findByRole("button", { name: /^Project/ }));
     // The rail is the user's own list: dismissing a file is an instruction,
     // and a file the user removed must stop riding along with every later turn.
     fireEvent.click(

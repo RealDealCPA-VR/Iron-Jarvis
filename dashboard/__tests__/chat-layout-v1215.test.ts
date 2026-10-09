@@ -64,9 +64,13 @@ describe("the module fills the app", () => {
   });
 
   it("all three columns take that height", () => {
-    // The thread rail, the conversation column, and the project panel.
+    // The thread rail and the conversation column. v1.326.0 (calm chat): the
+    // project panel is no longer a permanent third column; it is a drawer
+    // opened from the top bar (pinned in chat-topbar-v1326), so the old
+    // column's width class must be gone from the row.
     expect(CODE).toMatch(/md:block md:h-full md:w-60/); // threads
-    expect(CODE).toMatch(/md:h-full md:w-\[var\(--rail-w\)\]/); // project panel
+    expect(CODE).not.toMatch(/md:h-full md:w-\[var\(--rail-w\)\]/); // no project column
+    expect(CODE).toContain("<ProjectDrawer");
     expect(CODE).toMatch(/flex min-w-0 flex-1 flex-col gap-3 md:min-h-0/); // chat
     // The project panel's body was pinned to `60vh`, which ended it somewhere
     // other than where the other two ended.
@@ -100,26 +104,32 @@ describe("the title moved into the thread card", () => {
   });
 });
 
-describe("the controls are in the card, and cannot be scrolled away", () => {
+describe("the controls cannot be scrolled away", () => {
   it("the card is a flex column of DIRECT children, not a <Card>", () => {
     // See the header: Card's inner wrapper div would be the column's only
     // child and would size to its content.
     expect(CODE).toContain('data-testid="chat-card"');
-    expect(CODE).toMatch(
-      /card-surface relative flex h-full min-h-0 flex-col overflow-hidden/,
-    );
+    // v1.326.0 (calm chat): still the same flex column, but NO card: the
+    // `card-surface` fill/border/shadow is gone from the chat section.
+    expect(CODE).toMatch(/relative flex h-full min-h-0 flex-col overflow-hidden/);
+    const card = CODE.indexOf('data-testid="chat-card"');
+    expect(CODE.slice(card, card + 400)).not.toContain("card-surface");
     // No <Card> left in this file at all — the rails are sections too.
     expect(CODE).not.toContain("<Card");
   });
 
-  it("the controls sit in a shrink-0 header ABOVE the transcript", () => {
-    const bar = CODE.indexOf("{chatActions}");
+  it("the controls sit in a shrink-0 top bar ABOVE the transcript", () => {
+    // v1.326.0: the chat card's header row became the chat TOP BAR, which
+    // sits above the card (and above a project's Tasks/Board/Media).
+    const bar = CODE.indexOf("{chatTopBar}");
     const transcript = CODE.indexOf("ref={scrollRef}");
     expect(bar).toBeGreaterThan(-1);
     expect(transcript).toBeGreaterThan(bar);
-    const header = CODE.slice(CODE.lastIndexOf("<div", bar), bar);
+    const def = CODE.indexOf('data-testid="chat-topbar"');
+    expect(def).toBeGreaterThan(-1);
+    const header = CODE.slice(def, def + 300);
     expect(header).toContain("shrink-0");
-    expect(header).toContain("justify-end"); // "at the top right"
+    expect(CODE.slice(def, def + 6000)).toContain("ml-auto"); // "at the top right"
     // Not sticky: there is no scroll to stick against, and a sticky header
     // inside an overflow-hidden card with a backdrop-filter is the kind of
     // thing this codebase has been bitten by.

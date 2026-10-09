@@ -27,10 +27,11 @@
  *    (`[@media(hover:hover)]:opacity-0` + group-hover reveal, focus-within and
  *    the open-menu branch kept), a 28px target, and the project / messaging
  *    chip moved into the meta line in readable sentence case.
- *  - phone-chrome-eats-transcript: Voice is "Voice chat" by name with its word
- *    hidden on a phone; the header Project button is icon-only on a phone but
- *    NAMED "Project: {name}"; message avatars hide below sm; the persona
- *    select carries a visible "Persona" label.
+ *  - phone-chrome-eats-transcript: Voice is "Voice chat" by name; the header
+ *    Project button is icon-only on a phone but NAMED "Project: {name}";
+ *    message avatars hide below sm; the persona select carries a visible
+ *    "Persona" label. (v1.326.0: the header is the chat top bar, and Voice /
+ *    Persona sit in its "⋯" panel, opened first by these tests.)
  *  - carry-approval-browser-list: "Allow for this tab" (and its note) only for
  *    the 14 BUILT-IN browser tools, by exact name from lib/toolWords.ts — an
  *    agent-made `browser_backup` gets every other answer, not the tab one.
@@ -342,21 +343,25 @@ afterEach(() => {
 /* =============================================== phone-composer-cramped */
 
 describe("the composer on a phone (phone-composer-cramped)", () => {
-  it("the row wraps below sm and the message box takes the whole first line; + / project / mic stay one press away", async () => {
+  it("the message box takes the whole first line of the composer card; + / project / mic stay one press away under it", async () => {
     render(<ChatPage />);
     const box = await composerBox();
-    const row = box.parentElement as HTMLElement;
-    expect(classes(row)).toContain("flex-wrap");
-    expect(classes(row)).toContain("sm:flex-nowrap");
-    expect(classes(box)).toContain("basis-full");
-    expect(classes(box).some((c) => c.startsWith("sm:basis-"))).toBe(true);
-    // Every press is still a direct button in the same row.
-    const menu = within(row).getByRole("button", { name: "Open the chat menu" });
-    within(row).getByRole("button", { name: "Switch project" });
-    within(row).getByRole("button", { name: "Start dictation" });
-    // The box comes first on a phone: visually (order-first) or in the DOM.
-    const domFirst = Boolean(box.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(classes(box).includes("order-first") || domFirst).toBe(true);
+    // v1.326.0 (calm chat W1-2): the composer is ONE card at EVERY width —
+    // the box on top, one toolbar row under it — so the v1.315.0 pins on a
+    // row that was one line from sm up (`sm:flex-nowrap`, the box's
+    // `basis-full` + `sm:basis-*` pair) moved to the new shape: the box is a
+    // full-width child of the card and the TOOLBAR is what wraps on a phone.
+    const card = box.parentElement as HTMLElement;
+    expect(card.getAttribute("data-testid")).toBe("chat-composer");
+    expect(classes(box)).toContain("w-full");
+    const toolbar = within(card).getByTestId("composer-toolbar");
+    expect(classes(toolbar)).toContain("flex-wrap");
+    // Every press is still a direct button in the card's toolbar.
+    const menu = within(toolbar).getByRole("button", { name: "Open the chat menu" });
+    within(toolbar).getByRole("button", { name: "Switch project" });
+    within(toolbar).getByRole("button", { name: "Start dictation" });
+    // The box comes first, in the DOM (so on a phone too).
+    expect(Boolean(box.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
   it("Send is pinned to the right end of the controls line", async () => {
@@ -497,8 +502,9 @@ describe("the project views are real tabs in the card header (project-tabs-shift
     const lists = shownTablists();
     expect(lists).toHaveLength(1);
     const list = lists[0];
-    // No row pushed above the card: the strip lives in the card's header.
-    expect(screen.getByTestId("chat-card").contains(list)).toBe(true);
+    // No row pushed above the card. v1.326.0 (calm chat): the strip lives in
+    // the chat TOP BAR, which every view shares (it was the card's header).
+    expect(screen.getByTestId("chat-topbar").contains(list)).toBe(true);
     const tabs = within(list).getAllByRole("tab");
     expect(tabs.map((t) => (t.textContent ?? "").trim().toLowerCase())).toEqual(["chat", "tasks", "board", "media"]);
     expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
@@ -693,23 +699,32 @@ describe("thread options are reachable on touch (thread-options-invisible-on-tou
 
 /* ======================================== phone-chrome-eats-transcript */
 
-describe("the chat card header fits a phone (phone-chrome-eats-transcript)", () => {
-  it("Voice is named 'Voice chat' and its word hides on a phone", async () => {
+/** v1.326.0 (calm chat): the header row became the chat top bar; Voice, read
+ *  aloud, Persona + its editor and the project panel toggle live in its "⋯"
+ *  panel. Open it the way a user does. */
+async function openMoreMenu(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: "More chat options" }));
+  return await screen.findByRole("group", { name: "Chat options" });
+}
+
+describe("the chat top bar fits a phone (phone-chrome-eats-transcript)", () => {
+  it("Voice is named 'Voice chat' (in the ⋯ panel, where its word always shows)", async () => {
     render(<ChatPage />);
-    const voice = await screen.findByRole("button", { name: /^Voice chat$/i });
+    const panel = await openMoreMenu();
+    const voice = within(panel).getByRole("button", { name: /^Voice chat$/i });
     expect(voice.hasAttribute("aria-pressed")).toBe(true);
-    const word = within(voice).getByText(/^Voice/);
-    expect(classes(word)).toContain("hidden");
-    expect(classes(word)).toContain("sm:inline");
+    const word = within(voice).getByText(/^Voice chat$/);
+    expect(classes(word)).not.toContain("hidden");
   });
 
-  it("the header Project button is icon-only on a phone but NAMED 'Project: {name}'", async () => {
+  it("the top bar's Project button is icon-only on a phone but NAMED 'Project: {name}'", async () => {
     withProject();
     render(<ChatPage />);
-    const card = await screen.findByTestId("chat-card");
-    const btn = await within(card).findByRole("button", { name: /^Project: Q3 Bookkeeping/ });
-    expect(btn.hasAttribute("aria-pressed")).toBe(true);
-    const word = within(btn).getByText(PROJECT.name);
+    const bar = await screen.findByTestId("chat-topbar");
+    const btn = await within(bar).findByRole("button", { name: /^Project: Q3 Bookkeeping/ });
+    // It opens a drawer now: expanded/collapsed, not pressed.
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    const word = within(btn).getByText("Project");
     expect(classes(word)).toContain("hidden");
     expect(classes(word)).toContain("sm:inline");
   });
@@ -730,6 +745,7 @@ describe("the chat card header fits a phone (phone-chrome-eats-transcript)", () 
 
   it("the persona select carries a visible 'Persona' label", async () => {
     render(<ChatPage />);
+    await openMoreMenu();
     const sel = (await screen.findByRole("combobox", { name: "Persona" })) as HTMLSelectElement;
     const byFor = sel.id ? document.querySelector(`label[for="${sel.id}"]`) : null;
     const byRef = (sel.getAttribute("aria-labelledby") ?? "")
@@ -745,12 +761,12 @@ describe("the chat card header fits a phone (phone-chrome-eats-transcript)", () 
 
   it("CONTROL: every header control is still there with its action", async () => {
     render(<ChatPage />);
-    const card = await screen.findByTestId("chat-card");
-    const sel = (await within(card).findByRole("combobox", { name: "Persona" })) as HTMLSelectElement;
+    const panel = await openMoreMenu();
+    const sel = (await within(panel).findByRole("combobox", { name: "Persona" })) as HTMLSelectElement;
     expect(Array.from(sel.options).some((o) => o.textContent === "+ New persona…")).toBe(true);
-    expect(within(card).getByRole("button", { name: "Modify persona" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Modify persona" })).toBeTruthy();
     expect(
-      within(card)
+      within(panel)
         .getAllByRole("button")
         .some((b) => b.hasAttribute("aria-pressed") && /project/i.test(`${b.getAttribute("aria-label") ?? ""} ${b.textContent ?? ""} ${b.getAttribute("title") ?? ""}`)),
     ).toBe(true);

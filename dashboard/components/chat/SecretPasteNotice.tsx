@@ -83,7 +83,9 @@ export function SecretPasteNotice({
   }
 
   return (
-    <div data-testid="secret-held" role="alert" className="space-y-2 border-t hairline px-3 py-2 text-[12px] text-zinc-300">
+    // v1.326.0 (calm chat): it sits in the notices tray above the composer
+    // card, whose rows draw their own hairline between them.
+    <div data-testid="secret-held" role="alert" className="space-y-2 px-3 py-2 text-[12px] text-zinc-300">
       <p className="flex items-start gap-1.5">
         <KeyRound size={13} className="mt-0.5 shrink-0 text-tone-warn" aria-hidden />
         <span>
