@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.326.1 (2026-10-04).*
+holds itself to. Current as of v1.327.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat list, permissions and reply details (v1.327.0)
+
+Calm chat, part two (DeepSeek Harness ideas only).
+
+- **Chats are grouped under their projects.** The chat list on the left (and
+  the Chats drawer on a phone) shows each project as a quiet heading with its
+  chats under it; pinned chats come first and chats with no project last.
+  Each chat shows a short age ("12m", "3h") and a small dot: amber when it is
+  waiting for you (an approval or an app's question), a softly pulsing dot
+  while it is working, and a small dot when it changed since you last looked.
+  While a chat is working, the list checks again every few seconds.
+- **One permission chip.** The approvals menu in the message box is now a
+  single chip with three plain levels: **Ask first** (asks before it edits
+  files, uses the internet or runs commands), **Ask when risky** (edits files
+  and searches the web on its own, asks before running commands) and
+  **Don't ask** (use with care). It works with the keyboard and its menu is
+  never cut off on a phone.
+- **The reply details say what the answer drew on.** Open "answered by …" and
+  you see "Followed the project's AGENTS.md and CLAUDE.md" when the project's
+  rule files were used, and "Read 2 earlier chats: …" when earlier chats were
+  part of the answer. An earlier chat that had to be left out is named, in
+  amber when it matters.
 
 ## A calmer chat (v1.326.0)
 

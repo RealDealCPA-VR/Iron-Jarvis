@@ -2959,6 +2959,33 @@ does not need a bump, stop and bump it.
   raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
   reproduced CI's exact error.
 
+- **The chat list is grouped and lit, one permission chip, the receipt names
+  its rules and refs** (v1.327.0, calm chat wave 2). W2-1: the rail
+  (`chat-thread-rail`, one element for the desktop portal AND the phone
+  drawer) is `ThreadGroups` (project headings, Pinned first, No project last;
+  a project-scoped rail is one plain list); dots from
+  `lib/threadStatus.threadStatuses` (waiting > running > unread > idle; the
+  open chat never unread; markViewed on open/leave/pagehide); EVERY
+  /chat/stream and POST /chat body carries `thread_id` = the open SAVED chat
+  (`saveTargetRef` via `buildChatBody`; a new unsaved chat sends none);
+  `lib/threadListPoll.ts` re-reads /chat/threads every 4 s only while a row
+  is running/waiting and the tab is visible. W2-2: `PermissionChip` replaces
+  the approvals select, SAME id `#chat-approval-mode`, same state/request
+  fields; its menu is PORTALED to document.body (position fixed) because the
+  chat section's overflow clipped it on a phone; it closes when the chip's
+  box goes to zero (ResizeObserver). W2-3: `folder_rules` / `thread_refs`
+  are stored LAST on the message (`folderRules`, `threadRefs`, both lanes)
+  and drawn in the expanded TurnReceipt (`lib/turnReads.folderRulesLine`,
+  `turn-folder-rules`, `turn-thread-refs`, `turn-thread-ref-note`); new
+  receipt fields go AFTER these two. BW2-a: `scheduling/knobs.folder_rules_block`
+  is now a thin wrapper over `projects/folder_rules.read_rule_files(first_only=True)`
+  (it now also applies the file policy and drops a BOM;
+  tests/test_folder_rules_one_reader_v1327.py). BW2-b: search-refs leaves
+  archived chats out (an explicit id still resolves); `comm/threads.append`
+  clears `archived_at` on an inbound message. NOTE: v1.326.1's push carried
+  2d3d7e1/58a189f/d9a1d22 un-gated (reviewers commit to the shared master);
+  push hotfixes from a branch cut at origin/master while a workflow runs.
+
 - **A replaced answer is KEPT, a queued message waits for a clean finish,
   and page text is an attachment** (v1.325.0, wave D of the assistant-ui/tambo
   borrow list — ideas only). VERSIONS: `lib/branches.ts` — a fork lives on the
