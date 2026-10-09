@@ -2987,6 +2987,12 @@ does not need a bump, stop and bump it.
   `test_handbook_current_v1232` (roster line, bell line, daemon-offline
   phrases) and `vocabulary.test.ts` (no mode picker, no marketplace word,
   the three screenshot names, "Add a memory base") — run them after any edit.
+  v1.325.5 (test-only): v1.325.4's Release gate went red on
+  `iron-proxy-card-v1301` "renders ON" — a REMOUNT paints the previous
+  answer from `lib/apiCache` first, `mountWith` waits only for the card, and
+  the status was read before the fresh GET landed. Both reads now wait for
+  the line itself. A 300 ms delay on the mocked GET reproduced CI's exact
+  error; the whole file passes under that delay.
 
 - **A pack can ASK only where someone can answer, and a pack's model
   request is answered by THE TURN'S model or refused** (v1.324.0, wave C of

@@ -245,13 +245,19 @@ describe("the switch and the status line", () => {
   it("renders ON: started by Iron Jarvis + version, or already running on this PC", async () => {
     await mountWith(snap());
     expect(document.getElementById("iron-proxy-toggle")!.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByTestId("iron-proxy-status").textContent).toBe(
-      "Running· started by Iron Jarvis · v0.6.0",
+    // v1.325.5: a remount first paints the CACHED answer (lib/apiCache) and
+    // only then the fresh GET, so wait for the line itself, never the card.
+    await waitFor(() =>
+      expect(screen.getByTestId("iron-proxy-status").textContent).toBe(
+        "Running· started by Iron Jarvis · v0.6.0",
+      ),
     );
     cleanup();
     await mountWith(snap({ owned: false, version: "0.7.1" }));
-    expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(
-      /Running· already running on this PC · v0\.7\.1/,
+    await waitFor(() =>
+      expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(
+        /Running· already running on this PC · v0\.7\.1/,
+      ),
     );
   });
 
