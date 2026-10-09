@@ -50,6 +50,9 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import Link from "next/link";
 import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
   ArrowUp,
   AudioLines,
   BookmarkPlus,
@@ -99,6 +102,12 @@ import {
   Zap,
 } from "lucide-react";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
+import {
+  ARCHIVED_THREADS_PATH,
+  archiveChat,
+  stillRunningNote,
+  unarchiveChat,
+} from "@/lib/archiveChat";
 import { cacheDrop, cachedGet, cacheSet } from "@/lib/apiCache";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import {
@@ -337,6 +346,15 @@ const ShareChatDialog = dynamic(
   () =>
     import("@/components/chat/ShareChatDialog").then((m) => ({
       default: m.ShareChatDialog,
+    })),
+  { ssr: false },
+);
+// v1.328.0 (calm chat W3-3): shown only when an archive finds the chat still
+// working, so its code arrives with it.
+const ArchiveChatDialog = dynamic(
+  () =>
+    import("@/components/chat/ArchiveChatDialog").then((m) => ({
+      default: m.ArchiveChatDialog,
     })),
   { ssr: false },
 );
@@ -3480,6 +3498,22 @@ export default function ChatPage() {
   const [editUndo, setEditUndo] = useState<{ before: ChatMessage[]; text: string; files: UploadedFile[] } | null>(null);
   // v1.322.0: the chat whose delete item was pressed once (armed).
   const [deleteArmedId, setDeleteArmedId] = useState<string | null>(null);
+  // v1.328.0 (calm chat W3-3): ARCHIVE. A chat still working is not archived
+  // until the user says to stop it (`archiveAsk` = the dialog, with the
+  // daemon's own words for what is running). `archivedThreads` is GET
+  // /chat/threads?archived=only (every project); `archivedView` swaps the
+  // rail's list for it. `archiveNote` is the one sentence said when work
+  // kept going after an archive (it could not be stopped from here).
+  const [archiveAsk, setArchiveAsk] = useState<{
+    id: string;
+    title: string;
+    running: string[];
+  } | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveNote, setArchiveNote] = useState<string | null>(null);
+  const [archivedThreads, setArchivedThreads] = useState<ThreadSummary[]>([]);
+  const [archivedView, setArchivedView] = useState(false);
   // Calm UI redesign S7 (AUDIT Q5): on a wide screen the app sidebar holds
   // the conversation list — this page's own thread rail, portaled in (layout
   // only: same state, same rename / pin / move / delete). No slot (a phone, a
@@ -3547,6 +3581,13 @@ export default function ChatPage() {
     const q = threadQuery.trim().toLowerCase();
     return q ? threads.filter((t) => (t.title || "").toLowerCase().includes(q)) : threads;
   }, [threads, threadQuery]);
+  // v1.328.0: the same title filter over the archived list.
+  const visibleArchived = useMemo(() => {
+    const q = threadQuery.trim().toLowerCase();
+    return q
+      ? archivedThreads.filter((t) => (t.title || "").toLowerCase().includes(q))
+      : archivedThreads;
+  }, [archivedThreads, threadQuery]);
 
   // Hydrate pins once (per-device preference, like the workspace defaults).
   useEffect(() => {
@@ -4089,6 +4130,12 @@ export default function ChatPage() {
   // those flags are live in the daemon and nothing pushes their change. Stops
   // when no row is live, while the window is hidden, and on unmount.
   useThreadListPoll(threads, () => void refreshThreads());
+  // v1.328.0: how many chats are archived, for the rail's quiet
+  // "Archived (N)" link. Once on mount; archive/unarchive re-read it.
+  useEffect(() => {
+    void refreshArchived();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
+  }, []);
 
   // The model catalog for the header picker. v1.250.0 (S-02): through the
   // SHARED hook, so this page renders the catalog the title bar's switcher has
@@ -5472,8 +5519,88 @@ export default function ChatPage() {
     try {
       await del<void>(`/chat/threads/${id}`);
       setThreads((prev) => prev.filter((t) => t.id !== id));
+      // v1.328.0: a chat deleted from the Archived view leaves that list too.
+      setArchivedThreads((prev) => prev.filter((t) => t.id !== id));
       if (id === threadId) newChat(); // the open conversation is gone — clear the pane
       void refreshThreads();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  /** v1.328.0: re-read the archived chats (every project). Quiet on failure,
+   *  like the chat list: the count just stays what it was. */
+  async function refreshArchived() {
+    try {
+      const d = await get<{ threads?: ThreadSummary[] }>(ARCHIVED_THREADS_PATH);
+      if (mountedRef.current) {
+        setArchivedThreads(Array.isArray(d?.threads) ? d.threads : []);
+      }
+    } catch {
+      /* quiet */
+    }
+  }
+
+  /** v1.328.0 (calm chat W3-3): the ⋯ menu's Archive, and the dialog's
+   *  confirm (`stop` = "Stop and archive"). Nothing running → archived at
+   *  once (it is undone from the Archived view). Still working → the daemon
+   *  says 409 with what is running and nothing changes until the user
+   *  confirms in ArchiveChatDialog. Archiving the OPEN chat leaves it for a
+   *  new chat, as Delete does. */
+  async function archiveThread(id: string, stop = false) {
+    const title =
+      threads.find((x) => x.id === id)?.title ??
+      (archiveAsk?.id === id ? archiveAsk.title : "");
+    setThreadMenu(null);
+    setDeleteArmedId(null);
+    setArchiveNote(null);
+    if (archiveAsk) {
+      setArchiveBusy(true);
+      setArchiveError(null);
+    }
+    try {
+      const out = await archiveChat(id, stop);
+      if (out.kind === "busy") {
+        setArchiveAsk({ id, title, running: out.running });
+        return;
+      }
+      setArchiveAsk(null);
+      setArchiveNote(stillRunningNote(out.stillRunning, out.note));
+      setThreads((prev) => prev.filter((t) => t.id !== id));
+      if (id === threadId) newChat(); // archived chats leave the pane, like a delete
+      void refreshThreads();
+      void refreshArchived();
+    } catch (e) {
+      const offlineNow = e instanceof ApiError && e.status === 0;
+      if (archiveAsk) {
+        // The dialog is open: say it there, where the user is looking.
+        setArchiveError(
+          offlineNow
+            ? "Could not reach Iron Jarvis. Try again."
+            : `Could not archive this chat. ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } else if (offlineNow) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  /** v1.328.0: bring an archived chat back into the chat list; `open` also
+   *  opens it (pressing an archived row = bring it back and read it). */
+  async function unarchiveThread(id: string, open = false) {
+    setThreadMenu(null);
+    setDeleteArmedId(null);
+    try {
+      await unarchiveChat(id);
+      setArchivedThreads((prev) => prev.filter((t) => t.id !== id));
+      void refreshThreads();
+      void refreshArchived();
+      if (open) {
+        setArchivedView(false);
+        await openThread(id);
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
@@ -9084,6 +9211,38 @@ export default function ChatPage() {
     [],
   );
 
+  // The ⋯ beside every row, in the chat list AND (v1.328.0) the Archived
+  // view; its menu knows which list it was opened from.
+  const threadRowAction = (t: ThreadSummary) => (
+    /* v1.315.0: visible by default — a touch screen has no
+       hover, so the old opacity-0 left an invisible target.
+       Only a hover-capable pointer hides it until the row is
+       hovered or focused (where it takes the age's place). */
+    <span
+      className={`absolute right-1 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:group-hover/thread:opacity-100 ${
+        threadMenu?.id === t.id
+          ? "opacity-100"
+          : "[@media(hover:hover)]:opacity-0"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={(e) => openThreadMenu(e, t.id)}
+        aria-label={`Options for ${t.title || "chat"}`}
+        aria-haspopup="menu"
+        aria-expanded={threadMenu?.id === t.id}
+        title="Chat options"
+        className={`grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-white/[0.06] md:h-6 md:w-6 ${
+          threadMenu?.id === t.id
+            ? "bg-white/[0.06] text-zinc-200"
+            : "text-zinc-500 hover:text-zinc-200"
+        }`}
+      >
+        <MoreHorizontal size={14} />
+      </button>
+    </span>
+  );
+
   // The sidebar's New chat always reaches this render's newChat.
   newChatRef.current = newChat;
   // Redesign S7: the thread rail, lifted into a value so it can render in the
@@ -9183,7 +9342,52 @@ export default function ChatPage() {
                   the bottom of the window. The `max-h` is the narrow-width
                   floor, where the card has no height to fill. */}
               <div className={`min-h-0 flex-1 overflow-y-auto p-1.5 ${chatSlot ? "" : "max-h-[50vh] md:max-h-none"}`}>
-                {threadsLoading && threads.length === 0 ? (
+                {archivedView ? (
+                  /* v1.328.0 (calm chat W3-3): the ARCHIVED view, in the
+                     list's place. Every project's archived chats, one plain
+                     list; a row's ⋯ offers Unarchive and Delete, and pressing
+                     a row brings the chat back and opens it. */
+                  <div data-testid="thread-archived-view" className="min-w-0">
+                    <div className="flex items-center gap-2 px-1 pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setArchivedView(false)}
+                        data-testid="thread-archived-back"
+                        className="inline-flex h-7 items-center gap-1 rounded-[10px] px-1.5 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                      >
+                        <ArrowLeft size={13} aria-hidden="true" />
+                        Chats
+                      </button>
+                      <h3 className="ml-auto pr-1.5 text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500">
+                        Archived
+                      </h3>
+                    </div>
+                    {archivedThreads.length === 0 ? (
+                      <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
+                        No archived chats.
+                      </p>
+                    ) : visibleArchived.length === 0 ? (
+                      <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
+                        No archived chats match “{threadQuery.trim()}”.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="px-2.5 pb-1.5 text-[12px] leading-relaxed text-zinc-500">
+                          Opening one brings it back to your chats.
+                        </p>
+                        <ThreadGroups
+                          threads={visibleArchived}
+                          projects={projects}
+                          activeId={null}
+                          onOpen={(id) => void unarchiveThread(id, true)}
+                          headings={false}
+                          limit={Infinity}
+                          rowAction={threadRowAction}
+                        />
+                      </>
+                    )}
+                  </div>
+                ) : threadsLoading && threads.length === 0 ? (
                   <div className="space-y-1 p-1">
                     {[0, 1, 2, 3].map((i) => (
                       <div key={i} className="skeleton h-9 w-full" />
@@ -9248,37 +9452,44 @@ export default function ChatPage() {
                         </span>
                       ) : null
                     }
-                    rowAction={(t) => (
-                      /* v1.315.0: visible by default — a touch screen has no
-                         hover, so the old opacity-0 left an invisible target.
-                         Only a hover-capable pointer hides it until the row is
-                         hovered or focused (where it takes the age's place). */
-                      <span
-                        className={`absolute right-1 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 [@media(hover:hover)]:group-hover/thread:opacity-100 ${
-                          threadMenu?.id === t.id
-                            ? "opacity-100"
-                            : "[@media(hover:hover)]:opacity-0"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={(e) => openThreadMenu(e, t.id)}
-                          aria-label={`Options for ${t.title || "chat"}`}
-                          aria-haspopup="menu"
-                          aria-expanded={threadMenu?.id === t.id}
-                          title="Chat options"
-                          className={`grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-white/[0.06] md:h-6 md:w-6 ${
-                            threadMenu?.id === t.id
-                              ? "bg-white/[0.06] text-zinc-200"
-                              : "text-zinc-500 hover:text-zinc-200"
-                          }`}
-                        >
-                          <MoreHorizontal size={14} />
-                        </button>
-                      </span>
-                    )}
+                    rowAction={threadRowAction}
                   />
                 )}
+                {/* v1.328.0: work an archive could not stop from here is
+                    named, never called stopped. */}
+                {archiveNote ? (
+                  <p
+                    role="status"
+                    data-testid="thread-archive-note"
+                    className="mx-1 mt-2 flex items-start gap-2 rounded-[10px] border hairline px-2.5 py-2 text-[12px] leading-relaxed text-zinc-400"
+                  >
+                    <span className="min-w-0 flex-1">{archiveNote}</span>
+                    <button
+                      type="button"
+                      onClick={() => setArchiveNote(null)}
+                      aria-label="Dismiss"
+                      className="shrink-0 text-zinc-500 transition-colors hover:text-zinc-200"
+                    >
+                      <X size={12} />
+                    </button>
+                  </p>
+                ) : null}
+                {/* v1.328.0: the way into the Archived view, quiet at the
+                    foot of the list, only while something is archived. */}
+                {!archivedView && archivedThreads.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArchivedView(true);
+                      void refreshArchived();
+                    }}
+                    data-testid="thread-archived-link"
+                    className="mt-2 flex h-7 w-full items-center gap-1.5 rounded-[10px] pl-[22px] pr-2.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                  >
+                    <Archive size={12} aria-hidden="true" className="shrink-0" />
+                    Archived ({archivedThreads.length})
+                  </button>
+                ) : null}
               </div>
             </section>
   );
@@ -9475,7 +9686,11 @@ export default function ChatPage() {
               <AnimatePresence>
                 {threadMenu &&
                   (() => {
-                    const mt = threads.find((x) => x.id === threadMenu.id);
+                    // v1.328.0: a menu opened in the Archived view is about
+                    // an archived chat: Unarchive and Delete only.
+                    const mt = (archivedView ? archivedThreads : threads).find(
+                      (x) => x.id === threadMenu.id,
+                    );
                     if (!mt) return null;
                     const pinned = pinnedIds.includes(mt.id);
                     const item =
@@ -9499,143 +9714,168 @@ export default function ChatPage() {
                         }}
                         className="z-50 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
                       >
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className={item}
-                          onClick={() => {
-                            setRenameDraft(mt.title || "");
-                            setRenamingId(mt.id);
-                            setThreadMenu(null);
-                          }}
-                        >
-                          <Pencil size={14} className="shrink-0 text-zinc-400" />
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className={item}
-                          onClick={() => {
-                            togglePin(mt.id);
-                            setThreadMenu(null);
-                          }}
-                        >
-                          {pinned ? (
-                            <PinOff size={14} className="shrink-0 text-zinc-400" />
-                          ) : (
-                            <Pin size={14} className="shrink-0 text-zinc-400" />
-                          )}
-                          {pinned ? "Unpin" : "Pin to top"}
-                        </button>
-                        {/* Memory keeps the menu OPEN: the spinner→check that
-                            used to live on the row icon now lives here, and
-                            closing instantly would hide the only feedback. */}
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className={item}
-                          disabled={rememberingId !== null}
-                          onClick={() => void rememberThread(mt.id)}
-                        >
-                          {rememberingId === mt.id ? (
-                            <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
-                          ) : rememberedId === mt.id ? (
-                            <Check size={14} className="shrink-0 text-emerald-300" />
-                          ) : (
-                            <Brain size={14} className="shrink-0 text-zinc-400" />
-                          )}
-                          {rememberedId === mt.id ? "Saved to memory" : "Commit to memory"}
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          className={item}
-                          disabled={crystallizingId !== null}
-                          onClick={() => void crystallizeThread(mt.id)}
-                        >
-                          {crystallizingId === mt.id ? (
-                            <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
-                          ) : (
-                            <GitBranch size={14} className="shrink-0 text-zinc-400" />
-                          )}
-                          Turn into workflow
-                        </button>
-                        <button
-                          type="button"
-                          role="menuitem"
-                          aria-expanded={threadMenuProjects}
-                          className={item}
-                          onClick={() => setThreadMenuProjects((v) => !v)}
-                        >
-                          <FolderKanban size={14} className="shrink-0 text-zinc-400" />
-                          Add to project
-                          <ChevronRight
-                            size={13}
-                            className={`ml-auto shrink-0 text-zinc-500 transition-transform ${
-                              threadMenuProjects ? "rotate-90" : ""
-                            }`}
-                          />
-                        </button>
-                        <AnimatePresence initial={false}>
-                          {threadMenuProjects && (
-                            <m.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: "auto", opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              transition={{ duration: 0.14, ease: "easeOut" }}
-                              className="overflow-hidden"
-                            >
-                              <div className="max-h-44 overflow-y-auto pl-4">
-                                {projects.length === 0 ? (
-                                  <p className="px-2.5 py-2 text-[11.5px] text-zinc-500">
-                                    No projects yet — create one from the Project
-                                    button above the chat.
-                                  </p>
-                                ) : (
-                                  <>
-                                    {projects.map((pr) => (
-                                      <button
-                                        key={pr.id}
-                                        type="button"
-                                        role="menuitem"
-                                        className={item}
-                                        disabled={assigningThread}
-                                        onClick={() =>
-                                          void assignThreadProject(mt.id, pr.id)
-                                        }
-                                      >
-                                        <span className="min-w-0 flex-1 truncate">
-                                          {pr.name}
-                                        </span>
-                                        {mt.project_id === pr.id && (
-                                          <Check
-                                            size={13}
-                                            className="shrink-0 text-accent-soft"
-                                          />
-                                        )}
-                                      </button>
-                                    ))}
-                                    {mt.project_id && (
-                                      <button
-                                        type="button"
-                                        role="menuitem"
-                                        className={`${item} text-zinc-400`}
-                                        disabled={assigningThread}
-                                        onClick={() =>
-                                          void assignThreadProject(mt.id, null)
-                                        }
-                                      >
-                                        <X size={13} className="shrink-0" />
-                                        Remove from project
-                                      </button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </m.div>
-                          )}
-                        </AnimatePresence>
+                        {archivedView ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            data-testid="thread-menu-unarchive"
+                            onClick={() => void unarchiveThread(mt.id)}
+                          >
+                            <ArchiveRestore size={14} className="shrink-0 text-zinc-400" />
+                            Unarchive
+                          </button>
+                        ) : (
+                          <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            onClick={() => {
+                              setRenameDraft(mt.title || "");
+                              setRenamingId(mt.id);
+                              setThreadMenu(null);
+                            }}
+                          >
+                            <Pencil size={14} className="shrink-0 text-zinc-400" />
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            onClick={() => {
+                              togglePin(mt.id);
+                              setThreadMenu(null);
+                            }}
+                          >
+                            {pinned ? (
+                              <PinOff size={14} className="shrink-0 text-zinc-400" />
+                            ) : (
+                              <Pin size={14} className="shrink-0 text-zinc-400" />
+                            )}
+                            {pinned ? "Unpin" : "Pin to top"}
+                          </button>
+                          {/* Memory keeps the menu OPEN: the spinner→check that
+                              used to live on the row icon now lives here, and
+                              closing instantly would hide the only feedback. */}
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            disabled={rememberingId !== null}
+                            onClick={() => void rememberThread(mt.id)}
+                          >
+                            {rememberingId === mt.id ? (
+                              <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
+                            ) : rememberedId === mt.id ? (
+                              <Check size={14} className="shrink-0 text-emerald-300" />
+                            ) : (
+                              <Brain size={14} className="shrink-0 text-zinc-400" />
+                            )}
+                            {rememberedId === mt.id ? "Saved to memory" : "Commit to memory"}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            disabled={crystallizingId !== null}
+                            onClick={() => void crystallizeThread(mt.id)}
+                          >
+                            {crystallizingId === mt.id ? (
+                              <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
+                            ) : (
+                              <GitBranch size={14} className="shrink-0 text-zinc-400" />
+                            )}
+                            Turn into workflow
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            aria-expanded={threadMenuProjects}
+                            className={item}
+                            onClick={() => setThreadMenuProjects((v) => !v)}
+                          >
+                            <FolderKanban size={14} className="shrink-0 text-zinc-400" />
+                            Add to project
+                            <ChevronRight
+                              size={13}
+                              className={`ml-auto shrink-0 text-zinc-500 transition-transform ${
+                                threadMenuProjects ? "rotate-90" : ""
+                              }`}
+                            />
+                          </button>
+                          <AnimatePresence initial={false}>
+                            {threadMenuProjects && (
+                              <m.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.14, ease: "easeOut" }}
+                                className="overflow-hidden"
+                              >
+                                <div className="max-h-44 overflow-y-auto pl-4">
+                                  {projects.length === 0 ? (
+                                    <p className="px-2.5 py-2 text-[11.5px] text-zinc-500">
+                                      No projects yet — create one from the Project
+                                      button above the chat.
+                                    </p>
+                                  ) : (
+                                    <>
+                                      {projects.map((pr) => (
+                                        <button
+                                          key={pr.id}
+                                          type="button"
+                                          role="menuitem"
+                                          className={item}
+                                          disabled={assigningThread}
+                                          onClick={() =>
+                                            void assignThreadProject(mt.id, pr.id)
+                                          }
+                                        >
+                                          <span className="min-w-0 flex-1 truncate">
+                                            {pr.name}
+                                          </span>
+                                          {mt.project_id === pr.id && (
+                                            <Check
+                                              size={13}
+                                              className="shrink-0 text-accent-soft"
+                                            />
+                                          )}
+                                        </button>
+                                      ))}
+                                      {mt.project_id && (
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className={`${item} text-zinc-400`}
+                                          disabled={assigningThread}
+                                          onClick={() =>
+                                            void assignThreadProject(mt.id, null)
+                                          }
+                                        >
+                                          <X size={13} className="shrink-0" />
+                                          Remove from project
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </m.div>
+                            )}
+                          </AnimatePresence>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={item}
+                            data-testid="thread-menu-archive"
+                            onClick={() => void archiveThread(mt.id)}
+                          >
+                            <Archive size={14} className="shrink-0 text-zinc-400" />
+                            Archive
+                          </button>
+                          </>
+                        )}
                         <div className="my-1 h-px bg-white/[0.06]" />
                         {/* v1.322.0 (borrowed idea: assistant-ui's separate
                             archive/delete): deleting is permanent, so the
@@ -11978,6 +12218,22 @@ export default function ChatPage() {
           threadId={threadId}
           title={shareTitle}
           onClose={() => setShareOpen(false)}
+        />
+      )}
+      {/* v1.328.0 (calm chat W3-3): the chat is still working. The dialog
+          lists what would stop; confirming re-sends the archive with
+          {stop: true}, the same stop the Stop button sends. */}
+      {archiveAsk && (
+        <ArchiveChatDialog
+          title={archiveAsk.title}
+          running={archiveAsk.running}
+          busy={archiveBusy}
+          error={archiveError}
+          onConfirm={(stop) => void archiveThread(archiveAsk.id, stop)}
+          onClose={() => {
+            setArchiveAsk(null);
+            setArchiveError(null);
+          }}
         />
       )}
     </PageShell>

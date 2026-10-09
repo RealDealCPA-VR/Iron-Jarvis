@@ -191,9 +191,15 @@ function hold(path: string): () => void {
   };
 }
 
-/** The thread-LIST requests (not a single thread's GET). */
+/** The thread-LIST requests (not a single thread's GET). v1.328.0: the
+ *  ARCHIVED list (`?archived=only`, read once for the rail's "Archived (N)"
+ *  link, every project) is a different list and is not the rail's scope, so
+ *  it is left out here; the rail's own list request is still counted. */
 function listGets(): string[] {
-  return H.api.gets.filter((p) => p === "/chat/threads" || p.startsWith("/chat/threads?"));
+  return H.api.gets.filter(
+    (p) =>
+      (p === "/chat/threads" || p.startsWith("/chat/threads?")) && !p.includes("archived="),
+  );
 }
 
 /** Let any queued effects/fetches run, so a negative ("no second request") is
