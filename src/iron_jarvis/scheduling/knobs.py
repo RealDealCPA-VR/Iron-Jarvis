@@ -65,10 +65,13 @@ SCRIPT_OUTPUT_CAP = 8_000
 EARLIER_RESULT_CAP = 4_000
 #: Head + tail cap on a folder's rules file.
 FOLDER_RULES_CAP = 8_000
-#: How much of a rules file is READ at all (the scan caps it further).
-_RULES_READ_CHARS = 64_000
-#: The rules files looked for in a working folder, first found wins.
+#: The rules files looked for in a working folder, first found wins. (How
+#: much of one is read at all is the shared reader's
+#: ``projects/folder_rules.READ_CHARS``, 64,000 characters.)
 FOLDER_RULES_FILES: tuple[str, ...] = ("AGENTS.md", ".ironjarvis.md")
+#: The source label promptguard names in a placeholder and an event
+#: (``folder rules <file>``).
+FOLDER_RULES_SOURCE = "folder rules"
 #: The two places a script may run.
 SCRIPT_CWDS: tuple[str, ...] = ("workspace", "home")
 
@@ -399,37 +402,34 @@ def folder_rules_block(
 ) -> str:
     """The "# Folder rules (<file>)" block for a working folder, or "".
 
-    Looks for :data:`FOLDER_RULES_FILES` in that order and takes the FIRST
-    found; the text rides through ``promptguard.guard`` (source ``folder
-    rules <file>``, cap :data:`FOLDER_RULES_CAP`) so an injected line becomes
-    the placeholder and a ``context.blocked`` lands. BLOCKING (a file read):
-    the runtime hops it off the loop, and ONLY for a session whose options
-    carry ``folder_rules`` — a folder nobody asked about is never read."""
-    from ..core.promptguard import guard
-
-    root = Path(str(workspace or "")) if workspace else None
-    if root is None:
+    A thin wrapper over the ONE folder-rules reader,
+    ``projects/folder_rules.read_rule_files`` (v1.327.0; the chat lanes read
+    a project's AGENTS.md / CLAUDE.md through the same function). The
+    schedule's own settings: :data:`FOLDER_RULES_FILES` in that order, the
+    FIRST that exists wins even when it is blank (``first_only``), source
+    ``folder rules <file>`` and cap :data:`FOLDER_RULES_CAP`, so an injected
+    line becomes the placeholder and a ``context.blocked`` lands. From the
+    reader it also takes the file policy (a protected or non-allowlisted
+    folder or file is not read) and a leading BOM is dropped. BLOCKING (a
+    file read): the runtime hops it off the loop, and ONLY for a session
+    whose options carry ``folder_rules`` — a folder nobody asked about is
+    never read. Never raises."""
+    if not workspace:
         return ""
-    for fname in FOLDER_RULES_FILES:
-        path = root / fname
-        try:
-            if not path.is_file():
-                continue
-            raw = path.read_text(encoding="utf-8", errors="replace")[:_RULES_READ_CHARS]
-        except OSError:
-            log.debug("folder rules %s unreadable", path, exc_info=True)
-            continue
-        text = guard(
-            raw,
-            source=f"folder rules {fname}",
-            event_bus=event_bus,
-            session_id=session_id,
-            cap=FOLDER_RULES_CAP,
-        ).strip()
-        if not text:
-            return ""
-        return f"# Folder rules ({fname})\n{text}"
-    return ""
+    from ..projects import folder_rules
+
+    files = folder_rules.read_rule_files(
+        workspace,
+        FOLDER_RULES_FILES,
+        total_cap=FOLDER_RULES_CAP,
+        source_prefix=FOLDER_RULES_SOURCE,
+        first_only=True,
+        event_bus=event_bus,
+        session_id=session_id,
+    )
+    if not files:
+        return ""
+    return f"# Folder rules ({files[0].name})\n{files[0].text}"
 
 
 def set_session_task(engine: Any, session_id: str, task: str) -> None:
@@ -452,6 +452,7 @@ __all__ = [
     "EARLIER_RESULT_CAP",
     "FOLDER_RULES_CAP",
     "FOLDER_RULES_FILES",
+    "FOLDER_RULES_SOURCE",
     "KNOB_KEYS",
     "KnobError",
     "SCRIPT_FROM_AGENT_REFUSAL",
