@@ -4273,10 +4273,9 @@ async def chat_stream(
             # scan had run. MIRROR NOTE (lock-step): both lanes.
             reply += _claimed_write_note(reply, tools_used)
         if text_only_pick and (body.tools or []):
-            reply += (
-                f"\n\n_Note: {provider_choice} can't run tools — this "
-                f"turn was answered text-only._"
-            )
+            # v1.330.0: plain words, the endpoint's own name. MIRROR NOTE
+            # (lock-step): chat_turn.run_chat_turn appends the same helper.
+            reply += _chat_turn.text_only_note(d.platform, provider_choice)
         # UNREAD STEER NOTES (v1.287.0). A note posted while the model wrote
         # its final answer never met a round boundary — every plain question
         # ends after round 0 — yet the steer route had answered "queued".
@@ -4322,6 +4321,12 @@ async def chat_stream(
                 "why": route_why,
                 # v1.263.0 (additive): the reasoning level actually applied.
                 "reasoning": route_reasoning,
+                # v1.330.0 (additive, LAST): the answering endpoint's own
+                # name and whether this turn ran with NO tools because the
+                # picked model has not shown it can use them. MIRROR NOTE
+                # (lock-step): chat_turn.run_chat_turn's route carries both.
+                "label": _chat_turn.route_label(d.platform, route_provider),
+                "text_only": bool(text_only_pick),
             },
             "tools_used": tools_used,
             # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present

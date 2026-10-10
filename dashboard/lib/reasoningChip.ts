@@ -9,10 +9,17 @@
  * "Default" still sends nothing.
  *
  *  - picked "high"            chip "High"
- *  - nothing, default medium  chip "Medium",       menu "Medium (default)"
- *  - nothing, default off     chip "Thinking off", menu "Thinking off (default)"
- *  - nothing, default auto    chip "Auto",         menu "Auto (default)"
+ *  - nothing, default medium  chip "Medium",       menu "Default (Medium)"
+ *  - nothing, default off     chip "Thinking off", menu "Default (Thinking off)"
+ *  - nothing, default auto    chip "Auto",         menu "Default (Auto)"
  *  - nothing, unknown         chip "Reasoning",    menu "Default"
+ *
+ * v1.330.0 (W11): the "send nothing" row LEADS with "Default". It used to say
+ * "Medium (default)" right above the explicit "Medium" row, which read as the
+ * same choice twice. They are not the same: the default row sends nothing, so
+ * the model keeps following its vendor's default (and a chat saved with it
+ * follows a different model's default after a switch), while "Medium" pins
+ * medium. Both rows stay, so a saved explicit pick still matches an option.
  */
 
 const LEVELS = ["low", "medium", "high"];
@@ -48,10 +55,12 @@ export function reasoningChipLabel(picked: string, def: string): string {
   return defaultWords(def) || "Reasoning";
 }
 
-/** The menu row for "send nothing": names the default when it is known. */
+/** The menu row for "send nothing": "Default", naming the level in brackets
+ *  when it is known ("Default (Medium)"), so it never reads as a twin of the
+ *  explicit "Medium" row below it. */
 export function reasoningDefaultOption(def: string): string {
   const words = defaultWords(def);
-  return words ? `${words} (default)` : "Default";
+  return words ? `Default (${words})` : "Default";
 }
 
 /** The chip's tooltip: what it measures, then what happens with nothing picked. */

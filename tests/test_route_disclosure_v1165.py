@@ -185,6 +185,10 @@ def test_default_route_discloses_default_with_empty_requested(tmp_path):
         "why": "",
         # v1.263.0 (additive): the reasoning level applied — "" when none.
         "reasoning": "",
+        # v1.330.0 (additive, last): the endpoint label ("" off the fleet)
+        # and whether the turn ran with no tools (a text-only pick).
+        "label": "",
+        "text_only": False,
     }
 
 
@@ -235,6 +239,10 @@ def test_an_explicitly_chosen_mock_still_says_mock(tmp_path):
         "why": "",
         # v1.263.0 (additive): the reasoning level applied — "" when none.
         "reasoning": "",
+        # v1.330.0 (additive, last): the endpoint label ("" off the fleet)
+        # and whether the turn ran with no tools (a text-only pick).
+        "label": "",
+        "text_only": False,
     }
 
 
@@ -261,6 +269,10 @@ def test_stream_done_frame_route_is_identical_to_post_chat(tmp_path):
         "why": "",
         # v1.263.0 (additive): the reasoning level applied — "" when none.
         "reasoning": "",
+        # v1.330.0 (additive, last): the endpoint label ("" off the fleet)
+        # and whether the turn ran with no tools (a text-only pick).
+        "label": "",
+        "text_only": False,
     }
 
 
@@ -456,6 +468,10 @@ def test_parity_explicit_pick_both_lanes_identical(tmp_path):
         "why": "",
         # v1.263.0 (additive): the reasoning level applied — "" when none.
         "reasoning": "",
+        # v1.330.0 (additive, last): the endpoint label ("" off the fleet)
+        # and whether the turn ran with no tools (a text-only pick).
+        "label": "",
+        "text_only": False,
     }
 
 
@@ -525,6 +541,10 @@ def test_parity_failover_both_lanes_identical(tmp_path):
         "why": "http 429",
         # v1.263.0 (additive): the reasoning level applied — "" when none.
         "reasoning": "",
+        # v1.330.0 (additive, last): the endpoint label ("" off the fleet)
+        # and whether the turn ran with no tools (a text-only pick).
+        "label": "",
+        "text_only": False,
     }
     # Top-level provider/model tell the same story (old-client surface).
     assert flat.json()["provider"] == "grok-cli"

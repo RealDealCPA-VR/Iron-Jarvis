@@ -1153,6 +1153,36 @@ def _saved_workflows_block(platform) -> str:
         return ""
 
 
+def route_label(platform: Any, provider: str) -> str:
+    """The name the user gave the endpoint that answered, for the receipt
+    (calm chat W11, v1.330.0): a ``fleet-<id>`` provider's node label
+    ("Spark proxy (L4)"), else ``""``.
+
+    The model menu names a fleet endpoint by its label, so the reply's
+    "answered by" tooltip said "fleet-sparkl4 · glm" for a row the user only
+    ever saw as "Spark proxy (L4)". Read through the router's own
+    ``_endpoint_label`` (v1.329.0), the same name a refusal uses. The raw id
+    stays on the route's ``provider``. WORDING ONLY: any fault answers "".
+    MIRROR NOTE (lock-step): both chat lanes call this for ``route.label``."""
+    p = str(provider or "")
+    if not p.startswith("fleet-"):
+        return ""
+    try:
+        label = platform.router._endpoint_label(p)
+    except Exception:  # noqa: BLE001 — wording only, never a new failure
+        return ""
+    label = " ".join(str(label or "").split())
+    return "" if label == p else label
+
+
+def text_only_note(platform: Any, provider: str) -> str:
+    """The reply's note when the user ARMED tools but picked a model that
+    cannot use them (v1.125.0; plain words and the endpoint's label since
+    v1.330.0). MIRROR NOTE (lock-step): both chat lanes append this."""
+    name = route_label(platform, provider) or str(provider or "")
+    return f"\n\n_Note: {name} can't run tools, so this turn was answered text only._"
+
+
 def _last_user_text(messages) -> str:
     """The latest user message's text — the false-positive guard for the
     language check (a question ASKED in Chinese may be answered in Chinese)."""
@@ -5433,10 +5463,7 @@ async def run_chat_turn(
         # scan had run. MIRROR NOTE (lock-step): both lanes.
         reply += _claimed_write_note(reply, tools_used)
         if text_only_pick and (body.tools or []):
-            reply += (
-                f"\n\n_Note: {provider_choice} can't run tools — this "
-                f"turn was answered text-only._"
-            )
+            reply += text_only_note(d.platform, provider_choice)
     # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT): when this
     # message corrects HOW the assistant answers and the user made the same
     # correction in another turn, ONE proposed preference is minted and asked
@@ -5478,6 +5505,13 @@ async def run_chat_turn(
             # receipt can name the user's own endpoint that was skipped.
             "from": getattr(route, "from_provider", ""),
             "why": getattr(route, "why", ""),
+            # v1.330.0 (additive, LAST): the answering endpoint's own name
+            # ("" unless a fleet node has a label) and whether this turn ran
+            # with NO tools because the picked model has not shown it can use
+            # them (`text_only_pick` above: nothing armed, nothing offered).
+            # The receipt says "no tools" from this, never from a guess.
+            "label": route_label(d.platform, route.provider),
+            "text_only": bool(text_only_pick),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user

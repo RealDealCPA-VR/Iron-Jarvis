@@ -12298,7 +12298,7 @@ export default function ChatPage() {
                         {reasoningLevelsFor(choice).length > 0 && (
                           // v1.330.0: the chip's WORDS are this span; the native
                           // select lies invisibly over it (same box), so its
-                          // menu can say "Medium (default)" while the chip
+                          // menu can say "Default (Medium)" while the chip
                           // says "Medium". The select keeps its name, value,
                           // keyboard and phone picker.
                           <span
@@ -12334,7 +12334,9 @@ export default function ChatPage() {
                                   model ("High"); the select's name says what
                                   they measure. v1.330.0: the "send nothing"
                                   row names the model's own default when the
-                                  daemon knows it ("Medium (default)"). */}
+                                  daemon knows it ("Default (Medium)"; v1.330.0
+                                  leads with "Default" so it never reads as a
+                                  twin of the explicit "Medium" row). */}
                               <option value="" className="bg-ink-900 text-zinc-200">
                                 {reasoningDefaultOption(reasoningDefaultFor(choice))}
                               </option>

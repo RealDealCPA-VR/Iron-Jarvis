@@ -5,7 +5,8 @@
  * what level the model would run at. The daemon's catalog row now carries
  * `reasoning_default` (the vendor's documented default for that exact model,
  * "" = unknown). The chip says it in plain words; the menu's "send nothing"
- * row names it with "(default)"; an unknown default keeps "Reasoning" and the
+ * row names it ("Default (Medium)"; v1.330.0 W11 leads with "Default" so it
+ * never reads as a twin of the explicit "Medium" row); an unknown default keeps "Reasoning" and the
  * tooltip says the model decides. What is SENT is unchanged: a pick sends that
  * level, the default row sends nothing. Header, mocks and helpers are the
  * reasoning-level (v1.263.0) harness verbatim.
@@ -184,14 +185,14 @@ async function chipFor(model: string, words: string) {
 describe("the words, one table (lib/reasoningChip)", () => {
   it.each([
     // [picked, default, chip, default row]
-    ["", "medium", "Medium", "Medium (default)"],
-    ["", "low", "Low", "Low (default)"],
-    ["", "high", "High", "High (default)"],
-    ["", "off", "Thinking off", "Thinking off (default)"],
-    ["", "auto", "Auto", "Auto (default)"],
+    ["", "medium", "Medium", "Default (Medium)"],
+    ["", "low", "Low", "Default (Low)"],
+    ["", "high", "High", "Default (High)"],
+    ["", "off", "Thinking off", "Default (Thinking off)"],
+    ["", "auto", "Auto", "Default (Auto)"],
     ["", "", "Reasoning", "Default"],
-    ["high", "medium", "High", "Medium (default)"],
-    ["low", "off", "Low", "Thinking off (default)"],
+    ["high", "medium", "High", "Default (Medium)"],
+    ["low", "off", "Low", "Default (Thinking off)"],
     ["medium", "", "Medium", "Default"],
   ])("picked %j, default %j: chip %j, row %j", (picked, def, chip, row) => {
     expect(reasoningChipLabel(picked, def)).toBe(chip);
@@ -223,7 +224,7 @@ describe("the chip on the page says the level the model will use", () => {
     expect(select.value).toBe("");
     expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "low", "medium", "high"]);
     expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      "Medium (default)",
+      "Default (Medium)",
       "Low",
       "Medium",
       "High",
@@ -258,7 +259,7 @@ describe("the chip on the page says the level the model will use", () => {
   it("a model that does not think unless asked reads 'Thinking off'", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5.1", "Thinking off");
-    expect(select.options[0].textContent).toBe("Thinking off (default)");
+    expect(select.options[0].textContent).toBe("Default (Thinking off)");
     expect(select.getAttribute("title")).toContain("does not think first");
     // The menu still offers the three levels.
     expect(Array.from(select.options).slice(1).map((o) => o.value)).toEqual(LEVELS);
@@ -267,7 +268,7 @@ describe("the chip on the page says the level the model will use", () => {
   it("a model that decides for itself reads 'Auto'", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5.9-auto", "Auto");
-    expect(select.options[0].textContent).toBe("Auto (default)");
+    expect(select.options[0].textContent).toBe("Default (Auto)");
   });
 
   it.each(["gpt-5-codex", "o3", "gpt-7"])(

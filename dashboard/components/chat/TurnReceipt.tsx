@@ -181,6 +181,25 @@ export interface TurnRoute {
    *  serving model offers none — the receipt never names a level that did
    *  not reach the model. */
   reasoning?: string;
+  /** v1.330.0: the name the user gave the endpoint that answered (a fleet
+   *  node's label, "Spark proxy (L4)"); "" or absent when it has none. The
+   *  raw id stays in `provider`. */
+  label?: string;
+  /** v1.330.0: true when the daemon served this turn with NO tools because
+   *  the picked model has not shown it can use them (nothing was armed or
+   *  offered). Daemon truth, never inferred here. */
+  text_only?: boolean;
+}
+
+/** v1.330.0: the "no tools" part's words on hover, and the expanded line. */
+export const NO_TOOLS_TITLE =
+  "This model has not shown it can use tools, so this reply was text only. Pick a model with tools to let Jarvis act.";
+
+/** v1.330.0: the endpoint that answered, in the user's words: its label when
+ *  the daemon sent one, else the provider's plain name. */
+function servedName(rt: TurnRoute): string {
+  const label = typeof rt.label === "string" ? rt.label.trim() : "";
+  return label || providerDisplay(rt.provider);
 }
 
 /** One tool step with its duration (v1.323.0) — `useChatStream`'s TurnStep.
@@ -479,9 +498,14 @@ function answeredName(route: TurnRoute, modelName?: string | null): string {
 }
 
 /** v1.314.0: the raw route ids behind the plain words — a record, kept in a
- *  title: "claude-cli · claude-fable-5 (failover from codex-cli)". */
+ *  title: "claude-cli · claude-fable-5 (failover from codex-cli)".
+ *  v1.330.0: an endpoint with a label leads with it, the raw id kept last:
+ *  "Spark proxy (L4) · glm · fleet-sparkl4". */
 function rawRoute(rt: TurnRoute): string {
-  const bits = [rt.provider, rt.model].filter(Boolean).join(" · ");
+  const label = typeof rt.label === "string" ? rt.label.trim() : "";
+  const bits = (label ? [label, rt.model, rt.provider] : [rt.provider, rt.model])
+    .filter(Boolean)
+    .join(" · ");
   const from = (rt.from ?? "").trim();
   if (from && from !== rt.provider) return `${bits} (failover from ${from})`;
   if (rt.requested && rt.requested !== rt.provider) return `${bits} (asked for ${rt.requested})`;
@@ -694,7 +718,7 @@ export function TurnReceipt({
           title={
             rt.provider === "mock"
               ? rawRoute(rt)
-              : `Served by ${providerDisplay(rt.provider)}. ${rawRoute(rt)}`
+              : `Served by ${servedName(rt)}. ${rawRoute(rt)}`
           }
           className="inline-flex min-w-0 items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/[0.06] px-1.5 py-px font-medium text-tone-warn"
         >
@@ -712,9 +736,19 @@ export function TurnReceipt({
         </span>
       ) : (
         <span key="who" className="text-zinc-400" title={rawRoute(rt)}>
-          {providerDisplay(rt.provider)}
+          {servedName(rt)}
         </span>
       ),
+    );
+  }
+  if (rt?.text_only === true) {
+    // v1.330.0: the daemon served this turn with no tools (the picked model
+    // has not shown it can use them). Quiet, beside who answered; the reason
+    // is on hover and, for a phone, in the expanded receipt.
+    parts.push(
+      <span key="no-tools" data-testid="turn-no-tools" title={NO_TOOLS_TITLE} className="text-zinc-500">
+        no tools
+      </span>,
     );
   }
   if (adaptedText) {
@@ -849,10 +883,11 @@ export function TurnReceipt({
               <RouteIcon size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div className="min-w-0 text-[12px] leading-relaxed">
                 <span className={warning ? "text-tone-warn" : "text-zinc-300"}>
-                  {providerDisplay(rt.provider)}
+                  {servedName(rt)}
                 </span>
-                {/* v1.314.0: the raw id, quietly — a record for support. */}
-                {providerDisplay(rt.provider) !== rt.provider && (
+                {/* v1.314.0: the raw id, quietly — a record for support.
+                    v1.330.0: an endpoint's label leads, its id follows. */}
+                {servedName(rt) !== rt.provider && (
                   <span className="text-zinc-600"> ({rt.provider})</span>
                 )}
                 {rt.model && (
@@ -939,6 +974,16 @@ export function TurnReceipt({
               harbor.xlsx · 0.4 s", lib/stepWords), never a second
               vocabulary of monospace tool ids. The id stays on the row's
               hover, and as a quiet hint where the words do not name it. */}
+          {rt?.text_only === true && (
+            // v1.330.0: the "no tools" part in words a phone can read (a
+            // title never shows without a pointer).
+            <div className="flex items-start gap-2">
+              <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-no-tools-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
+                {NO_TOOLS_TITLE}
+              </div>
+            </div>
+          )}
           {(stepChips.length > 0 || tools.length > 0) && (
             <div className="flex items-start gap-2">
               <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
