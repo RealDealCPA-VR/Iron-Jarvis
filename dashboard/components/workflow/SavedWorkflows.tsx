@@ -21,7 +21,8 @@ import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, Trash2, Workflow, X } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { del, get, ApiError } from "@/lib/api";
-import { Card, Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
+import { CalmSection, WF_DANGER_SM, WF_GHOST_DANGER_SM, WF_GHOST_SM } from "./calm";
 
 /** One row of GET /workflows (project_id is omitted by the list route). */
 export interface SavedWorkflowDef {
@@ -182,16 +183,18 @@ export function SavedWorkflows() {
 
   const offline = error && error.status === 0;
 
+  // v1.329.0 (calm chat wave 9, K3): a plain section like the chat's lists:
+  // a quiet label, rows over hairlines, ghost Load / Delete that fill on
+  // hover, and the delete confirm as tone lines under its row.
   return (
-    <Card
+    <CalmSection
       title={rows.length ? `Saved workflows · ${rows.length}` : "Saved workflows"}
-      icon={<Workflow size={15} />}
     >
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : !data ? (
         // No response in hand means UNKNOWN — never "you have none".
-        <p className="py-2 text-sm text-zinc-500">
+        <p className="px-1 py-2 text-[13px] text-zinc-500">
           {offline
             ? "Saved workflows unavailable. The daemon looks offline."
             : `Saved workflows unavailable. The daemon returned an error (HTTP ${error?.status ?? "?"}).`}
@@ -205,19 +208,14 @@ export function SavedWorkflows() {
           start from a template below.
         </Empty>
       ) : (
-        <ul className="space-y-1.5" data-testid="saved-workflows">
+        <ul className="divide-y divide-white/[0.06]" data-testid="saved-workflows">
           {rows.map((d) => {
             const n = savedStepCount(d.steps_json);
             const confirming = pending === d.name;
             return (
-              <li
-                key={d.id ?? d.name}
-                className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
-              >
+              <li key={d.id ?? d.name} className="px-1 py-2">
                 <div className="flex items-center gap-2">
-                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-accent/30 bg-accent/10 text-accent-soft">
-                    <Workflow size={13} />
-                  </span>
+                  <Workflow size={14} aria-hidden className="shrink-0 text-zinc-500" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] font-medium text-zinc-100">
                       {d.name}
@@ -232,7 +230,7 @@ export function SavedWorkflows() {
                     onClick={() => load(d)}
                     disabled={confirming}
                     title={`Load “${d.name}” into the editor`}
-                    className="btn-ghost !px-2.5 !py-1 text-xs"
+                    className={WF_GHOST_SM}
                   >
                     <FolderOpen size={13} /> Load
                   </button>
@@ -242,7 +240,7 @@ export function SavedWorkflows() {
                       onClick={() => void askDelete(d.name)}
                       aria-label={`Delete ${d.name}`}
                       title={`Delete “${d.name}”`}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-rose-500/40 hover:text-rose-300"
+                      className={WF_GHOST_DANGER_SM}
                     >
                       <Trash2 size={13} /> Delete
                     </button>
@@ -250,34 +248,34 @@ export function SavedWorkflows() {
                 </div>
                 {confirming && (
                   <div
-                    className="mt-2 space-y-2 rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-3 py-2"
+                    className="mt-1.5 space-y-1.5 pl-6"
                     data-testid={`confirm-delete-${d.name}`}
                   >
-                    <p className="text-xs text-zinc-200">
+                    <p className="text-[13px] text-tone-danger">
                       Delete “{d.name}”? This can’t be undone.
                     </p>
                     {refs === null && !refsFailed ? (
-                      <p className="text-[11px] text-zinc-500">
+                      <p className="text-[12px] text-zinc-500">
                         <LoaderInline label="Checking what uses it…" />
                       </p>
                     ) : refsFailed ? (
-                      <p className="text-[11px] text-amber-200">
+                      <p className="text-[12px] text-tone-warn">
                         Couldn’t check whether a schedule or reflex rule still uses
                         it. If one does, it will fail until re-pointed.
                       </p>
                     ) : refs && refs.length > 0 ? (
-                      <p className="text-[11px] text-amber-200">{referencesSentence(refs)}</p>
+                      <p className="text-[12px] text-tone-warn">{referencesSentence(refs)}</p>
                     ) : (
-                      <p className="text-[11px] text-zinc-500">
+                      <p className="text-[12px] text-zinc-500">
                         Nothing scheduled or automated uses it.
                       </p>
                     )}
-                    <div className="flex items-center gap-2">
+                    <div className="-ml-2 flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => void confirmDelete(d.name)}
                         disabled={deleting === d.name}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/[0.12] px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:bg-rose-500/[0.2] disabled:opacity-50"
+                        className={WF_DANGER_SM}
                       >
                         {deleting === d.name ? (
                           <LoaderInline label="Deleting…" />
@@ -291,7 +289,7 @@ export function SavedWorkflows() {
                         type="button"
                         onClick={cancelDelete}
                         disabled={deleting === d.name}
-                        className="btn-ghost !px-2.5 !py-1 text-xs"
+                        className={WF_GHOST_SM}
                       >
                         <X size={13} /> Cancel
                       </button>
@@ -303,12 +301,12 @@ export function SavedWorkflows() {
           })}
         </ul>
       )}
-      {notice && <p className="mt-2 text-[11px] text-emerald-300">{notice}</p>}
+      {notice && <p className="mt-2 px-1 text-[12px] text-tone-success">{notice}</p>}
       {err && (
         <div className="mt-2">
           <ErrorNote>{err}</ErrorNote>
         </div>
       )}
-    </Card>
+    </CalmSection>
   );
 }

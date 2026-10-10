@@ -41,7 +41,7 @@ function StepNodeImpl({ data, selected }: NodeProps) {
             {d.name || "Untitled step"}
           </div>
           <span
-            className={`mt-1 inline-flex items-center rounded-full border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide ${
+            className={`mt-1 inline-flex items-center rounded-full border px-1.5 py-px text-[11px] font-medium ${
               kind === "agent" ? meta.chip : kindMeta.chip
             }`}
           >
@@ -59,7 +59,7 @@ function StepNodeImpl({ data, selected }: NodeProps) {
             <span
               data-testid="group-split-warning"
               title={`Group “${d.group}” is split by other steps. The split parts run separately, not together. Make the group's steps adjacent to run them in parallel.`}
-              className="ml-1 mt-1 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-300"
+              className="ml-1 mt-1 inline-flex items-center gap-1 rounded-full border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px text-[10px] font-medium text-tone-warn"
             >
               <TriangleAlert size={10} /> group split
             </span>
@@ -74,7 +74,7 @@ function StepNodeImpl({ data, selected }: NodeProps) {
 
       {/* Body — truncated task */}
       <div className="px-3.5 py-2.5">
-        <p className="line-clamp-2 text-[11.5px] leading-relaxed text-zinc-400">
+        <p className="line-clamp-2 text-[12px] leading-relaxed text-zinc-400">
           {kind === "tool" ? (
             <span className="font-mono">{d.tool || "pick a tool…"}</span>
           ) : kind === "ask" || kind === "notify" ? (

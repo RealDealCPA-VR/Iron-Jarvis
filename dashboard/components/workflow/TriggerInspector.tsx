@@ -7,9 +7,11 @@
 
 import Link from "next/link";
 import { CalendarClock, Play, SlidersHorizontal, Webhook, X } from "lucide-react";
+import { WF_ICON_GHOST, WF_POPOVER } from "./calm";
 
-const TILE =
-  "flex items-start gap-2.5 rounded-xl border border-white/[0.08] px-3 py-2.5 transition-colors";
+// v1.329.0 (calm chat wave 9, K3): the three answers are quiet rows that
+// fill on hover, not bordered tiles.
+const TILE = "flex items-start gap-2.5 rounded-lg px-3 py-2.5 transition-colors";
 
 /** A tile that is a live link only once the def is SAVED — schedules and
  * reflex rules fire saved workflows by name, so an unsaved deep link would
@@ -26,7 +28,7 @@ function MaybeLink({
   if (!saved)
     return <div className={`${TILE} cursor-not-allowed opacity-45`}>{children}</div>;
   return (
-    <Link href={href} className={`${TILE} hover:border-accent/40 hover:bg-white/[0.03]`}>
+    <Link href={href} className={`${TILE} hover:bg-white/[0.05]`}>
       {children}
     </Link>
   );
@@ -45,27 +47,27 @@ export function TriggerInspector({
 }) {
   const name = workflowName.trim();
   return (
-    <div className="card-surface absolute right-3 top-3 z-20 flex w-[300px] flex-col overflow-hidden">
-      <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
-        <h3 className="flex items-center gap-2 text-[13px] font-semibold text-zinc-200">
-          <SlidersHorizontal size={14} className="text-accent-soft/80" />
+    <div className={`${WF_POPOVER} absolute right-3 top-3 z-20 flex w-[300px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden`}>
+      <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-2.5">
+        <h3 className="flex items-center gap-2 text-[13px] font-medium text-zinc-200">
+          <SlidersHorizontal size={14} className="text-zinc-500" />
           When should this run?
         </h3>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close trigger options"
-          className="rounded-lg border border-white/10 p-1 text-zinc-500 transition-colors hover:border-white/20 hover:text-zinc-200"
+          className={WF_ICON_GHOST}
         >
           <X size={14} />
         </button>
       </header>
 
-      <div className="space-y-2 p-4">
-        <div className="flex items-start gap-2.5 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2.5">
+      <div className="space-y-1 p-2">
+        <div className="flex items-start gap-2.5 rounded-lg bg-accent/[0.06] px-3 py-2.5">
           <Play size={14} className="mt-0.5 shrink-0 text-accent-soft" />
           <div>
-            <div className="text-[12.5px] font-medium text-zinc-200">When you run it</div>
+            <div className="text-[13px] font-medium text-zinc-200">When you run it</div>
             <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
               The Run workflow button, or Run once from a chat card. Always on.
             </p>
@@ -78,7 +80,7 @@ export function TriggerInspector({
         >
           <CalendarClock size={14} className="mt-0.5 shrink-0 text-zinc-400" />
           <div>
-            <div className="text-[12.5px] font-medium text-zinc-200">On a schedule</div>
+            <div className="text-[13px] font-medium text-zinc-200">On a schedule</div>
             <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
               Every morning, weekdays at 4pm, and more. Results go to your destinations.
             </p>
@@ -88,18 +90,18 @@ export function TriggerInspector({
         <MaybeLink saved={saved} href={`/reflex?workflow=${encodeURIComponent(name)}`}>
           <Webhook size={14} className="mt-0.5 shrink-0 text-zinc-400" />
           <div>
-            <div className="text-[12.5px] font-medium text-zinc-200">
+            <div className="text-[13px] font-medium text-zinc-200">
               When something happens
             </div>
             <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
-              A webhook, an inbound message, a calendar event. The signal's text
+              A webhook, an inbound message, a calendar event. The signal&apos;s text
               reaches steps as {"{{Trigger}}"}.
             </p>
           </div>
         </MaybeLink>
 
         {!saved && (
-          <p className="pt-1 text-[11px] leading-snug text-amber-300/80">
+          <p className="px-3 pb-1 pt-1 text-[12px] leading-snug text-tone-warn">
             Save the workflow first. Schedules and signals fire the SAVED
             “{name || "workflow"}” by name.
           </p>

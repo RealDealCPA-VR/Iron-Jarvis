@@ -317,16 +317,28 @@ const FILES = [
 ];
 
 /* Wave 8 (J5): the dash guard reaches the whole workflow editor and the
-   notification bell too. The hue / half-pixel rule below stays on FILES only:
-   the workflow editor and the bell were not part of that clean-up. */
+   notification bell too. Wave 9 (K3): it also reads the Workflows page itself
+   (app/workflows/page.tsx), whose header, Build with chat intro and Templates
+   line still carried dash asides on screen. */
 const WORKFLOW_DIR = "components/workflow";
+const WORKFLOW_FILES = readdirSync(path.join(ROOT, WORKFLOW_DIR))
+  .filter((f) => /\.tsx?$/.test(f))
+  .map((f) => `${WORKFLOW_DIR}/${f}`);
 const COPY_FILES = [
   ...FILES,
-  ...readdirSync(path.join(ROOT, WORKFLOW_DIR))
-    .filter((f) => /\.tsx?$/.test(f))
-    .map((f) => `${WORKFLOW_DIR}/${f}`)
-    .filter((f) => !FILES.includes(f)),
+  ...WORKFLOW_FILES.filter((f) => !FILES.includes(f)),
+  "app/workflows/page.tsx",
   "components/NotificationBell.tsx",
+];
+
+/* Wave 9 (K3): the hue / half-pixel rule now reaches the whole workflow
+   editor too: the Workflows page and every file in components/workflow,
+   which moved onto tone tokens and whole pixels this wave. The bell is
+   still read for copy only. */
+const CALM_FILES = [
+  ...FILES,
+  ...WORKFLOW_FILES.filter((f) => !FILES.includes(f)),
+  "app/workflows/page.tsx",
 ];
 
 const HUES =
@@ -378,6 +390,14 @@ describe("the mission files, lib/mission and the workflow starters keep to the c
       expect(COPY_FILES).toContain(`${WORKFLOW_DIR}/${f}`);
     }
     expect(COPY_FILES).toContain("components/NotificationBell.tsx");
+    // Wave 9 (K3): the Workflows page itself is read too.
+    expect(COPY_FILES).toContain("app/workflows/page.tsx");
+    const page = copyPieces("app/workflows/page.tsx").map((p) => p.text).join("\n");
+    expect(page).toContain(
+      "Wire agents into a visual, multi-step workflow, then run it. Describe one below, or send a terminal session here with its → Workflow button.",
+    );
+    expect(page).toContain("No saved workflows yet. Start from one of these. Loading a");
+    expect(page).toContain("Describe a process and the agent builds the steps into the editor above. For example,");
     // Anti-vacuity: the plain sentences this wave wrote are read as copy.
     const canvas = copyPieces(`${WORKFLOW_DIR}/WorkflowCanvas.tsx`).map((p) => p.text).join("\n");
     expect(canvas).toContain("An example to start from. Change the steps, or Load a saved one.");
@@ -425,8 +445,21 @@ describe("the mission files, lib/mission and the workflow starters keep to the c
     ]);
   });
 
-  it("no literal hue and no half-pixel size", () => {
-    for (const rel of FILES) {
+  it("no literal hue and no half-pixel size (the mission files and, since wave 9, the whole workflow editor)", () => {
+    // Anti-vacuity: the workflow editor's files are in the list.
+    for (const f of [
+      "app/workflows/page.tsx",
+      `${WORKFLOW_DIR}/WorkflowCanvas.tsx`,
+      `${WORKFLOW_DIR}/NodeInspector.tsx`,
+      `${WORKFLOW_DIR}/TriggerInspector.tsx`,
+      `${WORKFLOW_DIR}/StepNode.tsx`,
+      `${WORKFLOW_DIR}/TriggerNode.tsx`,
+      `${WORKFLOW_DIR}/SavedWorkflows.tsx`,
+      `${WORKFLOW_DIR}/calm.tsx`,
+    ]) {
+      expect(CALM_FILES).toContain(f);
+    }
+    for (const rel of CALM_FILES) {
       const src = readSrc(rel);
       expect([...src.matchAll(LITERAL_HUE)].map((m) => m[0]), rel).toEqual([]);
       expect([...src.matchAll(HALF_PIXEL)].map((m) => m[0]), rel).toEqual([]);

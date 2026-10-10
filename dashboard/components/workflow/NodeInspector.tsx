@@ -18,6 +18,7 @@ import {
   type StepKind,
   type StepNodeData,
 } from "./agents";
+import { WF_ICON_GHOST, WF_LABEL, WF_POPOVER } from "./calm";
 
 /** Parse a lines-textarea into a trimmed, non-empty string list. */
 function parseLines(value: string): string[] {
@@ -49,17 +50,19 @@ export function NodeInspector({
   );
 
   return (
-    <div className="card-surface absolute right-3 top-3 bottom-3 z-20 flex w-[300px] flex-col overflow-hidden">
-      <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
-        <h3 className="flex items-center gap-2 text-[13px] font-semibold text-zinc-200">
-          <SlidersHorizontal size={14} className="text-accent-soft/80" />
+    // v1.329.0 (calm chat wave 9, K3): an opaque floating panel with one
+    // hairline (calm.tsx WF_POPOVER), sentence-case labels, a ghost close.
+    <div className={`${WF_POPOVER} absolute right-3 top-3 bottom-3 z-20 flex w-[300px] max-w-[calc(100%-1.5rem)] flex-col overflow-hidden`}>
+      <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-2.5">
+        <h3 className="flex items-center gap-2 text-[13px] font-medium text-zinc-200">
+          <SlidersHorizontal size={14} className="text-zinc-500" />
           Edit step
         </h3>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close inspector"
-          className="rounded-lg border border-white/10 p-1 text-zinc-500 transition-colors hover:border-white/20 hover:text-zinc-200"
+          className={WF_ICON_GHOST}
         >
           <X size={14} />
         </button>
@@ -67,7 +70,7 @@ export function NodeInspector({
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             Step name
           </label>
           <input
@@ -79,7 +82,7 @@ export function NodeInspector({
         </div>
 
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             What is this step?
           </label>
           <div className="space-y-1.5">
@@ -94,12 +97,12 @@ export function NodeInspector({
                   className={`flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition-colors ${
                     active
                       ? `${meta.chip} ring-1 ring-inset ring-white/10`
-                      : "border-white/[0.08] bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                      : "border-transparent text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
                   }`}
                 >
                   <span className="min-w-0">
                     <span className="block text-xs font-medium">{meta.label}</span>
-                    <span className="mt-0.5 block text-[10.5px] leading-snug opacity-70">
+                    <span className="mt-0.5 block text-[11px] leading-snug opacity-70">
                       {meta.blurb}
                     </span>
                   </span>
@@ -111,7 +114,7 @@ export function NodeInspector({
 
         {(data.kind ?? "agent") === "agent" && (
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             Agent type
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -127,7 +130,7 @@ export function NodeInspector({
                   className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs font-medium transition-all ${
                     active
                       ? `${meta.chip} ring-1 ring-inset ring-white/10`
-                      : "border-white/[0.08] bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                      : "border-transparent text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
                   }`}
                 >
                   <Icon size={14} />
@@ -142,7 +145,7 @@ export function NodeInspector({
         {(data.kind ?? "agent") === "agent" && (
         <div>
           <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            <label className="text-[12px] font-medium text-zinc-400">
               Task
             </label>
             <VoiceInput
@@ -165,7 +168,7 @@ export function NodeInspector({
         {(data.kind ?? "agent") === "tool" && (
           <>
             <div>
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className={WF_LABEL}>
                 Tool to call
               </label>
               <input
@@ -176,7 +179,7 @@ export function NodeInspector({
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <label className={WF_LABEL}>
                 Arguments (JSON)
               </label>
               <textarea
@@ -205,7 +208,7 @@ export function NodeInspector({
 
         {((data.kind ?? "agent") === "ask" || (data.kind ?? "agent") === "notify") && (
           <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            <label className={WF_LABEL}>
               {(data.kind ?? "agent") === "ask" ? "The question" : "The message"}
             </label>
             <textarea
@@ -232,7 +235,7 @@ export function NodeInspector({
         )}
 
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             If this step fails
           </label>
           <select
@@ -250,7 +253,7 @@ export function NodeInspector({
         </div>
 
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             Parallel group (optional)
           </label>
           <input
@@ -269,7 +272,7 @@ export function NodeInspector({
         <button
           type="button"
           onClick={onDelete}
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2 text-sm font-medium text-rose-200 transition-colors hover:border-rose-500/50 hover:bg-rose-500/[0.12]"
+          className="flex h-9 w-full items-center justify-center gap-2 rounded-lg text-[13px] font-medium text-tone-danger transition-colors hover:bg-tone-danger/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
         >
           <Trash2 size={15} /> Delete step
         </button>
@@ -309,11 +312,11 @@ function ExpectSection({
 
   return (
     <details open={hasChecks} data-testid="expect-section">
-      <summary className="flex cursor-pointer items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400 transition-colors hover:text-zinc-200">
+      <summary className="flex cursor-pointer items-center gap-1.5 text-[12px] font-medium text-zinc-400 transition-colors hover:text-zinc-200">
         <BadgeCheck size={13} className="text-accent-soft/80" />
         Prove it (optional)
         {hasChecks && (
-          <span className="rounded-full border border-accent/30 bg-accent/10 px-1.5 py-px text-[10px] normal-case tracking-normal text-accent-soft">
+          <span className="rounded-full bg-accent/10 px-1.5 py-px text-[11px] text-accent-soft">
             on
           </span>
         )}
@@ -323,7 +326,7 @@ function ExpectSection({
           Checked after the step runs. Any miss fails the step and says which check missed.
         </p>
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             Files it must produce
           </label>
           <textarea
@@ -338,7 +341,7 @@ function ExpectSection({
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+          <label className={WF_LABEL}>
             Summary must contain
           </label>
           <textarea

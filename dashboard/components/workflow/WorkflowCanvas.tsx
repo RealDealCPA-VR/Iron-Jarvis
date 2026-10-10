@@ -70,6 +70,13 @@ import { NodeInspector } from "./NodeInspector";
 import { TriggerInspector } from "./TriggerInspector";
 import { useCanvasColors } from "./useCanvasColorMode";
 import {
+  WF_GHOST,
+  WF_GHOST_DANGER_SM,
+  WF_GHOST_ON_SM,
+  WF_ICON_GHOST,
+  WF_POPOVER,
+} from "./calm";
+import {
   announceWorkflowsChanged,
   WORKFLOWS_LIST_EVENT,
   type WorkflowsListDetail,
@@ -542,13 +549,15 @@ export function runStepViews(run: WorkflowRun): RunStepView[] {
   });
 }
 
+/* v1.329.0 (calm chat wave 9, K3): tone tokens, which every theme re-inks for
+   itself (Daylight included), instead of literal emerald / amber / rose. */
 const CHIP_TONE: Record<string, string> = {
-  completed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  completed: "border-tone-success/30 bg-tone-success/10 text-tone-success",
   running: "border-accent/40 bg-accent/10 text-accent-soft animate-pulse",
-  waiting: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-  failed: "border-rose-500/30 bg-rose-500/10 text-rose-300",
-  skipped: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
-  pending: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
+  waiting: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
+  failed: "border-tone-danger/30 bg-tone-danger/10 text-tone-danger",
+  skipped: "border-white/[0.08] text-zinc-500",
+  pending: "border-white/[0.08] text-zinc-500",
 };
 
 function ChipIcon({ status }: { status: string }) {
@@ -626,7 +635,7 @@ export function RunProgress({
   };
 
   return (
-    <div className="space-y-2.5 rounded-xl border border-white/[0.08] bg-ink-950/40 px-3 py-2.5">
+    <div data-testid="run-progress" className="space-y-2.5">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         {/* waiting/resuming get a REAL badge (amber/cyan), not the raw slate
             fallback the generic status map would render. */}
@@ -646,7 +655,7 @@ export function RunProgress({
             type="button"
             onClick={onCancel}
             disabled={cancelling}
-            className="ml-auto flex items-center gap-1.5 rounded-lg border border-rose-500/25 bg-rose-500/[0.07] px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:border-rose-500/50 hover:bg-rose-500/[0.12] disabled:opacity-50"
+            className={`ml-auto ${WF_GHOST_DANGER_SM}`}
           >
             <Ban size={13} /> {cancelling ? "Cancelling…" : "Cancel"}
           </button>
@@ -677,23 +686,20 @@ export function RunProgress({
           POSTs the existing /workflows/runs/{id}/answer; a 409 (answered from
           the chat card or the bell first) surfaces honestly, never retries. */}
       {waiting && !conflicted && (
-        <div
-          data-testid="run-ask-gate"
-          className="space-y-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5"
-        >
-          <p className="flex items-start gap-2 text-[12px] leading-relaxed text-amber-200">
+        <div data-testid="run-ask-gate" className="space-y-2">
+          <p className="flex items-start gap-2 text-[13px] leading-relaxed text-tone-warn">
             <MessageCircleQuestion size={14} className="mt-0.5 shrink-0" />
             <span className="whitespace-pre-wrap">{waiting.question}</span>
           </p>
           {waiting.options.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="-ml-2 flex flex-wrap gap-1">
               {waiting.options.map((o) => (
                 <button
                   key={o}
                   type="button"
                   disabled={answering}
                   onClick={() => submitAnswer(o)}
-                  className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200 transition-colors hover:border-amber-500/60 hover:bg-amber-500/20 disabled:opacity-50"
+                  className={WF_GHOST_ON_SM}
                 >
                   {o}
                 </button>
@@ -715,43 +721,36 @@ export function RunProgress({
               type="button"
               onClick={() => submitAnswer(answerText)}
               disabled={answering || !answerText.trim()}
-              className="shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 transition-colors hover:border-amber-500/60 hover:bg-amber-500/20 disabled:opacity-50"
+              className={WF_GHOST_ON_SM}
             >
               {answering ? "Sending…" : "Answer"}
             </button>
           </div>
           {answerError && (
-            <p className="text-[11.5px] text-rose-300">{answerError}</p>
+            <p className="text-[12px] text-tone-danger">{answerError}</p>
           )}
         </div>
       )}
       {conflicted && answerError && (
-        <p data-testid="run-ask-conflict" className="text-[11.5px] text-amber-200/90">
+        <p data-testid="run-ask-conflict" className="text-[12px] text-tone-warn">
           Already answered elsewhere. {answerError}
         </p>
       )}
 
       {/* Honest per-step results (collapsible summaries; failures in red) */}
       {hasResults && (
-        <div className="space-y-1">
+        <div className="divide-y divide-white/[0.06]">
           {steps
             .filter((s) => s.summary || s.status === "failed")
             .map((s) => {
               const failed = s.status === "failed";
               const isOpen = open === s.name;
               return (
-                <div
-                  key={s.name}
-                  className={`rounded-lg border ${
-                    failed
-                      ? "border-rose-500/25 bg-rose-500/[0.05]"
-                      : "border-white/[0.06] bg-white/[0.02]"
-                  }`}
-                >
+                <div key={s.name}>
                   <button
                     type="button"
                     onClick={() => setOpen(isOpen ? null : s.name)}
-                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]"
+                    className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.04]"
                   >
                     <ChevronRight
                       size={13}
@@ -760,7 +759,7 @@ export function RunProgress({
                       }`}
                     />
                     <span
-                      className={`font-medium ${failed ? "text-rose-200" : "text-zinc-200"}`}
+                      className={`font-medium ${failed ? "text-tone-danger" : "text-zinc-200"}`}
                     >
                       {s.name}
                     </span>
@@ -768,8 +767,8 @@ export function RunProgress({
                   </button>
                   {isOpen && (
                     <p
-                      className={`whitespace-pre-wrap px-3 pb-2.5 pt-0.5 text-[12px] leading-relaxed ${
-                        failed ? "text-rose-200/90" : "text-zinc-400"
+                      className={`whitespace-pre-wrap pb-2.5 pl-6 pr-1 pt-0.5 text-[12px] leading-relaxed ${
+                        failed ? "text-tone-danger" : "text-zinc-400"
                       }`}
                     >
                       {s.summary || (failed ? "Step failed." : "No summary.")}
@@ -1343,13 +1342,19 @@ function Canvas() {
     // it has no demo strip to subtract (v1.314.0's --ij-strip-h rule is for
     // full-height modules). Below sm the toolbar wraps to ~200 px, so the
     // cap is taller there or the graph shrinks to a strip under the minimap.
-    <div className="card-surface flex h-[min(64vh,680px)] min-h-[420px] flex-col overflow-hidden max-sm:h-[min(80vh,680px)]">
+    //
+    // v1.329.0 (calm chat wave 9, K3): a plain section, not a card. The
+    // toolbar is quiet ghosts with ONE filled primary (Run workflow); the
+    // graph sits in a hairline frame with no fill, so the page's only card
+    // is the Describe box above. The height cap above is unchanged.
+    <section
+      data-testid="workflow-editor"
+      className="flex h-[min(64vh,680px)] min-h-[420px] flex-col overflow-hidden max-sm:h-[min(80vh,680px)]"
+    >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-3 border-b hairline px-4 py-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-accent/30 bg-accent/10 text-accent-soft">
-            <Workflow size={16} />
-          </span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 pb-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Workflow size={16} aria-hidden className="shrink-0 text-zinc-500" />
           {/* v1.316.0 (UX wave 4): a hairline border at rest so the name
               reads as a field you can edit, not a heading; blank reads
               "Untitled workflow" — the same words run() uses for a blank
@@ -1361,9 +1366,9 @@ function Canvas() {
             placeholder={UNTITLED_NAME}
             aria-label="Workflow name"
             title="Rename this workflow"
-            className="min-w-0 max-w-[280px] flex-1 rounded-lg border border-white/10 bg-white/[0.02] px-2 py-1 text-sm font-semibold text-zinc-100 outline-none transition-colors placeholder:font-normal placeholder:text-zinc-500 hover:border-white/20 focus:border-accent/50 focus:bg-ink-900/60"
+            className="min-w-0 max-w-[280px] flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-sm font-semibold text-zinc-100 outline-none transition-colors placeholder:font-normal placeholder:text-zinc-500 hover:border-white/20 focus:border-accent/50"
           />
-          <span className="hidden rounded-full border border-white/[0.07] bg-white/[0.03] px-2 py-0.5 text-[11px] text-zinc-500 sm:inline">
+          <span className="hidden whitespace-nowrap text-[12px] text-zinc-500 sm:inline">
             {stepCount} step{stepCount === 1 ? "" : "s"}
           </span>
         </div>
@@ -1372,7 +1377,7 @@ function Canvas() {
             fourth button and pushed Add step and Run workflow outside the
             card's overflow-hidden, where they could not be seen or tapped.
             Every label stays; Run workflow gets the wide tap target. */}
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto">
           {/* Load ▾ — saved & agent-authored workflows */}
           <div ref={loadRef} className="relative">
             <button
@@ -1385,7 +1390,7 @@ function Canvas() {
               }}
               aria-haspopup="listbox"
               aria-expanded={loadOpen}
-              className="btn-ghost"
+              className={WF_GHOST}
             >
               <FolderOpen size={15} /> Load
               <ChevronDown
@@ -1395,9 +1400,9 @@ function Canvas() {
             </button>
 
             {loadOpen && (
-              <div className="card-surface absolute left-0 top-[calc(100%+8px)] z-30 w-72 origin-top-left overflow-hidden sm:left-auto sm:right-0 sm:origin-top-right">
-                <div className="flex items-center justify-between gap-2 border-b hairline px-3 py-2">
-                  <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <div className={`${WF_POPOVER} absolute left-0 top-[calc(100%+8px)] z-30 w-72 origin-top-left overflow-hidden sm:left-auto sm:right-0 sm:origin-top-right`}>
+                <div className="flex items-center justify-between gap-2 border-b hairline px-3 py-1.5">
+                  <span className="text-[12px] font-medium text-zinc-400">
                     {defsLoading
                       ? "Loading…"
                       : defs.length
@@ -1408,7 +1413,7 @@ function Canvas() {
                     type="button"
                     onClick={() => refreshDefs()}
                     aria-label="Refresh list"
-                    className="rounded-md border border-white/10 p-1 text-zinc-500 transition-colors hover:border-white/20 hover:text-zinc-200"
+                    className={WF_ICON_GHOST}
                   >
                     <RefreshCw
                       size={12}
@@ -1418,7 +1423,7 @@ function Canvas() {
                 </div>
                 <div className="max-h-72 overflow-y-auto p-1.5">
                   {defs.length === 0 && !defsLoading && (
-                    <div className="px-2.5 py-6 text-center text-xs text-zinc-500">
+                    <div className="px-2.5 py-6 text-center text-[12px] text-zinc-500">
                       No saved workflows yet. Workflows you save, or that agents
                       author, show up here.
                     </div>
@@ -1435,11 +1440,9 @@ function Canvas() {
                           onClick={() => loadDef(d)}
                           className="flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2.5 py-2 text-left"
                         >
-                          <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border border-accent/30 bg-accent/10 text-accent-soft">
-                            <Workflow size={13} />
-                          </span>
+                          <Workflow size={14} aria-hidden className="mt-0.5 shrink-0 text-zinc-500" />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[13px] font-medium text-zinc-100 group-hover:text-white">
+                            <span className="block truncate text-[13px] font-medium text-zinc-100">
                               {d.name}
                             </span>
                             <span className="block truncate text-[11px] text-zinc-500">
@@ -1456,7 +1459,7 @@ function Canvas() {
                           // Always visible (v1.222.0): at opacity 0 until hover
                           // nobody found it — the user reported having no way
                           // to delete a workflow while this button existed.
-                          className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
+                          className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-tone-danger/10 hover:text-tone-danger"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -1477,7 +1480,7 @@ function Canvas() {
                 ? `Rename “${loadedName}” to “${name.trim()}” and save. Its pin and schedule follow the new name.`
                 : undefined
             }
-            className="btn-ghost"
+            className={WF_GHOST}
           >
             {saving ? (
               <LoaderInline label="Saving…" />
@@ -1497,7 +1500,7 @@ function Canvas() {
               onClick={() => save({ asNew: true })}
               disabled={saving}
               title={`Keep “${loadedName}” and save a separate copy named “${name.trim()}”`}
-              className="btn-ghost"
+              className={WF_GHOST}
             >
               <CopyPlus size={15} /> Save as new
             </button>
@@ -1505,14 +1508,15 @@ function Canvas() {
           <Link
             href={`/schedules?workflow=${encodeURIComponent(name)}`}
             title="Run this workflow on a schedule"
-            className="btn-ghost"
+            className={WF_GHOST}
           >
             <CalendarClock size={15} /> Schedule…
           </Link>
-          <button type="button" onClick={addStep} className="btn-ghost">
+          <button type="button" onClick={addStep} className={WF_GHOST}>
             <Plus size={15} /> Add step
           </button>
-          <button type="button" onClick={run} disabled={busy} className="btn-accent flex-1 sm:flex-none">
+          <button type="button" onClick={run} disabled={busy} className="btn-accent btn-md ml-1 flex-1 sm:flex-none">
+            {/* The page's one filled primary (calm chat wave 9, K3). */}
             {busy ? <LoaderInline label="Running…" /> : (<><Play size={14} /> Run workflow</>)}
           </button>
         </div>
@@ -1525,15 +1529,15 @@ function Canvas() {
       {isExample && (
         <div
           data-testid="workflow-example-notice"
-          className="flex items-center gap-2 border-b hairline px-4 py-2 text-xs text-zinc-400"
+          className="flex items-center gap-2 px-1 pb-2 text-[12px] text-zinc-400"
         >
           <Info size={13} className="shrink-0 text-accent-soft/70" aria-hidden />
           An example to start from. Change the steps, or Load a saved one.
         </div>
       )}
 
-      {/* Canvas */}
-      <div className="relative flex-1">
+      {/* Canvas: one hairline frame, no fill (the dots and the nodes carry it). */}
+      <div data-testid="workflow-canvas-frame" className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border hairline">
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1580,15 +1584,15 @@ function Canvas() {
         {edgeNotice && (
           <div
             data-testid="edge-notice"
-            className="absolute left-1/2 top-3 z-30 flex max-w-[420px] -translate-x-1/2 items-start gap-2 rounded-xl border border-amber-500/30 bg-ink-950/90 px-3 py-2 text-[12px] leading-relaxed text-amber-200 shadow-card"
+            className="absolute left-1/2 top-3 z-30 flex max-w-[420px] -translate-x-1/2 items-start gap-2 rounded-xl border hairline bg-ink-900 px-3 py-2 text-[12px] leading-relaxed text-tone-warn shadow-lg"
           >
             <TriangleAlert size={14} className="mt-0.5 shrink-0" />
-            <span>{edgeNotice}</span>
+            <span className="min-w-0 flex-1">{edgeNotice}</span>
             <button
               type="button"
               onClick={() => setEdgeNotice(null)}
               aria-label="Dismiss"
-              className="ml-1 shrink-0 rounded-md p-0.5 text-amber-200/70 transition-colors hover:text-amber-100"
+              className="ml-1 shrink-0 rounded-md p-0.5 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
             >
               <X size={13} />
             </button>
@@ -1614,7 +1618,7 @@ function Canvas() {
 
       {/* Result strip */}
       {(activeRun || result || error || success) && (
-        <div className="space-y-2 border-t hairline p-3">
+        <div className="space-y-2 px-1 pt-3">
           {result?.offline && (
             <OfflineHint detail="couldn't reach the daemon for this workflow." />
           )}
@@ -1636,7 +1640,7 @@ function Canvas() {
           {error && <ErrorNote>{error}</ErrorNote>}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 

@@ -338,8 +338,9 @@ describe("StarterTemplates (via the page)", () => {
       // Loading NEVER saves — no POST left this component.
       expect(api.posts).toHaveLength(0);
       expect(window.scrollTo).toHaveBeenCalled();
+      // v1.329.0 (calm chat wave 9, K3): plain copy, no dash aside.
       expect(
-        screen.getByText("Loaded above — press Save to keep it."),
+        screen.getByText("Loaded above. Press Save to keep it."),
       ).toBeInTheDocument();
     } finally {
       window.removeEventListener("ij:load-workflow", onLoad);
@@ -353,7 +354,8 @@ describe("StarterTemplates (via the page)", () => {
     expect(await screen.findByText(/No saved workflows yet/)).toBeInTheDocument();
     fireEvent.click(screen.getByText("Hide"));
     expect(screen.queryByText("Load into editor")).toBeNull();
-    expect(screen.getByText(/starter workflows — client intake/)).toBeInTheDocument();
+    // v1.329.0 (calm chat wave 9, K3): plain copy, no dash aside.
+    expect(screen.getByText(/starter workflows: client intake/)).toBeInTheDocument();
   });
 
   it("with saved workflows the section is collapsed but reachable", async () => {

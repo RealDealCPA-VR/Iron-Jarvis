@@ -1,17 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
-import {
-  History,
-  LayoutTemplate,
-  MessageSquare,
-  Send,
-  Sparkles,
-  Loader2,
-  Bot,
-  User,
-  ChevronRight,
-} from "lucide-react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { History, Send, Sparkles, Loader2, ChevronRight, ArrowUp } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
@@ -26,11 +16,20 @@ import {
   stepKindHint,
   type StarterWorkflow,
 } from "@/components/workflow/starters";
-import { Card, Badge, Empty, Field, SkeletonRows } from "@/components/ui";
+import { Badge, Empty, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
 import { SavedWorkflows } from "@/components/workflow/SavedWorkflows";
+import {
+  CalmSection,
+  WF_CHIP,
+  WF_GHOST,
+  WF_GHOST_ON,
+  WF_GHOST_ON_SM,
+  WF_GHOST_SM,
+} from "@/components/workflow/calm";
+import { COMPOSER_CARD_EDGE } from "@/lib/composerChips";
 import { timeAgo } from "@/lib/format";
 import { plainText } from "@/components/Markdown";
 
@@ -84,7 +83,7 @@ export default function WorkflowsPage() {
       <Reveal>
         <PageHeader
           title="Workflows"
-          subtitle="Wire agents into a visual, multi-step workflow, then run it — describe one below, or send a terminal session here with its → Workflow button."
+          subtitle="Wire agents into a visual, multi-step workflow, then run it. Describe one below, or send a terminal session here with its → Workflow button."
         />
       </Reveal>
       {/* v1.316.0 (UX wave 4): the easy path before the power editor — with
@@ -143,6 +142,7 @@ function QuickStart({ builder }: { builder: WorkflowBuilder }) {
   // reply shown here is the one to THIS box's request.
   const [sentAt, setSentAt] = useState<number | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
+  const inputId = useId();
 
   if (!none) return null;
 
@@ -174,39 +174,50 @@ function QuickStart({ builder }: { builder: WorkflowBuilder }) {
     document.getElementById("build-with-chat")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const ready = !builder.busy && !!text.trim();
+
   return (
     <Reveal>
-      <section className="card-surface px-4 py-3.5">
-        <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          {/* v1.316.0: the shared <Field> (useId → htmlFor/id), not a
-              hand-written label with a fixed id. */}
-          <Field
-            className="min-w-0 flex-1"
-            label={
-              <span className="inline-flex items-center gap-1.5">
-                <Sparkles size={12} aria-hidden /> Describe a workflow
-              </span>
-            }
+      {/* v1.329.0 (calm chat wave 9, K3): the page's ONE card, drawn like the
+          chat composer: a borderless box inside a hairline-edged card, and
+          Build it quiet until there is something to build. The label is tied
+          to the box by useId (the v1.316.0 rule), in sentence case. */}
+      <section data-testid="workflow-describe" className="space-y-2">
+        <form
+          onSubmit={submit}
+          data-testid="workflow-describe-card"
+          className={`rounded-[20px] bg-ink-800 ${COMPOSER_CARD_EDGE}`}
+        >
+          <label
+            htmlFor={inputId}
+            className="flex items-center gap-1.5 px-4 pt-3 text-[12px] font-medium text-zinc-400"
           >
+            <Sparkles size={12} aria-hidden /> Describe a workflow
+          </label>
+          <div className="flex items-center gap-2 pb-2 pl-2 pr-2">
             <input
+              id={inputId}
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder="e.g. research a topic, draft a summary, then review it"
-              className="field text-[13px]"
+              className="min-w-0 flex-1 bg-transparent px-2 py-2 text-[14px] text-zinc-100 caret-accent outline-none placeholder:text-zinc-500 disabled:opacity-60"
               disabled={builder.busy}
             />
-          </Field>
-          <button
-            type="submit"
-            disabled={builder.busy || !text.trim()}
-            className="btn-accent shrink-0"
-          >
-            {builder.busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-            Build it
-          </button>
+            <button
+              type="submit"
+              data-testid="workflow-describe-build"
+              disabled={!ready}
+              className={`inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] ${
+                ready ? "btn-accent" : "cursor-not-allowed bg-white/[0.06] text-zinc-500"
+              }`}
+            >
+              {builder.busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} />}
+              Build it
+            </button>
+          </div>
         </form>
         {(builder.busy && sentAt !== null) || reply ? (
-          <p className="mt-2 text-xs text-zinc-400" aria-live="polite">
+          <p className="px-2 text-[12px] text-zinc-400" aria-live="polite">
             {builder.busy && sentAt !== null ? (
               "Building the workflow…"
             ) : (
@@ -223,23 +234,23 @@ function QuickStart({ builder }: { builder: WorkflowBuilder }) {
             )}
           </p>
         ) : null}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-zinc-500">Or start from a template:</span>
+        <div className="flex flex-wrap items-center gap-1 px-1">
+          <span className="px-1 text-[12px] text-zinc-500">Or start from a template:</span>
           {STARTERS.map((s) => (
             <button
               key={s.name}
               type="button"
               onClick={() => loadStarter(s)}
               title={s.blurb}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+              className={WF_CHIP}
             >
               {s.title}
             </button>
           ))}
         </div>
         {loaded && (
-          <p className="mt-2 text-xs text-zinc-500" aria-live="polite">
-            Loaded “{loaded}” into the editor below — press Save to keep it.
+          <p className="px-2 text-[12px] text-zinc-500" aria-live="polite">
+            Loaded “{loaded}” into the editor below. Press Save to keep it.
           </p>
         )}
       </section>
@@ -324,8 +335,8 @@ function useWorkflowBuilder(): WorkflowBuilder {
       let reply = "Something went wrong building that workflow.";
       if (err instanceof ApiError) {
         if (err.status === 422)
-          reply = "I couldn't turn that into a workflow — try describing the steps more concretely.";
-        else if (err.status === 0) reply = "The daemon looks offline — start it and try again.";
+          reply = "I couldn't turn that into a workflow. Try describing the steps more concretely.";
+        else if (err.status === 0) reply = "The daemon looks offline. Start it and try again.";
         else reply = err.message;
       }
       setMessages((m) => [...m, { role: "assistant", content: reply }]);
@@ -352,29 +363,25 @@ function WorkflowBuilderChat({ builder }: { builder: WorkflowBuilder }) {
     void builder.send(text);
   }
 
+  const ready = !busy && !!input.trim();
+
+  // v1.329.0 (calm chat wave 9, K3): a plain section like the rest of the
+  // page. The thread reads like the chat: replies are bare prose, your own
+  // message is the tinted bubble, and the examples are quiet chips.
   return (
-    <Card title="Build with chat" icon={<Sparkles size={15} />}>
-      <p className="mb-3 text-xs text-zinc-500">
-        Describe a process and the agent builds the steps into the editor above — e.g.{" "}
+    <CalmSection title="Build with chat">
+      <p className="mb-3 px-1 text-[12px] text-zinc-500">
+        Describe a process and the agent builds the steps into the editor above. For example,{" "}
         <span className="text-zinc-400">“research a topic, draft a summary, then review it.”</span>
       </p>
 
-      <div
-        ref={threadRef}
-        className="mb-3 max-h-72 space-y-3 overflow-y-auto rounded-xl border border-white/[0.05] bg-ink-950/40 p-3"
-      >
+      <div ref={threadRef} className="mb-3 max-h-72 space-y-3 overflow-y-auto px-1">
         {messages.length === 0 && !busy ? (
-          <div className="space-y-2 py-2">
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
-              <MessageSquare size={14} /> Try one of these:
-            </div>
-            <div className="flex flex-wrap gap-2">
+          <div className="space-y-1.5">
+            <div className="text-[12px] text-zinc-500">Try one of these:</div>
+            <div className="-ml-1 flex flex-wrap gap-1">
               {EXAMPLES.map((ex) => (
-                <button
-                  key={ex}
-                  onClick={() => send(ex)}
-                  className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
-                >
+                <button key={ex} type="button" onClick={() => send(ex)} className={WF_CHIP}>
                   {ex}
                 </button>
               ))}
@@ -382,24 +389,12 @@ function WorkflowBuilderChat({ builder }: { builder: WorkflowBuilder }) {
           </div>
         ) : (
           messages.map((m, i) => (
-            <div
-              key={i}
-              className={`flex gap-2.5 ${m.role === "user" ? "flex-row-reverse" : ""}`}
-            >
-              <span
-                className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-lg ${
-                  m.role === "user"
-                    ? "bg-accent/15 text-accent-soft"
-                    : "border border-white/10 bg-white/[0.03] text-zinc-400"
-                }`}
-              >
-                {m.role === "user" ? <User size={13} /> : <Bot size={13} />}
-              </span>
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : ""}`}>
               <div
-                className={`max-w-[80%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[13px] leading-relaxed ${
+                className={`whitespace-pre-wrap text-[13px] leading-relaxed ${
                   m.role === "user"
-                    ? "bg-accent/[0.1] text-zinc-100"
-                    : "bg-white/[0.03] text-zinc-300"
+                    ? "max-w-[80%] rounded-2xl bg-accent/[0.1] px-3 py-2 text-zinc-100"
+                    : "max-w-full text-zinc-300"
                 }`}
               >
                 {m.content}
@@ -408,7 +403,7 @@ function WorkflowBuilderChat({ builder }: { builder: WorkflowBuilder }) {
           ))
         )}
         {busy && (
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <div className="flex items-center gap-2 text-[12px] text-zinc-500">
             <Loader2 size={13} className="animate-spin" /> Building the workflow…
           </div>
         )}
@@ -435,12 +430,16 @@ function WorkflowBuilderChat({ builder }: { builder: WorkflowBuilder }) {
           className="field flex-1 resize-y text-[13px]"
           disabled={busy}
         />
-        <button type="submit" disabled={busy || !input.trim()} className="btn-accent">
+        <button
+          type="submit"
+          disabled={!ready}
+          className={ready ? WF_GHOST_ON : WF_GHOST}
+        >
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
           Build
         </button>
       </form>
-    </Card>
+    </CalmSection>
   );
 }
 
@@ -474,71 +473,62 @@ function StarterTemplates() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  // v1.329.0 (calm chat wave 9, K3): a plain section; each template is a row
+  // over a hairline (title, what it does, a quiet Load), not a boxed tile.
   return (
-    <Card
+    <CalmSection
       title="Templates"
-      icon={<LayoutTemplate size={15} />}
       right={
-        <button
-          type="button"
-          onClick={() => setUserToggle(!expanded)}
-          className="text-[11.5px] text-zinc-400 transition-colors hover:text-accent-soft"
-        >
+        <button type="button" onClick={() => setUserToggle(!expanded)} className={WF_GHOST_SM}>
           {expanded ? "Hide" : `Show ${STARTERS.length}`}
         </button>
       }
     >
       {!expanded ? (
-        <p className="text-xs text-zinc-500">
-          {STARTERS.length} starter workflows — client intake, month-end close,
+        <p className="px-1 text-[12px] text-zinc-500">
+          {STARTERS.length} starter workflows: client intake, month-end close,
           weekly digest and more. Load one onto the canvas and make it yours.
         </p>
       ) : (
         <>
           {!hasSaved && !loading && !error && (
-            <p className="mb-3 text-xs text-zinc-500">
-              No saved workflows yet — start from one of these. Loading a
-              template only fills the editor above; nothing is saved until you
-              press Save.
+            <p className="mb-2 px-1 text-[12px] text-zinc-500">
+              No saved workflows yet. Start from one of these. Loading a
+              template only fills the editor above, and nothing is saved until
+              you press Save.
             </p>
           )}
-          {/* v1.313.0: a base minmax(0,1fr) track (grid-cols-1) so a long starter
-              name can never widen the page on a phone. */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <ul data-testid="workflow-templates" className="divide-y divide-white/[0.06]">
             {STARTERS.map((s) => (
-              <div
+              <li
                 key={s.name}
-                className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.02] p-3"
+                className="flex flex-col gap-2 px-1 py-2.5 sm:flex-row sm:items-start sm:gap-4"
               >
-                <div className="text-[13px] font-medium text-zinc-100">
-                  {s.title}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-zinc-100">{s.title}</div>
+                  <div className="mt-0.5 text-[11px] text-zinc-500">{starterKindSummary(s)}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-400">{s.blurb}</p>
                 </div>
-                <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.08em] text-zinc-500">
-                  {starterKindSummary(s)}
-                </div>
-                <p className="mt-1.5 flex-1 text-[12px] leading-relaxed text-zinc-400">
-                  {s.blurb}
-                </p>
-                <div className="mt-2.5 flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2 sm:flex-col sm:items-end">
                   <button
                     type="button"
                     onClick={() => loadStarter(s)}
-                    className="rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                    className={`${WF_GHOST_SM} -ml-2 sm:ml-0`}
                   >
                     Load into editor
                   </button>
                   {loadedName === s.name && (
                     <span className="text-[11px] text-zinc-500">
-                      Loaded above — press Save to keep it.
+                      Loaded above. Press Save to keep it.
                     </span>
                   )}
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </>
       )}
-    </Card>
+    </CalmSection>
   );
 }
 
@@ -705,16 +695,15 @@ function RunHistory() {
     return tb - ta;
   });
 
+  // v1.329.0 (calm chat wave 9, K3): a plain section with sentence-case
+  // column names; the notes and the waiting ask are tone lines, not boxes.
   return (
-    <Card
-      title={`Run history${runs.length ? ` · ${runs.length}` : ""}`}
-      icon={<History size={15} />}
-    >
+    <CalmSection title={`Run history${runs.length ? ` · ${runs.length}` : ""}`}>
       {loading && !data ? (
         <SkeletonRows rows={4} />
       ) : offline ? (
         <Empty icon={<History size={22} />}>
-          Daemon offline — run history is unavailable.
+          Daemon offline. Run history is unavailable.
         </Empty>
       ) : ordered.length === 0 ? (
         <Empty icon={<History size={22} />}>
@@ -724,7 +713,7 @@ function RunHistory() {
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              <tr className="border-b hairline text-[12px] text-zinc-500">
                 <th className="px-2 py-2.5 font-medium" />
                 <th className="px-2 py-2.5 font-medium">Workflow</th>
                 <th className="px-2 py-2.5 font-medium">Status</th>
@@ -747,7 +736,7 @@ function RunHistory() {
                       onClick={() =>
                         canExpand && setExpanded(isOpen ? null : key)
                       }
-                      className={`border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02] ${
+                      className={`border-b border-white/[0.06] last:border-0 hover:bg-white/[0.03] ${
                         canExpand ? "cursor-pointer" : ""
                       }`}
                     >
@@ -776,7 +765,7 @@ function RunHistory() {
                                 void resumeRun(String(r.id));
                               }}
                               disabled={resumingRunId != null}
-                              className="rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-0.5 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                              className={WF_GHOST_ON_SM}
                             >
                               {resumingRunId === String(r.id)
                                 ? "Resuming…"
@@ -785,7 +774,7 @@ function RunHistory() {
                           )}
                         </div>
                         {resumeErr && resumeErr.id === String(r.id) && (
-                          <p className="mt-1 text-[11px] text-rose-300">
+                          <p className="mt-1 text-[12px] text-tone-danger">
                             {resumeErr.message}
                           </p>
                         )}
@@ -798,27 +787,27 @@ function RunHistory() {
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr className="border-b border-white/[0.04] bg-ink-950/30">
-                        <td colSpan={5} className="px-3 py-2.5">
+                      <tr className="border-b border-white/[0.06]">
+                        <td colSpan={5} className="px-3 pb-3 pt-1">
                           {parseNotes(r).map((note) => (
-                            <div
+                            <p
                               key={note}
                               data-testid="run-note"
-                              className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[12.5px] text-amber-200"
+                              className="mb-2 text-[13px] leading-relaxed text-tone-warn"
                             >
                               {note}
-                            </div>
+                            </p>
                           ))}
                           {r.status === "interrupted" && (
-                            <div className="mb-2 text-[12px] text-amber-300/80">
+                            <div className="mb-2 text-[12px] text-tone-warn">
                               This run was interrupted (the daemon restarted
-                              mid-run) — steps below reflect how far it got.
+                              mid-run). The steps below show how far it got.
                               Resume continues from the first unfinished step.
                             </div>
                           )}
                           {r.status === "waiting" && (
-                            <div className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2">
-                              <p className="text-[12.5px] text-amber-200">
+                            <div className="mb-3">
+                              <p className="text-[13px] text-tone-warn">
                                 {parseWaiting(r)?.question ??
                                   "This run is waiting for your answer."}
                               </p>
@@ -836,9 +825,9 @@ function RunHistory() {
                                       void submitAnswer(String(r.id));
                                   }}
                                   onClick={(e) => e.stopPropagation()}
-                                  placeholder="Type your answer — the run continues from here"
+                                  placeholder="Type your answer. The run continues from here."
                                   aria-label="Answer the workflow"
-                                  className="field flex-1 py-1.5 text-[12.5px]"
+                                  className="field flex-1 py-1.5 text-[13px]"
                                 />
                                 <button
                                   type="button"
@@ -850,7 +839,7 @@ function RunHistory() {
                                     answeringId === String(r.id) ||
                                     !(answerDraft[String(r.id)] ?? "").trim()
                                   }
-                                  className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+                                  className={WF_GHOST_ON_SM}
                                 >
                                   {answeringId === String(r.id)
                                     ? "Sending…"
@@ -858,13 +847,13 @@ function RunHistory() {
                                 </button>
                               </div>
                               {answerErr && (
-                                <p className="mt-1 text-[11.5px] text-rose-300">
+                                <p className="mt-1 text-[12px] text-tone-danger">
                                   {answerErr}
                                 </p>
                               )}
                             </div>
                           )}
-                          <ol className="space-y-1.5">
+                          <ol className="divide-y divide-white/[0.06]">
                             {defs.map((d, di) => {
                               const nm = d.name?.trim() || `step-${di + 1}`;
                               const o = outs[nm];
@@ -873,10 +862,10 @@ function RunHistory() {
                               return (
                                 <li
                                   key={`${nm}-${di}`}
-                                  className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-2.5 py-2"
+                                  className="py-2"
                                 >
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.05] text-[10px] font-semibold text-zinc-400">
+                                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.05] text-[11px] font-medium text-zinc-400">
                                       {di + 1}
                                     </span>
                                     <span className="text-[13px] font-medium text-zinc-100">
@@ -898,7 +887,7 @@ function RunHistory() {
                                   {o?.summary && (
                                     <p
                                       className={`mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed ${
-                                        failed ? "text-rose-200/90" : "text-zinc-400"
+                                        failed ? "text-tone-danger" : "text-zinc-400"
                                       }`}
                                     >
                                       {o.summary}
@@ -918,6 +907,6 @@ function RunHistory() {
           </table>
         </div>
       )}
-    </Card>
+    </CalmSection>
   );
 }

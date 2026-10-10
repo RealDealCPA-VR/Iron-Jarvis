@@ -29,8 +29,18 @@ const CHAT_DIR = path.join(__dirname, "..", "components", "chat");
  *  agent-type and step-kind chips from components/workflow/agents.ts
  *  (AGENT_META / KIND_META), so those class strings are chat-card classes
  *  too and the guard reads that file as well. */
+const WORKFLOW_DIR = path.join(__dirname, "..", "components", "workflow");
+
+/* Wave 9 (K3): the workflow editor joined the calm look, so the guard reads
+   every file in components/workflow (not only agents.ts) and the Workflows
+   page itself: whole pixels, tone tokens, no literal colour values. */
 const EXTRA: Record<string, string> = {
-  "workflow/agents.ts": path.join(__dirname, "..", "components", "workflow", "agents.ts"),
+  ...Object.fromEntries(
+    readdirSync(WORKFLOW_DIR)
+      .filter((f) => /\.(tsx|ts)$/.test(f))
+      .map((f) => [`workflow/${f}`, path.join(WORKFLOW_DIR, f)]),
+  ),
+  "app/workflows/page.tsx": path.join(__dirname, "..", "app", "workflows", "page.tsx"),
 };
 
 const read = (name: string) =>
@@ -138,6 +148,26 @@ describe("chat cards: whole pixels and theme tokens only", () => {
     expect(src).toContain("export const KIND_META");
     expect((src.match(/chip: "/g) ?? []).length).toBeGreaterThanOrEqual(9);
     expect(read("WorkflowDraftCard.tsx")).toMatch(/from "@\/components\/workflow\/agents"/);
+  });
+
+  it("also reads the whole workflow editor and the Workflows page (wave 9, K3)", () => {
+    for (const f of [
+      "app/workflows/page.tsx",
+      "workflow/WorkflowCanvas.tsx",
+      "workflow/NodeInspector.tsx",
+      "workflow/TriggerInspector.tsx",
+      "workflow/StepNode.tsx",
+      "workflow/TriggerNode.tsx",
+      "workflow/SavedWorkflows.tsx",
+      "workflow/calm.tsx",
+      "workflow/starters.ts",
+      "workflow/useCanvasColorMode.ts",
+    ]) {
+      expect(scanned, f).toContain(f);
+    }
+    // Anti-vacuity: these are the real sources, with class strings in them.
+    expect(read("app/workflows/page.tsx")).toContain("export default function WorkflowsPage");
+    expect(read("workflow/WorkflowCanvas.tsx")).toContain("const CHIP_TONE");
   });
 
   it("no chat component has a half-pixel size, a literal hue or a colour value outside the allowlist", () => {
