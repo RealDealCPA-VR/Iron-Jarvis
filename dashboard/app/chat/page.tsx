@@ -296,7 +296,7 @@ import {
 import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
 import { CONTINUE_PROMPT, mergeContinuation } from "@/lib/continueReply";
 import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
-import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
+import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { friendlyModelName } from "@/lib/friendlyModelName";
@@ -11194,7 +11194,7 @@ export default function ChatPage() {
                               retryTurn();
                             }}
                             title={`${splitChoice(choice).provider} is not reachable; ${health.defaultProvider} is. Re-send with the default model.`}
-                            className="btn-ghost shrink-0 py-1.5 text-[13px]"
+                            className={CALM_GHOST_BTN}
                           >
                             Retry with the default model
                           </button>

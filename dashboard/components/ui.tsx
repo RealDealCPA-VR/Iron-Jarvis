@@ -57,8 +57,8 @@ export function Card({
           rhythm BETWEEN cards (PageShell's space-y-6) is deliberately left
           alone — Overview and Creative use that breathing room. */}
       {(title || right) && (
-        <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
-          <h2 className="flex items-center gap-2 text-[13px] font-semibold tracking-wide text-zinc-200">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b hairline px-4 py-3">
+          <h2 className="flex min-w-0 items-center gap-2 text-[13px] font-semibold tracking-wide text-zinc-200">
             {/* Neutral, not accent (v1.99.0). This icon renders in EVERY card
                 header in the app, so tinting it accent-soft spent the brand
                 colour on decoration hundreds of times over — leaving nothing to

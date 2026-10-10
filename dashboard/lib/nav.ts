@@ -436,7 +436,7 @@ export const NAV: NavSectionDef[] = [
           "accounts",
           "providers",
         ],
-        blurb: "Your accounts and model endpoints — connect once, everything can use them.",
+        blurb: "Your accounts and model endpoints. Connect once and everything can use them.",
       },
       // Advanced-only by construction: NOT in Sidebar's ESSENTIAL_HREFS.
       {
