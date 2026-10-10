@@ -80,19 +80,11 @@ function kindOf(name: string): Kind {
   return "other";
 }
 
-function KindIcon({ kind, size = 14, calm = false }: { kind: Kind; size?: number; calm?: boolean }) {
-  // v1.329.0: the calm look (the chat drawer) uses the tone tokens, which
-  // every theme re-inks; Build keeps its own hues.
-  if (calm) {
-    if (kind === "image") return <ImageIcon size={size} className="text-tone-violet/80" />;
-    if (kind === "video") return <FileVideo size={size} className="text-tone-info/80" />;
-    if (kind === "audio") return <FileAudio size={size} className="text-tone-success/80" />;
-    if (kind === "text") return <FileText size={size} className="text-accent-soft/80" />;
-    return <FileIcon size={size} className="text-zinc-500" />;
-  }
-  if (kind === "image") return <ImageIcon size={size} className="text-violet-300/80" />;
-  if (kind === "video") return <FileVideo size={size} className="text-sky-300/80" />;
-  if (kind === "audio") return <FileAudio size={size} className="text-emerald-300/80" />;
+function KindIcon({ kind, size = 14 }: { kind: Kind; size?: number }) {
+  // v1.329.0: the tone tokens, which every theme re-inks (both looks).
+  if (kind === "image") return <ImageIcon size={size} className="text-tone-violet/80" />;
+  if (kind === "video") return <FileVideo size={size} className="text-tone-info/80" />;
+  if (kind === "audio") return <FileAudio size={size} className="text-tone-success/80" />;
   if (kind === "text") return <FileText size={size} className="text-accent-soft/80" />;
   return <FileIcon size={size} className="text-zinc-500" />;
 }
@@ -109,6 +101,14 @@ function fileSrc(abs: string): string {
 function baseName(p: string): string {
   const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || p;
+}
+
+/** v1.329.0: the files list's error as ONE plain line that names the folder.
+ *  The daemon's own words often do already ("no such directory: <path>"); when
+ *  they do not, the folder is added so the line always says WHICH folder. */
+export function filesErrorLine(error: string, folder: string): string {
+  if (!folder || error.toLowerCase().includes(folder.toLowerCase())) return error;
+  return `${error} (${folder})`;
 }
 
 function fmtSize(bytes: number): string {
@@ -203,7 +203,7 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
               title="Copy full path"
               className="rounded-lg border border-transparent p-1.5 text-zinc-400 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-zinc-200"
             >
-              {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+              {copied ? <Check size={15} className="text-tone-success" /> : <Copy size={15} />}
             </button>
             <button
               type="button"
@@ -245,7 +245,7 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
               </div>
             ) : textErr ? (
               <div className="p-5">
-                <ErrorNote>Couldn&apos;t read this file — {textErr}</ErrorNote>
+                <ErrorNote>Couldn&apos;t read this file: {textErr}</ErrorNote>
               </div>
             ) : (
               <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words bg-ink-950 p-4 font-mono text-[12px] leading-relaxed text-zinc-300">
@@ -291,10 +291,15 @@ export function FilesPanel({
   onOpenTerminal,
   onPreview,
   variant = "card",
+  noFolderText,
 }: {
-  /** v1.329.0: "calm" draws the list without its card, in the normal font
-   *  (the chat drawer); "card" (the default) is Build's look, unchanged. */
+  /** v1.329.0: "calm" draws the list without its card, in the normal font.
+   *  The chat drawer AND Build pass it (wave 6: one look for the same list);
+   *  "card" stays the default for any other caller. */
   variant?: "card" | "calm";
+  /** Calm only: the line shown while no folder is known. The host says what
+   *  picks one (Build: a focused terminal or the Folders tab). */
+  noFolderText?: string;
   folder: string | null;
   onOpenTerminal?: (path: string) => void;
   /** When set (the chat rail), clicking a file opens the HOST's document
@@ -433,15 +438,20 @@ export function FilesPanel({
         <div className="min-h-0 flex-1 overflow-y-auto border-t hairline">
           {!folder ? (
             <p className="py-3 text-[12px] text-zinc-500">
-              Pick a folder to see its files here.
+              {noFolderText ?? "Pick a folder to see its files here."}
             </p>
           ) : offline ? (
             <div className="py-3">
               <OfflineHint detail="The files list needs Iron Jarvis running." />
             </div>
           ) : error ? (
-            <p role="alert" className="py-3 text-[12px] text-tone-danger">
-              {error}
+            <p
+              role="alert"
+              data-testid="files-panel-error"
+              className="break-words py-3 text-[12px] text-tone-danger"
+            >
+              {/* The folder ASKED for: `root` may still hold the last folder's. */}
+              {filesErrorLine(error, folder)}
             </p>
           ) : loading ? (
             <div className="py-1">
@@ -467,7 +477,7 @@ export function FilesPanel({
                       }`}
                     >
                       <span className="shrink-0">
-                        <KindIcon kind={kind} calm />
+                        <KindIcon kind={kind} />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] text-zinc-200">{f.rel}</span>
@@ -550,9 +560,13 @@ export function FilesPanel({
             <OfflineHint detail="The files panel needs the daemon running." />
           </div>
         ) : error ? (
-          <div className="p-3">
-            <ErrorNote>{error}</ErrorNote>
-          </div>
+          <p
+            role="alert"
+            data-testid="files-panel-error"
+            className="break-words px-4 py-3 text-[12px] text-tone-danger"
+          >
+            {filesErrorLine(error, folder)}
+          </p>
         ) : loading ? (
           <div className="px-4">
             <Spinner label="Loading files…" />
@@ -587,7 +601,7 @@ export function FilesPanel({
                       <span className="block truncate font-mono text-[12px] text-zinc-200">
                         {f.rel}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-zinc-500">
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
                         <span>{fmtSize(f.size)}</span>
                         <span className="text-zinc-700">·</span>
                         <span className={fresh ? "text-accent-soft" : ""}>{relTime(f.mtime)}</span>
@@ -602,7 +616,7 @@ export function FilesPanel({
       </div>
 
       {folder && !loading && !offline && !error && files.length > 0 && (
-        <footer className="shrink-0 border-t border-white/[0.06] px-4 py-2 text-[10.5px] text-zinc-500">
+        <footer className="shrink-0 border-t border-white/[0.06] px-4 py-2 text-[11px] text-zinc-500">
           {files.length > MAX_ROWS ? `Showing ${MAX_ROWS} of ` : ""}
           {count} file{count === 1 ? "" : "s"}
           {truncated ? " (capped at 600 — newest shown)" : ""}

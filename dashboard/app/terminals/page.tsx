@@ -1326,7 +1326,7 @@ export default function TerminalsPage() {
                                   aria-hidden
                                   className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full ${
                                     chatBadge === "approval"
-                                      ? "bg-amber-400"
+                                      ? "bg-tone-warn"
                                       : "bg-accent"
                                   }`}
                                 />
@@ -1355,7 +1355,12 @@ export default function TerminalsPage() {
                               title="Open the chat"
                               className={`absolute inset-x-0 bottom-0 z-20 truncate rounded-b-2xl border-t px-3 py-1 text-left text-[11px] backdrop-blur transition-colors ${
                                 chatPeek.amber
-                                  ? "border-amber-400/30 bg-amber-500/[0.18] text-amber-200 hover:bg-amber-500/[0.28]"
+                                  ? // v1.329.0: an opaque theme surface with the
+                                    // warn ink, not a see-through tint. The strip
+                                    // lies over the terminal canvas, which stays
+                                    // dark in every theme; a tint over it read
+                                    // dark-on-dark in Daylight.
+                                    "border-tone-warn/40 bg-ink-900/85 text-tone-warn hover:bg-tone-warn/[0.12]"
                                   : "border-white/10 bg-ink-900/85 text-zinc-300 hover:bg-accent/15 hover:text-accent-soft"
                               }`}
                             >
@@ -1574,10 +1579,15 @@ export default function TerminalsPage() {
                     id="build-panel-body"
                     role="tabpanel"
                     aria-labelledby={`build-tab-${treeTab}`}
-                    className="min-h-0 flex-1"
+                    className="min-h-0 flex-1 px-2"
                   >
+                    {/* v1.329.0 (calm chat wave 6): the CALM picker and file
+                        list, the same look the chat's project drawer draws,
+                        so one file browser has one look across the app. No
+                        card; the terminal canvas beside it stays dark. */}
                     {treeTab === "folders" ? (
                       <DirectoryTree
+                        variant="calm"
                         selectedPath={selectedPath}
                         onSelect={setSelectedPath}
                         onOpenTerminal={(p) => addTerminal(p)}
@@ -1589,8 +1599,10 @@ export default function TerminalsPage() {
                       />
                     ) : (
                       <FilesPanel
+                        variant="calm"
                         folder={focusedFolder}
                         onOpenTerminal={(p) => addTerminal(p)}
+                        noFolderText="Focus a terminal to see the files in its folder, or pick a folder in the Folders tab."
                       />
                     )}
                   </div>

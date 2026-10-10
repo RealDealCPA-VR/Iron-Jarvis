@@ -34,7 +34,8 @@ const CHIP_WORDS: Record<string, string> = {
 
 /**
  * v1.329.0 (calm chat wave 5, G4): the CALM look, used where the tree sits
- * inside a calm surface (the chat's project drawer). Build keeps the card.
+ * inside a calm surface (the chat's project drawer; since wave 6 also
+ * Build's Folders tab). Memory's folder dialog keeps the card.
  *
  * Calm means: no card, no accent header, sentence-case quiet labels, inputs
  * with a hairline edge in the normal font, a ghost Go, whole-pixel sizes and
@@ -82,14 +83,14 @@ function calmDriveWords(d: Drive): string {
 function projectChip(kind: string) {
   const map: Record<string, { label: string; cls: string; git?: boolean }> = {
     git: { label: "git", cls: "border-accent/30 bg-accent/10 text-accent-soft", git: true },
-    python: { label: "py", cls: "border-amber-500/30 bg-amber-500/10 text-amber-300" },
-    node: { label: "node", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" },
-    rust: { label: "rust", cls: "border-orange-500/30 bg-orange-500/10 text-orange-300" },
-    go: { label: "go", cls: "border-sky-500/30 bg-sky-500/10 text-sky-300" },
+    python: { label: "py", cls: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn" },
+    node: { label: "node", cls: "border-tone-success/30 bg-tone-success/10 text-tone-success" },
+    rust: { label: "rust", cls: "border-tone-danger/30 bg-tone-danger/10 text-tone-danger" },
+    go: { label: "go", cls: "border-tone-info/30 bg-tone-info/10 text-tone-info" },
   };
   const m = map[kind] ?? {
     label: kind,
-    cls: "border-violet-500/30 bg-violet-500/10 text-violet-300",
+    cls: "border-tone-violet/30 bg-tone-violet/10 text-tone-violet",
   };
   return (
     <span
@@ -174,7 +175,7 @@ function DirNode({
             ? `flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
                 active ? "bg-accent/[0.08] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.05]"
               }`
-            : `flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[12.5px] transition-colors ${
+            : `flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] transition-colors ${
                 active
                   ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
                   : "text-zinc-300 hover:bg-white/[0.05]"
@@ -208,7 +209,7 @@ function DirNode({
           {error && (
             <div
               className={`flex items-center gap-1.5 py-1 ${
-                calm ? "text-[12px] text-tone-danger" : "text-[11px] text-rose-300/80"
+                calm ? "text-[12px] text-tone-danger" : "text-[11px] text-tone-danger/80"
               }`}
               style={{ paddingLeft: 6 + (depth + 1) * 14 }}
             >
@@ -250,8 +251,8 @@ export function DirectoryTree({
   variant = "card",
   collapseLabel = "Close",
 }: {
-  /** v1.329.0: "calm" draws the tree without its card (the chat drawer);
-   *  "card" (the default) is Build's and Memory's look, unchanged. */
+  /** v1.329.0: "calm" draws the tree without its card (the chat drawer and
+   *  Build); "card" (the default) is Memory's look, on theme tokens. */
   variant?: DirectoryTreeVariant;
   /** Calm only: the words on the ghost button that calls `onCollapse`
    *  (the card look keeps its collapse icon). */
@@ -576,7 +577,7 @@ export function DirectoryTree({
           {/* The tree itself */}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
             {error ? (
-              <div className="flex items-center gap-1.5 px-2 py-3 text-[12px] text-rose-300/80">
+              <div className="flex items-center gap-1.5 px-2 py-3 text-[12px] text-tone-danger/80">
                 <TriangleAlert size={13} /> {error.message}
               </div>
             ) : activeRoot ? (

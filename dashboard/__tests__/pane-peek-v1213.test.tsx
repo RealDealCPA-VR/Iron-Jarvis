@@ -485,13 +485,16 @@ describe("chat-activity peek strip (page, terminal view)", () => {
     fireEvent.click(termBtn("t1"));
     const strip = screen.getByTestId("pane-peek-t1");
     expect(strip).toHaveTextContent("Approval needed — click to answer");
-    expect(strip.className).toContain("amber");
+    // v1.329.0 (wave 6): the warn TONE token on an opaque surface, never a
+    // literal amber (the strip lies over the always-dark terminal canvas).
+    expect(strip.className).toContain("text-tone-warn");
+    expect(strip.className).not.toMatch(/amber/);
     expect(strip.tagName).toBe("BUTTON"); // react-rnd cancel="button…" drag-exempt
 
     // Approval resolved, tool still running → "Chat: <tool>…".
     fireEvent.click(screen.getByTestId("emit-tool-t1"));
     expect(screen.getByTestId("pane-peek-t1")).toHaveTextContent("Chat: write_file…");
-    expect(screen.getByTestId("pane-peek-t1").className).not.toContain("amber");
+    expect(screen.getByTestId("pane-peek-t1").className).not.toContain("tone-warn");
 
     // Tools done, text streaming → the tail verbatim.
     fireEvent.click(screen.getByTestId("emit-text-t1"));

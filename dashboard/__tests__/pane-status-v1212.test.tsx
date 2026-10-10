@@ -423,7 +423,8 @@ describe("chat badge on the toggle (page)", () => {
     fireEvent.click(termBtn("t1"));
     const badge = screen.getByTestId("pane-chat-badge-t1");
     // Amber + pulse = approval; precedence over the simultaneous streaming.
-    expect(badge.className).toContain("bg-amber-400");
+    // v1.329.0 (wave 6): the warn TONE token, which Daylight re-inks.
+    expect(badge.className).toContain("bg-tone-warn");
     expect(badge.className).toContain("animate-pulse");
     expect(badge.className).not.toContain("bg-accent");
     // Title AND accessible name carry the status.
@@ -436,7 +437,7 @@ describe("chat badge on the toggle (page)", () => {
     fireEvent.click(screen.getByTestId("emit-streaming-t1"));
     const working = screen.getByTestId("pane-chat-badge-t1");
     expect(working.className).toContain("bg-accent");
-    expect(working.className).not.toContain("bg-amber-400");
+    expect(working.className).not.toContain("bg-tone-warn");
     expect(
       screen.getByRole("button", { name: "Chat view for pane t1 — Chat is working" }),
     ).toHaveAttribute("title", "Chat view — Chat is working");

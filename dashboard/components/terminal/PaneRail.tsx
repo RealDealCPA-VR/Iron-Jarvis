@@ -648,7 +648,7 @@ export function PaneRail({
                                 <Check size={11} strokeWidth={3} />
                               </span>
                               <span className="min-w-0 flex-1">
-                                <span className="block text-[11.5px] font-medium text-zinc-200">
+                                <span className="block text-[12px] font-medium text-zinc-200">
                                   {cap.label}
                                 </span>
                                 <span className="block text-[10px] leading-relaxed text-zinc-500">
@@ -660,7 +660,7 @@ export function PaneRail({
                                 <span
                                   data-testid={`rail-cap-word-${p.id}-${cap.key}`}
                                   className={`block text-[10px] ${
-                                    status.available ? "text-zinc-500" : "text-amber-300"
+                                    status.available ? "text-zinc-500" : "text-tone-warn"
                                   }`}
                                 >
                                   {status.word}
@@ -670,7 +670,7 @@ export function PaneRail({
                                 {on && !status.available ? (
                                   <span
                                     data-testid={`rail-cap-conflict-${p.id}-${cap.key}`}
-                                    className="block text-[10px] leading-relaxed text-amber-200"
+                                    className="block text-[10px] leading-relaxed text-tone-warn"
                                   >
                                     Ticked for this pane, but unavailable — the install setting wins. Untick it here if you want the grant gone.
                                   </span>
@@ -681,7 +681,7 @@ export function PaneRail({
                         })}
                       </div>
                       {capabilityStatus(ENFORCED_CAPABILITY, access, accessFailed).offForInstall ? (
-                        <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-amber-200">
+                        <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-tone-warn">
                           Browser is off for this whole install.{" "}
                           <Link
                             href="/computeruse"
@@ -708,7 +708,7 @@ export function PaneRail({
                       {capsError ? (
                         <p
                           role="alert"
-                          className="mt-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-200"
+                          className="mt-1.5 px-1 text-[10px] leading-relaxed text-tone-warn"
                         >
                           {capsError}
                         </p>

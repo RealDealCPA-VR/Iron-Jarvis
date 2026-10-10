@@ -175,7 +175,7 @@ function ContinueStrip({
     <div
       id={`pane-continue-${paneId}`}
       data-testid="continue-strip"
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-1 text-[11px] text-amber-200"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-1 text-[11px] text-tone-warn"
     >
       <ArrowRightLeft size={12} className="shrink-0" />
       <span className="min-w-0 flex-1">
@@ -195,7 +195,7 @@ function ContinueStrip({
           onClick={() => void go()}
           disabled={busy}
           title="Opens a new pane on that account in this folder and carries the conversation over when it can"
-          className="shrink-0 rounded-md border border-amber-400/50 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/15 disabled:opacity-60"
+          className="shrink-0 rounded-md border border-tone-warn/50 px-2 py-0.5 font-medium text-tone-warn transition-colors hover:bg-tone-warn/15 disabled:opacity-60"
         >
           {busy ? (
             <span className="flex items-center gap-1">
@@ -211,7 +211,7 @@ function ContinueStrip({
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-amber-200/80 transition-colors hover:bg-amber-500/10"
+        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
       >
         Dismiss
       </button>
@@ -219,7 +219,7 @@ function ContinueStrip({
         <span
           data-testid={`pane-continue-privacy-${paneId}`}
           title="Claude Code sends the conversation to Anthropic under the account it runs on. The copy stays in that account's own history; nothing is deleted from either."
-          className="basis-full text-[10.5px] text-amber-200/80"
+          className="basis-full text-[10px] text-tone-warn/80"
         >
           Your conversation is copied to{" "}
           {next.kind === "next" ? `“${next.account.title}”` : "the next account"} and continues
@@ -227,7 +227,7 @@ function ContinueStrip({
         </span>
       )}
       {error && (
-        <span role="alert" data-testid={`pane-continue-error-${paneId}`} className="basis-full text-rose-200">
+        <span role="alert" data-testid={`pane-continue-error-${paneId}`} className="basis-full text-tone-danger">
           {error}
         </span>
       )}
@@ -330,7 +330,7 @@ export function ResumeFailedStrip({
     <div
       id={`pane-resume-failed-${paneId}`}
       data-testid="resume-failed-strip"
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-1 text-[11px] text-amber-200"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-1 text-[11px] text-tone-warn"
     >
       <RotateCcw size={12} className="shrink-0" />
       <span className="min-w-0 flex-1">
@@ -341,7 +341,7 @@ export function ResumeFailedStrip({
         data-testid={`pane-start-fresh-${paneId}`}
         onClick={() => void go()}
         disabled={busy}
-        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/15 disabled:opacity-60"
+        className="shrink-0 rounded-md border border-tone-warn/50 px-2 py-0.5 font-medium text-tone-warn transition-colors hover:bg-tone-warn/15 disabled:opacity-60"
       >
         {busy ? (
           <span className="flex items-center gap-1">
@@ -351,18 +351,18 @@ export function ResumeFailedStrip({
           "Start fresh with what we were doing"
         )}
       </button>
-      <span className="shrink-0 text-amber-200/70">or type /clear to start empty</span>
+      <span className="shrink-0 text-tone-warn/70">or type /clear to start empty</span>
       <button
         type="button"
         onClick={() => {
           dismissedFailure.set(paneId, key);
           changed();
         }}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-amber-200/80 transition-colors hover:bg-amber-500/10"
+        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
       >
         Dismiss
       </button>
-      <span data-testid={`pane-start-fresh-how-${paneId}`} className="basis-full text-[10.5px] text-amber-200/80">
+      <span data-testid={`pane-start-fresh-how-${paneId}`} className="basis-full text-[10px] text-tone-warn/80">
         Iron Jarvis writes a short summary of the conversation so far (your first request, the last few
         messages, the files involved) and starts a new Claude session on {hereShort} with it.
       </span>
@@ -370,7 +370,7 @@ export function ResumeFailedStrip({
         <span
           role="alert"
           data-testid={`pane-start-fresh-error-${paneId}`}
-          className="basis-full whitespace-pre-line text-rose-200"
+          className="basis-full whitespace-pre-line text-tone-danger"
         >
           {error}
         </span>
@@ -423,7 +423,7 @@ function SignInNeededStrip({
       id={`pane-resume-failed-${paneId}`}
       data-testid="resume-failed-strip"
       data-variant="sign-in"
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-1 text-[11px] text-amber-200"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-1 text-[11px] text-tone-warn"
     >
       <LogIn size={12} className="shrink-0" />
       <span className="min-w-0 flex-1">
@@ -434,7 +434,7 @@ function SignInNeededStrip({
         data-testid={`pane-sign-in-${paneId}`}
         onClick={() => void signIn()}
         disabled={busy}
-        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/15 disabled:opacity-60"
+        className="shrink-0 rounded-md border border-tone-warn/50 px-2 py-0.5 font-medium text-tone-warn transition-colors hover:bg-tone-warn/15 disabled:opacity-60"
       >
         {busy ? (
           <span className="flex items-center gap-1">
@@ -450,7 +450,7 @@ function SignInNeededStrip({
           dismissedFailure.set(paneId, signInNeededKey(need));
           changed();
         }}
-        className="shrink-0 rounded-md px-1.5 py-0.5 text-amber-200/80 transition-colors hover:bg-amber-500/10"
+        className="shrink-0 rounded-md px-1.5 py-0.5 text-tone-warn/80 transition-colors hover:bg-tone-warn/10"
       >
         Dismiss
       </button>
@@ -458,7 +458,7 @@ function SignInNeededStrip({
         <span
           role="alert"
           data-testid={`pane-sign-in-error-${paneId}`}
-          className="basis-full whitespace-pre-line text-rose-200"
+          className="basis-full whitespace-pre-line text-tone-danger"
         >
           {error}
         </span>
@@ -491,7 +491,7 @@ export function SignedInStrip({
     <div
       id={`pane-signed-in-${paneId}`}
       data-testid="signed-in-strip"
-      className="flex shrink-0 items-center gap-2 border-b border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-1 text-[11px] text-emerald-200"
+      className="flex shrink-0 items-center gap-2 border-b border-tone-success/25 bg-tone-success/[0.07] px-3 py-1 text-[11px] text-tone-success"
     >
       <LogIn size={12} className="shrink-0" />
       <span className="min-w-0 flex-1">
@@ -505,7 +505,7 @@ export function SignedInStrip({
           dismissedSignedIn.add(paneId);
           changed();
         }}
-        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-emerald-200/80 hover:bg-emerald-500/15"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-tone-success/80 hover:bg-tone-success/15"
       >
         <X size={12} />
       </button>

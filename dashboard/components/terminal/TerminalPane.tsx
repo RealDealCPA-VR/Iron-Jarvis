@@ -162,15 +162,15 @@ export function recipeNote(cli: LaunchCli): {
 export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
   const note = recipeNote(cli);
   const tone = note.ready
-    ? "text-emerald-300/80"
+    ? "text-tone-success/80"
     : note.limitations.length
-      ? "text-amber-300"
+      ? "text-tone-warn"
       : "text-zinc-500";
   return (
     <span data-testid={`launch-recipe-${cli.id}`} className="block">
       <span className={`block text-[10px] leading-relaxed ${tone}`}>{note.headline}</span>
       {note.limitations.map((line) => (
-        <span key={line} className="block text-[10px] leading-relaxed text-amber-200">
+        <span key={line} className="block text-[10px] leading-relaxed text-tone-warn">
           {line}
         </span>
       ))}
@@ -1587,7 +1587,7 @@ export function TerminalPane({
         {info.degraded && (
           <span
             title="Basic shell (no full TTY) — commands run, but interactive TUI apps may not render. The full terminal returns after the next app update."
-            className="inline-flex shrink-0 items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-300"
+            className="inline-flex shrink-0 items-center rounded-full border border-tone-warn/25 bg-tone-warn/10 px-1.5 py-0.5 text-[9px] font-medium text-tone-warn"
           >
             basic
           </span>
@@ -1761,7 +1761,7 @@ export function TerminalPane({
       {snipNote && (
         <div
           role="status"
-          className="flex shrink-0 items-center gap-2 border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-1 text-[11px] text-amber-200"
+          className="flex shrink-0 items-center gap-2 border-b border-tone-warn/20 bg-tone-warn/[0.06] px-3 py-1 text-[11px] text-tone-warn"
         >
           <ImageIcon size={12} /> Saved outside this folder — {snipNote}
         </div>
@@ -1779,7 +1779,7 @@ export function TerminalPane({
               key={s.id}
               className={`flex items-center gap-1.5 rounded-lg border px-1.5 py-1 ${
                 s.status === "failed"
-                  ? "border-rose-500/30 bg-rose-500/[0.07]"
+                  ? "border-tone-danger/30 bg-tone-danger/[0.07]"
                   : "border-white/10 bg-white/[0.03]"
               }`}
             >
@@ -1815,14 +1815,14 @@ export function TerminalPane({
                   {s.status === "ready" && s.recompressed && (
                     <span
                       title={`Re-encoded to fit under ${formatSnipBytes(CLI_IMAGE_BUDGET_BYTES)} — the CLI would reject the original.`}
-                      className="ml-1 text-amber-300"
+                      className="ml-1 text-tone-warn"
                     >
                       · recompressed to fit
                     </span>
                   )}
                 </span>
                 {s.error && (
-                  <span role="alert" className="max-w-[16rem] text-[9px] text-rose-300">
+                  <span role="alert" className="max-w-[16rem] text-[9px] text-tone-danger">
                     {s.error}
                   </span>
                 )}
@@ -1835,7 +1835,7 @@ export function TerminalPane({
                 }}
                 title="Remove this snippet"
                 aria-label={`Remove ${s.name}`}
-                className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-300"
+                className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-tone-danger/15 hover:text-tone-danger"
               >
                 <X size={11} />
               </button>
@@ -1966,7 +1966,7 @@ export function TerminalPane({
               title="Copy this terminal's context — paste it into another terminal's AI CLI (claude, codex…) or anywhere else"
               className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft"
             >
-              {ctxCopied ? <Check size={12} className="text-emerald-300" /> : <ClipboardCopy size={12} />}
+              {ctxCopied ? <Check size={12} className="text-tone-success" /> : <ClipboardCopy size={12} />}
             </button>
             <button
               type="submit"
@@ -1978,7 +1978,7 @@ export function TerminalPane({
             </button>
           </form>
           {aiError && (
-            <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
+            <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-tone-danger">
               {aiError}
             </p>
           )}
@@ -2024,10 +2024,14 @@ export function TerminalPane({
         {(state === "reconnecting" || state === "closed") && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center bg-[#0a0c11]/70 backdrop-blur-[1px]">
             <div
-              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium ${
+              // v1.329.0: an opaque theme surface (ink-850) under the tone
+              // ink. This chip sits ON the terminal canvas, which stays dark
+              // in every theme, so a see-through tint read dark-on-dark in
+              // Daylight; a solid surface reads in every theme.
+              className={`flex items-center gap-2 rounded-lg border bg-ink-850 px-3 py-1.5 text-xs font-medium shadow-card ${
                 state === "reconnecting"
-                  ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                  : "border-rose-500/30 bg-rose-500/10 text-rose-200"
+                  ? "border-tone-warn/40 text-tone-warn"
+                  : "border-tone-danger/40 text-tone-danger"
               }`}
             >
               {state === "reconnecting" ? (
@@ -2043,7 +2047,7 @@ export function TerminalPane({
                     <button
                       type="button"
                       onClick={() => reconnectRef.current?.()}
-                      className="pointer-events-auto ml-1 rounded-md border border-rose-400/40 px-2 py-0.5 text-[11px] font-medium text-rose-100 transition-colors hover:bg-rose-500/20"
+                      className="pointer-events-auto ml-1 rounded-md border border-tone-danger/40 px-2 py-0.5 text-[11px] font-medium text-tone-danger transition-colors hover:bg-tone-danger/20"
                     >
                       Reconnect
                     </button>
@@ -2084,14 +2088,14 @@ export function TerminalPane({
 function ConnPill({ state }: { state: ConnState }) {
   if (state === "open") {
     return (
-      <span title="Connected" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300">
+      <span title="Connected" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-tone-success/25 bg-tone-success/10 px-1.5 py-0.5 text-[9px] font-medium text-tone-success">
         <PlugZap size={9} /><span className="max-sm:hidden">live</span>
       </span>
     );
   }
   if (state === "closed") {
     return (
-      <span title="Connection closed" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-medium text-rose-300">
+      <span title="Connection closed" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-tone-danger/25 bg-tone-danger/10 px-1.5 py-0.5 text-[9px] font-medium text-tone-danger">
         <Plug size={9} /><span className="max-sm:hidden">closed</span>
       </span>
     );
@@ -2099,7 +2103,7 @@ function ConnPill({ state }: { state: ConnState }) {
   return (
     <span
       title={state === "reconnecting" ? "Reconnecting" : "Connecting"}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-300"
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-1.5 py-0.5 text-[9px] font-medium text-tone-warn"
     >
       <Loader2 size={9} className="animate-spin" />
       <span className="max-sm:hidden">{state === "reconnecting" ? "reconnecting" : "connecting"}</span>

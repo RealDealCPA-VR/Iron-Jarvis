@@ -97,7 +97,7 @@ const LOOK: Record<
     // The one state that is about the USER. It is the loudest thing on the
     // pane for that reason, and it is the reason the feature exists.
     label: "needs you",
-    cls: "border-amber-400/40 bg-amber-400/[0.12] text-amber-200",
+    cls: "border-tone-warn/40 bg-tone-warn/[0.12] text-tone-warn",
     icon: <AlertTriangle size={10} aria-hidden />,
   },
   idle: {
@@ -120,7 +120,7 @@ const LOOK: Record<
   },
   done: {
     label: "finished",
-    cls: "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300",
+    cls: "border-tone-success/30 bg-tone-success/[0.08] text-tone-success",
     icon: <Check size={10} aria-hidden />,
   },
 };
@@ -187,12 +187,12 @@ export function PaneStateSummary({
   return (
     <div
       data-testid="pane-summary"
-      className="flex flex-wrap items-center gap-2 text-[11.5px]"
+      className="flex flex-wrap items-center gap-2 text-[12px]"
     >
       {blocked.length > 0 && (
         <span className="flex flex-wrap items-center gap-1.5">
-          <AlertTriangle size={12} className="shrink-0 text-amber-300" aria-hidden />
-          <span className="text-amber-200/90">
+          <AlertTriangle size={12} className="shrink-0 text-tone-warn" aria-hidden />
+          <span className="text-tone-warn/90">
             {blocked.length} pane{blocked.length === 1 ? "" : "s"} need
             {blocked.length === 1 ? "s" : ""} you
           </span>
@@ -203,7 +203,7 @@ export function PaneStateSummary({
               onClick={() => onFocus(p.id)}
               data-testid={`focus-blocked-${p.id}`}
               title="Bring this pane to the front"
-              className="rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 font-mono text-[10.5px] text-amber-200 transition-colors hover:bg-amber-400/[0.16]"
+              className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-tone-warn transition-colors hover:bg-tone-warn/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-tone-warn/50"
             >
               {p.name || p.id}
             </button>
@@ -217,7 +217,7 @@ export function PaneStateSummary({
         </span>
       )}
       {done.length > 0 && (
-        <span className="text-emerald-300/80">
+        <span className="text-tone-success/80">
           {blocked.length > 0 || working > 0 ? "· " : ""}
           {done.length} finished
         </span>

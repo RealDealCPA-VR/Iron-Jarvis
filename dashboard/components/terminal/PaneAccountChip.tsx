@@ -34,8 +34,8 @@ import {
 
 const TONE_CLASS: Record<AccountTone, string> = {
   plain: "border-white/10 bg-white/[0.04] text-zinc-300",
-  amber: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  red: "border-rose-500/20 bg-rose-500/[0.06] text-rose-300/80",
+  amber: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
+  red: "border-tone-danger/20 bg-tone-danger/[0.06] text-tone-danger/80",
 };
 
 export function PaneAccountChip({
@@ -137,7 +137,7 @@ export function LaunchAccountRows({
             : `Opens a new pane next to this one with ${cliLabel} started on this account.`)
         }
         onClick={() => void choose(choiceId)}
-        className="flex w-full items-center justify-between gap-2 rounded-lg py-1 pl-7 pr-2 text-left text-[11.5px] text-zinc-300 transition-colors hover:bg-accent/10 hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-zinc-300"
+        className="flex w-full items-center justify-between gap-2 rounded-lg py-1 pl-7 pr-2 text-left text-[11px] text-zinc-300 transition-colors hover:bg-accent/10 hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-zinc-300"
       >
         <span className="flex min-w-0 items-center gap-1.5">
           {busy === key ? <Loader2 size={11} className="shrink-0 animate-spin" /> : icon}
@@ -177,7 +177,7 @@ export function LaunchAccountRows({
         <div
           role="alert"
           data-testid={`launch-as-error-${cliId}`}
-          className="mx-2 mt-1 rounded-md border border-rose-500/25 bg-rose-500/[0.07] px-2 py-1 text-[11px] text-rose-200"
+          className="mx-2 mt-1 text-[11px] leading-relaxed text-tone-danger"
         >
           {error}
         </div>

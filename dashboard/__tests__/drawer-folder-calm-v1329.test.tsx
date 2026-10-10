@@ -326,12 +326,15 @@ describe("DirectoryTree variant='calm': no card, quiet words, tokens only", () =
     expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 
-  it("anti-vacuity: the card look (Build, Memory) is unchanged, and its line is plain copy too", async () => {
+  // Wave 6 (H2): Build now passes variant="calm" too, so the card is Memory's
+  // look only, and its node chip moved from bg-emerald-500/10 to the success
+  // TONE (build-calm-files-v1329 guards the source).
+  it("anti-vacuity: the card look (Memory) keeps its shape, and its line is plain copy too", async () => {
     const { container } = render(<DirectoryTree selectedPath={null} onSelect={() => {}} onOpenTerminal={() => {}} />);
     await screen.findByRole("button", { name: /Windows/ });
     expect(screen.getByRole("heading", { name: "Directory" })).toBeTruthy();
     expect(classes(container.firstElementChild)).toContain("rounded-2xl");
-    expect(classes(await screen.findByText("node"))).toContain("bg-emerald-500/10");
+    expect(classes(await screen.findByText("node"))).toContain("bg-tone-success/10");
     expect(screen.getByText("Selected")).toBeTruthy();
     const line = screen.getByText(/No folder picked yet/);
     expect(line.textContent).toBe("No folder picked yet. Pick a project or a folder.");
@@ -361,7 +364,7 @@ describe("FilesPanel variant='calm': names in the normal font, tokens only", () 
     expect(root.textContent ?? "").not.toMatch(/—/);
   });
 
-  it("anti-vacuity: the card look (Build) keeps its monospace rows", async () => {
+  it("anti-vacuity: the card look (the default) keeps its monospace rows", async () => {
     render(<FilesPanel folder={FOLDER} onPreview={() => {}} />);
     expect(classes(await screen.findByText("menu.md"))).toContain("font-mono");
   });
