@@ -312,8 +312,11 @@ describe("the mission screen", () => {
   it("opens on New task: the rail, the composer, and the team Jarvis can call on", async () => {
     render(<AgentsPage />);
     expect(await screen.findByTestId("mission-screen")).toBeTruthy();
+    // v1.329.0 (calm chat wave 8, J4): the rail is the page's two quiet text
+    // tabs; the five app-wide rows it used to repeat (Chat, Projects, Tools,
+    // Files, Settings) are the sidebar's own (mission-screen-calm-v1329).
     const rail = screen.getByTestId("mission-rail");
-    for (const label of ["New task", "Chat", "Projects", "Agents", "Tools", "Files", "Settings"]) {
+    for (const label of ["New task", "Your team"]) {
       expect(within(rail).getByText(label)).toBeTruthy();
     }
     expect(screen.getByTestId("mission-rail-new").getAttribute("aria-current")).toBe("page");
@@ -423,7 +426,7 @@ describe("the mission screen", () => {
     await waitFor(() => expect(H.posts.some((p) => p.path === "/sessions/s1/cancel")).toBe(true));
   });
 
-  it("the rail's Agents row opens Your team, and its New task row leads back", async () => {
+  it("the rail's Your team tab opens Your team, and its New task tab leads back", async () => {
     render(<AgentsPage />);
     fireEvent.click(await screen.findByTestId("mission-rail-agents"));
     await waitFor(() => expect(window.location.search).toBe("?view=team"));

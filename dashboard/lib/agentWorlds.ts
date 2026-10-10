@@ -152,14 +152,14 @@ export function countsLine(c: WorldCounts): string {
   if (c.running > 0) parts.push(`${c.running} running`);
   if (c.queued > 0) parts.push(`${c.queued} queued`);
   if (c.done_7d > 0) parts.push(`${c.done_7d} done this week`);
-  return parts.length ? parts.join(" · ") : "Quiet — nothing running";
+  return parts.length ? parts.join(" · ") : "Nothing running right now";
 }
 
 
 /** What a REMOTE agent at a project's table is shown — said where the team
  *  is chosen. The daemon's `sees` wins when it sends one. */
 export const REMOTE_SEES =
-  "Remote agents see only the task Jarvis hands them — never the project's files or the other agents' work";
+  "Remote agents see only the task Jarvis hands them, never the project's files or the other agents' work";
 
 /* ------------------------------------------------------ one identity --- */
 
@@ -269,9 +269,9 @@ export function waitingKindLabel(kind: string): string {
     case "review":
       return "Needs review";
     case "needs_you":
-      return "Stopped — needs your answer";
+      return "Stopped. It needs your answer";
     case "interrupted":
-      return "Cut off by a restart — Continue?";
+      return "Cut off by a restart. Continue?";
     default:
       return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Waiting";
   }

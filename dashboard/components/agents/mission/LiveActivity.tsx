@@ -5,6 +5,9 @@
 // daemon composes every line from the ledger (agents/mission.py), so this
 // component only lays it out. It follows the newest line while the user is at
 // the bottom, and stays put when they scroll up to read.
+//
+// v1.329.0 (calm chat wave 8, J4): a plain section with a quiet label over a
+// hairline, not a card.
 
 import { memo, useEffect, useRef } from "react";
 import { clock, type MissionActivity } from "@/lib/mission";
@@ -24,9 +27,9 @@ function LiveActivityLog({ lines, running }: { lines: MissionActivity[]; running
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [lines.length]);
   return (
-    <section data-testid="mission-activity" className="card-surface p-0">
-      <header className="flex items-center justify-between border-b hairline px-4 py-2.5">
-        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">Live activity</h2>
+    <section data-testid="mission-activity">
+      <header className="flex items-center justify-between border-b hairline px-2 pb-1.5">
+        <h2 className="text-[13px] font-medium text-zinc-400">Live activity</h2>
         {running && (
           <span className="flex items-center gap-1.5 text-[11px] text-zinc-400">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" /> live
@@ -34,7 +37,7 @@ function LiveActivityLog({ lines, running }: { lines: MissionActivity[]; running
         )}
       </header>
       {lines.length === 0 ? (
-        <p className="px-4 py-3 text-[12px] text-zinc-500">
+        <p className="px-2 py-3 text-[12px] text-zinc-500">
           {running ? "Getting started…" : "Nothing was recorded for this objective."}
         </p>
       ) : (
@@ -44,7 +47,7 @@ function LiveActivityLog({ lines, running }: { lines: MissionActivity[]; running
             const el = e.currentTarget;
             pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
           }}
-          className="max-h-56 space-y-1 overflow-y-auto px-4 py-2.5"
+          className="max-h-56 space-y-1 overflow-y-auto px-2 py-2.5"
         >
           {lines.map((line, i) => (
             <li

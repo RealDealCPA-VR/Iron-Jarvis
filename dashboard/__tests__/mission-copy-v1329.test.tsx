@@ -310,6 +310,10 @@ const FILES = [
     .map((f) => `${MISSION_DIR}/${f}`),
   "lib/mission.ts",
   "components/workflow/starters.ts",
+  // v1.329.0 wave 8 (J4): the mission page's own route file and the worlds
+  // helpers its sections read (countsLine, REMOTE_SEES, the waiting words).
+  "lib/agentWorlds.ts",
+  "app/agents/page.tsx",
 ];
 
 /* Wave 8 (J5): the dash guard reaches the whole workflow editor and the
@@ -346,9 +350,15 @@ describe("the mission files, lib/mission and the workflow starters keep to the c
       "RoomTranscript.tsx",
       "AgentCards.tsx",
       "MissionOutput.tsx",
+      "MissionRail.tsx",
+      "ProjectTeams.tsx",
+      "ProjectWork.tsx",
+      "TeamScreen.tsx",
     ]) {
       expect(FILES).toContain(`${MISSION_DIR}/${f}`);
     }
+    expect(FILES).toContain("lib/agentWorlds.ts");
+    expect(FILES).toContain("app/agents/page.tsx");
   });
 
   it("no spaced em or en dash in any user-visible string or JSX text", () => {

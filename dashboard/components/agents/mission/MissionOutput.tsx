@@ -397,7 +397,7 @@ export function MissionOutput({
   return (
     <section data-testid="mission-output" className="card-surface flex min-h-[28rem] flex-col p-0">
       <header className="border-b hairline px-5 py-4">
-        <div className="text-[11px] uppercase tracking-wide text-zinc-500">Your objective</div>
+        <div className="text-[12px] text-zinc-500">Your objective</div>
         <div className="mt-1 flex items-start justify-between gap-4">
           <p data-testid="mission-objective" className="whitespace-pre-wrap text-[15px] font-medium text-zinc-100">
             {view?.session.objective || view?.session.task || objective}

@@ -168,14 +168,16 @@ function AgentCard({
     <li
       data-testid={`mission-card-${m.agent}`}
       data-status={m.status}
-      className="rounded-xl border border-white/5 bg-white/[0.03] transition-colors hover:border-white/10"
+      // v1.329.0 (calm chat wave 8, J4): a row in the plain Team section,
+      // separated by hairlines and filled only on hover, not a boxed card.
+      className="rounded-lg transition-colors hover:bg-white/[0.03]"
     >
       <button
         type="button"
         aria-expanded={open}
         aria-controls={`mission-card-detail-${key}`}
         onClick={onToggle}
-        className="w-full px-3 py-2.5 text-left"
+        className="w-full px-1 py-2.5 text-left"
       >
         <div className="flex items-center gap-2.5">
           <AgentFace name={m.agent} mood={moodFor(m.status)} size={28} title="" />
@@ -202,7 +204,7 @@ function AgentCard({
         <div
           id={`mission-card-detail-${key}`}
           data-testid={`mission-card-detail-${m.agent}`}
-          className="space-y-2 border-t border-white/5 px-3 py-2.5 text-[12px] text-zinc-300"
+          className="space-y-2 border-t hairline px-1 py-2.5 text-[12px] text-zinc-300"
         >
           {m.progress.label && <div className="text-zinc-400">{m.progress.label}</div>}
           {ranOn && (
@@ -225,13 +227,13 @@ function AgentCard({
           )}
           {m.task && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500">Handed</div>
+              <div className="text-[11px] text-zinc-500">Handed</div>
               <div className="whitespace-pre-wrap">{m.task}</div>
             </div>
           )}
           {m.activity && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500">Latest</div>
+              <div className="text-[11px] text-zinc-500">Latest</div>
               <div>{m.activity}</div>
             </div>
           )}
@@ -242,7 +244,7 @@ function AgentCard({
           )}
           {m.result && (
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-zinc-500">Reported</div>
+              <div className="text-[11px] text-zinc-500">Reported</div>
               <div className="line-clamp-6 whitespace-pre-wrap text-zinc-300">{m.result}</div>
             </div>
           )}
@@ -287,7 +289,7 @@ export const AgentCards = memo(function AgentCards({
     );
   }
   return (
-    <ul data-testid="mission-cards" className="space-y-2">
+    <ul data-testid="mission-cards" className="divide-y divide-white/[0.06] border-t hairline">
       {members.map((m, i) => {
         // A remote teammate has no session; one asked twice is two rows with
         // the same name, so its key carries its position (v1.309.0 review).

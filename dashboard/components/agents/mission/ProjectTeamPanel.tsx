@@ -14,6 +14,7 @@ import { TeamEditor } from "@/components/agents/world/TeamEditor";
 import type { RosterEntry } from "@/components/agents/RosterStrip";
 import { bareMemberName, memberAvatar, memberSource, type WorldMember } from "@/lib/agentWorlds";
 import { useApi } from "@/lib/useApi";
+import { composerChipClass } from "@/lib/composerChips";
 
 export function ProjectTeamPanel({
   projectId,
@@ -69,7 +70,7 @@ export function ProjectTeamPanel({
         type="button"
         data-testid="mission-edit-team"
         onClick={() => setEditing(true)}
-        className="btn-ghost w-full justify-center py-1.5 text-[12px]"
+        className={composerChipClass()}
       >
         <Pencil size={12} /> {team.length ? "Edit team" : "Pick a team"}
       </button>

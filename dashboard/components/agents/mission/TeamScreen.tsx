@@ -63,11 +63,11 @@ export function TeamScreen({
   const [picked, setPicked] = useState<Selection | null>(null);
   const selected = picked ?? selectionFor(roster, agent);
   return (
-    <div data-testid="team-screen" className="grid grid-cols-1 gap-3 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:items-start">
-      <div className="lg:sticky lg:top-3">
-        <MissionRail active="agents" onAction={onRail} />
-      </div>
-      <section className="card-surface flex h-[calc(100vh-7rem-var(--ij-strip-h,0px))] min-h-[32rem] flex-col p-0">
+    <div data-testid="team-screen" className="space-y-3">
+      {/* v1.329.0: the page's two text tabs over the panel (the bordered
+          left rail is gone; its app-wide rows were the sidebar's). */}
+      <MissionRail active="agents" onAction={onRail} />
+      <section className="card-surface flex h-[calc(100vh-9rem-var(--ij-strip-h,0px))] min-h-[32rem] flex-col p-0">
         <AgentsPanel
           roster={roster}
           dynamic={(agentsData?.dynamic ?? []) as DynamicAgentFull[]}

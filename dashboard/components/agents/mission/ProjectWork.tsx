@@ -5,6 +5,10 @@
 // objective composer instead of beside a round table. Only the open tab is
 // mounted (the Board polls), and the screen opens on "Waiting on you" when
 // something is.
+//
+// v1.329.0 (calm chat wave 8, J4): a plain section under the composer card,
+// not a card of its own; the three views are the chat top bar's text tabs
+// (the open one in ink, the rest muted) over a hairline.
 
 import { useState } from "react";
 import type { CompletedItem, WaitingItem } from "@/lib/agentWorlds";
@@ -30,8 +34,8 @@ export function ProjectWork({
     { key: "completed", label: "Completed" },
   ];
   return (
-    <section data-testid="mission-project-work" className="card-surface p-0">
-      <div role="tablist" aria-label="Project work" className="flex items-center gap-1 border-b hairline px-4 pt-2">
+    <section data-testid="mission-project-work">
+      <div role="tablist" aria-label="Project work" className="flex flex-wrap items-center gap-2 border-b hairline px-1 pb-1.5">
         {tabs.map((t) => (
           <button
             key={t.key}
@@ -40,17 +44,15 @@ export function ProjectWork({
             data-testid={`project-tab-${t.key}`}
             aria-selected={tab === t.key}
             onClick={() => setTab(t.key)}
-            className={`-mb-px rounded-t-lg border-b-2 px-3 py-1.5 text-[13px] transition-colors ${
-              tab === t.key
-                ? "border-accent font-semibold text-zinc-100"
-                : "border-transparent text-zinc-400 hover:text-zinc-200"
+            className={`rounded-md px-1.5 py-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+              tab === t.key ? "font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
             }`}
           >
             {t.label}
           </button>
         ))}
       </div>
-      <div className="px-4 py-3">
+      <div className="px-1 py-3">
         {tab === "board" && <WorldBoard projectId={projectId} />}
         {tab === "waiting" && <WaitingList projectId={projectId} items={waiting} />}
         {tab === "completed" && <CompletedList projectId={projectId} items={completed} />}

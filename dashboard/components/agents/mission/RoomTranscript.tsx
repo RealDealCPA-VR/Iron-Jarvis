@@ -65,10 +65,8 @@ export function RoomTranscript({ thread, onRail }: { thread: string; onRail: (ta
   const project = (room?.project_id || "").trim();
 
   return (
-    <div data-testid="room-transcript" className="grid grid-cols-1 gap-3 lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:items-start">
-      <div className="lg:sticky lg:top-3">
-        <MissionRail active={null} onAction={onRail} />
-      </div>
+    <div data-testid="room-transcript" className="space-y-3">
+      <MissionRail active={null} onAction={onRail} />
       <section className="card-surface p-0">
         <header className="border-b hairline px-5 py-4">
           {project && (

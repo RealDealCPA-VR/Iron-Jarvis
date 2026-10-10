@@ -93,10 +93,10 @@ function GuideHandoff({ ask }: { ask: string }) {
     }
   }, [href]);
   return (
-    <p data-testid="guide-handoff" className="card-surface px-5 py-6 text-[13px] text-zinc-400">
-      The Guide answers in chat now —{" "}
+    <p data-testid="guide-handoff" className="px-2 py-6 text-[13px] text-zinc-400">
+      The Guide answers in chat now.{" "}
       <a href={href} className="text-accent hover:underline">
-        open the question in chat
+        Open the question in chat
       </a>
       .
     </p>

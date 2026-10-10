@@ -65,7 +65,10 @@ describe("the demo strip publishes its height", () => {
 
   it.each([
     ["app/chat/page.tsx", "md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))]"],
-    ["components/agents/mission/TeamScreen.tsx", "h-[calc(100vh-7rem-var(--ij-strip-h,0px))]"],
+    // v1.329.0 (calm chat wave 8, J4): the mission page's two text tabs now
+    // sit ABOVE Your team's panel (the old left rail sat beside it), so the
+    // panel takes 2rem more off the window; it still subtracts the strip.
+    ["components/agents/mission/TeamScreen.tsx", "h-[calc(100vh-9rem-var(--ij-strip-h,0px))]"],
     ["app/agents/page.tsx", "h-[calc(100vh-7rem-var(--ij-strip-h,0px))]"],
     // v1.316.0 (UX wave 4, T3): the workflow canvas is no longer viewport-tall
     // (a capped `h-[min(64vh,680px)]`, so the builder and starters stay within

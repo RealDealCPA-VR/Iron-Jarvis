@@ -10,9 +10,9 @@
  *    truncating; ids keep their text and are title-cased by CSS `capitalize`
  *    (rail rows and the agent's own name).
  *  - mission-rail-second-nav-on-phone: below lg only the two page-local rows
- *    (New task, Agents) show; Chat / Projects / Tools / Files / Settings are
- *    hidden by CSS (`hidden lg:flex`) — still RENDERED (v1307 pins all seven
- *    labels and New task's aria-current).
+ *    (New task, Agents) showed. Since v1.329.0 the rail IS only those two
+ *    (quiet text tabs, "New task" and "Your team"); the app-wide rows are
+ *    the sidebar's.
  *  - team-screen-appearance-before-work: on an agent's screen the work (the
  *    Inbox, and a custom agent's folder + coach) comes BEFORE the Appearance
  *    block; the hero portrait shrinks to ~96px; "Apply face" is quiet
@@ -243,34 +243,32 @@ describe("front door Team panel: Jarvis leads, the teammates follow", () => {
 /*  The mission rail is not a second nav on a phone                            */
 /* ========================================================================== */
 
-describe("mission rail: below lg only New task and Agents show", () => {
-  const LINK_ROWS = ["chat", "projects", "tools", "files", "settings"];
-
-  it("the app-wide destinations are hidden below lg by CSS (hidden lg:flex)", () => {
+describe("mission rail: only the page's own two places, never a second nav", () => {
+  // v1.329.0 (calm chat wave 8, J4): this used to pin five app-wide rows
+  // hidden below lg by CSS. The rail is now the page's two quiet text tabs
+  // (New task, Your team); the five rows it repeated are the sidebar's own,
+  // so on a phone there is nothing to hide (mission-screen-calm-v1329).
+  it("no app-wide destination is in the rail at any width", () => {
     frontDoor();
-    for (const key of LINK_ROWS) {
-      const row = screen.getByTestId(`mission-rail-${key}`);
-      const cls = classes(row);
-      expect(cls, key).toContain("hidden");
-      expect(cls, key).toContain("lg:flex");
+    for (const key of ["chat", "projects", "tools", "files", "settings"]) {
+      expect(screen.queryByTestId(`mission-rail-${key}`), key).toBeNull();
     }
   });
 
-  it("New task and Agents are never hidden at any width", () => {
+  it("New task and Your team are never hidden at any width", () => {
     frontDoor();
     for (const key of ["new", "agents"]) {
       expect(classes(screen.getByTestId(`mission-rail-${key}`)), key).not.toContain("hidden");
     }
   });
 
-  it("anti-vacuity: all seven rows are still rendered, New task is current, Agents still opens the team", () => {
+  it("anti-vacuity: both tabs render, New task is current, Your team still opens the team", () => {
     const props = frontDoor();
     const rail = screen.getByTestId("mission-rail");
-    for (const label of ["New task", "Chat", "Projects", "Agents", "Tools", "Files", "Settings"]) {
+    for (const label of ["New task", "Your team"]) {
       expect(within(rail).getByText(label)).toBeTruthy();
     }
     expect(screen.getByTestId("mission-rail-new").getAttribute("aria-current")).toBe("page");
-    expect(screen.getByTestId("mission-rail-chat").getAttribute("href")).toBe("/chat");
     fireEvent.click(screen.getByTestId("mission-rail-agents"));
     expect(props.onTeam).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("mission-rail-new"));
