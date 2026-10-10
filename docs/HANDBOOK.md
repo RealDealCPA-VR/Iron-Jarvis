@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.328.1 (2026-10-04).*
+holds itself to. Current as of v1.329.0 (2026-10-04).*
 
 ---
 
@@ -1839,6 +1839,69 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One calm app (v1.329.0)
+
+Calm chat, part four: the quiet look now reaches every corner (DeepSeek
+Harness ideas only).
+
+- **One chat list everywhere.** The sidebar on every page, and the phone
+  menu, show the same list: chats under their projects, with a dot when one
+  is working, waiting for you or unread, and a short age. Inside a project
+  chat, that project comes first and the other projects stay listed (folded,
+  with their dot), so work elsewhere is never hidden. "Only <project>" is a
+  small filter above the list. The list away from the chat page has a search
+  box too. Two chats with the same title show a time or a day instead of the
+  age, so you can tell them apart. On a phone, **Chats** at the top of the
+  chat opens the list; the old boxed chat rail is gone.
+- **The open chat's ⋯ does it all.** Rename, Pin to top, Archive, Commit to
+  memory, Turn into workflow, Add to project and Delete chat are in the top
+  bar's ⋯, not only on the list row.
+- **@ finds files and folders.** In a project with a folder, "@" also offers
+  that folder's files and folders: a file is attached, a folder becomes the
+  working folder. Chats in the @ menu show their date, and agents show their
+  names.
+- **Steps say what they did.** The "Worked for …" line and the reply details
+  both read "Read harbor.xlsx", "Searched the web for pier 9 hours", "Ran
+  excel_query", not tool ids. Only a short, safe part is kept (a file name,
+  the start of a search, a web address's site), never keys or full paths.
+- **One name for the model.** The model chip says "Opus 4.8" and the reply
+  says "answered by Opus 4.8", even when another model stood in. Warnings in
+  the reply details are plain sentences, for example "Mock answer. No real
+  model ran."
+- **Edits show what changed.** A reply that only edited existing files now
+  shows the "N files changed" line too.
+- **The Build page side chat** has the same calm look as the chat: the shared
+  safe text (pictures from model-written links wait for your press), the
+  "Worked for …" line, "N files changed", the permission chip, and a question
+  that takes the message box's place. It reads properly in Daylight. The rest
+  of the Build page lost its boxes: terminals are a plain list, Folders and
+  Files are text tabs, and a missing folder is one plain line naming it.
+- **The project panel, Tasks, Board and Media** are plain sections without
+  cards. The panel's folder picker is the calm one, and its Terminal button
+  opens a terminal on the Build page.
+- **Anthropic-compatible servers.** In Settings → Connections, a custom
+  endpoint has a **Server type**: OpenAI-compatible or Anthropic-compatible.
+  **Fetch available models** sets it to the way the server answered. Replies
+  then use that server's own API (an Anthropic-compatible server is asked at
+  /v1/messages with its key). Like every custom server, it starts with tools
+  off until **Verify tools** passes, and if it is down it says so; Iron Jarvis
+  never switches to another provider on its own.
+- **A refusal says what happened.** When the model you asked for cannot
+  answer, the chat shows one plain line naming it (by the name you gave a
+  custom server) with Retry beside it. No banner claims a stand-in answered,
+  because none did. A background job that nothing could answer still gets a
+  notice at the top, with a link to Connections.
+- **A new server shows up at once.** A custom server you just saved is
+  listed straight away as "not checked yet", then fills in once Iron Jarvis
+  has checked it. The Fleet page names it by the way it talks
+  (OpenAI-compatible or Anthropic-compatible).
+- **The Agents page is calm too.** One message box for the objective, with
+  Your projects, Team and the live work as plain sections below it.
+- **Smaller things.** "Jump to latest" is a quiet chip and steps aside while
+  a menu is open. Text uses whole-pixel sizes and theme colours throughout the
+  chat, the Build page and the mission screen, so Daylight reads right. The
+  mission screen's wording is plain too.
+
 ## Point at another chat, see what changed, archive (v1.328.0)
 
 Calm chat, part three (DeepSeek Harness ideas only).
@@ -1929,6 +1992,8 @@ page.
   endpoint now has a **Fetch available models** link: it asks that server
   only when you press it, the list can be searched, and the key goes only to
   that server. The automatic check while you typed the address is gone.
+  Since v1.329.0 it also asks Anthropic-compatible servers (see "One calm
+  app").
 
 ## Charts, versions and more in chat (v1.325.0)
 
@@ -2016,7 +2081,7 @@ More ideas from assistant-ui and tambo (MIT; ideas only):
   newest reply offers **Continue**. The model carries on where it stopped and
   the two parts become one reply.
 - **How long each step took.** Open the line under a reply: each tool shows
-  its time ("read_file · 0.3 s", a failed one marked), with "First word after
+  its time ("Read harbor.xlsx · 0.3 s", a failed one marked), with "First word after
   1.2 s · 42 tokens/s". While a reply runs, finished steps show their time
   too.
 - **Times.** Hover a message to see when it was sent.

@@ -2959,6 +2959,67 @@ does not need a bump, stop and bump it.
   raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
   reproduced CI's exact error.
 
+- **One calm app** (v1.329.0, calm chat waves 4-7: completeness-audit
+  fixes F1-F8, G1-G4, S1-S4, H1-H4, I1). Chat list: ONE store
+  `lib/chatList.ts` (one read of threads + projects, dedups the 4 s poll and
+  update bursts); `components/chat/SidebarChats.tsx` draws the grouped
+  ThreadGroups list on every page except /chat (read-only rows, quiet search).
+  On /chat the phone nav drawer holds the PAGE's own list through
+  `lib/sidebarSlot` (`#ij-drawer-chat-slot`, `closeChatSlot()`), a phone /chat
+  has no in-page list (top bar `#chat-open-chats` opens the drawer), and the
+  drawer scrolls as one column. In a project chat the rail is still grouped
+  (project first + open, others folded with their dot); "Only <project>" is a
+  filter. Same-titled rows: `lib/sameTitleRows.sameTitleLabels` shows ONE short time
+  or day in place of the age. Top-bar ⋯ (ChatMoreMenu) = Rename (own inline
+  state, not renamingId) / Pin / Archive / Commit to memory / Turn into
+  workflow / Add to project / Delete (two presses, disarmed by onOpenChange),
+  all the row menu's handlers; moving the open chat keeps its own folder
+  (`clearProject({keepFolder})`). Jump to latest hides while any composer menu
+  is open (`lib/composerMenus`, also the / menu's open rule). @ menu:
+  `lib/atMenuFiles` (GET /fs/files, active project's folder) + `atMenuRows`;
+  chats carry a date. Steps: F1 saves a short SAFE target LAST on each step
+  (`lib/workTarget`, cleaned again on read); `lib/stepWords` is the ONE
+  wording table WorkLine and TurnReceipt share. Model names:
+  `lib/friendlyModelName` + `lib/answeredModel` (catalog label, else friendly
+  id) for the chip, "answered by" and failover rows; raw id in tooltip and the
+  expanded receipt. Reasoning chip says "Reasoning" with no pick: no daemon
+  exposes a default level (a `reasoning_default` on GET /models would be
+  needed). F4: edit_file returns data={path, abs_path} and chat_turn's
+  `_FILE_EDIT_TOOLS` / `_reports_document` put edited files in `documents` on
+  BOTH lanes (MIRROR NOTE). Build: PaneChat uses components/Markdown
+  (RemoteMediaGate), `paneChatLook.ts`, PaneAsk (ask takes the composer's
+  place), WorkLine / ReplyChanges / PermissionChip via an adapter; the view
+  toggle lives in the pane header; DirectoryTree / FilesPanel `variant="calm"`
+  is used by the chat drawer AND Build (Memory's folder dialog keeps the
+  card); `filesErrorLine` = one tone-danger line. Source guards: no half-pixel
+  sizes or literal hues in components/chat + workflow/agents.ts
+  (`chat-cards-whole-pixels-v1329`), components/terminal + app/terminals
+  (`build-calm-files-v1329`, allowlist only the canvas `bg-[#0a0c11]` =
+  paneHost.ts xterm background), mission (`mission-calm-v1329`). Anthropic-
+  compatible endpoints: `FleetNode.protocol` ("openai" default | "anthropic",
+  LAST field, config.toml fleet_nodes, older nodes load as openai) picks the
+  adapter via `fleet/adapter.adapter_for`; `fleet/anthropic_compat.py` is
+  plain httpx (no env-key fallback, no redirects, key scrubbed from errors),
+  POST {base}/v1/messages with x-api-key + anthropic-version, streams, maps
+  tool_use / tool_result, merges same-side turns; reasoning + guided-decoding
+  options are ignored. `probes.probe_node` counts a 401/403 on an anthropic
+  node as reachable. POST /connections/endpoints/models accepts protocol
+  "anthropic" (after_id paging capped at 10x100); the form's Server type
+  choice is set by Fetch. Never auto-switch: a failing node refuses and names
+  itself. Refusals (wave 8): `provider.downgraded` carries `label` LAST (the
+  fleet node's label via `ModelRouter._endpoint_label`, falls back to the id
+  on any fault; `requested` keeps the id for logs); `ProviderDowngradeBanner`
+  reads `used` through `downgradeNotice`: "mock" keeps the mock line, "none"
+  with no session (a chat turn) shows NOTHING (the asking surface shows the
+  refusal), "none" with a session = "Nothing answered a background job";
+  router refusal copy shares `_NO_STAND_IN` (plain sentences). GET /fleet
+  lists a configured node before the sampler reaches it as not checked yet
+  (never online, never routable-healthy); Fleet labels a node by its saved
+  protocol. /agents (J4): the objective box is the page's one card, the rail
+  is two text tabs (New task, Your team). @ menu chat rows share
+  `sameTitleLabels` (J2). Pins: every `*-v1329` file in dashboard/__tests__
+  and tests/.
+
 - **@ another chat, what a reply changed, archive** (v1.328.0, calm chat
   wave 3). W3-1: the composer's @ menu has a Chats section from GET
   /chat/threads/search-refs (re-queried on open, the open chat excluded); a
