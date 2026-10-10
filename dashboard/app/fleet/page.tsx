@@ -32,6 +32,7 @@ import {
   SkeletonRows,
   Stat,
 } from "@/components/ui";
+import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { Sparkline } from "@/components/fleet/Sparkline";
@@ -86,8 +87,10 @@ const POLL_MS = 2000;
 function StatusPill({ snap }: { snap: NodeSnapshot }) {
   // v1.329.0: a node no probe has looked at yet says so, in a neutral tone
   // and in sentence case (the badge's capitalize would read "Not Checked Yet").
-  if (isUnchecked(snap)) return <Badge value="Not checked yet" tone="slate" keepCase />;
-  return <Badge value={snapStatusLabel(snap)} tone={fleetTone(snap.status)} />;
+  // v1.330.0 (calm M3): the calm Badge, like Connections: no border, no fill,
+  // only the dot carries the tone.
+  if (isUnchecked(snap)) return <Badge variant="calm" value="Not checked yet" tone="slate" keepCase />;
+  return <Badge variant="calm" value={snapStatusLabel(snap)} tone={fleetTone(snap.status)} />;
 }
 
 /**
@@ -352,7 +355,7 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
           type="button"
           onClick={() => void save()}
           disabled={busy}
-          className="rounded-md border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] text-accent-soft disabled:opacity-50"
+          className="btn-soft min-h-7 px-2.5 py-1 text-xs"
         >
           {busy ? "…" : "Save"}
         </button>
@@ -376,11 +379,12 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
         }}
         title="Rename this endpoint"
         aria-label="Rename this endpoint"
-        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+        className={CALM_ICON_ACTION}
       >
         <Pencil size={12} />
       </button>
       <ConfirmButton
+        variant="calm"
         label="Remove"
         onConfirm={remove}
         title={
@@ -440,7 +444,7 @@ function NodeCard({
             title={chatHint(snap.node)}
             className="inline-flex whitespace-nowrap"
           >
-            <Badge value={chatLabel(snap.node)} tone={chatTone(snap.node)} keepCase />
+            <Badge variant="calm" value={chatLabel(snap.node)} tone={chatTone(snap.node)} keepCase />
           </span>
           <span
             className="min-w-0 max-w-full truncate font-mono text-[11px] font-normal text-zinc-600"
@@ -873,7 +877,7 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3 py-2.5 text-xs text-zinc-400">
             <span className="flex flex-wrap items-center gap-2">
               <span className="text-zinc-300">Detected</span>
-              <Badge value={kindLabel(kind)} tone={kindTone(kind)} keepCase />
+              <Badge variant="calm" value={kindLabel(kind)} tone={kindTone(kind)} keepCase />
               {snap && <StatusPill snap={snap} />}
               {fmtLatency(snap?.latency_ms) && (
                 <span className="text-zinc-600">{fmtLatency(snap?.latency_ms)}</span>
@@ -1013,7 +1017,7 @@ export default function FleetPage() {
                 onClick={refresh}
                 disabled={refreshing}
                 title="Force a fresh probe of every node"
-                className="btn-ghost py-1.5 text-xs disabled:opacity-50"
+                className={CALM_ACTION}
               >
                 <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />{" "}
                 Refresh

@@ -103,7 +103,7 @@ import {
   MeasuredEndpoints,
   type MeasuredEntry,
 } from "@/components/connections/EnvelopeCard";
-import { ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/connections/endpointChip";
+import { CALM_ACTION, ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/connections/endpointChip";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
@@ -478,11 +478,16 @@ function StatusPill({ conn }: { conn: Connection }) {
 }
 
 /* v1.329.0 (calm J3): the ONE quiet chip a saved-endpoint row draws its tags
-   with (the Anthropic tag, the model, tools / vision and Verify tools) lives
-   in components/connections/endpointChip.ts since K2, so EnvelopeCard's
-   measurement chip and Measure button wear the same shell. Only a small mark
-   inside carries a tone token (a check for a verified yes, a dot for a "no"
-   that sends work elsewhere). */
+   with (the Anthropic tag, the model, tools / vision) lives in
+   components/connections/endpointChip.ts since K2, so EnvelopeCard's
+   measurement chip wears the same shell. Only a small mark inside carries a
+   tone token (a check for a verified yes, a dot for a "no" that sends work
+   elsewhere).
+   v1.330.0 (calm M3): that shell is now the calm Badge's (no hairline), and
+   every secondary action on this page (Make default, Test, Verify tools,
+   Use an API key instead, Cancel, Rescan) is CALM_ACTION, the same quiet
+   ghost as the calm Delete / Disconnect beside it. Each card keeps its one
+   clear primary (Connect, Log in, Save endpoint). */
 
 /* -------------------------------------------------------------------------- */
 /*  One connection card                                                        */
@@ -996,7 +1001,8 @@ function ConnectionCard({
           {isDefault ? (
             <span
               title="Sessions use this provider by default"
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-tone-success/25 bg-tone-success/10 px-3 py-1.5 text-xs font-medium text-tone-success"
+              data-testid="conn-default-mark"
+              className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap px-2.5 py-1 text-xs font-medium text-tone-success"
             >
               <Check size={14} /> Default
             </span>
@@ -1005,12 +1011,12 @@ function ConnectionCard({
               onClick={makeDefault}
               disabled={busy}
               title={`Use ${conn.display_name} for new sessions`}
-              className="btn-ghost whitespace-nowrap py-1.5 text-xs"
+              className={`${CALM_ACTION} whitespace-nowrap`}
             >
               {busy ? <LoaderInline label="Setting…" /> : <><Star size={14} /> Make default</>}
             </button>
           )}
-          <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 whitespace-nowrap py-1.5 text-xs">
+          <button onClick={runTest} disabled={busy} className={`${CALM_ACTION} whitespace-nowrap`}>
             {busy ? <LoaderInline label="Testing…" /> : <><CheckCircle2 size={14} /> Test</>}
           </button>
           {/* Nothing to disconnect for an inherited login — the key lives in
@@ -1021,7 +1027,7 @@ function ConnectionCard({
               onConfirm={disconnect}
               label="Disconnect"
               title={`Disconnect ${conn.display_name}`}
-              className="whitespace-nowrap py-1.5"
+              className="whitespace-nowrap"
             />
           )}
         </div>
@@ -1128,7 +1134,7 @@ function ConnectionCard({
                         setManualCode("");
                         setError(null);
                       }}
-                      className="btn-ghost py-1.5 text-xs"
+                      className={CALM_ACTION}
                     >
                       Cancel
                     </button>
@@ -1342,7 +1348,7 @@ function ConnectionCard({
             (!open ? (
               <button
                 onClick={() => setOpen(true)}
-                className={`${canOAuth ? "btn-ghost" : "btn-soft"} w-full py-1.5 text-xs sm:w-auto`}
+                className={canOAuth ? CALM_ACTION : "btn-soft w-full py-1.5 text-xs sm:w-auto"}
               >
                 {isCustom ? <Plus size={14} /> : <KeyRound size={14} />}{" "}
                 {canOAuth
@@ -1450,7 +1456,7 @@ function ConnectionCard({
                       setKey("");
                       setError(null);
                     }}
-                    className="btn-ghost py-1.5 text-xs"
+                    className={CALM_ACTION}
                   >
                     Cancel
                   </button>
@@ -1890,7 +1896,7 @@ export default function ConnectionsPage() {
           actions={
             <div className="flex items-center gap-2">
               {data ? (
-                <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
+                <span className="flex items-center gap-2 px-1 py-1.5 text-xs text-zinc-400">
                   <PlugZap size={14} className="text-accent-soft" />
                   {connectedCount} connected
                 </span>
@@ -2066,7 +2072,7 @@ export default function ConnectionsPage() {
               onClick={rescanClis}
               disabled={rescanBusy}
               title="Re-detect locally installed CLI providers (Claude, Codex, Grok) without restarting the daemon"
-              className="btn-ghost px-2.5 py-1 text-xs"
+              className={CALM_ACTION}
             >
               {rescanBusy ? (
                 <LoaderInline label="Scanning…" />

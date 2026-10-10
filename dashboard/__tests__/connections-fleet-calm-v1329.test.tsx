@@ -348,7 +348,14 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
     visit(file);
     return { found, bad };
   }
-  const CALM_FILES = ["components/settings/pages/ConnectionsPage.tsx", ...CONN_FILES.filter((f) => f.endsWith(".tsx"))];
+  // v1.330.0 (calm M3): the Fleet page joins the calm files (its status
+  // pills, protocol badge, detected-kind badge and Remove were the last
+  // default Badges and ConfirmButton beside the calm Connections page).
+  const CALM_FILES = [
+    "components/settings/pages/ConnectionsPage.tsx",
+    ...CONN_FILES.filter((f) => f.endsWith(".tsx")),
+    "app/fleet/page.tsx",
+  ];
 
   it.each(CALM_FILES)("%s draws every Badge and ConfirmButton in the calm variant", (rel) => {
     expect(uncalm(rel, readRel(rel)).bad).toEqual([]);
@@ -374,8 +381,10 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
     const total = CALM_FILES.map((rel) => uncalm(rel, readRel(rel)).found).reduce((a, b) => a + b, 0);
     // Disconnect, endpoint Delete, StatusPill and the three CLI-row states
     // (page), the account chip + Remove (IronProxyCard), Ready / Off / Not
-    // set up yet (RestHookups).
-    expect(total).toBeGreaterThanOrEqual(11);
+    // set up yet (RestHookups), and (v1.330.0) the Fleet page's two status
+    // pills, protocol badge, detected-kind badge and Remove.
+    expect(total).toBeGreaterThanOrEqual(16);
+    expect(uncalm("app/fleet/page.tsx", readRel("app/fleet/page.tsx")).found).toBeGreaterThanOrEqual(5);
     const probe = [
       "const a = <Badge value=\"Ready\" tone=\"green\" />;",
       "const b = <ConfirmButton onConfirm={() => void go()} label=\"Delete\" />;",
@@ -407,7 +416,11 @@ async function savedRows() {
 }
 
 describe("Settings > Connections: one quiet chip look on every saved-endpoint row", () => {
-  it("the Anthropic tag, the model, tools, vision and Verify share one shell; only the mark is toned", async () => {
+  /* v1.330.0 (calm M3): the tags are the calm Badge's shell (no hairline),
+     and Verify tools is no longer a chip: it is the row's calm action, the
+     same quiet ghost as Delete beside it (pinned in
+     connections-fleet-one-look-v1330). The tags still share ONE shell. */
+  it("the Anthropic tag, the model, tools and vision share one shell; only the mark is toned", async () => {
     seed([row(ANTH), row(OA), row(UNVERIFIED)]);
     const card = await savedRows();
 
@@ -416,11 +429,11 @@ describe("Settings > Connections: one quiet chip look on every saved-endpoint ro
       ...within(card).getAllByTestId("endpoint-row-model"),
       ...within(card).getAllByTestId("endpoint-row-tools"),
       ...within(card).getAllByTestId("endpoint-row-vision"),
-      ...within(card).getAllByTestId("endpoint-row-verify"),
     ];
     // relay: Anthropic, model, tools ✓, no vision · lab: model, no tools,
-    // vision ✓ · spare: model, Verify tools.
-    expect(chips).toHaveLength(9);
+    // vision ✓ · spare: model (and the Verify tools button).
+    expect(chips).toHaveLength(8);
+    expect(within(card).getAllByTestId("endpoint-row-verify")).toHaveLength(1);
     const shell = (el: HTMLElement) =>
       el.className
         .split(/\s+/)

@@ -24,6 +24,7 @@ import {
   SuccessNote,
   LoaderInline,
 } from "@/components/ui";
+import { CALM_ACTION } from "@/components/connections/endpointChip";
 
 /* -------------------------------------------------------------------------- */
 
@@ -146,7 +147,7 @@ function IntegrationCard({
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <button onClick={toggleEnable} disabled={busy !== null} className="btn-ghost px-3 py-1.5 text-xs">
+        <button onClick={toggleEnable} disabled={busy !== null} className={CALM_ACTION}>
           {busy === "enable" ? (
             <LoaderInline />
           ) : (
@@ -158,11 +159,11 @@ function IntegrationCard({
         <button
           onClick={() => setShowConfig((v) => !v)}
           disabled={busy !== null}
-          className="btn-ghost px-3 py-1.5 text-xs"
+          className={CALM_ACTION}
         >
           <Settings2 size={13} /> Configure
         </button>
-        <button onClick={runTest} disabled={busy !== null} className="btn-ghost px-3 py-1.5 text-xs">
+        <button onClick={runTest} disabled={busy !== null} className={CALM_ACTION}>
           {busy === "test" ? (
             <LoaderInline />
           ) : (
@@ -364,7 +365,7 @@ function AddIntegrationForm({
             type="button"
             onClick={onCancel}
             disabled={busy}
-            className="btn-ghost px-3 py-1.5 text-xs"
+            className={CALM_ACTION}
           >
             Cancel
           </button>
@@ -407,9 +408,9 @@ export function RestHookups() {
             setShowAdd((v) => !v);
             setAdded(null);
           }}
-          className="rounded-md border border-white/10 px-2.5 py-1 text-xs text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
+          className={CALM_ACTION}
         >
-          <Plus size={13} className="mr-1 inline" /> Add hookup
+          <Plus size={13} /> Add hookup
         </button>
       }
     >

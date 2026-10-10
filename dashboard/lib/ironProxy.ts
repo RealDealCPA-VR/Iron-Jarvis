@@ -172,8 +172,10 @@ export function parkReasonWords(reason: IronProxyAccountState["parkedReason"]): 
 
 export type ChipTone = "green" | "amber" | "red" | "cyan" | "slate";
 
-/** The account's state chip: Active / Ready / Parked until <local time> —
- *  <reason> / Needs sign-in / Off. */
+/** The account's state chip: Active / Ready / Parked until <local time> ·
+ *  <reason> / Needs sign-in / Off. v1.330.0 (calm M3): the reason follows a
+ *  middle dot like the rest of the card ("12 requests in 5 h · 80 in 7
+ *  days"), not a dash aside. */
 export function stateChip(
   a: IronProxyAccount,
   now: Date = new Date(),
@@ -184,7 +186,7 @@ export function stateChip(
   if (s === "parked") {
     const until = a.state.parkedUntil ? ` until ${localTime(a.state.parkedUntil, now)}` : "";
     const why = parkReasonWords(a.state.parkedReason);
-    return { label: `Parked${until}${why ? ` — ${why}` : ""}`, tone: "amber" };
+    return { label: `Parked${until}${why ? ` · ${why}` : ""}`, tone: "amber" };
   }
   if (s === "active") return { label: "Active", tone: "green" };
   if (s === "ready") return { label: "Ready", tone: "cyan" };

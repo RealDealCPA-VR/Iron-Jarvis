@@ -79,7 +79,7 @@ const SUBSECTIONS: Record<string, Sub[]> = {
     {
       id: "connections-notifications",
       label: "Notifications",
-      blurb: "Telegram, Slack, Discord and email — where Iron Jarvis messages you.",
+      blurb: "Where Iron Jarvis messages you: Telegram, Slack, Discord and email.",
       Comp: page(() => import("@/components/settings/pages/NotificationsPage")),
     },
     {

@@ -347,7 +347,8 @@ describe("accounts", () => {
     await mountWith(snap({}, { accounts: MIXED }));
     const chip = (id: string) => within(row(id)).getByTestId("iron-proxy-chip").textContent ?? "";
     expect(chip("a")).toBe("Active");
-    expect(chip("c")).toMatch(/^Parked until 3:05\sPM — plan limit reached$/u);
+    // v1.330.0 (calm M3): the reason follows a middle dot, not a dash aside.
+    expect(chip("c")).toMatch(/^Parked until 3:05\sPM · plan limit reached$/u);
     expect(chip("c")).not.toContain(PARKED_ISO);
     expect(chip("d")).toBe("Needs sign-in");
     expect(chip("e")).toBe("Off");

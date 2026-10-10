@@ -49,6 +49,15 @@ import {
   type IronProxySnapshot,
 } from "@/lib/ironProxy";
 import { CLI_ACCOUNT_PROVIDER, openedPaneId } from "@/lib/paneAccounts";
+import { CALM_ACTION, CALM_ICON_ACTION } from "@/components/connections/endpointChip";
+
+/** v1.330.0 (calm M3): ONE look per account row. Every secondary action
+ *  (Sign in on a signed-in account, Check again, Open in Build, Unpark, the
+ *  arrows, Disable, Use this PC's login, Add account) is the calm action,
+ *  the same quiet ghost as the calm Remove beside it. A signed-out account's
+ *  Sign in, and "Sign in now" after adding one, stay the accent outline: the
+ *  one thing that account needs from the user. Both are 28px tall at least. */
+const SIGN_IN_PRIMARY = "btn-soft min-h-7 px-2.5 py-1 text-xs";
 
 /** The providers whose accounts a Build pane can start a CLI on (v1.302.0). */
 const BUILD_PROVIDERS = new Set(Object.values(CLI_ACCOUNT_PROVIDER));
@@ -476,7 +485,7 @@ function IronProxyBody({
             <span>Added “{added.title}”. Sign it in to use it.</span>
             <button
               type="button"
-              className="btn-accent px-2.5 py-1 text-xs"
+              className={SIGN_IN_PRIMARY}
               disabled={anyBusy}
               onClick={() => {
                 const id = added.id;
@@ -568,7 +577,7 @@ function IronProxyBody({
                     </div>
                     <button
                       type="button"
-                      className="btn-ghost px-2.5 py-1 text-xs"
+                      className={CALM_ACTION}
                       disabled={anyBusy}
                       onClick={() =>
                         act(
@@ -619,7 +628,7 @@ function IronProxyBody({
               <button
                 type="submit"
                 disabled={anyBusy || !addTitle.trim()}
-                className="btn-ghost px-3 py-1.5 text-xs"
+                className={CALM_ACTION}
               >
                 {busy === "add" ? <LoaderInline label="Adding…" /> : (
                   <>
@@ -720,9 +729,10 @@ function AccountRow({
             onClick={onSignIn}
             disabled={busy}
             // v1.316.0 (UX wave 4): a signed-out account's Sign in is the
-            // accent OUTLINE, not a filled bar — Connections keeps one filled
-            // accent ("Add connection"); still told apart from the quiet rows.
-            className={`${a.state?.status === "unauthenticated" ? "btn-soft" : "btn-ghost"} px-2.5 py-1 text-xs`}
+            // accent OUTLINE, not a filled bar (Connections keeps one filled
+            // accent, "Add connection"). v1.330.0: on any other account it is
+            // the calm action, like the rest of the row.
+            className={a.state?.status === "unauthenticated" ? SIGN_IN_PRIMARY : CALM_ACTION}
           >
             <LogIn size={13} /> Sign in
           </button>
@@ -734,7 +744,7 @@ function AccountRow({
             onClick={onCheck}
             disabled={busy}
             title="Ask Iron-Proxy to check this account's login again now"
-            className="btn-ghost px-2.5 py-1 text-xs"
+            className={CALM_ACTION}
           >
             <RefreshCw size={13} /> Check again
           </button>
@@ -746,13 +756,13 @@ function AccountRow({
             onClick={onOpen}
             disabled={busy || openBlocked !== null}
             title={openBlocked ?? "Open a new Build terminal with this account's CLI already running"}
-            className="btn-ghost px-2.5 py-1 text-xs"
+            className={CALM_ACTION}
           >
             <SquareTerminal size={13} /> Open in Build
           </button>
         )}
         {parked && (
-          <button type="button" onClick={onUnpark} disabled={busy} className="btn-ghost px-2.5 py-1 text-xs">
+          <button type="button" onClick={onUnpark} disabled={busy} className={CALM_ACTION}>
             <Play size={13} /> Unpark
           </button>
         )}
@@ -762,7 +772,7 @@ function AccountRow({
           title="Try this account earlier"
           onClick={() => onMove(-1)}
           disabled={busy || first}
-          className="btn-ghost px-1.5 py-1 text-xs"
+          className={CALM_ICON_ACTION}
         >
           <ArrowUp size={13} />
         </button>
@@ -772,11 +782,11 @@ function AccountRow({
           title="Try this account later"
           onClick={() => onMove(1)}
           disabled={busy || last}
-          className="btn-ghost px-1.5 py-1 text-xs"
+          className={CALM_ICON_ACTION}
         >
           <ArrowDown size={13} />
         </button>
-        <button type="button" onClick={onEnable} disabled={busy} className="btn-ghost px-2.5 py-1 text-xs">
+        <button type="button" onClick={onEnable} disabled={busy} className={CALM_ACTION}>
           <Power size={13} /> {a.enabled ? "Disable" : "Enable"}
         </button>
         <ConfirmButton
