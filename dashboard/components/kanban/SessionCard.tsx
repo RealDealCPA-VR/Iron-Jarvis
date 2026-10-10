@@ -183,7 +183,7 @@ export function CardInner({
         ) : (
           <span
             title={session.model ? `${session.provider} / ${session.model}` : session.provider}
-            className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] text-zinc-400"
+            className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[11px] text-zinc-400"
           >
             {providerDisplay(session.provider)}
           </span>
@@ -228,7 +228,7 @@ export function CardInner({
               e.stopPropagation();
               onApprove?.();
             }}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1.5 text-[12px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-tone-success/30 bg-tone-success/10 px-2 py-1.5 text-[12px] font-semibold text-tone-success transition-colors hover:bg-tone-success/20 disabled:opacity-40"
           >
             {busy ? <LoaderCircle size={13} className="animate-spin-slow" /> : <Check size={13} />}
             Approve
@@ -436,11 +436,16 @@ function FailedActions({ session }: { session: SessionView }) {
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
+      {/* v1.330.0 (calm wave 13): Retry is the row's one primary, in the calm
+          Dismiss's own shape (CALM_CONFIRM.base: 12px, at least 28px tall,
+          no border) so the two buttons share a height; a quiet accent fill
+          and accent text are what make it the one to press. */}
       <button
         type="button"
         disabled={retrying}
         onClick={retry}
-        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2 py-1.5 text-[12px] font-semibold text-accent-soft transition-colors hover:bg-accent/20 disabled:opacity-40"
+        data-testid="failed-retry"
+        className="inline-flex min-h-7 flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.16] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-50"
       >
         {retrying ? <LoaderCircle size={13} className="animate-spin-slow" /> : <RotateCcw size={13} />}
         Retry

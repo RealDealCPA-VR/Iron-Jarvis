@@ -178,8 +178,13 @@ function MarkdownCode({
 }) {
   const inPre = useContext(PreContext);
   if (inPre) return <code className={className}>{children}</code>;
+  // v1.330.0 (calm wave 13): one pixel under the text around it. 0.85em was
+  // 11.9px in a 14px reply; `1em - 1px` still follows a heading or a 13px
+  // table cell (15 / 14 / 13 / 12 px) and lands on a whole pixel wherever
+  // the surrounding text does. Monospace reads larger at the same size, so
+  // one pixel down keeps it level with the words beside it.
   return (
-    <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[0.85em] text-accent-soft">
+    <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[length:calc(1em-1px)] text-accent-soft">
       {children}
     </code>
   );

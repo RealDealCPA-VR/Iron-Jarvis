@@ -212,14 +212,17 @@ describe("the Kanban board: calm chips on a card, calm Dismiss and Clear", () =>
     for (const o of outcomes) expectCalmChip(o.firstElementChild as Element, "bg-tone-warn", o.textContent ?? "");
   });
 
-  it("a failed card's Dismiss is the calm two-press ghost; Retry beside it is unchanged", () => {
+  // Wave 13 (O2) changed Retry on purpose: it is now the calm primary in
+  // Dismiss's shape (no border, same height). board-buttons-inline-code-v1330
+  // pins the full shape; this only keeps the row's two buttons borderless.
+  it("a failed card's Dismiss is the calm two-press ghost; Retry beside it is borderless too", () => {
     hooks.responses["/sessions/teams"] = { parents: {} };
     render(<KanbanBoard sessions={[FAILED]} reviews={{}} reload={() => {}} projectId="p1" />);
     const dismiss = screen.getByRole("button", { name: "Dismiss" });
     expect(dismiss.getAttribute("data-confirm-variant")).toBe("calm");
     expect(borders(dismiss)).toEqual([]);
     expect(tokens(dismiss)).toEqual(expect.arrayContaining(["flex-1", "justify-center"]));
-    expect(screen.getByRole("button", { name: /Retry/ })).toBeTruthy();
+    expect(borders(screen.getByRole("button", { name: /Retry/ }))).toEqual([]);
   });
 
   it("the unscoped (Sessions) board: Clear completed / Clear failed are calm, keep their words and the 28px hit area", () => {
