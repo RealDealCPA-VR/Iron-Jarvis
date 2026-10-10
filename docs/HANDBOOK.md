@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.329.0 (2026-10-04).*
+holds itself to. Current as of v1.330.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,44 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The calm chat, finished (v1.330.0)
+
+Calm chat, part five: the last loose ends, and a few honest words where the
+app used to stay quiet.
+
+- **The reasoning chip says the level the model will use.** With nothing
+  picked, the chip shows the model's own default when the vendor documents
+  one: "Medium", "Thinking off", "Auto". The menu's first row reads
+  "Default (Medium)" and sends nothing; "Medium" below it pins medium. When the
+  default is not known the chip still says "Reasoning" and its tooltip says the
+  model decides.
+- **A picked level works on the newer Claude models.** With an Anthropic API
+  key, Claude 4.6 and newer (and the Fable and Mythos models) get the thinking
+  format Anthropic now documents for them; older models get exactly what they
+  got before. Signed-in Claude (the `claude` command) was never affected.
+- **"no tools" when a reply ran without them.** If you pick a model that has
+  not shown it can use tools while the chat is on Auto tools, the reply is text
+  only, and the "answered by" line now ends "· no tools". The model is also
+  told it can only answer in words this turn, so it no longer promises to hand
+  work to another agent; if it still claims a hand-off, a short note says
+  nothing was handed off.
+- **Servers are named by their label.** "answered by" names a saved server by
+  the label you gave it ("Spark proxy"), with its id in the tooltip.
+- **Removing a proxy removes its models.** On the Fleet page, removing a proxy
+  server takes the models it listed with it. A model listed by a proxy has no
+  Remove of its own (it would come back on the next check); remove the proxy
+  instead.
+- **Anthropic-compatible servers, proven on a real one.** Tested against a real
+  LiteLLM proxy, including an error it sends partway through a reply, which now
+  shows as a plain refusal in the proxy's own words.
+- **The last boxes go.** Delete, Disconnect and Remove buttons and the status
+  chips on Settings > Connections, Fleet, Workflows, the Agents team, project
+  Tasks and the Board are quiet now: no border, a small coloured dot says the
+  state. Saved-endpoint rows put their tags on one line and their buttons on
+  another. The Agents page waits with one quiet "Loading" line.
+- **No empty Draft card.** A reply with an empty email block no longer draws an
+  empty card with Send and Copy.
 
 ## One calm app (v1.329.0)
 

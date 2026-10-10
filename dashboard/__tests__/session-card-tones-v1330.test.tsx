@@ -14,8 +14,10 @@ const FILE = "components/kanban/SessionCard.tsx";
 describe("SessionCard: tone tokens, whole pixels, plain copy (v1.330.0)", () => {
   const src = readSrc(FILE);
 
-  it("uses no literal rose / amber / emerald hues", () => {
-    expect(src.match(/\b(?:text|bg|border)-(?:rose|amber|emerald)-\d{3}/g) ?? []).toEqual([]);
+  it("uses no literal palette hues (tone tokens only)", () => {
+    const hue =
+      /\b(?:text|bg|border|ring)-(?:red|rose|amber|yellow|orange|emerald|green|lime|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink)-\d{2,3}\b/g;
+    expect(src.match(hue) ?? []).toEqual([]);
   });
 
   it("draws no half-pixel text", () => {

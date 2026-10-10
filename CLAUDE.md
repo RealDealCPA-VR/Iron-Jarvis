@@ -1253,7 +1253,10 @@ does not need a bump, stop and bump it.
   Every adapter accepts `reasoning: str = ""` beside the guided knobs and
   forwards it only when set; the translations: OpenAI `reasoning_effort` (+ one
   retry without it on a 400 that names it), Responses `reasoning.effort`,
-  Anthropic `thinking` budgets with `max_tokens` raised to fit AND `raw_blocks`
+  Anthropic `thinking` budgets with `max_tokens` raised to fit (Claude 4.5 and
+  earlier; 4.6+/Fable/Mythos get `thinking: {type: adaptive, display:
+  summarized}` + `output_config.effort` via `reasoning.anthropic_thinking_mode`
+  since v1.330.0) AND `raw_blocks`
   replayed verbatim (a thinking tool loop refuses a rebuilt assistant turn),
   Gemini `thinkingConfig.thinkingBudget`, `claude --effort`, `codex -c
   model_reasoning_effort=`. Never add a vendor spelling without a row in the
@@ -2959,6 +2962,55 @@ does not need a bump, stop and bump it.
   raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
   reproduced CI's exact error.
 
+- **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
+  M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
+  `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a
+  guess; "" for a model with no levels and for a keyless API provider served
+  by a CLI, `inherited_from`) from `providers/reasoning.reasoning_default`,
+  whose tables cite the vendor doc + read date per row. The chip words are
+  `lib/reasoningChip.ts` (only the five values are accepted, so an older
+  daemon reads unknown); the chip is a visible span with the real native
+  select invisibly over it (same testid, aria-label, keyboard, phone picker);
+  the send-nothing row reads "Default (Medium)", an explicit pick still sends
+  exactly its level. ANTHROPIC THINKING: `reasoning.anthropic_thinking_mode`
+  picks per family — Claude 4.5 and earlier keep `thinking: {type: enabled,
+  budget_tokens}` byte for byte; 4.6+/Fable/Mythos get `thinking: {type:
+  adaptive, display: summarized}` + `output_config: {effort}` (docs read
+  2026-10-10; NOT proven against the live API — no key on this machine; a 400
+  naming output_config/display would show it wrong). GPT-6 ids offer
+  `reasoning.effort`. TEXT-ONLY TURNS: both lanes put `route.label` (the fleet
+  node's label via `chat_turn.route_label`, "" otherwise) and `route.text_only`
+  (= `bool(text_only_pick)`) LAST on the route object; TurnReceipt draws
+  "· no tools" (`turn-no-tools`, `NO_TOOLS_TITLE`); the explicit-tools note is
+  `chat_turn.text_only_note`. A text-only turn's system prompt drops the
+  roster/handoff/browser-tool offers (`text_only_system`, `_browser_text_only`,
+  `TEXT_ONLY_LINES`; a tool turn's prompt is byte-identical, golden-pinned),
+  and a reply that still claims a handoff gets `handoff_note_for` (receiver must
+  be agent-shaped; `_COMMON_WORD_AGENTS` planner/reviewer/supervisor/memory/
+  guide need agent context, so code talk never gets the note). FLEET: removing
+  a proxy drops its discovered children (`registry.family(id)`, children listed
+  only while the parent is listed and enabled, `absorb_children` ignores a gone
+  parent); remove/PATCH/detect/verify on a child is a 409 with one sentence
+  (a child is rebuilt from the proxy every pass, so it is never stored);
+  `FleetSampler.forget(ids)` is the public way to drop readings. ANTHROPIC-
+  COMPATIBLE: proven live against the user's LiteLLM proxy (`/v1/messages`);
+  an untyped in-stream `{"error": …}` frame is a typed refusal with the
+  proxy's own words; opt-in live test `tests/test_anthropic_compat_live_v1330.py`
+  (skipped unless `IJ_LIVE_ANTHROPIC_URL`). CALM PIECES: `ConfirmButton` and
+  `Badge` take `variant="calm"` (`CALM_CONFIRM`, `CALM_BADGE`: no border, the
+  dot carries the tone, words neutral); defaults unchanged for older pages;
+  Connections, Fleet, Workflows, Agents team, project Tasks and the Kanban
+  board use calm (`SessionStatusBadge` gained a `variant`); Build's close-
+  terminal dialog keeps its boxed confirm on purpose. Secondary actions on
+  Connections are `CALM_ACTION`; endpoint rows put tags and actions on separate
+  lines. Draft card: a blank draft fence draws nothing, a headers-only fence is
+  a code block (`draftHasBody`, `blankDraftFence`). Inline code is
+  `text-[length:calc(1em-1px)]` (whole pixels at any whole-pixel host). The
+  no-dash AST walker is ONE helper, `dashboard/__tests__/helpers/dashGuard.ts`;
+  calm-variant guards read `__tests__/helpers/calmVariant.ts`. The Agents page
+  loads with one quiet line (role=status), not a card. Pins: every `*-v1330`
+  file in dashboard/__tests__ and tests/.
+
 - **One calm app** (v1.329.0, calm chat waves 4-7: completeness-audit
   fixes F1-F8, G1-G4, S1-S4, H1-H4, I1). Chat list: ONE store
   `lib/chatList.ts` (one read of threads + projects, dedups the 4 s poll and
@@ -2982,9 +3034,8 @@ does not need a bump, stop and bump it.
   wording table WorkLine and TurnReceipt share. Model names:
   `lib/friendlyModelName` + `lib/answeredModel` (catalog label, else friendly
   id) for the chip, "answered by" and failover rows; raw id in tooltip and the
-  expanded receipt. Reasoning chip says "Reasoning" with no pick: no daemon
-  exposes a default level (a `reasoning_default` on GET /models would be
-  needed). F4: edit_file returns data={path, abs_path} and chat_turn's
+  expanded receipt. Reasoning chip with no pick: since v1.330.0 GET /models
+  rows carry `reasoning_default` (see the v1.330.0 note). F4: edit_file returns data={path, abs_path} and chat_turn's
   `_FILE_EDIT_TOOLS` / `_reports_document` put edited files in `documents` on
   BOTH lanes (MIRROR NOTE). Build: PaneChat uses components/Markdown
   (RemoteMediaGate), `paneChatLook.ts`, PaneAsk (ask takes the composer's
