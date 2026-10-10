@@ -185,6 +185,26 @@ function isLive(value: string | null | undefined): boolean {
   return v === "active" || v === "running" || v === "pending";
 }
 
+/** The calm look's dot: the tone token alone, no glow. */
+const CALM_DOT: Record<Tone, string> = {
+  green: "bg-tone-success",
+  amber: "bg-tone-warn",
+  red: "bg-tone-danger",
+  cyan: "bg-accent",
+  violet: "bg-tone-violet",
+  slate: "bg-zinc-500",
+};
+
+/** `default` is the bordered status pill most pages use; `calm` (v1.330.0) is
+ *  the quiet chip of the calm pages (Settings > Connections): no border, no
+ *  fill, neutral words, and only the small dot carries the tone token. */
+export type BadgeVariant = "default" | "calm";
+
+/** The calm Badge's shell, exported so a test can hold it to the same rules
+ *  as the endpoint rows' quiet chip. */
+export const CALM_BADGE =
+  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium leading-none text-zinc-400";
+
 /** `keepCase` (v1.232.0): skip the CSS `capitalize` for a chip that carries a
  *  sentence, not a status word — "Completed · needs you" rendered as
  *  "Completed · Needs You". Every other Badge is unchanged. */
@@ -192,15 +212,42 @@ export function Badge({
   value,
   tone,
   keepCase = false,
+  variant = "default",
+  title,
+  className = "",
+  "data-testid": testId,
 }: {
   value: string;
   tone?: Tone;
   keepCase?: boolean;
+  variant?: BadgeVariant;
+  /** v1.330.0: a tooltip, extra classes and a test id pass through, so a
+   *  page's own status pill can be a Badge (Connections' StatusPill). Left
+   *  out, the default pill renders exactly as before. */
+  title?: string;
+  className?: string;
+  "data-testid"?: string;
 }) {
   const t = tone ?? statusTone(value);
+  if (variant === "calm") {
+    return (
+      <span
+        data-badge-variant="calm"
+        data-tone={t}
+        data-testid={testId}
+        title={title}
+        className={`${CALM_BADGE} ${keepCase ? "" : "capitalize"} ${className}`.replace(/\s+/g, " ").trim()}
+      >
+        <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${CALM_DOT[t]}`} />
+        {value}
+      </span>
+    );
+  }
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${keepCase ? "" : "capitalize"} ${TONE_BADGE[t]}`}
+      data-testid={testId}
+      title={title}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${keepCase ? "" : "capitalize"} ${TONE_BADGE[t]}${className ? ` ${className}` : ""}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[t]}`} />
       {value}
@@ -522,6 +569,20 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
+/** `default` is the hairline-bordered button most pages use; `calm`
+ *  (v1.330.0) is a quiet ghost for the calm pages: no border, it fills on
+ *  hover, and the armed step reads in tone-danger. Same button, same two
+ *  presses, same 3 s timeout. */
+export type ConfirmVariant = "default" | "calm";
+
+/** The calm ConfirmButton's look, one string per state (exported for the
+ *  source guard and the tests). 28 px tall at least, so a finger can hit it. */
+export const CALM_CONFIRM = {
+  base: "inline-flex min-h-7 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-50",
+  idle: "text-zinc-400 hover:bg-white/[0.06] hover:text-tone-danger",
+  armed: "bg-tone-danger/10 text-tone-danger hover:bg-tone-danger/15",
+} as const;
+
 /**
  * Two-step destructive button: the first click arms it ("Confirm?"), a second
  * click within 3s runs the action. Prevents accidental irreversible deletes
@@ -533,12 +594,14 @@ export function ConfirmButton({
   confirmLabel = "Confirm?",
   className = "",
   title,
+  variant = "default",
 }: {
   onConfirm: () => void | Promise<void>;
   label?: string;
   confirmLabel?: string;
   className?: string;
   title?: string;
+  variant?: ConfirmVariant;
 }) {
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -560,6 +623,21 @@ export function ConfirmButton({
       setArmed(false);
     }
   };
+  if (variant === "calm") {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={busy}
+        title={title}
+        data-confirm-variant="calm"
+        data-armed={armed ? "true" : "false"}
+        className={`${CALM_CONFIRM.base} ${armed ? CALM_CONFIRM.armed : CALM_CONFIRM.idle} ${className}`.trim()}
+      >
+        {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : label}
+      </button>
+    );
+  }
   return (
     <button
       type="button"

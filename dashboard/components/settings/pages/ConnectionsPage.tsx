@@ -85,6 +85,7 @@ interface VerifyResult {
   error?: string;
 }
 import {
+  Badge,
   Card,
   Code,
   OfflineHint,
@@ -93,6 +94,7 @@ import {
   SuccessNote,
   LoaderInline,
   ConfirmButton,
+  type Tone,
 } from "@/components/ui";
 import { RestHookups } from "@/components/connections/RestHookups";
 import { IronProxyCard } from "@/components/connections/IronProxyCard";
@@ -431,7 +433,7 @@ function inheritedVia(conn: Pick<Connection, "source">): string | null {
 }
 
 function StatusPill({ conn }: { conn: Connection }) {
-  let tone: string;
+  let tone: Tone;
   let label: string;
   // A connection that loaded ZERO tools is not usable, however green it looks
   // (v1.172.0): MCP tools load once at daemon boot, so a server added since
@@ -439,10 +441,10 @@ function StatusPill({ conn }: { conn: Connection }) {
   // the old flat "Connected" badge insisted it was fine. That badge is exactly
   // what hid a dark wiki from a user who then found Jarvis "blind as a bat".
   if (conn.status === "no_tools") {
-    tone = "border-tone-warn/25 bg-tone-warn/10 text-tone-warn";
+    tone = "amber";
     label = "0 tools · restart";
   } else if (conn.connected) {
-    tone = "border-tone-success/25 bg-tone-success/10 text-tone-success";
+    tone = "green";
     // Inherited (v1.230.0, U5): connected THROUGH the logged-in CLI, no key
     // stored here — say so, instead of "Not connected" under an available
     // provider (the audit's live finding).
@@ -452,33 +454,26 @@ function StatusPill({ conn }: { conn: Connection }) {
     const via = inheritedVia(conn);
     label = via ? `Connected · via ${providerDisplay(via)}` : "Connected";
   } else if (conn.status === "needs_auth") {
-    tone = "border-tone-warn/25 bg-tone-warn/10 text-tone-warn";
+    tone = "amber";
     label = "Needs auth";
   } else {
-    tone = "border-zinc-500/25 bg-zinc-500/10 text-zinc-300";
+    tone = "slate";
     label = "Not connected";
   }
+  // v1.330.0 (calm L2): the calm Badge, no border and no fill; only the dot
+  // carries the tone (amber for no_tools even though `connected` stays true).
+  // whitespace-nowrap (v1.314.0): the inherited label wrapped to two lines on
+  // desktop and three on a phone.
   return (
-    <span
+    <Badge
+      variant="calm"
       data-testid="conn-status-pill"
       title={conn.source || undefined}
-      // whitespace-nowrap (v1.314.0): the inherited label wrapped to two
-      // lines on desktop and three on a phone.
-      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${tone}`}
-    >
-      <span
-        className={`h-1.5 w-1.5 rounded-full ${
-          conn.status === "no_tools"
-            ? "bg-tone-warn"
-            : conn.connected
-              ? "bg-tone-success"
-              : conn.status === "needs_auth"
-                ? "bg-tone-warn"
-                : "bg-zinc-500"
-        }`}
-      />
-      {label}
-    </span>
+      value={label}
+      tone={tone}
+      keepCase
+      className="whitespace-nowrap"
+    />
   );
 }
 
@@ -1022,6 +1017,7 @@ function ConnectionCard({
               the CLI; log out of that CLI to drop it (v1.230.0). */}
           {!inheritedVia(conn) && (
             <ConfirmButton
+              variant="calm"
               onConfirm={disconnect}
               label="Disconnect"
               title={`Disconnect ${conn.display_name}`}
@@ -1309,6 +1305,7 @@ function ConnectionCard({
                     />
                   )}
                   <ConfirmButton
+                    variant="calm"
                     className="shrink-0"
                     onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
@@ -1610,24 +1607,19 @@ function CliProviderRow({
           ))}
         </div>
       </div>
+      {/* v1.330.0 (calm L2): the calm Badge; the dot carries the tone. */}
       {available ? (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-success/25 bg-tone-success/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-success">
-          <span className="h-1.5 w-1.5 rounded-full bg-tone-success" />
-          Detected · ready to use
-        </span>
+        <Badge variant="calm" value="Detected · ready to use" tone="green" keepCase />
       ) : signedOut ? (
-        <span
+        <Badge
+          variant="calm"
           data-testid={`cli-signed-out-${info.provider}`}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-warn"
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-tone-warn" />
-          Installed · not signed in
-        </span>
+          value="Installed · not signed in"
+          tone="amber"
+          keepCase
+        />
       ) : (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-500/25 bg-zinc-500/10 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
-          Not detected
-        </span>
+        <Badge variant="calm" value="Not detected" tone="slate" keepCase />
       )}
     </div>
   );

@@ -40,9 +40,10 @@ describe("connector status honesty", () => {
     expect(pageSrc).toContain('label = "0 tools · restart"');
     // A warning, not a success. v1.329.0 (calm J3): the warning tone is the
     // theme token (tone-warn), not literal amber, so Daylight re-inks it.
-    expect(pageSrc).toMatch(
-      /conn\.status === "no_tools"[\s\S]{0,200}tone-warn\/25/,
-    );
+    // v1.330.0 (calm L2): the pill is the calm Badge now, so the branch sets
+    // the Badge's "amber" tone, which Badge draws with the tone-warn token
+    // (confirm-badge-calm-v1330 pins the tone -> token mapping).
+    expect(pageSrc).toMatch(/conn\.status === "no_tools"\) \{\s*tone = "amber";/);
   });
 
   it("the server's explanation is rendered, not swallowed", () => {
@@ -55,13 +56,17 @@ describe("connector status honesty", () => {
     // connected===true keeps "your connect worked / it survived a restart"
     // honest (pinned server-side by test_connectors::test_restart_survival);
     // the DOT must still not read as a working connection.
-    const dot = pageSrc.slice(
-      pageSrc.indexOf("h-1.5 w-1.5 rounded-full"),
-      pageSrc.indexOf("h-1.5 w-1.5 rounded-full") + 420,
+    // v1.330.0 (calm L2): the pill is the calm Badge and its dot IS the tone
+    // the branches pick, so the order of those branches is the dot's rule.
+    const pill = pageSrc.slice(
+      pageSrc.indexOf("function StatusPill"),
+      pageSrc.indexOf("function StatusPill") + 2600,
     );
-    const amberFirst = dot.indexOf('conn.status === "no_tools"');
-    const greenBranch = dot.indexOf("conn.connected");
+    const amberFirst = pill.indexOf('tone = "amber";');
+    const greenBranch = pill.indexOf('tone = "green";');
     expect(amberFirst).toBeGreaterThan(-1);
+    expect(greenBranch).toBeGreaterThan(-1);
     expect(amberFirst).toBeLessThan(greenBranch);
+    expect(pill).toMatch(/<Badge[\s\S]{0,200}tone=\{tone\}/);
   });
 });

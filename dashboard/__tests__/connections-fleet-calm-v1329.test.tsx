@@ -25,6 +25,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 
@@ -314,6 +315,80 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
     for (const a of ALLOW) expect(read(a.file), `${a.file}: ${a.token}`).toContain(a.token);
   });
 
+  /* v1.330.0 (calm L2): the saved-server Delete, Disconnect, the Iron-Proxy
+     account Remove (ConfirmButton) and the status chips (Badge) were the last
+     bordered boxes on Connections. Every <Badge> and <ConfirmButton> on the
+     page and in components/connections must say variant="calm"; a default
+     (bordered) one, or a spread that could hide the variant, fails here. */
+  const CALM_ELEMENTS = ["Badge", "ConfirmButton"] as const;
+  function uncalm(rel: string, src: string): { found: number; bad: string[] } {
+    const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const bad: string[] = [];
+    let found = 0;
+    const visit = (n: ts.Node) => {
+      if (ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) {
+        const tag = n.tagName.getText(file).replace(/^ui\./, "");
+        if ((CALM_ELEMENTS as readonly string[]).includes(tag)) {
+          found += 1;
+          const props = n.attributes.properties;
+          const variant = props.find(
+            (p): p is ts.JsxAttribute => ts.isJsxAttribute(p) && p.name.getText(file) === "variant",
+          );
+          const value = variant?.initializer;
+          const calm = !!value && ts.isStringLiteral(value) && value.text === "calm";
+          const spread = props.some((p) => ts.isJsxSpreadAttribute(p));
+          if (!calm || spread) {
+            const line = file.getLineAndCharacterOfPosition(n.getStart(file)).line + 1;
+            bad.push(`${rel}:${line} <${tag}> ${spread ? "has a spread" : "is not variant=\"calm\""}`);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(file);
+    return { found, bad };
+  }
+  const CALM_FILES = ["components/settings/pages/ConnectionsPage.tsx", ...CONN_FILES.filter((f) => f.endsWith(".tsx"))];
+
+  it.each(CALM_FILES)("%s draws every Badge and ConfirmButton in the calm variant", (rel) => {
+    expect(uncalm(rel, readRel(rel)).bad).toEqual([]);
+  });
+
+  /* The page's own status pills (StatusPill, the CLI rows' Detected / Not
+     signed in / Not detected) were hand-rolled copies of the bordered Badge
+     shell; they are calm Badges now. A hand-rolled copy of that shell must
+     not come back either. (The endpoint model picker's choice chips and the
+     Iron-Proxy switch are controls, not status pills, and keep their own.) */
+  const PILL_SHELL = /rounded-full border(?:\s+border-\S+)?\s+(?:bg-\S+\s+)?px-2\.5 py-0\.5/;
+  it.each(CALM_FILES)("%s has no hand-rolled bordered status pill", (rel) => {
+    const hits = [...readRel(rel).matchAll(new RegExp(PILL_SHELL.source, "g"))].map((m) => m[0]);
+    expect(hits).toEqual([]);
+  });
+  it("the pill pattern catches the old shells", () => {
+    expect("rounded-full border px-2.5 py-0.5 text-[11px]").toMatch(PILL_SHELL);
+    expect("rounded-full border border-tone-success/25 bg-tone-success/10 px-2.5 py-0.5").toMatch(PILL_SHELL);
+    expect("rounded-full border px-2.5 py-1 text-[11px]").not.toMatch(PILL_SHELL);
+  });
+
+  it("the calm guard is not vacuous: it sees the page's chips and buttons and catches a default one", () => {
+    const total = CALM_FILES.map((rel) => uncalm(rel, readRel(rel)).found).reduce((a, b) => a + b, 0);
+    // Disconnect, endpoint Delete, StatusPill and the three CLI-row states
+    // (page), the account chip + Remove (IronProxyCard), Ready / Off / Not
+    // set up yet (RestHookups).
+    expect(total).toBeGreaterThanOrEqual(11);
+    const probe = [
+      "const a = <Badge value=\"Ready\" tone=\"green\" />;",
+      "const b = <ConfirmButton onConfirm={() => void go()} label=\"Delete\" />;",
+      "const c = <ConfirmButton variant=\"default\" onConfirm={go} />;",
+      "const d = <Badge {...rest} variant=\"calm\" value=\"x\" />;",
+      "const e = <ConfirmButton variant=\"calm\" onConfirm={go} label=\"Delete\" />;",
+      "const f = <Badge variant=\"calm\" value=\"Ready\" />;",
+    ].join("\n");
+    const r = uncalm("probe.tsx", probe);
+    expect(r.found).toBe(6);
+    expect(r.bad).toHaveLength(4);
+  });
+
   it("the key notes are plain sentences", () => {
     const src = read("ConnectionsPage.tsx");
     expect(src).toContain("Paste your API key. It is stored encrypted and never shown again.");
@@ -363,6 +438,57 @@ describe("Settings > Connections: one quiet chip look on every saved-endpoint ro
     expect(tools[1].querySelector(".bg-tone-warn")).not.toBeNull();
     // Tooltips are plain sentences.
     for (const el of chips) expect(el.getAttribute("title") ?? "").not.toMatch(/ — /);
+  });
+
+  /* v1.330.0 (calm L2): the status pill on every card, the endpoint Delete
+     and Disconnect are the calm variants: no border, the dot (or the armed
+     step) carries the tone. */
+  it("status pills are calm Badges whose dot carries the tone; Delete and Disconnect are calm ghosts", async () => {
+    seed([row(ANTH)]);
+    const card = (provider: string, over: Record<string, unknown>) => ({
+      ...customCard(),
+      provider,
+      display_name: `Card ${provider}`,
+      ...over,
+    });
+    hooks.responses["/connections"] = {
+      connections: [
+        customCard(),
+        card("wiki", { connected: true, status: "no_tools", source: "mcp" }),
+        card("openai", { connected: true, status: "connected", source: "vault" }),
+        card("dropbox", { connected: false, status: "needs_auth" }),
+      ],
+    };
+    render(<ConnectionsPage />);
+    const custom = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    await within(custom).findByText("Relay anthropic");
+
+    const expectations: Array<[string, string, string]> = [
+      ["custom", "Not connected", "bg-zinc-500"],
+      ["wiki", "0 tools · restart", "bg-tone-warn"],
+      ["openai", "Connected", "bg-tone-success"],
+      ["dropbox", "Needs auth", "bg-tone-warn"],
+    ];
+    for (const [id, words, dot] of expectations) {
+      const el = document.getElementById(`conn-card-${id}`) as HTMLElement;
+      expect(el, id).not.toBeNull();
+      const pill = within(el).getByTestId("conn-status-pill");
+      expect(pill.textContent, id).toBe(words);
+      expect(pill.getAttribute("data-badge-variant"), id).toBe("calm");
+      const cls = pill.className.split(/\s+/);
+      expect(cls.filter((c) => /^(?:[a-z-]+:)*border(?:-|$)/.test(c)), id).toEqual([]);
+      expect(cls, id).toContain("whitespace-nowrap");
+      expect((pill.querySelector("span") as HTMLElement).className.split(/\s+/), id).toContain(dot);
+    }
+    expect(within(document.getElementById("conn-card-openai") as HTMLElement).getByTestId("conn-status-pill").getAttribute("title")).toBe("vault");
+
+    const del = within(custom).getByRole("button", { name: "Delete" });
+    expect(del.getAttribute("data-confirm-variant")).toBe("calm");
+    const disconnect = within(document.getElementById("conn-card-openai") as HTMLElement).getByRole("button", { name: /Disconnect/ });
+    expect(disconnect.getAttribute("data-confirm-variant")).toBe("calm");
+    for (const b of [del, disconnect]) {
+      expect(b.className.split(/\s+/).filter((c) => /^(?:[a-z-]+:)*border(?:-|$)/.test(c))).toEqual([]);
+    }
   });
 
   it("a node the daemon has not checked yet is still a saved row", async () => {

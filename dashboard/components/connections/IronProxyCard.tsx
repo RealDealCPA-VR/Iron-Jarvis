@@ -699,7 +699,7 @@ function AccountRow({
             data-testid="iron-proxy-chip"
             title={a.state?.parkedReason?.message ?? undefined}
           >
-            <Badge value={chip.label} tone={chip.tone} keepCase />
+            <Badge variant="calm" value={chip.label} tone={chip.tone} keepCase />
           </span>
         </div>
         {!isCli && (
@@ -780,6 +780,7 @@ function AccountRow({
           <Power size={13} /> {a.enabled ? "Disable" : "Enable"}
         </button>
         <ConfirmButton
+          variant="calm"
           onConfirm={onRemove}
           label="Remove"
           confirmLabel="Press again to remove"

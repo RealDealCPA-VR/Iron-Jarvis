@@ -115,12 +115,12 @@ function IntegrationCard({
             for anything reading the text.) */}
         {integ.configured ? (
           integ.enabled ? (
-            <Badge value="Ready" tone="green" />
+            <Badge variant="calm" value="Ready" tone="green" />
           ) : (
-            <Badge value="Off" tone="slate" />
+            <Badge variant="calm" value="Off" tone="slate" />
           )
         ) : (
-          <Badge value="Not set up yet" tone="slate" keepCase />
+          <Badge variant="calm" value="Not set up yet" tone="slate" keepCase />
         )}
       </div>
       {!integ.configured && (
