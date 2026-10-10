@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Inbox, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
@@ -39,6 +39,8 @@ import type {
 import { Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 import { agentLabel } from "@/lib/agentWorlds";
+import { COMPOSER_CARD_EDGE, composerChipClass } from "@/lib/composerChips";
+import { ROW_BTN, SECTION_LABEL, SUB_LABEL, primaryBtn } from "./teamLook";
 
 /** The composer's three priorities → the wire's -10..10 scale. */
 export const PRIORITY_OPTIONS = [
@@ -86,10 +88,11 @@ function nameCase(name: string): string {
   return name.includes(":") ? "" : "capitalize";
 }
 
-/** The sentence every "Queue" surface says after a successful POST. */
+/** The sentence every "Queue" surface says after a successful POST.
+ *  v1.329.0: two plain sentences (it read "Queued for X — it runs when…"). */
 export function queuedSentence(assignee: string): string {
   const shown = assigneeLabel(assignee);
-  return `Queued for ${shown} — it runs when ${shown} is free.`;
+  return `Queued for ${shown}. It runs when ${shown} is free.`;
 }
 
 /** A row's one-line title: the daemon's `title`, else the task's first line. */
@@ -125,29 +128,32 @@ export function rowActions(status: AssignmentStatus): {
 export type HealthTone = "green" | "amber" | "red" | "slate";
 
 /**
- * The health line, in words, plus the dot's tone:
- *   "never ran"                                  (slate)
- *   "Last ran 12 min ago — completed"            (green)
- *   "Last ran 12 min ago — needs you"            (amber)
- *   "Last ran 12 min ago — failed: <last_error>" (red)
+ * The health line, in words, plus the dot's tone. v1.329.0: the parts are
+ * joined with the app's quiet " · " (as a project's counts line is), never a
+ * dash aside.
+ *   "Never ran"                                 (slate)
+ *   "Last ran 12m ago · completed"              (green)
+ *   "Last ran 12m ago · needs you"              (amber)
+ *   "Last ran 12m ago · failed: <last_error>"   (red)
  */
 export function healthLine(h: AgentHealth | null | undefined): { text: string; tone: HealthTone } {
-  if (!h || !h.last_run_at) return { text: "never ran", tone: "slate" };
+  if (!h || !h.last_run_at) return { text: "Never ran", tone: "slate" };
   const when = `Last ran ${timeAgo(h.last_run_at)}`;
   const outcome = String(h.last_outcome ?? "").toLowerCase();
   if (outcome === "failed" || outcome === "error") {
-    return { text: `${when} — failed: ${h.last_error || "no error recorded"}`, tone: "red" };
+    return { text: `${when} · failed: ${h.last_error || "no error recorded"}`, tone: "red" };
   }
   if (outcome === "needs_you" || outcome === "completed_with_failures") {
-    return { text: `${when} — ${outcome.replace(/_/g, " ")}`, tone: "amber" };
+    return { text: `${when} · ${outcome.replace(/_/g, " ")}`, tone: "amber" };
   }
-  return { text: `${when} — ${outcome ? outcome.replace(/_/g, " ") : "completed"}`, tone: "green" };
+  return { text: `${when} · ${outcome ? outcome.replace(/_/g, " ") : "completed"}`, tone: "green" };
 }
 
+/** The dot beside the health line: tone tokens, so a light theme re-inks it. */
 const HEALTH_DOT: Record<HealthTone, string> = {
-  green: "bg-emerald-400",
-  amber: "bg-amber-400",
-  red: "bg-rose-400",
+  green: "bg-tone-success",
+  amber: "bg-tone-warn",
+  red: "bg-tone-danger",
   slate: "bg-zinc-500",
 };
 
@@ -193,17 +199,15 @@ export function AssignmentRow({
     }
   }
 
-  const btn = "rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-50";
-
   return (
     <li
       data-testid={`inbox-${a.status}-${a.id}`}
-      className="rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.03]"
+      className="px-1 py-1.5"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Badge value={a.status === "done" ? "completed" : a.status} />
         <span
-          className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200"
+          className="min-w-0 flex-1 truncate text-[13px] text-zinc-200"
           title={a.task}
         >
           {showAssignee && (
@@ -214,10 +218,8 @@ export function AssignmentRow({
         {prio && (
           <span
             data-testid={`inbox-priority-${a.id}`}
-            className={`shrink-0 rounded-md border px-1 py-px text-[9.5px] font-medium ${
-              prio === "high"
-                ? "border-amber-400/25 bg-amber-400/10 text-amber-200"
-                : "border-zinc-500/25 bg-zinc-500/10 text-zinc-400"
+            className={`shrink-0 text-[11px] font-medium ${
+              prio === "high" ? "text-tone-warn" : "text-zinc-500"
             }`}
           >
             {prio}
@@ -225,7 +227,7 @@ export function AssignmentRow({
         )}
         {a.coalesced_count > 0 && (
           <span
-            className="shrink-0 text-[10px] text-zinc-600"
+            className="shrink-0 text-[11px] text-zinc-500"
             title="The same job was asked for again while this one waited"
           >
             ×{a.coalesced_count + 1}
@@ -234,21 +236,23 @@ export function AssignmentRow({
         {a.session_id && (
           <Link
             href={`/sessions/${encodeURIComponent(a.session_id)}`}
-            className="shrink-0 text-[11px] text-accent-soft transition-colors hover:text-accent"
+            className="shrink-0 text-[12px] text-accent-soft transition-colors hover:text-accent"
           >
             session →
           </Link>
         )}
-        <span className="shrink-0 text-[10.5px] tabular-nums text-zinc-600">
+        <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
           {timeAgo(a.updated_at ?? a.created_at)}
         </span>
+        {/* v1.329.0: the row's actions are ghosts (no border), each in the
+            tone of what it does, filling on hover. */}
         {actions.unblock && (
           <button
             type="button"
             data-testid={`inbox-unblock-${a.id}`}
             onClick={() => void act("unblock")}
             disabled={busy !== null}
-            className={`${btn} border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/[0.1]`}
+            className={`${ROW_BTN} text-tone-success`}
           >
             {busy === "unblock" ? "Unblocking…" : "Unblock"}
           </button>
@@ -259,7 +263,7 @@ export function AssignmentRow({
             data-testid={`inbox-retry-${a.id}`}
             onClick={() => void act("retry")}
             disabled={busy !== null}
-            className={`${btn} border-accent/30 text-accent-soft hover:bg-accent/[0.1]`}
+            className={`${ROW_BTN} text-accent-soft`}
           >
             {busy === "retry" ? "Retrying…" : "Retry"}
           </button>
@@ -270,28 +274,28 @@ export function AssignmentRow({
             data-testid={`inbox-cancel-${a.id}`}
             onClick={() => void act("cancel")}
             disabled={busy !== null}
-            className={`${btn} border-rose-500/25 text-rose-300 hover:bg-rose-500/[0.1]`}
+            className={`${ROW_BTN} text-zinc-400 hover:text-tone-danger`}
           >
             {busy === "cancel" ? "Cancelling…" : "Cancel"}
           </button>
         )}
       </div>
       {a.held_reason && a.status === "queued" && (
-        <p data-testid={`inbox-held-${a.id}`} className="mt-0.5 text-[11px] text-amber-300/90">
+        <p data-testid={`inbox-held-${a.id}`} className="mt-0.5 text-[12px] text-tone-warn">
           held: {a.held_reason}
         </p>
       )}
       {a.status === "blocked" && (
-        <p data-testid={`inbox-blocked-reason-${a.id}`} className="mt-0.5 text-[11px] text-rose-200/90">
-          {a.blocked_reason || "blocked — no reason recorded"}
+        <p data-testid={`inbox-blocked-reason-${a.id}`} className="mt-0.5 text-[12px] text-tone-danger">
+          {a.blocked_reason || "Blocked. No reason was recorded."}
         </p>
       )}
       {a.status === "failed" && a.last_error && (
-        <p className="mt-0.5 truncate text-[11px] text-rose-200/80" title={a.last_error}>
+        <p className="mt-0.5 truncate text-[12px] text-tone-danger" title={a.last_error}>
           {a.last_error}
         </p>
       )}
-      {error && <p className="mt-0.5 text-[11px] text-rose-300">{error}</p>}
+      {error && <p className="mt-0.5 text-[12px] text-tone-danger">{error}</p>}
     </li>
   );
 }
@@ -310,10 +314,10 @@ function Section({
   if (rows.length === 0) return null;
   return (
     <div>
-      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+      <div className={`mb-0.5 px-1 ${SUB_LABEL}`}>
         {label} · {rows.length}
       </div>
-      <ul className="space-y-0.5">
+      <ul className="divide-y divide-white/[0.06] border-t hairline">
         {rows.map((a) => (
           <AssignmentRow key={a.id} assignment={a} onChanged={onChanged} />
         ))}
@@ -382,82 +386,87 @@ function AssignComposer({
   }
 
   const id = `inbox-${bare}`;
+  const ready = !busy && Boolean(task.trim());
   return (
-    <form
-      onSubmit={submit}
-      data-testid={`inbox-assign-${name}`}
-      className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3"
-    >
-      <label
-        htmlFor={`${id}-task`}
-        className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
-      >
+    // v1.329.0 (calm chat wave 9, K4): drawn like the mission composer on
+    // the New task view. The box is the one card on the agent's screen, the
+    // task field is borderless inside it, the reason, priority and project
+    // are quiet chips on its bottom row, and "Queue for …" is the section's
+    // one primary: quiet until there is a task, then the accent.
+    <form onSubmit={submit} data-testid={`inbox-assign-${name}`} className="space-y-2">
+      <label htmlFor={`${id}-task`} className={`block px-1 ${SUB_LABEL}`}>
         Assign work
       </label>
-      <textarea
-        id={`${id}-task`}
-        value={task}
-        onChange={(e) => setTask(e.target.value)}
-        rows={2}
-        placeholder={`What should ${assigneeLabel(name)} do next? It waits its turn.`}
-        className="field resize-y"
-      />
-      <div className="grid gap-2 sm:grid-cols-3">
-        <input
-          type="text"
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          aria-label="Reason (optional)"
-          placeholder="Reason (optional)"
-          className="field sm:col-span-1"
+      <div
+        data-testid={`inbox-assign-card-${name}`}
+        className={`flex flex-col rounded-[20px] bg-ink-800 ${COMPOSER_CARD_EDGE}`}
+      >
+        <textarea
+          id={`${id}-task`}
+          value={task}
+          onChange={(e) => setTask(e.target.value)}
+          rows={2}
+          placeholder={`What should ${assigneeLabel(name)} do next? It waits its turn.`}
+          className="block max-h-60 min-h-[3.75rem] w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[13px] leading-6 text-zinc-100 caret-accent outline-none placeholder:text-zinc-500"
         />
-        <select
-          aria-label="Priority"
-          value={priority}
-          onChange={(e) => setPriority(e.target.value)}
-          className="field"
-        >
-          {PRIORITY_OPTIONS.map((o) => (
-            <option key={o.value} value={String(o.value)}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Project (optional)"
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          className="field"
-        >
-          <option value="">No project</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex items-center justify-end">
-        <button
-          type="submit"
-          disabled={busy || !task.trim()}
-          className="btn-accent px-2.5 py-1.5 text-[11.5px]"
-        >
-          {busy ? (
-            <LoaderInline label="Queueing…" />
-          ) : (
-            <>
-              {/* v1.315.0: the name is title-cased by CSS (it sits under the
-                  title-cased agent heading); the TEXT stays the raw id, so the
-                  button's accessible name is unchanged. One inline wrapper so
-                  the button's flex gap never splits "for" from the name. */}
-              <Send size={12} />{" "}
-              <span>
-                Queue for <span className={nameCase(name)}>{bare}</span>
-              </span>
-            </>
-          )}
-        </button>
+        <div className="flex flex-wrap items-center gap-1 px-2 pb-2 pt-1">
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            aria-label="Reason (optional)"
+            placeholder="Reason (optional)"
+            className={`${composerChipClass(Boolean(reason.trim()))} w-[11rem] min-w-0 bg-transparent outline-none placeholder:text-zinc-500 focus:bg-white/[0.04]`}
+          />
+          <select
+            aria-label="Priority"
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
+            title="Priority"
+            className={`${composerChipClass(priority !== "0")} cursor-pointer bg-transparent`}
+          >
+            {PRIORITY_OPTIONS.map((o) => (
+              <option key={o.value} value={String(o.value)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Project (optional)"
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            title="The project this job belongs to"
+            className={`${composerChipClass(Boolean(projectId))} max-w-[12rem] cursor-pointer truncate bg-transparent`}
+          >
+            <option value="">No project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            data-testid={`inbox-queue-${name}`}
+            disabled={!ready}
+            className={`ml-auto ${primaryBtn(ready)}`}
+          >
+            {busy ? (
+              <LoaderInline label="Queueing…" />
+            ) : (
+              <>
+                {/* v1.315.0: the name is title-cased by CSS (it sits under the
+                    title-cased agent heading); the TEXT stays the raw id, so the
+                    button's accessible name is unchanged. One inline wrapper so
+                    the button's flex gap never splits "for" from the name. */}
+                <Send size={13} />{" "}
+                <span>
+                  Queue for <span className={nameCase(name)}>{bare}</span>
+                </span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
       {note && <SuccessNote>{note}</SuccessNote>}
       {error && <ErrorNote>{error}</ErrorNote>}
@@ -502,14 +511,15 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
   const empty = running.length + queued.length + blocked.length + recent.length === 0;
 
   return (
-    <section data-testid={`agent-inbox-${name}`} className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Inbox size={13} className="text-accent-soft/80" aria-hidden />
-        <h3 className="text-[12px] font-semibold tracking-wide text-zinc-200">Inbox</h3>
+    // v1.329.0: a plain section under a hairline with a quiet label, like
+    // the New task view's sections; the composer inside is its one card.
+    <section data-testid={`agent-inbox-${name}`} className="space-y-3 border-t hairline pt-4">
+      <div className="flex items-center gap-2 px-1">
+        <h3 className={SECTION_LABEL}>Inbox</h3>
         <p
           data-testid={`inbox-health-${name}`}
           data-tone={health.tone}
-          className="ml-auto flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-400"
+          className="ml-auto flex min-w-0 items-center gap-1.5 text-[12px] text-zinc-500"
           title={data.health?.last_error ?? undefined}
         >
           <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${HEALTH_DOT[health.tone]}`} />
@@ -520,9 +530,9 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
       <AssignComposer name={name} onQueued={reload} defaultProjectId={projectId ?? ""} />
 
       {empty ? (
-        <p className="text-[11.5px] leading-relaxed text-zinc-500">
-          {/* v1.315.0: CSS casing only — same words, same text. */}
-          Nothing queued — give <span className={nameCase(name)}>{bare}</span> a job above and it runs when{" "}
+        <p data-testid={`inbox-empty-${name}`} className="px-1 text-[12px] leading-relaxed text-zinc-500">
+          {/* v1.315.0: CSS casing only. v1.329.0: two plain sentences. */}
+          Nothing queued. Give <span className={nameCase(name)}>{bare}</span> a job above and it runs when{" "}
           <span className={nameCase(name)}>{bare}</span> is free.
         </p>
       ) : (

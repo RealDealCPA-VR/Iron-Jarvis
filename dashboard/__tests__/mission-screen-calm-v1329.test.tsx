@@ -346,11 +346,25 @@ describe("the mission page's words are plain sentences", () => {
 describe("the mission files keep their labels quiet", () => {
   const ROOT = path.join(__dirname, "..");
   const DIR = "components/agents/mission";
+  const TEAM_TAB_FILES = [
+    "components/agents/AgentsModal.tsx",
+    "components/agents/AgentInbox.tsx",
+    "components/agents/AgentFiles.tsx",
+    "components/agents/AgentCoach.tsx",
+    "components/agents/AgentPortrait.tsx",
+    "components/agents/PortraitCropper.tsx",
+    "components/agents/SetupCard.tsx",
+    "components/agents/teamLook.ts",
+  ];
   const files = [
     ...readdirSync(path.join(ROOT, DIR))
       .filter((f) => /\.tsx?$/.test(f))
       .map((f) => `${DIR}/${f}`),
     "app/agents/page.tsx",
+    // v1.329.0 wave 9 (K4): the Your team tab's panel and the parts it
+    // draws keep the same quiet labels (the audit found ASSIGN WORK,
+    // APPEARANCE, SHAPE, EYES and COLOUR shouted there).
+    ...TEAM_TAB_FILES,
   ];
   /** Code without comments, so a comment quoting an old class never counts. */
   const code = (rel: string) =>
@@ -364,18 +378,30 @@ describe("the mission files keep their labels quiet", () => {
     const shouted = files.filter((rel) => /(^|[\s"'`])uppercase([\s"'`]|$)/.test(code(rel)));
     expect(shouted).toEqual([]);
     // card-surface is left only where it is the one panel of its screen: the
-    // objective's result, its loading shape, Your team's panel, an old room
-    // and the page's loading skeleton.
-    const boxed = files.filter((rel) => code(rel).includes("card-surface")).sort();
+    // objective's result, its loading shape, an old room and the page's
+    // loading skeleton. v1.329.0 wave 9 (K4): Your team's panel is no longer
+    // one of them (TeamScreen dropped its card; the panel sits on the page).
+    const boxed = files
+      .filter((rel) => !TEAM_TAB_FILES.includes(rel))
+      .filter((rel) => code(rel).includes("card-surface"))
+      .sort();
     expect(boxed).toEqual(
       [
         "app/agents/page.tsx",
         `${DIR}/MissionOutput.tsx`,
         `${DIR}/MissionScreen.tsx`,
         `${DIR}/RoomTranscript.tsx`,
-        `${DIR}/TeamScreen.tsx`,
       ].sort(),
     );
+    // The team-tab parts draw no card of their own. SetupCard.tsx keeps one
+    // only in its legacy standalone `SetupCard` (not drawn on Your team; the
+    // tab renders its YourAgentsSection / RemoteAgentsSection / FacePicker).
+    expect(TEAM_TAB_FILES.filter((rel) => code(rel).includes("card-surface"))).toEqual([
+      "components/agents/SetupCard.tsx",
+    ]);
+    // Anti-vacuity: the team-tab files are really read.
+    for (const rel of TEAM_TAB_FILES) expect(files, rel).toContain(rel);
+    expect(code("components/agents/AgentsModal.tsx")).toContain("SECTION_LABEL");
     const screenCode = code(`${DIR}/MissionScreen.tsx`);
     expect(screenCode.match(/card-surface/g)).toHaveLength(1); // the result's loading shape only
     expect(screenCode).toContain('data-testid="mission-output-loading"');

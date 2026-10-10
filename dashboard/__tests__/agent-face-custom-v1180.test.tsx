@@ -284,7 +284,9 @@ describe("SetupCard — the picker", () => {
     await openCard();
     openRowEditor();
     const picker = screen.getByTestId(`face-picker-${NAME}`);
-    const preview = () => screen.getByLabelText(`${NAME} — the face as chosen`);
+    // v1.329.0 (calm chat K4): the preview's name reads "<name>, the face as
+    // chosen" (it was a dash aside); the same element, the same role.
+    const preview = () => screen.getByLabelText(`${NAME}, the face as chosen`);
     // Opens on the truth as stored: nothing pinned, everything derived.
     expect(preview().getAttribute("data-face-shape")).toBe(DERIVED_SHAPE);
     expect(within(picker).getByText("drawn from the name")).toBeInTheDocument();
@@ -335,7 +337,7 @@ describe("SetupCard — the picker", () => {
     await openCard();
     openRowEditor();
     const picker = screen.getByTestId(`face-picker-${NAME}`);
-    const preview = () => screen.getByLabelText(`${NAME} — the face as chosen`);
+    const preview = () => screen.getByLabelText(`${NAME}, the face as chosen`); // v1.329.0 wording
     await waitFor(() =>
       expect(preview().getAttribute("data-face-shape")).toBe(PICK_SHAPE),
     );
@@ -420,7 +422,7 @@ describe("SetupCard — the picker", () => {
       within(second).getByLabelText("Shape from the name").getAttribute("aria-checked"),
     ).toBe("true");
     expect(
-      screen.getByLabelText("planner — the face as chosen").getAttribute("data-face-shape"),
+      screen.getByLabelText("planner, the face as chosen").getAttribute("data-face-shape"),
     ).toBe(faceShape("planner"));
   });
 

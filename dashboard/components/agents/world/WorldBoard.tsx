@@ -33,7 +33,7 @@ export function WorldBoard({ projectId }: { projectId: string }) {
   if (error && error.status === 0 && list.length === 0)
     return (
       <p data-testid="world-board" className="py-2 text-sm text-zinc-500">
-        Board unavailable — the daemon looks offline.
+        Board unavailable. The daemon looks offline.
       </p>
     );
   // Same honesty rule as the project page: "nothing here" is only said once
@@ -45,7 +45,7 @@ export function WorldBoard({ projectId }: { projectId: string }) {
           <SkeletonRows rows={3} />
         ) : (
           <p className="py-2 text-sm text-zinc-500">
-            Board unavailable — the daemon returned an error (HTTP {error.status}).
+            Board unavailable. The daemon returned an error (HTTP {error.status}).
           </p>
         )}
       </div>
@@ -54,7 +54,7 @@ export function WorldBoard({ projectId }: { projectId: string }) {
     return (
       <div data-testid="world-board">
         <Empty icon={<SquareKanban size={22} />}>
-          No work on this project&apos;s board yet — give the team a task.
+          No work on this project&apos;s board yet. Give the team a task.
         </Empty>
       </div>
     );

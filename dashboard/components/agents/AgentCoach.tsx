@@ -30,6 +30,7 @@ import { diffTexts } from "@/lib/diff";
 import type { AgentCoachView, CoachAskResult, CoachCluster, CoachProposal, CoachRun } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import { DiffBlock } from "./AgentFiles";
+import { GHOST_BASE, GHOST_BTN, SECTION_LABEL, primaryBtn } from "./teamLook";
 
 /** What each cluster category means, as the chip's title. */
 export const CLUSTER_DEFINITIONS: Record<string, string> = {
@@ -79,8 +80,6 @@ function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
 }
 
-const BTN = "rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-50";
-
 /* -------------------------------------------------------------- proposal --- */
 
 function ProposalCard({
@@ -116,24 +115,21 @@ function ProposalCard({
   const added = lines.filter((l) => l.kind === "added").length;
   const removed = lines.filter((l) => l.kind === "removed").length;
 
+  // v1.329.0 (calm chat wave 9, K4): a proposal is a plain row under the
+  // list's hairline, not an accent box. Accept is the row's one primary.
   return (
-    <li
-      data-testid={`coach-proposal-${p.id}`}
-      className="space-y-2 rounded-xl border border-accent/20 bg-accent/[0.04] p-3"
-    >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
-        <span className="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-px text-[10px] font-medium text-accent-soft">
-          {p.kind || "change"}
-        </span>
+    <li data-testid={`coach-proposal-${p.id}`} className="space-y-2 px-1 py-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-500">
+        <span className="text-[12px] font-medium text-accent-soft">{p.kind || "change"}</span>
         <span className="min-w-0 truncate font-mono" title={p.target}>
           {p.target}
         </span>
         <span className="ml-auto shrink-0 tabular-nums">
-          <span className="text-emerald-300">+{added}</span>{" "}
-          <span className="text-rose-300/90">−{removed}</span>
+          <span className="text-tone-success">+{added}</span>{" "}
+          <span className="text-tone-danger">−{removed}</span>
         </span>
       </div>
-      <p className="text-[12px] leading-relaxed text-zinc-200">{p.rationale}</p>
+      <p className="text-[13px] leading-relaxed text-zinc-200">{p.rationale}</p>
       <DiffBlock lines={lines} testId={`coach-diff-${p.id}`} />
       <div className="flex items-center justify-end gap-2">
         <button
@@ -141,7 +137,7 @@ function ProposalCard({
           data-testid={`coach-decline-${p.id}`}
           onClick={() => void decide("decline")}
           disabled={busy !== null}
-          className={`${BTN} border-white/10 text-zinc-400 hover:border-rose-500/30 hover:text-rose-300`}
+          className={`${GHOST_BASE} hover:text-tone-danger`}
         >
           {busy === "decline" ? "Declining…" : "Decline"}
         </button>
@@ -150,12 +146,12 @@ function ProposalCard({
           data-testid={`coach-accept-${p.id}`}
           onClick={() => void decide("accept")}
           disabled={busy !== null}
-          className={`${BTN} border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/[0.1]`}
+          className={primaryBtn(busy === null)}
         >
           {busy === "accept" ? "Accepting…" : "Accept"}
         </button>
       </div>
-      {error && <p className="text-[11px] text-rose-300">{error}</p>}
+      {error && <p className="text-[12px] text-tone-danger">{error}</p>}
     </li>
   );
 }
@@ -210,23 +206,30 @@ export function AgentCoach({ name }: { name: string }) {
   }
 
   return (
-    <section data-testid={`coach-${name}`} className="space-y-3">
-      <div className="flex items-center gap-2">
-        <GraduationCap size={13} className="text-accent-soft/80" aria-hidden />
-        <h3 className="text-[12px] font-semibold tracking-wide text-zinc-200">Coach</h3>
+    // v1.329.0: a plain section under a hairline with a quiet label; "Ask the
+    // coach" is a ghost (a proposal's Accept is the one primary).
+    <section data-testid={`coach-${name}`} className="space-y-3 border-t hairline pt-4">
+      <div className="flex items-center gap-2 px-1">
+        <h3 className={SECTION_LABEL}>Coach</h3>
         <button
           type="button"
           data-testid={`coach-ask-${name}`}
           onClick={() => void ask()}
           disabled={askBusy}
-          className="btn-ghost ml-auto py-1 text-[11.5px]"
+          className={`${GHOST_BTN} ml-auto`}
         >
-          {askBusy ? <LoaderInline label="Thinking…" /> : "Ask the coach"}
+          {askBusy ? (
+            <LoaderInline label="Thinking…" />
+          ) : (
+            <>
+              <GraduationCap size={13} aria-hidden /> Ask the coach
+            </>
+          )}
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        <p data-testid={`coach-summary-${name}`} className="text-[11.5px] text-zinc-400">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
+        <p data-testid={`coach-summary-${name}`} className="text-[12px] text-zinc-400">
           {coachSummary(runs)}
         </p>
         {clusters.map((c) => (
@@ -234,7 +237,7 @@ export function AgentCoach({ name }: { name: string }) {
             key={c.category}
             data-testid={`coach-cluster-${c.category}`}
             title={clusterTitle(c.category, data.report?.categories)}
-            className="rounded-md border border-amber-400/25 bg-amber-400/10 px-1.5 py-px text-[10px] font-medium text-amber-200"
+            className="rounded-md bg-tone-warn/10 px-1.5 py-px text-[11px] font-medium text-tone-warn"
           >
             {c.category} ×{c.count}
           </span>
@@ -242,24 +245,24 @@ export function AgentCoach({ name }: { name: string }) {
       </div>
 
       {askReason && (
-        <p data-testid={`coach-reason-${name}`} className="text-[11.5px] leading-relaxed text-zinc-500">
+        <p data-testid={`coach-reason-${name}`} className="px-1 text-[12px] leading-relaxed text-zinc-500">
           {askReason}
         </p>
       )}
       {askError && <ErrorNote>{askError}</ErrorNote>}
 
       {pending.length > 0 ? (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-white/[0.06] border-t hairline">
           {pending.map((p) => (
             <ProposalCard key={p.id} proposal={p} onChanged={reload} />
           ))}
         </ul>
       ) : (
         !askReason && (
-          <p className="text-[11.5px] leading-relaxed text-zinc-500">
+          <p className="px-1 text-[12px] leading-relaxed text-zinc-500">
             {data.last_reason
               ? data.last_reason
-              : `Nothing pending — ask the coach after ${name} has run a few times.`}
+              : `Nothing pending. Ask the coach after ${name} has run a few times.`}
           </p>
         )
       )}

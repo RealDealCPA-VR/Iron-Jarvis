@@ -31,6 +31,7 @@ import { API_BASE, ApiError, del, ijToken, post } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import AgentFace, { type FaceOverride } from "./AgentFace";
 import { PortraitCropper } from "./PortraitCropper";
+import { GHOST_BASE, GHOST_BTN } from "./teamLook";
 
 /** Upload cap on the PICKED file — mirrors the daemon's 2MB decoded limit so
  *  an oversized pick fails here with a plain line instead of a 413. */
@@ -76,7 +77,7 @@ export function AgentPortrait({
 
   function pick(file: File) {
     if (file.size > AVATAR_MAX_BYTES) {
-      setError("portrait too large — 2 MB max");
+      setError("That portrait is too large. The limit is 2 MB.");
       return;
     }
     setError(null);
@@ -128,8 +129,8 @@ export function AgentPortrait({
     }
   }
 
-  const btn =
-    "inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50";
+  // v1.329.0 (calm chat wave 9, K4): ghosts, no border; they fill on hover.
+  const btn = GHOST_BTN;
 
   return (
     <>
@@ -144,11 +145,11 @@ export function AgentPortrait({
           avatarUrl={avatarUrl}
           face={face}
         />
-        <span className="text-[11px] text-zinc-500">Portrait</span>
-        <span className="ml-auto flex items-center gap-1.5">
+        <span className="text-[12px] text-zinc-400">Portrait</span>
+        <span className="ml-auto flex items-center gap-1">
           <label
-            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
-            title={`Upload a portrait for "${name}" (PNG/JPEG/WebP, 2 MB max) — you choose the square`}
+            className={`${GHOST_BTN} cursor-pointer focus-within:ring-1 focus-within:ring-accent/50`}
+            title={`Upload a portrait for "${name}" (PNG, JPEG or WebP, 2 MB at most). You choose the square.`}
           >
             <Upload size={12} /> Upload
             <input
@@ -181,7 +182,7 @@ export function AgentPortrait({
               onClick={remove}
               disabled={busy}
               title={`Remove the stored portrait of "${name}" (back to the drawn face)`}
-              className={`${btn} hover:border-rose-400/40 hover:text-rose-300`}
+              className={`${GHOST_BASE} hover:text-tone-danger`}
             >
               <Trash2 size={12} /> Remove
             </button>

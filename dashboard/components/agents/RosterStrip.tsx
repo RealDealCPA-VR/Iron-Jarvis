@@ -208,11 +208,12 @@ export function allowanceShown(a: AgentAllowance | null | undefined): a is Agent
 /** Bar fill per status — zinc while fine, amber as a warning, rose when the
  *  month is spent. Keyed by the DAEMON's status word, never re-derived from
  *  pct here, so the two surfaces cannot disagree about a threshold. */
+// v1.329.0 (calm chat wave 9, K4): tone tokens, so a light theme re-inks them.
 const ALLOWANCE_FILL: Record<AgentAllowance["status"], string> = {
   unlimited: "bg-zinc-500",
   ok: "bg-zinc-500",
-  warning: "bg-amber-400",
-  exhausted: "bg-rose-500",
+  warning: "bg-tone-warn",
+  exhausted: "bg-tone-danger",
 };
 
 /**
@@ -259,11 +260,11 @@ export function AllowanceMeter({
       </div>
       {!compact && (
         <p
-          className={`text-[10px] tabular-nums ${
+          className={`text-[11px] tabular-nums ${
             allowance.status === "exhausted"
-              ? "text-rose-300"
+              ? "text-tone-danger"
               : allowance.status === "warning"
-                ? "text-amber-300/90"
+                ? "text-tone-warn"
                 : "text-zinc-500"
           }`}
         >
@@ -289,10 +290,11 @@ export function PausedPill({
   return (
     <span
       data-testid={testId}
-      title={reason ? `${bare} is paused — ${reason}` : `${bare} is paused`}
-      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/10 px-1 py-px text-[9.5px] font-medium text-amber-200"
+      title={reason ? `${bare} is paused: ${reason}` : `${bare} is paused`}
+      // v1.329.0: a quiet word in the warn tone, not a bordered pill.
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-tone-warn"
     >
-      <PauseCircle size={9} aria-hidden /> paused
+      <PauseCircle size={11} aria-hidden /> paused
     </span>
   );
 }
@@ -339,15 +341,13 @@ export function LivePill({
         busy
           ? `${bare} is running a session right now`
           : idle
-            ? `${bare} is free — a queued job runs as soon as it is given one`
+            ? `${bare} is free. A queued job runs as soon as it is given one`
             : `${bare} has a session waiting for a free slot`
       }
-      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1 py-px text-[9.5px] font-medium ${
-        busy
-          ? "border-amber-400/25 bg-amber-400/10 text-amber-200"
-          : idle
-            ? "border-zinc-500/25 bg-zinc-500/10 text-zinc-400"
-            : "border-sky-400/20 bg-sky-400/[0.07] text-sky-200/90"
+      // v1.329.0 (calm chat wave 9, K4): the dot and the word in a tone, no
+      // bordered pill; whole-pixel text.
+      className={`inline-flex shrink-0 items-center gap-1 text-[11px] font-medium ${
+        busy ? "text-tone-warn" : idle ? "text-zinc-400" : "text-tone-info"
       }`}
     >
       <span
@@ -355,10 +355,10 @@ export function LivePill({
         data-testid={`${testId}-dot`}
         className={`h-1.5 w-1.5 rounded-full ${
           busy
-            ? "bg-amber-300 motion-safe:animate-pulse"
+            ? "bg-tone-warn motion-safe:animate-pulse"
             : idle
               ? "bg-zinc-500"
-              : "bg-sky-300/80"
+              : "bg-tone-info"
         }`}
       />
       {state}

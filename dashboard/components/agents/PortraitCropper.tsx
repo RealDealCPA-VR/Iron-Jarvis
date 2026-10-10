@@ -148,7 +148,7 @@ export function PortraitCropper({
       setOffset({ x: (VIEW_PX - w * s) / 2, y: (VIEW_PX - h * s) / 2 });
     };
     img.onerror = () =>
-      setError("that file could not be decoded as an image — try a PNG, JPEG or WebP");
+      setError("That file could not be decoded as an image. Try a PNG, JPEG or WebP.");
     img.src = url;
     return () => {
       URL.revokeObjectURL(url);
@@ -219,7 +219,7 @@ export function PortraitCropper({
     out.height = OUTPUT_PX;
     const ctx = out.getContext("2d");
     if (!ctx) {
-      setError("this browser could not render the crop — try a square image instead");
+      setError("This browser could not render the crop. Try a square image instead.");
       return;
     }
     const { sx, sy, sw, sh } = cropRect(natural.w, natural.h, scale, offset);
@@ -247,9 +247,9 @@ export function PortraitCropper({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <p className="mb-3 text-[11.5px] leading-relaxed text-zinc-500">
-          Drag the picture and zoom until what you want is inside the circle —
-          that is exactly what gets stored, at {OUTPUT_PX}×{OUTPUT_PX}.
+        <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">
+          Drag the picture and zoom until what you want is inside the circle.
+          That is exactly what gets stored, at {OUTPUT_PX}×{OUTPUT_PX}.
         </p>
         <div className="flex justify-center">
           {/* The square IS the crop. The circular mask over it shows the shape
@@ -313,7 +313,7 @@ export function PortraitCropper({
           </span>
         </div>
         {natural && (
-          <p className="mt-2 text-[10.5px] tabular-nums text-zinc-600">
+          <p className="mt-2 text-[11px] tabular-nums text-zinc-500">
             {natural.w}×{natural.h}
             {natural.w === natural.h ? " · already square" : " · will be cropped square"}
           </p>

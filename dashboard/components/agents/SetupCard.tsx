@@ -17,7 +17,6 @@ import {
   ChevronDown,
   ChevronRight,
   Cpu,
-  Globe,
   Pause,
   Pencil,
   Play,
@@ -36,7 +35,6 @@ import {
   ConfirmButton,
   ErrorNote,
   LoaderInline,
-  SectionLabel,
   SuccessNote,
 } from "@/components/ui";
 import AgentFace, {
@@ -46,6 +44,7 @@ import AgentFace, {
   type FaceOverride,
 } from "./AgentFace";
 import { AgentPortrait } from "./AgentPortrait";
+import { GHOST_BTN, QUIET_FIELD, SECTION_LABEL, SUB_LABEL, primaryBtn } from "./teamLook";
 import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
 
@@ -170,9 +169,8 @@ function FaceRow({
 }) {
   return (
     <div data-testid={testId}>
-      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-zinc-500">
-        {label}
-      </div>
+      {/* v1.329.0 (calm chat wave 9, K4): a quiet sentence-case label. */}
+      <div className={`mb-1 ${SUB_LABEL}`}>{label}</div>
       <div
         role="radiogroup"
         aria-label={`${label} for ${agentName}`}
@@ -197,10 +195,13 @@ function FaceRow({
               aria-label={
                 value === null ? `${label} from the name` : `${label} ${value}`
               }
-              className={`grid h-8 min-w-8 place-items-center rounded-lg border px-1.5 transition-colors ${
+              // The open choice keeps a thin accent ring (it is a selection,
+              // and a ring is how a swatch says so); the rest are ghosts
+              // that fill on hover.
+              className={`grid h-8 min-w-8 place-items-center rounded-lg px-1.5 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
                 active
-                  ? "border-accent/60 bg-accent/[0.10]"
-                  : "border-white/[0.07] bg-white/[0.02] hover:border-accent/30"
+                  ? "bg-accent/[0.10] ring-1 ring-inset ring-accent/60"
+                  : "bg-white/[0.03] hover:bg-white/[0.07]"
               }`}
             >
               {render(value)}
@@ -329,10 +330,10 @@ export function FacePicker({
   }
 
   return (
-    <div
-      data-testid={`face-picker-${name}`}
-      className="space-y-2.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
-    >
+    // v1.329.0 (calm chat wave 9, K4): no box. The picker is part of its
+    // Appearance section; Apply face is the section's one primary (quiet
+    // until the face changes, v1.315.0) and Reset a ghost.
+    <div data-testid={`face-picker-${name}`} className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <AgentFace
           name={name}
@@ -340,37 +341,37 @@ export function FacePicker({
           size={34}
           face={draft}
           avatarUrl={avatarUrl}
-          title={`${name} — the face as chosen`}
+          title={`${name}, the face as chosen`}
         />
-        <span className="text-[11px] font-medium text-zinc-300">Face</span>
-        <span className="text-[10px] text-zinc-500">
+        <span className="text-[12px] font-medium text-zinc-300">Face</span>
+        <span className="text-[12px] text-zinc-500">
           {pinned ? "chosen" : "drawn from the name"}
         </span>
-        <span className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={apply}
-            disabled={busy}
-            className={`${changed ? "btn-accent" : "btn-ghost"} px-2.5 py-1 text-[11px]`}
-          >
-            {busy ? <LoaderInline label="Saving…" /> : "Apply face"}
-          </button>
+        <span className="ml-auto flex items-center gap-1">
           <button
             type="button"
             onClick={reset}
             disabled={busy}
             title={`Reset ${name}'s face to the one its name draws`}
-            className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+            className={GHOST_BTN}
           >
             Reset
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            disabled={busy}
+            className={`${changed ? "btn-accent" : "bg-white/[0.06] text-zinc-400 hover:bg-white/[0.09] hover:text-zinc-100"} inline-flex h-[30px] items-center rounded-full px-3 text-[12px] font-medium transition-colors`}
+          >
+            {busy ? <LoaderInline label="Saving…" /> : "Apply face"}
           </button>
         </span>
       </div>
 
       {avatarUrl && (
-        <p className="text-[10px] leading-relaxed text-amber-300/80">
+        <p className="text-[12px] leading-relaxed text-tone-warn">
           A stored portrait is shown instead of the drawn face wherever this
-          agent appears — remove it to see this one.
+          agent appears. Remove it to see this one.
         </p>
       )}
 
@@ -430,7 +431,10 @@ export function FacePicker({
           ) : (
             <span
               aria-hidden
-              className="block h-4 w-4 rounded-full"
+              // A faint ring in the theme's overlay ink, so a pale colour
+              // still reads on the light Daylight theme (the swatch lost its
+              // border in v1.329.0).
+              className="block h-4 w-4 rounded-full ring-1 ring-inset ring-white/15"
               style={{ backgroundColor: value }}
             />
           )
@@ -629,7 +633,7 @@ function EmployeeFields({
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
             Base type
           </span>
           <select
@@ -650,7 +654,7 @@ function EmployeeFields({
           </select>
         </label>
         <label className="block">
-          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
             Approvals
           </span>
           <select
@@ -669,7 +673,7 @@ function EmployeeFields({
       </div>
       <div className="grid grid-cols-3 gap-2">
         <label className="block">
-          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
             Tokens / month
           </span>
           <input
@@ -684,7 +688,7 @@ function EmployeeFields({
           />
         </label>
         <label className="block">
-          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
             $ / month
           </span>
           <input
@@ -700,7 +704,7 @@ function EmployeeFields({
           />
         </label>
         <label className="block">
-          <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+          <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
             Steps / run
           </span>
           <input
@@ -716,7 +720,7 @@ function EmployeeFields({
         </label>
       </div>
       <label className="block">
-        <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
           Reports to
         </span>
         <select
@@ -761,11 +765,11 @@ function reportsToChoices(
 const CHIP_KINDS = {
   deny: {
     label: "Never uses",
-    placeholder: "tool name, then Enter — e.g. shell",
+    placeholder: "Tool name, then Enter (for example shell)",
     add: (scope: string) => `Deny a tool for ${scope}`,
     remove: (t: string, scope: string) => `Stop denying ${t} for ${scope}`,
-    chip: "border-rose-500/25 bg-rose-500/10 text-rose-200",
-    x: "text-rose-300/80 hover:text-rose-100",
+    chip: "border-tone-danger/25 bg-tone-danger/10 text-tone-danger",
+    x: "text-tone-danger/80 hover:text-tone-danger",
   },
   skills: {
     label: "Skills it always carries",
@@ -806,7 +810,7 @@ function NameChips({
   }
   return (
     <div data-testid={testId} className="space-y-1">
-      <span className="block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+      <span className="block text-[12px] font-medium text-zinc-500">
         {words.label}
       </span>
       {value.length > 0 && (
@@ -1103,7 +1107,7 @@ function DynamicRow({
   }
 
   return (
-    <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+    <li className="px-1 py-2.5">
       <div className="flex items-center gap-2">
         <AgentFace
           name={agent.name}
@@ -1131,7 +1135,7 @@ function DynamicRow({
               onClick={resume}
               disabled={pauseBusy}
               title={`Resume "${agent.name}"`}
-              className="grid h-6 w-6 place-items-center rounded-md text-amber-300 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
+              className="grid h-6 w-6 place-items-center rounded-md text-tone-warn transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
             >
               <Play size={12} />
             </button>
@@ -1176,10 +1180,10 @@ function DynamicRow({
           {agent.paused && (
             <span
               data-testid={`agent-paused-${agent.name}`}
-              className="inline-flex items-center gap-1 rounded-md border border-amber-400/25 bg-amber-400/10 px-1.5 py-px text-[10px] font-medium text-amber-200"
+              className="inline-flex items-center gap-1 rounded-md bg-tone-warn/10 px-1.5 py-px text-[11px] font-medium text-tone-warn"
             >
               <Pause size={9} aria-hidden />
-              Paused{agent.paused.reason ? ` — ${agent.paused.reason}` : ""}
+              Paused{agent.paused.reason ? `: ${agent.paused.reason}` : ""}
             </span>
           )}
           {agent.reports_to && (
@@ -1211,7 +1215,7 @@ function DynamicRow({
               }
             }}
             data-testid={`agent-pause-reason-${agent.name}`}
-            placeholder="reason (optional) — e.g. budget review"
+            placeholder="Reason (optional), for example budget review"
             aria-label={`Why ${agent.name} is paused`}
             className="field min-w-0 flex-1 text-xs"
           />
@@ -1242,10 +1246,10 @@ function DynamicRow({
           created here shipped with an empty allowlist unnoticed. */}
       <div data-testid={`tools-summary-${agent.name}`} className="mt-1 pl-7">
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-          <Wrench size={10} className="shrink-0 text-amber-300/80" aria-hidden />
+          <Wrench size={11} className="shrink-0 text-tone-warn" aria-hidden />
           {origin === "explicit" && (
             <span className="text-[10px] text-zinc-400">
-              Tools · {storedTools.length} chosen — an explicit set
+              Tools · {storedTools.length} chosen, an explicit set
             </span>
           )}
           {origin === "inherited" && (
@@ -1260,7 +1264,7 @@ function DynamicRow({
               the lie this feature exists to stop telling. */}
           {origin === "unreported" && (
             <span className="text-[10px] text-zinc-500">
-              Tools · inherits {baseTypePhrase(agent)} — this daemon doesn’t
+              Tools · inherits {baseTypePhrase(agent)}. This daemon doesn’t
               report which ones
             </span>
           )}
@@ -1308,14 +1312,14 @@ function DynamicRow({
               remade to change it. */}
           <div
             data-testid={`employee-editor-${agent.name}`}
-            className="space-y-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+            className="space-y-2 border-t hairline pt-2.5"
           >
             <div className="flex items-center gap-2">
               <Cpu size={12} className="shrink-0 text-accent-soft" aria-hidden />
               <span className="text-[11px] font-medium text-zinc-300">Job card</span>
             </div>
             <label className="block">
-              <span className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+              <span className="mb-0.5 block text-[12px] font-medium text-zinc-500">
                 Model
               </span>
               <select
@@ -1375,17 +1379,17 @@ function DynamicRow({
               explicit allowlist. Only what is touched here is ever sent. */}
           <div
             data-testid={`tools-editor-${agent.name}`}
-            className="space-y-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+            className="space-y-2 border-t hairline pt-2.5"
           >
             <div className="flex flex-wrap items-center gap-2">
-              <Wrench size={12} className="shrink-0 text-amber-300" aria-hidden />
+              <Wrench size={12} className="shrink-0 text-tone-warn" aria-hidden />
               <span className="text-[11px] font-medium text-zinc-300">Tools</span>
               <span className="ml-auto">
                 {toolMode === "inherit" ? (
                   <button
                     type="button"
                     onClick={chooseExplicit}
-                    className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
                   >
                     Choose specific tools
                   </button>
@@ -1393,7 +1397,7 @@ function DynamicRow({
                   <button
                     type="button"
                     onClick={backToInherited}
-                    className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
                   >
                     Use inherited tools
                   </button>
@@ -1404,7 +1408,7 @@ function DynamicRow({
             {toolMode === "inherit" ? (
               <p className="text-[10px] leading-relaxed text-zinc-500">
                 {effectiveTools
-                  ? `Inherits ${baseTypePhrase(agent)} — ${effectiveTools.length} tools today, and it follows that roster as it changes.`
+                  ? `Inherits ${baseTypePhrase(agent)}: ${effectiveTools.length} tools today, and it follows that roster as it changes.`
                   : `Inherits ${baseTypePhrase(agent)}. This daemon doesn’t report the resolved list.`}
               </p>
             ) : (
@@ -1426,7 +1430,7 @@ function DynamicRow({
                         type="checkbox"
                         checked={chosen.includes(t)}
                         onChange={() => toggleTool(t)}
-                        className="accent-cyan-400"
+                        className="accent-accent"
                       />
                       <span className="min-w-0 truncate font-mono text-[11px] text-zinc-300">
                         {t}
@@ -1439,16 +1443,16 @@ function DynamicRow({
                     </p>
                   )}
                 </div>
-                <p className="text-[10px] leading-relaxed text-amber-300/80">
+                <p className="text-[12px] leading-relaxed text-tone-warn">
                   {chosen.length} chosen. An explicit set stops this agent
                   picking up later changes to {baseTypePhrase(agent)}
                   {chosen.length === 0
-                    ? " — and with nothing checked, saving clears it back to inherited."
+                    ? ". With nothing checked, saving clears it back to inherited."
                     : "."}
                 </p>
                 {catalogError && (
                   <p className="text-[10px] text-zinc-500">
-                    Couldn’t load the full tool list ({catalogError}) — showing
+                    Couldn’t load the full tool list ({catalogError}). Showing
                     what this agent already holds.
                   </p>
                 )}
@@ -1573,7 +1577,7 @@ export function YourAgentsSection({
         ...createEmployeeFields(draft, defaultBase, skills),
       });
       setOk(
-        `"${name.trim()}" is ready — it inherits its base type's tools; open it to narrow them.`,
+        `"${name.trim()}" is ready. It inherits its base type's tools; open it to narrow them.`,
       );
       setName("");
       setPrompt("");
@@ -1590,18 +1594,20 @@ export function YourAgentsSection({
   }
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Sparkles size={13} className="text-violet-300" />
-        <SectionLabel>Your agents{dynamic.length ? ` · ${dynamic.length}` : ""}</SectionLabel>
-      </div>
-      <p className="text-[11px] leading-relaxed text-zinc-500">
+    // v1.329.0 (calm chat wave 9, K4): a plain section with a quiet
+    // sentence-case label; the create form is not a box, and Create agent is
+    // its one primary (quiet until a name and a persona are typed).
+    <section data-testid="your-agents-section" className="space-y-3">
+      <h3 className={`px-1 ${SECTION_LABEL}`}>
+        Your agents{dynamic.length ? ` · ${dynamic.length}` : ""}
+      </h3>
+      <p className="px-1 text-[12px] leading-relaxed text-zinc-500">
         An agent of your own is a persona prompt plus an optional preferred
-        model — it carries both into every thread it joins.
+        model. It carries both into every thread it joins.
       </p>
 
       {dynamic.length > 0 && (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-white/[0.06] border-t hairline">
           {dynamic.map((a) => (
             <DynamicRow
               key={a.name}
@@ -1620,10 +1626,11 @@ export function YourAgentsSection({
 
       <form
         onSubmit={create}
-        className="space-y-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] p-3"
+        data-testid="create-agent-form"
+        className="space-y-2.5 border-t hairline pt-3"
       >
-        <SectionLabel>Create an agent</SectionLabel>
-        <div className="grid grid-cols-2 gap-2">
+        <h4 className={`px-1 ${SUB_LABEL}`}>Create an agent</h4>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {/* The deterministic face previews LIVE as the name is typed — the
               same seed every other surface uses, so what you see here is
               exactly the face this agent will wear everywhere (v1.171.0). */}
@@ -1634,23 +1641,23 @@ export function YourAgentsSection({
               size={24}
               title={
                 name.trim()
-                  ? `${name.trim()} — the face this name draws`
+                  ? `${name.trim()}, the face this name draws`
                   : "the face appears as you type a name"
               }
             />
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="name — e.g. skeptic"
+              placeholder="Name, for example skeptic"
               aria-label="Agent name"
-              className="field min-w-0 flex-1 text-xs"
+              className={`${QUIET_FIELD} min-w-0 flex-1`}
             />
           </div>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
             aria-label="Preferred model"
-            className="field text-xs"
+            className={`${QUIET_FIELD} cursor-pointer`}
           >
             <option value="">Default model</option>
             {models.map((m) => (
@@ -1664,27 +1671,28 @@ export function YourAgentsSection({
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={2}
-          placeholder="Persona — “You are a security-minded skeptic who challenges every assumption…”"
+          placeholder="Persona, for example “You are a security-minded skeptic who challenges every assumption…”"
           aria-label="Persona prompt"
-          className="field resize-y text-xs"
+          className={`${QUIET_FIELD} resize-y`}
         />
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="short description (optional)"
+          placeholder="Short description (optional)"
           aria-label="Description"
-          className="field text-xs"
+          className={QUIET_FIELD}
         />
 
         {/* EMPLOYEE DETAILS (v1.295.0), collapsed: the job card for a new
-            hire. Closed, the form is exactly the four-field form it was. */}
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02]">
+            hire. Closed, the form is exactly the four-field form it was.
+            v1.329.0: a ghost disclosure row, not a box. */}
+        <div>
           <button
             type="button"
             data-testid="employee-details-toggle"
             onClick={() => setDetailsOpen((v) => !v)}
             aria-expanded={detailsOpen}
-            className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-zinc-400 transition-colors hover:text-accent-soft"
+            className="flex w-full items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.04] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
           >
             {detailsOpen ? (
               <ChevronDown size={12} className="shrink-0" aria-hidden />
@@ -1692,12 +1700,12 @@ export function YourAgentsSection({
               <ChevronRight size={12} className="shrink-0" aria-hidden />
             )}
             Employee details
-            <span className="ml-auto text-[10px] font-normal text-zinc-600">
+            <span className="ml-auto truncate pl-2 text-[11px] font-normal text-zinc-500">
               base type · approvals · allowance · reports to
             </span>
           </button>
           {detailsOpen && (
-            <div data-testid="employee-details" className="border-t hairline px-2.5 pb-2.5 pt-2">
+            <div data-testid="employee-details" className="px-1 pb-1 pt-2">
               <EmployeeFields
                 draft={{ ...draft, baseType: draft.baseType || defaultBase }}
                 onChange={setDraft}
@@ -1716,13 +1724,15 @@ export function YourAgentsSection({
             </div>
           )}
         </div>
-        <button
-          type="submit"
-          disabled={busy || !name.trim() || !prompt.trim()}
-          className="btn-accent w-full py-1.5 text-xs"
-        >
-          {busy ? <LoaderInline label="Creating…" /> : <><Plus size={13} /> Create agent</>}
-        </button>
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={busy || !name.trim() || !prompt.trim()}
+            className={primaryBtn(!busy && Boolean(name.trim()) && Boolean(prompt.trim()))}
+          >
+            {busy ? <LoaderInline label="Creating…" /> : <><Plus size={14} /> Create agent</>}
+          </button>
+        </div>
         {ok && <SuccessNote>{ok}</SuccessNote>}
         {error && <ErrorNote>{error}</ErrorNote>}
       </form>
@@ -1795,11 +1805,11 @@ function RemoteEditForm({
     <form
       onSubmit={save}
       data-testid={`remote-edit-${agent.name}`}
-      className="mt-2 space-y-2.5 rounded-lg border border-accent/20 bg-accent/[0.03] p-2.5"
+      className="mt-2 space-y-2.5 border-t hairline pt-2.5"
     >
       <div className="grid grid-cols-2 gap-2">
-        <div className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-zinc-500">
-          <span className="truncate" title="A remote's name is how panels and threads refer to it — delete and re-add to rename.">
+        <div className="flex items-center gap-1.5 rounded-md bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-zinc-500">
+          <span className="truncate" title="A remote's name is how threads refer to it. Delete and add it again to rename it.">
             {agent.name}
           </span>
         </div>
@@ -1826,7 +1836,7 @@ function RemoteEditForm({
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="model — gpt-4o-mini / llama3"
+          placeholder="Model, for example gpt-4o-mini or llama3"
           aria-label="Model"
           autoComplete="off"
           className="field font-mono text-xs"
@@ -1839,8 +1849,8 @@ function RemoteEditForm({
         disabled={clearToken}
         placeholder={
           agent.has_credential
-            ? "secret — leave blank to keep the current one"
-            : "secret (optional)"
+            ? "Secret (leave it blank to keep the current one)"
+            : "Secret (optional)"
         }
         aria-label="Bearer secret"
         autoComplete="off"
@@ -1852,7 +1862,7 @@ function RemoteEditForm({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="accent-cyan-400"
+            className="accent-accent"
           />
           enabled
         </label>
@@ -1862,7 +1872,7 @@ function RemoteEditForm({
               type="checkbox"
               checked={clearToken}
               onChange={(e) => setClearToken(e.target.checked)}
-              className="accent-rose-400"
+              className="accent-tone-danger"
             />
             remove the stored secret
           </label>
@@ -1871,7 +1881,7 @@ function RemoteEditForm({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition-colors hover:text-zinc-200"
+            className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
           >
             Cancel
           </button>
@@ -1990,7 +2000,7 @@ function RemoteRow({
   }
 
   return (
-    <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+    <li className="px-1 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <AgentFace name={agent.name} mood="idle" size={20} face={face} />
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
@@ -2010,7 +2020,7 @@ function RemoteRow({
         {agent.inbound_enabled && (
           <span
             data-testid="inbound-on"
-            className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-emerald-300"
+            className="rounded-md bg-tone-success/10 px-1.5 py-0.5 text-[11px] font-medium text-tone-success"
             title={agent.inbound_url ? `Posts to ${agent.inbound_url}` : undefined}
           >
             messages back
@@ -2025,9 +2035,9 @@ function RemoteRow({
             title={
               agent.inbound_enabled
                 ? `Stop "${agent.name}" from messaging back (forgets its token)`
-                : `Let "${agent.name}" message back — progress, questions, results and files land in your chats`
+                : `Let "${agent.name}" message back. Progress, questions, results and files land in your chats`
             }
-            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
           >
             {inboundBusy ? (
               <LoaderInline label="…" />
@@ -2043,8 +2053,8 @@ function RemoteRow({
               onClick={enableInbound}
               disabled={inboundBusy}
               data-testid="inbound-rotate"
-              title="Mint a new inbound token — the old one stops working at once"
-              className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+              title="Mint a new inbound token. The old one stops working at once"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
             >
               Rotate token
             </button>
@@ -2054,7 +2064,7 @@ function RemoteRow({
             onClick={runTest}
             disabled={testing}
             title={`Check that "${agent.name}" is reachable`}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
           >
             {testing ? <LoaderInline label="…" /> : <><CheckCircle2 size={12} /> Test</>}
           </button>
@@ -2063,7 +2073,7 @@ function RemoteRow({
             onClick={() => setEditing((v) => !v)}
             aria-expanded={editing}
             title={`Fix "${agent.name}" without re-entering it`}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100"
           >
             <Pencil size={12} /> Edit
           </button>
@@ -2077,24 +2087,24 @@ function RemoteRow({
       {minted && (
         <div
           data-testid="inbound-minted"
-          className="mt-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-[11.5px] text-emerald-100"
+          className="mt-2 rounded-lg bg-tone-success/[0.06] px-3 py-2 text-[12px] text-zinc-200"
         >
           <div className="font-medium">
-            {agent.name} can message back now. Copy the token — it is shown once.
+            {agent.name} can message back now. Copy the token. It is shown once.
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <code className="min-w-0 truncate rounded-md bg-ink-900/80 px-2 py-1 font-mono text-[11px] text-emerald-50">
+            <code className="min-w-0 truncate rounded-md bg-ink-900/80 px-2 py-1 font-mono text-[12px] text-zinc-100">
               {minted.token}
             </code>
             <button
               type="button"
               onClick={() => void copyToken()}
-              className="rounded-lg border border-emerald-400/30 px-2 py-1 text-[11px] font-medium text-emerald-100 transition-colors hover:bg-emerald-500/10"
+              className="rounded-md px-2 py-1 text-[12px] font-medium text-tone-success transition-colors hover:bg-tone-success/10"
             >
               {copied ? "Copied" : "Copy token"}
             </button>
           </div>
-          <p className="mt-1.5 leading-relaxed text-emerald-200/80">
+          <p className="mt-1.5 leading-relaxed text-zinc-400">
             Have {agent.name} POST JSON to <code className="font-mono">{minted.url}</code> with{" "}
             <code className="font-mono">Authorization: Bearer &lt;token&gt;</code> and a body of{" "}
             <code className="font-mono">
@@ -2102,14 +2112,14 @@ function RemoteRow({
             </code>
             . Its outward calls now carry <code className="font-mono">conversation_id</code>,{" "}
             <code className="font-mono">history</code> and <code className="font-mono">reply_to</code>;
-            answering <code className="font-mono">202</code> means &ldquo;working — I&apos;ll message
+            answering <code className="font-mono">202</code> means &ldquo;working, I&apos;ll message
             back&rdquo;. Message-back is its own switch: disabling the agent above silences it in
             both directions.
           </p>
           {minted.note && (
             <p
               data-testid="inbound-reach-note"
-              className="mt-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.08] px-2.5 py-1.5 leading-relaxed text-amber-100"
+              className="mt-1.5 rounded-md bg-tone-warn/[0.08] px-2.5 py-1.5 leading-relaxed text-tone-warn"
             >
               {minted.note}
             </p>
@@ -2149,7 +2159,7 @@ function RemoteRow({
         </code>
       </div>
       {test && (
-        <p className={`mt-1.5 pl-7 text-[11px] ${test.ok ? "text-emerald-300" : "text-rose-300"}`}>
+        <p className={`mt-1.5 pl-7 text-[11px] ${test.ok ? "text-tone-success" : "text-tone-danger"}`}>
           {test.detail}
         </p>
       )}
@@ -2195,7 +2205,7 @@ export function RemoteAgentsSection({
         token: secret.trim(), // stored encrypted in the vault, never returned
         enabled: true,
       });
-      setOk(`"${name.trim()}" connected — it can join threads now.`);
+      setOk(`"${name.trim()}" is connected. Jarvis can hand it work now.`);
       setName("");
       setBaseUrl("");
       setModel("");
@@ -2210,18 +2220,19 @@ export function RemoteAgentsSection({
   }
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Globe size={13} className="text-emerald-300" />
-        <SectionLabel>Remote agents{remotes.length ? ` · ${remotes.length}` : ""}</SectionLabel>
-      </div>
-      <p className="text-[11px] leading-relaxed text-zinc-500">
-        Reach an agent you run elsewhere — a Hermes on another machine, an
-        OpenAI-compatible endpoint. Connect it once and it can sit on any panel.
+    // v1.329.0 (calm chat wave 9, K4): the same calm shape as Your agents.
+    <section data-testid="remote-agents-section" className="space-y-3">
+      <h3 className={`px-1 ${SECTION_LABEL}`}>
+        Remote agents{remotes.length ? ` · ${remotes.length}` : ""}
+      </h3>
+      <p className="px-1 text-[12px] leading-relaxed text-zinc-500">
+        Reach an agent you run elsewhere, such as a Hermes on another machine
+        or an OpenAI-compatible endpoint. Connect it once and Jarvis can hand it
+        work.
       </p>
 
       {remotes.length > 0 && (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-white/[0.06] border-t hairline">
           {remotes.map((r) => (
             <RemoteRow
               key={r.name}
@@ -2237,22 +2248,23 @@ export function RemoteAgentsSection({
 
       <form
         onSubmit={connect}
-        className="space-y-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] p-3"
+        data-testid="connect-remote-form"
+        className="space-y-2.5 border-t hairline pt-3"
       >
-        <SectionLabel>Connect a remote agent</SectionLabel>
-        <div className="grid grid-cols-2 gap-2">
+        <h4 className={`px-1 ${SUB_LABEL}`}>Connect a remote agent</h4>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="name — e.g. my-hermes"
+            placeholder="Name, for example my-hermes"
             aria-label="Remote agent name"
-            className="field text-xs"
+            className={QUIET_FIELD}
           />
           <select
             value={kind}
             onChange={(e) => setKind(e.target.value as RemoteKind)}
             aria-label="Remote kind"
-            className="field text-xs"
+            className={`${QUIET_FIELD} cursor-pointer`}
           >
             <option value="http-task">http-task (task API)</option>
             <option value="openai-chat">openai-chat (chat/completions)</option>
@@ -2262,43 +2274,45 @@ export function RemoteAgentsSection({
         <input
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="base URL — http://192.168.1.20:8080"
+          placeholder="Base URL, for example http://192.168.1.20:8080"
           aria-label="Base URL"
           autoComplete="off"
-          className="field font-mono text-xs"
+          className={`${QUIET_FIELD} font-mono`}
         />
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <input
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
-            placeholder="secret (optional)"
+            placeholder="Secret (optional)"
             aria-label="Bearer secret"
             autoComplete="off"
-            className="field font-mono text-xs"
+            className={`${QUIET_FIELD} font-mono`}
           />
           {OPENAI_KINDS.includes(kind) ? (
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="model — gpt-4o-mini / llama3"
+              placeholder="Model, for example gpt-4o-mini or llama3"
               aria-label="Model"
               autoComplete="off"
-              className="field font-mono text-xs"
+              className={`${QUIET_FIELD} font-mono`}
             />
           ) : (
-            <span className="self-center text-[10px] text-zinc-600">
-              secret is stored encrypted, never shown again
+            <span className="self-center px-1 text-[11px] text-zinc-500">
+              The secret is stored encrypted and never shown again.
             </span>
           )}
         </div>
-        <button
-          type="submit"
-          disabled={busy || !name.trim() || !baseUrl.trim()}
-          className="btn-accent w-full py-1.5 text-xs"
-        >
-          {busy ? <LoaderInline label="Connecting…" /> : <><Plus size={13} /> Connect remote</>}
-        </button>
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={busy || !name.trim() || !baseUrl.trim()}
+            className={primaryBtn(!busy && Boolean(name.trim()) && Boolean(baseUrl.trim()))}
+          >
+            {busy ? <LoaderInline label="Connecting…" /> : <><Plus size={14} /> Connect remote</>}
+          </button>
+        </div>
         {ok && <SuccessNote>{ok}</SuccessNote>}
         {error && <ErrorNote>{error}</ErrorNote>}
       </form>
@@ -2335,7 +2349,7 @@ export function BuiltinFaces({
   return (
     <div className="mb-5 space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+        <span className="mr-1 text-[12px] font-medium text-zinc-400">
           Built-in · always available
         </span>
         {builtin.map((b) =>
@@ -2468,8 +2482,8 @@ export function SetupCard({
             Set up agents
           </span>
           <span className="block truncate text-[11px] text-zinc-500">
-            Create agents of your own and connect remote ones — all of them can
-            sit on a thread panel.
+            Create agents of your own and connect remote ones. Jarvis can hand
+            any of them work.
           </span>
         </span>
         <span className="hidden shrink-0 text-[11px] text-zinc-500 sm:block">

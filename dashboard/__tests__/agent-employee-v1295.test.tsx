@@ -453,7 +453,8 @@ describe("a day off", () => {
     renderCard([{ ...PLAIN, paused: { reason: "on leave", at: "2026-10-01T09:00:00Z" } }], {
       onChanged,
     });
-    expect(screen.getByTestId("agent-paused-skeptic").textContent).toBe("Paused — on leave");
+    // v1.329.0 (calm chat K4): the reason follows a colon, not a dash aside.
+    expect(screen.getByTestId("agent-paused-skeptic").textContent).toBe("Paused: on leave");
     expect(screen.queryByTestId("agent-pause-skeptic")).toBeNull();
     fireEvent.click(screen.getByTestId("agent-resume-skeptic"));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
@@ -484,11 +485,13 @@ describe("the allowance meter and the captions on the row", () => {
     ]);
     const warn = screen.getByTestId("agent-allowance-warn");
     expect(warn.getAttribute("data-status")).toBe("warning");
-    expect(warn.querySelector(".bg-amber-400")).toBeTruthy();
+    // v1.329.0 (calm chat K4): the fills are the warn / danger TONE tokens
+    // (a light theme re-inks them), no longer literal amber-400 / rose-500.
+    expect(warn.querySelector(".bg-tone-warn")).toBeTruthy();
     expect(warn.textContent).toBe("Spent 12.4k of 50k tokens this month · $1.20 of $10 · 82%");
     const gone = screen.getByTestId("agent-allowance-gone");
     expect(gone.getAttribute("data-status")).toBe("exhausted");
-    expect(gone.querySelector(".bg-rose-500")).toBeTruthy();
+    expect(gone.querySelector(".bg-tone-danger")).toBeTruthy();
     expect(screen.getByTestId("agent-allowance-usd").textContent).toBe(
       "Spent $1.20 of $10 this month · 12%",
     );

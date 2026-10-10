@@ -67,7 +67,16 @@ export function TeamScreen({
       {/* v1.329.0: the page's two text tabs over the panel (the bordered
           left rail is gone; its app-wide rows were the sidebar's). */}
       <MissionRail active="agents" onAction={onRail} />
-      <section className="card-surface flex h-[calc(100vh-9rem-var(--ij-strip-h,0px))] min-h-[32rem] flex-col p-0">
+      {/* v1.329.0 (calm chat wave 9, K4): no outer card. The panel sits on
+          the page like the New task view beside it; a hairline under the
+          tabs and between the list and the agent sets the parts apart. From
+          md the panel keeps its window height (the list and the agent scroll
+          on their own); on a phone it is one column that scrolls with the
+          page. */}
+      <section
+        data-testid="team-panel"
+        className="flex flex-col md:h-[calc(100vh-9rem-var(--ij-strip-h,0px))] md:min-h-[32rem]"
+      >
         <AgentsPanel
           roster={roster}
           dynamic={(agentsData?.dynamic ?? []) as DynamicAgentFull[]}

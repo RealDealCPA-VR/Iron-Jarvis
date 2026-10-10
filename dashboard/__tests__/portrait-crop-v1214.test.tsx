@@ -324,7 +324,8 @@ describe("AgentPortrait — the same row for every kind of agent", () => {
     render(<AgentPortrait name="analyst" onChanged={vi.fn()} />);
     pick("analyst", pngFile("huge.png", 2 * 1024 * 1024 + 1));
     await waitFor(() =>
-      expect(screen.getByText("portrait too large — 2 MB max")).toBeTruthy(),
+      // v1.329.0 (calm chat K4): two plain sentences, not a dash aside.
+      expect(screen.getByText("That portrait is too large. The limit is 2 MB.")).toBeTruthy(),
     );
     // No cropper, no POST — a 40MB photo must not be read into a canvas first.
     expect(screen.queryByTestId("portrait-cropper")).toBeNull();

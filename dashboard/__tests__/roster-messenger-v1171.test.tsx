@@ -367,7 +367,8 @@ describe("SetupCard — the portrait row", () => {
     });
     fireEvent.change(input, { target: { files: [big] } });
     await waitFor(() =>
-      expect(screen.getByText("portrait too large — 2 MB max")).toBeTruthy(),
+      // v1.329.0 (calm chat K4): the same refusal, in two plain sentences.
+      expect(screen.getByText("That portrait is too large. The limit is 2 MB.")).toBeTruthy(),
     );
     expect(hooks.posts).toHaveLength(0);
   });

@@ -287,9 +287,11 @@ describe("AgentFiles — the folder", () => {
     render(<AgentFiles name="analyst" />);
     fireEvent.click(screen.getByTestId("files-edit-analyst"));
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "# Analyst\nBe brief." } });
-    fireEvent.change(screen.getByPlaceholderText("why (optional)"), { target: { value: "shorter" } });
+    // v1.329.0 (calm chat K4): sentence-case placeholder, and the note is two
+    // plain sentences (it was "Saved — the old text…").
+    fireEvent.change(screen.getByPlaceholderText("Why (optional)"), { target: { value: "shorter" } });
     fireEvent.click(screen.getByTestId("files-save-analyst"));
-    await waitFor(() => expect(screen.getByText(/Saved — the old text is kept in History/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Saved. The old text is kept in History.")).toBeInTheDocument());
     expect(hooks.puts).toEqual([
       { path: `${FILES_PATH}/instructions`, body: { text: "# Analyst\nBe brief.", reason: "shorter" } },
     ]);
@@ -451,8 +453,10 @@ describe("AgentCoach — the panel", () => {
       ["added", "+ x"],
       ["same", "  c"],
     ]);
-    expect(diff.querySelector('[data-kind="added"]')?.className).toMatch(/emerald/);
-    expect(diff.querySelector('[data-kind="removed"]')?.className).toMatch(/rose/);
+    // v1.329.0 (calm chat K4): the same two colours, now the success / danger
+    // TONE tokens instead of literal emerald / rose.
+    expect(diff.querySelector('[data-kind="added"]')?.className).toMatch(/tone-success/);
+    expect(diff.querySelector('[data-kind="removed"]')?.className).toMatch(/tone-danger/);
     expect(screen.queryByTestId("coach-proposal-p2")).toBeNull();
     expect(screen.queryByTestId("coach-proposal-p3")).toBeNull();
   });

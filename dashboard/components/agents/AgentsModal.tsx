@@ -33,16 +33,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  Briefcase,
-  MessageCircle,
-  Plus,
-  Settings2,
-  Sparkles,
-  Users,
-  WifiOff,
-  X,
-} from "lucide-react";
+import { Briefcase, MessageCircle, Plus, Users, WifiOff, X } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
 import type { ModelOption } from "@/lib/types";
 import { Empty } from "@/components/ui";
@@ -61,8 +52,8 @@ import {
   type DynamicAgentFull,
   type FaceMap,
 } from "./SetupCard";
+import { GHOST_BTN, SECTION_LABEL } from "./teamLook";
 import {
-  KIND_PILL,
   LivePill,
   bareName,
   livenessOf,
@@ -137,7 +128,7 @@ type AgentsPanelProps = {
 export function AgentsModal(props: AgentsPanelProps & { onClose: () => void }) {
   return (
     <Modal
-      label="Agents — who exists, and how they look"
+      label="Agents: who exists, and how they look"
       onClose={props.onClose}
       className="h-[88vh] w-full max-w-5xl"
       testId="agents-modal"
@@ -209,34 +200,40 @@ export function AgentsPanel({
     onSelect(e.kind, bareName(e.name), e.delegable && e.healthy);
   }
 
-  const tabBtn = (id: AgentsTab, icon: React.ReactNode, label: string) => (
+  // v1.329.0 (calm chat wave 9, K4): the two tabs are quiet text tabs, the
+  // same shape as the page's own New task / Your team tabs above them: the
+  // open one in ink, the other muted, neither a filled or bordered chip.
+  const tabBtn = (id: AgentsTab, label: string) => (
     <button
       key={id}
       type="button"
       role="tab"
+      data-testid={`agents-tab-${id}`}
       aria-selected={tab === id}
       onClick={() => setTab(id)}
-      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium transition-colors ${
-        tab === id
-          ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
-          : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+      className={`rounded-md px-1.5 py-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+        tab === id ? "font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
       }`}
     >
-      {icon}
       {label}
     </button>
   );
 
   return (
     <div data-testid="agents-panel" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b hairline px-4 py-3">
-        <Users size={16} className="text-accent-soft/80" aria-hidden />
-        <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
+      <header
+        className={`flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b hairline ${
+          onClose ? "px-4 py-3" : "px-1 pb-2"
+        }`}
+      >
+        {/* On the page the tab above already says "Your team", so the
+            heading is for a screen reader only; the dialog shows its own. */}
+        <h2 className={onClose ? "text-[15px] font-semibold text-zinc-100" : "sr-only"}>
           {onClose ? "Agents" : "Your team"}
         </h2>
-        <div role="tablist" aria-label="Agents" className="ml-3 flex items-center gap-1">
-          {tabBtn("agents", <Sparkles size={12} aria-hidden />, "Roster")}
-          {tabBtn("manage", <Settings2 size={12} aria-hidden />, "New & manage")}
+        <div role="tablist" aria-label="Agents" className="flex items-center gap-2">
+          {tabBtn("agents", "Agents")}
+          {tabBtn("manage", "New & manage")}
         </div>
         {onClose && (
           <button
@@ -254,13 +251,16 @@ export function AgentsPanel({
       {tab === "agents" ? (
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[15rem_minmax(0,1fr)]">
           {/* WHO EXISTS. Its own scroll region: a thirty-agent roster must not
-              push the detail panel — or the dialog's own footer — anywhere. */}
+              push the detail panel (or the dialog's own footer) anywhere. On
+              a phone it is capped so the open agent shows under it. */}
           <div
             data-testid="agents-modal-list"
-            className="min-h-0 space-y-0.5 overflow-y-auto border-b hairline p-2 md:border-b-0 md:border-r"
+            className={`max-h-[15rem] min-h-0 space-y-0.5 overflow-y-auto border-b hairline py-2 pr-2 md:max-h-none md:border-b-0 md:border-r ${
+              onClose ? "pl-2" : ""
+            }`}
           >
             {entries.length === 0 ? (
-              <p className="p-3 text-[11.5px] leading-relaxed text-zinc-500">
+              <p className="p-3 text-[12px] leading-relaxed text-zinc-500">
                 This daemon serves no roster, so there is nobody to show here.
                 The New &amp; manage tab still works.
               </p>
@@ -280,13 +280,12 @@ export function AgentsPanel({
                     // Announced only for the PAGE's pick — the open row is a
                     // panel state, not a claim about who takes the work.
                     aria-current={isPicked ? "true" : undefined}
-                    title={`${bare} — ${SOURCE_LABEL[e.kind] ?? e.kind}${
+                    title={`${bare}, ${SOURCE_LABEL[e.kind] ?? e.kind}${
                       off ? " (offline)" : ""
                     }${!e.delegable ? " (chat-only)" : ""}`}
-                    className={`flex w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-left transition-colors ${
-                      isOpen
-                        ? "border-accent/25 bg-accent/[0.08]"
-                        : "border-transparent hover:bg-white/[0.04]"
+                    data-open={isOpen ? "true" : undefined}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+                      isOpen ? "bg-white/[0.06]" : "hover:bg-white/[0.04]"
                     }`}
                   >
                     <AgentFace
@@ -305,10 +304,10 @@ export function AgentsPanel({
                       // "Builder" the front door and the agent's heading show.
                       // v1.316.0: built-ins only; a custom or remote name reads
                       // exactly as the user typed it (the agentLabel rule).
-                      className={`min-w-0 flex-1 truncate text-[12.5px] ${
+                      className={`min-w-0 flex-1 truncate text-[13px] ${
                         e.kind === "builtin" ? "capitalize " : ""
                       }${
-                        isOpen ? "text-accent-soft" : "text-zinc-300"
+                        isOpen ? "font-medium text-zinc-100" : "text-zinc-300"
                       }`}
                     >
                       {bare}
@@ -321,14 +320,14 @@ export function AgentsPanel({
                       />
                     )}
                     {off && (
-                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-1 py-px text-[9.5px] font-medium text-rose-300">
-                        <WifiOff size={9} aria-hidden /> offline
+                      <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-tone-danger">
+                        <WifiOff size={10} aria-hidden /> offline
                       </span>
                     )}
                     {e.kind === "remote" && (
                       <span
                         data-testid={`roster-kind-${bare}`}
-                        className={`shrink-0 rounded-md border px-1 py-px text-[9.5px] font-medium ${KIND_PILL.remote}`}
+                        className="shrink-0 text-[11px] text-zinc-500"
                       >
                         {SOURCE_LABEL.remote}
                       </span>
@@ -338,32 +337,33 @@ export function AgentsPanel({
               })
             )}
             {/* CREATING ONE IS IN THE LIST, not only behind the other tab.
-                The icon that opens this dialog is the door to BOTH questions —
-                "who do I have" and "give me a new one" — and burying the
+                The icon that opens this dialog is the door to BOTH questions,
+                "who do I have" and "give me a new one", and burying the
                 second under a tab would make the common first-run gesture two
-                clicks from a place the user has to know to look. */}
+                clicks from a place the user has to know to look. A ghost row
+                since v1.329.0: no dashed box, it fills on hover. */}
             <button
               type="button"
               onClick={() => setTab("manage")}
               data-testid="agents-modal-new"
               title="Create an agent of your own, or connect one on another computer"
-              className="mt-1 flex w-full items-center gap-2 rounded-xl border border-dashed border-white/[0.10] px-2 py-2 text-left text-zinc-400 transition-colors hover:border-accent/40 hover:bg-white/[0.04] hover:text-accent-soft"
+              className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-zinc-400 transition-colors hover:bg-white/[0.04] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
             >
               <span
-                className="grid shrink-0 place-items-center rounded-full border border-white/[0.10]"
+                className="grid shrink-0 place-items-center rounded-full bg-white/[0.04]"
                 style={{ width: AGENT_LIST_PX, height: AGENT_LIST_PX }}
               >
-                <Plus size={13} aria-hidden />
+                <Plus size={14} aria-hidden />
               </span>
-              <span className="min-w-0 flex-1 truncate text-[12.5px]">
+              <span className="min-w-0 flex-1 truncate text-[13px]">
                 New agent
-                <span className="sr-only"> — local or remote</span>
+                <span className="sr-only"> (local or remote)</span>
               </span>
             </button>
           </div>
 
           {/* ONE AGENT, IN FULL. */}
-          <div className="min-h-0 overflow-y-auto p-4">
+          <div className="min-h-0 overflow-y-auto px-1 py-4 md:px-5">
             {open ? (
               <AgentDetail
                 // A FRESH PANEL PER AGENT. The face picker holds an unapplied
@@ -382,13 +382,13 @@ export function AgentsPanel({
               />
             ) : (
               <Empty icon={<Users size={22} />}>
-                No agents to configure yet — create one in New &amp; manage.
+                No agents to set up yet. Create one in New &amp; manage.
               </Empty>
             )}
           </div>
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <div className={`min-h-0 flex-1 overflow-y-auto py-5 ${onClose ? "px-5" : "px-1"}`}>
           <div className="grid gap-8 lg:grid-cols-2">
             <YourAgentsSection
               dynamic={dynamic}
@@ -466,7 +466,7 @@ export function AgentDetail({
           data-testid="agent-hero"
           data-status={status}
           role="img"
-          aria-label={`${bare} — ${SOURCE_LABEL[entry.kind] ?? entry.kind}, ${SEAT_STATUS_LABEL[status]}`}
+          aria-label={`${bare}, ${SOURCE_LABEL[entry.kind] ?? entry.kind}, ${SEAT_STATUS_LABEL[status]}`}
           className="relative grid shrink-0 place-items-center rounded-full p-2"
           style={{
             backgroundImage:
@@ -496,25 +496,23 @@ export function AgentDetail({
               {bare}
             </span>
             <span
-              // Same testid the rail's rows use — provenance is provenance
+              // Same testid the rail's rows use: provenance is provenance
               // wherever it is drawn, and one name for it keeps the assertions
               // (and anyone reading them) from having to know which surface
-              // they are looking at.
+              // they are looking at. v1.329.0: a quiet word, not a pill.
               data-testid={`roster-kind-${bare}`}
-              className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
-                KIND_PILL[entry.kind] ?? KIND_PILL.remote
-              }`}
+              className="shrink-0 text-[12px] text-zinc-500"
             >
               {SOURCE_LABEL[entry.kind] ?? entry.kind}
             </span>
             {live && <LivePill state={live} bare={bare} testId={`detail-activity-${bare}`} />}
             {off && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
-                <WifiOff size={10} aria-hidden /> offline
+              <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-tone-danger">
+                <WifiOff size={12} aria-hidden /> offline
               </span>
             )}
             {!entry.delegable && (
-              <span className="shrink-0 text-[10px] text-zinc-600">
+              <span className="shrink-0 text-[11px] text-zinc-500">
                 (chat-only for now)
               </span>
             )}
@@ -523,20 +521,20 @@ export function AgentDetail({
             </span>
           </div>
           {entry.description && (
-            <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
+            <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
               {entry.description}
             </p>
           )}
           {entry.last_message && (
             <p
               data-testid="roster-preview"
-              className="mt-1 flex items-baseline gap-1.5 text-[11.5px] leading-relaxed"
+              className="mt-1 flex items-baseline gap-1.5 text-[12px] leading-relaxed"
             >
               <span className="min-w-0 flex-1 text-zinc-400">{entry.last_message}</span>
               {entry.last_active && (
                 <span
                   data-testid="roster-when"
-                  className="shrink-0 text-[10.5px] tabular-nums text-zinc-600"
+                  className="shrink-0 text-[11px] tabular-nums text-zinc-500"
                 >
                   {timeAgo(entry.last_active)}
                 </span>
@@ -547,15 +545,15 @@ export function AgentDetail({
       </div>
 
       {(onTalk || onAssign) && actionable && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1">
           {onTalk && (
             <button
               type="button"
               onClick={() => onTalk(entry.kind, bare)}
               title={`Talk with ${bare} at the round-table`}
-              className="btn-ghost px-2.5 py-1.5 text-[11.5px]"
+              className={GHOST_BTN}
             >
-              <MessageCircle size={12} /> Talk
+              <MessageCircle size={13} /> Talk
             </button>
           )}
           {onAssign && (
@@ -563,16 +561,16 @@ export function AgentDetail({
               type="button"
               onClick={() => onAssign(entry.kind, bare)}
               title={`Give ${bare} a job`}
-              className="btn-ghost px-2.5 py-1.5 text-[11.5px]"
+              className={GHOST_BTN}
             >
-              <Briefcase size={12} /> Give work
+              <Briefcase size={13} /> Give work
             </button>
           )}
         </div>
       )}
 
       {entry.kind === "dynamic" && (
-        <p className="text-[11px] leading-relaxed text-zinc-500">
+        <p className="text-[12px] leading-relaxed text-zinc-500">
           Its persona prompt, preferred model and tools live under{" "}
           <span className="text-zinc-400">New &amp; manage</span>.
         </p>
@@ -599,11 +597,13 @@ export function AgentDetail({
           real job queue below the fold. Still fully expanded, same presses,
           only lower. Portrait first: it WINS over the drawn face wherever the
           agent appears, so the picker below says so rather than quietly
-          drawing something the app will not show. */}
-      <div className="space-y-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-        <h3 className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-500">
-          Appearance
-        </h3>
+          drawing something the app will not show. v1.329.0: a plain section
+          under a hairline with a quiet sentence-case label, not a box. */}
+      <section
+        data-testid={`agent-appearance-${bare}`}
+        className="space-y-3 border-t hairline pt-4"
+      >
+        <h3 className={SECTION_LABEL}>Appearance</h3>
         <AgentPortrait
           name={bare}
           avatar={entry.avatar}
@@ -620,12 +620,12 @@ export function AgentDetail({
             onChanged={onFaceChanged}
           />
         ) : (
-          <p className="text-[11px] leading-relaxed text-zinc-500">
+          <p className="text-[12px] leading-relaxed text-zinc-500">
             This daemon predates chosen faces, so every face is drawn from the
             agent&rsquo;s name. A portrait still works.
           </p>
         )}
-      </div>
+      </section>
     </div>
   );
 }

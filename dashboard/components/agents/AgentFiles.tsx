@@ -30,6 +30,7 @@ import { diffTexts, type DiffLine } from "@/lib/diff";
 import type { AgentFilesView, AgentFileRevisionText } from "@/lib/types";
 import { ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
+import { GHOST_BTN, QUIET_FIELD, ROW_BTN, SECTION_LABEL, SUB_LABEL, primaryBtn } from "./teamLook";
 
 /** How many lines the read-only preview shows before "Show all". */
 export const PREVIEW_LINES = 6;
@@ -48,11 +49,12 @@ export function bytesLabel(n: number): string {
   return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
 }
 
-const BTN =
-  "rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium transition-colors disabled:opacity-50";
-const BTN_QUIET = `${BTN} border-white/10 text-zinc-400 hover:border-accent/40 hover:text-accent-soft`;
+/** v1.329.0 (calm chat wave 9, K4): the folder's controls are ghosts (no
+ *  border, they fill on hover) and its text blocks sit on a faint fill with
+ *  no box edge. */
+const BTN_QUIET = `${ROW_BTN} text-zinc-400 hover:text-zinc-100`;
 const PRE_CLS =
-  "max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-white/[0.06] bg-ink-950 p-3 font-mono text-[11px] leading-relaxed text-zinc-300";
+  "max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] p-3 font-mono text-[12px] leading-relaxed text-zinc-300";
 
 /**
  * The two-colour line diff every "before → after" surface of the agents room
@@ -63,7 +65,7 @@ export function DiffBlock({ lines, testId }: { lines: DiffLine[]; testId?: strin
   return (
     <div
       data-testid={testId}
-      className="max-h-72 overflow-auto rounded-xl border border-white/[0.06] bg-ink-950 p-2 font-mono text-[11px] leading-relaxed"
+      className="max-h-72 overflow-auto rounded-lg bg-white/[0.03] p-2 font-mono text-[12px] leading-relaxed"
     >
       {lines.map((l, i) => (
         <div
@@ -71,9 +73,9 @@ export function DiffBlock({ lines, testId }: { lines: DiffLine[]; testId?: strin
           data-kind={l.kind}
           className={`whitespace-pre-wrap px-1 ${
             l.kind === "added"
-              ? "bg-emerald-500/[0.08] text-emerald-300"
+              ? "bg-tone-success/[0.08] text-tone-success"
               : l.kind === "removed"
-                ? "bg-rose-500/[0.08] text-rose-300/90"
+                ? "bg-tone-danger/[0.08] text-tone-danger"
                 : "text-zinc-500"
           }`}
         >
@@ -153,15 +155,15 @@ function RevisionRow({
   }
 
   return (
-    <li data-testid={`files-revision-${id}`} className="rounded-lg px-1.5 py-1 hover:bg-white/[0.03]">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]">
+    <li data-testid={`files-revision-${id}`} className="px-1 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
         <span className="shrink-0 tabular-nums text-zinc-500" title={at}>
           {timeAgo(at)}
         </span>
         <span className="min-w-0 flex-1 truncate text-zinc-300" title={reason}>
-          {reason || <span className="text-zinc-600">no reason given</span>}
+          {reason || <span className="text-zinc-500">no reason given</span>}
         </span>
-        <span className="shrink-0 text-[10.5px] tabular-nums text-zinc-600">{bytesLabel(bytes)}</span>
+        <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">{bytesLabel(bytes)}</span>
         <button type="button" onClick={() => void view()} disabled={viewBusy} className={BTN_QUIET}>
           {viewBusy ? "Loading…" : shown ? "Hide" : "View"}
         </button>
@@ -170,10 +172,8 @@ function RevisionRow({
           data-testid={`files-restore-${id}`}
           onClick={() => void restore()}
           disabled={restoring}
-          className={`${BTN} ${
-            armed
-              ? "border-amber-400/50 bg-amber-400/15 text-amber-200"
-              : "border-white/10 text-zinc-400 hover:border-amber-400/40 hover:text-amber-200"
+          className={`${ROW_BTN} ${
+            armed ? "bg-tone-warn/15 text-tone-warn" : "text-zinc-400 hover:text-tone-warn"
           }`}
         >
           {restoring ? "Restoring…" : armed ? "Restore this one?" : "Restore"}
@@ -184,13 +184,11 @@ function RevisionRow({
           <pre data-testid={`files-revision-text-${id}`} className={PRE_CLS}>
             {shown.text}
           </pre>
-          <p className="text-[10.5px] uppercase tracking-wide text-zinc-600">
-            Then → now
-          </p>
+          <p className={SUB_LABEL}>Then → now</p>
           <DiffBlock lines={diffTexts(shown.text, current)} testId={`files-revision-diff-${id}`} />
         </div>
       )}
-      {error && <p className="mt-0.5 text-[11px] text-rose-300">{error}</p>}
+      {error && <p className="mt-0.5 text-[12px] text-tone-danger">{error}</p>}
     </li>
   );
 }
@@ -255,7 +253,7 @@ export function AgentFiles({ name }: { name: string }) {
       await put<AgentFilesView>(`${path}/instructions`, body);
       setEditing(false);
       setReason("");
-      setSaveNote("Saved — the old text is kept in History.");
+      setSaveNote("Saved. The old text is kept in History.");
       reload();
     } catch (err) {
       setSaveError(errText(err));
@@ -297,12 +295,13 @@ export function AgentFiles({ name }: { name: string }) {
   const notesDirty = notes !== serverNotes;
 
   return (
-    <section data-testid={`files-${name}`} className="space-y-3">
-      <div className="flex items-center gap-2">
-        <FolderOpen size={13} className="text-accent-soft/80" aria-hidden />
-        <h3 className="text-[12px] font-semibold tracking-wide text-zinc-200">Folder</h3>
+    // v1.329.0: a plain section under a hairline with a quiet label; its
+    // parts (Instructions, Notebook, History) are sub-labels, not boxes.
+    <section data-testid={`files-${name}`} className="space-y-4 border-t hairline pt-4">
+      <div className="flex items-center gap-2 px-1">
+        <h3 className={SECTION_LABEL}>Folder</h3>
         <span
-          className="ml-auto min-w-0 truncate font-mono text-[10.5px] text-zinc-500"
+          className="ml-auto min-w-0 truncate font-mono text-[11px] text-zinc-500"
           title={data.folder}
         >
           {data.folder}
@@ -315,16 +314,16 @@ export function AgentFiles({ name }: { name: string }) {
             title="Open the folder on this computer"
             className={BTN_QUIET}
           >
-            {openBusy ? "Opening…" : "Open"}
+            <FolderOpen size={12} aria-hidden /> {openBusy ? "Opening…" : "Open"}
           </button>
         )}
       </div>
       {openError && <ErrorNote>{openError}</ErrorNote>}
 
       {/* Instructions */}
-      <div className="space-y-1.5 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Instructions</span>
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 px-1">
+          <span className={SUB_LABEL}>Instructions</span>
           <span className="ml-auto" />
           {!editing && (
             <button
@@ -338,7 +337,7 @@ export function AgentFiles({ name }: { name: string }) {
               }}
               className={BTN_QUIET}
             >
-              <Pencil size={10} className="mr-1 inline-block" aria-hidden /> Edit
+              <Pencil size={11} aria-hidden /> Edit
             </button>
           )}
         </div>
@@ -349,15 +348,15 @@ export function AgentFiles({ name }: { name: string }) {
               onChange={(e) => setDraft(e.target.value)}
               rows={10}
               aria-label="Instructions"
-              className="field resize-y font-mono text-[11.5px] leading-relaxed"
+              className={`${QUIET_FIELD} resize-y font-mono leading-relaxed`}
             />
             <input
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               aria-label="Reason (optional)"
-              placeholder="why (optional)"
-              className="field"
+              placeholder="Why (optional)"
+              className={QUIET_FIELD}
             />
             <div className="flex items-center justify-end gap-2">
               <button
@@ -367,7 +366,7 @@ export function AgentFiles({ name }: { name: string }) {
                   setReason("");
                 }}
                 disabled={saveBusy}
-                className="btn-ghost py-1 text-[11.5px]"
+                className={GHOST_BTN}
               >
                 Cancel
               </button>
@@ -376,7 +375,7 @@ export function AgentFiles({ name }: { name: string }) {
                 data-testid={`files-save-${name}`}
                 onClick={() => void saveInstructions()}
                 disabled={saveBusy || draft === serverInstructions}
-                className="btn-accent px-2.5 py-1 text-[11.5px]"
+                className={primaryBtn(!saveBusy && draft !== serverInstructions)}
               >
                 {saveBusy ? <LoaderInline label="Saving…" /> : "Save"}
               </button>
@@ -392,15 +391,15 @@ export function AgentFiles({ name }: { name: string }) {
               <button
                 type="button"
                 onClick={() => setShowAll((v) => !v)}
-                className="text-[11px] text-accent-soft transition-colors hover:text-accent"
+                className="px-1 text-[12px] text-accent-soft transition-colors hover:text-accent"
               >
                 {showAll ? "Show less" : `Show all (${lines.length} lines)`}
               </button>
             )}
           </>
         ) : (
-          <p className="text-[11.5px] text-zinc-500">
-            No instructions yet — Edit to give {name} its standing orders.
+          <p className="px-1 text-[12px] text-zinc-500">
+            No instructions yet. Press Edit to give {name} its standing orders.
           </p>
         )}
         {saveNote && <SuccessNote>{saveNote}</SuccessNote>}
@@ -408,10 +407,10 @@ export function AgentFiles({ name }: { name: string }) {
       </div>
 
       {/* Notebook */}
-      <div className="space-y-1.5 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
-        <div className="flex items-center gap-2">
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 px-1">
           <NotebookPen size={12} className="text-zinc-500" aria-hidden />
-          <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Notebook</span>
+          <span className={SUB_LABEL}>Notebook</span>
         </div>
         <textarea
           data-testid={`files-notes-${name}`}
@@ -419,14 +418,14 @@ export function AgentFiles({ name }: { name: string }) {
           onChange={(e) => setNotes(e.target.value)}
           rows={4}
           aria-label="Notebook"
-          placeholder={`${name}'s own notes — it writes here too.`}
-          className="field resize-y text-[11.5px] leading-relaxed"
+          placeholder={`${name}'s own notes. It writes here too.`}
+          className={`${QUIET_FIELD} resize-y leading-relaxed`}
         />
         <div className="flex items-center gap-2">
-          <p className="min-w-0 flex-1 text-[10.5px] leading-relaxed text-zinc-600">
+          <p className="min-w-0 flex-1 px-1 text-[11px] leading-relaxed text-zinc-500">
             Injected into its runs, trimmed to {NOTES_CAP.toLocaleString()} characters.
             {notes.length > NOTES_CAP && (
-              <span className="text-amber-300/90"> {notes.length.toLocaleString()} now.</span>
+              <span className="text-tone-warn"> {notes.length.toLocaleString()} now.</span>
             )}
           </p>
           <button
@@ -434,7 +433,7 @@ export function AgentFiles({ name }: { name: string }) {
             data-testid={`files-notes-save-${name}`}
             onClick={() => void saveNotes()}
             disabled={notesBusy || !notesDirty}
-            className="btn-accent px-2.5 py-1 text-[11.5px]"
+            className={primaryBtn(!notesBusy && notesDirty)}
           >
             {notesBusy ? <LoaderInline label="Saving…" /> : "Save"}
           </button>
@@ -446,13 +445,11 @@ export function AgentFiles({ name }: { name: string }) {
       {/* History */}
       {(data.revisions ?? []).length > 0 && (
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-1">
             <History size={12} className="text-zinc-500" aria-hidden />
-            <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              History · {data.revisions.length}
-            </span>
+            <span className={SUB_LABEL}>History · {data.revisions.length}</span>
           </div>
-          <ul className="space-y-0.5">
+          <ul className="divide-y divide-white/[0.06] border-t hairline">
             {data.revisions.map((r) => (
               <RevisionRow
                 key={r.id}

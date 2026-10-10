@@ -204,7 +204,8 @@ describe("AgentInbox", () => {
     hooks.api[INBOX_PATH] = inboxPayload();
     render(<AgentInbox name="custom:analyst" />);
     const health = screen.getByTestId("inbox-health-custom:analyst");
-    expect(health.textContent).toMatch(/Last ran 12m ago — completed/);
+    // v1.329.0 (calm chat K4): joined with the app's quiet " · ", no dash.
+    expect(health.textContent).toMatch(/Last ran 12m ago · completed/);
     expect(health.getAttribute("data-tone")).toBe("green");
     expect(screen.getByTestId("inbox-running-r1")).toBeInTheDocument();
     expect(screen.getByTestId("inbox-queued-q1")).toBeInTheDocument();
@@ -271,7 +272,8 @@ describe("AgentInbox", () => {
     fireEvent.click(within(form).getByRole("button", { name: /Queue for analyst/ }));
     // The success note is set at the END of the handler.
     await waitFor(() =>
-      expect(screen.getByText("Queued for analyst — it runs when analyst is free.")).toBeInTheDocument(),
+      // v1.329.0 (calm chat K4): two plain sentences.
+      expect(screen.getByText("Queued for analyst. It runs when analyst is free.")).toBeInTheDocument(),
     );
     const call = hooks.posts.find((p) => p.path === "/assignments");
     expect(call?.body).toEqual({
@@ -326,10 +328,12 @@ describe("AgentInbox", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     try {
-    expect(healthLine(null)).toEqual({ text: "never ran", tone: "slate" });
+    // v1.329.0 (calm chat K4): sentence case on its own, and " · " in place
+    // of the dash aside; the tones are unchanged.
+    expect(healthLine(null)).toEqual({ text: "Never ran", tone: "slate" });
     expect(healthLine({ last_run_at: null, last_outcome: null, last_error: null, last_wake_at: null, queued: 0, running: 0, blocked: 0 }).tone).toBe("slate");
-    expect(healthLine({ last_run_at: ago(3_600_000), last_outcome: "needs_you", last_error: null, last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 1h ago — needs you", tone: "amber" });
-    expect(healthLine({ last_run_at: ago(30_000), last_outcome: "failed", last_error: "disk full", last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 30s ago — failed: disk full", tone: "red" });
+    expect(healthLine({ last_run_at: ago(3_600_000), last_outcome: "needs_you", last_error: null, last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 1h ago · needs you", tone: "amber" });
+    expect(healthLine({ last_run_at: ago(30_000), last_outcome: "failed", last_error: "disk full", last_wake_at: null, queued: 0, running: 0, blocked: 0 })).toEqual({ text: "Last ran 30s ago · failed: disk full", tone: "red" });
     expect(rowActions("claimed")).toEqual({ cancel: true, unblock: false, retry: false });
     expect(rowActions("cancelled")).toEqual({ cancel: false, unblock: false, retry: true });
     } finally {
@@ -401,7 +405,7 @@ describe("ProjectTasks — Assign to", () => {
     fireEvent.click(screen.getByRole("button", { name: /Queue for analyst/ }));
     await waitFor(() =>
       expect(screen.getByTestId("project-task-queued").textContent).toBe(
-        "Queued for analyst — it runs when analyst is free.",
+        "Queued for analyst. It runs when analyst is free.", // v1.329.0: plain sentences
       ),
     );
     const call = hooks.posts.find((p) => p.path === "/projects/p1/task");

@@ -523,17 +523,26 @@ def _route_note(route_events: list[tuple[str, str | None, str]], names: dict[str
             text = f"{who}'s model {src} failed" + (f" ({why})" if why else "")
             notes.append(f"{text}; {dst} answered instead.")
         elif etype == EventType.PROVIDER_DOWNGRADED:
-            wanted = _short(data.get("requested") or "the chosen model", 40)
             used = str(data.get("used") or "")
             if used == "mock":
-                notes.append(f"{who} ran on the offline mock model — no real model answered.")
+                # v1.329.0 (calm chat K4): two plain sentences, the words the
+                # mission screen's own mock line uses.
+                notes.append(f"{who} ran on the mock model. No real model answered.")
             else:
+                # A refusal (``used: "none"``) carries ``label`` since
+                # v1.329.0 (calm chat J1): the name the user gave a fleet
+                # endpoint. It wins over ``requested`` (the raw
+                # ``fleet-<id>``, kept for the logs); an older event without
+                # it still names the requested provider.
+                wanted = _short(
+                    data.get("label") or data.get("requested") or "the chosen model", 40
+                )
                 notes.append(f"{who} could not use {wanted}" + (f" ({why})." if why else "."))
     if not notes:
         return ""
     note = notes[0]
     if len(notes) > 1:
-        note = f"{note[:-1]} — {len(notes)} route changes in this mission."
+        note = f"{note} There were {len(notes)} route changes in this mission."
     return " ".join(note.split())
 
 
