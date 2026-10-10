@@ -133,10 +133,10 @@ export function ProjectSchedules({
             <span className="flex shrink-0 flex-col items-end">
               {/* Outcome truth (v1.119.0): how the last fire went + the session. */}
               {s.last_status === "ok" ? (
-                <span className="text-[11px] text-emerald-300">✓ ok</span>
+                <span className="text-[11px] text-tone-success">✓ ok</span>
               ) : s.last_status === "error" ? (
                 <span
-                  className="max-w-[200px] truncate text-[11px] text-rose-300"
+                  className="max-w-[200px] truncate text-[11px] text-tone-danger"
                   title={s.last_detail || undefined}
                 >
                   ✗ failed{s.last_detail ? `: ${s.last_detail}` : ""}

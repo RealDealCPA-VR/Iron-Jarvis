@@ -80,7 +80,16 @@ function kindOf(name: string): Kind {
   return "other";
 }
 
-function KindIcon({ kind, size = 14 }: { kind: Kind; size?: number }) {
+function KindIcon({ kind, size = 14, calm = false }: { kind: Kind; size?: number; calm?: boolean }) {
+  // v1.329.0: the calm look (the chat drawer) uses the tone tokens, which
+  // every theme re-inks; Build keeps its own hues.
+  if (calm) {
+    if (kind === "image") return <ImageIcon size={size} className="text-tone-violet/80" />;
+    if (kind === "video") return <FileVideo size={size} className="text-tone-info/80" />;
+    if (kind === "audio") return <FileAudio size={size} className="text-tone-success/80" />;
+    if (kind === "text") return <FileText size={size} className="text-accent-soft/80" />;
+    return <FileIcon size={size} className="text-zinc-500" />;
+  }
   if (kind === "image") return <ImageIcon size={size} className="text-violet-300/80" />;
   if (kind === "video") return <FileVideo size={size} className="text-sky-300/80" />;
   if (kind === "audio") return <FileAudio size={size} className="text-emerald-300/80" />;
@@ -281,7 +290,11 @@ export function FilesPanel({
   folder,
   onOpenTerminal,
   onPreview,
+  variant = "card",
 }: {
+  /** v1.329.0: "calm" draws the list without its card, in the normal font
+   *  (the chat drawer); "card" (the default) is Build's look, unchanged. */
+  variant?: "card" | "calm";
   folder: string | null;
   onOpenTerminal?: (path: string) => void;
   /** When set (the chat rail), clicking a file opens the HOST's document
@@ -375,6 +388,118 @@ export function FilesPanel({
   useVisibleInterval(() => tickRef.current(), 4000, Boolean(folder));
 
   const shown = files.slice(0, MAX_ROWS);
+
+  if (variant === "calm") {
+    const ghostIcon =
+      "grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40";
+    return (
+      <div data-testid="files-panel" data-variant="calm" className="flex h-full min-h-0 flex-col">
+        <header className="flex shrink-0 items-center gap-2 pb-2">
+          <div className="min-w-0">
+            <h2 className="truncate text-[13px] font-medium text-zinc-200">
+              {folder ? baseName(root ?? folder) : "Files"}
+            </h2>
+            {folder && (
+              <div className="truncate text-[12px] text-zinc-500" title={root ?? folder}>
+                {root ?? folder}
+              </div>
+            )}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-0.5">
+            {folder && onOpenTerminal && (
+              <button
+                type="button"
+                onClick={() => onOpenTerminal(folder)}
+                title="Open a new terminal in this folder"
+                aria-label="Open a terminal here"
+                className={ghostIcon}
+              >
+                <SquareTerminal size={14} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => tickRef.current()}
+              disabled={!folder}
+              title="Refresh"
+              aria-label="Refresh files"
+              className={ghostIcon}
+            >
+              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            </button>
+          </div>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto border-t hairline">
+          {!folder ? (
+            <p className="py-3 text-[12px] text-zinc-500">
+              Pick a folder to see its files here.
+            </p>
+          ) : offline ? (
+            <div className="py-3">
+              <OfflineHint detail="The files list needs Iron Jarvis running." />
+            </div>
+          ) : error ? (
+            <p role="alert" className="py-3 text-[12px] text-tone-danger">
+              {error}
+            </p>
+          ) : loading ? (
+            <div className="py-1">
+              <Spinner label="Loading files…" />
+            </div>
+          ) : files.length === 0 ? (
+            <p className="py-3 text-[12px] text-zinc-500">
+              No files yet. New files show up here as they are made.
+            </p>
+          ) : (
+            <ul className="-mx-2 py-1">
+              {shown.map((f) => {
+                const kind = kindOf(f.name);
+                const fresh = Date.now() / 1000 - f.mtime < 30;
+                return (
+                  <li key={f.path}>
+                    <button
+                      type="button"
+                      onClick={() => (onPreview ? onPreview(f.path) : setSelected(f))}
+                      title={onPreview ? `Preview ${f.rel}` : f.path}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+                        fresh ? "bg-accent/[0.06] hover:bg-accent/[0.1]" : "hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <span className="shrink-0">
+                        <KindIcon kind={kind} calm />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-zinc-200">{f.rel}</span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] tabular-nums text-zinc-500">
+                          <span>{fmtSize(f.size)}</span>
+                          <span aria-hidden>·</span>
+                          <span className={fresh ? "text-accent-soft" : ""}>{relTime(f.mtime)}</span>
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {folder && !loading && !offline && !error && files.length > 0 && (
+          <footer className="shrink-0 border-t hairline py-2 text-[11px] tabular-nums text-zinc-500">
+            {files.length > MAX_ROWS ? `Showing ${MAX_ROWS} of ` : ""}
+            {count} file{count === 1 ? "" : "s"}
+            {truncated ? ". The list stops at 600, newest first." : ""}
+            {scanCut !== null
+              ? ` This folder is too big to read in full, so these are the newest of the first ${scanCut.toLocaleString()} entries.`
+              : ""}
+          </footer>
+        )}
+
+        {selected && <FilePreview file={selected} onClose={() => setSelected(null)} />}
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-850/80 shadow-card backdrop-blur-sm">

@@ -40,16 +40,6 @@ export const PANEL_GHOST =
 export const PANEL_SELECT =
   "-mx-2 block w-[calc(100%+1rem)] cursor-pointer rounded-lg bg-transparent px-2 py-1.5 text-[13px] text-zinc-100 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50";
 
-/**
- * A wrapper for a child that still draws its own card (the folder picker and
- * the folder's file list are shared with Build, which keeps its cards). It
- * takes the card's edge, fill, shadow and blur away and lets the child's own
- * 16px padding line up with the drawer's (the drawer body is px-4, so -mx-4
- * cancels it exactly and nothing overflows).
- */
-export const UNBOX_CHILD =
-  "-mx-4 [&>div]:rounded-none [&>div]:border-0 [&>div]:bg-transparent [&>div]:shadow-none [&>div]:backdrop-filter-none";
-
 /** One plain section: a quiet label (with optional ghost actions on its right)
  *  and a hairline under it. */
 export function PanelSection({

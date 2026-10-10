@@ -32,6 +32,52 @@ const CHIP_WORDS: Record<string, string> = {
   go: "Looks like a code project (Go)",
 };
 
+/**
+ * v1.329.0 (calm chat wave 5, G4): the CALM look, used where the tree sits
+ * inside a calm surface (the chat's project drawer). Build keeps the card.
+ *
+ * Calm means: no card, no accent header, sentence-case quiet labels, inputs
+ * with a hairline edge in the normal font, a ghost Go, whole-pixel sizes and
+ * theme tokens only (zinc, accent, white overlays, hairline, tone-*), so the
+ * dark Marks and the light Daylight Mark both read right.
+ */
+export type DirectoryTreeVariant = "card" | "calm";
+
+/** A calm text field: a hairline edge, no fill, the normal font. */
+export const CALM_FIELD =
+  "w-full rounded-lg border hairline bg-transparent px-2 py-1.5 text-[13px] text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-accent/50 disabled:opacity-50";
+
+/** A calm ghost button: transparent at rest, a soft fill on hover, a ring
+ *  only for a keyboard user (the drawer's own ghost, word for word). */
+export const CALM_GHOST =
+  "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
+
+/** A calm label: sentence case, quiet. */
+const CALM_LABEL = "mb-1.5 block text-[12px] text-zinc-500";
+
+/** The calm project marker: a quiet word (no fill, no hue), the same tooltip. */
+function calmProjectChip(kind: string) {
+  const label = kind === "python" ? "py" : kind;
+  return (
+    <span
+      data-testid="dir-project-chip"
+      className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] text-zinc-500"
+      title={CHIP_WORDS[kind] ?? `Looks like a code project (${kind})`}
+    >
+      {kind === "git" && <GitBranch size={11} />}
+      {label}
+    </span>
+  );
+}
+
+/** A drive's words in the calm select: its path, plus its name when that
+ *  says something the path does not ("C:\", "Data (D:\)"). */
+function calmDriveWords(d: Drive): string {
+  const label = (d.label ?? "").trim();
+  if (!label || d.path.toLowerCase().startsWith(label.toLowerCase())) return d.path;
+  return `${label} (${d.path})`;
+}
+
 /** Colour + short label for a project marker, or null for plain folders. */
 function projectChip(kind: string) {
   const map: Record<string, { label: string; cls: string; git?: boolean }> = {
@@ -68,12 +114,14 @@ function DirNode({
   selectedPath,
   onSelect,
   defaultOpen = false,
+  calm = false,
 }: {
   node: DirNodeData;
   depth: number;
   selectedPath: string | null;
   onSelect: (path: string) => void;
   defaultOpen?: boolean;
+  calm?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [children, setChildren] = useState<DirNodeData[] | null>(null);
@@ -121,11 +169,17 @@ function DirNode({
         onClick={onRowClick}
         title={node.path}
         style={{ paddingLeft: 6 + depth * 14 }}
-        className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[12.5px] transition-colors ${
-          active
-            ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
-            : "text-zinc-300 hover:bg-white/[0.05]"
-        }`}
+        className={
+          calm
+            ? `flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 ${
+                active ? "bg-accent/[0.08] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.05]"
+              }`
+            : `flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[12.5px] transition-colors ${
+                active
+                  ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
+                  : "text-zinc-300 hover:bg-white/[0.05]"
+              }`
+        }
       >
         <ChevronRight
           size={13}
@@ -137,22 +191,25 @@ function DirNode({
           <Folder size={14} className="shrink-0 text-zinc-500" />
         )}
         <span className="truncate">{node.name}</span>
-        {node.is_project && projectChip(node.is_project)}
+        {node.is_project &&
+          (calm ? calmProjectChip(node.is_project) : projectChip(node.is_project))}
       </button>
 
       {open && (
         <div>
           {loading && (
             <div
-              className="flex items-center gap-1.5 py-1 text-[11px] text-zinc-500"
+              className={`flex items-center gap-1.5 py-1 ${calm ? "text-[12px]" : "text-[11px]"} text-zinc-500`}
               style={{ paddingLeft: 6 + (depth + 1) * 14 }}
             >
-              <Loader2 size={11} className="animate-spin" /> loading…
+              <Loader2 size={11} className="animate-spin" /> {calm ? "Loading…" : "loading…"}
             </div>
           )}
           {error && (
             <div
-              className="flex items-center gap-1.5 py-1 text-[11px] text-rose-300/80"
+              className={`flex items-center gap-1.5 py-1 ${
+                calm ? "text-[12px] text-tone-danger" : "text-[11px] text-rose-300/80"
+              }`}
               style={{ paddingLeft: 6 + (depth + 1) * 14 }}
             >
               <TriangleAlert size={11} /> {error}
@@ -160,10 +217,10 @@ function DirNode({
           )}
           {!loading && !error && children && children.length === 0 && (
             <div
-              className="py-1 text-[11px] text-zinc-600"
+              className={`py-1 ${calm ? "text-[12px] text-zinc-500" : "text-[11px] text-zinc-600"}`}
               style={{ paddingLeft: 6 + (depth + 1) * 14 }}
             >
-              empty
+              {calm ? "No folders inside" : "empty"}
             </div>
           )}
           {children?.map((c) => (
@@ -173,6 +230,7 @@ function DirNode({
               depth={depth + 1}
               selectedPath={selectedPath}
               onSelect={onSelect}
+              calm={calm}
             />
           ))}
         </div>
@@ -189,7 +247,15 @@ export function DirectoryTree({
   onCollapse,
   showProjects = false,
   hideHeaderCollapse = false,
+  variant = "card",
+  collapseLabel = "Close",
 }: {
+  /** v1.329.0: "calm" draws the tree without its card (the chat drawer);
+   *  "card" (the default) is Build's and Memory's look, unchanged. */
+  variant?: DirectoryTreeVariant;
+  /** Calm only: the words on the ghost button that calls `onCollapse`
+   *  (the card look keeps its collapse icon). */
+  collapseLabel?: string;
   selectedPath: string | null;
   onSelect: (path: string) => void;
   /** Create a new terminal whose cwd is the selected directory. Optional so the
@@ -236,6 +302,143 @@ export function DirectoryTree({
   // Default the root to the first drive once they load.
   const activeRoot = root ?? drives[0]?.path ?? null;
   const rootLabel = drives.find((d) => d.path === activeRoot)?.label ?? activeRoot ?? "";
+
+  if (variant === "calm") {
+    return (
+      <div data-testid="directory-tree" data-variant="calm" className="flex h-full min-h-0 flex-col">
+        {/* What is picked, said first, in plain words. */}
+        <section className="shrink-0 border-b hairline pb-3">
+          <div className="flex min-h-[28px] items-center gap-2">
+            <h2 className="text-[13px] font-medium text-zinc-200">Pick a folder</h2>
+            {onCollapse && !hideHeaderCollapse && (
+              <button type="button" onClick={onCollapse} className={`ml-auto ${CALM_GHOST}`}>
+                {collapseLabel}
+              </button>
+            )}
+          </div>
+          {selectedPath ? (
+            <p className="mt-1 truncate text-[12px] text-zinc-400" title={selectedPath}>
+              Picked: <span className="text-zinc-200">{selectedPath}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-[12px] text-zinc-500">
+              No folder picked yet. Pick one below.
+            </p>
+          )}
+        </section>
+
+        {showProjects && projects.length > 0 && (
+          <section className="shrink-0 border-b hairline py-3">
+            <div className={CALM_LABEL}>Your projects</div>
+            <ul className="-mx-2 max-h-32 space-y-0.5 overflow-y-auto">
+              {projects.map((p) => {
+                const on = selectedPath === p.root;
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(p.root)}
+                      title={p.root}
+                      aria-pressed={on}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[13px] transition-colors ${
+                        on ? "bg-accent/[0.08] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <Briefcase size={13} className="shrink-0 text-zinc-500" />
+                      <span className="truncate">{p.name}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {/* Where to start browsing: a drive, or a pasted path. */}
+        <section className="shrink-0 border-b hairline py-3">
+          <label className={CALM_LABEL}>
+            {showProjects && projects.length > 0 ? "Or browse a drive" : "Drive"}
+          </label>
+          <select
+            aria-label="Root directory"
+            value={activeRoot ?? ""}
+            onChange={(e) => setRoot(e.target.value)}
+            className={CALM_FIELD}
+            disabled={loading || drives.length === 0}
+          >
+            {drives.length === 0 && (
+              <option value="">{loading ? "Loading…" : "No drives found"}</option>
+            )}
+            {activeRoot && !drives.some((d) => d.path === activeRoot) && (
+              <option value={activeRoot}>{activeRoot}</option>
+            )}
+            {drives.map((d) => (
+              <option key={d.path} value={d.path}>
+                {calmDriveWords(d)}
+              </option>
+            ))}
+          </select>
+          <div className="mt-2 flex items-center gap-1.5">
+            <input
+              value={typedRoot}
+              onChange={(e) => setTypedRoot(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  goTypedRoot();
+                }
+              }}
+              placeholder="Or paste a folder path"
+              aria-label="Go to root path"
+              spellCheck={false}
+              className={`${CALM_FIELD} min-w-0 flex-1`}
+            />
+            <button
+              type="button"
+              onClick={goTypedRoot}
+              disabled={!typedRoot.trim()}
+              className={CALM_GHOST}
+            >
+              Go
+            </button>
+          </div>
+          {!hideAction && onOpenTerminal && (
+            <button
+              type="button"
+              onClick={() => selectedPath && onOpenTerminal(selectedPath)}
+              disabled={!selectedPath}
+              className={`mt-2 -ml-2 ${CALM_GHOST}`}
+            >
+              <SquareTerminal size={13} /> Open terminal here
+            </button>
+          )}
+        </section>
+
+        {/* The tree itself. */}
+        <div className="-mx-2 min-h-0 flex-1 overflow-y-auto py-2">
+          {error ? (
+            <div className="flex items-center gap-1.5 px-2 py-3 text-[12px] text-tone-danger">
+              <TriangleAlert size={13} /> {error.message}
+            </div>
+          ) : activeRoot ? (
+            <DirNode
+              key={activeRoot}
+              node={{ name: rootLabel, path: activeRoot, is_project: null }}
+              depth={0}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              defaultOpen
+              calm
+            />
+          ) : (
+            <div className="px-2 py-3 text-[12px] text-zinc-500">
+              {loading ? "Loading drives…" : "No drives found"}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-850/80 shadow-card backdrop-blur-sm">
@@ -356,7 +559,7 @@ export function DirectoryTree({
               </div>
             ) : (
               <div className="mt-1 text-[12px] text-zinc-500">
-                No folder picked yet — pick a project or a folder.
+                No folder picked yet. Pick a project or a folder.
               </div>
             )}
             {!hideAction && onOpenTerminal && (

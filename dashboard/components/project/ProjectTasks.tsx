@@ -695,10 +695,21 @@ export function ProjectTasks({
           </p>
         )}
 
-        {/* Bundled tool-permission grant — one confirm covers the task. */}
+        {/* Bundled tool-permission grant — one confirm covers the task.
+            v1.329.0 (calm chat wave 5, G4): the warning TONE token, which
+            every theme re-inks (the literal amber read on Daylight only
+            through the generated overrides). In the calm (bare) form it is a
+            plain section over a hairline, like the run row below it. */}
         {pendingPlan && pendingPlan.tools.length > 0 && (
-          <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-amber-200">
+          <div
+            data-testid="project-task-grant"
+            className={
+              bare
+                ? "border-t hairline pt-2.5"
+                : "rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-3 py-2.5"
+            }
+          >
+            <div className="flex items-center gap-1.5 text-xs font-medium text-tone-warn">
               <ShieldCheck size={13} /> This task will use these tools
             </div>
             <ul className="mt-2 space-y-1.5">
@@ -804,8 +815,11 @@ export function ProjectTasks({
               <>
                 {taskRun.output !== "chat" && taskRun.target_path && (
                   deliverable && !deliverable.exists ? (
-                    <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-200">
-                      <span className="shrink-0 text-amber-300/80">Not written:</span>
+                    <div
+                      data-testid="project-task-not-written"
+                      className="mt-1.5 flex items-start gap-1.5 text-xs text-tone-warn"
+                    >
+                      <span className="shrink-0 font-medium">Not written:</span>
                       <span className="min-w-0">
                         the agent finished but{" "}
                         <span className="font-mono">{taskRun.target_path}</span> isn’t on disk.
@@ -857,7 +871,10 @@ export function ProjectTasks({
             )}
 
             {taskDone && taskSession?.status !== "completed" && (
-              <p className="mt-1.5 whitespace-pre-wrap text-xs text-rose-200">
+              <p
+                data-testid="project-task-failed"
+                className="mt-1.5 whitespace-pre-wrap text-xs text-tone-danger"
+              >
                 {taskSession?.summary ||
                   `The session ${taskSession?.status} without a summary. Open it for details.`}
               </p>

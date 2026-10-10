@@ -412,7 +412,7 @@ export function KnowledgePanel({
                   <button
                     type="button"
                     onClick={() => void remove(it.id)}
-                    className="rounded p-1 text-rose-300"
+                    className="rounded p-1 text-tone-danger"
                     title="Confirm delete"
                   >
                     <Check size={13} />
@@ -430,7 +430,7 @@ export function KnowledgePanel({
                 <button
                   type="button"
                   onClick={() => setPendingDelete(it.id)}
-                  className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-opacity hover:text-rose-300 group-hover:opacity-100"
+                  className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-opacity hover:text-tone-danger group-hover:opacity-100"
                   title="Remove"
                 >
                   <Trash2 size={13} />

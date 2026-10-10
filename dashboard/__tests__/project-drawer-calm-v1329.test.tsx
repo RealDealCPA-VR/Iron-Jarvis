@@ -281,20 +281,28 @@ describe("a project chat's drawer: plain sections, not cards", () => {
     expect(classes(note)).toContain("text-tone-warn");
   });
 
-  it("the folder picker sits unboxed and without its dead 'Open terminal here'", async () => {
+  it("the folder picker is the CALM picker, without its dead 'Open terminal here'", async () => {
+    // v1.329.0 (wave 5, G4) moved this pin on purpose: the drawer used to
+    // UNBOX Build's card from outside (a -mx-4 wrapper stripping the card's
+    // edge); now it asks the tree for its calm look, which draws no card at
+    // all, so there is nothing to strip (drawer-folder-calm-v1329 pins the
+    // calm look itself).
     window.localStorage.setItem(PROJECT_KEY, PROJECT.id);
     render(<ChatPage />);
     const drawer = await openDrawer();
     const tree = await within(drawer).findByRole("combobox", { name: "Root directory" });
     expect(within(drawer).queryByRole("button", { name: /Open terminal here/ })).toBeNull();
-    // The picker's own card is its root div; the drawer's wrapper unboxes it.
-    let root: HTMLElement | null = tree;
-    while (root && !classes(root).includes("rounded-2xl")) root = root.parentElement;
+    const root = tree.closest('[data-variant="calm"]') as HTMLElement | null;
     expect(root).not.toBeNull();
-    const wrap = classes(root!.parentElement);
-    expect(wrap).toEqual(
-      expect.arrayContaining(["-mx-4", "[&>div]:border-0", "[&>div]:bg-transparent", "[&>div]:shadow-none"]),
-    );
+    for (const card of ["rounded-2xl", "border", "shadow-card", "backdrop-blur-sm"]) {
+      expect(classes(root!)).not.toContain(card);
+    }
+    // No accent "Directory" header, and with no folder picked the drawer's
+    // own Close is the way out (no second collapse control in the picker).
+    expect(within(drawer).queryByRole("heading", { name: "Directory" })).toBeNull();
+    expect(within(drawer).queryByTitle("Collapse panel")).toBeNull();
+    expect(within(drawer).queryByRole("button", { name: "Back to files" })).toBeNull();
+    expect(root!.textContent).toContain("No folder picked yet. Pick one below.");
   });
 });
 

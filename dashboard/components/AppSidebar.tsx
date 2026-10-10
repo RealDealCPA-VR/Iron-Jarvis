@@ -235,7 +235,7 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
         >
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
-              online ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.45)]" : "bg-zinc-600"
+              online ? "bg-tone-success shadow-[0_0_8px_2px_rgb(var(--tone-success)/0.45)]" : "bg-zinc-600"
             }`}
             aria-hidden
           />

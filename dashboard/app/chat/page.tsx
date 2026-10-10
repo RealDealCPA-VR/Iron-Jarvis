@@ -205,7 +205,6 @@ import {
   PANEL_SELECT,
   PanelSection,
   PanelTabs,
-  UNBOX_CHILD,
   useOpenTerminal,
 } from "@/components/chat/ProjectPanelParts";
 import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
@@ -917,10 +916,11 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
   const pct = Math.min(100, raw);
   const trimmed = usage.dropped > 0 || usage.clipped;
   if (pct < 50 && !trimmed && !usage.compacted) return null;
+  // v1.329.0: the tone tokens, which every theme (Daylight included) re-inks.
   const tone = trimmed
-    ? "text-rose-400/90"
+    ? "text-tone-danger"
     : pct >= 75
-      ? "text-amber-400/90"
+      ? "text-tone-warn"
       : "text-zinc-500";
   const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
   return (
@@ -973,18 +973,23 @@ function CompactionOffer({
   const pct = usage.percent ?? 0;
   const auto = usage.auto_at ?? 92;
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[12px] text-amber-200/90">
+    // v1.329.0 (calm chat wave 5, G4): a calm notice in the warning TONE (a
+    // hairline edge, a faint tint, ghost buttons), so Daylight re-inks it.
+    <div
+      data-testid="compaction-offer"
+      className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-tone-warn/25 bg-tone-warn/[0.05] px-3 py-2 text-[12px] text-tone-warn"
+    >
       <span>
         This conversation is using about <strong>{pct}%</strong> of this model&apos;s
-        context window. Summarizing the earlier part keeps the thread going —
+        context window. Summarizing the earlier part keeps the thread going, and
         the full transcript is kept either way.
       </span>
-      <span className="ml-auto flex items-center gap-2">
+      <span className="ml-auto flex items-center gap-1">
         <button
           type="button"
           onClick={onCompact}
           disabled={busy}
-          className="rounded-md border border-amber-400/40 px-2 py-1 font-medium text-amber-100 transition-colors hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg px-2 py-1 font-medium text-tone-warn transition-colors hover:bg-tone-warn/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? "Summarizing…" : "Compact now"}
         </button>
@@ -992,7 +997,7 @@ function CompactionOffer({
           type="button"
           onClick={onDismiss}
           disabled={busy}
-          className="text-amber-200/60 transition-colors hover:text-amber-100"
+          className="rounded-lg px-2 py-1 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
           title={`If you do nothing, this happens automatically around ${auto}%.`}
         >
           Not now
@@ -1558,7 +1563,7 @@ function PromoteKnowledgeButton({
         {state === "busy" ? (
           <Loader2 size={12} className="animate-spin" />
         ) : state === "done" ? (
-          <Check size={12} className="text-emerald-400" />
+          <Check size={12} className="text-tone-success" />
         ) : (
           <BookmarkPlus size={12} />
         )}
@@ -2498,7 +2503,7 @@ const AtPicker = memo(function AtPicker({
                 {a.kind === "remote" ? "remote" : a.kind === "dynamic" ? "custom" : "built-in"}
               </span>
               {!a.healthy && (
-                <span className="shrink-0 text-[10px] text-amber-400/80">offline</span>
+                <span className="shrink-0 text-[10px] text-tone-warn">offline</span>
               )}
               <span className="truncate text-[11px] text-zinc-500">{a.description}</span>
             </button>
@@ -3012,7 +3017,7 @@ const MessageRow = memo(function MessageRow({
       {/* v1.324.0: an app resource the user attached that could not be read
           says so here — the answer above was written without it. */}
       {(m.appResources ?? []).some((r) => !r.ok) && (
-        <div data-testid="app-resource-failed" className="mt-1 text-[12px] text-amber-400/80">
+        <div data-testid="app-resource-failed" className="mt-1 text-[12px] text-tone-warn">
           {(m.appResources ?? [])
             .filter((r) => !r.ok)
             .map((r) => `Couldn't read ${r.uri} from ${r.pack}${r.note ? `: ${r.note}` : ""}`)
@@ -3020,11 +3025,11 @@ const MessageRow = memo(function MessageRow({
         </div>
       )}
       {(m.interrupted || m.truncated) && (
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] italic text-amber-400/80">
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] italic text-tone-warn">
           <span data-testid="reply-cut-note">
             {m.truncated
-              ? "stopped — the reply ran out of room"
-              : "interrupted — the reply was cut off"}
+              ? "The reply ran out of room and stopped."
+              : "The reply was cut off."}
           </span>
           {/* v1.323.0: CONTINUE — only the newest plain chat reply, never mid-turn. */}
           {isLast && !busy && !m.panelWho && !m.fromSession && !m.runResult && m.content.trim() && (
@@ -3192,7 +3197,7 @@ const MessageRow = memo(function MessageRow({
       <DoorsStrip doors={m.doors} />
       {!m.route && m.viaProvider && (
         <div
-          className="mt-1 text-[12px] text-amber-200/90"
+          className="mt-1 text-[12px] text-tone-warn"
           title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
         >
           answered by {m.viaProvider}
@@ -4207,8 +4212,8 @@ export default function ChatPage() {
 
   /** Badge for a provider row: where it runs, in one word. */
   const KIND_BADGE: Record<string, { text: string; cls: string }> = {
-    local: { text: "local", cls: "text-emerald-400/80" },
-    cli: { text: "included", cls: "text-sky-400/80" },
+    local: { text: "local", cls: "text-tone-success" },
+    cli: { text: "included", cls: "text-tone-info" },
     api: { text: "metered", cls: "text-zinc-500" },
   };
   const modelLabel = useMemo(() => {
@@ -10670,7 +10675,7 @@ export default function ChatPage() {
                       )}
                     </button>
                     {personaSaved && (
-                      <span className="inline-flex items-center gap-1 text-[12px] text-emerald-400">
+                      <span className="inline-flex items-center gap-1 text-[12px] text-tone-success">
                         <Check size={13} /> Saved
                       </span>
                     )}
@@ -10684,7 +10689,7 @@ export default function ChatPage() {
                             ? "Discard your changes to this built-in persona"
                             : "Delete this custom persona"
                         }
-                        className="btn-ghost ml-auto py-1.5 text-[13px] text-rose-300 hover:text-rose-200"
+                        className="btn-ghost ml-auto py-1.5 text-[13px] text-tone-danger hover:bg-tone-danger/10"
                       >
                         {curPersona?.builtin ? (
                           <>
@@ -12895,28 +12900,37 @@ export default function ChatPage() {
                         </p>
                       )}
                     </PanelSection>
-                    <div className={`min-h-0 flex-1 ${UNBOX_CHILD}`}>
-                      <FilesPanel folder={workspaceDir} onPreview={openDocPreview} />
+                    {/* v1.329.0 (calm chat wave 5, G4): the CALM file list,
+                        no card, file names in the normal font. Build keeps
+                        its own card look. */}
+                    <div className="min-h-0 flex-1">
+                      <FilesPanel
+                        variant="calm"
+                        folder={workspaceDir}
+                        onPreview={openDocPreview}
+                      />
                     </div>
                   </>
                 ) : (
                   // The folder picker is shared with Build (which keeps its
-                  // card and its "Open terminal here"); here it sits unboxed
-                  // and without that action, which never did anything from
-                  // chat. Once a folder is picked the Folder section above
-                  // offers the working Terminal button.
-                  <div className={`min-h-0 flex-1 ${UNBOX_CHILD}`}>
+                  // card and its "Open terminal here"); here it is the CALM
+                  // picker (v1.329.0: no card, no accent header, quiet
+                  // sentence-case labels, hairline inputs, a ghost Go) and
+                  // without that action, which never did anything from chat.
+                  // Once a folder is picked the Folder section above offers
+                  // the working Terminal button. With no folder yet, the
+                  // drawer's own Close is the way out; while CHANGING a
+                  // folder, "Back to files" cancels.
+                  <div className="min-h-0 flex-1">
                     <DirectoryTree
+                      variant="calm"
                       selectedPath={workspaceDir}
                       onSelect={chooseWorkspace}
                       hideAction
-                      onCollapse={() => {
-                        // While changing an existing folder, the tree's collapse
-                        // acts as "cancel → back to files"; otherwise it hides the
-                        // whole project panel.
-                        if (pickingFolder && workspaceDir) setPickingFolder(false);
-                        else hideProjectPanel();
-                      }}
+                      collapseLabel="Back to files"
+                      onCollapse={
+                        pickingFolder && workspaceDir ? () => setPickingFolder(false) : undefined
+                      }
                     />
                   </div>
                 )}
