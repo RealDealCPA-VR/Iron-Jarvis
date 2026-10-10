@@ -65,6 +65,7 @@ import {
   Download,
   FileText,
   ExternalLink,
+  Folder,
   FolderKanban,
   FolderOpen,
   FolderPen,
@@ -155,6 +156,15 @@ import {
   visibleChatRefRows,
   type ChatRefPick,
 } from "@/lib/chatRefs";
+import {
+  AT_FILES_ROWS_MAX,
+  entryWhere,
+  matchProjectEntries,
+  sameFolderPath,
+  useProjectFiles,
+  type ProjectEntry,
+} from "@/lib/atMenuFiles";
+import { atAgentName, chatRefSecondary } from "@/lib/atMenuRows";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
@@ -2131,6 +2141,17 @@ const SlashPicker = memo(function SlashPicker({
   );
 });
 
+/** v1.329.0: one heading for every "@" menu section, calm and in sentence
+ *  case ("Agents", "Files", "Chats"), with a quiet plain hint beside it. */
+function AtSectionHead({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline gap-2 px-2.5 pb-1 pt-1.5">
+      <span className="shrink-0 text-[11px] font-medium text-zinc-400">{title}</span>
+      {hint && <span className="min-w-0 truncate text-[11px] text-zinc-600">{hint}</span>}
+    </div>
+  );
+}
+
 /** v1.328.0: the "@" menu's key handler. The picker owns it (it knows the
  *  rows); the textarea's keydown asks it first while the menu is open.
  *  Returns true when the key was handled. */
@@ -2152,6 +2173,10 @@ const AtPicker = memo(function AtPicker({
   chatRefs,
   onPickChat,
   keysRef,
+  filesRoot,
+  attachedPaths,
+  onPickEntry,
+  chatProjectName,
 }: {
   store: ComposerStore;
   busy: boolean;
@@ -2172,6 +2197,16 @@ const AtPicker = memo(function AtPicker({
   onPickChat: (c: ChatRefPick) => void;
   /** v1.328.0: where this picker puts its key handler for the textarea. */
   keysRef: React.RefObject<AtKeyHandler | null>;
+  /** v1.329.0: the active project's folder (null = no project, or its folder
+   *  is missing): its files and folders are offered under "Files". */
+  filesRoot: string | null;
+  /** v1.329.0: paths already attached to the next message (not offered). */
+  attachedPaths: readonly string[];
+  /** v1.329.0: a file is attached like "+ Attach"; a folder becomes the
+   *  working folder like "+ Choose a working folder". */
+  onPickEntry: (e: ProjectEntry) => void;
+  /** v1.329.0: the project a saved chat belongs to, by name, when known. */
+  chatProjectName: (c: ChatRefPick) => string | null;
 }) {
   const { text, caret, slashDismissed, atDismissed } = useComposer(store);
   const atToken = busy || atDismissed ? null : tokenAt(text, caret, "@");
@@ -2186,6 +2221,9 @@ const AtPicker = memo(function AtPicker({
   const typed = open ? (atToken?.query ?? "") : "";
   // Asked at once each time the menu opens, then again as the query changes.
   const chatRows = useChatRefSearch(open, typed, openChatId);
+  // v1.329.0: the project folder's files, listed once each time the menu
+  // opens (typing narrows that list).
+  const projectListing = useProjectFiles(open, filesRoot);
   // The highlighted row, across every section; back to the top as the query
   // changes or the menu reopens.
   const [active, setActive] = useState(0);
@@ -2224,6 +2262,10 @@ const AtPicker = memo(function AtPicker({
     )
     .slice(0, 50);
   const chatMatches = visibleChatRefRows(chatRows, chatRefs, openChatId, atQuery);
+  // v1.329.0: the project's files and folders matching what is typed.
+  const fileMatches = filesRoot
+    ? matchProjectEntries(projectListing, atQuery, attachedPaths, Infinity)
+    : [];
   // With full room each section keeps its own short scroll, so agents and
   // chats are both in view at once. When the fit squeezed the menu, those
   // inner scrolls would nest inside a small one: the sections drop their caps
@@ -2231,13 +2273,18 @@ const AtPicker = memo(function AtPicker({
   const roomy = !fit || fit.maxHeight >= AT_MENU_ROOMY_PX;
   // ... and then the agents alone would fill it (a new chat, where pointing at
   // an earlier chat is most likely), with the Chats section below the fold.
-  // So while chats match, the sections above them keep only their first rows
-  // and say how many more there are; typing narrows them as before.
-  const lead = !roomy && fit && chatMatches.length > 0 ? squeezedLeadRows(fit.maxHeight) : Infinity;
+  // So while a section further down matches (Files, Chats), the sections
+  // above it keep only their first rows and say how many more there are;
+  // typing narrows them as before.
+  const squeezed = !roomy && fit ? squeezedLeadRows(fit.maxHeight) : Infinity;
+  const lead = chatMatches.length > 0 || fileMatches.length > 0 ? squeezed : Infinity;
+  const fileLead = Math.min(chatMatches.length > 0 ? squeezed : Infinity, AT_FILES_ROWS_MAX);
   const resourceShown = resourceMatches.slice(0, lead);
   const agentShown = mentionable === null ? [] : agentMatches.slice(0, lead);
+  const fileShown = fileMatches.slice(0, fileLead);
   const resourceMore = resourceMatches.length - resourceShown.length;
   const agentMore = mentionable === null ? 0 : agentMatches.length - agentShown.length;
+  const fileMore = fileMatches.length - fileShown.length;
   const tok = atToken;
 
   function pickResource(r: PackResource) {
@@ -2265,6 +2312,20 @@ const AtPicker = memo(function AtPicker({
       if (el) el.selectionStart = el.selectionEnd = pos;
     });
   }
+  /** v1.329.0: a file or folder, like a chat, is never words in the message:
+   *  only the "@token" is consumed and the caret goes back where it was. */
+  function pickEntry(e: ProjectEntry) {
+    const cur = store.get();
+    const pos = tok.start;
+    store.setText(spliceToken(cur.text, tok), pos);
+    store.setAtDismissed(false);
+    onPickEntry(e);
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.selectionStart = el.selectionEnd = pos;
+    });
+  }
 
   // Every row in the order it is drawn — the keys walk this one list.
   const rows: { key: string; pick: () => void }[] = [
@@ -2273,6 +2334,7 @@ const AtPicker = memo(function AtPicker({
       key: `agent:${a.name}`,
       pick: () => pickAgent(a),
     })),
+    ...fileShown.map((f) => ({ key: `${f.kind}:${f.path}`, pick: () => pickEntry(f) })),
     ...chatMatches.map((c) => ({ key: `chat:${c.id}`, pick: () => pickChat(c) })),
   ];
   const activeIdx = rows.length ? Math.min(active, rows.length - 1) : -1;
@@ -2326,6 +2388,8 @@ const AtPicker = memo(function AtPicker({
   const below = fit?.side === "below";
   const sectionCap = (cls: string) => (roomy ? `${cls} overflow-y-auto` : "");
   const ageNow = Date.now();
+  // v1.329.0: each chat row's quiet second part (its project, else the day).
+  const chatSecondary = chatRefSecondary(chatMatches, chatProjectName, ageNow);
 
   return (
     <div
@@ -2339,9 +2403,7 @@ const AtPicker = memo(function AtPicker({
     >
       {resourceMatches.length > 0 && (
         <div role="listbox" aria-label="From your apps" className={`${sectionCap("max-h-40")} border-b border-white/[0.06] p-1`}>
-          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-            From your apps — attach to your next message
-          </div>
+          <AtSectionHead title="From your apps" hint="Attach to your next message" />
           {resourceShown.map((r) => (
             <button
               key={`${r.pack}/${r.uri}`}
@@ -2368,22 +2430,22 @@ const AtPicker = memo(function AtPicker({
       {mentionable === null ? (
         <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
       ) : agentMatches.length === 0 ? (
-        // v1.328.0: when chats match, the empty agents line is noise.
-        chatMatches.length === 0 && (
+        // v1.328.0: when chats (v1.329.0: or files) match, the empty agents
+        // line is noise.
+        chatMatches.length === 0 &&
+        fileMatches.length === 0 && (
           <p className="px-3 py-2.5 text-xs text-zinc-500">
-            no matching agent — add one on the Agents page
+            No agent by that name. Add one on the Agents page.
           </p>
         )
       ) : (
         <div
           role="listbox"
           aria-label="Agents"
-          className={`${sectionCap(chatMatches.length > 0 ? "max-h-40" : "max-h-72")} p-1`}
+          className={`${sectionCap(chatMatches.length > 0 || fileMatches.length > 0 ? "max-h-40" : "max-h-72")} p-1`}
         >
-          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-            {agentMatches.length} agent{agentMatches.length === 1 ? "" : "s"}
-            {atQuery ? " matching" : ""} — they answer instead of Iron Jarvis
-          </div>
+          {/* v1.329.0: a calm heading in sentence case, like Chats. */}
+          <AtSectionHead title="Agents" hint="Answer in place of Iron Jarvis" />
           {agentShown.map((a) => (
             <button
               key={a.name}
@@ -2394,11 +2456,18 @@ const AtPicker = memo(function AtPicker({
               title={a.description}
             >
               <Bot size={12} className="shrink-0 text-accent-soft/70" />
-              <span className="shrink-0 font-mono text-[12px]">{a.mention}</span>
+              {/* v1.329.0: the agent's name in words, in the normal font;
+                  the "@name" you type stays as a muted hint. */}
+              <span data-testid="at-agent-name" className="max-w-[12rem] shrink-0 truncate text-[12px]">
+                {atAgentName(a)}
+              </span>
+              <span data-testid="at-agent-mention" className="shrink-0 text-[11px] text-zinc-500">
+                @{a.mention}
+              </span>
               {/* Where it runs + whether it can actually take work. An offline
                   remote is LISTED, not hidden — "my agent isn't in the list"
                   is the worse failure. */}
-              <span className="shrink-0 text-[10px] text-zinc-600">
+              <span className="hidden shrink-0 text-[10px] text-zinc-600 sm:inline">
                 {a.kind === "remote" ? "remote" : a.kind === "dynamic" ? "custom" : "built-in"}
               </span>
               {!a.healthy && (
@@ -2414,6 +2483,54 @@ const AtPicker = memo(function AtPicker({
           )}
         </div>
       )}
+      {/* v1.329.0: FILES in the active project's folder (GET /fs/files, the
+          Files tab's own query). A file is attached like "+ Attach"; a folder
+          becomes the working folder like "+ Choose a working folder". No
+          project, or nothing matching, draws nothing. */}
+      {fileMatches.length > 0 && (
+        <div
+          role="listbox"
+          aria-label="Files"
+          data-testid="at-menu-files"
+          className={`${sectionCap("max-h-48")} border-t border-white/[0.06] p-1`}
+        >
+          <AtSectionHead title="Files" hint="A file is attached, a folder becomes the working folder" />
+          {fileShown.map((f) => {
+            const where = entryWhere(f);
+            return (
+              <button
+                key={`${f.kind}:${f.path}`}
+                type="button"
+                role="option"
+                data-testid="at-file-option"
+                data-kind={f.kind}
+                {...rowProps(`${f.kind}:${f.path}`)}
+                onClick={() => pickEntry(f)}
+                title={f.kind === "folder" ? `Work in ${f.path}` : `Attach ${f.path}`}
+              >
+                {f.kind === "folder" ? (
+                  <Folder size={12} className="shrink-0 text-accent-soft/70" />
+                ) : (
+                  <FileText size={12} className="shrink-0 text-accent-soft/70" />
+                )}
+                <span data-testid="at-file-name" className="min-w-0 truncate text-[12px]">
+                  {f.name}
+                </span>
+                {where && (
+                  <span className="ml-auto min-w-0 shrink truncate pl-2 text-[11px] text-zinc-500">
+                    {where}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {fileMore > 0 && (
+            <p data-testid="at-menu-more-files" className="px-2.5 py-1 text-[11px] text-zinc-500">
+              {fileMore} more in this project, type to narrow
+            </p>
+          )}
+        </div>
+      )}
       {/* v1.328.0: SAVED CHATS (GET /chat/threads/search-refs). A pick is a
           chip in the composer card, read with the next message. Nothing is
           drawn while the first answer is on its way or when none match. */}
@@ -2424,16 +2541,14 @@ const AtPicker = memo(function AtPicker({
           data-testid="at-menu-chats"
           className={`${sectionCap("max-h-48")} border-t border-white/[0.06] p-1`}
         >
-          <div className="flex items-baseline gap-2 px-2.5 pb-1 pt-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-              Chats
-            </span>
-            <span className="truncate text-[11px] text-zinc-600">
-              {chatsFull
+          <AtSectionHead
+            title="Chats"
+            hint={
+              chatsFull
                 ? `${CHAT_REFS_FULL_NOTE}. Remove one to add another.`
-                : "Read with your next message"}
-            </span>
-          </div>
+                : "Read with your next message"
+            }
+          />
           {chatMatches.map((c) => (
             <button
               key={c.id}
@@ -2442,10 +2557,20 @@ const AtPicker = memo(function AtPicker({
               data-testid="chat-ref-option"
               {...rowProps(`chat:${c.id}`)}
               onClick={() => pickChat(c)}
-              title={c.title}
+              title={chatSecondary.get(c.id) ? `${c.title} (${chatSecondary.get(c.id)})` : c.title}
             >
               <MessageSquare size={12} className="shrink-0 text-accent-soft/70" />
-              <span data-testid="chat-ref-title" className="truncate text-[12px]">{c.title}</span>
+              <span data-testid="chat-ref-title" className="min-w-0 truncate text-[12px]">{c.title}</span>
+              {/* v1.329.0: the project it belongs to (or the day), so chats
+                  that share a title read apart. */}
+              {chatSecondary.get(c.id) && (
+                <span
+                  data-testid="chat-ref-where"
+                  className="min-w-0 shrink truncate text-[11px] text-zinc-500"
+                >
+                  {chatSecondary.get(c.id)}
+                </span>
+              )}
               {/* When it last changed, so chats that share a title can be
                   told apart (the chat list's own "8m / 2h" format). */}
               {formatAge(c.updatedAt, ageNow) && (
@@ -6198,6 +6323,60 @@ export default function ChatPage() {
       if (next !== chatRefsRef.current) setChatRefs(next);
     },
     [setChatRefs],
+  );
+  // v1.329.0: "@" → a file or folder in the project. A FILE joins the
+  // attachments exactly as "+ Attach" leaves an upload (same chip, same
+  // `attachments` request field; the daemon reads the absolute path through
+  // its file policy). A FOLDER becomes the working folder exactly as
+  // "+ Choose a working folder" does (`workspace_dir`).
+  const pickFolderRef = useRef<(path: string) => void>(() => {});
+  const pickProjectEntry = useCallback((e: ProjectEntry) => {
+    if (e.kind === "folder") {
+      pickFolderRef.current(e.path);
+      return;
+    }
+    const cur = attachmentsRef.current;
+    if (cur.some((a) => a.path === e.path)) return;
+    if (cur.length >= MAX_ATTACHMENTS) {
+      setError(`Up to ${MAX_ATTACHMENTS} files per message.`);
+      return;
+    }
+    setError(null);
+    setAttachments((prev) =>
+      prev.some((a) => a.path === e.path) || prev.length >= MAX_ATTACHMENTS
+        ? prev
+        : [...prev, { name: e.name, path: e.path, bytes: e.size ?? 0 }],
+    );
+  }, []);
+  pickFolderRef.current = chooseWorkspace;
+  // v1.329.0: the "@" menu's Files section searches the ACTIVE project's
+  // folder; no project (or its folder missing) = no section.
+  const atFilesRoot =
+    activeProject && activeProject.root && activeProject.root_exists !== false
+      ? activeProject.root
+      : null;
+  const attachedPaths = useMemo(() => attachments.map((a) => a.path), [attachments]);
+  // v1.329.0: the working folder is a folder INSIDE the project (not its own
+  // folder): the composer card says so (`working-folder-chip`).
+  const projectSubfolder =
+    atFilesRoot && workspaceDir && workfolder === null && !sameFolderPath(workspaceDir, atFilesRoot)
+      ? workspaceDir
+      : null;
+  // v1.329.0: which project a saved chat belongs to, for the "@" row's quiet
+  // second part: what the daemon said on the row, else what the chat list
+  // here knows; the name from the project list. Unknown = null (the row then
+  // shows the day instead).
+  const chatProjectName = useCallback(
+    (c: ChatRefPick): string | null => {
+      let pid: string | null | undefined = c.projectId;
+      if (pid === undefined) {
+        const t = threads.find((x) => x.id === c.id) ?? archivedThreads.find((x) => x.id === c.id);
+        pid = t ? (t.project_id ?? null) : undefined;
+      }
+      if (!pid) return null;
+      return projects.find((p) => p.id === pid)?.name ?? null;
+    },
+    [threads, archivedThreads, projects],
   );
 
   const loadSkillsOnce = useCallback(() => {
@@ -10960,6 +11139,10 @@ export default function ChatPage() {
                       chatRefs={chatRefs}
                       onPickChat={pickChatRef}
                       keysRef={atKeysRef}
+                      filesRoot={atFilesRoot}
+                      attachedPaths={attachedPaths}
+                      onPickEntry={pickProjectEntry}
+                      chatProjectName={chatProjectName}
                     />
                     <SlashPicker
                       store={composer}
@@ -11013,9 +11196,36 @@ export default function ChatPage() {
                       chatRefNote !== "" ||
                       pageCtx !== null ||
                       workfolder !== null ||
+                      projectSubfolder !== null ||
                       activeSkill !== "" ||
                       selectedConnectors.length > 0) && (
                       <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3">
+                        {/* v1.329.0: the working folder is a folder INSIDE the
+                            project (picked with "@" or "+ Choose a working
+                            folder"). Said on the card, with a way back to the
+                            project's own folder, because a choice that leaves no
+                            trace reads as one that failed. */}
+                        {projectSubfolder !== null && atFilesRoot && (
+                          <span
+                            data-testid="working-folder-chip"
+                            title={`Files this chat's tools make land in ${projectSubfolder}`}
+                            className="max-w-full inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
+                          >
+                            <FolderOpen size={11} className="shrink-0 text-accent-soft" />
+                            <span className="max-w-[14rem] truncate">
+                              Working in {projectSubfolder.split(/[\\/]/).filter(Boolean).pop() ?? projectSubfolder}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => chooseWorkspace(atFilesRoot)}
+                              aria-label="Work in the project folder again"
+                              title="Work in the project folder again"
+                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        )}
                         {/* THIS CONVERSATION'S FOLDER (v1.244.0, placeInWorkfolder) —
                             where the files it was handed were copied and where what
                             it makes is saved. On screen because an output nobody can
@@ -12152,7 +12362,7 @@ export default function ChatPage() {
                     <span className="hidden sm:inline">
                       {askInDock
                         ? dockAskKeyHint(dockAsks[0].kind)
-                        : composerKeyHint(busy, !commMeta)}
+                        : composerKeyHint(busy, !commMeta, atFilesRoot !== null)}
                     </span>
                   </div>
                   {/* Calm chat W1-3: under the card on a NEW chat, quietly. The

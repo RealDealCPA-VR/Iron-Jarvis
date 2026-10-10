@@ -11,7 +11,8 @@
  *
  * The search is GET /chat/threads/search-refs?q=&exclude= : saved chats whose
  * title contains `q`, newest first, at most 8, archived ones and `exclude`
- * (the open chat) left out. Rows carry only id, title and updated_at.
+ * (the open chat) left out. Rows carry only id, title and updated_at (and,
+ * from a daemon that sends it, project_id: v1.329.0).
  *
  * Its own module (not in useChatStream or the page) because tests mock
  * `@/lib/useChatStream` with a fixed export list.
@@ -38,6 +39,10 @@ export interface ChatRefPick {
   id: string;
   title: string;
   updatedAt?: string | null;
+  /** v1.329.0: the project the chat belongs to, when the daemon says (a
+   *  string id, or null for none). Only for the row's quiet second part
+   *  (`lib/atMenuRows.chatRefSecondary`); never sent, never saved. */
+  projectId?: string | null;
 }
 
 /** The search path for `q`, leaving out the open chat when there is one. */
@@ -56,10 +61,11 @@ export function decodeChatRefRows(raw: unknown): ChatRefPick[] {
   const out: ChatRefPick[] = [];
   for (const r of list) {
     if (!r || typeof r !== "object") continue;
-    const { id, title, updated_at } = r as {
+    const { id, title, updated_at, project_id } = r as {
       id?: unknown;
       title?: unknown;
       updated_at?: unknown;
+      project_id?: unknown;
     };
     if (typeof id !== "string") continue;
     const tid = id.trim();
@@ -68,6 +74,12 @@ export function decodeChatRefRows(raw: unknown): ChatRefPick[] {
     const row: ChatRefPick = { id: tid, title: t && t !== "(untitled)" ? t : "Untitled chat" };
     if (typeof updated_at === "string" && updated_at && updated_at.length <= 64) {
       row.updatedAt = updated_at;
+    }
+    // v1.329.0: carried only when the daemon sends it (a short string, or
+    // null for a chat in no project); an older daemon sends neither.
+    if (project_id === null) row.projectId = null;
+    else if (typeof project_id === "string" && project_id.trim() && project_id.length <= ID_CHARS) {
+      row.projectId = project_id.trim();
     }
     out.push(row);
     if (out.length >= SEARCH_ROWS_MAX) break;

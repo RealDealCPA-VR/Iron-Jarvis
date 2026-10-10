@@ -282,10 +282,14 @@ describe("a squeezed menu keeps the Chats section in view (v1.328.0)", () => {
     fireEvent.change(el, { target: { value: "compare with @" } });
     await waitFor(() => expect(screen.getAllByTestId("chat-ref-option")).toHaveLength(2));
     await waitFor(() => expect(agentRows()).toHaveLength(3));
-    expect(agentRows().map((r) => r.textContent?.slice(0, 7))).toEqual(["builder", "planner", "reviewe"]);
+    // v1.329.0: a row reads the agent's name in words ("Builder"); the
+    // "@builder" you type is its muted hint.
+    expect(
+      agentRows().map((r) => r.querySelector('[data-testid="at-agent-mention"]')?.textContent),
+    ).toEqual(["@builder", "@planner", "@reviewer"]);
     expect(screen.getByTestId("at-menu-more-agents").textContent).toBe("6 more agents, type to narrow");
-    // The heading still counts them all.
-    expect(screen.getByRole("listbox", { name: "Agents" }).textContent).toContain("9 agents");
+    // v1.329.0: the heading is a calm "Agents" (the "N more" line counts the rest).
+    expect(screen.getByRole("listbox", { name: "Agents" }).textContent).toContain("Agents");
     // In the menu, the chats come straight after the cut-off agents.
     const menu = screen.getByTestId("at-menu");
     const options = Array.from(menu.querySelectorAll('[role="option"]'));

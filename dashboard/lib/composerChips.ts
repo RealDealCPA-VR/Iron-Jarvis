@@ -83,11 +83,13 @@ export function toolsChipWords(autoTools: boolean, armed: number): ToolsChipWord
 }
 
 /** The quiet keyboard line under the card (shown from sm up; a touch screen
- *  has no keys to hint at). */
-export function composerKeyHint(busy: boolean, steerable: boolean): string {
+ *  has no keys to hint at). v1.329.0: in a project with a folder, "@" also
+ *  offers its files (`files`), and the line says so. */
+export function composerKeyHint(busy: boolean, steerable: boolean, files: boolean = false): string {
   if (busy && steerable) {
     return "Enter sends a note Jarvis reads at its next step · Ctrl+Enter sends after this reply · Esc stops";
   }
   if (busy) return "Esc stops";
-  return "Enter to send · Shift+Enter new line · / for skills · @ for agents and chats";
+  const at = files ? "@ for agents, files and chats" : "@ for agents and chats";
+  return `Enter to send · Shift+Enter new line · / for skills · ${at}`;
 }
