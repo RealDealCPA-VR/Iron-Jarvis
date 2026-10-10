@@ -47,6 +47,7 @@ import {
 } from "@/lib/paneAccounts";
 import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
+import { PANE_TOGGLE_PLACE, PANE_TOGGLE_SLOT } from "@/components/terminal/paneViewToggle";
 import {
   PaneStateSummary,
   displayState,
@@ -1111,6 +1112,7 @@ export default function TerminalsPage() {
                               info={t}
                               focused={focusedId === t.id}
                               parked={shape === "rail" && activeId !== t.id}
+                              reserveViewToggle
                               paneName={paneOverrides[t.id]?.name ?? act?.name}
                               draggable={shape === "canvas"}
                               paneState={paneState}
@@ -1187,13 +1189,21 @@ export default function TerminalsPage() {
                                 >
                                   {t.cwd}
                                 </span>
+                                {/* The Terminal ⇄ Chat toggle sits over this
+                                    slot, in the header row (v1.329.0), never
+                                    over the conversation below. */}
+                                <span
+                                  aria-hidden="true"
+                                  data-testid="pane-toggle-slot"
+                                  className={PANE_TOGGLE_SLOT}
+                                />
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setPendingClose(t.id);
                                   }}
                                   title="Close terminal"
-                                  className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-300"
+                                  className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-tone-danger/15 hover:text-tone-danger"
                                 >
                                   <X size={13} />
                                 </button>
@@ -1209,14 +1219,19 @@ export default function TerminalsPage() {
                             </div>
                           )}
 
-                          {/* Terminal ⇄ Chat toggle. Floats just BELOW the
-                              header in both views — deliberately outside every
-                              ij-term-drag region, and buttons besides, which
-                              react-rnd's `cancel` already exempts: clicking it
-                              can never start a drag. */}
+                          {/* Terminal ⇄ Chat toggle. v1.329.0: it sits IN the
+                              header row, over the empty slot both headers keep
+                              just left of their close button
+                              (components/terminal/paneViewToggle.ts). Below the
+                              header it covered the side chat's right-aligned
+                              bubble. Still ONE element, deliberately outside
+                              every ij-term-drag region, and buttons besides,
+                              which react-rnd's `cancel` already exempts:
+                              clicking it can never start a drag, and the focus
+                              stays on it when the view flips. */}
                           <div
                             data-testid={`pane-view-toggle-${t.id}`}
-                            className="absolute right-1.5 top-10 z-20 flex items-center gap-0.5 rounded-lg border border-white/10 bg-ink-900/85 p-0.5 shadow-card backdrop-blur"
+                            className={`${PANE_TOGGLE_PLACE} z-20 flex items-center gap-0.5 rounded-lg p-0.5`}
                           >
                             <button
                               type="button"

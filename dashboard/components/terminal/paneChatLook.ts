@@ -42,6 +42,17 @@ export const PANE_GHOST_BUTTON =
  *  fill, no border. */
 export const PANE_QUIET_ROW = "rounded-lg bg-white/[0.03] px-2.5 py-1.5";
 
+/** Below this width the composer card is a narrow pane's (a canvas pane can
+ *  be 280px wide on a 1440px screen), and the permission chip shows only its
+ *  shield. Measured on the card itself (usePaneNarrow), never the window. */
+export const PANE_COMPOSER_NARROW_PX = 480;
+
+/** Wraps the chat page's PermissionChip in a narrow pane: its words and
+ *  chevron are hidden and only the shield shows, the chip's own phone look.
+ *  The level stays in the chip's aria-label and hover text. */
+export const PANE_PERMISSION_COMPACT =
+  "[&_[data-testid=permission-chip]>span]:hidden [&_[data-testid=permission-chip]>svg:last-child]:hidden [&_[data-testid=permission-chip]]:px-2";
+
 /** The round send button: quiet until there is something to send. */
 export function paneSendClass(ready: boolean): string {
   return `ml-auto grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full p-0 transition-colors ${

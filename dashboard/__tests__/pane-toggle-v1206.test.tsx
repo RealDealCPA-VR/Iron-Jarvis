@@ -35,6 +35,11 @@ import { join } from "node:path";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  PANE_TOGGLE_PLACE,
+  PANE_TOGGLE_SLOT,
+  PANE_TOGGLE_WIDTH_PX,
+} from "@/components/terminal/paneViewToggle";
 
 /* ---- api ------------------------------------------------------------------ */
 
@@ -84,6 +89,8 @@ const counters = vi.hoisted(() => ({
   runResults: [] as Array<boolean | null>,
   /** The code block the stub's Run button hands over on the next click. */
   runPayload: "git status",
+  /** v1.329.0: the `reserveViewToggle` each TerminalPane was handed. */
+  reserveToggle: [] as unknown[],
 }));
 
 vi.mock("next/dynamic", async () => {
@@ -163,6 +170,7 @@ vi.mock("next/dynamic", async () => {
             />
           );
         }
+        counters.reserveToggle.push(props.reserveViewToggle);
         return (
           <TerminalPaneStub
             info={props.info as { id: string; shell: string; cwd: string }}
@@ -278,6 +286,7 @@ beforeEach(() => {
   counters.unregistered = [];
   counters.runResults = [];
   counters.runPayload = "git status";
+  counters.reserveToggle = [];
   seedApi([term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta")]);
 });
 
@@ -414,6 +423,58 @@ describe("the toggle never starts a drag", () => {
       .querySelector("header.ij-term-drag");
     expect(chatHeader).not.toBeNull();
     expect(screen.getByTestId("pane-view-toggle-t1").closest(".ij-term-drag")).toBeNull();
+  });
+});
+
+describe("v1.329.0: the toggle sits in the header row, never over the conversation", () => {
+  it("is placed over the slot each header keeps, not below the header", async () => {
+    useCanvas();
+    await renderPage();
+    const toggle = screen.getByTestId("pane-view-toggle-t1");
+    // In the header row, just left of the close button (paneViewToggle.ts).
+    for (const cls of PANE_TOGGLE_PLACE.split(" ")) expect(toggle.className.split(/\s+/)).toContain(cls);
+    // The old place, under the header, sat on the side chat's right-aligned
+    // bubble and cut its words.
+    expect(toggle.className).not.toMatch(/\btop-10\b/);
+    // Quiet: no box of its own in the header.
+    expect(toggle.className).not.toMatch(/\bborder\b|shadow-card|bg-ink-900/);
+    // The terminal header is told to keep the slot…
+    expect(counters.reserveToggle.length).toBeGreaterThan(0);
+    expect(counters.reserveToggle.every((v) => v === true)).toBe(true);
+    // …and so is the chat header: the slot sits right before its close button.
+    fireEvent.click(chatBtn("t1"));
+    const header = screen.getByTestId("chat-layer-t1").querySelector("header");
+    const slot = header?.querySelector('[data-testid="pane-toggle-slot"]');
+    expect(slot).not.toBeNull();
+    expect(slot?.getAttribute("aria-hidden")).toBe("true");
+    expect(slot?.className).toBe(PANE_TOGGLE_SLOT);
+    expect(slot?.nextElementSibling?.getAttribute("title")).toBe("Close terminal");
+    // Still ONE toggle on the page, still outside every drag handle.
+    expect(screen.getAllByTestId("pane-view-toggle-t1")).toHaveLength(1);
+    expect(screen.getByTestId("pane-view-toggle-t1").closest(".ij-term-drag")).toBeNull();
+  });
+
+  it("the slot is as wide as the toggle, and the place lines up with it", () => {
+    // Two 20px buttons + a 2px gap + 2px padding each side.
+    expect(PANE_TOGGLE_WIDTH_PX).toBe(20 + 20 + 2 + 2 + 2);
+    expect(PANE_TOGGLE_SLOT).toContain(`w-[${PANE_TOGGLE_WIDTH_PX}px]`);
+    // 1px border + px-3 + the 20px close button + gap-2.
+    expect(PANE_TOGGLE_PLACE).toContain(`right-[${1 + 12 + 20 + 8}px]`);
+    const pane = readFileSync(
+      join(process.cwd(), "components", "terminal", "TerminalPane.tsx"),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    // The terminal header keeps the slot right before its close button, and
+    // its tools give way first on a narrow pane, so the slot stays in the row.
+    const slot = pane.indexOf('data-testid="pane-toggle-slot"');
+    const close = pane.indexOf('title="Close terminal"', slot);
+    expect(slot).toBeGreaterThan(-1);
+    expect(close - slot).toBeLessThan(400);
+    expect(pane).toContain('<div className="flex min-w-0 shrink items-center gap-2 overflow-hidden">');
+    // Both headers have the metrics the numbers above assume.
+    expect(pane).toMatch(/<header\s+className=\{`flex shrink-0 items-center gap-2 border-b border-white\/\[0\.06\] bg-ink-900\/60 px-3 py-2/);
+    const page = readFileSync(join(process.cwd(), "app", "terminals", "page.tsx"), "utf8").replace(/\r\n/g, "\n");
+    expect(page).toMatch(/className=\{`flex shrink-0 items-center gap-2 border-b border-white\/\[0\.06\] bg-ink-900\/60 px-3 py-2/);
   });
 });
 

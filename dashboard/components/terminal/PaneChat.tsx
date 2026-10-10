@@ -43,12 +43,11 @@ import {
   Paperclip,
   Play,
   Undo2,
-  Wrench,
   X,
 } from "lucide-react";
 import { get, post, put, ApiError } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
-import { useChatStream, StreamError, type ToolCard } from "@/lib/useChatStream";
+import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 // v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
@@ -61,7 +60,9 @@ import { PaneAsk, onScreen } from "@/components/terminal/PaneAsk";
 import {
   PANE_COMPOSER_BOX,
   PANE_COMPOSER_CARD,
+  PANE_COMPOSER_NARROW_PX,
   PANE_GHOST_BUTTON,
+  PANE_PERMISSION_COMPACT,
   PANE_QUIET_ROW,
   PANE_REPLY_PROSE,
   PANE_USER_BUBBLE,
@@ -69,6 +70,21 @@ import {
 } from "@/components/terminal/paneChatLook";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
+// v1.329.0 (calm chat wave 5): the chat page's own work line, changes line
+// and permission chip, fed from the pane's messages by a small adapter
+// (paneWork.ts), never forked.
+import { LiveToolRows, WorkLine } from "@/components/chat/WorkLine";
+import { ReplyChanges } from "@/components/chat/ReplyChanges";
+import type { ChangeUndoState } from "@/components/chat/ChangedFiles";
+import { PermissionChip } from "@/components/chat/PermissionChip";
+import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
+import {
+  paneReplyWork,
+  paneTurnWindow,
+  paneWorkInput,
+  type PaneMessage,
+} from "@/components/terminal/paneWork";
+import { usePaneNarrow } from "@/components/terminal/usePaneNarrow";
 import {
   joinUndoByPath,
   normalizeFsPath,
@@ -125,7 +141,7 @@ export interface PaneChatProps {
 interface PaneThreadDetail {
   id: string;
   title?: string;
-  messages?: PaneMsg[];
+  messages?: PaneMessage[];
   setup?: PaneThreadSetup | null;
 }
 
@@ -186,29 +202,6 @@ function storedThreadId(paneId: string): string | null {
   }
 }
 
-/** One live tool row under the streaming reply: a quiet line, no box. */
-function ToolRow({ card }: { card: ToolCard }) {
-  return (
-    <div
-      data-testid="pane-tool-card"
-      className="flex items-center gap-2 px-0.5 py-0.5 text-[11px] text-zinc-500"
-    >
-      {card.status === "running" ? (
-        <Loader2 size={11} className="shrink-0 animate-spin text-accent-soft" />
-      ) : (
-        <Wrench
-          size={11}
-          className={`shrink-0 ${card.ok === false ? "text-rose-400" : "text-emerald-400/80"}`}
-        />
-      )}
-      <span className="truncate font-mono">{card.name}</span>
-      {card.status === "done" && card.ok === false ? (
-        <span className="text-rose-300">failed</span>
-      ) : null}
-    </div>
-  );
-}
-
 /** A reply: prose with no box, through the app's ONE markdown renderer (the
  *  chat page's). A settled reply is memoized on its text; the live one is
  *  re-parsed as it grows. Tables read as part of the text (PANE_REPLY_PROSE). */
@@ -224,8 +217,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   const daemon = useDaemon();
   const stream = useChatStream();
 
-  const [messages, setMessages] = useState<PaneMsg[]>([]);
-  const messagesRef = useRef<PaneMsg[]>(messages);
+  const [messages, setMessages] = useState<PaneMessage[]>([]);
+  const messagesRef = useRef<PaneMessage[]>(messages);
   messagesRef.current = messages;
   const [loading, setLoading] = useState(true);
   // A stored thread that could not be LOADED (non-404): sending is blocked —
@@ -238,7 +231,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   // Dismiss, or a pane identity change.
   const [saveFailure, setSaveFailure] = useState<{
     detail: string;
-    msgs: PaneMsg[];
+    msgs: PaneMessage[];
   } | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -263,6 +256,15 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   // stored set — so a save can union them into a FRESH base without
   // resurrecting a tool the user disarmed in /chat meanwhile.
   const paneGrantsRef = useRef<string[]>([]);
+  // v1.329.0: the conversation's permission level (the chat page's three
+  // postures, lib/permissionLevels). It starts as the thread's stored
+  // posture and rides every turn's body (the stream lane gates on it for a
+  // pane turn exactly as for a /chat turn). A pick HERE persists into the
+  // thread's setup; while untouched, the save-time refresh adopts a change
+  // made from /chat (the engine picker's rule, BC1 D3).
+  const [approvalMode, setApprovalMode] = useState<PermissionMode>("approve_for_me");
+  const approvalRef = useRef<PermissionMode>("approve_for_me");
+  const approvalTouchedRef = useRef(false);
   // Bumped by the Retry affordance on a failed thread load.
   const [loadNonce, setLoadNonce] = useState(0);
   const [project, setProject] = useState<PaneProjectOption | null>(null);
@@ -298,6 +300,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   // and gives the caret back when it is answered (PaneAsk).
   const rootRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  // The composer card: in a narrow pane the permission chip shows only its
+  // shield (the pane's width, not the window's, decides; v1.329.0).
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const composerNarrow = usePaneNarrow(composerRef, PANE_COMPOSER_NARROW_PX);
 
   // ------------------------------------------------------------- thread load
   useEffect(() => {
@@ -316,6 +322,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     modelRef.current = "";
     providerTouchedRef.current = false;
     paneGrantsRef.current = [];
+    setApprovalMode("approve_for_me");
+    approvalRef.current = "approve_for_me";
+    approvalTouchedRef.current = false;
     baseSetupRef.current = null;
     saveChainRef.current = Promise.resolve();
     setUndoRows([]);
@@ -344,6 +353,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         // The pinned model rides with its provider (BC1 D5).
         const mo = t.setup?.model;
         if (typeof mo === "string") modelRef.current = mo;
+        // The conversation's permission level (v1.329.0).
+        const level = asPermissionMode(t.setup?.approval_mode);
+        approvalRef.current = level;
+        setApprovalMode(level);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -469,6 +482,24 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
    *  the button and says so. */
   async function undoWrite(actionId: string, path: string) {
     const norm = normalizeFsPath(path);
+    try {
+      await undoNewestWrite(actionId, path);
+    } catch (e) {
+      // The guard's own words — a blocked undo must say why.
+      setFileNote(norm, {
+        ok: false,
+        text: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /** The ONE undo both places use (the file card above, and the "files
+   *  changed" list, v1.329.0): the pane's honest confirm, POST /undo/{id},
+   *  the card's note, the refetch. THROWS on a refusal, so each caller shows
+   *  the guard's words where the user pressed. A declined confirm (or an undo
+   *  already running) does nothing. */
+  async function undoNewestWrite(actionId: string, path: string) {
+    const norm = normalizeFsPath(path);
     if (undoBusyPath) return;
     const row = undoByPath.get(norm);
     if (!window.confirm(paneUndoPrompt(row?.kind, paneBasename(path)))) return;
@@ -482,15 +513,23 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         text: "undone — restored to before the newest write",
       });
       void refreshUndoRows();
-    } catch (e) {
-      // The guard's own words — a blocked undo must say why.
-      setFileNote(norm, {
-        ok: false,
-        text: e instanceof Error ? e.message : String(e),
-      });
     } finally {
       setUndoBusyPath(null);
     }
+  }
+
+  /** The changes list's journal match for a file: the same newest-row join
+   *  the file card reads, so the two never disagree about what Undo does. */
+  function undoStateFor(path: string): ChangeUndoState | null {
+    const row = undoByPath.get(normalizeFsPath(path));
+    if (!row) return null;
+    if (undoneActions.has(row.action_id))
+      return { actionId: row.action_id, undoable: false, reason: "already undone" };
+    return {
+      actionId: row.action_id,
+      undoable: row.undoable !== false,
+      ...(row.undoable === false ? { reason: "this action has no safe inverse" } : {}),
+    };
   }
 
   /** "Run in terminal" (BC2): hand the fence's code VERBATIM to the page's
@@ -512,7 +551,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
    *  turn, engine change). Serialized; the id is read INSIDE the chain step so
    *  the first save's "new"→real-id lands before the second save runs. */
   const queueSave = useCallback(
-    (msgs: PaneMsg[]) => {
+    (msgs: PaneMessage[]) => {
       if (msgs.length === 0) return;
       const target = saveTargetRef.current;
       saveChainRef.current = saveChainRef.current.then(async () => {
@@ -539,6 +578,11 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 modelRef.current = t.setup?.model ?? "";
                 setProvider(providerRef.current);
               }
+              if (!approvalTouchedRef.current) {
+                // Same rule for the permission level (v1.329.0).
+                approvalRef.current = asPermissionMode(t.setup?.approval_mode);
+                setApprovalMode(approvalRef.current);
+              }
             } catch {
               /* refresh is best-effort — the save still runs */
             }
@@ -553,8 +597,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           if (paneGrantsRef.current.length) {
             setup.tools = unionTools(setup.tools, paneGrantsRef.current);
           }
+          // A level picked HERE is this conversation's posture from now on.
+          if (approvalTouchedRef.current) setup.approval_mode = approvalRef.current;
           const body: {
-            messages: PaneMsg[];
+            messages: PaneMessage[];
             setup: PaneThreadSetup;
             title?: string;
             project_id?: string;
@@ -772,7 +818,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     if (!text || busy || !canCompose || uploading) return;
     const atts = attachmentsRef.current;
     setError(null);
-    const userMsg: PaneMsg = {
+    const userMsg: PaneMessage = {
       role: "user",
       content: text,
       ...(atts.length
@@ -781,6 +827,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             attachmentPaths: atts.map((a) => a.path),
           }
         : {}),
+      // v1.329.0: when it was sent (the changes line's window falls back to
+      // it for a reply with no timing).
+      at: new Date().toISOString(),
     };
     const history = [...messagesRef.current, userMsg];
     setMessages(history);
@@ -806,10 +855,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           projectId: project?.id ?? null,
           // The thread's consent posture — an always_ask thread must not run
           // pane turns at the default, nor a yolo one re-ask (BC1 D4).
-          approvalMode: baseSetupRef.current?.approval_mode,
+          // v1.329.0: the permission chip's level (the stored posture until
+          // the user picks one here).
+          approvalMode: approvalRef.current,
         }),
       );
-      const reply: PaneMsg = {
+      const reply: PaneMessage = {
         role: "assistant",
         content: res.reply,
         ...(res.route ? { route: res.route } : {}),
@@ -828,6 +879,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         ...(res.usage ? { usage: res.usage } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(res.doors?.length ? { doors: res.doors } : {}),
+        // v1.329.0 (kept LAST, the receipt rule): the settle time and the
+        // turn's steps, timing and thinking, for the work line and the
+        // changes line.
+        ...paneReplyWork(res, new Date().toISOString()),
       };
       const full = [...history, reply];
       setMessages(full);
@@ -837,7 +892,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       // kept and marked interrupted (never presented as a complete answer);
       // the failed turn still saves so nothing is lost to a pane close.
       const partial = e instanceof StreamError ? e.partial : "";
-      const full: PaneMsg[] = partial
+      const full: PaneMessage[] = partial
         ? [...history, { role: "assistant", content: partial, interrupted: true }]
         : history;
       setMessages(full);
@@ -877,6 +932,20 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     }
     // Persist right away on an existing conversation — granting then closing
     // the pane must not lose the grant.
+    if (messagesRef.current.length > 0 && !loadError) {
+      queueSave(messagesRef.current);
+    }
+  }
+
+  /** The permission chip (v1.329.0): rides the next turn's body AND persists
+   *  to the thread's setup right away when a conversation exists (picking a
+   *  level then closing the pane must not lose it); a fresh pane's pick rides
+   *  the first save. This pane's conversation only: the chat page's default
+   *  for new chats is left as it is. */
+  function pickPermission(mode: PermissionMode) {
+    approvalTouchedRef.current = true;
+    approvalRef.current = mode;
+    setApprovalMode(mode);
     if (messagesRef.current.length > 0 && !loadError) {
       queueSave(messagesRef.current);
     }
@@ -985,9 +1054,13 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             </div>
           ) : (
             <div key={i} className="min-w-0">
+              {/* v1.329.0: the work behind the answer, folded into the chat
+                  page's ONE quiet line ("Worked for 3.2 s · read 2 files");
+                  nothing for a reply with none. */}
+              <WorkLine {...paneWorkInput(m)} />
               <PaneMarkdown text={m.content} />
               {m.interrupted ? (
-                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-400/90">
+                <div className="mt-1 flex items-center gap-1.5 text-[11px] text-tone-warn">
                   <CircleAlert size={11} /> interrupted — this answer is
                   incomplete
                 </div>
@@ -1022,7 +1095,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                           </button>
                         </div>
                         {runNotes[key] ? (
-                          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-400/90">
+                          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-tone-warn">
                             <CircleAlert size={11} /> {runNotes[key]}
                           </div>
                         ) : null}
@@ -1030,6 +1103,16 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                     );
                   })
                 : null}
+              {/* v1.329.0: WHAT THE REPLY CHANGED, the chat page's line
+                  ("2 files changed +14 −3", each file opening its diff).
+                  Only a reply whose documents list paths has a window; it is
+                  asked once, when the reply is on screen. Undo is the pane's
+                  own (the same confirm and journal row as the card below). */}
+              <ReplyChanges
+                turn={paneTurnWindow(messages, i)}
+                undoFor={undoStateFor}
+                onUndo={undoNewestWrite}
+              />
               {/* CHANGED-FILE CARDS (BC2): the receipt's created/changed
                   paths as actionable rows — Open (OS app) + Undo (the real
                   journal). The receipt below stays the accountability record;
@@ -1073,7 +1156,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                           {outside ? (
                             // The receipt is truth — a path outside the
                             // pane's folder still renders, flagged.
-                            <span className="shrink-0 rounded-full bg-amber-500/[0.08] px-1.5 py-px text-[11px] text-amber-300">
+                            <span className="shrink-0 rounded-full bg-tone-warn/[0.08] px-1.5 py-px text-[11px] text-tone-warn">
                               outside this folder
                             </span>
                           ) : null}
@@ -1101,14 +1184,14 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                                 onClick={() =>
                                   void undoWrite(row.action_id, p)
                                 }
-                                className={`${PANE_GHOST_BUTTON} hover:bg-rose-500/10 hover:text-rose-300`}
+                                className={`${PANE_GHOST_BUTTON} hover:bg-tone-danger/10 hover:text-tone-danger`}
                               >
                                 <Undo2 size={10} />
                                 {undone ? "Undone" : "Undo newest write"}
                               </button>
                             ) : null}
                             {newerInThread ? (
-                              <span className="shrink-0 text-[11px] text-amber-400/80">
+                              <span className="shrink-0 text-[11px] text-tone-warn">
                                 (newer than this message)
                               </span>
                             ) : null}
@@ -1117,7 +1200,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                         {note ? (
                           <div
                             className={`mt-1 text-[11px] ${
-                              note.ok ? "text-emerald-400/90" : "text-rose-300"
+                              note.ok ? "text-tone-success" : "text-tone-danger"
                             }`}
                           >
                             {note.text}
@@ -1146,11 +1229,11 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         )}
         {stream.streaming ? (
           <div className="min-w-0" data-testid="pane-chat-live">
+            {/* v1.329.0: the chat page's live rows ("Reading harbor.xlsx",
+                "Running excel_query"), one grey line each. */}
             {stream.tools.length > 0 ? (
-              <div className="mb-2 space-y-0.5">
-                {stream.tools.map((t) => (
-                  <ToolRow key={t.id} card={t} />
-                ))}
+              <div className="mb-2">
+                <LiveToolRows cards={stream.tools} />
               </div>
             ) : null}
             {stream.text ? (
@@ -1178,7 +1261,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         {saveFailure ? (
           <div
             role="status"
-            className="mb-1.5 flex items-center gap-2 px-1 text-[11px] text-amber-300"
+            className="mb-1.5 flex items-center gap-2 px-1 text-[11px] text-tone-warn"
           >
             <span className="min-w-0 flex-1">
               Couldn&apos;t save this conversation: {saveFailure.detail}
@@ -1222,6 +1305,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           />
         ) : null}
         <div
+          ref={composerRef}
           data-testid="pane-chat-composer"
           inert={approvalPending}
           aria-hidden={approvalPending || undefined}
@@ -1301,6 +1385,22 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 ) : null}
               </select>
             </span>
+            {/* v1.329.0: the chat page's ONE permission chip, for this pane's
+                conversation. The level rides every pane turn (the stream lane
+                gates a pane turn on it exactly as a /chat turn) and is saved
+                with the thread. A narrow pane shows only the shield. */}
+            <span
+              data-testid="pane-chat-permission"
+              data-compact={composerNarrow ? "true" : undefined}
+              className={`inline-flex shrink-0 ${composerNarrow ? PANE_PERMISSION_COMPACT : ""}`}
+            >
+              <PermissionChip
+                value={approvalMode}
+                onChange={pickPermission}
+                disabled={!canCompose}
+                iconOnlyOnPhone
+              />
+            </span>
             <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
               {project ? (
                 <span
@@ -1320,18 +1420,26 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                     {folder}
                   </span>
                   {cwd ? (
+                    // v1.329.0: a narrow pane shows only the icon, so the
+                    // folder name keeps its room beside the permission
+                    // shield (it read "H…" at 390px). The name is still
+                    // said to a screen reader and on hover.
                     <button
                       type="button"
                       data-testid="pane-chat-make-project"
+                      data-compact={composerNarrow ? "true" : undefined}
+                      aria-label={composerNarrow ? "Make this a project" : undefined}
                       onClick={() => void makeProject()}
                       disabled={makingProject}
                       title="Creates a project rooted in this folder, so this chat, the assist bar and any agent handed work here are grounded in it"
-                      className="inline-flex h-[30px] min-w-[30px] shrink items-center gap-1.5 overflow-hidden rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40"
+                      className={`inline-flex h-[30px] min-w-[30px] items-center gap-1.5 overflow-hidden rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${composerNarrow ? "shrink-0 justify-center" : "shrink"}`}
                     >
                       <FolderKanban size={12} className="shrink-0" />
-                      <span className="min-w-0 truncate">
-                        {makingProject ? "Making…" : "Make this a project"}
-                      </span>
+                      {composerNarrow ? null : (
+                        <span data-testid="pane-chat-make-project-words" className="min-w-0 truncate">
+                          {makingProject ? "Making…" : "Make this a project"}
+                        </span>
+                      )}
                     </button>
                   ) : null}
                 </>

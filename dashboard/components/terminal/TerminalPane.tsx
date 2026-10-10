@@ -44,6 +44,7 @@ import {
   type PaneHost,
 } from "@/components/terminal/paneHost";
 import { resizeAllowed } from "@/components/terminal/resizeGate";
+import { PANE_TOGGLE_SLOT } from "@/components/terminal/paneViewToggle";
 import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
@@ -451,6 +452,7 @@ export function TerminalPane({
   onWriterReady,
   onOutput,
   parked = false,
+  reserveViewToggle = false,
   models = [],
   aiClis = [],
   skills = [],
@@ -519,6 +521,10 @@ export function TerminalPane({
    *  buffer and the output badges keep going; nothing renders, nothing holds
    *  a GPU context, and nothing resizes the PTY. */
   parked?: boolean;
+  /** v1.329.0: keep an empty slot right before the close button for the
+   *  page's Terminal ⇄ Chat toggle, which sits over it IN the header row
+   *  (components/terminal/paneViewToggle.ts) instead of over the content. */
+  reserveViewToggle?: boolean;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
@@ -1512,13 +1518,18 @@ export function TerminalPane({
         >
           {info.cwd}
         </span>
+        {/* v1.329.0: the pane's tools, as ONE group that gives way first when
+            the header is narrow (a phone, a small canvas pane): the model
+            picker shrinks, then the group is clipped, so the close button and
+            the view toggle's slot after it always stay in the row. */}
+        <div className="flex min-w-0 shrink items-center gap-2 overflow-hidden">
         {/* Per-pane AI model — THIS terminal's assist uses THIS model. */}
         <select
           aria-label="AI model for this terminal"
           value={choice}
           onChange={(e) => setChoice(e.target.value)}
           onMouseDown={(e) => e.stopPropagation()}
-          className="field w-auto max-w-[10rem] shrink-0 py-0.5 text-[10px]"
+          className="field w-auto min-w-0 max-w-[10rem] shrink py-0.5 text-[10px]"
         >
           <option value="">default model</option>
           {models.map((m) => (
@@ -1587,13 +1598,17 @@ export function TerminalPane({
           </span>
         )}
         <ConnPill state={state} />
+        </div>
+        {reserveViewToggle ? (
+          <span aria-hidden="true" data-testid="pane-toggle-slot" className={PANE_TOGGLE_SLOT} />
+        ) : null}
         <button
           onClick={(e) => {
             e.stopPropagation();
             onClose();
           }}
           title="Close terminal"
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-300"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-tone-danger/15 hover:text-tone-danger"
         >
           <X size={13} />
         </button>
@@ -2074,22 +2089,25 @@ export function TerminalPane({
 function ConnPill({ state }: { state: ConnState }) {
   if (state === "open") {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300">
-        <PlugZap size={9} /> live
+      <span title="Connected" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300">
+        <PlugZap size={9} /><span className="max-sm:hidden">live</span>
       </span>
     );
   }
   if (state === "closed") {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-medium text-rose-300">
-        <Plug size={9} /> closed
+      <span title="Connection closed" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-medium text-rose-300">
+        <Plug size={9} /><span className="max-sm:hidden">closed</span>
       </span>
     );
   }
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">
+    <span
+      title={state === "reconnecting" ? "Reconnecting" : "Connecting"}
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-300"
+    >
       <Loader2 size={9} className="animate-spin" />
-      {state === "reconnecting" ? "reconnecting" : "connecting"}
+      <span className="max-sm:hidden">{state === "reconnecting" ? "reconnecting" : "connecting"}</span>
     </span>
   );
 }
