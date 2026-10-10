@@ -300,6 +300,7 @@ import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { answeredModelName as answeredModelNameFor } from "@/lib/answeredModel";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
@@ -9765,17 +9766,13 @@ export default function ChatPage() {
     [models, choice],
   );
   // Calm chat W1-5 (v1.326.0): what the receipt's "answered by …" calls the
-  // model — the catalog's own label when it has one ("Opus 5.5", the words the
-  // model menu uses), else the model id. No model on the route: undefined, and
-  // the receipt names the provider instead. Returns a STRING so each memoized
-  // row re-renders only when its own name changes.
+  // model. v1.329.0 (G2): the SAME name the composer's model chip uses (the
+  // catalog's label, else friendlyModelName: "Opus 4.8", never
+  // "claude-opus-4-8"); lib/answeredModel holds the rule. No model on the
+  // route: undefined, and the receipt names the provider instead. Returns a
+  // STRING so each memoized row re-renders only when its own name changes.
   const answeredModelName = useCallback(
-    (route: TurnRoute | undefined): string | undefined => {
-      const model = (route?.model ?? "").trim();
-      if (!route || !model) return undefined;
-      const row = models.find((x) => x.provider === route.provider && x.model === model);
-      return row ? modelText(row) : model;
-    },
+    (route: TurnRoute | undefined): string | undefined => answeredModelNameFor(route, models),
     [models],
   );
   const rowImplRef = useRef(rowImpl);
@@ -12211,7 +12208,7 @@ export default function ChatPage() {
                                 markSetupChanged();
                               }}
                               disabled={awaiting && sessionId !== null}
-                              title="How hard the model thinks before answering — higher is slower and costs more"
+                              title="How hard the model thinks before answering. Higher is slower and costs more. Reasoning means the model's own default level."
                               className="h-[30px] max-w-[10rem] cursor-pointer appearance-none rounded-lg border-0 bg-transparent pl-2 pr-6 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40"
                             >
                               {/* v1.326.0: short words for a chip beside the

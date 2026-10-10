@@ -618,7 +618,9 @@ describe("TurnReceipt — step durations and the speed line", () => {
     );
     expand();
     const chips = screen.getAllByTestId("turn-step");
-    expect(chips.map((c) => c.textContent)).toEqual(["read_file · 0.3 s", "shell · 1.5 s · failed"]);
+    // v1.329.0 (G2): the work line's words; a step with no saved target keeps
+    // the tool id as a quiet hint, exactly as the work line says it.
+    expect(chips.map((c) => c.textContent)).toEqual(["Read · read_file · 0.3 s", "Ran · shell · 1.5 s · failed"]);
     expect(chips[1].getAttribute("data-ok")).toBe("false");
   });
 

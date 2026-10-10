@@ -47,6 +47,7 @@ import type { ToolCard } from "@/lib/useChatStream";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
+import { STEP_WORDS, rowSubject, stepPhrase } from "@/lib/stepWords";
 
 /* ------------------------------------------------------------- vocabulary */
 
@@ -54,49 +55,19 @@ import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from 
 // to keep each step's safe target); re-exported here for existing callers.
 export { toolKind, type WorkKind };
 
-function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
-
-function times(n: number): string {
-  return n === 1 ? "" : ` ${n} times`;
-}
-
-interface KindWords {
-  icon: LucideIcon;
-  /** Row title once the step is done. */
-  done: string;
-  /** Row title while it runs. */
-  doing: string;
-  /** v1.329.0: the words BEFORE a target, once done and while running —
-   *  "Searched the web for" + "pier 9 hours", "Read" + "harbor.xlsx". */
-  doneOn: string;
-  doingOn: string;
-  /** The count in the folded line ("read 2 files"). */
-  count: (n: number) => string;
-}
-
-const WORDS: Record<WorkKind, KindWords> = {
-  read: { icon: FileText, done: "Read", doing: "Reading", doneOn: "Read", doingOn: "Reading", count: (n) => `read ${plural(n, "file")}` },
-  make: { icon: FilePlus, done: "Made", doing: "Making", doneOn: "Made", doingOn: "Making", count: (n) => `made ${plural(n, "file")}` },
-  change: { icon: FilePen, done: "Changed", doing: "Changing", doneOn: "Changed", doingOn: "Changing", count: (n) => `changed ${plural(n, "file")}` },
-  folder: { icon: Folder, done: "Looked in", doing: "Looking in", doneOn: "Looked in", doingOn: "Looking in", count: (n) => `looked in ${plural(n, "folder")}` },
-  search: { icon: Search, done: "Searched files", doing: "Searching files", doneOn: "Searched files for", doingOn: "Searching files for", count: (n) => `searched files${times(n)}` },
-  web: { icon: Globe, done: "Searched the web", doing: "Searching the web", doneOn: "Searched the web for", doingOn: "Searching the web for", count: (n) => `searched the web${times(n)}` },
-  page: { icon: Globe, done: "Read a web page", doing: "Reading a web page", doneOn: "Read a page on", doingOn: "Reading a page on", count: (n) => `read ${plural(n, "web page")}` },
-  command: { icon: SquareTerminal, done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "command")}` },
-  tool: { icon: Wrench, done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "tool")}` },
+/* v1.329.0 (G2): the WORDS live in lib/stepWords, shared with the expanded
+ * receipt so both say a step the same way; only the icons stay here. */
+const ICON: Record<WorkKind, LucideIcon> = {
+  read: FileText,
+  make: FilePlus,
+  change: FilePen,
+  folder: Folder,
+  search: Search,
+  web: Globe,
+  page: Globe,
+  command: SquareTerminal,
+  tool: Wrench,
 };
-
-/** v1.329.0: the subject a row names after its words, and whether it is a
- *  file. A known tool names its safe target; any other tool names its own id
- *  ("Ran excel_query"). Null = no subject: the row keeps the older shape,
- *  words · tool id (a step saved before targets existed). */
-function rowSubject(kind: WorkKind, name: string, target: string | null): { text: string; file: boolean } | null {
-  if (kind === "tool") return { text: name, file: false };
-  if (!target) return null;
-  return { text: target, file: kind === "read" || kind === "make" || kind === "change" || kind === "folder" };
-}
 
 /** The order counts are said in: looking before making, tools last. */
 const KIND_ORDER: WorkKind[] = ["read", "folder", "search", "page", "web", "change", "make", "command", "tool"];
@@ -164,7 +135,7 @@ export function workCounts(steps: ReceiptStep[]): string[] {
   const out: string[] = [];
   for (const k of KIND_ORDER) {
     const c = n.get(k);
-    if (c) out.push(WORDS[k].count(c));
+    if (c) out.push(STEP_WORDS[k].count(c));
   }
   if (failed) out.push(`${failed} failed`);
   return out;
@@ -373,7 +344,7 @@ function ToolRow({ card }: { card: ToolCard }) {
   const running = card.status !== "done";
   const failed = !running && card.ok === false;
   const kind = toolKind(card.name);
-  const w = WORDS[kind];
+  const w = STEP_WORDS[kind];
   const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
   // The hover: a live FILE keeps its full path (it is on this screen only and
   // is never saved); a search or a page shows the safe words and the tool id.
@@ -395,7 +366,7 @@ function ToolRow({ card }: { card: ToolCard }) {
   const preview = !running ? firstLine(card.output) : "";
   return (
     <WorkRow
-      icon={w.icon}
+      icon={ICON[kind]}
       title={subject ? (running ? w.doingOn : w.doneOn) : running ? w.doing : w.done}
       subject={subject?.text ?? null}
       subjectFile={!!subject?.file}
@@ -462,19 +433,18 @@ export const LiveToolRows = memo(function LiveToolRows({ cards }: { cards: reado
  *  excel_query". A step saved before targets existed keeps the older row,
  *  words · tool id ("Read · read_file"). */
 function StepRow({ step }: { step: ReceiptStep }) {
-  const kind = toolKind(step.name);
-  const w = WORDS[kind];
+  // v1.329.0 (G2): the same phrase the expanded receipt says (lib/stepWords).
+  const p = stepPhrase(step.name, step.target ?? null);
   const failed = step.ok === false;
   const dur = secondsText(step.ms);
-  const subject = rowSubject(kind, step.name, step.target ?? null);
   return (
     <WorkRow
-      icon={w.icon}
-      title={subject ? w.doneOn : w.done}
-      subject={subject?.text ?? null}
-      subjectFile={!!subject?.file}
-      subjectTitle={subject ? (kind === "tool" ? step.name : `${subject.text} (${step.name})`) : undefined}
-      detail={subject ? null : step.name}
+      icon={ICON[p.kind]}
+      title={p.words}
+      subject={p.subject}
+      subjectFile={p.file}
+      subjectTitle={p.subject ? (p.kind === "tool" ? step.name : `${p.subject} (${step.name})`) : undefined}
+      detail={p.hint}
       failed={failed}
       meta={
         <>

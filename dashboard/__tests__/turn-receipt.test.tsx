@@ -97,11 +97,12 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
   it("mock gets the strongest wording, collapsed", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "default" }} />);
     // No expand click — this must be on the collapsed line.
-    const chip = screen.getByText(/mock answer — no real model ran/);
+    const chip = screen.getByText(/Mock answer\. No real model ran\./);
     expect(chip).toBeTruthy();
     expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
-    // And it is styled as a warning, not quiet zinc.
-    expect(chip.className).toContain("amber");
+    // And it is styled as a warning, not quiet zinc. v1.329.0 (G2): through
+    // the tone token, so Daylight inks it too.
+    expect(chip.className).toContain("text-tone-warn");
   });
 
   it("failover names who actually answered, collapsed, amber", () => {
@@ -114,8 +115,9 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
         }}
       />,
     );
-    const chip = screen.getByText(/answered by OpenAI — failover/);
-    expect(chip.className).toContain("amber");
+    // v1.329.0 (G2): plain words, no dash aside.
+    const chip = screen.getByText(/answered by OpenAI \(Claude Code was not available\)/);
+    expect(chip.className).toContain("text-tone-warn");
   });
 
   it("requested !== provider warns even without a failover reason", () => {
@@ -125,9 +127,9 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
       />,
     );
     const chip = screen.getByText(
-      /answered by OpenAI — asked for Ollama/,
+      /answered by OpenAI \(you asked for Ollama\)/,
     );
-    expect(chip.className).toContain("amber");
+    expect(chip.className).toContain("text-tone-warn");
   });
 
   it("served-as-asked stays quiet: provider name, no warning", () => {
@@ -135,7 +137,7 @@ describe("TurnReceipt — the honesty chip (visible WITHOUT expanding)", () => {
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.textContent).toContain("Claude Code"); // v1.314.0: plain name
     expect(screen.queryByText(/answered by/)).toBeNull();
-    expect(document.querySelector(".text-amber-300")).toBeNull();
+    expect(document.querySelector(".text-tone-warn")).toBeNull();
   });
 });
 
@@ -194,7 +196,7 @@ describe("TurnReceipt — expand/collapse", () => {
     expand();
     // Requested vs served + reason.
     // v1.314.0: plain name in the words, the raw id in the span's title.
-    expect(screen.getByText(/requested Claude Code/).getAttribute("title")).toBe("claude-cli");
+    expect(screen.getByText(/you asked for Claude Code/).getAttribute("title")).toBe("claude-cli");
     expect(screen.getByText(/\(failover\)/)).toBeTruthy();
     expect(screen.getByText(/gpt-5\.2/)).toBeTruthy();
     // Tools as individual entries.
@@ -268,7 +270,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
   it("mock outranks everything", () => {
     expect(
       routeWarning({ requested: "mock", provider: "mock", reason: "explicit" }),
-    ).toBe("mock answer — no real model ran");
+    ).toBe("Mock answer. No real model ran.");
   });
   it("mock outranks failover — a failover TO the mock is still a mock answer", () => {
     // Kills the precedence-swap mutation: reason says failover, but "no real
@@ -279,11 +281,11 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "mock",
         reason: "failover",
       }),
-    ).toBe("mock answer — no real model ran");
+    ).toBe("Mock answer. No real model ran.");
   });
   it("failover warns even when requested is absent", () => {
     expect(routeWarning({ provider: "openai", reason: "failover" })).toContain(
-      "failover",
+      "as a fallback",
     );
   });
   it("failover names who was asked for when that is known", () => {
@@ -294,12 +296,12 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "openai",
         reason: "failover",
       }),
-    ).toBe("answered by OpenAI — failover from Claude Code");
+    ).toBe("answered by OpenAI (Claude Code was not available)");
   });
   it("failover with requested === provider still warns, without a bogus 'from'", () => {
     expect(
       routeWarning({ requested: "openai", provider: "openai", reason: "failover" }),
-    ).toBe("answered by OpenAI — failover");
+    ).toBe("answered by OpenAI (as a fallback)");
   });
   it('requested "" (chat\'s normal default-route value) is "didn\'t ask", not a mismatch', () => {
     expect(
@@ -307,7 +309,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
     ).toBeNull();
     expect(
       routeWarning({ requested: "", provider: "openai", reason: "failover" }),
-    ).toBe("answered by OpenAI — failover");
+    ).toBe("answered by OpenAI (as a fallback)");
   });
   it("the quiet reasons stay quiet when the asked-for provider served", () => {
     // "prompted-tools" = the CHOSEN adapter kept the request via the scaffold
@@ -337,7 +339,7 @@ describe("routeWarning (the pure honesty predicate)", () => {
         provider: "openai",
         reason: "prompted-tools",
       }),
-    ).toBe("answered by OpenAI — asked for Claude Code");
+    ).toBe("answered by OpenAI (you asked for Claude Code)");
   });
 });
 
@@ -442,8 +444,11 @@ describe("TurnReceipt — pathological server data", () => {
     const long = "x".repeat(300);
     render(<TurnReceipt route={SERVED_AS_ASKED} toolsUsed={[long]} />);
     expand();
-    const chip = screen.getByTitle(long);
-    expect(chip.textContent).toBe(long);
+    // v1.329.0 (G2): an unknown tool reads "Ran <its id>", the work line's
+    // words; the full id is still on the row's title.
+    const chip = screen.getByTestId("turn-tool");
+    expect(chip.textContent).toBe(`Ran ${long}`);
+    expect(chip.getAttribute("title")).toContain(long);
     expect(chip.className).toContain("truncate");
   });
 });
@@ -451,7 +456,7 @@ describe("TurnReceipt — pathological server data", () => {
 describe("TurnReceipt — interaction & accessibility", () => {
   it("clicking the warning chip itself toggles expansion (it lives inside the button)", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "mock" }} />);
-    fireEvent.click(screen.getByText(/mock answer/));
+    fireEvent.click(screen.getByText(/Mock answer/));
     expect(
       screen.getByRole("button", { expanded: true }).getAttribute("aria-expanded"),
     ).toBe("true");
@@ -508,7 +513,7 @@ describe("TurnReceipt — interaction & accessibility", () => {
       />,
     );
     expect(container.firstChild).not.toBeNull();
-    expect(screen.getByText(/mock answer — no real model ran/)).toBeTruthy();
+    expect(screen.getByText(/Mock answer\. No real model ran\./)).toBeTruthy();
     expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
   });
 });

@@ -402,11 +402,11 @@ describe("the done frame's trust fields reach the receipt (v1.298.0)", () => {
   it("the receipt says the note beside the reason, once", () => {
     render(<TurnReceipt trust="low" trustReason={REASON} trustNote="low trust: 4 tools kept away" />);
     expect(screen.getByTestId("turn-trust").textContent).toBe(
-      `low trust: ${REASON} — 4 tools kept away`,
+      `low trust: ${REASON}. 4 tools kept away`,
     );
     cleanup();
     render(<TurnReceipt trust="low" trustNote="4 tools kept away" />);
-    expect(screen.getByTestId("turn-trust").textContent).toBe("low trust — 4 tools kept away");
+    expect(screen.getByTestId("turn-trust").textContent).toBe("low trust. 4 tools kept away");
     cleanup();
     // A note alone, under full trust, is NOT a line.
     const { container } = render(<TurnReceipt trust="full" trustNote="low trust: x" />);

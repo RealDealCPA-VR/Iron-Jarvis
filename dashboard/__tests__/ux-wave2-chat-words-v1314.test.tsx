@@ -443,16 +443,16 @@ describe("turn receipt names who answered in plain words (receipt-raw-provider-i
   it("failover and mismatch warnings name both sides through providerDisplay", () => {
     expect(
       routeWarning({ requested: "", provider: "codex-cli", reason: "failover", from: "claude-cli", why: "timeout" }),
-    ).toBe("answered by Codex — Claude Code didn't respond in time");
+    ).toBe("answered by Codex (Claude Code didn't respond in time)");
     // A custom endpoint id has no friendly name: it passes through unchanged.
     expect(
       routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "fleet-rtx6000ada", why: "http 500" }),
-    ).toBe("answered by Claude Code — fleet-rtx6000ada returned HTTP 500");
+    ).toBe("answered by Claude Code (fleet-rtx6000ada returned HTTP 500)");
     expect(routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "ollama" })).toBe(
-      "answered by Claude Code — failover from Ollama",
+      "answered by Claude Code (Ollama was not available)",
     );
     expect(routeWarning({ requested: "codex-cli", provider: "claude-cli", reason: "explicit" })).toBe(
-      "answered by Claude Code — asked for Codex",
+      "answered by Claude Code (you asked for Codex)",
     );
   });
 
@@ -469,8 +469,8 @@ describe("turn receipt names who answered in plain words (receipt-raw-provider-i
         }}
       />,
     );
-    const chip = screen.getByText(/answered by Claude Code — Codex returned HTTP 500/);
-    expect(chip.className).toMatch(/amber/);
+    const chip = screen.getByText(/answered by Claude Code \(Codex returned HTTP 500\)/);
+    expect(chip.className).toMatch(/text-tone-warn/);
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.textContent).not.toContain("claude-cli");
     fireEvent.click(toggle);
@@ -486,9 +486,9 @@ describe("turn receipt names who answered in plain words (receipt-raw-provider-i
 
   it("CONTROL: the demo-model warning still outranks everything, amber, without expanding", () => {
     render(<TurnReceipt route={{ provider: "mock", reason: "failover", from: "ollama", why: "http 500" }} />);
-    const chip = screen.getByText(/no real model ran/);
-    expect(chip.className).toMatch(/amber/);
-    expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/no real model ran/);
+    const chip = screen.getByText(/No real model ran/);
+    expect(chip.className).toMatch(/text-tone-warn/);
+    expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/No real model ran/);
   });
 });
 

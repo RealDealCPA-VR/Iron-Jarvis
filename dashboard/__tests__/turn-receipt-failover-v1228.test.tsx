@@ -28,7 +28,7 @@ describe("routeWarning with from/why (v1.228.0)", () => {
         from: "fleet-rtx6000ada",
         why: "http 500",
       }),
-    ).toBe("answered by Claude Code — fleet-rtx6000ada returned HTTP 500");
+    ).toBe("answered by Claude Code (fleet-rtx6000ada returned HTTP 500)");
   });
 
   it("words every router token in plain language", () => {
@@ -46,28 +46,28 @@ describe("routeWarning with from/why (v1.228.0)", () => {
   it("from without why still names who failed", () => {
     expect(
       routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "ollama" }),
-    ).toBe("answered by Claude Code — failover from Ollama");
+    ).toBe("answered by Claude Code (Ollama was not available)");
   });
 
   it("from === provider is not a failover story — falls back to the old wording", () => {
     expect(
       routeWarning({ requested: "", provider: "claude-cli", reason: "failover", from: "claude-cli", why: "http 500" }),
-    ).toBe("answered by Claude Code — failover");
+    ).toBe("answered by Claude Code (as a fallback)");
   });
 
   it("pre-v1.228.0 messages (no from/why) keep their wording", () => {
     expect(
       routeWarning({ requested: "fleet-custom", provider: "claude-cli", reason: "failover" }),
-    ).toBe("answered by Claude Code — failover from fleet-custom");
+    ).toBe("answered by Claude Code (fleet-custom was not available)");
     expect(routeWarning({ requested: "", provider: "claude-cli", reason: "failover" })).toBe(
-      "answered by Claude Code — failover",
+      "answered by Claude Code (as a fallback)",
     );
   });
 
   it("mock still outranks a failover that carries from/why", () => {
     expect(
       routeWarning({ provider: "mock", reason: "failover", from: "ollama", why: "http 500" }),
-    ).toBe("mock answer — no real model ran");
+    ).toBe("Mock answer. No real model ran.");
   });
 
   it("from/why are ignored when the reason is not failover", () => {
@@ -92,11 +92,12 @@ describe("TurnReceipt renders the from/why story", () => {
         }}
       />,
     );
-    const chip = screen.getByText(/answered by Claude Code — fleet-rtx6000ada returned HTTP 500/);
-    expect(chip.className).toMatch(/amber/);
+    const chip = screen.getByText(/answered by Claude Code \(fleet-rtx6000ada returned HTTP 500\)/);
+    expect(chip.className).toMatch(/text-tone-warn/);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     // The expanded row is its own span whose whole text is the from/why
     // story (exact match — the collapsed chip also CONTAINS it).
-    expect(screen.getByText("— fleet-rtx6000ada returned HTTP 500")).toBeTruthy();
+    // v1.329.0 (G2): a " · " joins the detail, never a dash aside.
+    expect(screen.getByText("· fleet-rtx6000ada returned HTTP 500")).toBeTruthy();
   });
 });

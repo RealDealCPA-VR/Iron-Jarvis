@@ -475,7 +475,7 @@ describe("receipt + doors: the done frame's server truth renders", () => {
     // disclosure the receipt exists for.
     await waitFor(() =>
       expect(
-        screen.getByText(/mock answer — no real model ran/i),
+        screen.getByText(/Mock answer\. No real model ran\./i),
       ).toBeInTheDocument(),
     );
     expect(screen.getByText(/adapted to qwen-3b/i)).toBeInTheDocument();

@@ -68,6 +68,9 @@ import {
 } from "lucide-react";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 import { providerDisplay } from "@/lib/onboarding";
+import { friendlyModelName } from "@/lib/friendlyModelName";
+import { stepPhrase } from "@/lib/stepWords";
+import { cleanTarget } from "@/lib/workTarget";
 import {
   folderRulesLine,
   refWarningCount,
@@ -151,7 +154,7 @@ export function adaptedLabel(
   const worded = changes.map(wordChange);
   const who =
     typeof adapted.model === "string" && adapted.model.trim()
-      ? ` to ${adapted.model.trim()}`
+      ? ` to ${friendlyModelName(adapted.model.trim())}`
       : "";
   return `adapted${who}: ${worded.join(", ")}`;
 }
@@ -241,10 +244,15 @@ function stepRows(steps: ReceiptStep[] | null | undefined): ReceiptStep[] {
   for (const st of steps) {
     if (!st || typeof st !== "object") continue;
     if (typeof st.name !== "string" || !st.name.trim()) continue;
+    // v1.329.0 (G2): the step's safe target rides along (made safe AGAIN:
+    // a saved thread may be older or hand-edited), so the detail can say
+    // "Read harbor.xlsx" in the work line's own words.
+    const target = cleanTarget((st as { target?: unknown }).target);
     out.push({
       name: st.name,
       ok: typeof st.ok === "boolean" ? st.ok : null,
       ms: fin(st.ms),
+      ...(target ? { target } : {}),
     });
   }
   return out;
@@ -292,9 +300,10 @@ export interface TurnReceiptProps {
    * with the honest reason as its title. Requires `onUndo` too.
    */
   undoFor?: (path: string) => ReceiptUndoState | null | undefined;
-  /** v1.323.0: the turn's tool steps in order, with durations — the expanded
-   *  tool chips then say "read_file · 0.3 s" and mark a failed one. Absent →
-   *  today's names-only chips. Never a reason to render on its own. */
+  /** v1.323.0: the turn's tool steps in order, with durations. The expanded
+   *  rows say them in the work line's words ("Read harbor.xlsx · 0.3 s",
+   *  v1.329.0) and mark a failed one. Absent: one row per tool name. Never a
+   *  reason to render on its own. */
   steps?: ReceiptStep[] | null;
   /** v1.323.0: client-clock timing — the expanded view's speed line. Never
    *  a reason to render on its own (a trivial turn stays silent). */
@@ -317,8 +326,10 @@ export interface TurnReceiptProps {
    * surfaces (Build pane, missions) keep the stand-alone line.
    */
   inline?: boolean;
-  /** v1.326.0: the model's name for the "answered by" words (the catalog's
-   *  label, else its id), chosen by the caller. Absent: the provider's name. */
+  /** v1.326.0: the model's name for the "answered by" words, chosen by the
+   *  caller (v1.329.0: the catalog's label, else the name the composer's chip
+   *  uses, lib/answeredModel). The raw id stays in the line's title.
+   *  Absent: the provider's name. */
   modelName?: string | null;
   /** Calm chat W2-3 (v1.327.0): the project folder's instruction files this
    *  turn followed (["AGENTS.md", "CLAUDE.md"]) — a quiet line in the
@@ -416,7 +427,9 @@ export function wordWhy(why: string | null | undefined): string {
 
 export function routeWarning(route: TurnRoute | null | undefined): string | null {
   if (!route) return null;
-  if (route.provider === "mock") return "mock answer — no real model ran";
+  // v1.329.0 (G2): plain short sentences, no dash asides. The reason a
+  // substitute answered rides in brackets after the name.
+  if (route.provider === "mock") return "Mock answer. No real model ran.";
   // v1.314.0: plain provider names in the words; the ids stay in titles.
   const who = providerDisplay(route.provider);
   if (route.reason === "failover") {
@@ -428,15 +441,15 @@ export function routeWarning(route: TurnRoute | null | undefined): string | null
     if (from && from !== route.provider) {
       const why = wordWhy(route.why);
       return why
-        ? `answered by ${who} — ${providerDisplay(from)} ${why}`
-        : `answered by ${who} — failover from ${providerDisplay(from)}`;
+        ? `answered by ${who} (${providerDisplay(from)} ${why})`
+        : `answered by ${who} (${providerDisplay(from)} was not available)`;
     }
     return route.requested && route.requested !== route.provider
-      ? `answered by ${who} — failover from ${providerDisplay(route.requested)}`
-      : `answered by ${who} — failover`;
+      ? `answered by ${who} (${providerDisplay(route.requested)} was not available)`
+      : `answered by ${who} (as a fallback)`;
   }
   if (route.requested && route.requested !== route.provider) {
-    return `answered by ${who} — asked for ${providerDisplay(route.requested)}`;
+    return `answered by ${who} (you asked for ${providerDisplay(route.requested)})`;
   }
   return null;
 }
@@ -503,6 +516,42 @@ function fin(n: number | null | undefined): number | null {
  *  props cross a JSON boundary, so the types alone are not a guarantee. */
 function names(xs: string[]): string[] {
   return xs.filter((x) => typeof x === "string" && x.trim().length > 0);
+}
+
+/** One step of the expanded receipt, said the way the work line says it
+ *  (v1.329.0, G2). `timed` = it came from the stored steps (so it carries
+ *  `data-ok`, a duration and a failure); a names-only fallback row has none. */
+function ReceiptStepRow({ step, timed }: { step: ReceiptStep; timed: boolean }) {
+  const p = stepPhrase(step.name, step.target ?? null);
+  const dur = secondsText(step.ms);
+  const failed = step.ok === false;
+  const title = [p.subject ? `${p.words} ${p.subject} (${step.name})` : `${p.words} (${step.name})`, dur, failed ? "failed" : null]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div
+      data-testid={timed ? "turn-step" : "turn-tool"}
+      data-ok={timed ? (step.ok === null ? "unknown" : String(step.ok)) : undefined}
+      title={title}
+      className={`min-w-0 truncate text-[12px] leading-5 ${failed ? "text-tone-danger" : "text-zinc-400"}`}
+    >
+      {p.words}
+      {p.subject && (
+        <>
+          {" "}
+          <span className={failed ? undefined : "text-zinc-300"}>{p.subject}</span>
+        </>
+      )}
+      {p.hint && (
+        <>
+          <span aria-hidden="true" className="text-zinc-600"> · </span>
+          <span className="text-zinc-500">{p.hint}</span>
+        </>
+      )}
+      {dur && <span className={failed ? undefined : "text-zinc-500"}> · {dur}</span>}
+      {failed && <span> · failed</span>}
+    </div>
+  );
 }
 
 export function TurnReceipt({
@@ -616,7 +665,7 @@ export function TurnReceipt({
         <span
           key="who"
           title={rawRoute(rt)}
-          className="inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.06] px-1.5 py-px font-medium text-amber-300"
+          className="inline-flex min-w-0 items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/[0.06] px-1.5 py-px font-medium text-tone-warn"
         >
           <AlertTriangle size={10} className="shrink-0" />
           {warning}
@@ -662,7 +711,7 @@ export function TurnReceipt({
     // A silent denial invisible until expand would repeat the original bug —
     // the count is on the line, in warning colour.
     parts.push(
-      <span key="denied" className="inline-flex items-center gap-1 text-amber-300">
+      <span key="denied" className="inline-flex items-center gap-1 text-tone-warn">
         <Ban size={10} className="shrink-0" />
         {denied.length} blocked
       </span>,
@@ -703,10 +752,10 @@ export function TurnReceipt({
       <span
         key="trust"
         data-testid="turn-trust"
-        className="inline-flex items-center gap-1 text-amber-300"
+        className="inline-flex items-center gap-1 text-tone-warn"
       >
         <ShieldAlert size={10} className="shrink-0" />
-        {note ? `${head} — ${note}` : head}
+        {note ? `${head}. ${note.charAt(0).toUpperCase()}${note.slice(1)}` : head}
       </span>,
     );
   }
@@ -781,13 +830,13 @@ export function TurnReceipt({
                 {mismatch && (
                   <span className="text-tone-warn/90" title={rt.requested}>
                     {" "}
-                    — requested {providerDisplay(rt.requested)}
+                    · you asked for {providerDisplay(rt.requested)}
                   </span>
                 )}
                 {rt.reason === "failover" && rt.from && rt.from !== rt.provider && (
                   <span className="text-tone-warn/90" title={rt.from}>
                     {" "}
-                    — {providerDisplay(rt.from)} {wordWhy(rt.why) || "failed"}
+                    · {providerDisplay(rt.from)} {wordWhy(rt.why) || "failed"}
                   </span>
                 )}
                 {rt.reason === "auto-tier" ? (
@@ -804,7 +853,7 @@ export function TurnReceipt({
                     (
                     <Link
                       href="/connections"
-                      title="Auto picked this model from its difficulty tiers and your local models' measured quality — see each model's report card on Connections"
+                      title="Auto picked this model from its difficulty tiers and your local models' measured quality. Each model's report card on Connections shows it."
                       className="underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-300"
                     >
                       auto-tier
@@ -855,48 +904,19 @@ export function TurnReceipt({
             </div>
           )}
 
-          {stepChips.length > 0 ? (
+          {/* v1.329.0 (G2): the steps in the WORK LINE's own words ("Read
+              harbor.xlsx · 0.4 s", lib/stepWords), never a second
+              vocabulary of monospace tool ids. The id stays on the row's
+              hover, and as a quiet hint where the words do not name it. */}
+          {(stepChips.length > 0 || tools.length > 0) && (
             <div className="flex items-start gap-2">
               <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
-                {stepChips.map((st, i) => {
-                  const dur = secondsText(st.ms);
-                  const failed = st.ok === false;
-                  const label = [st.name, dur, failed ? "failed" : null]
-                    .filter(Boolean)
-                    .join(" · ");
-                  return (
-                    <code
-                      key={`${st.name}-${i}`}
-                      data-testid="turn-step"
-                      data-ok={st.ok === null ? "unknown" : String(st.ok)}
-                      title={label}
-                      className={
-                        failed
-                          ? "max-w-full truncate rounded border border-tone-danger/20 bg-tone-danger/[0.05] px-1.5 py-0.5 font-mono text-[11px] text-tone-danger/90"
-                          : "max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
-                      }
-                    >
-                      {st.name}
-                      {dur && <span className="text-zinc-500"> · {dur}</span>}
-                      {failed && <span> · failed</span>}
-                    </code>
-                  );
-                })}
-              </div>
-            </div>
-          ) : tools.length > 0 && (
-            <div className="flex items-start gap-2">
-              <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
-                {tools.map((t, i) => (
-                  <code
-                    key={`${t}-${i}`}
-                    title={t}
-                    className="max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
-                  >
-                    {t}
-                  </code>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                {(stepChips.length > 0
+                  ? stepChips
+                  : tools.map((t): ReceiptStep => ({ name: t, ok: null, ms: null }))
+                ).map((st, i) => (
+                  <ReceiptStepRow key={`${st.name}-${i}`} step={st} timed={stepChips.length > 0} />
                 ))}
               </div>
             </div>
@@ -954,7 +974,7 @@ export function TurnReceipt({
                             aria-label={`Undo the write to ${docBasename(path)}`}
                             title={
                               undoState.undoable
-                                ? `Undo this write — revert ${docBasename(path)}`
+                                ? `Undo this write and put back ${docBasename(path)}`
                                 : `Can't undo: ${undoState.reason ?? "not undoable"}`
                             }
                             className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-warn disabled:opacity-40"

@@ -62,7 +62,8 @@ function ArgLine({ name, value }: { name: string; value: unknown }) {
   // user is deciding is a decision made on half the facts.
   return (
     <p className="break-all text-[11px] text-zinc-400">
-      <span className="text-zinc-500">{name}:</span> {text}
+      <span className="text-zinc-500">{name}:</span>{" "}
+      {text ? text : <span className="text-zinc-500">(empty)</span>}
     </p>
   );
 }
@@ -72,7 +73,13 @@ function ExampleLine({ args }: { args: Record<string, unknown> }) {
   const text = Object.entries(args)
     .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
     .join(" · ");
-  return <p className="break-all font-mono text-[11px] text-zinc-400">{text || "—"}</p>;
+  // v1.329.0 (G2): a call with no arguments says so in a word, never a bare
+  // dash the user has to decode.
+  return (
+    <p className="break-all font-mono text-[11px] text-zinc-400">
+      {text || <span className="font-sans text-zinc-500">(empty)</span>}
+    </p>
+  );
 }
 
 /** "Waiting for you" in the words the daemon's wait actually has. */

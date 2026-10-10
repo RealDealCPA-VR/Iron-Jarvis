@@ -114,10 +114,10 @@ describe("TurnReceipt — the quiet adapted line", () => {
     );
     const line = screen.getByText(/adapted to qwen3:4b/);
     expect(line.className).toContain("zinc");
-    expect(line.className).not.toContain("amber");
+    expect(line.className).not.toContain("tone-warn");
     // The whole strip stays warning-free — same bar the quiet-route test in
     // turn-receipt.test.tsx holds served-as-asked turns to.
-    expect(document.querySelector(".text-amber-300")).toBeNull();
+    expect(document.querySelector(".text-tone-warn")).toBeNull();
     expect(screen.queryByText(/answered by/)).toBeNull();
   });
 
@@ -152,9 +152,9 @@ describe("TurnReceipt — the quiet adapted line", () => {
       />,
     );
     // The warning stays the warning; the quiet line stays quiet.
-    const chip = screen.getByText(/mock answer — no real model ran/);
-    expect(chip.className).toContain("amber");
+    const chip = screen.getByText(/Mock answer\. No real model ran\./);
+    expect(chip.className).toContain("text-tone-warn");
     const line = screen.getByText(/adapted to tiny/);
-    expect(line.className).not.toContain("amber");
+    expect(line.className).not.toContain("tone-warn");
   });
 });
