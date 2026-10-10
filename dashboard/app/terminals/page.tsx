@@ -9,8 +9,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Rnd } from "react-rnd";
 import {
-  FileText,
-  FolderTree,
   LayoutGrid,
   Loader2,
   MessageSquare,
@@ -23,7 +21,7 @@ import {
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
-import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton, Empty } from "@/components/ui";
+import { Card, OfflineHint, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
 import { PageHeader } from "@/components/PageHeader";
@@ -36,7 +34,7 @@ import {
   lastLine,
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
-import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
+import { PaneRail, RAIL_FOOTER_BUTTON, type RailPane } from "@/components/terminal/PaneRail";
 import {
   livePaneAccounts,
   paneAccountBadge,
@@ -48,6 +46,7 @@ import {
 import { PANE_VIEW_PREFIX, prunePaneStorage } from "@/components/terminal/paneKeys";
 import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
 import { PANE_TOGGLE_PLACE, PANE_TOGGLE_SLOT } from "@/components/terminal/paneViewToggle";
+import { paneFrameClass } from "@/components/terminal/paneFrame";
 import {
   PaneStateSummary,
   displayState,
@@ -112,6 +111,12 @@ function rectsOverlap(a: Rect, b: Rect, gutter = 6): boolean {
     a.y + a.height + gutter > b.y
   );
 }
+
+/** The Build side panel's two tabs (v1.329.0: plain text tabs). */
+const BUILD_PANEL_TABS = [
+  { value: "folders", label: "Folders" },
+  { value: "files", label: "Files" },
+] as const;
 
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -275,8 +280,11 @@ export default function TerminalsPage() {
           const cli = paneOverrides[t.id]?.cli ?? a?.agent_cli ?? null;
           return {
             id: t.id,
+            // `||`, not `??` (v1.329.0): a pane whose name was cleared reads
+            // as "" from the daemon, and a row with no name at all is a dot
+            // over nothing; it falls back to the shell's name like the header.
             label:
-              paneOverrides[t.id]?.name ?? a?.name ?? t.shell ?? t.id,
+              paneOverrides[t.id]?.name || a?.name || t.shell || t.id,
             state: displayState(
               resolveState(a?.state, Boolean(unseenTermOutput[t.id])),
               cli,
@@ -293,6 +301,8 @@ export default function TerminalsPage() {
             // v1.302.0: the account this pane started on (the header chip's label).
             // Live: the activity poll's accounts win over the row read at load.
             account: paneAccountBadge(livePaneAccounts(t, a), cli),
+            // v1.329.0: the row's quiet age.
+            since: t.created_at ?? null,
           };
         }),
     [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus, cliLabel],
@@ -890,10 +900,14 @@ export default function TerminalsPage() {
                   </option>
                 ))}
               </select>
+              {/* v1.329.0 (calm chat): a quiet ghost like Rail and Tidy beside
+                  it, not a glowing accent slab. */}
               <button
+                type="button"
+                data-testid="header-new-terminal"
                 onClick={() => addTerminal(selectedPath)}
                 disabled={busy}
-                className="btn-accent py-1.5 text-[13px]"
+                className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px]"
               >
                 {busy ? (
                   <Loader2 size={14} className="animate-spin" />
@@ -924,9 +938,17 @@ export default function TerminalsPage() {
           <OfflineHint detail="Terminals and the directory tree both need it running." />
         </Reveal>
       )}
+      {/* v1.329.0 (calm chat): one plain line in the danger tone, never a
+          red bordered card. The daemon's own words carry the path. */}
       {error && (
         <Reveal>
-          <ErrorNote>{error}</ErrorNote>
+          <p
+            role="alert"
+            data-testid="build-error"
+            className="break-words text-[13px] text-tone-danger"
+          >
+            {error}
+          </p>
         </Reveal>
       )}
 
@@ -958,9 +980,9 @@ export default function TerminalsPage() {
                     data-testid="shape-canvas"
                     onClick={() => chooseShape("canvas")}
                     title="Free-form canvas — drag and resize terminals, several visible at once"
-                    className="flex w-full items-center gap-2 rounded-xl border border-white/[0.06] px-2 py-1.5 text-[11.5px] text-zinc-500 transition-colors hover:border-white/[0.14] hover:text-zinc-300"
+                    className={RAIL_FOOTER_BUTTON}
                   >
-                    <LayoutGrid size={13} className="shrink-0" />
+                    <LayoutGrid size={14} className="shrink-0" />
                     Canvas
                   </button>
                 }
@@ -1165,11 +1187,10 @@ export default function TerminalsPage() {
                             <div
                               data-testid={`chat-layer-${t.id}`}
                               style={{ visibility: view === "chat" ? "visible" : "hidden" }}
-                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-ink-900 shadow-card transition-colors ${
-                                focusedId === t.id
-                                  ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
-                                  : "border-white/[0.07] hover:border-white/[0.14]"
-                              }`}
+                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(
+                                focusedId === t.id,
+                                shape === "canvas",
+                              )}`}
                             >
                               <header
                                 className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2 ${
@@ -1456,7 +1477,8 @@ export default function TerminalsPage() {
                   onClick={() => addTerminal(selectedPath)}
                   disabled={busy}
                   title="Open a new terminal"
-                  className="absolute bottom-3 right-3 z-[9998] flex items-center gap-1.5 rounded-lg border border-accent/30 bg-ink-900/85 px-2.5 py-1.5 text-[12px] font-medium text-accent-soft shadow-card backdrop-blur transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-testid="canvas-new-terminal"
+                  className="absolute bottom-3 right-3 z-[9998] flex items-center gap-1.5 rounded-[10px] border border-white/[0.08] bg-ink-900/85 px-2.5 py-1.5 text-[12px] text-zinc-300 backdrop-blur transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy ? (
                     <Loader2 size={13} className="animate-spin" />
@@ -1480,40 +1502,63 @@ export default function TerminalsPage() {
             <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-9rem-var(--ij-strip-h,0px))]">
               {treeCollapsed ? (
                 <button
+                  type="button"
                   onClick={() => changeTreeCollapsed(false)}
                   title="Show panel"
                   aria-label="Show panel"
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 py-2 text-[12px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft lg:h-full lg:flex-col lg:py-4"
+                  className="flex w-full items-center justify-center gap-2 rounded-[10px] py-2 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 lg:h-full lg:flex-col lg:justify-start lg:py-3"
                 >
                   <PanelLeftOpen size={16} />
                   <span className="lg:hidden">Show panel</span>
                 </button>
               ) : (
                 <div className="flex h-full flex-col gap-2">
-                  {/* Tab bar: Folders (picker) / Files (live folder contents). */}
-                  <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/[0.06] bg-ink-850/60 p-1">
-                    <button
-                      type="button"
-                      onClick={() => chooseTab("folders")}
-                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] font-medium transition-colors ${
-                        treeTab === "folders"
-                          ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
-                          : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                      }`}
+                  {/* Folders (picker) / Files (live folder contents).
+                      v1.329.0 (calm chat): plain text tabs like the chat top
+                      bar's, the open one in ink and the other muted; no box,
+                      no accent chip. Arrow keys move between them. */}
+                  <div className="flex shrink-0 items-center gap-2 px-1">
+                    <div
+                      role="tablist"
+                      aria-label="Folders and files"
+                      data-testid="build-panel-tabs"
+                      className="flex min-w-0 flex-1 items-center gap-2"
                     >
-                      <FolderTree size={13} /> Folders
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => chooseTab("files")}
-                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] font-medium transition-colors ${
-                        treeTab === "files"
-                          ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
-                          : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
-                      }`}
-                    >
-                      <FileText size={13} /> Files
-                    </button>
+                      {BUILD_PANEL_TABS.map((tab) => {
+                        const selected = treeTab === tab.value;
+                        return (
+                          <button
+                            key={tab.value}
+                            type="button"
+                            role="tab"
+                            id={`build-tab-${tab.value}`}
+                            aria-selected={selected}
+                            aria-controls="build-panel-body"
+                            tabIndex={selected ? 0 : -1}
+                            onClick={() => chooseTab(tab.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+                              e.preventDefault();
+                              const tabs = Array.from(
+                                e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                  '[role="tab"]',
+                                ) ?? [],
+                              );
+                              const i = tabs.indexOf(e.currentTarget);
+                              const step = e.key === "ArrowRight" ? 1 : -1;
+                              tabs[(i + step + tabs.length) % tabs.length]?.focus();
+                            }}
+                            className={`rounded-md px-1.5 py-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+                              selected
+                                ? "font-medium text-zinc-100"
+                                : "text-zinc-500 hover:text-zinc-200"
+                            }`}
+                          >
+                            {tab.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <button
                       type="button"
                       onClick={() => changeTreeCollapsed(true)}
@@ -1525,7 +1570,12 @@ export default function TerminalsPage() {
                     </button>
                   </div>
 
-                  <div className="min-h-0 flex-1">
+                  <div
+                    id="build-panel-body"
+                    role="tabpanel"
+                    aria-labelledby={`build-tab-${treeTab}`}
+                    className="min-h-0 flex-1"
+                  >
                     {treeTab === "folders" ? (
                       <DirectoryTree
                         selectedPath={selectedPath}

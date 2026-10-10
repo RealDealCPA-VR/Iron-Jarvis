@@ -71,6 +71,7 @@ import {
   PaneAccountChip,
   type OpenedPane,
 } from "@/components/terminal/PaneAccountChip";
+import { paneFrameClass } from "@/components/terminal/paneFrame";
 
 type AIResult = {
   reply: string;
@@ -1440,13 +1441,7 @@ export function TerminalPane({
         }
         acceptSnips(files);
       }}
-      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-ink-900 shadow-card transition-colors ${
-        dragOver
-          ? "border-accent shadow-glow-sm ring-2 ring-accent/40"
-          : focused
-            ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
-            : "border-white/[0.07] hover:border-white/[0.14]"
-      }`}
+      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-ink-900 transition-colors ${paneFrameClass(Boolean(focused), Boolean(draggable), dragOver)}`}
     >
       {/* Pane header: shell · cwd · connection state · close. The `ij-term-drag`
           class marks this as the drag handle for react-rnd on the Terminals

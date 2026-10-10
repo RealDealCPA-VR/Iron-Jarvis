@@ -232,16 +232,18 @@ export function PaneStateSummary({
  * a column of ten panes, not the thing that says what the state IS.
  */
 export function PaneDot({ state }: { state: PaneDisplay }) {
+  // v1.329.0: tone tokens (deep inks on the light Marks), like the chat
+  // list's dots. "can't tell" is zinc-600, not zinc-700, which vanished.
   const cls =
     state === "blocked"
-      ? "bg-amber-400 animate-pulse"
+      ? "bg-tone-warn animate-pulse"
       : state === "working"
         ? "bg-accent"
         : state === "done"
-          ? "bg-emerald-400"
+          ? "bg-tone-success"
           : state === "idle"
             ? "bg-zinc-500"
-            : "bg-zinc-700";
+            : "bg-zinc-600";
   return (
     <span
       aria-hidden

@@ -45,6 +45,7 @@ import Link from "next/link";
 import { Check, Pencil, Plus, SlidersHorizontal, X } from "lucide-react";
 
 import { get, patch } from "@/lib/api";
+import { formatAge } from "@/lib/threadStatus";
 import {
   PaneDot,
   stateWord,
@@ -199,7 +200,30 @@ export interface RailPane {
   /** v1.302.0: the account the pane started on — the header chip's short
    *  label ("Claude · Work Max"). Absent for a pane without accounts. */
   account?: PaneAccountBadge | null;
+  /** v1.329.0: when the terminal was opened (the daemon's `created_at`), drawn
+   *  as a quiet age on the row ("now", "12m", "3h"), like the chat list. */
+  since?: string | null;
 }
+
+/** The colour of a row's state word: tone tokens only, so Daylight inks it. */
+function stateTone(state: PaneDisplay): string {
+  if (state === "blocked") return "text-tone-warn";
+  if (state === "working") return "text-accent-soft";
+  if (state === "done") return "text-tone-success";
+  return "";
+}
+
+/** The row's ghost actions (v1.329.0): hidden on a mouse screen until the row
+ *  is hovered or holds focus, always shown on a touch screen, and real buttons
+ *  in the tab order either way, so the keyboard reaches them too. */
+const RAIL_ACTION =
+  "grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60";
+/** The rail's footer presses ("New terminal", and the page's "Canvas"): quiet
+ *  ghost rows that fill on hover, the same shape as a terminal row. */
+export const RAIL_FOOTER_BUTTON =
+  "flex h-8 w-full items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
+const RAIL_ACTIONS_HIDDEN =
+  "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/row:opacity-100 [@media(hover:hover)]:group-focus-within/row:opacity-100";
 
 export function PaneRail({
   panes,
@@ -210,6 +234,7 @@ export function PaneRail({
   onNew,
   busy = false,
   footer,
+  now,
 }: {
   panes: RailPane[];
   focusedId: string | null;
@@ -221,7 +246,10 @@ export function PaneRail({
   busy?: boolean;
   /** The layout switch, supplied by the page so the rail owns no modes. */
   footer?: React.ReactNode;
+  /** "Now" for the ages (tests pass a fixed clock). */
+  now?: number;
 }) {
+  const clock = now ?? Date.now();
   const blocked = panes.filter((p) => p.state === "blocked");
 
   // RENAMING FROM THE RAIL (v1.219.0). The name was editable in the pane
@@ -349,11 +377,12 @@ export function PaneRail({
       data-testid="pane-rail"
       className="flex h-full flex-col gap-2 overflow-hidden"
     >
-      <div className="flex shrink-0 items-center justify-between px-1">
+      <div className="flex shrink-0 items-center justify-between px-2.5">
         {/* v1.314.0 (UX wave 2): ONE name for one thing. The header says
             "New terminal", so the rail says Terminals / New terminal too —
-            "pane" stays an internal word (testids, code), never a label. */}
-        <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+            "pane" stays an internal word (testids, code), never a label.
+            v1.329.0: the quiet heading the chat list uses. */}
+        <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500">
           Terminals
         </span>
         {blocked.length > 0 ? (
@@ -365,42 +394,46 @@ export function PaneRail({
             data-testid="rail-jump-blocked"
             onClick={() => onFocus(blocked[0].id)}
             title="Go to the terminal waiting on you"
-            className="rounded-md border border-amber-400/30 bg-amber-400/[0.1] px-1.5 py-0.5 text-[10px] font-medium text-amber-200 transition-colors hover:bg-amber-400/[0.2]"
+            className="rounded-md px-1.5 py-0.5 text-[12px] font-medium text-tone-warn transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
           >
             {blocked.length} needs you
           </button>
         ) : (
           // zinc-500, not zinc-700 (v1.313.0): the count is information, and
           // zinc-700 measured ~1.6:1 on the rail in every theme.
-          <span className="text-[10px] text-zinc-500">{panes.length}</span>
+          <span className="text-[12px] tabular-nums text-zinc-500">{panes.length}</span>
         )}
       </div>
 
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
+      <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
         {panes.length === 0 ? (
           // A helper paragraph, so the 12px `meta` step in zinc-500 (v1.313.0;
           // it was 11.5px zinc-600, under AA). Dense rail rows keep their size.
-          <p className="px-1 py-3 text-meta text-zinc-500">
+          <p className="px-2.5 py-3 text-meta text-zinc-500">
             No terminals open yet. Open one and it appears here with whatever
             is running inside it.
           </p>
         ) : (
           panes.map((p) => {
             const active = p.id === focusedId;
+            const word = stateWord(p.state);
+            const age = formatAge(p.since, clock);
+            const actionsShown = capsOpen === p.id;
+            // v1.329.0 (calm chat): a LIST ROW, not a card. No border, no
+            // accent box: the open terminal has a subtle fill, the rest are
+            // ghosts that fill on hover, like the chat list. A blocked row is
+            // found by its pulsing dot and its "needs you" word, never a tint.
             return (
               <div
                 key={p.id}
                 data-testid={`rail-row-${p.id}`}
-                className={`group relative flex items-center gap-2 rounded-xl border px-2 py-1.5 transition-colors ${
-                  active
-                    ? "border-accent/40 bg-accent/[0.07]"
-                    : p.state === "blocked"
-                      ? "border-amber-400/25 bg-amber-400/[0.05] hover:border-amber-400/40"
-                      : "border-white/[0.05] hover:border-white/[0.12] hover:bg-white/[0.03]"
+                data-active={active ? "true" : undefined}
+                className={`group/row relative flex min-w-0 items-center rounded-[10px] transition-colors ${
+                  active ? "bg-white/[0.07]" : "hover:bg-white/[0.05]"
                 }`}
               >
                 {editing === p.id ? (
-                  <>
+                  <div className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5">
                     <PaneDot state={p.state} />
                     <input
                       ref={inputRef}
@@ -416,9 +449,9 @@ export function PaneRail({
                         // one people stop starting.
                         if (e.key === "Escape") setEditing(null);
                       }}
-                      className="field min-w-0 flex-1 py-0.5 font-mono text-[11.5px]"
+                      className="field min-w-0 flex-1 py-0.5 text-[13px]"
                     />
-                  </>
+                  </div>
                 ) : (
                 <button
                   type="button"
@@ -426,119 +459,139 @@ export function PaneRail({
                   onDoubleClick={() => begin(p)}
                   aria-current={active ? "true" : undefined}
                   title={p.cwd || undefined}
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  // Room on the right for the ghost actions: always on touch;
+                  // on a mouse only while they show (they take the age's place).
+                  className={`flex min-w-0 flex-1 items-start gap-2 rounded-[10px] py-1.5 pl-2.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+                    actionsShown
+                      ? "pr-[84px]"
+                      : "pr-[84px] [@media(hover:hover)]:pr-2.5 [@media(hover:hover)]:group-hover/row:pr-[84px] [@media(hover:hover)]:group-focus-within/row:pr-[84px]"
+                  }`}
                 >
-                  <PaneDot state={p.state} />
+                  <span className="mt-[7px] flex shrink-0">
+                    <PaneDot state={p.state} />
+                  </span>
                   <span className="min-w-0 flex-1">
-                    <span
-                      className={`block truncate font-mono text-[11.5px] ${
-                        active ? "text-accent-soft" : "text-zinc-200"
-                      }`}
-                    >
-                      {p.label}
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-zinc-600">
-                      {/* The word, always — never colour alone. */}
+                    <span className="flex min-w-0 items-center gap-1.5">
                       <span
-                        className={
-                          p.state === "blocked"
-                            ? "text-amber-300/90"
-                            : p.state === "working"
-                              ? "text-accent-soft/80"
-                              : p.state === "done"
-                                ? "text-emerald-300/80"
-                                : ""
-                        }
-                      >
-                        {stateWord(p.state)}
-                      </span>
-                    </span>
-                    {/* The CLI on its OWN line, by the name the Launch menu
-                        used. The first cut appended the daemon's id — "claude",
-                        "grok" — beside the state, which is the internal key,
-                        not what the user picked. */}
-                    {p.cli ? (
-                      <span
-                        data-testid={`rail-cli-${p.id}`}
-                        className="block truncate text-[10px] text-zinc-500"
-                      >
-                        {p.cli}
-                      </span>
-                    ) : null}
-                    {p.account ? (
-                      <span
-                        data-testid={`rail-account-${p.id}`}
-                        data-tone={p.account.tone}
-                        title={p.account.tooltip}
-                        className={`block truncate text-[10px] ${
-                          p.account.tone === "amber"
-                            ? "text-amber-300/90"
-                            : p.account.tone === "red"
-                              ? "text-rose-300/70"
-                              : "text-zinc-500"
+                        className={`min-w-0 flex-1 truncate text-[13px] ${
+                          active ? "text-zinc-100" : "text-zinc-300"
                         }`}
                       >
-                        {p.account.label}
+                        {p.label}
                       </span>
-                    ) : null}
+                      {/* Two things the pane's own header cannot tell you from
+                          here: an approval waiting in the pane's HIDDEN chat
+                          layer, and output you have not seen. Both are about a
+                          pane you are not looking at, which is the only kind
+                          this list is for. */}
+                      {p.chatApproval ? (
+                        <span
+                          data-testid={`rail-chat-approval-${p.id}`}
+                          title="An approval is waiting in this pane's chat"
+                          className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-tone-warn"
+                        />
+                      ) : null}
+                      {p.unseen && !active ? (
+                        <span
+                          data-testid={`rail-unseen-${p.id}`}
+                          title="New output you have not seen"
+                          className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                        />
+                      ) : null}
+                      {age ? (
+                        <time
+                          dateTime={p.since || undefined}
+                          data-testid={`rail-age-${p.id}`}
+                          title="Opened this long ago"
+                          className={`shrink-0 text-[12px] tabular-nums text-zinc-500 transition-opacity ${
+                            actionsShown
+                              ? ""
+                              : "[@media(hover:hover)]:group-hover/row:opacity-0 [@media(hover:hover)]:group-focus-within/row:opacity-0"
+                          }`}
+                        >
+                          {age}
+                        </time>
+                      ) : null}
+                    </span>
+                    {/* The quiet second line: the state WORD (always — never
+                        colour alone), then the CLI by the name the Launch menu
+                        used, then the account. */}
+                    <span className="block min-w-0 truncate text-[12px] text-zinc-500">
+                      {word ? <span className={stateTone(p.state)}>{word}</span> : null}
+                      {p.cli ? (
+                        <>
+                          {word ? <span aria-hidden="true"> · </span> : null}
+                          <span data-testid={`rail-cli-${p.id}`}>{p.cli}</span>
+                        </>
+                      ) : null}
+                      {p.account ? (
+                        <>
+                          {word || p.cli ? <span aria-hidden="true"> · </span> : null}
+                          <span
+                            data-testid={`rail-account-${p.id}`}
+                            data-tone={p.account.tone}
+                            title={p.account.tooltip}
+                            className={
+                              p.account.tone === "amber"
+                                ? "text-tone-warn"
+                                : p.account.tone === "red"
+                                  ? "text-tone-danger"
+                                  : ""
+                            }
+                          >
+                            {p.account.label}
+                          </span>
+                        </>
+                      ) : null}
+                    </span>
                   </span>
                 </button>
                 )}
 
-                {/* Two things the pane's own header cannot tell you from here:
-                    output you have not seen, and an approval waiting in the
-                    pane's HIDDEN chat layer. Both are about a pane you are not
-                    looking at, which is the only kind this list is for. */}
-                <span className="flex shrink-0 items-center gap-1">
-                  {p.chatApproval ? (
-                    <span
-                      data-testid={`rail-chat-approval-${p.id}`}
-                      title="An approval is waiting in this pane's chat"
-                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400"
-                    />
-                  ) : null}
-                  {p.unseen && !active ? (
-                    <span
-                      data-testid={`rail-unseen-${p.id}`}
-                      title="New output you have not seen"
-                      className="h-1.5 w-1.5 rounded-full bg-accent"
-                    />
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => (capsOpen === p.id ? closeCaps() : openCaps(p.id))}
-                    title="Capabilities for this pane"
-                    aria-label={`Capabilities for ${p.label}`}
-                    aria-expanded={capsOpen === p.id}
-                    data-testid={`rail-caps-${p.id}`}
-                    className={`grid h-4 w-4 place-items-center rounded transition-colors hover:bg-white/[0.08] hover:text-zinc-300 focus:opacity-100 group-hover:opacity-100 ${
-                      capsOpen === p.id
-                        ? "text-accent-soft opacity-100"
-                        : "text-zinc-700 opacity-0"
-                    }`}
-                  >
-                    <SlidersHorizontal size={10} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => begin(p)}
-                    title="Rename this pane"
-                    aria-label={`Rename ${p.label}`}
-                    data-testid={`rail-rename-${p.id}`}
-                    className="grid h-4 w-4 place-items-center rounded text-zinc-700 opacity-0 transition-colors hover:bg-white/[0.08] hover:text-zinc-300 focus:opacity-100 group-hover:opacity-100"
-                  >
-                    <Pencil size={10} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onClose(p.id)}
-                    title="Close this pane"
-                    aria-label={`Close ${p.label}`}
-                    className="grid h-4 w-4 place-items-center rounded text-zinc-700 opacity-0 transition-colors hover:bg-rose-500/15 hover:text-rose-300 focus:opacity-100 group-hover:opacity-100"
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
+                {/* The ghost actions, over the row's right edge where the age
+                    sits. Hidden on a mouse screen until the row is hovered or
+                    focused; always there on touch; always in the tab order. */}
+                {editing === p.id ? null : (
+                  <span className="absolute right-1 top-1 flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => (capsOpen === p.id ? closeCaps() : openCaps(p.id))}
+                      title="Capabilities for this pane"
+                      aria-label={`Capabilities for ${p.label}`}
+                      aria-expanded={capsOpen === p.id}
+                      data-testid={`rail-caps-${p.id}`}
+                      className={`${RAIL_ACTION} hover:bg-white/[0.08] hover:text-zinc-200 ${
+                        capsOpen === p.id ? "text-accent-soft" : RAIL_ACTIONS_HIDDEN
+                      }`}
+                    >
+                      <SlidersHorizontal size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => begin(p)}
+                      title="Rename this pane"
+                      aria-label={`Rename ${p.label}`}
+                      data-testid={`rail-rename-${p.id}`}
+                      className={`${RAIL_ACTION} hover:bg-white/[0.08] hover:text-zinc-200 ${
+                        actionsShown ? "" : RAIL_ACTIONS_HIDDEN
+                      }`}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onClose(p.id)}
+                      title="Close this pane"
+                      aria-label={`Close ${p.label}`}
+                      data-testid={`rail-close-${p.id}`}
+                      className={`${RAIL_ACTION} hover:bg-tone-danger/15 hover:text-tone-danger ${
+                        actionsShown ? "" : RAIL_ACTIONS_HIDDEN
+                      }`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </span>
+                )}
 
                 {capsOpen === p.id ? (
                   <>
@@ -669,15 +722,16 @@ export function PaneRail({
         )}
       </div>
 
-      <div className="shrink-0 space-y-1 border-t border-white/[0.06] pt-2">
+      <div className="flex shrink-0 flex-col gap-px border-t border-white/[0.06] pt-2">
+        {/* v1.329.0: a quiet ghost row, not an accent box. */}
         <button
           type="button"
           onClick={onNew}
           disabled={busy}
           data-testid="rail-new-pane"
-          className="flex w-full items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-2 py-1.5 text-[11.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:cursor-not-allowed disabled:opacity-50"
+          className={RAIL_FOOTER_BUTTON}
         >
-          <Plus size={13} className="shrink-0" />
+          <Plus size={14} className="shrink-0" />
           New terminal
         </button>
         {footer}
