@@ -68,7 +68,15 @@ export function scheduleRepeatLabel(s: Schedule): string {
 
 /** This project's schedules row — "what runs here, and did last night's run
  * succeed?". Rendered by the Tasks surface under the run-a-task card. */
-export function ProjectSchedules({ projectId }: { projectId: string }) {
+export function ProjectSchedules({
+  projectId,
+  bare = false,
+}: {
+  projectId: string;
+  /** v1.329.0 (calm chat W4 F6): no card; a quiet labelled section under a
+   *  hairline, for the chat's box-free Tasks view. */
+  bare?: boolean;
+}) {
   const { data, error } = useApi<{ schedules: Schedule[] }>("/schedules");
   const mine = projectSchedules(data?.schedules ?? [], projectId);
   // Honesty over tidiness: when the list could not load, this project's
@@ -77,32 +85,33 @@ export function ProjectSchedules({ projectId }: { projectId: string }) {
   // v1.165.0 exists to prevent. Same hint idiom as SurfaceMedia/SurfaceBoard
   // (status 0 = daemon unreachable; anything else = the daemon errored).
   if (error) {
-    return (
+    const line = (
+      <p className="py-2 text-sm text-zinc-500">
+        {error.status === 0
+          ? "Schedules unavailable. The daemon looks offline."
+          : `Schedules unavailable. The daemon returned an error (HTTP ${error.status}).`}
+      </p>
+    );
+    return bare ? (
+      <BareSection title="Schedules">{line}</BareSection>
+    ) : (
       <Card title="Schedules" icon={<CalendarClock size={15} />}>
-        <p className="py-2 text-sm text-zinc-500">
-          {error.status === 0
-            ? "Schedules unavailable — the daemon looks offline."
-            : `Schedules unavailable — the daemon returned an error (HTTP ${error.status}).`}
-        </p>
+        {line}
       </Card>
     );
   }
   // Absent beats an empty box, but ONLY for the genuine cases: still loading,
   // or the list loaded and nothing here is scheduled.
   if (mine.length === 0) return null;
-  return (
-    <Card
-      title={`Schedules · ${mine.length}`}
-      icon={<CalendarClock size={15} />}
-      right={
-        <Link
-          href="/schedules"
-          className="text-[11px] text-accent-soft transition-colors hover:text-accent"
-        >
-          manage →
-        </Link>
-      }
+  const manage = (
+    <Link
+      href="/schedules"
+      className="text-[11px] text-accent-soft transition-colors hover:text-accent"
     >
+      manage →
+    </Link>
+  );
+  const list = (
       <ul className="space-y-0.5" data-testid="project-schedules">
         {mine.map((s) => (
           <li
@@ -130,7 +139,7 @@ export function ProjectSchedules({ projectId }: { projectId: string }) {
                   className="max-w-[200px] truncate text-[11px] text-rose-300"
                   title={s.last_detail || undefined}
                 >
-                  ✗ failed{s.last_detail ? ` — ${s.last_detail}` : ""}
+                  ✗ failed{s.last_detail ? `: ${s.last_detail}` : ""}
                 </span>
               ) : (
                 <span className="text-[11px] text-zinc-600">not run yet</span>
@@ -154,6 +163,38 @@ export function ProjectSchedules({ projectId }: { projectId: string }) {
           </li>
         ))}
       </ul>
+  );
+  return bare ? (
+    <BareSection title={`Schedules · ${mine.length}`} right={manage}>
+      {list}
+    </BareSection>
+  ) : (
+    <Card title={`Schedules · ${mine.length}`} icon={<CalendarClock size={15} />} right={manage}>
+      {list}
     </Card>
+  );
+}
+
+/** The bare frame: a quiet label (the chat list's heading style) over a
+ *  hairline, the same words the card's title would carry. */
+function BareSection({
+  title,
+  right,
+  children,
+}: {
+  title: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section data-testid="project-schedules-section" className="border-t hairline pt-3">
+      <div className="mb-1.5 flex items-center gap-2">
+        <h3 className="text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500">
+          {title}
+        </h3>
+        {right ? <div className="ml-auto">{right}</div> : null}
+      </div>
+      {children}
+    </section>
   );
 }

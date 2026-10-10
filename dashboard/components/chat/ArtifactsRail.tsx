@@ -117,6 +117,10 @@ export interface ArtifactsRailProps {
    * never a silent no-op.
    */
   promoteDisabledReason?: string | null;
+  /** v1.329.0 (calm chat W4 F6): no box of its own. The chat's project
+   *  drawer draws it as a plain section (its parent adds the hairline);
+   *  the session page keeps the bordered box. */
+  bare?: boolean;
 }
 
 /** The journal row matched to a rail item — what `undoFor` returns. */
@@ -349,6 +353,7 @@ export function ArtifactsRail({
   onUndo,
   onPromote,
   promoteDisabledReason,
+  bare = false,
 }: ArtifactsRailProps) {
   // Defensive dedupe (first occurrence wins — items arrive newest-first) so a
   // coordinator that concatenates per-turn lists still shows each file once.
@@ -473,8 +478,21 @@ export function ArtifactsRail({
   }
 
   return (
-    <div className="flex min-h-0 flex-col rounded-xl border border-white/[0.06] bg-white/[0.02]">
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-white/[0.05] px-2.5 py-2">
+    <div
+      data-bare={bare ? "true" : undefined}
+      className={
+        bare
+          ? "flex min-h-0 flex-col"
+          : "flex min-h-0 flex-col rounded-xl border border-white/[0.06] bg-white/[0.02]"
+      }
+    >
+      <div
+        className={
+          bare
+            ? "flex shrink-0 items-center gap-1.5 py-1"
+            : "flex shrink-0 items-center gap-1.5 border-b border-white/[0.05] px-2.5 py-2"
+        }
+      >
         <Files size={12} className="shrink-0 text-accent-soft/80" aria-hidden />
         <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-400">
           Files
@@ -495,7 +513,9 @@ export function ArtifactsRail({
         )}
       </div>
 
-      <ul className="min-h-0 flex-1 overflow-y-auto p-1">
+      {/* Bare: the rows' text lines up with the label above (-mx cancels the
+          rows' own inset, so only the hover fill reaches past it). */}
+      <ul className={`min-h-0 flex-1 overflow-y-auto p-1 ${bare ? "-mx-2.5" : ""}`}>
         {rows.map((it) => {
           const base = basename(it.path);
           const dir = parentDir(it.path);

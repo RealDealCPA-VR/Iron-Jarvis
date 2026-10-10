@@ -179,7 +179,10 @@ export function ProjectDrawer({
             <span className="h-12 w-1 rounded-full bg-white/10 transition-colors group-hover/resize:bg-accent/60" />
           </div>
         )}
-        <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
+        {/* v1.329.0 (calm chat W4 F6): px-4, the 16px every section inside
+            lines up on (the shared folder picker and file list keep their own
+            16px, unboxed against it). */}
+        <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-4">
           <span className="text-[13px] font-medium text-zinc-200">Project panel</span>
           <button
             type="button"
@@ -192,7 +195,7 @@ export function ProjectDrawer({
             <X size={15} />
           </button>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3">{children}</div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-3">{children}</div>
       </aside>
     </>,
     host,

@@ -6,7 +6,7 @@
 // status strip polling the session (NESTED shape) → on completion the summary
 // (chat) or "Saved: <path>" plus any produced media/files inline.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Bot,
@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { composerChipClass } from "@/lib/composerChips";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import type { AgentsResponse, Assignment, SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
@@ -81,7 +82,7 @@ export function assigneeOptions(
   }
   for (const d of agents?.dynamic ?? []) {
     if (d && typeof d.name === "string" && d.name) {
-      out.push({ value: `custom:${d.name}`, label: `${d.name} — yours` });
+      out.push({ value: `custom:${d.name}`, label: `${d.name} (yours)` });
     }
   }
   return out;
@@ -137,6 +138,18 @@ export function teamAssigneeChoices(
     .map((o) => ({ ...o, group: OTHERS_GROUP }));
   return [...onTeam, ...others];
 }
+
+/** The "" (no assignee) choice's words: the user runs it now. */
+export const SELF_LABEL = "Me, run it now";
+
+/** v1.329.0 (calm chat W4 F6): a ghost select/input in the bare form, the
+ *  composer's chip language (transparent at rest, a soft fill on hover). */
+const GHOST_FIELD = `${composerChipClass()} bg-transparent`;
+
+/** The shared mic button, ghosted while idle (its listening look, the rose
+ *  ring and fill, is left alone: that state must stay loud). */
+const GHOST_MIC =
+  "[&>button[aria-pressed=false]]:border-transparent [&>button[aria-pressed=false]]:bg-transparent [&>button[aria-pressed=false]:hover]:bg-white/[0.06]";
 
 /** How many of the project's assignments the compact list shows. */
 const MAX_ASSIGNMENTS = 10;
@@ -212,6 +225,7 @@ export function ProjectTasks({
   assigneeChoices,
   selfLabel,
   team,
+  bare = false,
 }: {
   projectId: string;
   hasRoot: boolean;
@@ -225,10 +239,16 @@ export function ProjectTasks({
    *  Absent = read it here, so every door to this panel (the project page,
    *  chat's project surfaces) offers the same team first. */
   team?: TeamAssigneeRow[] | null;
-  /** v1.304.0: the words on the "" (no assignee) choice. Absent = "You —
-   *  run now". The world says "Whole team — Jarvis decides": the same plain
-   *  project task, no assignee on the wire. */
+  /** v1.304.0: the words on the "" (no assignee) choice. Absent =
+   *  SELF_LABEL ("Me, run it now"; v1.329.0 dropped the em-dash aside). The
+   *  world says "Whole team — Jarvis decides": the same plain project task,
+   *  no assignee on the wire. */
   selfLabel?: string;
+  /** v1.329.0 (calm chat W4 F6): no card. The chat's Tasks tab draws the form
+   *  as plain, hairline-separated rows with ghost controls and one primary
+   *  action, so it never reads as a second composer. The project page keeps
+   *  the card (absent = false). */
+  bare?: boolean;
   /** This project's recent sessions, fetched ONCE by the parent workspace
    *  (avoids a second identical GET /projects/{id} just to read `sessions`). */
   sessions: SessionView[];
@@ -525,9 +545,32 @@ export function ProjectTasks({
     }
   }
 
-  return (
-    <Card title="Run a task" icon={<Bot size={15} />}>
+  // A plain function, never a component defined in render (that would be a
+  // new type each render and remount the textarea on every keystroke).
+  const frame = (children: ReactNode) =>
+    bare ? (
+      <section data-testid="project-tasks" data-bare="true" aria-label="Run a task">
+        <div className="mb-2">
+          <h2 className="text-[13px] font-medium text-zinc-200">Run a task</h2>
+          <p className="text-[12px] text-zinc-500">
+            An agent works in this project and reports back here.
+          </p>
+        </div>
+        {children}
+      </section>
+    ) : (
+      <Card title="Run a task" icon={<Bot size={15} />}>
+        {children}
+      </Card>
+    );
+
+  return frame(
       <div className="space-y-2">
+        <div
+          className={
+            bare ? "border-b hairline transition-colors focus-within:border-accent/40" : undefined
+          }
+        >
         <textarea
           value={taskText}
           onChange={(e) => setTaskText(e.target.value)}
@@ -540,12 +583,18 @@ export function ProjectTasks({
           rows={3}
           aria-label="Task for an agent in this project"
           placeholder="Ask an agent to do something in this project… (e.g. 'summarize every PDF in here into one report')"
-          className="field resize-y text-sm"
+          className={
+            bare
+              ? "block w-full resize-y bg-transparent py-1.5 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-500"
+              : "field resize-y text-sm"
+          }
         />
-        <div className="flex flex-wrap items-center gap-2">
+        </div>
+        <div className={`flex flex-wrap items-center ${bare ? "gap-1" : "gap-2"}`}>
           {/* Dictate the task (offline in the desktop app), same as chat + Build. */}
           <VoiceInput
             size="sm"
+            className={bare ? GHOST_MIC : ""}
             onTranscript={(chunk) => setTaskText((p) => appendDictation(p, chunk))}
           />
           {/* v1.315.0 (UX wave 3): a 10rem floor. With a bare `min-w-0
@@ -557,7 +606,7 @@ export function ProjectTasks({
             aria-label="Deliverable"
             value={taskOutput}
             onChange={(e) => setTaskOutput(e.target.value as TaskOutput)}
-            className="field min-w-[10rem] flex-1 text-sm"
+            className={bare ? `${GHOST_FIELD} min-w-[10rem]` : "field min-w-[10rem] flex-1 text-sm"}
           >
             {TASK_OUTPUTS.map((o) => (
               <option key={o.value} value={o.value} disabled={o.value !== "chat" && !hasRoot}>
@@ -571,7 +620,11 @@ export function ProjectTasks({
               onChange={(e) => setTaskFilename(e.target.value)}
               placeholder="filename (optional)"
               aria-label="Deliverable filename"
-              className="field w-44 min-w-0 font-mono text-sm"
+              className={
+                bare
+                  ? `${GHOST_FIELD} w-44 min-w-0 font-mono placeholder:text-zinc-500 focus:bg-white/[0.06]`
+                  : "field w-44 min-w-0 font-mono text-sm"
+              }
             />
           )}
           {/* ASSIGN TO (v1.296.0). Absent on a daemon that lists no agents
@@ -581,10 +634,12 @@ export function ProjectTasks({
             data-testid="project-task-assignee"
             value={effectiveAssignee}
             onChange={(e) => setAssignee(e.target.value)}
-            className="field min-w-[9rem] flex-1 text-sm sm:w-40 sm:flex-none"
-            title="Run it now yourself, or queue it for an agent — it runs when that agent is free"
+            className={
+              bare ? `${GHOST_FIELD} min-w-[9rem]` : "field min-w-[9rem] flex-1 text-sm sm:w-40 sm:flex-none"
+            }
+            title="Run it now yourself, or queue it for an agent. A queued task runs when that agent is free."
           >
-            <option value="">{selfLabel || "You — run now"}</option>
+            <option value="">{selfLabel || SELF_LABEL}</option>
             {ungrouped.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -606,10 +661,10 @@ export function ProjectTasks({
             disabled={taskStarting || planning || pendingPlan !== null || !taskText.trim()}
             title={
               effectiveAssignee
-                ? `Queue this for ${assigneeName} — it runs when ${assigneeName} is free`
+                ? `Queue this for ${assigneeName}. It runs when ${assigneeName} is free.`
                 : "Start an agent session on this task"
             }
-            className="btn-accent shrink-0"
+            className={bare ? "btn-accent ml-auto shrink-0" : "btn-accent shrink-0"}
           >
             {taskStarting ? (
               <LoaderInline label={effectiveAssignee ? "Queueing…" : "Starting…"} />
@@ -635,7 +690,7 @@ export function ProjectTasks({
 
         {!hasRoot && (
           <p className="text-[11px] text-zinc-600">
-            A file deliverable needs the project to have a folder — this one has none, so only
+            A file deliverable needs a project folder. This project has none, so only
             “Reply in chat” is available.
           </p>
         )}
@@ -700,7 +755,14 @@ export function ProjectTasks({
         {taskError && <ErrorNote>{taskError}</ErrorNote>}
 
         {taskRun && (
-          <div className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+          <div
+            data-testid="project-task-run"
+            className={
+              bare
+                ? "border-t hairline pt-2.5"
+                : "rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
+            }
+          >
             <div className="flex items-center justify-between gap-3">
               {!taskDone ? (
                 <span className="flex items-center gap-2.5">
@@ -711,7 +773,7 @@ export function ProjectTasks({
                     type="button"
                     onClick={() => void cancelRun()}
                     disabled={cancelling}
-                    className="inline-flex items-center gap-1 rounded-md border border-rose-500/25 px-1.5 py-0.5 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.1] disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] font-medium text-tone-danger transition-colors hover:bg-white/[0.06] disabled:opacity-50"
                   >
                     <X size={11} /> {cancelling ? "Stopping…" : "Stop"}
                   </button>
@@ -734,7 +796,7 @@ export function ProjectTasks({
 
             {!taskDone && taskPollError && (
               <p className="mt-1.5 text-[11px] text-zinc-500">
-                status check failed ({taskPollError}) — retrying…
+                status check failed ({taskPollError}), retrying…
               </p>
             )}
 
@@ -746,8 +808,8 @@ export function ProjectTasks({
                       <span className="shrink-0 text-amber-300/80">Not written:</span>
                       <span className="min-w-0">
                         the agent finished but{" "}
-                        <span className="font-mono">{taskRun.target_path}</span> isn’t on disk —
-                        open the session to see what happened.
+                        <span className="font-mono">{taskRun.target_path}</span> isn’t on disk.
+                        Open the session to see what happened.
                       </span>
                     </div>
                   ) : (
@@ -787,7 +849,7 @@ export function ProjectTasks({
                   </div>
                 ) : (
                   <p className="mt-1.5 text-xs text-zinc-500">
-                    The agent finished without a summary — open the session for the full
+                    The agent finished without a summary. Open the session for the full
                     transcript.
                   </p>
                 )}
@@ -797,7 +859,7 @@ export function ProjectTasks({
             {taskDone && taskSession?.status !== "completed" && (
               <p className="mt-1.5 whitespace-pre-wrap text-xs text-rose-200">
                 {taskSession?.summary ||
-                  `The session ${taskSession?.status} without a summary — open it for details.`}
+                  `The session ${taskSession?.status} without a summary. Open it for details.`}
               </p>
             )}
 
@@ -941,7 +1003,6 @@ export function ProjectTasks({
             </ul>
           </div>
         )}
-      </div>
-    </Card>
+      </div>,
   );
 }

@@ -391,7 +391,9 @@ describe("the project panel is a drawer on demand", () => {
     expect(btn.getAttribute("aria-expanded")).toBe("true");
     // Its contents are the old rail's: the project picker, Files/Knowledge.
     expect(within(drawer).getByRole("combobox", { name: "Project" })).toBeTruthy();
-    expect(within(drawer).getByRole("button", { name: "knowledge" })).toBeTruthy();
+    // v1.329.0 (calm chat W4 F6): Files / Knowledge are plain text TABS now
+    // (role=tab, capitalised words), no longer bordered chip buttons.
+    expect(within(drawer).getByRole("tab", { name: "Knowledge" })).toBeTruthy();
     await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true));
     fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Project panel" })).toBeNull());

@@ -93,6 +93,7 @@ import {
   ListTree,
   Sparkles,
   Square,
+  SquareTerminal,
   Store,
   Trash2,
   Volume2,
@@ -199,6 +200,14 @@ import { PreflightNote } from "@/components/chat/PreflightNote";
 import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
+import {
+  PANEL_GHOST,
+  PANEL_SELECT,
+  PanelSection,
+  PanelTabs,
+  UNBOX_CHILD,
+  useOpenTerminal,
+} from "@/components/chat/ProjectPanelParts";
 import { ModelSuggestChip } from "@/components/chat/ModelSuggestChip";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
@@ -1598,6 +1607,12 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
  *  plain text tabs in the chat TOP BAR, which every view shares, so there is
  *  one tablist on screen whatever is showing and nothing shifts. Arrow keys move focus only (wrapping); a click, Enter or Space selects —
  *  manual activation, because selecting mounts a whole surface. */
+/** The project drawer's own tabs (v1.329.0): only what the top bar does NOT
+ *  hold. Tasks / Board / Media live in ProjectViewTabs below. */
+const PROJECT_PANEL_TABS = [
+  { value: "files", label: "Files" },
+  { value: "knowledge", label: "Knowledge" },
+] as const;
 const PROJECT_VIEWS = ["chat", "tasks", "board", "media"] as const;
 const PROJECT_VIEW_CHAT_ID = "project-view-chat";
 const PROJECT_VIEW_SURFACE_ID = "project-view-surface";
@@ -3425,6 +3440,9 @@ export default function ChatPage() {
     }
   }, []);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
+  // v1.329.0 (calm chat W4 F6): the drawer's Terminal button. A new Build
+  // terminal in the folder, then Build focused on it.
+  const folderTerminal = useOpenTerminal(workspaceDir);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   // v1.278.0: the running turn's name (so a steer can reach it) and the notes
   // sent to it so far — shown under the live reply until the turn ends.
@@ -12420,30 +12438,34 @@ export default function ChatPage() {
               onResizeStart={startRailDrag}
               onResizeReset={resetRailW}
             >
-              <div className="flex min-h-0 flex-1 flex-col gap-2">
-                <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    <FolderKanban size={13} className="shrink-0 text-accent-soft/80" />
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                      Project
-                    </span>
-                    {activeProject && (
+              {/* v1.329.0 (calm chat W4 F6): plain sections, not stacked
+                  cards. A quiet label and a hairline per section, ghost
+                  controls, Files / Knowledge as plain text tabs. Tasks /
+                  Board / Media are not repeated here: the top bar holds them
+                  (ProjectViewTabs). Parts in components/chat/ProjectPanelParts. */}
+              <div data-testid="project-panel-body" className="flex min-h-0 flex-1 flex-col">
+                <PanelSection
+                  label="Project"
+                  testId="project-panel-project"
+                  right={
+                    activeProject ? (
                       <Link
                         href={`/projects/${encodeURIComponent(activeProject.id)}`}
-                        title="Open the project hub — tasks, board, media, knowledge"
-                        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                        title="Open this project's own page: tasks, board, media and knowledge"
+                        className={PANEL_GHOST}
                       >
-                        Hub <ExternalLink size={11} />
+                        Project page <ExternalLink size={12} />
                       </Link>
-                    )}
-                  </div>
+                    ) : null
+                  }
+                >
                   <select
                     aria-label="Project"
                     value={projectId ?? ""}
                     onChange={(e) => chooseProject(e.target.value)}
-                    className="field mt-2 w-full py-1.5 text-[12px]"
+                    className={PANEL_SELECT}
                   >
-                    <option value="">No project — plain chat</option>
+                    <option value="">No project (plain chat)</option>
                     {/* Tolerate an open thread's project the list doesn't know. */}
                     {projectId && !projects.some((p) => p.id === projectId) && (
                       <option value={projectId}>(unknown project)</option>
@@ -12456,53 +12478,33 @@ export default function ChatPage() {
                   </select>
                   {activeProject &&
                     (activeProject.root_exists === false ? (
-                      <p className="mt-1.5 text-[10px] leading-relaxed text-amber-300/90">
-                        The project folder is missing — file tools stay off until
-                        it&apos;s back (fix it in the hub).
+                      <p className="mt-1 text-[12px] leading-relaxed text-tone-warn">
+                        The project folder is missing, so file tools stay off
+                        until it is back. Fix it on the project page.
                       </p>
                     ) : (
-                      <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
-                        Replies ground in this project&apos;s instructions +
-                        knowledge; chats and runs stay tagged to it.
+                      <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+                        Replies use this project&apos;s instructions and
+                        knowledge. Its chats and runs stay tagged to it.
                       </p>
                     ))}
-                  {/* The workspace strip: inline tabs + the wide surfaces.
-                      Projects has no nav entry — this rail IS the module. */}
-                  {activeProject && (
-                    <div className="mt-2 flex flex-wrap items-center gap-1">
-                      {(["files", "knowledge"] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setRailTab(t)}
-                          className={`rounded-lg border px-2 py-1 text-[10.5px] capitalize transition-colors ${
-                            railTab === t
-                              ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
-                              : "border-white/10 text-zinc-400 hover:text-zinc-200"
-                          }`}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                      {(["tasks", "board", "media"] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => {
-                            setProjectView(t);
-                            // On a phone the drawer covers the view just
-                            // opened; get out of its way.
-                            if (isPhoneWidth()) hideProjectPanel();
-                          }}
-                          className="rounded-lg border border-white/10 px-2 py-1 text-[10.5px] capitalize text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
-                          title={`Open ${t} in the chat column`}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                </PanelSection>
+                {activeProject && (
+                  <PanelTabs
+                    label="Project panel views"
+                    idPrefix="project-panel-tab"
+                    panelId="project-panel-tabpanel"
+                    tabs={PROJECT_PANEL_TABS}
+                    value={railTab}
+                    onSelect={setRailTab}
+                  />
+                )}
+                <div
+                  id="project-panel-tabpanel"
+                  role={activeProject ? "tabpanel" : undefined}
+                  aria-labelledby={activeProject ? `project-panel-tab-${railTab}` : undefined}
+                  className="flex min-h-0 flex-1 flex-col pt-3"
+                >
                 {previewPath ? (
                   <div className="min-h-0 flex-1">
                     <DocPreview
@@ -12515,7 +12517,7 @@ export default function ChatPage() {
                   </div>
                 ) : activeProject && railTab === "knowledge" ? (
                   <div className="min-h-0 flex-1 overflow-y-auto">
-                    <KnowledgePanel projectId={activeProject.id} />
+                    <KnowledgePanel projectId={activeProject.id} bare />
                   </div>
                 ) : (
                 <>
@@ -12529,8 +12531,9 @@ export default function ChatPage() {
                     EVERY tool, so repl-made files land here too, not only the
                     document tools' output. */}
                 {threadDocs.length > 0 && (
-                  <div className="shrink-0">
+                  <div className="mb-3 shrink-0 border-b hairline pb-3">
                     <ArtifactsRail
+                      bare
                       items={threadDocs.map((p) => ({ path: p }))}
                       onPreview={openDocPreview}
                       onDismiss={dismissThreadDoc}
@@ -12555,76 +12558,101 @@ export default function ChatPage() {
                     />
                   </div>
                 )}
-                <div className="min-h-0 flex-1">
+                <div className="flex min-h-0 flex-1 flex-col">
                 {workspaceDir && !pickingFolder ? (
-                  <div className="flex h-full flex-col gap-2">
-                    <div className="flex shrink-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
-                      <FolderOpen size={13} className="shrink-0 text-accent-soft/80" />
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                        Workspace
-                      </span>
-                      <div className="ml-auto flex shrink-0 items-center gap-1">
-                        {!projectId && (
+                  <>
+                    {/* The folder, as a plain section. Its actions are ghost
+                        buttons; the drawer's own Close replaces the old
+                        "Collapse workspace" button. */}
+                    <PanelSection
+                      label="Folder"
+                      testId="project-panel-folder"
+                      className="border-b-0 pt-0"
+                      right={
+                        <>
+                          {!projectId && (
+                            <button
+                              type="button"
+                              onClick={() => void promoteFolderToProject()}
+                              disabled={promoting}
+                              title="Turn this folder into a project: chats here get tagged, grounded and gathered in one place"
+                              aria-label="Make this folder a project"
+                              className={PANEL_GHOST}
+                            >
+                              {promoting ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <FolderKanban size={13} />
+                              )}
+                              Make project
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => void promoteFolderToProject()}
-                            disabled={promoting}
-                            title="Turn this folder into a project — chats here get tagged, grounded, and gathered in one place"
-                            aria-label="Make this folder a project"
-                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
+                            onClick={() => setPickingFolder(true)}
+                            title="Change folder"
+                            aria-label="Change workspace folder"
+                            className={PANEL_GHOST}
                           >
-                            {promoting ? (
+                            <FolderPen size={13} /> Change
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="project-panel-terminal"
+                            onClick={() => void folderTerminal.open()}
+                            disabled={folderTerminal.busy}
+                            title="Open a new Build terminal in this folder"
+                            aria-label="Open a terminal in this folder"
+                            className={PANEL_GHOST}
+                          >
+                            {folderTerminal.busy ? (
                               <Loader2 size={13} className="animate-spin" />
                             ) : (
-                              <FolderKanban size={13} />
-                            )}{" "}
-                            Make project
+                              <SquareTerminal size={13} />
+                            )}
+                            Terminal
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setPickingFolder(true)}
-                          title="Change folder"
-                          aria-label="Change workspace folder"
-                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
-                        >
-                          <FolderPen size={13} /> Change
-                        </button>
-                        <button
-                          type="button"
-                          onClick={hideProjectPanel}
-                          title="Collapse workspace"
-                          aria-label="Collapse workspace"
-                          className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-                        >
-                          <PanelRightClose size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    <p className="shrink-0 px-1 text-[10px] text-zinc-600">
-                      Files the chat&apos;s armed tools create land here.
-                    </p>
-                    <div className="min-h-0 flex-1">
+                        </>
+                      }
+                    >
+                      <p className="text-[12px] text-zinc-500">
+                        Files the chat&apos;s tools create land here.
+                      </p>
+                      {folderTerminal.error && (
+                        <p role="alert" className="mt-1 text-[12px] text-tone-danger">
+                          No terminal opened. {folderTerminal.error}
+                        </p>
+                      )}
+                    </PanelSection>
+                    <div className={`min-h-0 flex-1 ${UNBOX_CHILD}`}>
                       <FilesPanel folder={workspaceDir} onPreview={openDocPreview} />
                     </div>
-                  </div>
+                  </>
                 ) : (
-                  <DirectoryTree
-                    selectedPath={workspaceDir}
-                    onSelect={chooseWorkspace}
-                    onOpenTerminal={() => {}}
-                    onCollapse={() => {
-                      // While changing an existing folder, the tree's collapse
-                      // acts as "cancel → back to files"; otherwise it hides the
-                      // whole project panel.
-                      if (pickingFolder && workspaceDir) setPickingFolder(false);
-                      else hideProjectPanel();
-                    }}
-                  />
+                  // The folder picker is shared with Build (which keeps its
+                  // card and its "Open terminal here"); here it sits unboxed
+                  // and without that action, which never did anything from
+                  // chat. Once a folder is picked the Folder section above
+                  // offers the working Terminal button.
+                  <div className={`min-h-0 flex-1 ${UNBOX_CHILD}`}>
+                    <DirectoryTree
+                      selectedPath={workspaceDir}
+                      onSelect={chooseWorkspace}
+                      hideAction
+                      onCollapse={() => {
+                        // While changing an existing folder, the tree's collapse
+                        // acts as "cancel → back to files"; otherwise it hides the
+                        // whole project panel.
+                        if (pickingFolder && workspaceDir) setPickingFolder(false);
+                        else hideProjectPanel();
+                      }}
+                    />
+                  </div>
                 )}
                 </div>
                 </>
                 )}
+                </div>
               </div>
             </ProjectDrawer>
           )}

@@ -189,7 +189,8 @@ describe("SurfaceBoard never asserts an empty project on a guess", () => {
     render(<ProjectSurface projectId="proj_1" hasRoot view="board" />);
 
     expect(
-      await screen.findByText("Board unavailable — the daemon looks offline."),
+      // v1.329.0 (calm chat W4 F6): the same sentence without its em-dash aside.
+      await screen.findByText("Board unavailable. The daemon looks offline."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No sessions in this project yet/)).toBeNull();
   });
@@ -230,7 +231,7 @@ describe("SurfaceMedia never asserts an empty project on a failed request", () =
 
     expect(
       await screen.findByText(
-        /Media unavailable — the daemon returned an error \(HTTP 500\)/,
+        /Media unavailable\. The daemon returned an error \(HTTP 500\)/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/No media in this project yet/)).toBeNull();

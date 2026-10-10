@@ -251,7 +251,8 @@ describe("ProjectSchedules", () => {
     };
     render(<ProjectSchedules projectId="proj_1" />);
     expect(
-      await screen.findByText("✗ failed — provider unreachable"),
+      // v1.329.0 (calm chat W4 F6): "failed: <why>", no em-dash aside.
+      await screen.findByText("✗ failed: provider unreachable"),
     ).toBeInTheDocument();
     expect(screen.queryByText("✓ ok")).toBeNull();
   });
@@ -284,7 +285,7 @@ describe("ProjectSchedules", () => {
     // project with nothing scheduled (same hint idiom as SurfaceMedia).
     render(<ProjectSchedules projectId="proj_1" />);
     expect(
-      await screen.findByText("Schedules unavailable — the daemon looks offline."),
+      await screen.findByText("Schedules unavailable. The daemon looks offline."),
     ).toBeInTheDocument();
   });
 
@@ -293,12 +294,12 @@ describe("ProjectSchedules", () => {
     render(<ProjectSchedules projectId="proj_1" />);
     expect(
       await screen.findByText(
-        "Schedules unavailable — the daemon returned an error (HTTP 500).",
+        "Schedules unavailable. The daemon returned an error (HTTP 500).",
       ),
     ).toBeInTheDocument();
     // And it is honest about WHICH failure: not the offline wording.
     expect(
-      screen.queryByText("Schedules unavailable — the daemon looks offline."),
+      screen.queryByText("Schedules unavailable. The daemon looks offline."),
     ).toBeNull();
   });
 });

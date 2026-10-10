@@ -4,7 +4,7 @@
 // the project (the daemon injects it into prompts). Two ways to add: paste a
 // note (name + text) or upload a file (base64 → the daemon extracts its text).
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
   Check,
@@ -20,6 +20,7 @@ import { useApi } from "@/lib/useApi";
 import { get, post, patch, del, ApiError } from "@/lib/api";
 import { Card, Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
+import { composerChipClass } from "@/lib/composerChips";
 
 interface KnowledgeItem {
   id: string;
@@ -59,7 +60,16 @@ function kb(bytes: number): number {
   return Math.max(1, Math.round((bytes || 0) / 1024));
 }
 
-export function KnowledgePanel({ projectId }: { projectId: string }) {
+export function KnowledgePanel({
+  projectId,
+  bare = false,
+}: {
+  projectId: string;
+  /** v1.329.0 (calm chat W4 F6): no card. The chat's project drawer shows it
+   *  under its own "Knowledge" tab, so a second titled box would only repeat
+   *  the tab; the project page keeps the card. */
+  bare?: boolean;
+}) {
   const { data, loading, error, reload } = useApi<{
     knowledge: KnowledgeItem[];
     count: number;
@@ -185,26 +195,45 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
     }
   }
 
-  return (
-    <Card
-      title="Knowledge"
-      icon={<BookOpen size={15} />}
-      right={
-        <span className="text-[11px] text-zinc-500">
-          {items.length} item{items.length === 1 ? "" : "s"}
-          {totalBytes > 0 ? ` · ${kb(totalBytes)} KB` : ""}
-        </span>
-      }
-    >
-      <p className="mb-3 text-[12px] text-zinc-500">
-        Knowledge grounds every chat and task in this project.
-      </p>
+  const countLine = (
+    <span className="text-[11px] text-zinc-500">
+      {items.length} item{items.length === 1 ? "" : "s"}
+      {totalBytes > 0 ? ` · ${kb(totalBytes)} KB` : ""}
+    </span>
+  );
+  // A plain function, never a component defined in render (that would be a
+  // new type each render and remount the open note form on every keystroke).
+  const frame = (children: ReactNode) =>
+    bare ? (
+      <div data-testid="knowledge-panel" data-bare="true">
+        {children}
+      </div>
+    ) : (
+      <Card title="Knowledge" icon={<BookOpen size={15} />} right={countLine}>
+        {children}
+      </Card>
+    );
 
-      <div className="mb-3 flex flex-wrap gap-2">
+  return frame(
+    <>
+      {bare ? (
+        <div className="mb-3 flex items-baseline gap-2">
+          <p className="min-w-0 flex-1 text-[12px] text-zinc-500">
+            Knowledge grounds every chat and task in this project.
+          </p>
+          {countLine}
+        </div>
+      ) : (
+        <p className="mb-3 text-[12px] text-zinc-500">
+          Knowledge grounds every chat and task in this project.
+        </p>
+      )}
+
+      <div className={`mb-3 flex flex-wrap ${bare ? "-ml-2 gap-0.5" : "gap-2"}`}>
         <button
           type="button"
           onClick={() => setNoteOpen((o) => !o)}
-          className="btn-ghost !px-2.5 !py-1 text-xs"
+          className={bare ? composerChipClass() : "btn-ghost !px-2.5 !py-1 text-xs"}
         >
           <Plus size={13} /> Paste a note
         </button>
@@ -212,7 +241,7 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={uploadBusy}
-          className="btn-ghost !px-2.5 !py-1 text-xs"
+          className={bare ? composerChipClass() : "btn-ghost !px-2.5 !py-1 text-xs"}
         >
           {uploadBusy ? (
             <LoaderInline label="Uploading…" />
@@ -345,18 +374,22 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
         <p className="py-2 text-sm text-zinc-500">
-          Knowledge unavailable — the daemon looks offline.
+          Knowledge unavailable. The daemon looks offline.
         </p>
       ) : items.length === 0 ? (
         <Empty icon={<BookOpen size={22} />}>
-          No knowledge yet — paste a note or add a file to ground this project.
+          No knowledge yet. Paste a note or add a file to ground this project.
         </Empty>
       ) : (
         <ul className="space-y-1.5">
           {items.map((it) => (
             <li
               key={it.id}
-              className="group flex items-center gap-2 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
+              className={
+                bare
+                  ? "group -mx-2 flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.03]"
+                  : "group flex items-center gap-2 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
+              }
             >
               <span className="shrink-0 text-zinc-500">
                 {it.kind === "note" ? <StickyNote size={14} /> : <FileText size={14} />}
@@ -407,6 +440,6 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
           ))}
         </ul>
       )}
-    </Card>
+    </>,
   );
 }

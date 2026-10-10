@@ -4,6 +4,11 @@
 // conversation column can flip to Tasks / Board / Media right in place —
 // Projects has no page of its own in daily use. Mirrors the old hub's wiring
 // (visibility-paused scoped polls, shared reviews) with the same components.
+//
+// v1.329.0 (calm chat W4 F6): no cards here. The chat column is box-free, so
+// its project views are too: Tasks draws its run form bare (hairlines, ghost
+// controls, one primary action), Board is the board itself, and Media is the
+// grid. A state line (loading, offline, empty) is a quiet line, not a box.
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -14,7 +19,7 @@ import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { useEvents } from "@/lib/useEvents";
 import { useReviews } from "@/lib/useReviews";
 import type { SessionView } from "@/lib/types";
-import { Card, Empty, SkeletonRows } from "@/components/ui";
+import { Empty, SkeletonRows } from "@/components/ui";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
@@ -164,12 +169,12 @@ export function ProjectApprovals({ projectId }: { projectId: string }) {
       {pending.map((a) => (
         <div key={a.id} className="space-y-1">
           <p className="text-[11px] text-zinc-500">
-            A task in this project is paused —{" "}
+            A task in this project is paused.{" "}
             <Link
               href={`/sessions/${encodeURIComponent(a.sessionId)}`}
               className="text-accent-soft hover:underline"
             >
-              open the session
+              Open the session
             </Link>
           </p>
           {/* No `onConversation`: there is no composer here to arm. The
@@ -202,16 +207,17 @@ function SurfaceTasks({ projectId, hasRoot }: { projectId: string; hasRoot: bool
     `/projects/${encodeURIComponent(projectId)}`,
   );
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <ProjectTasks
         projectId={projectId}
         hasRoot={hasRoot}
         sessions={detail.data?.sessions ?? []}
         reloadSessions={detail.reload}
+        bare
       />
       {/* v1.169.0: the project's heartbeat — task schedules that run in here,
           with next fire + last outcome. Renders nothing when there are none. */}
-      <ProjectSchedules projectId={projectId} />
+      <ProjectSchedules projectId={projectId} bare />
     </div>
   );
 }
@@ -227,11 +233,9 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
   const mine = (sessions ?? []).filter((s) => s.project_id === projectId);
   if (error && error.status === 0 && mine.length === 0)
     return (
-      <Card title="Board" icon={<SquareKanban size={15} />}>
-        <p className="py-2 text-sm text-zinc-500">
-          Board unavailable — the daemon looks offline.
-        </p>
-      </Card>
+      <p data-testid="project-board-state" className="py-2 text-sm text-zinc-500">
+        Board unavailable. The daemon looks offline.
+      </p>
     );
   // "No sessions" is a CLAIM and may only be made once a response has landed.
   // `data` is null until the first /sessions round-trip resolves, so the old
@@ -246,23 +250,23 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
   // errored" is the same lie wearing a different coat.
   if (!data)
     return (
-      <Card title="Board" icon={<SquareKanban size={15} />}>
+      <div data-testid="project-board-state">
         {loading || !error ? (
           <SkeletonRows rows={3} />
         ) : (
           <p className="py-2 text-sm text-zinc-500">
-            Board unavailable — the daemon returned an error (HTTP {error.status}).
+            Board unavailable. The daemon returned an error (HTTP {error.status}).
           </p>
         )}
-      </Card>
+      </div>
     );
   if (mine.length === 0)
     return (
-      <Card title="Board" icon={<SquareKanban size={15} />}>
+      <div data-testid="project-board-state">
         <Empty icon={<SquareKanban size={22} />}>
-          No sessions in this project yet — run a task from the Tasks tab.
+          No sessions in this project yet. Run a task from the Tasks tab.
         </Empty>
-      </Card>
+      </div>
     );
   return (
     <KanbanBoard
@@ -283,15 +287,17 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
   );
   const items = data?.items ?? [];
   return (
-    <Card
-      title={items.length ? `Media · ${items.length}` : "Media"}
-      icon={<Images size={15} />}
-    >
+    <section data-testid="project-media" aria-label="Media">
+      {items.length > 0 && (
+        <p className="mb-2 text-[12px] text-zinc-500">
+          {items.length} item{items.length === 1 ? "" : "s"}
+        </p>
+      )}
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
         <p className="py-2 text-sm text-zinc-500">
-          Media unavailable — the daemon looks offline.
+          Media unavailable. The daemon looks offline.
         </p>
       ) : !data ? (
         // Same unknown-guard as the Board, and for the same reason: `items`
@@ -300,15 +306,15 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
         // from a failed request. No response in hand means UNKNOWN.
         error ? (
           <p className="py-2 text-sm text-zinc-500">
-            Media unavailable — the daemon returned an error (HTTP {error.status}).
+            Media unavailable. The daemon returned an error (HTTP {error.status}).
           </p>
         ) : (
           <SkeletonRows rows={3} />
         )
       ) : items.length === 0 ? (
         <Empty icon={<Images size={22} />}>
-          No media in this project yet — media generated in this project&apos;s
-          chat, or by a project task, lands here.
+          No media in this project yet. Media made in this project&apos;s chat,
+          or by a project task, lands here.
         </Empty>
       ) : (
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
@@ -335,7 +341,7 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
           ))}
         </div>
       )}
-    </Card>
+    </section>
   );
 }
 
