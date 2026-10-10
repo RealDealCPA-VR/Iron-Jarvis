@@ -11,8 +11,8 @@
  *  - ladder rows (and the word SELECTED) render ONLY for measured sources
  *    (probed / partial / tuned) — seeded and floor profiles say what they
  *    are instead of dressing up as a scorecard;
- *  - a probe that measured nothing says so ("measure failed — keeping floor
- *    defaults").
+ *  - a probe that measured nothing says so ("Measuring failed. Using the
+ *    floor defaults.").
  *
  * v1.204.0 — three findings from the shipped UI, live on the user's install:
  *  1. PLACEMENT: the envelope section inside the connect tiles made the
@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, ApiError } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
+import { ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/connections/endpointChip";
 
 /* ----------------------------------------------------------------- wire */
 
@@ -99,56 +100,76 @@ export function envelopeUrl(provider: string, model: string): string {
 /** Sources that are real evidence — everything else must not read as such. */
 const MEASURED_SOURCES = new Set(["probed", "partial", "tuned"]);
 
-const TONE_OK = "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300/90";
-const TONE_NEUTRAL = "border-white/10 bg-white/[0.04] text-zinc-400";
-const TONE_WARN = "border-amber-400/25 bg-amber-400/[0.08] text-amber-200/90";
+/**
+ * v1.329.0 (calm K2): every provenance chip wears the ONE quiet endpoint-row
+ * shell (`ENDPOINT_CHIP`); only a small dot inside carries a tone token. The
+ * chip used to be an amber or emerald bordered pill in literal hues, drawn on
+ * every saved-endpoint row as "floor defaults" beside J3's quiet chips.
+ *  - `ok`: a measured source (a success dot);
+ *  - `warn`: a probe that ran and measured nothing (a warn dot);
+ *  - `null`: seeded, or nothing measured yet (no mark).
+ */
+export type SourceMark = "ok" | "warn" | null;
 
 interface SourceBadge {
   label: string;
-  tone: string;
+  mark: SourceMark;
   title: string;
 }
 
-/** Badge text/tone per provenance: measured=ok, seeded=neutral, floor/failed=warn. */
+/** Plain words per provenance. "default" (nothing measured yet) is the
+ *  ABSENCE of a measurement: a row draws no chip for it, only Measure. */
 export function sourceBadge(source: string): SourceBadge {
   switch (source) {
     case "probed":
       return {
         label: "measured",
-        tone: TONE_OK,
-        title: "Every probe answered — these numbers were taken against this model, not read off a spec sheet.",
+        mark: "ok",
+        title: "Every check answered. These numbers were measured on this model, not read off a spec sheet.",
       };
     case "tuned":
       return {
         label: "measured · tuned down",
-        tone: TONE_OK,
-        title: "Measured, then lowered from live outcome evidence — never raised without a re-probe.",
+        mark: "ok",
+        title: "Measured, then lowered after real use. It is never raised again without a new measurement.",
       };
     case "partial":
       return {
         label: "partly measured",
-        tone: TONE_OK,
-        title: "Some probes failed; what is shown is the evidence from the ones that answered.",
+        mark: "ok",
+        title: "Some checks failed. What is shown comes from the ones that answered.",
       };
     case "seeded":
       return {
         label: "seeded",
-        tone: TONE_NEUTRAL,
-        title: "Reported by the endpoint's own introspection (~1s) — provisional until a probe verifies it.",
+        mark: null,
+        title: "Reported by the endpoint itself. It is not verified until you press Measure.",
       };
     case "probe_failed":
       return {
-        label: "measure failed — keeping floor defaults",
-        tone: TONE_WARN,
-        title: "The probe battery ran and nothing came back usable — these stay conservative floor defaults, not evidence.",
+        label: "Measuring failed",
+        mark: "warn",
+        title: "Measuring failed. Using the floor defaults: safe, conservative settings, not measured ones.",
       };
     default:
       return {
-        label: "floor defaults",
-        tone: TONE_WARN,
-        title: "Nothing probed yet — conservative defaults until a probe runs.",
+        label: "Not measured yet",
+        mark: null,
+        title: "Not measured yet. Using the floor defaults until you press Measure.",
       };
   }
+}
+
+/** The small tone mark inside a provenance chip (no text, so the chip's
+ *  words are its whole textContent). */
+function SourceDot({ mark }: { mark: SourceMark }) {
+  if (!mark) return null;
+  return (
+    <span
+      aria-hidden
+      className={`h-1.5 w-1.5 shrink-0 rounded-full ${mark === "ok" ? "bg-tone-success" : "bg-tone-warn"}`}
+    />
+  );
 }
 
 /* -------------------------------------------------------------- fetching */
@@ -235,12 +256,12 @@ function LadderRow({
         ? "ok, fallback"
         : `below bar (${(bar - score).toFixed(2)} short)`;
   const verdictTone = selected
-    ? "font-semibold text-emerald-300"
+    ? "font-semibold text-tone-success"
     : score != null && score < bar
-      ? "text-rose-300/90"
+      ? "text-tone-danger"
       : "text-zinc-500";
   return (
-    <div data-rung={rung} className="flex items-center gap-2 text-[10.5px]">
+    <div data-rung={rung} className="flex items-center gap-2 text-[11px]">
       <span className="w-36 shrink-0 truncate text-zinc-400">{label}</span>
       <span className="w-24 shrink-0 font-mono text-zinc-300">
         {score != null ? score.toFixed(2) : "—"}{" "}
@@ -250,7 +271,7 @@ function LadderRow({
         {score != null && (
           <span
             className={`absolute inset-y-0 left-0 rounded-full ${
-              score >= bar ? "bg-emerald-400/70" : "bg-rose-400/70"
+              score >= bar ? "bg-tone-success/70" : "bg-tone-danger/70"
             }`}
             style={{ width: `${Math.min(100, Math.max(0, score * 100))}%` }}
           />
@@ -365,8 +386,8 @@ export function MeasuredEndpoints({ entries }: { entries: MeasuredEntry[] }) {
       <div className="mb-3">
         <h2 className="text-sm font-semibold text-zinc-100">Measured endpoints</h2>
         <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
-          What each local model was measured to do. An endpoint appears here once a
-          capability profile exists — Measure lives on the endpoint rows above.
+          What each local model was measured to do. An endpoint shows up here once it has
+          been measured. Measure is on the endpoint rows above.
         </p>
       </div>
       <div className="space-y-2">
@@ -425,22 +446,23 @@ function MeasuredProfileCard({
 
   // The one-line verdict, plain language FIRST — the user read "native 0.00"
   // as their model scoring zero; the card now leads with what it means.
+  // v1.329.0 (calm K2): plain sentences, tone tokens.
   const verdict = !measured
     ? profile.source === "probe_failed"
-      ? "measure failed — keeping floor defaults"
-      : "reported by the endpoint — not verified yet"
+      ? "Measuring failed. Using the floor defaults."
+      : "Reported by the endpoint. Not verified yet."
     : selectedRung === "native"
-      ? "fully usable — native tool calls"
+      ? "Fully usable, with native tool calls."
       : selectedRung === "strict_json"
-        ? "fully usable — tool calls run as guided JSON"
-        : "limited — runs step-by-step with verification";
+        ? "Fully usable. Tool calls run as guided JSON."
+        : "Limited. It runs step by step and checks each step.";
   const verdictTone = !measured
     ? profile.source === "probe_failed"
-      ? "text-amber-200/90"
+      ? "text-tone-warn"
       : "text-zinc-400"
     : selectedRung != null
-      ? "text-emerald-300/90"
-      : "text-amber-200/90";
+      ? "text-tone-success"
+      : "text-tone-warn";
 
   // Context honesty: the app budgets with effective_window, so THAT is the
   // number shown. The profile's own floor context (8192/4096) never renders
@@ -471,14 +493,11 @@ function MeasuredProfileCard({
         <span className="max-w-[10rem] truncate text-[12px] font-medium text-zinc-200" title={label}>
           {label}
         </span>
-        <span className="min-w-0 truncate font-mono text-[10.5px] text-zinc-500" title={model}>
+        <span className="min-w-0 truncate font-mono text-[11px] text-zinc-500" title={model}>
           {model}
         </span>
-        <span
-          data-testid={`${tid}-source`}
-          title={badge.title}
-          className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${badge.tone}`}
-        >
+        <span data-testid={`${tid}-source`} title={badge.title} className={ENDPOINT_CHIP}>
+          <SourceDot mark={badge.mark} />
           {badge.label}
         </span>
         <button
@@ -486,7 +505,7 @@ function MeasuredProfileCard({
           data-testid={`${tid}-expand`}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="ml-auto shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
+          className={`ml-auto ${ENDPOINT_CHIP_BUTTON}`}
         >
           {open ? "hide details" : "details"}
         </button>
@@ -497,13 +516,13 @@ function MeasuredProfileCard({
       </p>
 
       {ew && ew.value != null && (
-        <p className="mt-0.5 text-[10.5px] text-zinc-400">
+        <p className="mt-0.5 text-[11px] text-zinc-400">
           context window: <span className="font-mono">{fmtInt(ew.value)}</span>{" "}
           ({effectiveWindowWords(ew.source)})
         </p>
       )}
       {!ctxMeasured && (
-        <p className="mt-0.5 text-[10.5px] text-zinc-500">
+        <p className="mt-0.5 text-[11px] text-zinc-500">
           context not yet deep-measured; the app uses{" "}
           {ew?.source === "pin" ? "your pinned value" : "the endpoint's value"}
         </p>
@@ -516,9 +535,9 @@ function MeasuredProfileCard({
               <div data-testid={`${tid}-ladder`} className="space-y-1">
                 {rungs.map((r) =>
                   r.refused ? (
-                    <div key={r.rung} data-rung={r.rung} className="text-[10.5px]">
+                    <div key={r.rung} data-rung={r.rung} className="text-[11px]">
                       <span className="text-zinc-400">{r.label}: </span>
-                      <span className="text-amber-200/90">the endpoint refused them</span>
+                      <span className="text-tone-warn">the endpoint refused them</span>
                       {notes[`tool_protocols.${r.rung}`] && (
                         <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">
                           {notes[`tool_protocols.${r.rung}`]}
@@ -536,34 +555,33 @@ function MeasuredProfileCard({
                     />
                   ),
                 )}
-                <div data-rung="text_floor" className="flex items-center gap-2 text-[10.5px]">
+                <div data-rung="text_floor" className="flex items-center gap-2 text-[11px]">
                   <span className="w-36 shrink-0 truncate text-zinc-400">text floor</span>
                   <span
                     className={
-                      selectedRung == null ? "font-semibold text-emerald-300" : "text-zinc-600"
+                      selectedRung == null ? "font-semibold text-tone-success" : "text-zinc-600"
                     }
                   >
                     {selectedRung == null
-                      ? "SELECTED — no rung cleared its bar"
+                      ? "SELECTED. No rung cleared its bar."
                       : "floor (always works)"}
                   </span>
                 </div>
               </div>
               {ctxMeasured && honest != null && adv != null && honest < adv && (
-                <p className="text-[10.5px] text-zinc-400">
+                <p className="text-[11px] text-zinc-400">
                   honest context <span className="font-mono">{fmtInt(honest)}</span> of{" "}
                   <span className="font-mono">{fmtInt(adv)}</span> advertised
                   {gapPct != null ? ` (${gapPct}%)` : ""}
                   {bigGap && (
-                    <span className="text-rose-300/90">
-                      {" "}
-                      — big gap; budgets use the honest number
+                    <span className="text-tone-danger">
+                      . A big gap, so budgets use the honest number.
                     </span>
                   )}
                 </p>
               )}
               {profile.chars_per_token != null && fieldMeasured("chars_per_token") && (
-                <p className="text-[10.5px] text-zinc-400">
+                <p className="text-[11px] text-zinc-400">
                   {profile.chars_per_token} chars/token
                 </p>
               )}
@@ -572,12 +590,12 @@ function MeasuredProfileCard({
               )}
             </>
           ) : profile.source === "probe_failed" ? (
-            <p className="text-[10.5px] text-amber-200/80">
-              the probe battery ran and nothing came back usable — keeping floor defaults
+            <p className="text-[11px] text-tone-warn">
+              Every check ran and nothing came back usable, so the floor defaults stay.
             </p>
           ) : (
-            <p className="text-[10.5px] text-zinc-500">
-              capabilities reported by the endpoint, not verified — Measure runs the real probes
+            <p className="text-[11px] text-zinc-500">
+              Capabilities reported by the endpoint, not verified. Measure runs the real checks.
             </p>
           )}
         </div>
@@ -645,7 +663,7 @@ export function EnvelopeRowControls({
     }, pollMs);
     const to = setTimeout(() => {
       setMeasuring(false);
-      setError("measurement finished or timed out — refresh shows the latest");
+      setError("Measuring finished or timed out. Refresh to see the latest.");
       reload();
     }, timeoutMs);
     return () => {
@@ -680,7 +698,11 @@ export function EnvelopeRowControls({
 
   const profile = data?.profile;
   const trusted = data?.trusted === true;
-  const badge = profile?.source ? sourceBadge(profile.source) : null;
+  // v1.329.0 (calm K2): "default" (nothing measured yet) draws NO chip. It sat
+  // as an amber "floor defaults" pill on every saved row; Measure (whose
+  // title says "Not measured yet") already says it, quietly.
+  const badge =
+    profile?.source && profile.source !== "default" ? sourceBadge(profile.source) : null;
 
   if (trusted) return null; // frontier rows get no chip, no button, no delta
 
@@ -690,8 +712,9 @@ export function EnvelopeRowControls({
         <span
           data-testid={`envelope-chip-${provider}-${model}`}
           title={badge.title}
-          className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${badge.tone}`}
+          className={ENDPOINT_CHIP}
         >
+          <SourceDot mark={badge.mark} />
           {badge.label}
         </span>
       )}
@@ -700,15 +723,15 @@ export function EnvelopeRowControls({
         onClick={() => void measure()}
         disabled={measuring}
         data-testid={`measure-${provider}-${model}`}
-        title="Measure this model's real capability envelope (tool-call ladder, honest context, chars/token) — runs in the background; the card updates when it finishes"
-        className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+        title={`${badge ? "" : "Not measured yet. "}Measure checks what this model can really do: tool calls, how much context it handles, characters per token. It runs in the background and this row updates when it finishes.`}
+        className={ENDPOINT_CHIP_BUTTON}
       >
         {measuring ? "Measuring…" : "Measure"}
       </button>
       {error && (
         <span
           data-testid={`measure-error-${provider}-${model}`}
-          className="w-full basis-full text-[10px] leading-relaxed text-amber-300/90"
+          className="w-full basis-full text-[11px] leading-relaxed text-tone-warn"
         >
           {error}
         </span>

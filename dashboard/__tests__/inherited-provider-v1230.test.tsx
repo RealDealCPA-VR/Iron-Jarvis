@@ -201,7 +201,8 @@ describe("Connections — an inherited login reads as connected", () => {
     expect(within(anthropic).getByText("Connected · via Claude Code")).toBeInTheDocument();
     expect(within(anthropic).queryByText("Not connected")).toBeNull();
     expect(within(anthropic).queryByRole("button", { name: /Disconnect/ })).toBeNull();
-    expect(anthropic.textContent).toMatch(/Uses your Claude Code sign-in — no key stored here/);
+    // v1.329.0 (calm K2): two plain sentences, no dash aside.
+    expect(anthropic.textContent).toMatch(/Uses your Claude Code sign-in\. No key is stored here\./);
     // Test and Make default are still offered — it IS usable.
     expect(within(anthropic).getByRole("button", { name: /Test/ })).toBeInTheDocument();
 

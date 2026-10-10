@@ -331,7 +331,7 @@ describe("Measured endpoints — their own section BELOW the connect cards", () 
 
     // The plain-language verdict LEADS.
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "fully usable — native tool calls",
+      "Fully usable, with native tool calls.",
     );
 
     // The window the app budgets with, source in words — never the floor.
@@ -508,7 +508,7 @@ describe("Measured endpoints — a floored rung is a refusal, not a score", () =
   it("floored native: verdict leads with guided JSON; expand says refused + the note, never 0.00", async () => {
     const card = await renderOllamaCard(FLOORED_NATIVE);
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "fully usable — tool calls run as guided JSON",
+      "Fully usable. Tool calls run as guided JSON.",
     );
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     const detail = within(card).getByTestId(`${OLLAMA_CARD}-detail`);
@@ -546,19 +546,19 @@ describe("Measured endpoints — a floored rung is a refusal, not a score", () =
 /* ------------------------------------------------- the plain verdict line */
 
 describe("Measured endpoints — the verdict, all three ways", () => {
-  it("native clears its bar: fully usable — native tool calls", async () => {
+  it("native clears its bar: Fully usable, with native tool calls.", async () => {
     const card = await renderOllamaCard(envelope());
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "fully usable — native tool calls",
+      "Fully usable, with native tool calls.",
     );
   });
 
-  it("only strict_json clears: fully usable — tool calls run as guided JSON", async () => {
+  it("only strict_json clears: Fully usable. Tool calls run as guided JSON.", async () => {
     const card = await renderOllamaCard(
       envelope({ profile: profile({ tool_protocols: { native: 0.8, strict_json: 0.93 } }) }),
     );
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "fully usable — tool calls run as guided JSON",
+      "Fully usable. Tool calls run as guided JSON.",
     );
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     const detail = within(card).getByTestId(`${OLLAMA_CARD}-detail`);
@@ -568,19 +568,19 @@ describe("Measured endpoints — the verdict, all three ways", () => {
     expect(detail.querySelector('[data-rung="strict_json"]')?.textContent).toContain("SELECTED");
   });
 
-  it("nothing clears: limited — runs step-by-step with verification", async () => {
+  it("nothing clears: Limited. It runs step by step and checks each step.", async () => {
     const card = await renderOllamaCard(
       envelope({ profile: profile({ tool_protocols: { native: 0.4, strict_json: 0.5 } }) }),
     );
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "limited — runs step-by-step with verification",
+      "Limited. It runs step by step and checks each step.",
     );
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     expect(
       within(card)
         .getByTestId(`${OLLAMA_CARD}-detail`)
         .querySelector('[data-rung="text_floor"]')?.textContent,
-    ).toContain("SELECTED — no rung cleared its bar");
+    ).toContain("SELECTED. No rung cleared its bar.");
   });
 });
 
@@ -604,13 +604,13 @@ describe("Measured endpoints — unmeasured provenance never dresses up as evide
     });
     expect(within(card).getByTestId(`${OLLAMA_CARD}-source`).textContent).toBe("seeded");
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "reported by the endpoint — not verified yet",
+      "Reported by the endpoint. Not verified yet.",
     );
     expect(card.textContent).not.toContain("SELECTED");
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     expect(within(card).queryByTestId(`${OLLAMA_CARD}-ladder`)).toBeNull();
     expect(within(card).getByTestId(`${OLLAMA_CARD}-detail`).textContent).toContain(
-      "capabilities reported by the endpoint, not verified — Measure runs the real probes",
+      "Capabilities reported by the endpoint, not verified. Measure runs the real checks.",
     );
   });
 
@@ -628,7 +628,7 @@ describe("Measured endpoints — unmeasured provenance never dresses up as evide
       effective_window: { value: 131072, source: "endpoint" },
     });
     expect(within(card).getByTestId(`${OLLAMA_CARD}-verdict`).textContent).toBe(
-      "measure failed — keeping floor defaults",
+      "Measuring failed. Using the floor defaults.",
     );
     expect(card.textContent).toContain("context window: 131,072 (from the endpoint)");
     expect(card.textContent).not.toContain("8,192");
@@ -637,7 +637,7 @@ describe("Measured endpoints — unmeasured provenance never dresses up as evide
     fireEvent.click(within(card).getByTestId(`${OLLAMA_CARD}-expand`));
     expect(within(card).queryByTestId(`${OLLAMA_CARD}-ladder`)).toBeNull();
     expect(within(card).getByTestId(`${OLLAMA_CARD}-detail`).textContent).toContain(
-      "the probe battery ran and nothing came back usable — keeping floor defaults",
+      "Every check ran and nothing came back usable, so the floor defaults stay.",
     );
   });
 });
@@ -888,7 +888,7 @@ describe("EnvelopeRowControls — the WS event is not the only exit from Measuri
 
     const note = await screen.findByTestId("measure-error-fleet-abc-gpt-oss-120b");
     expect(note.textContent).toBe(
-      "measurement finished or timed out — refresh shows the latest",
+      "Measuring finished or timed out. Refresh to see the latest.",
     );
     expect(btn.textContent).toBe("Measure");
     expect(btn).not.toBeDisabled();

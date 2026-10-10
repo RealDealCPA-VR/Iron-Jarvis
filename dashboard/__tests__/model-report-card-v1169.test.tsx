@@ -222,7 +222,7 @@ describe("Connections — the model report line (local providers)", () => {
     render(<ConnectionsPage />);
     const report = screen.getByTestId("model-report-ollama");
     expect(report.textContent).toContain(
-      "avg 0.62 over 9 sessions — below your 0.75 bar, so eligible work routes up",
+      "avg 0.62 over 9 sessions: below your 0.75 bar, so eligible work routes up",
     );
     // ONE line: the builder task-class row must not render a second one.
     expect(report.querySelectorAll("p")).toHaveLength(1);
@@ -235,7 +235,7 @@ describe("Connections — the model report line (local providers)", () => {
     expect(
       screen.getByTestId("model-report-ollama").textContent,
     ).toContain(
-      "avg 0.81 over 9 sessions — clears your 0.75 bar, so eligible work can stay local",
+      "avg 0.81 over 9 sessions: clears your 0.75 bar, so eligible work can stay local",
     );
   });
 
@@ -275,8 +275,8 @@ describe("Connections — the model report line (local providers)", () => {
     expect(report.querySelectorAll("p")).toHaveLength(2);
     expect(report.textContent).toContain("qwen2.5:14b:");
     expect(report.textContent).toContain("gpt-oss-120b:");
-    expect(report.textContent).toContain("avg 0.90 over 4 sessions — clears");
-    expect(report.textContent).toContain("avg 0.50 over 4 sessions — below");
+    expect(report.textContent).toContain("avg 0.90 over 4 sessions: clears");
+    expect(report.textContent).toContain("avg 0.50 over 4 sessions: below");
   });
 });
 
@@ -297,7 +297,7 @@ describe("Connections — diverging task classes never collapse into one verdict
     render(<ConnectionsPage />);
     const text = screen.getByTestId("model-report-ollama").textContent ?? "";
     expect(text).toContain(
-      "avg 0.70 over 12 sessions — clears your 0.75 bar for chat work, which can stay local; below it for builder work, which routes up",
+      "avg 0.70 over 12 sessions: clears your 0.75 bar for chat work, which can stay local; below it for builder work, which routes up",
     );
     // The categorical single-consequence claims must be GONE.
     expect(text).not.toContain("so eligible work routes up");
@@ -314,7 +314,7 @@ describe("Connections — diverging task classes never collapse into one verdict
     render(<ConnectionsPage />);
     const text = screen.getByTestId("model-report-ollama").textContent ?? "";
     expect(text).toContain(
-      "avg 0.80 over 12 sessions — below your 0.75 bar for builder work, which routes up",
+      "avg 0.80 over 12 sessions: below your 0.75 bar for builder work, which routes up",
     );
     expect(text).not.toContain("can stay local");
   });
@@ -329,7 +329,7 @@ describe("Connections — diverging task classes never collapse into one verdict
     render(<ConnectionsPage />);
     const report = screen.getByTestId("model-report-ollama");
     expect(report.textContent).toContain(
-      "avg 0.62 over 9 sessions — clears your 0.75 bar for builder work, which can stay local; other eligible work routes up",
+      "avg 0.62 over 9 sessions: clears your 0.75 bar for builder work, which can stay local; other eligible work routes up",
     );
     expect(report.querySelectorAll("p")).toHaveLength(1);
   });
@@ -364,7 +364,7 @@ describe("Connections — diverging task classes never collapse into one verdict
     expect(
       screen.getByTestId("model-report-ollama").textContent,
     ).toContain(
-      "avg 0.80 over 12 sessions — clears your 0.75 bar, so eligible work can stay local",
+      "avg 0.80 over 12 sessions: clears your 0.75 bar, so eligible work can stay local",
     );
   });
 });
@@ -377,7 +377,7 @@ describe("Connections — the displayed avg never contradicts the verdict", () =
     render(<ConnectionsPage />);
     const text = screen.getByTestId("model-report-ollama").textContent ?? "";
     expect(text).toContain(
-      "avg 0.748 over 5 sessions — below your 0.75 bar, so eligible work routes up",
+      "avg 0.748 over 5 sessions: below your 0.75 bar, so eligible work routes up",
     );
     expect(text).not.toContain("avg 0.75 ");
   });
@@ -387,7 +387,7 @@ describe("Connections — the displayed avg never contradicts the verdict", () =
     render(<ConnectionsPage />);
     expect(
       screen.getByTestId("model-report-ollama").textContent,
-    ).toContain("avg 0.75 over 3 sessions — clears your 0.75 bar");
+    ).toContain("avg 0.75 over 3 sessions: clears your 0.75 bar");
   });
 });
 
@@ -435,7 +435,7 @@ describe("Connections — fleet endpoints on the custom card", () => {
     // reloadEndpoints() fetches /fleet asynchronously — wait for the row.
     const report = await screen.findByTestId("model-report-fleet-abc");
     expect(report.textContent).toContain(
-      "avg 0.66 over 7 sessions — below your 0.75 bar, so eligible work routes up",
+      "avg 0.66 over 7 sessions: below your 0.75 bar, so eligible work routes up",
     );
   });
 

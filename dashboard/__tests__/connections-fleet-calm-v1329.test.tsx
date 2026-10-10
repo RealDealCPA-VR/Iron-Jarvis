@@ -23,7 +23,7 @@
  *     online, never "exposes no serving metrics") and Settings lists the row.
  */
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -270,6 +270,32 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
     expect(src.length).toBeGreaterThan(5000);
     expect(src).toMatch(/text-tone-(?:success|warn|danger)/);
     expect(offenders(name, src)).toEqual([]);
+  });
+
+  /* v1.329.0 (calm K2): the guard reaches every file in components/connections
+     (EnvelopeCard's "floor defaults" chip was an amber bordered pill in
+     literal hues, drawn on every saved row; IronProxyCard's Running dot had a
+     literal emerald glow) and lib/fleet.ts. The folder is LISTED, so a new
+     file there is guarded the day it lands. */
+  const CONN_DIR = path.join(DASH_ROOT, "components", "connections");
+  const CONN_FILES = readdirSync(CONN_DIR)
+    .filter((f) => /\.tsx?$/.test(f))
+    .map((f) => `components/connections/${f}`);
+  const MORE = [...CONN_FILES, "lib/fleet.ts"];
+  const readRel = (rel: string) =>
+    readFileSync(path.join(DASH_ROOT, rel), "utf8").replace(/\r\n/g, "\n");
+
+  it("the connections folder is listed in full (anti-vacuity)", () => {
+    for (const f of ["EnvelopeCard.tsx", "IronProxyCard.tsx", "RestHookups.tsx", "EndpointModelPicker.tsx", "endpointChip.ts"]) {
+      expect(CONN_FILES).toContain(`components/connections/${f}`);
+    }
+    // The files that colour things do it with tone tokens.
+    expect(readRel("components/connections/EnvelopeCard.tsx")).toMatch(/bg-tone-(?:success|warn)/);
+    expect(readRel("components/connections/IronProxyCard.tsx")).toMatch(/text-tone-success/);
+  });
+
+  it.each(MORE)("%s has no half-pixel size, literal hue or literal colour", (rel) => {
+    expect(offenders(rel, readRel(rel))).toEqual([]);
   });
 
   it("the patterns catch what they are meant to catch", () => {

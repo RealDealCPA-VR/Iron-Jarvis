@@ -346,7 +346,7 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
   }
 
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex flex-wrap items-center justify-end gap-1.5">
       {err && <span className="text-[11px] text-tone-danger">{err}</span>}
       {cleared && (
         <span className="text-[11px] text-tone-warn" title={cleared.join(", ")}>
@@ -400,9 +400,21 @@ function NodeCard({
 
   return (
     <Card
+      // v1.329.0 (calm K2): the header WRAPS. With J3's longer
+      // "OpenAI-compatible" badge, the name + badge + host and the latency +
+      // status + rename + Remove no longer fit one 358px row on a phone, and
+      // the Card's single-row header pushed Remove past the card's edge
+      // (clipped to "Remov"). Now the controls drop to their own line,
+      // right-aligned, and a long name or host truncates with its title.
+      className="[&>header>h2]:min-w-0 [&>header]:flex-wrap"
       title={
-        <span className="flex flex-wrap items-center gap-2">
-          <span className="text-zinc-100">{nodeName(snap.node)}</span>
+        <span data-testid="fleet-node-title" className="flex min-w-0 flex-wrap items-center gap-2">
+          <span
+            className="min-w-0 max-w-full truncate text-zinc-100"
+            title={nodeName(snap.node)}
+          >
+            {nodeName(snap.node)}
+          </span>
           {/* v1.329.0: the way this node CHATS (the saved protocol wins over
               the detected kind, so an Anthropic endpoint whose server also
               answers /v1/models is not called "OpenAI-compatible"); what
@@ -415,14 +427,20 @@ function NodeCard({
           >
             <Badge value={chatLabel(snap.node)} tone={chatTone(snap.node)} keepCase />
           </span>
-          <span className="font-mono text-[11px] font-normal text-zinc-600">
+          <span
+            className="min-w-0 max-w-full truncate font-mono text-[11px] font-normal text-zinc-600"
+            title={snap.node.base_url}
+          >
             {hostOf(snap.node.base_url)}
           </span>
         </span>
       }
       icon={<Server size={15} />}
       right={
-        <span className="flex shrink-0 items-center gap-2">
+        <span
+          data-testid="fleet-node-controls"
+          className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2"
+        >
           {fmtLatency(snap.latency_ms) && (
             <span
               className="text-[11px] tabular-nums text-zinc-500"
@@ -1046,8 +1064,8 @@ export default function FleetPage() {
               action={{ label: "Add an endpoint", href: "/connections?focus=endpoints" }}
               secondary={{ label: "Open Settings", href: "/settings" }}
             >
-              Add a model server on Connections, or set the Ollama or custom URL in Settings —
-              they show up here automatically. You can also add one below by its address.
+              Add a model server on Connections, or set the Ollama or custom URL in Settings.
+              They show up here on their own. You can also add one below by its address.
             </Empty>
           </Card>
         </Reveal>

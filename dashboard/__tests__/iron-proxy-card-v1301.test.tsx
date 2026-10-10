@@ -237,7 +237,7 @@ describe("the switch and the status line", () => {
     const toggle = document.getElementById("iron-proxy-toggle")!;
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(
-      /Off — Iron Jarvis uses each CLI's own sign-in/,
+      /Off\. Iron Jarvis uses each CLI's own sign-in/,
     );
     expect(screen.queryByRole("button", { name: /Add account/ })).toBeNull();
   });
@@ -294,7 +294,7 @@ describe("the switch and the status line", () => {
     await waitFor(() => expect(callsTo("POST", "/iron-proxy/disable")).toHaveLength(1));
     expect(callsTo("POST", "/iron-proxy/enable")).toHaveLength(0);
     await waitFor(() =>
-      expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(/^Off — /),
+      expect(screen.getByTestId("iron-proxy-status").textContent).toMatch(/^Off\. /),
     );
   });
 
@@ -372,7 +372,7 @@ describe("accounts", () => {
 
   it("explains the same-provider rule", async () => {
     await mountWith(snap());
-    expect(card()!.textContent).toMatch(/next account of the SAME\s+provider — never to another provider/);
+    expect(card()!.textContent).toMatch(/next account of the SAME\s+provider, never to another provider/);
     expect(card()!.textContent).toMatch(/API-key accounts are managed in Iron-Proxy/);
   });
 });

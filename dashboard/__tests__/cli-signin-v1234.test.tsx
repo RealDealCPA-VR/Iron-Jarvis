@@ -51,7 +51,8 @@ describe("Connections CLI row (v1.234.0)", () => {
   const page = read("components/settings/pages/ConnectionsPage.tsx");
 
   it("renders the third state with the remedy, not 'Not detected'", () => {
-    expect(page).toMatch(/Installed — not signed in/);
+    // v1.329.0 (calm K2): the pills' middle dot, not a dash aside.
+    expect(page).toMatch(/Installed · not signed in/);
     expect(page).toMatch(/cli-signed-out-\$\{info\.provider\}/);
     expect(page).toMatch(/"claude-cli": "run `claude` in a terminal, then \/login, then Re-detect"/);
     expect(page).toMatch(/"codex-cli": "run `codex login` in a terminal, then Re-detect"/);

@@ -196,7 +196,7 @@ export function IronProxyCard() {
     const a = (live.accounts ?? []).find((x) => x.id === watch.id);
     const s = a?.state?.status;
     if (s === "ready" || s === "active") {
-      setSignedIn(`Signed in — ${a?.title ?? watch.title} is ready.`);
+      setSignedIn(`Signed in. ${a?.title ?? watch.title} is ready.`);
       signInWatch = null;
       setWatch(null);
     }
@@ -338,9 +338,9 @@ function IronProxyBody({
     if (!ok) return;
     reload();
     if (status === "unauthenticated") {
-      setActionError("Still not signed in — finish the login in the Sign in pane.");
+      setActionError("Still not signed in. Finish the login in the Sign in pane.");
     } else if (status === "ready" || status === "active") {
-      setNote(`Signed in — ${title} is ready.`);
+      setNote(`Signed in. ${title} is ready.`);
     }
   }
 
@@ -414,8 +414,8 @@ function IronProxyBody({
         <div data-testid="iron-proxy-status" className="text-xs text-zinc-400">
           {status.running ? (
             <span className="flex flex-wrap items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]" />
-              <span className="font-medium text-emerald-300">Running</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-tone-success" />
+              <span className="font-medium text-tone-success">Running</span>
               <span className="text-zinc-500">
                 · {status.owned ? "started by Iron Jarvis" : "already running on this PC"}
                 {status.version ? ` · v${status.version.replace(/^v/, "")}` : ""}
@@ -425,7 +425,7 @@ function IronProxyBody({
             <LoaderInline label="Starting…" />
           ) : status.enabled && status.error ? null : (
             <span className="text-zinc-500">
-              Off — Iron Jarvis uses each CLI&apos;s own sign-in.
+              Off. Iron Jarvis uses each CLI&apos;s own sign-in.
             </span>
           )}
         </div>
@@ -434,12 +434,12 @@ function IronProxyBody({
           <div
             id="iron-proxy-outdated"
             role="alert"
-            className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/[0.1] px-3 py-2.5 text-sm text-amber-100"
+            className="mt-3 flex items-start gap-2 rounded-xl border border-tone-warn/25 bg-tone-warn/[0.06] px-3 py-2.5 text-sm text-zinc-200"
           >
-            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-amber-300" />
+            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-tone-warn" />
             <div>
-              <div className="font-medium">{status.error}</div>
-              <div className="mt-0.5 text-xs text-amber-200/80">
+              <div className="font-medium text-tone-warn">{status.error}</div>
+              <div className="mt-0.5 text-xs text-zinc-400">
                 Until then Iron Jarvis cannot pick accounts through it: Build&apos;s “as &lt;account&gt;”
                 launches and account switching are refused.
               </div>
@@ -472,7 +472,7 @@ function IronProxyBody({
           </div>
         )}
         {added && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2 text-sm text-emerald-200">
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-tone-success/25 bg-tone-success/[0.06] px-3 py-2 text-sm text-tone-success">
             <span>Added “{added.title}”. Sign it in to use it.</span>
             <button
               type="button"
@@ -634,11 +634,11 @@ function IronProxyBody({
         <p className="mt-4 text-[11px] leading-relaxed text-zinc-600">
           When this is on, Iron Jarvis&apos;s Claude, Codex and Grok calls run as the first usable
           account of that provider. A limit moves the call to the next account of the SAME
-          provider — never to another provider. API-key accounts are managed in Iron-Proxy, but
+          provider, never to another provider. API-key accounts are managed in Iron-Proxy, but
           Iron Jarvis keeps using its own keys.
         </p>
         <p id="iron-proxy-build-help" className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
-          How accounts work in Build: a terminal pane keeps the account it started on — read
+          How accounts work in Build: a terminal pane keeps the account it started on. Read
           “Several accounts in Build” in the Handbook (Help → Guides).
         </p>
       </Card>
@@ -680,9 +680,9 @@ function AccountRow({
   // the button says why instead of opening a pane that is refused.
   const canOpen = isCli && BUILD_PROVIDERS.has(a.provider);
   const openBlocked = !a.enabled
-    ? "This account is switched off — enable it first."
+    ? "This account is switched off. Turn it on first."
     : parked
-      ? "This account is parked — unpark it, or wait until its limit resets."
+      ? "This account is parked. Unpark it, or wait until its limit resets."
       : a.state?.status === "unauthenticated"
         ? "Sign this account in first."
         : null;
@@ -704,7 +704,7 @@ function AccountRow({
         </div>
         {!isCli && (
           <div className="mt-0.5 text-[11px] text-zinc-500">
-            API key — managed in Iron-Proxy; Iron Jarvis uses its own keys.
+            API key, managed in Iron-Proxy. Iron Jarvis uses its own keys.
           </div>
         )}
         {usage && (

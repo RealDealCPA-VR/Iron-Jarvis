@@ -457,7 +457,7 @@ export const NAV: NavSectionDef[] = [
           "loaded models",
           "what is running",
         ],
-        blurb: "Every inference endpoint you can reach — what's loaded and serving.",
+        blurb: "Every model server you can reach, and what each one has loaded and is serving.",
       },
       {
         href: "/secrets",

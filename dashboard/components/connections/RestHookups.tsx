@@ -414,7 +414,7 @@ export function RestHookups() {
       }
     >
       <p className="mb-3 text-xs leading-relaxed text-zinc-500">
-        Connect any service that has an HTTP API — give it a name, base URL, and an API
+        Connect any service that has an HTTP API. Give it a name, base URL, and an API
         key. Use Test any time to check the connection is healthy.
       </p>
 
@@ -431,14 +431,14 @@ export function RestHookups() {
         </div>
       )}
       {added && (
-        <p className="mb-3 text-xs text-emerald-300">Added {added}.</p>
+        <p className="mb-3 text-xs text-tone-success">Added {added}.</p>
       )}
 
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : integrations.length === 0 ? (
         <Empty icon={<Plug size={22} />}>
-          Nothing here yet — most people never need this; the tiles above cover the
+          Nothing here yet. Most people never need this, because the tiles above cover the
           usual connections.
         </Empty>
       ) : (

@@ -551,7 +551,7 @@ export function codeRouteText(
   const target = (route.target || "").trim();
   if (!route.enabled) {
     return why || target
-      ? "Coding work isn’t sent to a local model — that routing is turned off."
+      ? "Coding work isn’t sent to a local model. That routing is turned off."
       : null;
   }
   if (why) return why.charAt(0).toUpperCase() + why.slice(1);

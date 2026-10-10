@@ -297,7 +297,7 @@ describe("Check again", () => {
     await mountCard();
     const before = n(LIGHT);
     fireEvent.click(await screen.findByTestId("iron-proxy-check-d"));
-    expect(await screen.findByText("Still not signed in — finish the login in the Sign in pane.")).toBeTruthy();
+    expect(await screen.findByText("Still not signed in. Finish the login in the Sign in pane.")).toBeTruthy();
     expect(callsTo("POST", "/iron-proxy/accounts/d/check")).toHaveLength(1);
     await waitFor(() => expect(n(LIGHT)).toBeGreaterThan(before));
   });
@@ -308,7 +308,7 @@ describe("Check again", () => {
     await mountCard();
     serve(snap([WORK, SIGNED_IN])); // what the re-read will answer
     fireEvent.click(await screen.findByTestId("iron-proxy-check-d"));
-    expect(await screen.findByText("Signed in — Personal is ready.")).toBeTruthy();
+    expect(await screen.findByText("Signed in. Personal is ready.")).toBeTruthy();
     await waitFor(() =>
       expect(document.getElementById("iron-proxy-account-d")!.getAttribute("data-status")).toBe("ready"),
     );
@@ -331,7 +331,7 @@ describe("after Sign in, the card watches that account", () => {
     // The login finished in the Build pane: the chip flips without a reload.
     serve(snap([WORK, SIGNED_IN]));
     const note = await screen.findByTestId("iron-proxy-signed-in", {}, { timeout: 4000 });
-    expect(note.textContent).toBe("Signed in — Personal is ready.");
+    expect(note.textContent).toBe("Signed in. Personal is ready.");
     expect(document.getElementById("iron-proxy-account-d")!.getAttribute("data-status")).toBe("ready");
     // Watching stopped: back to the 5 s cadence.
     expect(await lightReadsOver(2500)).toBeLessThanOrEqual(1);

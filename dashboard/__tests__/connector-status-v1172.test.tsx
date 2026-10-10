@@ -35,7 +35,9 @@ describe("connector status honesty", () => {
   });
 
   it("the no_tools badge says what is wrong AND what fixes it", () => {
-    expect(pageSrc).toContain('label = "0 tools — restart"');
+    // v1.329.0 (calm K2): the pill keeps both halves (what is wrong, what
+    // fixes it) with the pills' middle dot instead of a dash aside.
+    expect(pageSrc).toContain('label = "0 tools · restart"');
     // A warning, not a success. v1.329.0 (calm J3): the warning tone is the
     // theme token (tone-warn), not literal amber, so Daylight re-inks it.
     expect(pageSrc).toMatch(

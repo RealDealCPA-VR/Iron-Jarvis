@@ -871,7 +871,8 @@ describe("Connections — an inherited login reads 'Connected · via Claude Code
     expect(within(anthropic).getByTestId("conn-status-pill").className).toMatch(/\bwhitespace-nowrap\b/);
     expect(visibleText(anthropic)).not.toMatch(/claude-cli/);
     // Its own line says where the login lives and that no key is kept here.
-    const why = within(anthropic).getByText(/no key stored here/);
+    // v1.329.0 (calm K2): "Uses your Claude Code sign-in. No key is stored here."
+    const why = within(anthropic).getByText(/No key is stored here/);
     expect(why.tagName).toBe("P");
     expect(why.textContent).toMatch(/Claude Code/);
     // No key is involved, so no "API key" method chip.

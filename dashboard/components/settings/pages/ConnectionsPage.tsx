@@ -101,6 +101,7 @@ import {
   MeasuredEndpoints,
   type MeasuredEntry,
 } from "@/components/connections/EnvelopeCard";
+import { ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/connections/endpointChip";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
@@ -226,11 +227,11 @@ function qualityLine(row: QualityRow, classRows: QualityRow[] = []): string {
       // clearing classes speak for everything.
       parts.push("other eligible work routes up");
     }
-    return `avg ${avg} over ${n} — ${parts.join("; ")}`;
+    return `avg ${avg} over ${n}: ${parts.join("; ")}`;
   }
   return row.clears
-    ? `avg ${avg} over ${n} — clears your ${row.bar} bar, so eligible work can stay local`
-    : `avg ${avg} over ${n} — below your ${row.bar} bar, so eligible work routes up`;
+    ? `avg ${avg} over ${n}: clears your ${row.bar} bar, so eligible work can stay local`
+    : `avg ${avg} over ${n}: below your ${row.bar} bar, so eligible work routes up`;
 }
 
 /**
@@ -273,8 +274,8 @@ function ModelReportLine({
         return (
           <div key={r.model || "_"}>
             <p
-              title={`Auto-tier judges local models on the average completion score of their evaluated sessions — below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
-                detail ? ` Per task class — ${detail}.` : ""
+              title={`Auto-tier judges local models on the average completion score of their evaluated sessions. Below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
+                detail ? ` Per task class: ${detail}.` : ""
               }`}
               className="flex items-start gap-1 text-[11px] leading-relaxed text-zinc-500"
             >
@@ -439,7 +440,7 @@ function StatusPill({ conn }: { conn: Connection }) {
   // what hid a dark wiki from a user who then found Jarvis "blind as a bat".
   if (conn.status === "no_tools") {
     tone = "border-tone-warn/25 bg-tone-warn/10 text-tone-warn";
-    label = "0 tools — restart";
+    label = "0 tools · restart";
   } else if (conn.connected) {
     tone = "border-tone-success/25 bg-tone-success/10 text-tone-success";
     // Inherited (v1.230.0, U5): connected THROUGH the logged-in CLI, no key
@@ -481,16 +482,12 @@ function StatusPill({ conn }: { conn: Connection }) {
   );
 }
 
-/**
- * v1.329.0 (calm J3): the ONE quiet chip a saved-endpoint row draws its tags
- * with: the Anthropic tag, the model, tools / vision and Verify tools. The
- * rows mixed two looks (a hairline "Anthropic" tag beside filled emerald and
- * amber chips Daylight did not re-ink); now the shell is the same for all and
- * only a small mark inside carries a tone token (a check for a verified yes,
- * a dot for a "no" that sends work elsewhere).
- */
-const ENDPOINT_CHIP =
-  "inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400";
+/* v1.329.0 (calm J3): the ONE quiet chip a saved-endpoint row draws its tags
+   with (the Anthropic tag, the model, tools / vision and Verify tools) lives
+   in components/connections/endpointChip.ts since K2, so EnvelopeCard's
+   measurement chip and Measure button wear the same shell. Only a small mark
+   inside carries a tone token (a check for a verified yes, a dot for a "no"
+   that sends work elsewhere). */
 
 /* -------------------------------------------------------------------------- */
 /*  One connection card                                                        */
@@ -978,7 +975,7 @@ function ConnectionCard({
           pill. */}
       {inheritedVia(conn) && (
         <p className="-mt-2 text-[11px] leading-snug text-zinc-500">
-          Uses your {providerDisplay(inheritedVia(conn))} sign-in — no key stored here.
+          Uses your {providerDisplay(inheritedVia(conn))} sign-in. No key is stored here.
         </p>
       )}
 
@@ -991,8 +988,8 @@ function ConnectionCard({
       {/* Body */}
       {isMock ? (
         <p className="text-xs leading-relaxed text-zinc-500">
-          The built-in demo model: scripted replies, no AI. Always available for testing — no
-          key required.
+          The built-in demo model: scripted replies, no AI. Always available for testing. No
+          key needed.
         </p>
       ) : conn.connected ? (
         // v1.329.0 (H3): the actions row WRAPS inside the card. Three across
@@ -1118,7 +1115,7 @@ function ConnectionCard({
                   />
                   <p className="text-[11px] leading-relaxed text-zinc-500">
                     After you approve access, {conn.display_name} shows an authorization
-                    code — copy it and paste it here to finish connecting.
+                    code. Copy it and paste it here to finish connecting.
                   </p>
                   <div className="flex items-center gap-2">
                     <button
@@ -1211,7 +1208,7 @@ function ConnectionCard({
                         setRenameDraft(ep.label);
                         setRenaming(ep.id);
                       }}
-                      title={`${ep.label} — click to rename`}
+                      title={`${ep.label} (click to rename)`}
                       className="group/rn flex max-w-[9rem] shrink-0 items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-white/[0.06]"
                     >
                       <span className="truncate">{ep.label}</span>
@@ -1290,7 +1287,7 @@ function ConnectionCard({
                       data-testid="endpoint-row-verify"
                       onClick={() => void verifyEndpoint(ep)}
                       disabled={epBusy === ep.id}
-                      className={`${ENDPOINT_CHIP} transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:opacity-50`}
+                      className={ENDPOINT_CHIP_BUTTON}
                       title="Tool support is not checked yet, so tool turns go to another model for now. Press to check this server."
                     >
                       {epBusy === ep.id ? "…" : "Verify tools"}
@@ -1316,7 +1313,7 @@ function ConnectionCard({
                     onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
                     confirmLabel="Delete?"
-                    title={`Remove "${ep.label}" — its provider disappears from every picker; the saved key is cleaned up`}
+                    title={`Remove "${ep.label}". Its provider disappears from every picker and the saved key is cleaned up.`}
                   />
                   {/* The report card for THIS endpoint's provider
                       ("fleet-<id>") — what auto-tier's quality judgment sees
@@ -1483,7 +1480,7 @@ function ConnectionCard({
         <Link
           href="/marketplace"
           className="inline-flex w-fit items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-          title="The Directory's storage cards connect this same account — connecting in either place is one connection"
+          title="The Directory's storage cards connect this same account. Connecting in either place is one connection."
         >
           Same connection in the Directory <ArrowRight size={11} aria-hidden />
         </Link>
@@ -1616,7 +1613,7 @@ function CliProviderRow({
       {available ? (
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-success/25 bg-tone-success/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-success">
           <span className="h-1.5 w-1.5 rounded-full bg-tone-success" />
-          Detected — ready to use
+          Detected · ready to use
         </span>
       ) : signedOut ? (
         <span
@@ -1624,7 +1621,7 @@ function CliProviderRow({
           className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-warn"
         >
           <span className="h-1.5 w-1.5 rounded-full bg-tone-warn" />
-          Installed — not signed in
+          Installed · not signed in
         </span>
       ) : (
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-500/25 bg-zinc-500/10 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
@@ -1682,7 +1679,7 @@ const CONNECT_ELSEWHERE = [
   {
     href: "/memory?scope=longterm",
     title: "Cloud drives for memory",
-    desc: "Box, Drive, Dropbox and more — long-term memory storage.",
+    desc: "Box, Drive, Dropbox and more, for long-term memory storage.",
     icon: <Cloud size={17} />,
   },
 ];
@@ -1846,13 +1843,13 @@ export default function ConnectionsPage() {
       }
       for (const p of notReady) {
         const d = detected.find((m) => m.provider === p && m.detail)?.detail;
-        parts.push(`${label(p)} found but not usable${d ? ` — ${d}` : ""}`);
+        parts.push(`${label(p)} found but not usable${d ? ` (${d})` : ""}`);
       }
       setRescanNote({
         ok: true,
         text: parts.length
           ? `Rescan complete: ${parts.join("; ")}.`
-          : "Rescan complete — no local CLI providers detected. Install (and log into) the Claude, Codex, or Grok CLI and it will appear here.",
+          : "Rescan complete. No local CLI providers detected. Install (and log into) the Claude, Codex, or Grok CLI and it will appear here.",
       });
       reload(); // connections list
       refreshHealth(); // /health providers → the "Detected" pills below
@@ -1897,7 +1894,7 @@ export default function ConnectionsPage() {
       <Reveal>
         <PageHeader
           title="Connections"
-          subtitle="Your accounts — AI models, cloud drives, and services. Connect once; everything in Iron Jarvis can use them."
+          subtitle="Your accounts: AI models, cloud drives and services. Connect once and everything in Iron Jarvis can use them."
           actions={
             <div className="flex items-center gap-2">
               {data ? (
@@ -2111,7 +2108,7 @@ export default function ConnectionsPage() {
             ))}
           </div>
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
-            These use plans you already pay for — no API keys. Pick them in any model picker.
+            These use plans you already pay for, so no API keys are needed. Pick them in any model picker.
           </p>
         </Card>
         </div>
