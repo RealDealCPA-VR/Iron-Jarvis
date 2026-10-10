@@ -309,7 +309,10 @@ describe("one quiet line above a settled reply", () => {
     expect(steps.map((r) => r.textContent)).toEqual([
       "Readread_file0.3 s",
       "Readread_file0.2 s",
-      "Ranexcel_query1.2 s",
+      // v1.329.0: a tool the app does not know names itself in one phrase
+      // with a real space ("Ran excel_query"); the two read_file steps were
+      // saved before targets existed and keep the older words · id row.
+      "Ran excel_query1.2 s",
     ]);
     for (const r of steps) expect(boxClasses(r)).toEqual([]);
   });
@@ -470,7 +473,9 @@ describe("on the chat page (calm chat W1-5)", () => {
     const rows = within(live).getAllByTestId("work-row");
     expect(rows.map((r) => r.getAttribute("data-state"))).toEqual(["done", "running", "running"]);
     expect(within(rows[0]).getByText("harbor.xlsx")).toBeTruthy();
-    expect(within(rows[1]).getByText("Searching the web")).toBeTruthy();
+    // v1.329.0: the live row says what it searches for, like a saved step.
+    expect(within(rows[1]).getByText("Searching the web for")).toBeTruthy();
+    expect(within(rows[1]).getByText("pier 9 hours")).toBeTruthy();
     expect(within(rows[2]).getByText("Thinking…")).toBeTruthy();
     expect(within(live).getByTestId("thinking-summary").textContent).toBe("Thinking…");
     for (const r of rows) expect(boxClasses(r)).toEqual([]);

@@ -599,8 +599,9 @@ interface ChatMessage {
   /** v1.323.0: the answer stopped because the model ran out of output room —
    *  the reply offers Continue. */
   truncated?: boolean;
-  /** v1.323.0: the turn's tool steps with how long each took (receipt). */
-  steps?: { name: string; ok: boolean | null; ms: number | null }[];
+  /** v1.323.0: the turn's tool steps with how long each took (receipt).
+   *  v1.329.0: each may carry a short safe `target` (lib/workTarget), last. */
+  steps?: { name: string; ok: boolean | null; ms: number | null; target?: string }[];
   /** v1.323.0: when the turn started, said its first word, and finished (ms
    *  epoch) — the receipt's speed line. */
   timing?: { startedAt: number; firstTokenAt: number | null; endedAt: number };

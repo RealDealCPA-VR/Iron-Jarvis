@@ -18,6 +18,13 @@
  * Plain words only for tools this file KNOWS (built-ins, by exact name). Any
  * other tool reads as "ran a tool" with its own id beside it: the app does not
  * describe what it cannot vouch for (the lib/toolWords rule).
+ *
+ * v1.329.0: a row says what was done to WHAT, live and after the turn alike:
+ * "Read harbor.xlsx", "Searched the web for pier 9 hours", "Ran excel_query".
+ * The subject is the step's safe target (lib/workTarget: a base name, a short
+ * query, a host, a program name; never a full path, a whole argument or
+ * anything credential-shaped), saved on the step so a reopened chat still
+ * says it. A step saved before then keeps the older "Read · read_file".
  */
 
 import { memo, useId, useState, type ReactNode } from "react";
@@ -39,60 +46,13 @@ import {
 import type { ToolCard } from "@/lib/useChatStream";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
+import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
 
 /* ------------------------------------------------------------- vocabulary */
 
-export type WorkKind =
-  | "read"
-  | "make"
-  | "change"
-  | "folder"
-  | "search"
-  | "web"
-  | "page"
-  | "command"
-  | "tool";
-
-/** Built-in tools by EXACT name. Anything else is a plain "tool". */
-const KIND_OF: Record<string, WorkKind> = {
-  read_file: "read",
-  read_document: "read",
-  extract_pdf: "read",
-  view_image: "read",
-  excel_read: "read",
-  excel_profile: "read",
-  image_info: "read",
-  pdf_form_fields: "read",
-  write_file: "make",
-  write_document: "make",
-  convert_document: "make",
-  image_convert: "make",
-  image_resize: "make",
-  pdf_split: "make",
-  redact_pii: "make",
-  edit_file: "change",
-  docx_edit: "change",
-  excel_edit: "change",
-  excel_apply_spec: "change",
-  rename_file: "change",
-  pdf_arrange: "change",
-  pdf_form_fill: "change",
-  list_files: "folder",
-  list_folder: "folder",
-  grep: "search",
-  web_search: "web",
-  web_fetch: "page",
-  shell: "command",
-  run_code: "command",
-  repl: "command",
-};
-
-/** The kind of a tool id. Exact match only: never trimmed, never a prefix. */
-export function toolKind(name: string): WorkKind {
-  return typeof name === "string" && Object.prototype.hasOwnProperty.call(KIND_OF, name)
-    ? KIND_OF[name]
-    : "tool";
-}
+// v1.329.0: the kinds table moved to lib/workTarget (the stream hook reads it
+// to keep each step's safe target); re-exported here for existing callers.
+export { toolKind, type WorkKind };
 
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -108,21 +68,35 @@ interface KindWords {
   done: string;
   /** Row title while it runs. */
   doing: string;
+  /** v1.329.0: the words BEFORE a target, once done and while running —
+   *  "Searched the web for" + "pier 9 hours", "Read" + "harbor.xlsx". */
+  doneOn: string;
+  doingOn: string;
   /** The count in the folded line ("read 2 files"). */
   count: (n: number) => string;
 }
 
 const WORDS: Record<WorkKind, KindWords> = {
-  read: { icon: FileText, done: "Read", doing: "Reading", count: (n) => `read ${plural(n, "file")}` },
-  make: { icon: FilePlus, done: "Made", doing: "Making", count: (n) => `made ${plural(n, "file")}` },
-  change: { icon: FilePen, done: "Changed", doing: "Changing", count: (n) => `changed ${plural(n, "file")}` },
-  folder: { icon: Folder, done: "Looked in", doing: "Looking in", count: (n) => `looked in ${plural(n, "folder")}` },
-  search: { icon: Search, done: "Searched files", doing: "Searching files", count: (n) => `searched files${times(n)}` },
-  web: { icon: Globe, done: "Searched the web", doing: "Searching the web", count: (n) => `searched the web${times(n)}` },
-  page: { icon: Globe, done: "Read a web page", doing: "Reading a web page", count: (n) => `read ${plural(n, "web page")}` },
-  command: { icon: SquareTerminal, done: "Ran", doing: "Running", count: (n) => `ran ${plural(n, "command")}` },
-  tool: { icon: Wrench, done: "Ran", doing: "Running", count: (n) => `ran ${plural(n, "tool")}` },
+  read: { icon: FileText, done: "Read", doing: "Reading", doneOn: "Read", doingOn: "Reading", count: (n) => `read ${plural(n, "file")}` },
+  make: { icon: FilePlus, done: "Made", doing: "Making", doneOn: "Made", doingOn: "Making", count: (n) => `made ${plural(n, "file")}` },
+  change: { icon: FilePen, done: "Changed", doing: "Changing", doneOn: "Changed", doingOn: "Changing", count: (n) => `changed ${plural(n, "file")}` },
+  folder: { icon: Folder, done: "Looked in", doing: "Looking in", doneOn: "Looked in", doingOn: "Looking in", count: (n) => `looked in ${plural(n, "folder")}` },
+  search: { icon: Search, done: "Searched files", doing: "Searching files", doneOn: "Searched files for", doingOn: "Searching files for", count: (n) => `searched files${times(n)}` },
+  web: { icon: Globe, done: "Searched the web", doing: "Searching the web", doneOn: "Searched the web for", doingOn: "Searching the web for", count: (n) => `searched the web${times(n)}` },
+  page: { icon: Globe, done: "Read a web page", doing: "Reading a web page", doneOn: "Read a page on", doingOn: "Reading a page on", count: (n) => `read ${plural(n, "web page")}` },
+  command: { icon: SquareTerminal, done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "command")}` },
+  tool: { icon: Wrench, done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "tool")}` },
 };
+
+/** v1.329.0: the subject a row names after its words, and whether it is a
+ *  file. A known tool names its safe target; any other tool names its own id
+ *  ("Ran excel_query"). Null = no subject: the row keeps the older shape,
+ *  words · tool id (a step saved before targets existed). */
+function rowSubject(kind: WorkKind, name: string, target: string | null): { text: string; file: boolean } | null {
+  if (kind === "tool") return { text: name, file: false };
+  if (!target) return null;
+  return { text: target, file: kind === "read" || kind === "make" || kind === "change" || kind === "folder" };
+}
 
 /** The order counts are said in: looking before making, tools last. */
 const KIND_ORDER: WorkKind[] = ["read", "folder", "search", "page", "web", "change", "make", "command", "tool"];
@@ -158,10 +132,14 @@ export function workSteps(input: WorkInput): ReceiptStep[] {
   if (Array.isArray(input.steps)) {
     for (const st of input.steps) {
       if (!st || typeof st !== "object" || typeof st.name !== "string" || !st.name.trim()) continue;
+      // v1.329.0: a saved target is made safe AGAIN on the way out (the
+      // thread file may be older, or hand-edited); junk reads as none.
+      const target = cleanTarget((st as { target?: unknown }).target);
       out.push({
         name: st.name,
         ok: typeof st.ok === "boolean" ? st.ok : null,
         ms: typeof st.ms === "number" && Number.isFinite(st.ms) && st.ms >= 0 ? st.ms : null,
+        ...(target ? { target } : {}),
       });
     }
   }
@@ -246,10 +224,36 @@ export interface WorkRowProps {
   failed?: boolean;
   /** The row's own hover text (a tool's full output). */
   hint?: string;
+  /** v1.329.0: what the step was done TO, said right after the title as one
+   *  phrase ("Read harbor.xlsx", "Searched the web for pier 9 hours"). Takes
+   *  the place of `detail`. */
+  subject?: string | null;
+  /** The subject is a file or folder name: dotted underline. */
+  subjectFile?: boolean;
+  /** The subject's hover text (its tool id, a live file's full path). */
+  subjectTitle?: string;
 }
 
 /** ONE grey line: icon, title, dot, summary. Never a box. */
-export function WorkRow({ icon: Icon, title, detail, path, detailTitle, meta, running, failed, hint }: WorkRowProps) {
+export function WorkRow({
+  icon: Icon,
+  title,
+  detail,
+  path,
+  detailTitle,
+  meta,
+  running,
+  failed,
+  hint,
+  subject,
+  subjectFile,
+  subjectTitle,
+}: WorkRowProps) {
+  const titleTone = running
+    ? "animate-pulse text-zinc-300 motion-reduce:animate-none"
+    : failed
+      ? "text-tone-danger"
+      : "text-zinc-400";
   return (
     <div
       data-testid="work-row"
@@ -264,14 +268,25 @@ export function WorkRow({ icon: Icon, title, detail, path, detailTitle, meta, ru
       ) : (
         <Icon size={14} aria-hidden="true" className="shrink-0" />
       )}
-      <span
-        className={`shrink-0 ${
-          running ? "animate-pulse text-zinc-300 motion-reduce:animate-none" : failed ? "text-tone-danger" : "text-zinc-400"
-        }`}
-      >
-        {title}
-      </span>
-      {detail ? (
+      {subject ? (
+        // v1.329.0: words and subject read as ONE phrase with a real space,
+        // and the phrase (not the words) gives way on a narrow screen.
+        <span className="min-w-0 truncate">
+          <span className={titleTone}>{title}</span>{" "}
+          <span
+            data-testid="work-target"
+            title={subjectTitle ?? subject}
+            className={`text-zinc-300 ${
+              subjectFile ? "underline decoration-zinc-500 decoration-dotted underline-offset-[3px]" : ""
+            }`}
+          >
+            {subject}
+          </span>
+        </span>
+      ) : (
+        <span className={`shrink-0 ${titleTone}`}>{title}</span>
+      )}
+      {!subject && detail ? (
         <>
           <Dot />
           <span
@@ -333,27 +348,60 @@ function firstLine(s: string | undefined): string {
   return line.trim();
 }
 
-/** One live tool call as a row (the streaming hooks' ToolCard). */
+/** How much of a live call's argument text a hover shows. Kept under the
+ *  credential check's span (lib/workTarget CHECK_SPAN, 240) so every shown
+ *  character, and 40 past the cut, has been checked. */
+const ARG_HOVER_MAX = 200;
+
+/** A live command's or unknown tool's hover: its one-line argument text, then
+ *  its tool id ("git push origin main (shell)"). Null when there is no such
+ *  text, or when it looks like it carries a credential (the row then keeps
+ *  its older hover). On this screen only: never saved with the step. */
+function liveArgHover(card: ToolCard): string | null {
+  const full = argDetail(card.args)?.full.replace(/\s+/g, " ").trim();
+  if (!full || secretLooking(full)) return null;
+  const shown = full.length > ARG_HOVER_MAX ? `${full.slice(0, ARG_HOVER_MAX - 1)}…` : full;
+  return `${shown} (${card.name})`;
+}
+
+/** One live tool call as a row (the streaming hooks' ToolCard). v1.329.0:
+ *  the same words as a saved step ("Reading harbor.xlsx", "Searching the web
+ *  for pier 9 hours", "Running excel_query"), from the same safe target
+ *  (lib/workTarget). A known tool with nothing safe to name falls back to its
+ *  words · its own id, never to a raw argument. */
 function ToolRow({ card }: { card: ToolCard }) {
   const running = card.status !== "done";
   const failed = !running && card.ok === false;
   const kind = toolKind(card.name);
   const w = WORDS[kind];
-  const named = argDetail(card.args);
-  // An unknown tool names itself: "Ran · mcp__files__scan". A known one names
-  // its file, search or command and keeps its id for the hover.
-  const detail = kind === "tool" ? card.name : (named?.text ?? card.name);
-  const detailTitle = kind === "tool" ? named?.full ?? card.name : named ? `${named.full} (${card.name})` : card.name;
+  const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
+  // The hover: a live FILE keeps its full path (it is on this screen only and
+  // is never saved); a search or a page shows the safe words and the tool id.
+  const named = subject?.file ? argDetail(card.args) : null;
+  // A running command or an unknown tool shows what it was CALLED WITH on
+  // hover ("git push origin main (shell)"): with a grant there is no card, so
+  // this is the only place on the chat page that says which command runs.
+  // Screen only, never saved; dropped whole when it looks like a credential.
+  const argHover = kind === "command" || kind === "tool" ? liveArgHover(card) : null;
+  const subjectTitle =
+    kind === "tool"
+      ? argHover ?? card.name
+      : subject
+        ? argHover ??
+          `${named?.path && named.full.endsWith(subject.text) ? named.full : subject.text} (${card.name})`
+        : undefined;
   const elapsed =
     !running && card.startedAt && card.endedAt ? secondsText(card.endedAt - card.startedAt) : null;
   const preview = !running ? firstLine(card.output) : "";
   return (
     <WorkRow
       icon={w.icon}
-      title={running ? w.doing : w.done}
-      detail={detail}
-      path={kind !== "tool" && !!named?.path}
-      detailTitle={detailTitle}
+      title={subject ? (running ? w.doingOn : w.doneOn) : running ? w.doing : w.done}
+      subject={subject?.text ?? null}
+      subjectFile={!!subject?.file}
+      subjectTitle={subjectTitle}
+      detail={subject ? null : card.name}
+      detailTitle={subject ? card.name : argHover ?? card.name}
       running={running}
       failed={failed}
       hint={card.output || undefined}
@@ -409,17 +457,24 @@ export const LiveToolRows = memo(function LiveToolRows({ cards }: { cards: reado
   );
 });
 
-/** A finished step from the message's record (no arguments are stored). */
+/** A finished step from the message's record. No arguments are stored, only
+ *  the step's safe `target` (v1.329.0): "Read harbor.xlsx", "Ran
+ *  excel_query". A step saved before targets existed keeps the older row,
+ *  words · tool id ("Read · read_file"). */
 function StepRow({ step }: { step: ReceiptStep }) {
   const kind = toolKind(step.name);
   const w = WORDS[kind];
   const failed = step.ok === false;
   const dur = secondsText(step.ms);
+  const subject = rowSubject(kind, step.name, step.target ?? null);
   return (
     <WorkRow
       icon={w.icon}
-      title={w.done}
-      detail={step.name}
+      title={subject ? w.doneOn : w.done}
+      subject={subject?.text ?? null}
+      subjectFile={!!subject?.file}
+      subjectTitle={subject ? (kind === "tool" ? step.name : `${subject.text} (${step.name})`) : undefined}
+      detail={subject ? null : step.name}
       failed={failed}
       meta={
         <>

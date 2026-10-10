@@ -182,6 +182,9 @@ export interface ReceiptStep {
   name: string;
   ok: boolean | null;
   ms: number | null;
+  /** v1.329.0: what the step was done to, in a few safe words (WorkLine's
+   *  rows). Absent on steps saved before then. */
+  target?: string;
 }
 
 /** Client-clock timing of the turn (v1.323.0) — `useChatStream`'s TurnTiming. */

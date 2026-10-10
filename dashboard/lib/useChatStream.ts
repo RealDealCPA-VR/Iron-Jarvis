@@ -51,6 +51,7 @@ import {
   type ResourceReceipt,
 } from "./mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./turnReads";
+import { stepTarget } from "./workTarget";
 
 // v1.324.0: type-only re-exports (they erase — a mock of this module with a
 // fixed export list is unaffected). The runtime helpers live in mcpInteract.
@@ -234,6 +235,10 @@ export interface TurnStep {
   name: string;
   ok: boolean | null;
   ms: number | null;
+  /** v1.329.0: what the step was done to, in a few SAFE words ("harbor.xlsx",
+   *  "pier 9 hours", "example.com") — lib/workTarget. Absent when there is
+   *  nothing safe to say, and on every step saved before v1.329.0. */
+  target?: string;
 }
 
 /** When a turn started, said its first word, and ended — CLIENT clock (ms
@@ -246,14 +251,20 @@ export interface TurnTiming {
 
 /** The steps of a turn from its tool cards, in order (v1.323.0). */
 export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
-  return cards.map((c) => ({
-    name: c.name,
-    ok: typeof c.ok === "boolean" ? c.ok : null,
-    ms:
-      typeof c.startedAt === "number" && typeof c.endedAt === "number"
-        ? Math.max(0, c.endedAt - c.startedAt)
-        : null,
-  }));
+  return cards.map((c) => {
+    // v1.329.0: the step's safe target, taken from the call's arguments here
+    // on the stream lane (the only place they exist) — appended LAST.
+    const target = stepTarget(c.name, c.args);
+    return {
+      name: c.name,
+      ok: typeof c.ok === "boolean" ? c.ok : null,
+      ms:
+        typeof c.startedAt === "number" && typeof c.endedAt === "number"
+          ? Math.max(0, c.endedAt - c.startedAt)
+          : null,
+      ...(target ? { target } : {}),
+    };
+  });
 }
 
 /** What one chat turn resolves to. `reply` is authoritative (from the `done`
