@@ -500,7 +500,10 @@ async def test_a_failing_anthropic_node_refuses_by_name_and_never_fails_over(mon
         await router.complete(
             provider="fleet-box", system="", messages=[LLMMessage(role="user", content="hi")], tools=[]
         )
-    assert "fleet-box" in str(ei.value)
+    # Calm chat J1 (v1.329.0): the refusal names the endpoint by the LABEL the
+    # user gave it ("Box"), not the raw provider id; the id stays on the
+    # provider.downgraded payload for the logs.
+    assert str(ei.value).startswith("Box answered HTTP 500")
     assert cloud.calls == 0  # never handed to another provider
 
 

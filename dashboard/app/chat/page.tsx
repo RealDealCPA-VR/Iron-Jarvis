@@ -11130,10 +11130,18 @@ export default function ChatPage() {
                             Jarvis finished before reading this — press Enter to send it.
                           </div>
                         )}
+                        {/* v1.329.0 (calm chat J1): the turn's error is ONE calm
+                            line in the danger tone, like every other notice in this
+                            tray (no bordered box, no second card). Still an alert,
+                            and the Retry / model actions beside it are unchanged. */}
                         {error && (
-                          <div className="min-w-0 flex-1">
-                            <ErrorNote>{error}</ErrorNote>
-                          </div>
+                          <p
+                            role="alert"
+                            data-testid="chat-turn-error"
+                            className="min-w-0 flex-1 break-words text-[13px] leading-5 text-tone-danger"
+                          >
+                            {error}
+                          </p>
                         )}
                         {compactNote && (
                           <div className="min-w-0 flex-1 text-[12px] text-zinc-400">

@@ -405,6 +405,15 @@ def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:
 _LIVENESS_TIMEOUT_S = 2.5
 
 
+#: The refusal's "why nothing stood in" sentence (v1.329.0, calm chat J1):
+#: two plain sentences where it used to be one with a dash aside. Shared by
+#: every refusal kind so the wording cannot drift between them.
+_NO_STAND_IN = (
+    " No substitute was used on purpose. A stand-in answer would look like"
+    " real work that never happened."
+)
+
+
 def _short_detail(text: str, wanted: str, status: "int | None") -> str:
     """The endpoint's own error detail for the answered-error refusal, minus
     the adapter's ``"<provider> API error <status>:"`` prefix (the refusal
@@ -838,20 +847,23 @@ class ModelRouter:
         the user is looking at is incomplete, and "not answered" would be
         the wrong claim about it.
         """
+        # v1.329.0 (calm chat J1): the words the user reads name the endpoint
+        # by the LABEL they gave it (a fleet node's label), never the raw
+        # ``fleet-<id>``; the id stays on every event payload for the logs.
+        # Plain sentences, no dash asides. Wording only: nothing here changes
+        # whether a turn refuses or what it refuses with.
+        name = self._endpoint_label(wanted)
         if kind == "cooldown":
             secs = int(math.ceil(max(0.0, retry_in)))
             text = (
-                f"{wanted} is in cooldown, retry in {secs} s — it failed"
+                f"{name} is in cooldown, retry in {secs} s. It failed"
                 f" {self.health.threshold} times in a row, so this turn was not"
                 " sent to it."
             )
             if pinned:
                 text += " No substitute was tried because strict model pin is on."
             else:
-                text += (
-                    " No substitute was used on purpose — a stand-in answer would"
-                    " look like real work that never happened."
-                )
+                text += _NO_STAND_IN
             text += " Wait it out, or pick another model for this chat and retry."
             return ProviderError(text)
         if kind == "signed_out":
@@ -873,34 +885,31 @@ class ModelRouter:
             if pinned:
                 text += " No substitute was tried because strict model pin is on."
             else:
-                text += (
-                    " No substitute was used on purpose — a stand-in answer would"
-                    " look like real work that never happened."
-                )
+                text += _NO_STAND_IN
             return ProviderError(f"{text} {fix}")
         if kind == "answered_error":
             status = getattr(exc, "status_code", None) if exc is not None else None
             what = f"answered HTTP {status}" if status else "answered with an error"
             detail = _short_detail(str(exc) if exc is not None else "", wanted, status)
-            text = f"{wanted} {what}"
+            text = f"{name} {what}"
             if detail:
-                text += f": {detail}"
-            text += " — no substitute used on purpose (local_primary_policy=refuse)."
+                text += f": {detail.rstrip(' .')}"
+            text += ". No substitute was used on purpose (local_primary_policy=refuse)."
             if pinned:
                 text += " Strict model pin is on as well."
             text += (
                 " Check that endpoint or pick another model for this chat and"
-                " retry; set local_primary_policy to failover in Settings if you"
+                " retry. Set local_primary_policy to failover in Settings if you"
                 " want another provider to stand in."
             )
             return ProviderError(text)
         lead = {
-            "timeout": f"{wanted} didn't respond in time",
-            "interrupted": f"the connection to {wanted} dropped mid-request",
-        }.get(kind, f"{wanted} isn't connected right now")
+            "timeout": f"{name} didn't respond in time",
+            "interrupted": f"the connection to {name} dropped mid-request",
+        }.get(kind, f"{name} isn't connected right now")
         if partial and kind == "interrupted":
             detail = (
-                f"the connection to {wanted} dropped mid-answer, so the reply"
+                f"the connection to {name} dropped mid-answer, so the reply"
                 " above is incomplete."
             )
         else:
@@ -908,10 +917,7 @@ class ModelRouter:
         if pinned:
             detail += " No substitute was tried because strict model pin is on."
         else:
-            detail += (
-                " No substitute was used on purpose — a stand-in answer would"
-                " look like real work that never happened."
-            )
+            detail += _NO_STAND_IN
         fix = {
             # It IS up — the honest advice is time (a cold 30B/70B load), not a
             # restart of something that never went down.
@@ -932,10 +938,29 @@ class ModelRouter:
             # v1.287.0 (chat-07 review): a cloud API has no endpoint the user
             # runs, so "check that endpoint" names nothing they can check.
             fix = (
-                " Press Retry — if it keeps happening, check your internet"
+                " Press Retry. If it keeps happening, check your internet"
                 " connection or pick another model for this chat."
             )
         return ProviderError(detail + fix)
+
+    def _endpoint_label(self, wanted: str) -> str:
+        """The name the user gave a ``fleet-<id>`` endpoint (its node's
+        label), else *wanted* unchanged (v1.329.0, calm chat J1).
+
+        Read off the adapter the manager already builds for that provider
+        (``FleetAdapter`` / ``AnthropicFleetAdapter`` carry their ``node``),
+        so no second registry is consulted. WORDING ONLY and never a new
+        failure: an unknown provider, a fake manager, a node with no label or
+        any fault answers the id, exactly as the refusal read before."""
+        if not str(wanted or "").startswith("fleet-"):
+            return wanted
+        try:
+            adapter = self.manager.get(wanted)
+            node = getattr(self._innermost(adapter), "node", None)
+            label = " ".join(str(getattr(node, "label", "") or "").split())
+        except Exception:  # noqa: BLE001 — wording only, never a new failure
+            return wanted
+        return label[:80] if label else wanted
 
     def _signed_out_cli(self, wanted: str) -> str | None:
         """The subscription CLI provider behind *wanted* that is installed
@@ -1031,25 +1056,33 @@ class ModelRouter:
         The reason follows the same honesty rule as :meth:`_unavailable_error`:
         an endpoint that connected and then timed out is not "not connected",
         and the banner is read as a diagnosis. ``used`` stays ``"none"`` in every
-        case — nothing answered, and nothing stood in."""
+        case — nothing answered, and nothing stood in.
+
+        v1.329.0 (calm chat J1): the reasons are plain clauses (no dash
+        asides) that read after the endpoint's name, and ``label`` (LAST, an
+        additive key) is the name the user gave a fleet endpoint, so the
+        banner never has to show the raw ``fleet-<id>``; ``requested`` keeps
+        the id for the logs and the mission's route note."""
         reason = {
-            "timeout": "no answer in time — that endpoint accepted the"
-            " connection but never replied",
-            "interrupted": "the connection dropped mid-request — that endpoint"
-            " stopped answering",
-            "answered_error": "answered with an error — that endpoint is up but"
-            " could not serve this turn; no substitute used"
+            "timeout": "no answer in time, though the endpoint accepted the"
+            " connection",
+            "interrupted": "the connection dropped mid-request",
+            "answered_error": "answered with an error, so no substitute was used"
             " (local_primary_policy=refuse)",
             # v1.232.0 (audit R4): the breaker's own word, seconds included.
             "cooldown": (
-                f"in cooldown, retry in {int(math.ceil(max(0.0, retry_in)))} s —"
-                " that provider failed repeatedly and this turn was not sent to"
-                " it; nothing stood in"
+                f"in cooldown, retry in {int(math.ceil(max(0.0, retry_in)))} s,"
+                " after failing repeatedly, so this turn was not sent to it"
             ),
-        }.get(kind, "not connected — connect a model on the Connections page")
+        }.get(kind, "not connected")
         await self.event_bus.publish(
             EventType.PROVIDER_DOWNGRADED,
-            {"requested": wanted, "used": "none", "reason": reason},
+            {
+                "requested": wanted,
+                "used": "none",
+                "reason": reason,
+                "label": self._endpoint_label(wanted),
+            },
             session_id=session_id,
         )
 
@@ -1551,7 +1584,7 @@ class ModelRouter:
                     "used": "mock",
                     "reason": (
                         "your default provider is 'mock' but a real provider is "
-                        "connected — set it as your default on the Connections page"
+                        "connected. Make it your default on the Connections page."
                     ),
                 },
                 session_id=session_id,
@@ -1761,7 +1794,7 @@ class ModelRouter:
                 if transient:
                     raise RuntimeError(
                         "every connected model is rate-limited or unavailable "
-                        f"right now — wait a minute and try again ({adapter.provider}: {exc})"
+                        f"right now. Wait a minute and try again ({adapter.provider}: {exc})"
                     ) from exc
                 raise
             fallback = self.manager.get("mock")
@@ -1982,7 +2015,7 @@ class ModelRouter:
                     "used": "mock",
                     "reason": (
                         "your default provider is 'mock' but a real provider is "
-                        "connected — set it as your default on the Connections page"
+                        "connected. Make it your default on the Connections page."
                     ),
                 },
                 session_id=session_id,
@@ -2198,7 +2231,7 @@ class ModelRouter:
             if transient:
                 raise RuntimeError(
                     "every connected model is rate-limited or unavailable "
-                    f"right now — wait a minute and try again ({adapter.provider}: {primary_exc})"
+                    f"right now. Wait a minute and try again ({adapter.provider}: {primary_exc})"
                 ) from primary_exc
             raise primary_exc
         fallback = self.manager.get("mock")

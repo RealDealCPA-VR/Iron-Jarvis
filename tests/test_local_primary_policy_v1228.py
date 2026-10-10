@@ -176,7 +176,8 @@ async def test_local_primary_that_answered_an_error_refuses_by_name(status, expl
         await router.complete(system="", messages=_msgs(), tools=[], **kwargs)
     msg = str(ei.value)
     assert f"fleet-custom answered HTTP {status}" in msg
-    assert "no substitute used on purpose (local_primary_policy=refuse)" in msg
+    # v1.329.0 (calm chat J1): the dash aside became its own sentence.
+    assert "No substitute was used on purpose (local_primary_policy=refuse)" in msg
     assert "rate limited" not in msg
     assert cloud.calls == 0, "the conversation left the machine"
     assert not bus.of(EventType.PROVIDER_FAILOVER)
