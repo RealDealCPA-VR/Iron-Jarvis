@@ -378,6 +378,13 @@ export function draftFromFence(
   rawText: string,
 ): { subject?: string; text: string; markdown: string } | null {
   if (!DRAFT_LANGS.has(fenceLang(children))) return null;
+  // v1.330.0: a draft with nothing to send is not a card. A real model reply
+  // opened with an empty ```draft fence and the chat drew Save to Drafts,
+  // Send and Copy around nothing. A fence holding only headers ("To:",
+  // "Subject:") falls through to the plain code block, so what the model
+  // wrote is still on screen; a blank one is dropped by the caller
+  // (blankDraftFence).
+  if (!draftHasBody(rawText)) return null;
   const { subject, body } = splitSubject(rawText);
   //: `text` is the plain-text flavour (what a plain paste gets); `markdown` is
   //: what gets RENDERED, with soft newlines hardened so a signature block does
@@ -391,6 +398,32 @@ export function draftFromFence(
     text: plainFromMarkdown(body),
     markdown: hardenLineBreaks(body),
   };
+}
+
+/** A line that addresses the message rather than being part of it. */
+const DRAFT_HEADER_LINE = /^\s*(subject|to|cc|bcc|from|reply-to)\s*:.*$/i;
+
+/**
+ * Whether a draft fence holds words to send (v1.330.0): something beyond
+ * blank lines and the header lines a draft may open with (Subject, To, Cc,
+ * Bcc, From, Reply-To). Only the LEADING lines are read as headers, the same
+ * rule `splitSubject` and `draftHeaders` follow: a "To:" further down is part
+ * of the message.
+ */
+export function draftHasBody(rawText: string): boolean {
+  const lines = splitSubject(rawText).body.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length && (!lines[i].trim() || DRAFT_HEADER_LINE.test(lines[i]))) i += 1;
+  return i < lines.length;
+}
+
+/**
+ * A draft fence with nothing in it at all (v1.330.0). The renderer draws
+ * nothing for it: an empty card and an empty code block are both a box
+ * around nothing.
+ */
+export function blankDraftFence(children: ReactNode, rawText: string): boolean {
+  return DRAFT_LANGS.has(fenceLang(children)) && !rawText.trim();
 }
 
 export function DraftCard({
@@ -537,8 +570,8 @@ export function DraftCard({
           {mailed
             ? mailed
             : state === "plain"
-              ? "formatting could not be copied here — paste as plain text"
-              : "paste into your email — formatting is kept"}
+              ? "Formatting could not be copied here. It pastes as plain text."
+              : "Paste into your email. The formatting is kept."}
         </span>
         <button
           type="button"
@@ -588,7 +621,7 @@ export function DraftCard({
               result.mode === "draft"
                 ? `Saved to your ${result.folder ?? "Drafts"} folder`
                 : result.refused?.length
-                  ? `Sent — but refused for ${result.refused.join(", ")}`
+                  ? `Sent, but refused for ${result.refused.join(", ")}`
                   : "Sent",
             );
           }}

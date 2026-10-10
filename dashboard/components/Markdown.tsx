@@ -30,7 +30,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Check, Copy, Download } from "lucide-r
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API_BASE, ijToken } from "@/lib/api";
-import { DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
+import { blankDraftFence, DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
 import { ChartCard } from "@/components/chat/ChartCard";
 import { CHART_FENCE, parseChartSpec } from "@/lib/chartSpec";
 import { nextSort, rowsToCsv, sortOrder, type SortDir, type SortState } from "@/lib/tableData";
@@ -134,6 +134,9 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
   // them. Parsing it here is what makes the copied HTML carry real formatting
   // instead of literal asterisks. All of the decision-making lives in
   // draftFromFence so this call site and the tests share one implementation.
+  // v1.330.0: a blank draft fence draws nothing (no empty card, no empty code
+  // block); one with only headers is not a card and shows as plain code below.
+  if (blankDraftFence(children, text)) return null;
   const draft = draftFromFence(children, text);
   if (draft) {
     return (

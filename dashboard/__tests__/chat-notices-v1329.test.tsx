@@ -227,6 +227,9 @@ const FILES = [
   "components/chat/PreflightNote.tsx",
   "components/chat/RetryTurnButton.tsx",
   "app/chat/page.tsx",
+  // v1.330.0 (wave 12): the Draft card's footer showed "paste into your
+  // email — formatting is kept" on a real reply, and no guard read the file.
+  "components/chat/DraftCard.tsx",
 ];
 
 describe("the chat page and its notice components keep to plain sentences", () => {
