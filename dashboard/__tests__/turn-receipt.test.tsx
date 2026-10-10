@@ -158,7 +158,8 @@ describe("TurnReceipt — denied tools", () => {
     );
     expand();
     const shell = screen.getByText("blocked: shell");
-    expect(shell.className).toContain("amber");
+    // v1.329.0: the warning colour is the tone token (same ink, both schemes).
+    expect(shell.className).toContain("text-tone-warn");
     expect(screen.getByText("blocked: write_file")).toBeTruthy();
   });
 });

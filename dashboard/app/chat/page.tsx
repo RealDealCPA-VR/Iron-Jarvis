@@ -297,6 +297,7 @@ import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
 import { RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
+import { friendlyModelName } from "@/lib/friendlyModelName";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
@@ -3342,10 +3343,15 @@ export default function ChatPage() {
   } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   /** v1.263.0: the reasoning levels the PICKED model offers, from the daemon's
-   *  catalog row — [] for the default model (its id is not known here), for a
-   *  model with no knob, and for an older daemon that sends none. */
+   *  catalog row — [] for a model with no knob and for an older daemon that
+   *  sends none. v1.329.0: with no pick ("") it reads the DEFAULT model's row
+   *  (/health names it), so the chip shows there too; the daemon still applies
+   *  a level only where the serving model offers it. "auto" and an unknown
+   *  default match no row and draw nothing. */
   function reasoningLevelsFor(c: string): string[] {
-    const { provider, model } = splitChoice(c);
+    const { provider, model } = c
+      ? splitChoice(c)
+      : { provider: defaultProviderId, model: defaultModelName };
     if (!provider || !model) return [];
     const row = models.find((m) => m.provider === provider && m.model === model);
     return (row?.reasoning ?? []).filter((l) => REASONING_LEVELS.includes(l));
@@ -4159,18 +4165,26 @@ export default function ChatPage() {
   // label for it (nothing invented). A default on the scripted demo model is
   // named as that, never as the model id it pretends to be. The raw id the
   // turn will run on stays in modelTriggerRaw (the trigger's inner title).
+  // v1.329.0 (calm chat F7): the chip SHOWS only the name ("Opus 4.8"), as
+  // the approved mockup draws it; "Default:" stays in the words a screen
+  // reader hears (an sr-only span, modelTriggerDefault) and in the title.
+  // Showing it took the room the reasoning chip needs, so the toolbar
+  // broke onto two lines in a project chat.
+  const modelTriggerDefault = !choice && !!defaultModelName;
   const modelTriggerText = useMemo(() => {
     if (!choice) {
       if (!defaultModelName) return modelLabel;
-      if (defaultProviderId === "mock") return `Default: ${providerDisplay("mock")}`;
+      if (defaultProviderId === "mock") return providerDisplay("mock");
       const row = models.find(
         (m) => m.provider === defaultProviderId && m.model === defaultModelName,
       );
-      return `Default: ${row?.label ? modelText(row) : defaultModelName}`;
+      return row?.label ? modelText(row) : friendlyModelName(defaultModelName);
     }
     const { provider, model } = splitChoice(choice);
     const row = models.find((m) => m.provider === provider && m.model === model);
-    return row?.label ? modelText(row) : modelLabel;
+    // v1.329.0: no label → the name people say ("Opus 4.8"), derived only
+    // from what the id spells; an id it cannot read stays as it is.
+    return row?.label ? modelText(row) : friendlyModelName(modelLabel);
   }, [choice, models, modelLabel, defaultModelName, defaultProviderId]);
   /** The record behind the trigger's words: provider · model id. */
   const modelTriggerRaw = useMemo(() => {
@@ -10099,7 +10113,7 @@ export default function ChatPage() {
                     if (!mt) return null;
                     const pinned = pinnedIds.includes(mt.id);
                     const item =
-                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]";
+                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]";
                     return (
                       <m.div
                         ref={threadMenuRef}
@@ -10174,7 +10188,7 @@ export default function ChatPage() {
                             {rememberingId === mt.id ? (
                               <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
                             ) : rememberedId === mt.id ? (
-                              <Check size={14} className="shrink-0 text-emerald-300" />
+                              <Check size={14} className="shrink-0 text-tone-success" />
                             ) : (
                               <Brain size={14} className="shrink-0 text-zinc-400" />
                             )}
@@ -10221,8 +10235,8 @@ export default function ChatPage() {
                               >
                                 <div className="max-h-44 overflow-y-auto pl-4">
                                   {projects.length === 0 ? (
-                                    <p className="px-2.5 py-2 text-[11.5px] text-zinc-500">
-                                      No projects yet — create one from the Project
+                                    <p className="px-2.5 py-2 text-[12px] text-zinc-500">
+                                      No projects yet. Make one with the Project
                                       button above the chat.
                                     </p>
                                   ) : (
@@ -10290,7 +10304,7 @@ export default function ChatPage() {
                         <button
                           type="button"
                           role="menuitem"
-                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-rose-300 transition-colors hover:bg-rose-500/10"
+                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] text-tone-danger transition-colors hover:bg-tone-danger/10"
                           data-armed={deleteArmedId === mt.id ? "true" : undefined}
                           onClick={() => pressDelete(mt.id)}
                         >
@@ -10807,7 +10821,7 @@ export default function ChatPage() {
                         role="status"
                         className="flex flex-wrap items-center gap-2 px-3 py-2 text-[12px]"
                       >
-                        <span className="min-w-0 flex-1 text-amber-300">
+                        <span className="min-w-0 flex-1 text-tone-warn">
                           Couldn&apos;t save this conversation: {saveFailure.detail}
                         </span>
                         <button
@@ -10886,7 +10900,7 @@ export default function ChatPage() {
                         {/* A reopened thread ending on a question (CL5): no error
                             text belongs to it, so say what happened. */}
                         {!error && failedTurn && !busy && (
-                          <div className="min-w-0 flex-1 text-[12px] text-amber-300">
+                          <div className="min-w-0 flex-1 text-[12px] text-tone-warn">
                             This didn&apos;t get a reply.
                           </div>
                         )}
@@ -11238,7 +11252,7 @@ export default function ChatPage() {
                               onClick={() => chooseWorkspace(atFilesRoot)}
                               aria-label="Work in the project folder again"
                               title="Work in the project folder again"
-                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
                             >
                               <X size={11} />
                             </button>
@@ -11276,7 +11290,7 @@ export default function ChatPage() {
                         {workfolderNote && (
                           <span
                             data-testid="workfolder-note"
-                            className="max-w-full truncate text-[11px] text-amber-300"
+                            className="max-w-full truncate text-[11px] text-tone-warn"
                             title={workfolderNote}
                           >
                             {workfolderNote}
@@ -11296,7 +11310,7 @@ export default function ChatPage() {
                               }}
                               aria-label={`Clear skill ${activeSkill}`}
                               title="Clear skill"
-                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
                             >
                               <X size={11} />
                             </button>
@@ -11314,7 +11328,7 @@ export default function ChatPage() {
                                 onClick={() => toggleConnector(id)}
                                 aria-label={`Turn off connection ${id}`}
                                 title="Turn off for this chat"
-                                className="text-zinc-500 transition-colors hover:text-rose-300"
+                                className="text-zinc-500 transition-colors hover:text-tone-danger"
                               >
                                 <X size={11} />
                               </button>
@@ -11339,7 +11353,7 @@ export default function ChatPage() {
                               onClick={() => setPageCtx(null)}
                               aria-label="Don't send the page"
                               title="Don't send the page"
-                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
                             >
                               <X size={11} />
                             </button>
@@ -11362,7 +11376,7 @@ export default function ChatPage() {
                                 )
                               }
                               aria-label={`Remove ${r.title || r.name || r.uri}`}
-                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
                             >
                               <X size={11} />
                             </button>
@@ -11419,7 +11433,7 @@ export default function ChatPage() {
                               type="button"
                               onClick={() => removeAttachment(i)}
                               aria-label={`Remove ${a.name}`}
-                              className="text-zinc-500 transition-colors hover:text-rose-300"
+                              className="text-zinc-500 transition-colors hover:text-tone-danger"
                             >
                               <X size={11} />
                             </button>
@@ -11595,7 +11609,7 @@ export default function ChatPage() {
                                           setActiveSkill("");
                                           markSetupChanged();
                                         }}
-                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-tone-danger/90 transition-colors hover:bg-white/[0.06]"
                                       >
                                         <X size={12} /> Clear “{activeSkill}”
                                       </button>
@@ -11671,8 +11685,8 @@ export default function ChatPage() {
                                         <LoaderInline />
                                       </div>
                                     ) : savedWorkflows === "error" ? (
-                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-amber-300/90">
-                                        Couldn&apos;t load workflows — reopen to retry.
+                                      <p className="px-2.5 py-2 text-[11px] leading-relaxed text-tone-warn/90">
+                                        Couldn&apos;t load workflows. Reopen to retry.
                                       </p>
                                     ) : savedWorkflows.length === 0 ? (
                                       <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
@@ -12060,7 +12074,18 @@ export default function ChatPage() {
                             }
                             className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
                           >
-                            <span className="min-w-0 truncate font-medium text-zinc-200" title={modelTriggerRaw || undefined}>
+                            <span
+                              data-testid="model-chip-words"
+                              className="min-w-0 truncate"
+                              title={
+                                modelTriggerRaw
+                                  ? modelTriggerDefault
+                                    ? `The default model: ${modelTriggerRaw}`
+                                    : modelTriggerRaw
+                                  : undefined
+                              }
+                            >
+                              {modelTriggerDefault && <span className="sr-only">Default: </span>}
                               {modelTriggerText}
                             </span>
                             <ChevronDown size={12} className="shrink-0 opacity-70" />

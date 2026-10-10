@@ -73,23 +73,25 @@ describe("one card for a batch", () => {
     );
   });
 
-  it("a single ask is unchanged: Allow once, your call, no count", () => {
+  it("a single ask is unchanged: Allow once, Your call, no count", () => {
     render(
       <ApprovalCard
         approval={{ id: "apr_1", callId: "c1", tool: "shell", args: { command: "git status" } }}
       />,
     );
     expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
-    expect(screen.getByText(/your call\./)).toBeInTheDocument();
+    // v1.329.0: a plain sentence, no em-dash aside ("… (shell). Your call.").
+    expect(screen.getByText(/\. Your call\./)).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).toBeNull();
     expect(screen.queryByTestId("approval-count")).toBeNull();
   });
 });
 
 describe("waiting, not expiring", () => {
   it("0 = nothing runs until you answer; a positive wait is named once", () => {
-    expect(waitingLine(0)).toBe("Waiting for you — nothing runs until you answer.");
+    expect(waitingLine(0)).toBe("Waiting for you. Nothing runs until you answer.");
     expect(waitingLine(300)).toBe(
-      "Waiting for you — if nobody answers within 5 min, it is not run.",
+      "Waiting for you. If nobody answers within 5 min, it is not run.",
     );
     expect(waitingLine(undefined)).toBe("Waiting for you.");
   });
@@ -97,7 +99,7 @@ describe("waiting, not expiring", () => {
   it("the card renders the line from the ask's own wait", () => {
     render(<ApprovalCard approval={BATCH} />);
     expect(screen.getByTestId("approval-waiting").textContent).toBe(
-      "Waiting for you — nothing runs until you answer.",
+      "Waiting for you. Nothing runs until you answer.",
     );
   });
 });

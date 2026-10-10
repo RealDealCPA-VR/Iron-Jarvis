@@ -547,8 +547,9 @@ describe("source pins — the call sites the component tests cannot see", () => 
     const fn = pageSrc.slice(start, pageSrc.indexOf("async function runSavedWorkflow"));
     expect(fn).toContain('setSavedWorkflows("error")');
     expect(fn).not.toContain("setSavedWorkflows([])");
+    // v1.329.0 (calm chat F7): plain sentences, no em-dash aside.
     expect(pageSrc).toContain(
-      "Couldn&apos;t load workflows — reopen to retry.",
+      "Couldn&apos;t load workflows. Reopen to retry.",
     );
     // And the flyout branches on the sentinel BEFORE the genuine-empty check.
     expect(pageSrc).toMatch(

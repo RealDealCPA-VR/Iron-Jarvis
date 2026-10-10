@@ -533,6 +533,8 @@ describe("TurnReceipt — auto-tier explanation is reachable, quietly", () => {
     // Quiet idiom preserved: nothing amber about a configured automation.
     expect(link.className).not.toContain("amber");
     expect(document.querySelector(".text-amber-300")).toBeNull();
+    // v1.329.0: the expanded receipt warns in the tone token now.
+    expect(document.querySelector(".text-tone-warn")).toBeNull();
   });
 
   it("stays quiet collapsed: no warning, and no link nested in the toggle", () => {

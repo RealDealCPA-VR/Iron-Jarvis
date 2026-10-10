@@ -292,11 +292,17 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
     expect(reachable(trigger, RAW_MODEL)).toBe(true);
   });
 
-  it("CONTROL: a default with no catalog label falls back to its id (nothing invented)", async () => {
+  // v1.329.0 (calm chat F7): this pin moved on purpose. With no catalog
+  // label the chip no longer prints the raw id; it says the name the id
+  // spells ("Opus 4.8"), derived only from the id (nothing invented), and
+  // the raw id stays reachable on the inner title.
+  it("CONTROL: a default with no catalog label reads as the name its id spells (nothing invented)", async () => {
     H.getResponses["/models"] = { models: [] };
     render(<ChatPage />);
     const trigger = await screen.findByTitle("Switch model");
-    await waitFor(() => expect(trigger.textContent).toContain(RAW_MODEL));
+    await waitFor(() => expect(trigger.textContent).toContain("Default: Opus 4.8"));
+    expect(trigger.textContent).not.toContain(RAW_MODEL);
+    expect(reachable(trigger, RAW_MODEL)).toBe(true);
     expect(trigger.textContent).not.toContain(MODEL_LABEL);
   });
 
@@ -501,7 +507,7 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
       <ApprovalCard approval={{ id: "apr_w", callId: "c1", tool: "write_file", args: { path: LONG_PATH } }} />,
     );
     const card = screen.getByTestId("chat-approval-card");
-    const lead = leadOf(/your call/);
+    const lead = leadOf(/Your call/);
     expect(lead.textContent).toMatch(/save a file/i);
     // The record: the exact tool id is still on the card, and the aria-label keeps it.
     expect(reachable(card, "write_file")).toBe(true);
@@ -540,7 +546,7 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
       />,
     );
     const card = screen.getByTestId("chat-approval-card");
-    expect(leadOf(/one answer/).textContent).toMatch(/rename or move a file/i);
+    expect(leadOf(/One answer/).textContent).toMatch(/rename or move a file/i);
     expect(screen.getByTestId("approval-count").textContent).toBe("× 8");
     expect(reachable(card, "rename_file")).toBe(true);
     expect(card.getAttribute("aria-label")).toBe("Approve rename_file × 8?");
@@ -555,7 +561,7 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
     render(
       <ApprovalCard approval={{ id: "apr_s", callId: "c1", tool: "shell", args: { command: "git status --short" } }} />,
     );
-    expect(leadOf(/your call/).textContent).toMatch(/run a command/i);
+    expect(leadOf(/Your call/).textContent).toMatch(/run a command/i);
     const pre = screen.getByText("git status --short");
     expect(pre.tagName).toBe("PRE");
     expect(reachable(screen.getByTestId("chat-approval-card"), "shell")).toBe(true);
@@ -565,7 +571,7 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
     render(
       <ApprovalCard approval={{ id: "apr_c", callId: "c1", tool: "browser_click", args: { selector: "#pay" } }} />,
     );
-    expect(leadOf(/your call/).textContent).toMatch(/browser tab/i);
+    expect(leadOf(/Your call/).textContent).toMatch(/browser tab/i);
     expect(screen.getByTestId("approval-tab")).toBeTruthy();
     expect(screen.getByTestId("approval-tab-note")).toBeTruthy();
     expect(reachable(screen.getByTestId("chat-approval-card"), "browser_click")).toBe(true);
@@ -573,7 +579,7 @@ describe("approval card says the action in words (approval-card-tool-ids)", () =
 
   it("CONTROL: an unknown tool falls back to 'run <its id>' — no invented words", () => {
     render(<ApprovalCard approval={{ id: "apr_u", callId: "c1", tool: "frobnicate_widget", args: {} }} />);
-    const lead = leadOf(/your call/);
+    const lead = leadOf(/Your call/);
     expect(lead.textContent).toMatch(/run/);
     expect(lead.textContent).toContain("frobnicate_widget");
   });

@@ -764,8 +764,8 @@ export function TurnReceipt({
           {rt && (
             <div className="flex items-start gap-2">
               <RouteIcon size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div className="min-w-0 text-[11.5px] leading-relaxed">
-                <span className={warning ? "text-amber-300" : "text-zinc-300"}>
+              <div className="min-w-0 text-[12px] leading-relaxed">
+                <span className={warning ? "text-tone-warn" : "text-zinc-300"}>
                   {providerDisplay(rt.provider)}
                 </span>
                 {/* v1.314.0: the raw id, quietly — a record for support. */}
@@ -776,13 +776,13 @@ export function TurnReceipt({
                   <span className="text-zinc-500"> · {rt.model}</span>
                 )}
                 {mismatch && (
-                  <span className="text-amber-300/90" title={rt.requested}>
+                  <span className="text-tone-warn/90" title={rt.requested}>
                     {" "}
                     — requested {providerDisplay(rt.requested)}
                   </span>
                 )}
                 {rt.reason === "failover" && rt.from && rt.from !== rt.provider && (
-                  <span className="text-amber-300/90" title={rt.from}>
+                  <span className="text-tone-warn/90" title={rt.from}>
                     {" "}
                     — {providerDisplay(rt.from)} {wordWhy(rt.why) || "failed"}
                   </span>
@@ -870,7 +870,7 @@ export function TurnReceipt({
                       title={label}
                       className={
                         failed
-                          ? "max-w-full truncate rounded border border-rose-500/20 bg-rose-500/[0.05] px-1.5 py-0.5 font-mono text-[11px] text-rose-300/90"
+                          ? "max-w-full truncate rounded border border-tone-danger/20 bg-tone-danger/[0.05] px-1.5 py-0.5 font-mono text-[11px] text-tone-danger/90"
                           : "max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
                       }
                     >
@@ -901,13 +901,13 @@ export function TurnReceipt({
 
           {denied.length > 0 && (
             <div className="flex items-start gap-2">
-              <Ban size={12} className="mt-0.5 shrink-0 text-amber-400" />
+              <Ban size={12} className="mt-0.5 shrink-0 text-tone-warn" />
               <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
                 {denied.map((t, i) => (
                   <code
                     key={`${t}-${i}`}
                     title={t}
-                    className="max-w-full truncate rounded border border-amber-500/25 bg-amber-500/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-amber-300"
+                    className="max-w-full truncate rounded border border-tone-warn/25 bg-tone-warn/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-tone-warn"
                   >
                     blocked: {t}
                   </code>
@@ -954,7 +954,7 @@ export function TurnReceipt({
                                 ? `Undo this write — revert ${docBasename(path)}`
                                 : `Can't undo: ${undoState.reason ?? "not undoable"}`
                             }
-                            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[10.5px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-amber-300 disabled:opacity-40"
+                            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-warn disabled:opacity-40"
                           >
                             {undoingPath === path ? (
                               <Loader2 size={10} className="animate-spin" />
@@ -969,7 +969,7 @@ export function TurnReceipt({
                   })}
                 </div>
                 {undoErr && (
-                  <p className="mt-1 text-[10.5px] text-rose-300/90">
+                  <p className="mt-1 text-[11px] text-tone-danger">
                     {undoErr}
                   </p>
                 )}
@@ -980,7 +980,7 @@ export function TurnReceipt({
           {(inTok != null || outTok != null || ctx != null) && (
             <div className="flex items-start gap-2">
               <Gauge size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div className="min-w-0 text-[11.5px] text-zinc-500">
+              <div className="min-w-0 text-[12px] text-zinc-500">
                 {[
                   inTok != null ? `${inTok.toLocaleString()} in` : null,
                   outTok != null ? `${outTok.toLocaleString()} out` : null,
@@ -995,7 +995,7 @@ export function TurnReceipt({
           {speed && (
             <div className="flex items-start gap-2">
               <Timer size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div data-testid="turn-speed" className="min-w-0 text-[11.5px] text-zinc-500">
+              <div data-testid="turn-speed" className="min-w-0 text-[12px] text-zinc-500">
                 {speed}
               </div>
             </div>

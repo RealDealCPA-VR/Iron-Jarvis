@@ -77,11 +77,11 @@ function ExampleLine({ args }: { args: Record<string, unknown> }) {
 
 /** "Waiting for you" in the words the daemon's wait actually has. */
 export function waitingLine(timeoutS: number | undefined): string {
-  if (timeoutS === 0) return "Waiting for you — nothing runs until you answer.";
+  if (timeoutS === 0) return "Waiting for you. Nothing runs until you answer.";
   if (typeof timeoutS === "number" && timeoutS > 0) {
     const mins = Math.round(timeoutS / 60);
     const span = mins >= 1 ? `${mins} min` : `${timeoutS} s`;
-    return `Waiting for you — if nobody answers within ${span}, it is not run.`;
+    return `Waiting for you. If nobody answers within ${span}, it is not run.`;
   }
   return "Waiting for you.";
 }
@@ -145,7 +145,7 @@ export function ApprovalCard({
   // the map does not know keeps today's "run <id>" — no invented words.
   const words = toolWords(approval.tool);
   const toolChip = (
-    <code className="rounded bg-ink-900/80 px-1 font-mono text-[11.5px]" title="The exact tool that will run">
+    <code className="rounded bg-ink-900/80 px-1 font-mono text-[12px]" title="The exact tool that will run">
       {approval.tool}
     </code>
   );
@@ -156,17 +156,17 @@ export function ApprovalCard({
       className={
         docked
           ? "space-y-2.5 px-4 pb-4 pt-3"
-          : "space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+          : "space-y-2.5 rounded-xl border border-tone-warn/30 bg-tone-warn/[0.06] p-3"
       }
       data-testid="chat-approval-card"
       data-count={count}
     >
       <div className="flex items-center gap-2">
-        <ShieldQuestion size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
-        <p className="text-[12.5px] font-medium text-amber-100">
+        <ShieldQuestion size={15} className="shrink-0 text-tone-warn" aria-hidden="true" />
+        <p className="text-[13px] font-medium text-zinc-100">
           {words ? (
             <>
-              The assistant wants to {words} <span className="text-amber-100/70">({toolChip})</span>
+              The assistant wants to {words} <span className="text-zinc-400">({toolChip})</span>
             </>
           ) : (
             <>The assistant wants to run {toolChip}</>
@@ -174,11 +174,11 @@ export function ApprovalCard({
           {batch ? (
             <>
               {" "}
-              <span data-testid="approval-count">× {count}</span> — one answer
+              <span data-testid="approval-count">× {count}</span>. One answer
               covers all of them.
             </>
           ) : (
-            <> — your call.</>
+            <>. Your call.</>
           )}
         </p>
       </div>
@@ -204,7 +204,7 @@ export function ApprovalCard({
             </div>
           )}
 
-      <p data-testid="approval-waiting" className="text-[11px] font-medium text-amber-200/90">
+      <p data-testid="approval-waiting" className="text-[11px] font-medium text-tone-warn">
         {waitingLine(approval.timeoutS)}
       </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
@@ -233,12 +233,12 @@ export function ApprovalCard({
       {canAlways && (
         <p data-testid="approval-always-note" className="text-[11px] leading-relaxed text-zinc-400">
           “Always allow exactly this” runs it now and keeps allowing {approval.tool} with
-          exactly these arguments here for 30 days — different arguments still ask. Revoke
+          exactly these arguments here for 30 days. Different arguments still ask. Revoke
           it any time on the Autonomy page.
         </p>
       )}
 
-      {error && <p className="text-[11px] text-rose-300">{error}</p>}
+      {error && <p className="text-[11px] text-tone-danger">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
         {browserAction && (
@@ -297,7 +297,7 @@ export function ApprovalCard({
           data-dock-decline=""
           onClick={() => void decide("deny")}
           disabled={!!sent}
-          className="btn-ghost text-xs text-rose-300 hover:text-rose-200"
+          className="btn-ghost text-xs text-tone-danger"
         >
           {sent === "deny" ? <LoaderInline label="Declining…" /> : batch ? `Deny all ${count}` : "Deny"}
         </button>

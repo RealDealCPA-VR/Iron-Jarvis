@@ -191,7 +191,8 @@ describe("type to find a model (v1.277.0)", () => {
     await screen.findAllByTestId("model-match");
     fireEvent.keyDown(box, { key: "Enter" });
     await waitFor(() => expect(screen.queryByTestId("model-filter")).toBeNull());
-    expect((await screen.findByTitle("Switch model")).textContent).toContain("claude-opus-5");
+    // v1.329.0: a row with no label reads as the name people say ("Opus 5").
+    expect((await screen.findByTitle("Switch model")).textContent).toContain("Opus 5");
     const body = await send("hello");
     expect(body.provider).toBe("anthropic");
     expect(body.model).toBe("claude-opus-5");
@@ -233,7 +234,7 @@ describe("the last picks first (v1.277.0)", () => {
     // The tree still follows.
     expect(within(screen.getByTestId("model-menu")).getByText("default model")).not.toBeNull();
     fireEvent.click(within(recent).getAllByRole("button")[1]);
-    expect((await screen.findByTitle("Switch model")).textContent).toContain("claude-sonnet-5");
+    expect((await screen.findByTitle("Switch model")).textContent).toContain("Sonnet 5");
     expect(readRecentModels()[0]).toBe("anthropic::claude-sonnet-5");
   });
 
