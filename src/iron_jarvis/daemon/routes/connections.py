@@ -312,10 +312,20 @@ def _with_claude_catalog(d, models: list[dict[str, Any]]) -> list[dict[str, Any]
 _ENDPOINT_PROBE_TIMEOUT_S = 5.0
 #: Most ids kept from one listing (a gateway can list thousands).
 _ENDPOINT_PROBE_MAX_MODELS = 1000
-#: Protocols a SAVED endpoint can actually speak. A saved endpoint is a fleet
-#: node, and a fleet node is an OpenAI-compatible adapter (fleet/adapter.py),
-#: so listing an Anthropic-style server would offer models it cannot call.
-_ENDPOINT_PROTOCOLS = ("openai",)
+#: The ways a server can be asked for its model list. ``openai`` is
+#: ``GET /v1/models`` with a Bearer key (plus the /models and Ollama
+#: fallbacks); ``anthropic`` (v1.329.0) is the Anthropic Models API: ``GET
+#: /v1/models`` with ``x-api-key`` + ``anthropic-version``, paged by
+#: ``after_id``. Listing is all this does: a SAVED endpoint is still a fleet
+#: node, which is an OpenAI-compatible adapter (fleet/adapter.py), so the form
+#: says so when only the Anthropic way answered.
+_ENDPOINT_PROTOCOLS = ("openai", "anthropic")
+#: The Anthropic Models API version header (the one stable value it documents).
+_ANTHROPIC_VERSION = "2023-06-01"
+#: Rows asked for per page, and the most pages followed. 10 x 100 = the same
+#: 1,000-id ceiling as one OpenAI listing.
+_ANTHROPIC_PAGE_LIMIT = 100
+_ANTHROPIC_MAX_PAGES = 10
 
 
 class EndpointModelsProbeBody(BaseModel):
@@ -465,6 +475,141 @@ def _probe_endpoint_models(base_url: str, key: str, *, timeout_s: float) -> dict
         if kind in saw:
             return _probe_fail(kind)
     return _probe_fail("not_model_server")
+
+
+def _anthropic_models_url(base_url: str) -> str:
+    """The Anthropic Models API address for *base_url*: ``<base>/v1/models``,
+    or ``<base>/models`` when the base already ends in /v1. A pasted messages
+    or models URL is cut back to its base first."""
+    u = base_url.strip().rstrip("/")
+    for suffix in ("/messages", "/models"):
+        if u.endswith(suffix):
+            u = u[: -len(suffix)].rstrip("/")
+            break
+    return f"{u}/models" if u.endswith("/v1") else f"{u}/v1/models"
+
+
+def _anthropic_page(payload: Any) -> tuple[list[tuple[str, str]], bool, str] | None:
+    """One page of the Anthropic Models API: ``([(id, display_name)],
+    has_more, last_id)``, or None when *payload* is not that shape. Rows
+    without a usable id are skipped (the same rules as ``_model_ids``)."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        return None
+    rows: list[tuple[str, str]] = []
+    for row in payload["data"]:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        mid = row["id"].strip()
+        if not mid or len(mid) > 256 or any(ord(c) < 32 for c in mid):
+            continue
+        name = row.get("display_name")
+        label = name.strip() if isinstance(name, str) else ""
+        if len(label) > 256 or any(ord(c) < 32 for c in label):
+            label = ""
+        rows.append((mid, label))
+    if payload["data"] and not rows:
+        return None  # a list, but of nothing that names a model
+    last = payload.get("last_id")
+    last_id = last.strip() if isinstance(last, str) else ""
+    if not last_id and rows:
+        last_id = rows[-1][0]
+    return rows, payload.get("has_more") is True, last_id
+
+
+def _probe_anthropic_models(base_url: str, key: str, *, timeout_s: float) -> dict[str, Any]:
+    """BLOCKING: ask an Anthropic-compatible server for its model list (the
+    route runs this in a worker thread, under the same bound as the OpenAI
+    probe). The key rides ONE ``x-api-key`` header to that server; redirects
+    are not followed. Pages are followed by ``after_id`` while ``has_more``,
+    at most ``_ANTHROPIC_MAX_PAGES``. A page that fails AFTER the first one
+    keeps what was listed and says the list is ``partial`` (a short list
+    must never read as the whole list)."""
+    import httpx
+
+    deadline = time.monotonic() + timeout_s
+    headers = {"Accept": "application/json", "anthropic-version": _ANTHROPIC_VERSION}
+    if key:
+        headers["x-api-key"] = key
+    url = _anthropic_models_url(base_url)
+    ids: list[str] = []
+    seen: set[str] = set()
+    labels: dict[str, str] = {}
+    after = ""
+    partial = False
+
+    def _done() -> dict[str, Any]:
+        if not ids:
+            return _probe_fail("no_models")
+        return {
+            "models": ids,
+            "error": None,
+            "reason": None,
+            "protocol": "anthropic",
+            "labels": labels,
+            "partial": partial,
+        }
+
+    with httpx.Client(follow_redirects=False) as client:
+        for page in range(_ANTHROPIC_MAX_PAGES):
+            first = page == 0
+            left = deadline - time.monotonic()
+            if left <= 0:
+                if first:
+                    return _probe_fail("timeout")
+                partial = True
+                return _done()
+            params: dict[str, str | int] = {"limit": _ANTHROPIC_PAGE_LIMIT}
+            if after:
+                params["after_id"] = after
+            failed: str | None = None
+            try:
+                resp = client.get(url, headers=headers, params=params, timeout=left)
+            except httpx.TimeoutException:
+                failed = "timeout"
+            except httpx.ConnectError:
+                failed = "unreachable"
+            except (httpx.InvalidURL, httpx.UnsupportedProtocol):
+                failed = "bad_address"
+            except httpx.HTTPError:
+                failed = "not_model_server"
+            else:
+                if resp.status_code in (401, 403):
+                    failed = "refused_key" if key else "needs_key"
+                elif resp.status_code >= 500:
+                    failed = "server_error"
+                elif resp.status_code != 200:
+                    failed = "not_model_server"
+            if failed is None:
+                try:
+                    parsed = _anthropic_page(resp.json())
+                except ValueError:
+                    parsed = None
+                if parsed is None:
+                    failed = "not_model_server"
+            if failed is not None:
+                if first:
+                    return _probe_fail(failed)
+                partial = True
+                return _done()
+            rows, has_more, last_id = parsed  # type: ignore[misc]
+            for n, (mid, label) in enumerate(rows):
+                if mid in seen:
+                    continue
+                seen.add(mid)
+                ids.append(mid)
+                if label and label != mid:
+                    labels[mid] = label
+                if len(ids) >= _ENDPOINT_PROBE_MAX_MODELS:
+                    partial = has_more or n < len(rows) - 1
+                    return _done()
+            if not has_more:
+                return _done()
+            if not last_id or last_id == after:
+                partial = True  # says there is more but gives no way to it
+                return _done()
+            after = last_id
+    partial = True  # still has_more after the last page we follow
+    return _done()
 
 
 def register(app: FastAPI, d) -> None:
@@ -699,11 +844,14 @@ def register(app: FastAPI, d) -> None:
         Asks the server the user typed for its own model list, bounded by
         ``_ENDPOINT_PROBE_TIMEOUT_S`` and run in a worker thread (a dead host
         must never park the event loop). Probe-only: nothing is saved. The key
-        rides one ``Authorization`` header to that server and is never logged,
+        rides one header to that server (``Authorization`` for ``openai``,
+        ``x-api-key`` for ``anthropic``, v1.329.0) and is never logged,
         stored or returned. Always 200 for a server's answer, with ``error``
         in plain words and ``reason`` (unreachable / timeout / refused_key /
         needs_key / not_model_server / no_models / server_error /
-        bad_address); 400 only for input the form should not have sent."""
+        bad_address); 400 only for input the form should not have sent. An
+        ``anthropic`` answer also carries ``protocol``, ``labels`` (id ->
+        display name) and ``partial``."""
         url = (body.base_url or "").strip()
         try:
             parts = urlsplit(url)
@@ -719,8 +867,9 @@ def register(app: FastAPI, d) -> None:
         if protocol not in _ENDPOINT_PROTOCOLS:
             raise HTTPException(
                 status_code=400,
-                detail="Only OpenAI-compatible endpoints can be added here.",
+                detail="Models can be listed for OpenAI-compatible or Anthropic-compatible servers only.",
             )
+        probe = _probe_anthropic_models if protocol == "anthropic" else _probe_endpoint_models
         key = (body.api_key or "").strip()
         if len(key) > 8192 or any(not 32 <= ord(c) < 127 for c in key):
             raise HTTPException(
@@ -733,9 +882,7 @@ def register(app: FastAPI, d) -> None:
             # bound; this outer one is the backstop, and only ITS expiry earns
             # the timeout words.
             async with asyncio.timeout(timeout_s + 1.0) as cm:
-                return await asyncio.to_thread(
-                    _probe_endpoint_models, url, key, timeout_s=timeout_s
-                )
+                return await asyncio.to_thread(probe, url, key, timeout_s=timeout_s)
         except TimeoutError:
             if cm.expired():
                 return _probe_fail("timeout")

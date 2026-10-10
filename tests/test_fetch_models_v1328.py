@@ -244,8 +244,10 @@ def test_a_body_without_base_url_never_echoes_the_key(client):
     assert KEY not in r.text
 
 
-def test_only_the_protocol_a_saved_endpoint_can_speak_is_accepted(client, server):
-    r = _probe(client, base_url=server.base, protocol="anthropic")
+def test_an_unknown_protocol_is_refused_before_any_request(client, server):
+    # v1.329.0: "anthropic" is listed too (tests/test_endpoint_models_anthropic_v1329.py);
+    # any other word is still refused before a request goes out.
+    r = _probe(client, base_url=server.base, protocol="gemini")
     assert r.status_code == 400
     assert "OpenAI-compatible" in r.json()["detail"]
     assert server.seen == []  # refused before any request went out

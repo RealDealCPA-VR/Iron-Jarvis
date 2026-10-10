@@ -13,25 +13,68 @@
  *
  * Saving is not this component's job: it only edits the `value` the form
  * already owns.
+ *
+ * v1.329.0 (calm chat wave 5, S4): the list is asked the OpenAI way first.
+ * When that answer is a refused or missing key, or "not a model server", it is
+ * asked ONCE more the Anthropic way (`protocol: "anthropic"`: x-api-key +
+ * anthropic-version, same server, same key). Only a real list from that second
+ * ask replaces the first answer; otherwise the first answer's words stand. A
+ * list that came the Anthropic way says so, because a saved endpoint still
+ * talks to its server the OpenAI way.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { post, ApiError } from "@/lib/api";
 
-/** What the daemon answers (routes/connections.py `endpoint_models_probe`). */
+const PROBE = "/connections/endpoints/models";
+
+/** What the daemon answers (routes/connections.py `endpoint_models_probe`).
+ *  `protocol` / `labels` / `partial` come only with an Anthropic answer. */
 interface ProbeAnswer {
   models?: string[];
   error?: string | null;
   reason?: string | null;
+  protocol?: string;
+  labels?: Record<string, unknown>;
+  partial?: boolean;
 }
 
-/** Every word of `query` appears in `id` (case folded). Order kept. */
-export function filterModels(models: string[], query: string): string[] {
+/** OpenAI-way answers worth asking the Anthropic way once more: the two ways
+ *  differ in the key header and the version header, nothing else. */
+export const ANTHROPIC_RETRY_REASONS: ReadonlySet<string> = new Set([
+  "refused_key",
+  "needs_key",
+  "not_model_server",
+]);
+
+/** The ids in an answer (strings only). */
+function idsOf(res: ProbeAnswer): string[] {
+  return Array.isArray(res.models) ? res.models.filter((m): m is string => typeof m === "string") : [];
+}
+
+/** The display names in an answer, kept only for listed ids. */
+function labelsOf(res: ProbeAnswer, ids: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = res.labels && typeof res.labels === "object" ? res.labels : {};
+  for (const id of ids) {
+    const v = raw[id];
+    if (typeof v === "string" && v.trim() && v.trim() !== id) out[id] = v.trim();
+  }
+  return out;
+}
+
+/** Every word of `query` appears in the id or its display name (case
+ *  folded). Order kept. */
+export function filterModels(
+  models: string[],
+  query: string,
+  labels: Record<string, string> = {},
+): string[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return models;
   return models.filter((m) => {
-    const id = m.toLowerCase();
-    return words.every((w) => id.includes(w));
+    const hay = `${m} ${labels[m] ?? ""}`.toLowerCase();
+    return words.every((w) => hay.includes(w));
   });
 }
 
@@ -62,6 +105,11 @@ export function EndpointModelPicker({
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   const [models, setModels] = useState<string[] | null>(null);
+  // v1.329.0: display names (Anthropic answers), whether the list came the
+  // Anthropic way, and whether the server has more than was listed.
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [anthropic, setAnthropic] = useState(false);
+  const [partial, setPartial] = useState(false);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,12 +124,18 @@ export function EndpointModelPicker({
   useEffect(() => {
     gen.current += 1;
     setModels(null);
+    setLabels({});
+    setAnthropic(false);
+    setPartial(false);
     setOpen(false);
     setError(null);
     setLoading(false);
   }, [baseUrl, apiKey]);
 
-  const shown = useMemo(() => (models ? filterModels(models, query) : []), [models, query]);
+  const shown = useMemo(
+    () => (models ? filterModels(models, query, labels) : []),
+    [models, query, labels],
+  );
 
   async function fetchModels() {
     const url = baseUrl.trim();
@@ -93,19 +147,33 @@ export function EndpointModelPicker({
     setLoading(true);
     setError(null);
     try {
-      const res = await post<ProbeAnswer>("/connections/endpoints/models", {
-        base_url: url,
-        api_key: apiKey.trim(),
-        protocol: "openai",
-      });
+      const ask = { base_url: url, api_key: apiKey.trim() };
+      let res = await post<ProbeAnswer>(PROBE, { ...ask, protocol: "openai" });
       if (mine !== gen.current) return;
-      const list = Array.isArray(res.models) ? res.models.filter((m) => typeof m === "string") : [];
+      let list = idsOf(res);
+      if ((res.error || list.length === 0) && res.reason && ANTHROPIC_RETRY_REASONS.has(res.reason)) {
+        try {
+          const alt = await post<ProbeAnswer>(PROBE, { ...ask, protocol: "anthropic" });
+          const altList = idsOf(alt);
+          if (!alt.error && altList.length > 0) {
+            res = alt;
+            list = altList;
+          }
+        } catch {
+          // An older daemon refuses the word, or the second ask failed:
+          // the first answer's words stand.
+        }
+        if (mine !== gen.current) return;
+      }
       if (res.error || list.length === 0) {
         setModels(null);
         setOpen(false);
         setError(res.error || "The server answered but lists no models. Type the model id yourself.");
         return;
       }
+      setLabels(labelsOf(res, list));
+      setAnthropic(res.protocol === "anthropic");
+      setPartial(res.partial === true);
       setModels(list);
       setQuery("");
       const at = list.indexOf(value.trim());
@@ -256,7 +324,14 @@ export function EndpointModelPicker({
                   i === active ? "bg-white/[0.06] text-zinc-100" : "text-zinc-400"
                 }`}
               >
-                <span className="min-w-0">{m}</span>
+                <span className="min-w-0">
+                  {m}
+                  {labels[m] && (
+                    <span data-testid="endpoint-model-label" className="ml-2 font-sans text-[11px] text-zinc-500">
+                      {labels[m]}
+                    </span>
+                  )}
+                </span>
                 {m === value.trim() && <span className="shrink-0 font-sans text-[11px] text-zinc-500">current</span>}
               </li>
             ))}
@@ -266,11 +341,19 @@ export function EndpointModelPicker({
               No model matches. Press Enter to use &ldquo;{query.trim()}&rdquo; as typed.
             </p>
           )}
-          <p className="px-2 text-[11px] text-zinc-500">
+          <p data-testid="endpoint-models-count" className="px-2 text-[11px] text-zinc-500">
             {shown.length === count
-              ? `${count} model${count === 1 ? "" : "s"} on this server`
+              ? partial
+                ? `${count} model${count === 1 ? "" : "s"} listed. The server has more, so type the id if yours is not here.`
+                : `${count} model${count === 1 ? "" : "s"} on this server`
               : `${shown.length} of ${count} models`}
           </p>
+          {anthropic && (
+            <p data-testid="endpoint-models-protocol-note" className="px-2 text-[11px] leading-relaxed text-zinc-500">
+              This server answered the Anthropic way. A saved endpoint chats the OpenAI way, so replies
+              work only if the server speaks both.
+            </p>
+          )}
         </div>
       )}
     </div>

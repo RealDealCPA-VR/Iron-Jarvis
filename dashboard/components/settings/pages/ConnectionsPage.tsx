@@ -889,9 +889,13 @@ function ConnectionCard({
       id={id}
       className="card-surface flex scroll-mt-24 flex-col gap-4 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover"
     >
-      {/* Header: icon + name + status */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
+      {/* Header: icon + name + status. v1.329.0: the row WRAPS. In a narrow
+          card (three across beside the Settings sidebar) the nowrap pill used
+          to take its whole width and squeeze the name under it, so "Custom
+          endpoint" ran beneath "Not connected". Now the name keeps at least
+          11rem and the pill drops to its own line when both do not fit. */}
+      <div data-testid="conn-card-header" className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-[min(11rem,100%)] flex-1 items-center gap-3">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
             <ProviderMark
               id={conn.provider}
