@@ -46,7 +46,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
-from typing import Any, Callable, Deque
+from typing import Any, Callable, Deque, Iterable
 
 from ..core.logging import get_logger
 from .models import FleetNode, NodeMetrics, NodeRates, NodeSnapshot
@@ -332,6 +332,23 @@ class FleetSampler:
         the node offline counts exactly as a cycle that found it offline.
         """
         self._record_result(node, snapshot, list(children or []))
+
+    def forget(self, node_ids: Iterable[str]) -> int:
+        """Drop everything held for these nodes: the last reading, the metric
+        history and the backoff (v1.330.0). Returns how many were held.
+
+        For a removed node: a node re-added under the same id (a proxy's
+        models come back with the same ids) starts from "not checked yet"
+        instead of an old reading and an old backoff, and the per-node state
+        does not grow forever. Under the sampler's lock, like every other
+        write to that state.
+        """
+        dropped = 0
+        with self._lock:
+            for node_id in node_ids:
+                if self._state.pop(node_id, None) is not None:
+                    dropped += 1
+        return dropped
 
     def series(self, node_id: str, limit: int | None = None) -> list[MetricPoint]:
         """Bounded metric history for a node, oldest → newest (a copy)."""

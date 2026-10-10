@@ -25,7 +25,6 @@ import {
   Badge,
   Card,
   ConfirmButton,
-  Dot,
   Empty,
   ErrorNote,
   OfflineHint,
@@ -322,8 +321,9 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
   }
 
   // v1.330.0: a model a proxy reports is rebuilt from the proxy's own list on
-  // every pass, so the daemon refuses to remove (or rename) it on its own.
-  // Say where the real control is instead of offering one that cannot work.
+  // every pass, so the daemon refuses (409) to remove, rename, re-detect or
+  // verify it on its own while its proxy is a node. Say where the real
+  // control is instead of offering one that cannot work.
   if (node.parent_id) {
     return (
       <span
@@ -996,8 +996,16 @@ export default function FleetPage() {
           subtitle="Every model server you can reach: what is loaded, what is serving, and what we cannot see."
           actions={
             <div className="flex items-center gap-2">
-              <span
-                className="flex items-center gap-1.5 rounded-xl border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-[11px] text-zinc-400"
+              {/* v1.314.0: say what the chip means ("live" was unexplained).
+                  v1.330.0: the calm Badge (no border, no fill, the dot carries
+                  the tone), not a hand-made bordered pill beside the calm
+                  Refresh. */}
+              <Badge
+                variant="calm"
+                keepCase
+                data-testid="fleet-sampling-chip"
+                tone={sampling?.active ? "green" : "slate"}
+                value={sampling?.active ? "Live updates" : "Idle"}
                 title={
                   sampling?.active
                     ? `Sampling every ${interval ?? POLL_MS / 1000}s${
@@ -1007,11 +1015,7 @@ export default function FleetPage() {
                         interval !== null ? `. Idles at ${interval}s` : ""
                       }`
                 }
-              >
-                <Dot on={!!sampling?.active} />
-                {/* v1.314.0: say what the chip means ("live" was unexplained). */}
-                {sampling?.active ? "Live updates" : "Idle"}
-              </span>
+              />
               <button
                 type="button"
                 onClick={refresh}

@@ -195,9 +195,10 @@ def _forget_readings(sampler: Any, node_ids: list[str]) -> None:
     ``GET /fleet`` lists by the registry, so a removed node is already gone
     from the page; this keeps an old reading from greeting a node re-added
     under the same id (a proxy's children come back with the same ids) and
-    stops the per-node state growing forever. Uses the sampler's own
-    ``forget`` when it has one; otherwise clears its state under its lock.
-    Best-effort: a removal never fails over its telemetry.
+    stops the per-node state growing forever. Goes through the sampler's
+    public ``forget`` (which holds the sampler's own lock); a sampler without
+    one (a test stand-in) keeps what it holds. Best-effort: a removal never
+    fails over its telemetry.
     """
     if sampler is None or not node_ids:
         return
@@ -205,14 +206,6 @@ def _forget_readings(sampler: Any, node_ids: list[str]) -> None:
         forget = getattr(sampler, "forget", None)
         if callable(forget):
             forget(list(node_ids))
-            return
-        state = getattr(sampler, "_state", None)
-        lock = getattr(sampler, "_lock", None)
-        if not isinstance(state, dict) or lock is None:
-            return
-        with lock:
-            for node_id in node_ids:
-                state.pop(node_id, None)
     except Exception:  # noqa: BLE001 — telemetry never fails a removal
         pass
 
@@ -292,6 +285,16 @@ def register(app: FastAPI, d) -> None:
         if node is None:
             raise HTTPException(status_code=404, detail="unknown node")
         return node
+
+    def _refuse_child(node) -> None:
+        """409 for a model a proxy reports (v1.330.0), in the sentence the
+        remove route uses. Asked BEFORE any probe or write: an edit, a
+        re-detect or a verify result used to be saved as a top-level row, so
+        ``GET /fleet`` listed the model twice and the copy outlived its proxy."""
+        refusal_for = getattr(d.fleet, "child_refusal", None)
+        refusal = refusal_for(node) if callable(refusal_for) else ""
+        if refusal:
+            raise HTTPException(status_code=409, detail=refusal)
 
     def _code_route_view() -> dict[str, Any]:
         """Code-routing config + what it RESOLVES to right now.
@@ -540,8 +543,10 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/fleet/nodes/{node_id}")
     def fleet_patch_node(node_id: str, body: FleetNodePatch) -> dict[str, Any]:
-        """Edit a node. Only the fields actually sent are written."""
+        """Edit a node. Only the fields actually sent are written. A model a
+        proxy reports is refused (409): it is the proxy's, not ours to edit."""
         current = _node_or_404(node_id)
+        _refuse_child(current)
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
         if "protocol" in fields:
             fields["protocol"] = _protocol_or_400(
@@ -549,8 +554,12 @@ def register(app: FastAPI, d) -> None:
             )
         if not fields:
             return {"node": _dump(d.fleet.get(node_id))}
+        from ...fleet.registry import ChildNodeError
+
         try:
             node = d.fleet.update(node_id, **fields)
+        except ChildNodeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         # Keep the provider registry in step LIVE: a node flipped routable gets
@@ -605,8 +614,10 @@ def register(app: FastAPI, d) -> None:
     @app.post("/fleet/nodes/{node_id}/detect")
     async def fleet_detect_node(node_id: str) -> dict[str, Any]:
         """Re-run kind detection (a box that changed from Ollama to vLLM, or
-        one that was asleep when it was added)."""
+        one that was asleep when it was added). Refused (409) for a model a
+        proxy reports, before anything is probed."""
         node = _node_or_404(node_id)
+        _refuse_child(node)
         from ...fleet.probes import detect_kind
 
         kind, reason = await asyncio.to_thread(detect_kind, node.base_url)
@@ -629,8 +640,11 @@ def register(app: FastAPI, d) -> None:
         an unreachable node is an UNKNOWN capability, not a node that can't
         call tools. Recording a False here would permanently demote a box that
         was merely asleep.
+
+        Refused (409) for a model a proxy reports, before anything is asked:
+        its result would be saved as a top-level copy of the model (v1.330.0).
         """
-        _node_or_404(node_id)
+        _refuse_child(_node_or_404(node_id))
         from ...providers.adapters.base import LLMMessage
 
         model = ((body.model if body else "") or "").strip()

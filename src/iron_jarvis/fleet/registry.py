@@ -43,9 +43,12 @@ def _check_protocol(value: object) -> None:
 
 
 class ChildNodeError(ValueError):
-    """Removing a model a proxy reports (v1.330.0). The proxy names its
-    backends again on every sampling pass, so removing one here would be undone
-    within seconds; the honest answer is "remove the proxy", in plain words."""
+    """Removing or changing a model a proxy reports (v1.330.0). The proxy names
+    its backends again on every sampling pass, so removing one here would be
+    undone within seconds; the honest answer is "remove the proxy", in plain
+    words. An edit (rename, re-detect, a verify result) is refused with the
+    same sentence: saving it used to store the model as a top-level row, so
+    ``GET /fleet`` listed it twice and the row outlived its proxy."""
 
 
 class FleetRegistry:
@@ -114,8 +117,19 @@ class FleetRegistry:
         id, so a user can label / flag their Ollama box without leaving the
         config slot."""
         by_id: dict[str, FleetNode] = {n.id: n for n in self.seeded()}
-        for node in self._stored():
-            by_id[node.id] = node
+        stored = self._stored()
+        for node in stored:
+            if not node.parent_id:
+                by_id[node.id] = node
+        # A stored row with a parent is a proxy's model that an older build
+        # saved on an edit (v1.330.0 refuses that edit). While its proxy is a
+        # node, the proxy's own report is the truth: listing the saved copy as
+        # well showed the model twice, and kept it after the proxy was
+        # switched off. Only a row whose proxy is gone stays listed, so it can
+        # still be removed.
+        for node in stored:
+            if node.parent_id and node.parent_id not in by_id:
+                by_id[node.id] = node
         return by_id
 
     def nodes(self) -> list[FleetNode]:
@@ -181,10 +195,33 @@ class FleetRegistry:
         self._save(rows)
         return node
 
+    def child_refusal(self, node: FleetNode | None) -> str:
+        """The one sentence that refuses removing or changing a proxy's model,
+        or "" when ``node`` is not one (v1.330.0).
+
+        A row whose proxy is no longer a node (a copy an older build saved) is
+        not refused: nothing will report it again, so removing it works.
+        """
+        if node is None or not node.parent_id:
+            return ""
+        parent = self._top_level().get(node.parent_id)
+        if parent is None:
+            return ""
+        return (
+            f"{node.alias or node.id} comes from the proxy "
+            f"{parent.label or parent.id}. Remove the proxy to remove it."
+        )
+
     def update(self, node_id: str, **fields: Any) -> FleetNode:
         current = self.get(node_id)
         if current is None:
             raise KeyError(node_id)
+        # v1.330.0: a proxy's model is the proxy's report, rebuilt every pass.
+        # Saving an edit stored it as a top-level row: GET /fleet then listed
+        # it twice, and the saved copy stayed after the proxy was switched off.
+        refusal = self.child_refusal(current)
+        if refusal:
+            raise ChildNodeError(refusal)
         # model_copy(update=) does not validate, so a bad protocol would be
         # stored as typed and then drop the whole row on the next load.
         if fields.get("protocol") is not None:
@@ -226,16 +263,13 @@ class FleetRegistry:
         # v1.330.0: a model a proxy reports is not ours to remove. Its row is
         # rebuilt from the proxy's own list on the next sampling pass, so this
         # used to answer {"ok": true} and change nothing. Say what does work.
-        if node.parent_id:
-            parent = self._top_level().get(node.parent_id)
-            if parent is not None:
-                raise ChildNodeError(
-                    f"{node.alias or node.id} comes from the proxy "
-                    f"{parent.label or parent.id}. Remove the proxy to remove it."
-                )
+        refusal = self.child_refusal(node)
+        if refusal:
+            raise ChildNodeError(refusal)
 
         # Drop any stored row first (a promoted seed has one; a user node is
-        # one). A child row an edit once saved goes with its proxy too.
+        # one). A child row an older build saved on an edit goes with its
+        # proxy too.
         stored = self._stored()
         rows = [n for n in stored if n.id != node_id and n.parent_id != node_id]
         if len(rows) != len(stored):

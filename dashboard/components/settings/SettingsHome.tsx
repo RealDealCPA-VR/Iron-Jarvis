@@ -119,7 +119,7 @@ const SUBSECTIONS: Record<string, Sub[]> = {
     {
       id: "permissions-grants",
       label: "Standing grants",
-      blurb: "Approvals you gave once and for all — revoke any.",
+      blurb: "Approvals you gave that stay in place. You can revoke any of them.",
       Comp: named(() => import("@/components/StandingGrants"), "StandingGrants"),
     },
   ],

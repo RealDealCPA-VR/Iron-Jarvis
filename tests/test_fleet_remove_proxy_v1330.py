@@ -114,8 +114,14 @@ def test_removing_a_child_is_refused_in_plain_words_and_changes_nothing(tmp_path
 
 def test_a_child_row_an_edit_saved_goes_with_its_proxy(tmp_path):
     reg, cfg = _registry_with_proxy(tmp_path)
-    # Any PATCH on a child (rename, detect) promotes it to a stored row.
-    reg.update("spark-glm", label="GLM on the Sparks")
+    # An OLDER build saved a child as a stored row on any PATCH (rename,
+    # detect). Wave 12 refuses that edit (test_fleet_child_edit_v1330), so the
+    # row is seeded the way such a build left it on disk.
+    saved = FleetNode(id="spark-glm", parent_id="spark", alias="glm", label="GLM on the Sparks",
+                      source="topology", base_url="http://spark-049d:8888")
+    cfg.fleet_nodes = list(cfg.fleet_nodes) + [
+        {k: v for k, v in saved.model_dump().items() if v is not None}
+    ]
     assert "spark-glm" in [row["id"] for row in cfg.fleet_nodes]
     assert set(reg.family("spark")) == {"spark", "spark-fleet", "spark-glm", "spark-fleet-think"}
 
