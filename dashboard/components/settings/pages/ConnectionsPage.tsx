@@ -109,6 +109,25 @@ import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
 
 /* -------------------------------------------------------------------------- */
+/*  Saved-endpoint row lines (v1.330.0, calm wave 12)                          */
+/* -------------------------------------------------------------------------- */
+
+/* A saved-endpoint row reads as three lines: the name and address, then the
+ * tags (Anthropic, the model, vision, tools, the measured chip), then the
+ * actions (Verify tools, Measure, Delete). The tags and the actions are both
+ * borderless now, so on one shared line "Verify tools" read like a tag beside
+ * the model, and in the narrow card "Measure" landed among the tags while
+ * Delete wrapped alone. The measured chip and Measure come from ONE component
+ * (EnvelopeRowControls), so the row stays one flex box and CSS `order` puts
+ * every action after a full-width break: the visual order is the tags, the
+ * break, the actions, then any note. Delete keeps to the right edge. */
+const ROW_BREAK = "h-0 basis-full";
+const ROW_ACTIONS_BREAK = `order-1 ${ROW_BREAK}`;
+const ROW_ACTION = "order-2";
+const ROW_NOTE = "order-3";
+const ROW_REPORT = "order-4";
+
+/* -------------------------------------------------------------------------- */
 /*  Model report card (v1.169.0) — the evidence auto-tier judges on            */
 /* -------------------------------------------------------------------------- */
 
@@ -1188,7 +1207,8 @@ function ConnectionCard({
               {endpoints.map((ep) => (
                 <div
                   key={ep.id}
-                  className="flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                  data-testid="endpoint-row"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
                 >
                   {renaming === ep.id ? (
                     <input
@@ -1229,6 +1249,8 @@ function ConnectionCard({
                   >
                     {ep.base_url}
                   </span>
+                  {/* The tags start their own line (see ROW_BREAK). */}
+                  <span aria-hidden data-testid="endpoint-row-tags-break" className={ROW_BREAK} />
                   {/* v1.329.0: an endpoint that chats the Anthropic way says
                       so; the OpenAI way is the long-standing default and stays
                       unmarked. */}
@@ -1289,7 +1311,7 @@ function ConnectionCard({
                       data-testid="endpoint-row-verify"
                       onClick={() => void verifyEndpoint(ep)}
                       disabled={epBusy === ep.id}
-                      className={ENDPOINT_CHIP_BUTTON}
+                      className={`${ENDPOINT_CHIP_BUTTON} ${ROW_ACTION}`}
                       title="Tool support is not checked yet, so tool turns go to another model for now. Press to check this server."
                     >
                       {epBusy === ep.id ? "…" : "Verify tools"}
@@ -1308,11 +1330,15 @@ function ConnectionCard({
                     <EnvelopeRowControls
                       provider={ep.seeded ? ep.id : `fleet-${ep.id}`}
                       model={ep.default_model}
+                      actionClassName={ROW_ACTION}
+                      noteClassName={ROW_NOTE}
                     />
                   )}
+                  {/* The actions start their own line, after every tag. */}
+                  <span aria-hidden data-testid="endpoint-row-actions-break" className={ROW_ACTIONS_BREAK} />
                   <ConfirmButton
                     variant="calm"
-                    className="shrink-0"
+                    className={`${ROW_ACTION} ml-auto shrink-0`}
                     onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
                     confirmLabel="Delete?"
@@ -1327,7 +1353,7 @@ function ConnectionCard({
                     (r) =>
                       r.provider === `fleet-${ep.id}` && r.task_class == null,
                   ) && (
-                    <div className="w-full basis-full">
+                    <div className={`w-full basis-full ${ROW_REPORT}`}>
                       <ModelReportLine
                         rows={quality}
                         provider={`fleet-${ep.id}`}

@@ -517,7 +517,10 @@ describe("Settings > Connections: secondary actions are calm, each card keeps it
       expect(tokens(t).filter((c) => c !== "font-mono").sort()).toEqual(tokens(CALM_BADGE).sort());
     }
     const verify = within(custom).getByTestId("endpoint-row-verify");
-    expect(verify.className).toBe(CALM_ACTION);
+    // Wave 12 (N4) adds ONE layout class, `order-2`, which moves the action
+    // onto the row's actions line (endpoint-row-lines-v1330 pins the lines).
+    // The look is still exactly the calm action.
+    expect(verify.className).toBe(`${CALM_ACTION} order-2`);
     expectCalmAction(verify, "Verify tools");
     const del = within(custom).getAllByRole("button", { name: "Delete" })[0];
     expect(del.getAttribute("data-confirm-variant")).toBe("calm");

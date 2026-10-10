@@ -617,12 +617,20 @@ export function EnvelopeRowControls({
   model,
   pollMs = 10_000,
   timeoutMs = 180_000,
+  actionClassName = "",
+  noteClassName = "",
 }: {
   provider: string;
   model: string;
   /** Test seams only — the defaults ARE the product cadence. */
   pollMs?: number;
   timeoutMs?: number;
+  /** v1.330.0 (calm wave 12): extra classes for the Measure button and for
+   *  the error note. The saved-endpoint row passes CSS `order` classes so
+   *  Measure sits on the row's actions line, not among the tags (the chip
+   *  stays with the tags). Left out, the row renders exactly as before. */
+  actionClassName?: string;
+  noteClassName?: string;
 }) {
   const { data, reload } = useEnvelope(provider, model);
   const [measuring, setMeasuring] = useState(false);
@@ -724,14 +732,14 @@ export function EnvelopeRowControls({
         disabled={measuring}
         data-testid={`measure-${provider}-${model}`}
         title={`${badge ? "" : "Not measured yet. "}Measure checks what this model can really do: tool calls, how much context it handles, characters per token. It runs in the background and this row updates when it finishes.`}
-        className={ENDPOINT_CHIP_BUTTON}
+        className={actionClassName ? `${ENDPOINT_CHIP_BUTTON} ${actionClassName}` : ENDPOINT_CHIP_BUTTON}
       >
         {measuring ? "Measuring…" : "Measure"}
       </button>
       {error && (
         <span
           data-testid={`measure-error-${provider}-${model}`}
-          className="w-full basis-full text-[11px] leading-relaxed text-tone-warn"
+          className={`w-full basis-full text-[11px] leading-relaxed text-tone-warn${noteClassName ? ` ${noteClassName}` : ""}`}
         >
           {error}
         </span>

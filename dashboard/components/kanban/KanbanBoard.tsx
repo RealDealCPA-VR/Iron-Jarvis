@@ -355,28 +355,34 @@ export function KanbanBoard({
    * nested under an active parent lives in the Active column; "Clear failed
    * (1)" over an empty Failed column was the v1.168.0 review finding). The
    * clear itself stays status-wide, two-press, and the toast reports the
-   * REAL cleared count. */
+   * REAL cleared count.
+   * v1.330.0 (calm wave 12): the calm ConfirmButton, a quiet ghost that fills
+   * on hover, like every board on the calm surfaces. It keeps its 28px hit
+   * area; `-my-1` lets the lane header keep its height, so a lane with a
+   * Clear lines up with one without. */
   function clearAction(laneId: LaneId): React.ReactNode {
     if (projectId) return null;
     if (laneId === "completed" && laneSessions.completed.length > 0) {
       return (
         <ConfirmButton
+          variant="calm"
           label={`Clear completed (${laneSessions.completed.length})`}
           confirmLabel="Confirm clear?"
           title="Remove every completed session from the board"
           onConfirm={() => clearLane("completed")}
-          className="!px-2 !py-0.5 !text-[11px]"
+          className="-my-1 whitespace-nowrap"
         />
       );
     }
     if (laneId === "failed" && laneSessions.failed.length > 0) {
       return (
         <ConfirmButton
+          variant="calm"
           label={`Clear failed (${laneSessions.failed.length})`}
           confirmLabel="Confirm clear?"
           title="Remove every failed or cancelled session from the board"
           onConfirm={() => clearLane("failed")}
-          className="!px-2 !py-0.5 !text-[11px]"
+          className="-my-1 whitespace-nowrap"
         />
       );
     }

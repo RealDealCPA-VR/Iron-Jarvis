@@ -793,9 +793,12 @@ export function ProjectTasks({
                 // Amber for "needs you" / "with failures" (v1.227.0) — a
                 // finished task that fell short must not wear green beside
                 // its own "Task NOT complete" summary.
-                <SessionStatusBadge session={taskSession} />
+                // v1.330.0 (calm wave 12): the calm chip, on the chat drawer
+                // AND the project page, so it matches the Assignments rows
+                // below it (AssignmentRow is calm on both).
+                <SessionStatusBadge session={taskSession} variant="calm" />
               ) : (
-                <Badge value="unknown" />
+                <Badge value="unknown" variant="calm" />
               )}
               <Link
                 href={`/sessions/${encodeURIComponent(taskRun.id)}`}
@@ -992,7 +995,7 @@ export function ProjectTasks({
                         title={ask || undefined}
                         className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                       >
-                        <SessionStatusBadge session={s} />
+                        <SessionStatusBadge session={s} variant="calm" />
                         <span className="min-w-0 flex-1">
                           {ask ? (
                             <span className="line-clamp-2 break-words text-xs text-zinc-200">{ask}</span>

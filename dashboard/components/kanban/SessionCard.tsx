@@ -198,14 +198,18 @@ export function CardInner({
           reason={session.trust_reason}
           taintedAt={session.tainted_at}
         />
+        {/* v1.330.0 (calm wave 12): the calm chip, no border, the amber on
+            its dot. The board lives on the calm surfaces (the chat drawer's
+            Board, the Agents page's project board) and keeps one look on the
+            Sessions board too. */}
         {waiting && (
           <span data-testid="session-waiting-chip" className="contents">
-            <Badge value={waiting} tone="amber" keepCase />
+            <Badge value={waiting} tone="amber" keepCase variant="calm" />
           </span>
         )}
         {!waiting && outcome && (
           <span data-testid="session-outcome-chip" className="contents">
-            <Badge value={outcome} tone="amber" keepCase />
+            <Badge value={outcome} tone="amber" keepCase variant="calm" />
           </span>
         )}
         {teamBadge}
@@ -442,6 +446,7 @@ function FailedActions({ session }: { session: SessionView }) {
         Retry
       </button>
       <ConfirmButton
+        variant="calm"
         label="Dismiss"
         confirmLabel="Confirm?"
         title="Remove this session permanently"

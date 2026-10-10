@@ -20,7 +20,7 @@
 // Labels are exported as pure functions so the tests pin the words, not the
 // markup.
 
-import { Badge, type Tone } from "@/components/ui";
+import { Badge, type BadgeVariant, type Tone } from "@/components/ui";
 import type { SessionOutcome, SessionWaitingOn } from "@/lib/types";
 
 export interface OutcomeSource {
@@ -48,19 +48,27 @@ export function waitingLabel(session: OutcomeSource): string | null {
 
 /** The status badge every session surface renders: amber when the run is
  *  paused for the user or finished short of the job, else the plain status
- *  badge exactly as before (`tone` passes through for that case only). */
+ *  badge exactly as before (`tone` passes through for that case only).
+ *
+ *  `variant` (v1.330.0, calm wave 12) picks the Badge's look for all three
+ *  cases: "default" is the bordered pill the Sessions pages draw (and what a
+ *  caller that says nothing gets); "calm" is the quiet chip of the calm
+ *  surfaces (a project's Tasks list), where only the dot carries the tone.
+ *  The words and the tone are the same either way. */
 export function SessionStatusBadge({
   session,
   tone,
+  variant = "default",
 }: {
   session: OutcomeSource;
   tone?: Tone;
+  variant?: BadgeVariant;
 }) {
   const waiting = waitingLabel(session);
   if (waiting) {
     return (
       <span data-testid="session-waiting-chip" className="contents">
-        <Badge value={waiting} tone="amber" keepCase />
+        <Badge value={waiting} tone="amber" keepCase variant={variant} />
       </span>
     );
   }
@@ -68,11 +76,11 @@ export function SessionStatusBadge({
   if (label) {
     return (
       <span data-testid="session-outcome-chip" className="contents">
-        <Badge value={label} tone="amber" keepCase />
+        <Badge value={label} tone="amber" keepCase variant={variant} />
       </span>
     );
   }
-  return <Badge value={session.status} tone={tone} />;
+  return <Badge value={session.status} tone={tone} variant={variant} />;
 }
 
 export default SessionStatusBadge;
