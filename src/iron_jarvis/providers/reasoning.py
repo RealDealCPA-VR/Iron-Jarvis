@@ -195,6 +195,16 @@ DEFAULTS: tuple[str, ...] = LEVELS + (OFF, AUTO)
 #:     -> ``high``.
 #:   * Opus 5.5: thinking cannot be turned off and effort defaults to
 #:     ``medium`` -> ``medium``.
+#:   * Read 2026-10-10 (platform.claude.com/docs/en/build-with-claude/effort
+#:     and .../thinking-troubleshooting, "Thinking support, defaults, and
+#:     rejected configurations by model"):
+#:       - Claude Haiku 5.5 (``claude-haiku-5-5``): thinking "On" by default
+#:         and "Claude Opus 5.5 and Claude Haiku 5.5 default to medium"
+#:         -> ``medium``;
+#:       - Claude Mythos Preview (``claude-mythos-preview``): thinking
+#:         "Always on" and it supports effort, whose `high` level is "The
+#:         default on every model that supports effort except Claude Opus 5.5
+#:         and Claude Haiku 5.5" -> ``high``.
 #: A Claude id not listed here is a model this table has not read docs for
 #: -> "" (unknown), never a family guess.
 _ANTHROPIC_DEFAULTS: dict[str, str] = {
@@ -219,6 +229,8 @@ _ANTHROPIC_DEFAULTS: dict[str, str] = {
     "claude-mythos-5": "high",
     "claude-mythos-5-1": "high",
     "claude-opus-5-5": "medium",
+    "claude-haiku-5-5": "medium",
+    "claude-mythos-preview": "high",
 }
 
 #: OpenAI API (Chat Completions ``reasoning_effort`` / Responses

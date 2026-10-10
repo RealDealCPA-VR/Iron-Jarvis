@@ -982,6 +982,38 @@ def _browser_section(d, pane_id: str = "") -> str:
     return "\n\n" + "\n".join(lines)
 
 
+#: The freshness caveat and the no-tab line for a TEXT-ONLY turn (calm chat
+#: W12, v1.330.0): the same facts, without "call browser_get_active_tab" — a
+#: turn that cannot call a tool must not be told to.
+BROWSER_STALE_TEXT_ONLY_LINE = (
+    "Jarvis is told which tab this is when the user switches to it, so it can be "
+    "out of date if they have navigated since."
+)
+BROWSER_NO_TAB_TEXT_ONLY_LINE = "Jarvis has not been told which tab is active."
+
+
+def _browser_text_only(section: str) -> str:
+    """The rendered :func:`_browser_section` for a TEXT-ONLY turn: the tab's
+    title and URL, the untrusted fence and the freshness caveat stay; every
+    line that offers a browser tool goes (the capability line, the read-only
+    "you can look at tabs" line, and "call browser_get_active_tab").
+
+    Works on the RENDERED section, line by line, so the tab is read once per
+    turn and both forms describe the same tab. A page-authored value can never
+    equal one of these lines: it always sits behind its ``Active tab:`` /
+    ``URL:`` label. "" stays "". MIRROR NOTE (lock-step): both lanes, through
+    :func:`text_only_system`."""
+    if not section:
+        return ""
+    swap = {
+        BROWSER_STALE_LINE: BROWSER_STALE_TEXT_ONLY_LINE,
+        BROWSER_NO_TAB_LINE: BROWSER_NO_TAB_TEXT_ONLY_LINE,
+    }
+    drop = {BROWSER_CAPABILITY_LINE, BROWSER_LOOK_ONLY_LINE}
+    lines = section.split("\n")
+    return "\n".join(swap.get(line, line) for line in lines if line not in drop)
+
+
 #: The page-context section's heading (v1.325.0) — the dashboard page the user
 #: pressed "Ask Jarvis about this page" on. Named as THE PAGE THE USER IS
 #: ASKING ABOUT so "this", "here" and "these numbers" resolve to it.
@@ -1181,6 +1213,268 @@ def text_only_note(platform: Any, provider: str) -> str:
     v1.330.0). MIRROR NOTE (lock-step): both chat lanes append this."""
     name = route_label(platform, provider) or str(provider or "")
     return f"\n\n_Note: {name} can't run tools, so this turn was answered text only._"
+
+
+#: The Environment section's two EXIT lines (v1.108.0 / v1.120.0), shared by
+#: BOTH lanes so a text-only turn can swap exactly these bytes. A turn that can
+#: use tools sends them verbatim, as it always has.
+_ENV_EXIT_LINES = (
+    # THIS LINE caused the reported behaviour. It told the model that
+    # a mode existed and that switching was the USER's job, so when a
+    # request outgrew the turn it dutifully said "you need to be in
+    # agent mode" — the app asking the user to do its routing.
+    "- Answer directly. There are no modes for the user to pick: when "
+    "a request needs sustained multi-step work you cannot finish here, "
+    "call escalate_to_agent and it is taken over seamlessly.\n"
+    "- When the user describes a repeatable multi-step process (\"every "
+    "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
+    "they get a saveable workflow card instead of prose steps."
+)
+
+#: What a TEXT-ONLY turn is told in place of :data:`_ENV_EXIT_LINES`
+#: (calm chat W12, v1.330.0). Live-hit: under "Auto tools" a picked model whose
+#: tool use is not verified answered "I'm passing this to builder, who can run
+#: commands on your machine" — the turn had no tools, no exits and nothing was
+#: handed off; the exit lines and the roster had invited the claim.
+TEXT_ONLY_LINES = (
+    "- This turn you can only answer in text. You have no tools here: you "
+    "cannot run commands, open, list or change files, browse, start a "
+    "workflow, or hand the work to another agent, and nothing runs after "
+    "your reply. Never say that you are doing, passing on or will do any of "
+    "that, or that someone else will.\n"
+    "- When the request needs that kind of work, say so plainly and suggest "
+    "the user pick a model that can use tools from the model menu."
+)
+
+
+def is_text_only_pick(d, body, provider_choice: str, model_choice: str) -> bool:
+    """True when this turn serves an EXPLICITLY picked model that cannot use
+    tools (v1.125.0): no armed tools, no exit tools, a text-only prompt.
+
+    An EXPLICITLY picked text-only CLI (codex exec has no structured
+    tool-calling) used to be capability-REROUTED — the user asked for their
+    Codex subscription and got a different provider every time. Honest fix:
+    honour the pick and serve the turn TEXT-ONLY. Only for explicit picks;
+    default/auto routes keep full capability routing. Read through the
+    ROUTER's accessor (adapter.capabilities()) — the same truth the
+    capability reroute reads, so the two can never disagree. A resolution
+    failure routes normally (False). Computed BEFORE the roster and the exit
+    lines join the prompt (v1.330.0), so a text-only prompt never offers them.
+    MIRROR NOTE (lock-step): both chat lanes call this once per turn."""
+    if (getattr(body, "provider", "") or "").strip() in ("", "auto"):
+        return False
+    try:
+        _picked = d.platform.providers.get(provider_choice, model_choice or None)
+        from ..providers.router import _capabilities
+
+        return not bool(_capabilities(_picked).get("tool_use", True))
+    except Exception:  # noqa: BLE001 — resolution failures route normally
+        return False
+
+
+def text_only_system(system: str, browser: str = "") -> str:
+    """The prompt of a text-only turn: the exit lines swapped for
+    :data:`TEXT_ONLY_LINES` and the browser section (``browser``, the exact
+    text :func:`_browser_section` rendered into ``system`` this turn) swapped
+    for its tool-free form (:func:`_browser_text_only`); the roster is left
+    out by :meth:`_Grounding.after_skill`. Only ever called on a text-only
+    turn; a turn that can use tools keeps its prompt byte for byte."""
+    system = system.replace(_ENV_EXIT_LINES, TEXT_ONLY_LINES, 1)
+    if browser:
+        system = system.replace(browser, _browser_text_only(browser), 1)
+    return system
+
+
+#: A reply's own claim that the work was HANDED to someone (an agent, "the
+#: builder"). Checked only on a text-only turn, where nothing can be handed
+#: off. Deliberately narrow, because a false accusation is its own trust
+#: failure, and the most common text-only pick is a coding CLI whose everyday
+#: output explains code ("Then I pass it to the parser", "Sending it to the
+#: server returns a 200"). A claim needs ALL of:
+#:   1. a first-person or bare-gerund hand-off ("I'm passing this to …", "let
+#:      me hand it over to …", "Delegating to …", "I've asked the reviewer to
+#:      …"); the everyday verbs (pass, hand, send, forward, transfer, assign)
+#:      count only with the work as their object ("this", "it", "your
+#:      request") or with off/over/on; never "I've got X to" (W12 review:
+#:      "I've got nothing to add" is no claim);
+#:   2. no hedge in its run-up (:data:`_HANDOFF_HEDGE_RX`: "if I pass", "I
+#:      could hand");
+#:   3. an AGENT-SHAPED receiver (:func:`_agent_shaped`): a name on the roster
+#:      (the builtin agent types plus custom and remote agent names,
+#:      :func:`handoff_receivers`) or a word like agent / teammate /
+#:      specialist / team / another model. A function, a server, stdout, a
+#:      parser or a callback never counts; "you"/"your" never does.
+_HANDOFF_OBJ = r"(?:this|it|that|them|your\s+(?:request|question|task)|the\s+(?:task|request|job|work|question))"
+_HANDOFF_TAIL = (
+    r"\s+(?:" + _HANDOFF_OBJ + r"\s+(?:(?:off|over|along|on)\s+)?|(?:off|over|along|on)\s+)"
+    r"to\s+(?!you\b|your\b)"
+)
+_HANDOFF_VERB = (
+    r"(?:pass(?:ing|ed)?|hand(?:ing|ed)?|forward(?:ing|ed)?|send(?:ing)?|sent"
+    r"|transfer(?:ring|red)?|assign(?:ing|ed)?)"
+)
+_HANDOFF_SUBJECT = (
+    r"\bI(?:'m|’m| am|'ll|’ll| will|'ve|’ve| have)?"
+    r"\s+(?:going\s+to\s+|now\s+|just\s+|already\s+)?"
+)
+_HANDOFF_CLAIM_RX = _re.compile(
+    r"(?:"
+    + _HANDOFF_SUBJECT + _HANDOFF_VERB + _HANDOFF_TAIL
+    + r"|" + _HANDOFF_SUBJECT
+    + r"(?:delegat(?:e|ing|ed)|escalat(?:e|ing|ed))\b[^.\n]{0,40}?\bto\s+(?!you\b|your\b)"
+    + r"|\blet\s+me\s+(?:pass|hand|forward|send|transfer|assign)" + _HANDOFF_TAIL
+    + r"|\blet\s+me\s+(?:delegate|escalate)\b[^.\n]{0,40}?\bto\s+(?!you\b|your\b)"
+    + r"|(?:^|[.!?]\s+|\n)(?:passing|handing|forwarding|sending)" + _HANDOFF_TAIL
+    + r"|(?:^|[.!?]\s+|\n)(?:delegating|escalating)\b[^.\n]{0,40}?\bto\s+(?!you\b|your\b)"
+    # "I've asked the reviewer to …": here the receiver comes BEFORE "to", so
+    # it is captured (``asked``) and judged like every other receiver.
+    + r"|\bI(?:'ve|’ve| have)\s+(?:asked|told)\s+"
+    + r"(?P<asked>(?!you\b)(?:[\w:'’-]+\s+){0,3}?[\w:'’-]+)\s+to\b"
+    + r")",
+    _re.IGNORECASE,
+)
+
+#: Words a receiver phrase may open with ("the builder", "one of our
+#: specialists"); stripped before the receiver is judged.
+_RECEIVER_LEAD_RX = _re.compile(
+    r"^(?:(?:the|a|an|another|our|my|one\s+of\s+(?:the|our|my))\s+)+",
+    _re.IGNORECASE,
+)
+#: "another model", "a different model": the receiver is a model, said so.
+_RECEIVER_OTHER_MODEL_RX = _re.compile(
+    r"^(?:another|a\s+different|a\s+stronger|a\s+tool[-\s]capable)\s+model\b",
+    _re.IGNORECASE,
+)
+#: Head nouns that make ANY receiver agent-shaped ("the builder agent", "a
+#: specialist", "the research team"). The HEAD (the last word before a stop
+#: word or punctuation) must be one, so "the team channel" is not.
+_AGENT_WORDS = frozenset(
+    {"agent", "agents", "teammate", "teammates", "specialist", "specialists", "team"}
+)
+#: Words that end a receiver phrase ("builder WHO can …", "the agent NOW").
+_RECEIVER_STOP = frozenset({
+    "who", "which", "that", "to", "for", "now", "and", "so", "with", "in", "on",
+    "at", "because", "as", "while", "then", "next", "here", "there", "instead",
+    "directly", "right", "first", "later", "soon", "since", "who'll", "who’ll",
+})
+
+
+def handoff_receivers(platform: Any = None) -> tuple[str, ...]:
+    """Every name work could be HANDED to on this install, casefolded: the
+    builtin agent types always, plus the roster's custom and remote agents
+    (``build_roster(with_health=False)``, the prompt-side read), each both as
+    ``custom:<name>`` and bare. Never raises: a roster that cannot be read
+    leaves the builtins. BLOCKING (SQLite) — the lanes call it through
+    :func:`handoff_note_for`, off the loop, and only when a claim is in sight."""
+    names = {t.value for t in AgentType}
+    if platform is not None:
+        try:
+            from ..agents.roster import build_roster
+
+            for entry in build_roster(platform, with_health=False):
+                name = str(getattr(entry, "name", "") or "").strip()
+                if not name:
+                    continue
+                names.add(name)
+                if ":" in name:
+                    names.add(name.split(":", 1)[1].strip())
+        except Exception:  # noqa: BLE001 — the builtins are still a roster
+            pass
+    return tuple(sorted({n.casefold() for n in names if n}, key=len, reverse=True))
+
+
+def _agent_shaped(receiver: str, names) -> bool:
+    """Is this receiver phrase an AGENT? A name on the roster at its head, a
+    head noun from :data:`_AGENT_WORDS`, or "another model". Markdown emphasis
+    is ignored ("Escalating to **builder**"). A code name that merely SHARES a
+    roster name and is written as code (``builder()``, ``builder.run``) is
+    not the agent."""
+    text = _re.sub(r"[*_`\"“”‘]", "", receiver or "").lstrip()
+    if _RECEIVER_OTHER_MODEL_RX.match(text):
+        return True
+    text = _RECEIVER_LEAD_RX.sub("", text, count=1)
+    low = text.casefold()
+    for name in names or ():
+        if not low.startswith(name):
+            continue
+        rest = low[len(name):]
+        if not rest:
+            return True
+        if rest[0].isalnum() or rest[0] in "-_(":
+            continue  # a longer word ("builders-kit") or a call ("builder()")
+        if rest[0] == "." and len(rest) > 1 and rest[1].isalnum():
+            continue  # an attribute ("builder.run")
+        return True
+    head = ""
+    for word in _re.match(r"[\w\s'’-]*", text).group(0).split()[:4]:
+        if word.casefold() in _RECEIVER_STOP:
+            break
+        head = word
+    head = _re.sub(r"['’]s$", "", head.casefold())
+    return head in _AGENT_WORDS
+
+
+#: Words in the run-up that turn a claim into a condition or an offer
+#: ("if I pass this to builder", "I could hand it to").
+_HANDOFF_HEDGE_RX = _re.compile(
+    r"\b(?:if|once|when|could|would|can|cannot|can't|unable|not|never|"
+    r"suggest|recommend|should|might|may)\b[^.\n]{0,24}$",
+    _re.IGNORECASE,
+)
+
+
+def _claimed_handoff_note(
+    reply: str,
+    *,
+    receivers: tuple[str, ...] | None = None,
+    tool_note_follows: bool = False,
+) -> str:
+    """'' unless a TEXT-ONLY turn's reply claims it handed the work on.
+
+    The sibling of :func:`_claimed_write_note` (the record decides, never the
+    prose): a text-only turn has no exits and no tools, so ANY "I'm passing
+    this to builder" is false. Called only when ``text_only_pick`` — on a tool
+    turn the escalate exit is the record. ``receivers``: the names that count
+    as an agent (:func:`handoff_receivers`); None = the builtin agent types
+    only. ``tool_note_follows``: the armed-tools note (:func:`text_only_note`)
+    already says the turn was text only, so this note does not say it twice.
+    Plain words, no dash aside. Pure; the lanes call :func:`handoff_note_for`."""
+    if not reply:
+        return ""
+    names = receivers if receivers is not None else handoff_receivers(None)
+    for m in _HANDOFF_CLAIM_RX.finditer(reply):
+        lead = reply[max(0, m.start() - 40) : m.start()]
+        if _HANDOFF_HEDGE_RX.search(lead):
+            continue  # a condition or an offer, not a claim
+        receiver = m.group("asked") or reply[m.end() : m.end() + 80]
+        if not _agent_shaped(receiver, names):
+            continue  # "to the parser", "to sorted()", "to stdout": not an agent
+        if tool_note_follows:
+            return "\n\n_Note: nothing was handed off._"
+        return "\n\n_Note: nothing was handed off. This model answered text only._"
+    return ""
+
+
+async def handoff_note_for(
+    platform: Any, reply: str, *, tool_note_follows: bool = False
+) -> str:
+    """The lanes' entry to :func:`_claimed_handoff_note`: the roster names are
+    read (off the loop) only when the reply holds a hand-off phrase at all, so
+    an ordinary text-only reply costs one regex. Never raises.
+    MIRROR NOTE (lock-step): both chat lanes append this on a text-only turn."""
+    try:
+        if not reply or not _HANDOFF_CLAIM_RX.search(reply):
+            return ""
+        try:
+            names = await asyncio.to_thread(handoff_receivers, platform)
+        except Exception:  # noqa: BLE001 — the builtins are still a roster
+            names = handoff_receivers(None)
+        return _claimed_handoff_note(
+            reply, receivers=names, tool_note_follows=tool_note_follows
+        )
+    except Exception:  # noqa: BLE001 — a safety note must never cost the reply
+        log.debug("hand-off note check failed", exc_info=True)
+        return ""
 
 
 def _last_user_text(messages) -> str:
@@ -4123,11 +4417,17 @@ class _Grounding:
     __slots__ = (
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
+        "text_only",
     )
 
     def __init__(self) -> None:
         self.project = self.lessons = self.index = self.fabric = ""
         self.connector = self.roster = self.workflows = ""
+        #: Set by the lane once it knows the turn is a text-only pick
+        #: (:func:`is_text_only_pick`, v1.330.0): the roster ("Who can take
+        #: this work") is then left out, because the turn has no exit to
+        #: hand work to anyone. False keeps the join byte for byte.
+        self.text_only = False
         #: The project folder's AGENTS.md / CLAUDE.md (+ .local) sections
         #: (v1.326.0, ``projects/folder_rules``) and the file names injected —
         #: the turn's ``folder_rules`` receipt on BOTH lanes ([] = none).
@@ -4153,7 +4453,8 @@ class _Grounding:
         # lanes carry it on EVERY turn — not only one that armed tools — and
         # it is "" (byte-identical prompt) whenever nothing is starting.
         note = packs_starting_note(self.packs_starting)
-        return self.roster + self.workflows + (("\n\n" + note) if note else "")
+        roster = "" if self.text_only else self.roster
+        return roster + self.workflows + (("\n\n" + note) if note else "")
 
 
 async def _gather_grounding(
@@ -4503,16 +4804,10 @@ async def run_chat_turn(
     system = persona + (
         "\n\n# Environment\n"
         f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
-        # THIS LINE caused the reported behaviour. It told the model that
-        # a mode existed and that switching was the USER's job, so when a
-        # request outgrew the turn it dutifully said "you need to be in
-        # agent mode" — the app asking the user to do its routing.
-        "- Answer directly. There are no modes for the user to pick: when "
-        "a request needs sustained multi-step work you cannot finish here, "
-        "call escalate_to_agent and it is taken over seamlessly.\n"
-        "- When the user describes a repeatable multi-step process (\"every "
-        "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
-        "they get a saveable workflow card instead of prose steps."
+        # The two exit lines (escalate / workflow card) — one constant both
+        # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
+        # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step).
+        + _ENV_EXIT_LINES
     )
     # USER PROFILE (v1.144.0): who this person is + how they want to be
     # answered + their voice. Injected HIGH — right after the persona, before
@@ -4535,8 +4830,11 @@ async def run_chat_turn(
     # actually connected; "" otherwise, so no existing
     # prompt grows. Here, at the DRAFT_BLOCK seam, for the same reason every
     # section above it is here: `_plan_context` has not run yet, and a section
-    # added after the planner has a cost the budget cannot see.
-    system += _browser_section(d, getattr(body, "pane_id", "") or "")
+    # added after the planner has a cost the budget cannot see. Kept by name
+    # (v1.330.0) so a TEXT-ONLY turn can swap exactly these bytes for the
+    # tool-free form below (`text_only_system`).
+    _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
+    system += _browser_block
     # A project only applies INSIDE the Projects module: the in-project chat
     # sends an explicit project_id and grounds in that project's
     # instructions + brief + knowledge. The MAIN chat sends none and stays
@@ -4570,6 +4868,17 @@ async def run_chat_turn(
     model_choice = (body.model or "").strip() or (
         (resolved_proj.default_model or "").strip() if resolved_proj else ""
     )
+    # TEXT-ONLY PICK (v1.125.0), decided HERE (v1.330.0) — before the roster
+    # and the exit lines are final — so a turn that cannot use tools is never
+    # offered escalate_to_agent, workflow_draft or "Who can take this work":
+    # those lines invited "I'm passing this to builder" on a turn with no
+    # exits. Swapped before the planner, so its cost is priced. A turn that can
+    # use tools keeps its prompt byte for byte. MIRROR NOTE (lock-step):
+    # routes/chat.py's stream lane does the same at the same seam.
+    text_only_pick = is_text_only_pick(d, body, provider_choice, model_choice)
+    if text_only_pick:
+        system = text_only_system(system, _browser_block)
+        _grounding.text_only = True
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -4717,29 +5026,11 @@ async def run_chat_turn(
     # The turn's tool loop: "+"-armed tools (explicit consent) plus, with
     # body.auto_tools, safe auto-selected tools filling the free slots —
     # seamless by default, explicit picks always first.
-    # An EXPLICITLY picked text-only CLI (codex exec has no structured
-    # tool-calling) used to be capability-REROUTED here — the user asked
-    # for their Codex subscription and got a different provider every
-    # time. Honest fix (v1.125.0): honor the pick and serve the turn
+    # An EXPLICITLY picked text-only model (`text_only_pick`, decided above by
+    # `is_text_only_pick` before the roster joined the prompt) is served
     # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
-    # were explicitly requested. Only for explicit picks; default/auto
-    # routes keep full capability routing.
-    text_only_pick = False
-    if (body.provider or "").strip() not in ("", "auto"):
-        try:
-            _picked = d.platform.providers.get(
-                provider_choice, model_choice or None
-            )
-            from ..providers.router import _capabilities
-
-            # The ROUTER's accessor (adapter.capabilities()) — the same
-            # truth the capability reroute reads, so the two can never
-            # disagree about what "text-only" means.
-            text_only_pick = not bool(
-                _capabilities(_picked).get("tool_use", True)
-            )
-        except Exception:  # noqa: BLE001 — resolution failures rout normally
-            text_only_pick = False
+    # were explicitly requested (v1.125.0). Default/auto routes keep full
+    # capability routing.
     # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
     # capability envelope narrowed this turn's arming (the tool cap below) —
     # null on every trusted/unmeasured route, which is the common case. The
@@ -5462,6 +5753,15 @@ async def run_chat_turn(
         # so missed a reply announcing a saved file after only a
         # scan had run. MIRROR NOTE (lock-step): both lanes.
         reply += _claimed_write_note(reply, tools_used)
+        # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
+        # says it did ("I'm passing this to builder") gets the plain note.
+        # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.
+        # Only an AGENT-shaped receiver counts (the roster's names, read off
+        # the loop and only when a hand-off phrase is there at all).
+        if text_only_pick:
+            reply += await handoff_note_for(
+                d.platform, reply, tool_note_follows=bool(body.tools or [])
+            )
         if text_only_pick and (body.tools or []):
             reply += text_only_note(d.platform, provider_choice)
     # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT): when this

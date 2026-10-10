@@ -2490,16 +2490,10 @@ async def chat_stream(
     system = persona + (
         "\n\n# Environment\n"
         f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
-        # THIS LINE caused the reported behaviour. It told the model that
-        # a mode existed and that switching was the USER's job, so when a
-        # request outgrew the turn it dutifully said "you need to be in
-        # agent mode" — the app asking the user to do its routing.
-        "- Answer directly. There are no modes for the user to pick: when "
-        "a request needs sustained multi-step work you cannot finish here, "
-        "call escalate_to_agent and it is taken over seamlessly.\n"
-        "- When the user describes a repeatable multi-step process (\"every "
-        "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
-        "they get a saveable workflow card instead of prose steps."
+        # The two exit lines (escalate / workflow card): the ONE constant both
+        # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
+        # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step): chat_turn.
+        + _chat_turn._ENV_EXIT_LINES
     )
     # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
     # MIRROR NOTE: edit both or neither.
@@ -2518,8 +2512,11 @@ async def chat_stream(
     # ("what page do I have open?" in a Build chat) lives on THIS side: an
     # ambient block that reached only the non-streaming lane would be a
     # feature nobody could see. Placed at the same seam, before
-    # `_plan_context`, so the section is priced by the budget planner.
-    system += _browser_section(d, getattr(body, "pane_id", "") or "")
+    # `_plan_context`, so the section is priced by the budget planner. Kept
+    # by name (v1.330.0) so a TEXT-ONLY turn can swap exactly these bytes for
+    # the tool-free form below. MIRROR NOTE (lock-step): chat_turn.
+    _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
+    system += _browser_block
     pid = (body.project_id or "").strip() or None
     resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
 
@@ -2554,6 +2551,14 @@ async def chat_stream(
     model_choice = (body.model or "").strip() or (
         (resolved_proj.default_model or "").strip() if resolved_proj else ""
     )
+    # TEXT-ONLY PICK (v1.125.0), decided HERE (v1.330.0) — the lock-step copy
+    # of chat_turn's: before the roster and the exit lines are final, so a
+    # turn that cannot use tools is never offered a hand-off it cannot make.
+    # A turn that can use tools keeps its prompt byte for byte.
+    text_only_pick = _chat_turn.is_text_only_pick(d, body, provider_choice, model_choice)
+    if text_only_pick:
+        system = _chat_turn.text_only_system(system, _browser_block)
+        _grounding.text_only = True
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -2750,29 +2755,11 @@ async def chat_stream(
                 m.images = images
                 break
 
-    # An EXPLICITLY picked text-only CLI (codex exec has no structured
-    # tool-calling) used to be capability-REROUTED here — the user asked
-    # for their Codex subscription and got a different provider every
-    # time. Honest fix (v1.125.0): honor the pick and serve the turn
-    # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
-    # were explicitly requested. Only for explicit picks; default/auto
-    # routes keep full capability routing.
-    text_only_pick = False
-    if (body.provider or "").strip() not in ("", "auto"):
-        try:
-            _picked = d.platform.providers.get(
-                provider_choice, model_choice or None
-            )
-            from ...providers.router import _capabilities
-
-            # The ROUTER's accessor (adapter.capabilities()) — the same
-            # truth the capability reroute reads, so the two can never
-            # disagree about what "text-only" means.
-            text_only_pick = not bool(
-                _capabilities(_picked).get("tool_use", True)
-            )
-        except Exception:  # noqa: BLE001 — resolution failures rout normally
-            text_only_pick = False
+    # An EXPLICITLY picked text-only model (`text_only_pick`, decided above by
+    # `_chat_turn.is_text_only_pick` before the roster joined the prompt) is
+    # served TEXT-ONLY — no armed tools, no exit tools — with a note when
+    # tools were explicitly requested (v1.125.0). Default/auto routes keep
+    # full capability routing.
     # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
     # capability envelope narrowed this turn's arming (the tool cap below)
     # — null on every trusted/unmeasured route, which is the common case.
@@ -4272,6 +4259,14 @@ async def chat_stream(
             # so missed a reply announcing a saved file after only a
             # scan had run. MIRROR NOTE (lock-step): both lanes.
             reply += _claimed_write_note(reply, tools_used)
+        # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
+        # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
+        # Only an AGENT-shaped receiver counts (the roster's names, read off
+        # the loop and only when a hand-off phrase is there at all).
+        if text_only_pick:
+            reply += await _chat_turn.handoff_note_for(
+                d.platform, reply, tool_note_follows=bool(body.tools or [])
+            )
         if text_only_pick and (body.tools or []):
             # v1.330.0: plain words, the endpoint's own name. MIRROR NOTE
             # (lock-step): chat_turn.run_chat_turn appends the same helper.
