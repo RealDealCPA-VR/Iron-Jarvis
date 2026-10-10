@@ -153,7 +153,7 @@ export function CardInner({
             (the card is a record of what ran). */}
         <span
           title={session.agent_type}
-          className="inline-flex items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] font-medium capitalize text-zinc-300"
+          className="inline-flex items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[11px] font-medium capitalize text-zinc-300"
         >
           {/* The agent's face replaces the generic Cpu glyph (v1.171.0):
               identity from the agent type, mood from the card's REAL status
@@ -241,7 +241,7 @@ export function CardInner({
               e.stopPropagation();
               onReject?.();
             }}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[12px] font-semibold text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-tone-danger/30 bg-tone-danger/10 px-2 py-1.5 text-[12px] font-semibold text-tone-danger transition-colors hover:bg-tone-danger/20 disabled:opacity-40"
           >
             <X size={13} />
             Reject
@@ -315,7 +315,7 @@ export function SessionCard({
           e.stopPropagation();
           team.toggle(session.id);
         }}
-        className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 text-[10.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.16]"
+        className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.16]"
       >
         <Users size={11} aria-hidden="true" />
         Team of {childCount}
@@ -384,7 +384,7 @@ function WaitingFooter({ session }: { session: SessionView }) {
         href={`/sessions/${session.id}`}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/[0.08] px-2 py-1 text-[11px] font-medium text-amber-200 transition-colors hover:bg-amber-400/[0.16]"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-tone-warn/30 bg-tone-warn/[0.08] px-2 py-1 text-[11px] font-medium text-tone-warn transition-colors hover:bg-tone-warn/[0.16]"
       >
         Answer on the session page →
       </Link>
@@ -411,7 +411,7 @@ function FailedActions({ session }: { session: SessionView }) {
     setRetrying(true);
     try {
       await post<SessionView>(`/sessions/${session.id}/rerun?wait=false`);
-      notify("ok", "Retry started — a fresh run is underway.");
+      notify("ok", "Retry started. A fresh run is underway.");
       reload();
     } catch (err) {
       notify("err", `Could not retry: ${err instanceof ApiError ? err.message : String(err)}`);
@@ -505,7 +505,7 @@ function AddContext({ session }: { session: SessionView }) {
       await post<SessionView>(`/sessions/${session.id}/continue`, { message, wait: false });
       notify(
         "ok",
-        "Context sent — the agent is revising; a new review will appear (the original stays until it lands).",
+        "Context sent. The agent is revising, and a new review will appear (the original stays until it lands).",
       );
       setOpen(false);
       setNote("");
@@ -559,7 +559,7 @@ function AddContext({ session }: { session: SessionView }) {
               )}
             </button>
             {attached && (
-              <span className="min-w-0 truncate text-[11px] text-emerald-300">
+              <span className="min-w-0 truncate text-[11px] text-tone-success">
                 Attached {attached.name}
               </span>
             )}
