@@ -1717,8 +1717,8 @@ class Orchestrator:
                     ).first()
                 if busy is not None:
                     raise ValueError(
-                        "a continuation is already running or queued in this "
-                        "workspace — wait for it to finish before continuing again"
+                        "A follow-up is already running or queued in this folder. "
+                        "Wait for it to finish before continuing again."
                     )
             else:
                 ws = str(self.p.config.workspaces_dir / session.id)

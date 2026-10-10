@@ -80,7 +80,7 @@ export function TriggerInspector({
           <div>
             <div className="text-[12.5px] font-medium text-zinc-200">On a schedule</div>
             <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
-              Every morning, weekdays at 4pm… — results go to your destinations.
+              Every morning, weekdays at 4pm, and more. Results go to your destinations.
             </p>
           </div>
         </MaybeLink>
@@ -100,7 +100,7 @@ export function TriggerInspector({
 
         {!saved && (
           <p className="pt-1 text-[11px] leading-snug text-amber-300/80">
-            Save the workflow first — schedules and signals fire the SAVED
+            Save the workflow first. Schedules and signals fire the SAVED
             “{name || "workflow"}” by name.
           </p>
         )}

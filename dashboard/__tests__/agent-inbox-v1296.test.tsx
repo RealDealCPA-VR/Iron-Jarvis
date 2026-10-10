@@ -522,7 +522,7 @@ describe("toActivity maps the assignment events", () => {
       href: "/agents?view=team&agent=builder",
       icon: OctagonAlert,
       title: "Blocked: Rename files",
-      body: "builder — needs a key",
+      body: "builder: needs a key", // v1.329.0: no dash aside
     });
   });
 

@@ -175,7 +175,7 @@ describe("bell badge with waiting runs", () => {
     render(<NotificationBell />);
     await waitFor(() => expect(notifyMock).toHaveBeenCalled());
     const [title, body] = notifyMock.mock.calls[0] as [string, string];
-    expect(title).toBe("Iron Jarvis — 1 pending");
+    expect(title).toBe("Iron Jarvis: 1 pending"); // v1.329.0: no dash aside
     expect(body).toContain("1 workflow question waiting");
   });
 });

@@ -83,8 +83,8 @@ export function referencesSentence(refs: WorkflowReference[]): string {
         ? `reflex rule “${r.name || r.id || "unnamed"}”`
         : `${r.kind} “${r.name}”`,
   );
-  return `Still used by ${parts.join(", ")} — ${
-    refs.length === 1 ? "it" : "they"
+  return `Still used by ${parts.join(", ")}. ${
+    refs.length === 1 ? "It" : "They"
   } will fail with “no saved workflow” until re-pointed.`;
 }
 
@@ -193,15 +193,15 @@ export function SavedWorkflows() {
         // No response in hand means UNKNOWN — never "you have none".
         <p className="py-2 text-sm text-zinc-500">
           {offline
-            ? "Saved workflows unavailable — the daemon looks offline."
-            : `Saved workflows unavailable — the daemon returned an error (HTTP ${error?.status ?? "?"}).`}
+            ? "Saved workflows unavailable. The daemon looks offline."
+            : `Saved workflows unavailable. The daemon returned an error (HTTP ${error?.status ?? "?"}).`}
         </p>
       ) : rows.length === 0 ? (
         <Empty icon={<Workflow size={22} />}>
           {/* Worded apart from the Templates card's "No saved workflows yet"
               line, which shows at the same moment — two identical sentences
               on one page read as a glitch. */}
-          Nothing saved yet — build one in the editor above and press Save, or
+          Nothing saved yet. Build one in the editor above and press Save, or
           start from a template below.
         </Empty>
       ) : (
@@ -263,7 +263,7 @@ export function SavedWorkflows() {
                     ) : refsFailed ? (
                       <p className="text-[11px] text-amber-200">
                         Couldn’t check whether a schedule or reflex rule still uses
-                        it — if one does, it will fail until re-pointed.
+                        it. If one does, it will fail until re-pointed.
                       </p>
                     ) : refs && refs.length > 0 ? (
                       <p className="text-[11px] text-amber-200">{referencesSentence(refs)}</p>

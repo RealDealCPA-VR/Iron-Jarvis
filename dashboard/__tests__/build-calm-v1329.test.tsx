@@ -300,7 +300,9 @@ describe("New terminal is a quiet button", () => {
     render(<TerminalsPage />);
     await screen.findByTestId("terminal-pane-t1");
     const b = screen.getByTestId("header-new-terminal");
-    expect(tokens(b.className)).toContain("btn-ghost");
+    // Wave 8 (J5) dropped the btn-ghost hairline box too: a borderless ghost
+    // that fills on hover (pinned in build-header-quiet-v1329).
+    expect(tokens(b.className)).toContain("hover:bg-white/[0.06]");
     expect(tokens(b.className)).not.toContain("btn-accent");
     fireEvent.click(b);
     await waitFor(() => expect(api.posts.map(([p]) => p)).toContain("/terminals"));

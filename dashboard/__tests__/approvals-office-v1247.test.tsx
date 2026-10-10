@@ -143,6 +143,7 @@ describe("the fields ride every hop", () => {
     );
     const bell = readSrc("components/NotificationBell.tsx");
     expect(bell).toContain('data-testid="bell-approval-count"');
-    expect(bell).toContain('"the run is waiting for you."');
+    // v1.329.0 (J5): the bell's line is two sentences now, with no dash aside.
+    expect(bell).toContain('"The run is waiting for you."');
   });
 });

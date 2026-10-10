@@ -221,7 +221,7 @@ export function NodeInspector({
             />
             <p className="mt-1.5 text-[11px] text-zinc-500">
               {(data.kind ?? "agent") === "ask"
-                ? "Delivered to your destinations; the run parks until you answer — in chat or on this page."
+                ? "Delivered to your destinations. The run waits until you answer, in chat or on this page."
                 : "Sent to every notification destination."}
             </p>
           </div>
@@ -320,7 +320,7 @@ function ExpectSection({
       </summary>
       <div className="mt-2 space-y-3">
         <p className="text-[11px] leading-snug text-zinc-500">
-          Checked after the step runs — any miss fails the step, honestly named.
+          Checked after the step runs. Any miss fails the step and says which check missed.
         </p>
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">

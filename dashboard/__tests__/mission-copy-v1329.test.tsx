@@ -14,7 +14,8 @@
  *
  * The guard at the bottom reads every STRING LITERAL and JSX TEXT node in
  * these files through the TypeScript parser (so comments never count) and
- * fails if a spaced em or en dash comes back.
+ * fails if a spaced em or en dash comes back. Wave 8 (J5) widened it to the
+ * whole workflow editor (components/workflow) and the notification bell.
  */
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -200,9 +201,9 @@ describe("the workflow starter cards read as sentences", () => {
 
 /** Every string literal, template piece and JSX text node in a source file,
  *  with its line. Comments are not nodes, so they never count. */
-function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string }> {
+function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string; jsx: boolean }> {
   const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: Array<{ line: number; text: string }> = [];
+  const out: Array<{ line: number; text: string; jsx: boolean }> = [];
   const visit = (node: ts.Node) => {
     if (
       ts.isStringLiteral(node) ||
@@ -213,7 +214,7 @@ function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text
       ts.isJsxText(node)
     ) {
       const text = ts.isJsxText(node) ? node.getText(file) : (node as ts.LiteralLikeNode).text;
-      out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text });
+      out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text, jsx: ts.isJsxText(node) });
     }
     ts.forEachChild(node, visit);
   };
@@ -224,10 +225,82 @@ function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text
 /** A dash used as an aside: an em or en dash with a space (or the edge of
  *  the text) on both sides. A lone dash placeholder ("—") is not an aside. */
 const ASIDE = /(^|\s)[—–](\s|$)/;
+const DASH_ONLY = /^[—–]$/;
+
+/** What a JSX text node renders, by React's whitespace rule: a run of
+ *  whitespace that holds a line break is dropped at the start and end of a
+ *  line; whitespace on one line is kept. */
+function jsxRendered(raw: string): string {
+  const lines = raw.split(/\r\n|\n|\r/);
+  if (lines.length === 1) return raw;
+  return lines
+    .map((l, i) => {
+      let s = l;
+      if (i !== 0) s = s.replace(/^[ \t]+/, "");
+      if (i !== lines.length - 1) s = s.replace(/[ \t]+$/, "");
+      return s;
+    })
+    .filter((s) => s.length > 0)
+    .join(" ");
+}
+
+/** A JSX child that is only a dash, read together with its siblings. On its
+ *  own it looks like a placeholder, but `{" "}\n—{" "}` renders "x — y": a
+ *  space next to it (from a `{" "}` sibling, or whitespace the node keeps) makes
+ *  it an aside. A dash that is the element's whole text stays a placeholder. */
+function jsxDashAsides(rel: string, src = readSrc(rel)): string[] {
+  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
+      let joined = "";
+      const parts: Array<{ start: number; text: string; node: ts.Node }> = [];
+      for (const child of node.children) {
+        let text: string;
+        if (ts.isJsxText(child)) text = jsxRendered(child.getText(file));
+        else if (ts.isJsxExpression(child) && !child.expression) text = ""; // {/* a comment */}
+        else if (
+          ts.isJsxExpression(child) &&
+          child.expression &&
+          (ts.isStringLiteral(child.expression) || ts.isNoSubstitutionTemplateLiteral(child.expression))
+        )
+          text = child.expression.text;
+        else text = "\u0001"; // an element or a computed value: never a space
+        parts.push({ start: joined.length, text, node: child });
+        joined += text;
+      }
+      if (!DASH_ONLY.test(joined.trim())) {
+        for (const p of parts) {
+          const dash = p.text.trim();
+          if (!DASH_ONLY.test(dash)) continue; // longer copy is the per-piece check's job
+          const at = p.start + p.text.indexOf(dash);
+          const spaced = (c: string | undefined) => c !== undefined && /\s/.test(c);
+          if (spaced(joined[at - 1]) || spaced(joined[at + 1])) {
+            const line = file.getLineAndCharacterOfPosition(p.node.getStart(file)).line + 1;
+            out.push(`${rel}:${line}: ${joined.replace(/\u0001/g, "{…}").trim().slice(0, 80)}`);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return out;
+}
+
 function asides(rel: string, src?: string): string[] {
-  return copyPieces(rel, src)
-    .filter((p) => p.text.trim() !== "—" && ASIDE.test(p.text))
-    .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`);
+  const text = src ?? readSrc(rel);
+  // A string that is exactly a dash ("—") is a placeholder; " — " is not. A
+  // JSX text node that trims to a dash is judged with its siblings by
+  // jsxDashAsides (its raw text carries the source's indentation).
+  const placeholder = (p: { text: string; jsx: boolean }) =>
+    p.jsx ? DASH_ONLY.test(p.text.trim()) : DASH_ONLY.test(p.text);
+  return [
+    ...copyPieces(rel, text)
+      .filter((p) => !placeholder(p) && ASIDE.test(p.text))
+      .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`),
+    ...jsxDashAsides(rel, text),
+  ];
 }
 
 const MISSION_DIR = "components/agents/mission";
@@ -237,6 +310,19 @@ const FILES = [
     .map((f) => `${MISSION_DIR}/${f}`),
   "lib/mission.ts",
   "components/workflow/starters.ts",
+];
+
+/* Wave 8 (J5): the dash guard reaches the whole workflow editor and the
+   notification bell too. The hue / half-pixel rule below stays on FILES only:
+   the workflow editor and the bell were not part of that clean-up. */
+const WORKFLOW_DIR = "components/workflow";
+const COPY_FILES = [
+  ...FILES,
+  ...readdirSync(path.join(ROOT, WORKFLOW_DIR))
+    .filter((f) => /\.tsx?$/.test(f))
+    .map((f) => `${WORKFLOW_DIR}/${f}`)
+    .filter((f) => !FILES.includes(f)),
+  "components/NotificationBell.tsx",
 ];
 
 const HUES =
@@ -266,7 +352,29 @@ describe("the mission files, lib/mission and the workflow starters keep to the c
   });
 
   it("no spaced em or en dash in any user-visible string or JSX text", () => {
-    expect(FILES.flatMap((rel) => asides(rel))).toEqual([]);
+    expect(COPY_FILES.flatMap((rel) => asides(rel))).toEqual([]);
+  });
+
+  it("the dash guard covers the workflow editor and the bell (wave 8)", () => {
+    for (const f of [
+      "NodeInspector.tsx",
+      "SavedWorkflows.tsx",
+      "StepNode.tsx",
+      "TriggerInspector.tsx",
+      "WorkflowCanvas.tsx",
+      "agents.ts",
+      "starters.ts",
+    ]) {
+      expect(COPY_FILES).toContain(`${WORKFLOW_DIR}/${f}`);
+    }
+    expect(COPY_FILES).toContain("components/NotificationBell.tsx");
+    // Anti-vacuity: the plain sentences this wave wrote are read as copy.
+    const canvas = copyPieces(`${WORKFLOW_DIR}/WorkflowCanvas.tsx`).map((p) => p.text).join("\n");
+    expect(canvas).toContain("An example to start from. Change the steps, or Load a saved one.");
+    const bell = copyPieces("components/NotificationBell.tsx").map((p) => p.text).join("\n");
+    expect(bell).toContain("Your objective finished, but something needs you");
+    expect(bell).toContain("Your objective finished. Check what it did");
+    expect(bell).toContain("The run is waiting for you.");
   });
 
   it("the guard reads copy and skips comments (anti-vacuity)", () => {
@@ -285,8 +393,26 @@ describe("the mission files, lib/mission and the workflow starters keep to the c
       "const c = <p>{/* jsx comment — fine */}left — right</p>;",
       'const d = <span>— a caption</span>;',
       'const e = "—";',
+      // Wave 8 (J5): a dash on its own between {" "} pieces renders as an
+      // aside ("It wants to run x — the run is waiting"), even across lines.
+      'const f = <p>run <b>x</b>{" "}',
+      "  —{\" \"}",
+      '  {"the run is waiting."}</p>;',
+      'const g = <p>left {"—"} right</p>;',
+      "const h = <p>{a} — </p>;",
+      'const i = <span>{a ?? "—"}</span>;',
+      "const j = <td>—</td>;",
+      "const k = <td>\n  —\n</td>;",
+      "const l = <p>{a}—{b}</p>;",
+      'const m = " — ";',
+      "const n = <td> — </td>;",
     ].join("\n");
-    expect(asides("probe.tsx", probe).map((s) => s.split(":")[1])).toEqual(["3", "4", "5", "6"]);
+    expect(asides("probe.tsx", probe).map((s) => s.split(":")[1]).sort((x, y) => Number(x) - Number(y))).toEqual([
+      // f's lone dash (line 9), g's {"—"} (11), h's trailing " — " (12) and
+      // m's " — " string (19). i, j, k and n are placeholders (a dash that is
+      // the cell's whole text), l is glued to its neighbours.
+      "3", "4", "5", "6", "9", "11", "12", "19",
+    ]);
   });
 
   it("no literal hue and no half-pixel size", () => {

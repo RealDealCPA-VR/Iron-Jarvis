@@ -309,7 +309,7 @@ export function connectionRefusal(edges: Edge[], c: Connection): string | null {
   );
   if (other) {
     return (
-      "One outgoing link per step — the engine runs a single chain. " +
+      "One outgoing link per step. The engine runs a single chain. " +
       "Branches run via Parallel group instead: set the same group on adjacent steps."
     );
   }
@@ -658,7 +658,7 @@ export function RunProgress({
         {steps.map((s) => (
           <span
             key={s.name}
-            title={`${s.name} — ${s.status === "waiting" ? "waiting on you" : s.status}`}
+            title={`${s.name}: ${s.status === "waiting" ? "waiting on you" : s.status}`}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
               CHIP_TONE[s.status] ?? CHIP_TONE.pending
             }`}
@@ -707,7 +707,7 @@ export function RunProgress({
               onKeyDown={(e) => {
                 if (e.key === "Enter") submitAnswer(answerText);
               }}
-              placeholder="Type your answer — the run continues from here"
+              placeholder="Type your answer. The run continues from here."
               aria-label={`Answer workflow ${String(run.workflow_name ?? "")}`}
               className="field min-w-0 flex-1 text-[12px]"
             />
@@ -727,7 +727,7 @@ export function RunProgress({
       )}
       {conflicted && answerError && (
         <p data-testid="run-ask-conflict" className="text-[11.5px] text-amber-200/90">
-          Already answered elsewhere — {answerError}
+          Already answered elsewhere. {answerError}
         </p>
       )}
 
@@ -1102,7 +1102,7 @@ function Canvas() {
       setActiveRun(null);
       setError(null);
       setSuccess(
-        `Loaded “${def.name}” — ${steps.length} step${steps.length === 1 ? "" : "s"}.`,
+        `Loaded “${def.name}”: ${steps.length} step${steps.length === 1 ? "" : "s"}.`,
       );
       // Tell the "Build with chat" panel what's loaded so a follow-up refines
       // THIS workflow instead of minting a context-free new one.
@@ -1177,7 +1177,7 @@ function Canvas() {
         setSuccess(
           renamed
             ? `Renamed “${loadedName}” to “${wfName}” and saved ${steps.length} step${steps.length === 1 ? "" : "s"}.`
-            : `Saved “${wfName}” — ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
+            : `Saved “${wfName}”: ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
         );
         // Saved = it is the user's workflow now, not the example.
         setIsExample(false);
@@ -1419,8 +1419,8 @@ function Canvas() {
                 <div className="max-h-72 overflow-y-auto p-1.5">
                   {defs.length === 0 && !defsLoading && (
                     <div className="px-2.5 py-6 text-center text-xs text-zinc-500">
-                      No saved workflows yet. Workflows you save — or that agents
-                      author — show up here.
+                      No saved workflows yet. Workflows you save, or that agents
+                      author, show up here.
                     </div>
                   )}
                   {defs.map((d) => {
@@ -1474,7 +1474,7 @@ function Canvas() {
             disabled={saving}
             title={
               renamePending
-                ? `Rename “${loadedName}” to “${name.trim()}” and save — its pin and schedule follow the new name`
+                ? `Rename “${loadedName}” to “${name.trim()}” and save. Its pin and schedule follow the new name.`
                 : undefined
             }
             className="btn-ghost"
@@ -1528,7 +1528,7 @@ function Canvas() {
           className="flex items-center gap-2 border-b hairline px-4 py-2 text-xs text-zinc-400"
         >
           <Info size={13} className="shrink-0 text-accent-soft/70" aria-hidden />
-          An example to start from — change the steps, or Load a saved one.
+          An example to start from. Change the steps, or Load a saved one.
         </div>
       )}
 

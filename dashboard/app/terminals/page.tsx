@@ -882,16 +882,20 @@ export default function TerminalsPage() {
               </button>
               )}
               <span className="mx-1 h-5 w-px bg-white/10" />
-              <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                <SquareTerminal size={13} className="text-accent-soft/70" />
+              {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
+                  borderless select that fills on hover, like the rail's own
+                  footer, not a boxed field under an uppercase caption. */}
+              <label className="flex items-center gap-1.5 text-[13px] text-zinc-500">
+                <SquareTerminal size={14} className="text-zinc-500" />
                 Shell
               </label>
               <select
                 aria-label="Shell"
+                data-testid="header-shell"
                 value={shell}
                 onChange={(e) => setShell(e.target.value)}
                 disabled={shells.length === 0}
-                className="field w-auto py-1.5 text-[13px]"
+                className="h-8 w-auto cursor-pointer rounded-lg border-0 bg-transparent pl-2 pr-1 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {shells.length === 0 && <option value="">default</option>}
                 {shells.map((s) => (
@@ -900,14 +904,15 @@ export default function TerminalsPage() {
                   </option>
                 ))}
               </select>
-              {/* v1.329.0 (calm chat): a quiet ghost like Rail and Tidy beside
-                  it, not a glowing accent slab. */}
+              {/* v1.329.0 (calm chat): a quiet ghost, not a glowing accent
+                  slab; wave 8 dropped its hairline box too, so it reads like
+                  the rail's own "New terminal" and fills only on hover. */}
               <button
                 type="button"
                 data-testid="header-new-terminal"
                 onClick={() => addTerminal(selectedPath)}
                 disabled={busy}
-                className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px]"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy ? (
                   <Loader2 size={14} className="animate-spin" />

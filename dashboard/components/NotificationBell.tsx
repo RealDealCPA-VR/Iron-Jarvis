@@ -172,12 +172,12 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       : done
         ? "Your objective is done"
         : outcome === "needs_you"
-          ? "Your objective finished — something needs you"
+          ? "Your objective finished, but something needs you"
           : outcome === "completed_with_failures"
             ? "Your objective finished, but part of it failed"
             : outcome === ""
               ? "Your objective finished"
-              : "Your objective finished — check what it did";
+              : "Your objective finished. Check what it did";
     const project = typeof p.project_id === "string" ? p.project_id : "";
     const summary = typeof p.summary === "string" ? p.summary.trim() : "";
     return {
@@ -349,7 +349,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       href: agentHref(p.assignee),
       icon: OctagonAlert,
       title: `Blocked: ${title}`,
-      body: `${assignee} — ${why}`,
+      body: why ? `${assignee}: ${why}` : assignee,
     };
   }
   if (e.type === "assignment.finished") {
@@ -439,7 +439,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       ts: e.ts,
       href: "/computeruse",
       icon: MonitorCog,
-      title: `Computer-use run finished — ${ok ? "ok" : "failed"}`,
+      title: ok ? "Computer-use run finished" : "Computer-use run failed",
       body: [status, steps, runId].filter(Boolean).join(" · "),
     };
   }
@@ -563,7 +563,7 @@ function WaitingRunRow({
               onKeyDown={(e) => {
                 if (e.key === "Enter") void submit(text);
               }}
-              placeholder="Type your answer — the run continues"
+              placeholder="Type your answer. The run continues."
               aria-label={`Answer workflow ${ask.workflow}`}
               className="field flex-1 py-1.5 text-[12px]"
             />
@@ -686,11 +686,11 @@ function AgentApprovalRow({
             It wants to run <span className="font-mono">{ask.tool}</span>
             {ask.count > 1 ? (
               <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
-            ) : null}{" "}
-            —{" "}
+            ) : null}
+            .{" "}
             {ask.timeoutS && ask.timeoutS > 0
-              ? `the run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
-              : "the run is waiting for you."}
+              ? `The run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
+              : "The run is waiting for you."}
           </p>
           <div className="mt-1.5 flex items-center gap-1.5">
             <button
@@ -705,7 +705,7 @@ function AgentApprovalRow({
               type="button"
               onClick={() => void answer("conversation")}
               disabled={busy !== null}
-              title={`Approve ${ask.tool} for the rest of this run — every pending ask for it clears at once`}
+              title={`Approve ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
               className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
             >
               {busy === "conversation" ? "Allowing…" : "Allow for this run"}
@@ -718,7 +718,7 @@ function AgentApprovalRow({
                 data-testid="bell-approval-always"
                 onClick={() => void answer("always")}
                 disabled={busy !== null}
-                title={`Allow ${ask.tool} with exactly these arguments in this run's scope for 30 days — revocable on the Autonomy page`}
+                title={`Allow ${ask.tool} with exactly these arguments in this run's scope for 30 days. You can take it back on the Autonomy page.`}
                 className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200 disabled:opacity-50"
               >
                 {busy === "always" ? "Allowing…" : "Always allow exactly this"}
@@ -996,7 +996,7 @@ export function NotificationBell() {
           `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped by a restart`,
         );
       const body = parts.join(" · ") || "Something needs your attention.";
-      notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
+      notify(`Iron Jarvis: ${count} pending`, body, () => setOpen(true));
     }
   }, [
     count,

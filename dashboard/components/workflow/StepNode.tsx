@@ -58,7 +58,7 @@ function StepNodeImpl({ data, selected }: NodeProps) {
             // as separate batches, so say so on the card, not after the run.
             <span
               data-testid="group-split-warning"
-              title={`Group “${d.group}” is split by other steps — the split parts run separately, not together. Make the group's steps adjacent to run them in parallel.`}
+              title={`Group “${d.group}” is split by other steps. The split parts run separately, not together. Make the group's steps adjacent to run them in parallel.`}
               className="ml-1 mt-1 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-300"
             >
               <TriangleAlert size={10} /> group split
@@ -86,7 +86,7 @@ function StepNodeImpl({ data, selected }: NodeProps) {
           ) : d.task?.trim() ? (
             d.task
           ) : (
-            <span className="italic text-zinc-600">No task yet — click to edit…</span>
+            <span className="italic text-zinc-600">No task yet. Click to edit…</span>
           )}
         </p>
       </div>
