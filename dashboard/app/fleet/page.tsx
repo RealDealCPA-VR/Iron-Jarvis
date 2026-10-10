@@ -39,6 +39,9 @@ import {
   DASH,
   SPARK_POINTS,
   buildFleetTree,
+  chatHint,
+  chatLabel,
+  chatTone,
   codeRouteText,
   flattenTree,
   fleetTone,
@@ -53,6 +56,7 @@ import {
   genTps,
   hasSignal,
   hostOf,
+  isUnchecked,
   kindLabel,
   kindTone,
   kvCache,
@@ -61,7 +65,7 @@ import {
   num,
   pushRates,
   running,
-  statusLabel,
+  snapStatusLabel,
   unloadIn,
   waiting,
   type FleetModel,
@@ -80,7 +84,10 @@ const POLL_MS = 2000;
 /* -------------------------------------------------------------------------- */
 
 function StatusPill({ snap }: { snap: NodeSnapshot }) {
-  return <Badge value={statusLabel(snap.status)} tone={fleetTone(snap.status)} />;
+  // v1.329.0: a node no probe has looked at yet says so, in a neutral tone
+  // and in sentence case (the badge's capitalize would read "Not Checked Yet").
+  if (isUnchecked(snap)) return <Badge value="Not checked yet" tone="slate" keepCase />;
+  return <Badge value={snapStatusLabel(snap)} tone={fleetTone(snap.status)} />;
 }
 
 /**
@@ -133,7 +140,7 @@ function MetricStat({
 function Commands({ commands }: { commands: string[] }) {
   if (commands.length === 0) return null;
   return (
-    <pre className="mt-2 overflow-x-auto rounded-lg border border-white/[0.06] bg-black/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-300">
+    <pre className="mt-2 overflow-x-auto rounded-lg border border-white/[0.06] bg-ink-950/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-300">
       {commands.join("\n")}
     </pre>
   );
@@ -166,15 +173,15 @@ function ModelRow({ model }: { model: FleetModel }) {
         )}
         {unload?.kind === "pinned" && (
           <span
-            className="inline-flex items-center gap-1 text-emerald-300/80"
-            title="Keep-alive forever — Ollama writes a year-2318 expiry for this"
+            className="inline-flex items-center gap-1 text-tone-success/80"
+            title="Kept loaded for good. Ollama writes a year-2318 expiry for this."
           >
             <Pin size={11} /> pinned
           </span>
         )}
         {unload?.kind === "in" && (
           <span
-            className="inline-flex items-center gap-1 text-amber-300/80"
+            className="inline-flex items-center gap-1 text-tone-warn/80"
             title="Time until Ollama unloads this model from VRAM"
           >
             <Timer size={11} /> unloads in {unload.text}
@@ -207,10 +214,10 @@ function ChildRow({ snap }: { snap: NodeSnapshot }) {
           </span>
           {snap.node.tool_use && (
             <span
-              className="rounded border border-violet-500/25 bg-violet-500/10 px-1.5 py-px text-[10px] text-violet-300"
-              title="Verified: this endpoint calls tools"
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400"
+              title="Checked: this endpoint calls tools."
             >
-              tools
+              tools <span className="text-tone-success">✓</span>
             </span>
           )}
           {snap.proxy_verdict && snap.proxy_verdict !== "unknown" && (
@@ -241,8 +248,8 @@ function ChildRow({ snap }: { snap: NodeSnapshot }) {
           <span className="text-zinc-600">no backing endpoint reported</span>
         )}
       </div>
-      {snap.error && <div className="mt-1.5 text-[11px] text-rose-300/80">{snap.error}</div>}
-      {text && <div className="mt-1.5 text-[11px] text-amber-200/80">{text}</div>}
+      {snap.error && <div className="mt-1.5 text-[11px] text-tone-danger/80">{snap.error}</div>}
+      {text && <div className="mt-1.5 text-[11px] text-tone-warn/80">{text}</div>}
       <Commands commands={commands} />
     </div>
   );
@@ -340,9 +347,9 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
 
   return (
     <span className="flex items-center gap-1.5">
-      {err && <span className="text-[11px] text-rose-300">{err}</span>}
+      {err && <span className="text-[11px] text-tone-danger">{err}</span>}
       {cleared && (
-        <span className="text-[11px] text-amber-300" title={cleared.join(", ")}>
+        <span className="text-[11px] text-tone-warn" title={cleared.join(", ")}>
           cleared {cleared.length} setting{cleared.length === 1 ? "" : "s"}
         </span>
       )}
@@ -389,13 +396,25 @@ function NodeCard({
   const models = snap.models ?? [];
   const children = snap.children ?? [];
   const secondhand = snap.evidence === "proxy";
+  const unchecked = isUnchecked(snap);
 
   return (
     <Card
       title={
         <span className="flex flex-wrap items-center gap-2">
           <span className="text-zinc-100">{nodeName(snap.node)}</span>
-          <Badge value={kindLabel(snap.node.kind)} tone={kindTone(snap.node.kind)} />
+          {/* v1.329.0: the way this node CHATS (the saved protocol wins over
+              the detected kind, so an Anthropic endpoint whose server also
+              answers /v1/models is not called "OpenAI-compatible"); what
+              detection saw stays in the title. keepCase so "vLLM" is not
+              shown as "VLLM". */}
+          <span
+            data-testid="fleet-node-chat"
+            title={chatHint(snap.node)}
+            className="inline-flex whitespace-nowrap"
+          >
+            <Badge value={chatLabel(snap.node)} tone={chatTone(snap.node)} keepCase />
+          </span>
           <span className="font-mono text-[11px] font-normal text-zinc-600">
             {hostOf(snap.node.base_url)}
           </span>
@@ -419,15 +438,24 @@ function NodeCard({
     >
       {/* Why we can't reach it — the actionable part, above everything else. */}
       {(snap.error || hintText) && (
-        <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2.5">
-          {snap.error && <div className="text-xs text-rose-200/90">{snap.error}</div>}
-          {hintText && <div className="mt-1 text-xs text-amber-100/80">{hintText}</div>}
+        <div className="mb-4 rounded-xl border border-tone-warn/20 bg-tone-warn/[0.05] px-3 py-2.5">
+          {snap.error && <div className="text-xs text-tone-danger">{snap.error}</div>}
+          {hintText && <div className="mt-1 text-xs text-tone-warn">{hintText}</div>}
           <Commands commands={commands} />
         </div>
       )}
 
-      {/* Serving metrics. A null NEVER becomes a zero. */}
-      {supported ? (
+      {/* Serving metrics. A null NEVER becomes a zero. v1.329.0: a node no
+          probe has looked at yet has nothing to show, and says so plainly
+          rather than "exposes no serving metrics" (which would be a claim). */}
+      {unchecked ? (
+        <div
+          data-testid="fleet-node-unchecked"
+          className="rounded-xl border border-white/[0.05] bg-white/[0.015] px-3 py-2.5 text-xs text-zinc-500"
+        >
+          Not checked yet. Refresh checks it now.
+        </div>
+      ) : supported ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricStat
             label="Running"
@@ -445,7 +473,7 @@ function NodeCard({
             label="tok/s"
             value={fmtTps(tps)}
             reason={
-              reason ?? "needs two consecutive samples — keep this page open a moment"
+              reason ?? "Needs two readings in a row. Keep this page open a moment."
             }
             icon={<Zap size={15} />}
             accent
@@ -509,7 +537,7 @@ function NodeCard({
               <Network size={12} /> Behind this proxy
             </span>
             <span className="text-[11px] text-zinc-600">
-              reported by the proxy — secondhand, not probed directly
+              reported by the proxy, not probed directly
             </span>
           </div>
           <div className="space-y-2">
@@ -598,8 +626,8 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
     >
       {local === null && cloud === null ? (
         <div className="text-xs text-zinc-500">
-          No local/cloud split recorded yet — run something through the fleet and
-          it will show up here.
+          No local and cloud split recorded yet. Run something on a local model and
+          it shows up here.
         </div>
       ) : (
         <div className="space-y-3">
@@ -627,9 +655,9 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
           )}
           {avoided !== null && baseline ? (
             <div>
-              <div className="text-xs text-emerald-300/90">
+              <div className="text-xs text-tone-success">
                 est. {fmtUsd(avoided)} avoided vs{" "}
-                <span className="text-emerald-200/90" title={`Priced as ${baseline}`}>
+                <span className="text-tone-success" title={`Priced as ${baseline}`}>
                   {baselineWords}
                 </span>
               </div>
@@ -669,7 +697,7 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
                     className={`truncate ${n.retired ? "text-zinc-600" : "text-zinc-400"}`}
                     title={
                       n.retired
-                        ? "This endpoint was removed — its past usage is kept here"
+                        ? "This endpoint was removed. Its past usage is kept here."
                         : undefined
                     }
                   >
@@ -803,23 +831,23 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
         {/* What we found, before saving anything. */}
         {probing && <div className="text-xs text-zinc-500">probing {url.trim()}…</div>}
         {!probing && probeError && (
-          <div className="text-xs text-amber-200/80">
-            Could not read that endpoint: {probeError}. You can still add it — it
-            will show as offline until it answers.
+          <div className="text-xs text-tone-warn">
+            Could not read that endpoint: {probeError}. You can still add it. It
+            shows as offline until it answers.
           </div>
         )}
         {!probing && !probeError && probe && (
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3 py-2.5 text-xs text-zinc-400">
             <span className="flex flex-wrap items-center gap-2">
               <span className="text-zinc-300">Detected</span>
-              <Badge value={kindLabel(kind)} tone={kindTone(kind)} />
+              <Badge value={kindLabel(kind)} tone={kindTone(kind)} keepCase />
               {snap && <StatusPill snap={snap} />}
               {fmtLatency(snap?.latency_ms) && (
                 <span className="text-zinc-600">{fmtLatency(snap?.latency_ms)}</span>
               )}
             </span>
             {kind === "unknown" && probe.reason && (
-              <div className="mt-1.5 text-amber-200/80">{probe.reason}</div>
+              <div className="mt-1.5 text-tone-warn">{probe.reason}</div>
             )}
             {found.length > 0 ? (
               <div className="mt-1.5 space-y-0.5 font-mono text-[11px] text-zinc-500">
@@ -928,7 +956,7 @@ export default function FleetPage() {
       <Reveal>
         <PageHeader
           title="Fleet"
-          subtitle="Every inference endpoint you can reach — what's loaded, what's serving, and what we honestly can't see."
+          subtitle="Every model server you can reach: what is loaded, what is serving, and what we cannot see."
           actions={
             <div className="flex items-center gap-2">
               <span
@@ -939,7 +967,7 @@ export default function FleetPage() {
                         lease !== null ? ` · lease ${Math.round(lease)}s left` : ""
                       }`
                     : `Not sampling right now${
-                        interval !== null ? ` — idles at ${interval}s` : ""
+                        interval !== null ? `. Idles at ${interval}s` : ""
                       }`
                 }
               >

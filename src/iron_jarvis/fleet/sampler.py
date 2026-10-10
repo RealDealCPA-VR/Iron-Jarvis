@@ -92,6 +92,31 @@ _NODE_TIMEOUT = 10.0
 #: a 30s idle sleep switches to the 2s cadence promptly.
 _SLEEP_SLICE = 0.25
 
+#: v1.329.0: the reason a configured node that no probe has looked at yet
+#: carries in place of metrics. Plain words; the page shows it as written.
+NOT_CHECKED_REASON = "Not checked yet."
+
+
+def not_checked_snapshot(node: FleetNode) -> NodeSnapshot:
+    """What a configured but never-probed node honestly is (v1.329.0).
+
+    Status ``unknown``, evidence ``none``, no metrics, no rates, no models and
+    ``sampled_at`` 0: nothing here was observed, so nothing here claims to be.
+    It exists so a node the user just saved is LISTED at once (Settings showed
+    no saved endpoint until the sampler had sampled it) without inventing an
+    ``online`` or a zero. It never touches the registry's reachability cache,
+    so the router still reads such a node as unknown, never as healthy.
+    """
+    return NodeSnapshot(
+        node=node,
+        status="unknown",
+        evidence="none",
+        metrics=None,
+        rates=None,
+        metrics_supported=False,
+        metrics_reason=NOT_CHECKED_REASON,
+    )
+
 
 def derive(prev: MetricPoint | None, cur: MetricPoint | None) -> NodeRates:
     """Derive per-second rates from two metric samples.
@@ -257,9 +282,15 @@ class FleetSampler:
             st = self._state.get(node_id)
             return st.snapshot if st else None
 
-    def snapshots(self) -> list[NodeSnapshot]:
-        """Latest snapshot per node, in registry order. Unsampled nodes are
-        omitted rather than invented.
+    def listing(self) -> list[tuple[NodeSnapshot, bool]]:
+        """Every enabled node in registry order, with whether it was checked.
+
+        A node no probe has looked at yet is LISTED (v1.329.0) as
+        :func:`not_checked_snapshot` with ``False`` beside it: a node the user
+        just saved used to be absent from ``GET /fleet`` until the sampler's
+        next pass (and forever when the loop was not running), so Settings
+        listed no saved endpoint right after saving. Listed, never invented:
+        the stand-in has no metrics, no ``online`` and no reachability write.
 
         The node record is re-attached from the REGISTRY, not served from the
         snapshot (v1.102.1). A snapshot is *observation*; the node is *config*
@@ -270,18 +301,37 @@ class FleetSampler:
         Observation still comes from the snapshot; identity always comes from
         the registry.
         """
-        out: list[NodeSnapshot] = []
+        out: list[tuple[NodeSnapshot, bool]] = []
         for node in self._nodes():
             snap = self.latest(node.id)
             if snap is None:
+                out.append((not_checked_snapshot(node), False))
                 continue
             if getattr(snap, "node", None) is not node:
                 try:
                     snap = snap.model_copy(update={"node": node})
                 except Exception:  # noqa: BLE001 — stale label beats no snapshot
                     pass
-            out.append(snap)
+            out.append((snap, True))
         return out
+
+    def snapshots(self) -> list[NodeSnapshot]:
+        """Latest snapshot per node, in registry order; a node not checked yet
+        is its honest stand-in (see :meth:`listing`)."""
+        return [snap for snap, _checked in self.listing()]
+
+    def record(
+        self, node: FleetNode, snapshot: NodeSnapshot, children: list[FleetNode] | None = None
+    ) -> None:
+        """Keep a probe the CALLER already ran as this node's latest reading.
+
+        ``POST /fleet/nodes`` probes the node it saves once; handing that real
+        reading here means the new node fills in at once instead of reading
+        "not checked yet" until the loop's next pass. Same bookkeeping as a
+        cycle (rates, backoff, the reachability cache), so a probe that found
+        the node offline counts exactly as a cycle that found it offline.
+        """
+        self._record_result(node, snapshot, list(children or []))
 
     def series(self, node_id: str, limit: int | None = None) -> list[MetricPoint]:
         """Bounded metric history for a node, oldest → newest (a copy)."""

@@ -163,6 +163,31 @@ def _dump(obj: Any) -> Any:
     return obj
 
 
+def _node_rows(sampler: Any) -> list[Any]:
+    """The ``nodes`` list of ``GET /fleet``: every snapshot, each with
+    ``checked`` (v1.329.0).
+
+    ``checked: false`` marks a configured node no probe has looked at yet
+    (the sampler's honest stand-in: status ``unknown``, no metrics). The page
+    words it "not checked yet" and fills it in once a probe lands. Read in ONE
+    pass (``listing``) so a node sampled between two reads can never be
+    labelled with the other read's answer. A sampler without ``listing`` (an
+    older stand-in) reports what it holds, all of it checked.
+    """
+    listing = getattr(sampler, "listing", None)
+    if callable(listing):
+        pairs = list(listing())
+    else:
+        pairs = [(snap, True) for snap in sampler.snapshots()]
+    rows: list[Any] = []
+    for snap, checked in pairs:
+        row = _dump(snap)
+        if isinstance(row, dict):
+            row["checked"] = bool(checked)
+        rows.append(row)
+    return rows
+
+
 def _err(exc: BaseException) -> str:
     """Verbatim, bounded error text. Never a friendly lie."""
     return f"{type(exc).__name__}: {exc}"[:300]
@@ -350,7 +375,7 @@ def register(app: FastAPI, d) -> None:
             sampler = d.fleet_sampler
             sampler.touch()
             return {
-                "nodes": [_dump(s) for s in sampler.snapshots()],
+                "nodes": _node_rows(sampler),
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
@@ -374,7 +399,7 @@ def register(app: FastAPI, d) -> None:
                 await asyncio.to_thread(sampler.sample_once)
             sampler.touch()
             return {
-                "nodes": [_dump(s) for s in sampler.snapshots()],
+                "nodes": _node_rows(sampler),
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
@@ -459,6 +484,24 @@ def register(app: FastAPI, d) -> None:
             try:
                 d.fleet.absorb_children(node.id, children)
             except Exception:  # noqa: BLE001 — a bad child can't fail the add
+                pass
+        # v1.329.0: that probe is a REAL reading, so the sampler keeps it and
+        # GET /fleet shows the new node filled in at once (children were
+        # adopted just above, so none are handed over twice). Then make sure
+        # the loop runs: it is only started at boot when a node already
+        # existed, so the first endpoint on a fresh install was never sampled
+        # again. Both best-effort; neither can fail the add.
+        record = getattr(getattr(d, "fleet_sampler", None), "record", None)
+        if callable(record):
+            try:
+                record(node, snapshot, [])
+            except Exception:  # noqa: BLE001 — telemetry never fails the add
+                pass
+        rearm = (getattr(d, "_live_rearm", None) or {}).get("fleet")
+        if callable(rearm):
+            try:
+                rearm()
+            except Exception:  # noqa: BLE001
                 pass
         return {
             "node": _dump(node),

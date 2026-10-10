@@ -30,6 +30,10 @@ export interface FleetNode {
   alias?: string | null;
   routable?: boolean | null;
   tool_use?: boolean | null;
+  /** v1.329.0: the API the node CHATS in ("openai" when absent; older
+   *  daemons never send it). Saved by the user, so it wins over `kind`,
+   *  which is only what detection guessed from the server's answers. */
+  protocol?: string | null;
 }
 
 /**
@@ -133,6 +137,12 @@ export interface NodeSnapshot {
   proxy_verdict?: string | null;
   /** Epoch seconds (the sampler's clock), or an ISO string on older builds. */
   sampled_at?: number | string | null;
+  /**
+   * v1.329.0: false = a configured node no probe has looked at yet. The
+   * daemon lists it at once (status "unknown", no metrics) instead of leaving
+   * it out until the sampler gets to it. Absent (older daemon) = checked.
+   */
+  checked?: boolean | null;
 }
 
 export interface FleetHint {
@@ -357,14 +367,64 @@ const KIND_LABELS: Record<string, string> = {
   ollama: "Ollama",
   vllm: "vLLM",
   litellm: "LiteLLM",
-  openai: "OpenAI-compat",
-  "openai-compat": "OpenAI-compat",
+  // v1.329.0: the words the endpoint form's Server type uses.
+  openai: "OpenAI-compatible",
+  "openai-compat": "OpenAI-compatible",
   unknown: "not detected yet",
 };
 
 export function kindLabel(kind: FleetKind | null | undefined): string {
   if (!kind) return "not detected yet";
   return KIND_LABELS[String(kind).toLowerCase()] ?? String(kind);
+}
+
+/** The API a node chats in: "anthropic" only when saved so, else "openai". */
+export function nodeProtocol(node: Pick<FleetNode, "protocol"> | null | undefined): "openai" | "anthropic" {
+  return String(node?.protocol ?? "").toLowerCase() === "anthropic" ? "anthropic" : "openai";
+}
+
+/**
+ * v1.329.0: the badge on a node — the way it actually CHATS. An Anthropic
+ * endpoint's detected kind can be "openai-compat" (its server also answers
+ * /v1/models), so labelling by kind called an Anthropic-speaking endpoint
+ * "OpenAI" while Settings tagged it "Anthropic". The saved protocol wins;
+ * an OpenAI-way node keeps its detected server name (Ollama, vLLM, …),
+ * which already says how it chats.
+ */
+export function chatLabel(node: Pick<FleetNode, "protocol" | "kind"> | null | undefined): string {
+  if (nodeProtocol(node) === "anthropic") return "Anthropic";
+  return kindLabel(node?.kind);
+}
+
+/** The badge's tone: neutral for an Anthropic endpoint, else the kind's. */
+export function chatTone(node: Pick<FleetNode, "protocol" | "kind"> | null | undefined): Tone {
+  return nodeProtocol(node) === "anthropic" ? "slate" : kindTone(node?.kind);
+}
+
+/** The badge's tooltip: how replies are asked for, then what detection saw. */
+export function chatHint(node: Pick<FleetNode, "protocol" | "kind"> | null | undefined): string {
+  const how =
+    nodeProtocol(node) === "anthropic"
+      ? "Replies use the Anthropic Messages API."
+      : "Replies use the OpenAI chat API.";
+  const kind = node?.kind ? String(node.kind) : "";
+  const seen =
+    !kind || kind.toLowerCase() === "unknown"
+      ? "The server type has not been detected yet."
+      : `The server was detected as ${kindLabel(kind)}.`;
+  return `${how} ${seen}`;
+}
+
+/** v1.329.0: a configured node no probe has looked at yet. */
+export function isUnchecked(snap: Pick<NodeSnapshot, "checked"> | null | undefined): boolean {
+  return snap?.checked === false;
+}
+
+/** The status pill's words for one snapshot ("not checked yet" before any
+ *  probe, else the status word). */
+export function snapStatusLabel(snap: Pick<NodeSnapshot, "checked" | "status"> | null | undefined): string {
+  if (isUnchecked(snap)) return "not checked yet";
+  return statusLabel(snap?.status);
 }
 
 const KIND_TONES: Record<string, Tone> = {

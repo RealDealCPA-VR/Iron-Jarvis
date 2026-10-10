@@ -36,9 +36,10 @@ describe("connector status honesty", () => {
 
   it("the no_tools badge says what is wrong AND what fixes it", () => {
     expect(pageSrc).toContain('label = "0 tools — restart"');
-    // Amber, not green: the state is a warning, not a success.
+    // A warning, not a success. v1.329.0 (calm J3): the warning tone is the
+    // theme token (tone-warn), not literal amber, so Daylight re-inks it.
     expect(pageSrc).toMatch(
-      /conn\.status === "no_tools"[\s\S]{0,200}amber-500\/25/,
+      /conn\.status === "no_tools"[\s\S]{0,200}tone-warn\/25/,
     );
   });
 

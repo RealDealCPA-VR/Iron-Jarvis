@@ -276,7 +276,7 @@ function ModelReportLine({
               title={`Auto-tier judges local models on the average completion score of their evaluated sessions — below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
                 detail ? ` Per task class — ${detail}.` : ""
               }`}
-              className="flex items-start gap-1 text-[10.5px] leading-relaxed text-zinc-500"
+              className="flex items-start gap-1 text-[11px] leading-relaxed text-zinc-500"
             >
               <Gauge size={10} className="mt-0.5 shrink-0 text-zinc-600" />
               <span className="min-w-0">
@@ -317,44 +317,44 @@ interface ProviderMeta {
 const META: Record<string, ProviderMeta> = {
   anthropic: {
     icon: Sparkles,
-    tint: "text-orange-300",
+    tint: "text-tone-warn",
     keyUrl: "https://console.anthropic.com/settings/keys",
     keyLabel: "console.anthropic.com",
     placeholder: "sk-ant-…",
   },
   openai: {
     icon: Bot,
-    tint: "text-emerald-300",
+    tint: "text-tone-success",
     keyUrl: "https://platform.openai.com/api-keys",
     keyLabel: "platform.openai.com",
     placeholder: "sk-…",
   },
   google: {
     icon: Globe,
-    tint: "text-sky-300",
+    tint: "text-tone-info",
     docsUrl: "https://console.cloud.google.com/apis/credentials",
     docsLabel: "Google Cloud Console",
   },
   xai: {
     icon: Zap,
-    tint: "text-violet-300",
+    tint: "text-tone-violet",
     keyUrl: "https://console.x.ai",
     keyLabel: "console.x.ai",
     placeholder: "xai-…",
   },
   openrouter: {
     icon: PlugZap,
-    tint: "text-rose-300",
+    tint: "text-tone-danger",
     keyUrl: "https://openrouter.ai/settings/keys",
     keyLabel: "openrouter.ai",
     placeholder: "sk-or-…",
   },
   custom: {
     icon: Cpu,
-    tint: "text-teal-300",
+    tint: "text-tone-info",
     placeholder: "key (optional for local servers)",
   },
-  mock: { icon: MoonStar, tint: "text-amber-300" },
+  mock: { icon: MoonStar, tint: "text-tone-warn" },
 };
 
 function metaFor(provider: string): ProviderMeta {
@@ -438,10 +438,10 @@ function StatusPill({ conn }: { conn: Connection }) {
   // the old flat "Connected" badge insisted it was fine. That badge is exactly
   // what hid a dark wiki from a user who then found Jarvis "blind as a bat".
   if (conn.status === "no_tools") {
-    tone = "border-amber-500/25 bg-amber-500/10 text-amber-300";
+    tone = "border-tone-warn/25 bg-tone-warn/10 text-tone-warn";
     label = "0 tools — restart";
   } else if (conn.connected) {
-    tone = "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
+    tone = "border-tone-success/25 bg-tone-success/10 text-tone-success";
     // Inherited (v1.230.0, U5): connected THROUGH the logged-in CLI, no key
     // stored here — say so, instead of "Not connected" under an available
     // provider (the audit's live finding).
@@ -451,7 +451,7 @@ function StatusPill({ conn }: { conn: Connection }) {
     const via = inheritedVia(conn);
     label = via ? `Connected · via ${providerDisplay(via)}` : "Connected";
   } else if (conn.status === "needs_auth") {
-    tone = "border-amber-500/25 bg-amber-500/10 text-amber-300";
+    tone = "border-tone-warn/25 bg-tone-warn/10 text-tone-warn";
     label = "Needs auth";
   } else {
     tone = "border-zinc-500/25 bg-zinc-500/10 text-zinc-300";
@@ -468,11 +468,11 @@ function StatusPill({ conn }: { conn: Connection }) {
       <span
         className={`h-1.5 w-1.5 rounded-full ${
           conn.status === "no_tools"
-            ? "bg-amber-400"
+            ? "bg-tone-warn"
             : conn.connected
-              ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]"
+              ? "bg-tone-success"
               : conn.status === "needs_auth"
-                ? "bg-amber-400"
+                ? "bg-tone-warn"
                 : "bg-zinc-500"
         }`}
       />
@@ -480,6 +480,17 @@ function StatusPill({ conn }: { conn: Connection }) {
     </span>
   );
 }
+
+/**
+ * v1.329.0 (calm J3): the ONE quiet chip a saved-endpoint row draws its tags
+ * with: the Anthropic tag, the model, tools / vision and Verify tools. The
+ * rows mixed two looks (a hairline "Anthropic" tag beside filled emerald and
+ * amber chips Daylight did not re-ink); now the shell is the same for all and
+ * only a small mark inside carries a tone token (a check for a verified yes,
+ * a dot for a "no" that sends work elsewhere).
+ */
+const ENDPOINT_CHIP =
+  "inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400";
 
 /* -------------------------------------------------------------------------- */
 /*  One connection card                                                        */
@@ -758,17 +769,17 @@ function ConnectionCard({
             );
             verifyNote =
               v.tool_use === true
-                ? " Tool support verified ✓ — web/file turns can run here."
+                ? " It runs tools, so turns that use the web or files can run here."
                 : v.tool_use === false
-                  ? " Heads-up: this server can't run tools — turns that use web/files will route to another provider."
-                  : " Couldn't verify tool support yet (endpoint asleep?) — use Verify on its row later.";
+                  ? " This server can't run tools, so turns that use the web or files go to another model."
+                  : " Tool support could not be checked yet. The server may be asleep; press Verify tools on its row later.";
           } catch {
             verifyNote = "";
           }
         }
         setTest({
           ok: true,
-          detail: `Endpoint saved — pick "${shown}" in any model picker.${verifyNote}`,
+          detail: `Endpoint saved. Pick "${shown}" in any model picker.${verifyNote}`,
         });
         setEpName("");
         setBaseUrl("");
@@ -972,7 +983,7 @@ function ConnectionCard({
       )}
 
       {conn.status === "no_tools" && conn.detail ? (
-        <p className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200/90">
+        <p className="rounded-lg border border-tone-warn/20 bg-tone-warn/[0.06] px-2.5 py-1.5 text-[11px] leading-relaxed text-tone-warn">
           {conn.detail}
         </p>
       ) : null}
@@ -993,7 +1004,7 @@ function ConnectionCard({
           {isDefault ? (
             <span
               title="Sessions use this provider by default"
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-tone-success/25 bg-tone-success/10 px-3 py-1.5 text-xs font-medium text-tone-success"
             >
               <Check size={14} /> Default
             </span>
@@ -1145,9 +1156,9 @@ function ConnectionCard({
                 </a>
               )}
               {needsSecrets && (
-                <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-100/90">
+                <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
                   No OAuth client configured. Set{" "}
-                  <code className="rounded bg-ink-900/80 px-1 font-mono text-amber-200">
+                  <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
                     {conn.provider}_oauth_client_id
                   </code>{" "}
                   in{" "}
@@ -1210,8 +1221,11 @@ function ConnectionCard({
                       />
                     </button>
                   )}
+                  {/* basis-24 (v1.329.0): in the narrow card the address used
+                      to shrink to one letter beside the name; now it wraps
+                      to its own line when it cannot have 6rem. */}
                   <span
-                    className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500"
+                    className="min-w-0 flex-1 basis-24 truncate font-mono text-[11px] text-zinc-500"
                     title={ep.base_url}
                   >
                     {ep.base_url}
@@ -1222,56 +1236,62 @@ function ConnectionCard({
                   {ep.protocol === "anthropic" && (
                     <span
                       data-testid="endpoint-row-protocol"
-                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400"
-                      title="Replies use the Anthropic Messages API"
+                      className={ENDPOINT_CHIP}
+                      title="Replies use the Anthropic Messages API."
                     >
                       Anthropic
                     </span>
                   )}
                   {ep.default_model && (
-                    <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                    <span data-testid="endpoint-row-model" className={`${ENDPOINT_CHIP} font-mono`}>
                       {ep.default_model}
                     </span>
                   )}
-                  {/* Tool-capability chip — decides whether tool turns can
-                      stay on this endpoint or route to another provider. */}
+                  {/* Capability chips. They decide whether tool and image
+                      turns stay on this endpoint or go to another model. */}
                   {ep.vision === true && (
                     <span
-                      className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[10px] text-emerald-300/90"
-                      title="Verified: this model SAW the probe image — image turns and scanned-PDF OCR can run here"
+                      data-testid="endpoint-row-vision"
+                      className={ENDPOINT_CHIP}
+                      title="Checked: this model saw the test image, so image turns and scanned PDFs can run here."
                     >
-                      vision ✓
+                      vision <span aria-hidden className="text-tone-success">✓</span>
                     </span>
                   )}
                   {ep.vision === false && (
                     <span
-                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-500"
-                      title="Verified: this model answered but did not see the probe image — image turns route to a vision-capable provider"
+                      data-testid="endpoint-row-vision"
+                      className={ENDPOINT_CHIP}
+                      title="Checked: this model answered but did not see the test image, so image turns go to a model that can."
                     >
                       no vision
                     </span>
                   )}
                   {ep.tool_use === true ? (
                     <span
-                      className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[10px] text-emerald-300/90"
-                      title="Verified: this server runs tools — web/file turns stay here"
+                      data-testid="endpoint-row-tools"
+                      className={ENDPOINT_CHIP}
+                      title="Checked: this server runs tools, so turns that use the web or files stay here."
                     >
-                      tools ✓
+                      tools <span aria-hidden className="text-tone-success">✓</span>
                     </span>
                   ) : ep.tool_use === false ? (
                     <span
-                      className="shrink-0 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] text-amber-200/90"
-                      title="Verified: this server can't run tools — turns that use web/files route to another provider (the reply says so)"
+                      data-testid="endpoint-row-tools"
+                      className={ENDPOINT_CHIP}
+                      title="Checked: this server can't run tools, so turns that use the web or files go to another model. The reply says so."
                     >
+                      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-tone-warn" />
                       no tools
                     </span>
                   ) : (
                     <button
                       type="button"
+                      data-testid="endpoint-row-verify"
                       onClick={() => void verifyEndpoint(ep)}
                       disabled={epBusy === ep.id}
-                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
-                      title="Tool support unverified — tool turns route elsewhere until verified. Click to probe this server now."
+                      className={`${ENDPOINT_CHIP} transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:opacity-50`}
+                      title="Tool support is not checked yet, so tool turns go to another model for now. Press to check this server."
                     >
                       {epBusy === ep.id ? "…" : "Verify tools"}
                     </button>
@@ -1400,7 +1420,7 @@ function ConnectionCard({
                 <p className="text-[11px] leading-relaxed text-zinc-500">
                   {isCustom
                     ? "The key is optional. Local servers usually don't need one. If you set it, it is stored encrypted."
-                    : "Paste your API key — it's stored encrypted and never shown again."}
+                    : "Paste your API key. It is stored encrypted and never shown again."}
                   {meta.keyUrl && (
                     <>
                       {" "}Get one at{" "}
@@ -1497,7 +1517,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     description: "Your Claude Max plan",
     hint: "install / log in via its CLI; appears automatically",
     icon: Sparkles,
-    tint: "text-orange-300",
+    tint: "text-tone-warn",
   },
   {
     provider: "codex-cli",
@@ -1505,7 +1525,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     description: "Your ChatGPT plan",
     hint: "install / log in via its CLI; appears automatically",
     icon: Bot,
-    tint: "text-emerald-300",
+    tint: "text-tone-success",
   },
   {
     provider: "grok-cli",
@@ -1513,7 +1533,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     description: "Your Grok subscription",
     hint: "install / log in via its CLI; appears automatically",
     icon: Zap,
-    tint: "text-violet-300",
+    tint: "text-tone-violet",
   },
   {
     provider: "opencode-cli",
@@ -1521,7 +1541,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     description: "Your local models only",
     hint: "point an OpenCode provider at a server on your own network",
     icon: Terminal,
-    tint: "text-sky-300",
+    tint: "text-tone-info",
   },
   {
     provider: "ollama",
@@ -1529,7 +1549,7 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     description: "Free models running on this machine",
     hint: "install Ollama and pull a model; appears automatically",
     icon: Cpu,
-    tint: "text-teal-300",
+    tint: "text-tone-info",
   },
 ];
 
@@ -1594,16 +1614,16 @@ function CliProviderRow({
         </div>
       </div>
       {available ? (
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]" />
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-success/25 bg-tone-success/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-success">
+          <span className="h-1.5 w-1.5 rounded-full bg-tone-success" />
           Detected — ready to use
         </span>
       ) : signedOut ? (
         <span
           data-testid={`cli-signed-out-${info.provider}`}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-300"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-tone-warn/25 bg-tone-warn/10 px-2.5 py-0.5 text-[11px] font-medium text-tone-warn"
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+          <span className="h-1.5 w-1.5 rounded-full bg-tone-warn" />
           Installed — not signed in
         </span>
       ) : (
@@ -1934,7 +1954,7 @@ export default function ConnectionsPage() {
                       onClick={() => setMenuOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                     >
-                      <HardDrive size={14} className="text-sky-300" />
+                      <HardDrive size={14} className="text-tone-info" />
                       <span className="flex-1">Cloud memory drives</span>
                       <ChevronRight size={13} className="text-zinc-600" />
                     </Link>
@@ -1944,7 +1964,7 @@ export default function ConnectionsPage() {
                       onClick={() => setMenuOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                     >
-                      <Wrench size={14} className="text-amber-300" />
+                      <Wrench size={14} className="text-tone-warn" />
                       <span className="flex-1">Extensions (MCP)</span>
                       <ChevronRight size={13} className="text-zinc-600" />
                     </Link>
@@ -1966,9 +1986,9 @@ export default function ConnectionsPage() {
         <Reveal>
           <div
             data-testid="connections-ready-banner"
-            className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.05] px-4 py-3 text-[13px] text-zinc-300"
+            className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-xl border border-tone-success/20 bg-tone-success/[0.05] px-4 py-3 text-[13px] text-zinc-300"
           >
-            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-300" aria-hidden />
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-tone-success" aria-hidden />
             {/* basis-64: on a phone the link wraps below the sentence
                 instead of squeezing it into a one-word column. */}
             <span className="min-w-0 flex-1 basis-64">
