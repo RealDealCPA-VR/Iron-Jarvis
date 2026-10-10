@@ -38,13 +38,16 @@ LEVELS: tuple[str, ...] = ("low", "medium", "high")
 BUDGET_TOKENS: dict[str, int] = {"low": 2048, "medium": 8192, "high": 24576}
 
 _ANTHROPIC_NO_THINKING = re.compile(r"^claude-(2|3-opus|3-5|3-sonnet|3-haiku|instant)", re.I)
-_OPENAI_REASONING = re.compile(r"^(o[1345](-|$)|gpt-5|codex|gpt-oss)", re.I)
+#: GPT-6 (v1.330.0): every gpt-6 id OpenAI lists documents reasoning.effort
+#: (developers.openai.com/api/docs/models/<id>, read 2026-10-10:
+#: gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-6.1-sol).
+_OPENAI_REASONING = re.compile(r"^(o[1345](-|$)|gpt-5|gpt-6([.-]|$)|codex|gpt-oss)", re.I)
 _GEMINI_THINKING = re.compile(r"gemini-(2\.5|3)", re.I)
 #: Reasoning families an OpenAI-compatible endpoint (Ollama, vLLM, LiteLLM, a
 #: fleet node) may serve. Matched anywhere in the id, case-insensitively.
 _LOCAL_REASONING = re.compile(
     r"gpt-oss|deepseek-r1|deepseek-reasoner|deepseek-v3\.1|qwen3|qwq|magistral"
-    r"|glm-4\.[56]|kimi-k2-thinking|-thinking|nemotron.*reason|\bo[13](-mini)?\b|gpt-5",
+    r"|glm-4\.[56]|kimi-k2-thinking|-thinking|nemotron.*reason|\bo[13](-mini)?\b|gpt-5|gpt-6",
     re.I,
 )
 
@@ -91,6 +94,67 @@ def supports(provider: str, model: str, level: str) -> bool:
 def budget_tokens(level: str) -> int:
     """The thinking budget for a level (Anthropic / Gemini), 0 for none."""
     return BUDGET_TOKENS.get(normalize_level(level), 0)
+
+
+# --------------------------------------------------------------------------- #
+# v1.330.0: WHICH Anthropic thinking spelling a Claude model takes
+# --------------------------------------------------------------------------- #
+#
+# Anthropic's Messages API has two spellings of "think this hard", and each
+# model takes only some of them. Read 2026-10-10 from Anthropic's own docs:
+#
+#   platform.claude.com/docs/en/build-with-claude/extended-thinking:
+#     "Extended thinking (`thinking.type: "enabled"` with `budget_tokens`) is
+#      deprecated on the Claude 4.6 models (requests using it still succeed).
+#      Claude 4.7 and later models do not support it and reject requests that
+#      use it, returning a 400 error. On Claude 4.5 and earlier models that
+#      support thinking, extended thinking is the only available thinking
+#      mode. Claude Mythos Preview supports both modes. Where both modes are
+#      available, use adaptive thinking instead."
+#     "The mapping is small: remove `budget_tokens`, set `thinking: {type:
+#      "adaptive"}`, and control reasoning depth with `output_config:
+#      {effort: ...}` instead of a token budget."
+#   .../thinking-troubleshooting (per-model table): "Extended only" for
+#     Claude Opus 4.5, Claude Haiku 4.5, Claude Sonnet 4.5 (each rejects
+#     "adaptive" with a 400); "Earlier Claude 4 models (Claude Opus 4.1,
+#     Claude Sonnet 4, and Claude Opus 4) support extended thinking only."
+#     Every other row (Fable 5.1, Mythos 5.1, Fable 5, Mythos 5, Mythos
+#     Preview, Opus 5.5, Opus 5, Opus 4.8, Opus 4.7, Sonnet 5.5, Sonnet 5,
+#     Haiku 5.5, Opus 4.6, Sonnet 4.6) takes "adaptive".
+#   .../effort: `output_config.effort` takes low / medium / high on every
+#     one of those adaptive models (its supportedModels list).
+#
+# So the BUDGET list is the closed one: no new model will ever be "4.5 or
+# earlier", while every model released since 4.7 rejects a budget. A Claude
+# id not in the list gets the adaptive spelling. Claude 3.7 Sonnet is the
+# first thinking model and took a budget only (it predates "adaptive").
+BUDGET = "budget"
+ADAPTIVE = "adaptive"
+
+#: Bare ids (``_bare_claude``: no date, no ``[1m]``, no ``-latest``) of the
+#: Claude models that take ONLY ``thinking: {type: "enabled", budget_tokens}``.
+_ANTHROPIC_BUDGET_THINKING: frozenset[str] = frozenset(
+    {
+        "claude-3-7-sonnet",
+        "claude-sonnet-4",
+        "claude-sonnet-4-0",
+        "claude-opus-4",
+        "claude-opus-4-0",
+        "claude-opus-4-1",
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "claude-haiku-4-5",
+    }
+)
+
+
+def anthropic_thinking_mode(model: str) -> str:
+    """``budget`` for the Claude models that take only a thinking budget
+    (4.5 and earlier), ``adaptive`` for every other Claude model (4.6 and
+    later, Fable, Mythos): ``thinking: {type: "adaptive"}`` plus
+    ``output_config.effort``. Only the Anthropic adapter asks."""
+    low = (model or "").strip().lower()
+    return BUDGET if _bare_claude(low) in _ANTHROPIC_BUDGET_THINKING else ADAPTIVE
 
 
 # --------------------------------------------------------------------------- #
@@ -168,8 +232,13 @@ _ANTHROPIC_DEFAULTS: dict[str, str] = {
 #:     none (``off``); gpt-5.5, gpt-5.6, gpt-5.4-pro = ``medium``;
 #:     gpt-5.5-pro = ``high``; gpt-5-pro "defaults to (and only supports)
 #:     high" = ``high``.
+#:   * the same pages for GPT-6, read 2026-10-10: gpt-6-sol and gpt-6-luna
+#:     "`reasoning.effort` supports `none`, `low`, `medium` (default), `high`,
+#:     `xhigh`, and `max`."; gpt-6.1-sol "supports `low`, `medium` (default),
+#:     `high`, `xhigh`, and `max`." -> ``medium``.
 #: Not listed on purpose (no documented default found): the -codex models,
-#: gpt-5.2-pro, o1-mini/-preview, o1-pro/o3-pro, every GPT-6 id.
+#: gpt-5.2-pro, o1-mini/-preview, o1-pro/o3-pro, gpt-6-astra (its page lists
+#: `low`, `medium`, `high`, `xhigh`, and `max` with no "(default)" marker).
 _OPENAI_DEFAULTS: dict[str, str] = {
     "o1": "medium",
     "o3": "medium",
@@ -187,6 +256,9 @@ _OPENAI_DEFAULTS: dict[str, str] = {
     "gpt-5.5": "medium",
     "gpt-5.5-pro": "high",
     "gpt-5.6": "medium",
+    "gpt-6-sol": "medium",
+    "gpt-6-luna": "medium",
+    "gpt-6.1-sol": "medium",
 }
 
 #: Gemini API, keyed by the bare id (no ``models/`` prefix). Source:

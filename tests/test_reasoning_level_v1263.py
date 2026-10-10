@@ -181,7 +181,11 @@ def test_anthropic_turns_a_level_into_a_thinking_budget_and_room_for_it(monkeypa
     thinking = _Block(type="thinking", thinking="…", signature="sig", citations=None)
     tool = _Block(type="tool_use", id="t1", name="read_file", input={"path": "a"})
     messages = _AnthropicMessages([thinking, tool])
-    a = AnthropicAdapter(model="claude-opus-4-8", api_key="sk-ant-test")
+    # v1.330.0: a model that takes a thinking BUDGET (4.5 and earlier).
+    # This pin used claude-opus-4-8, which Anthropic's docs say rejects a
+    # budget with a 400; the newer models' adaptive + effort body is pinned
+    # in tests/test_anthropic_thinking_v1330.py.
+    a = AnthropicAdapter(model="claude-haiku-4-5-20251001", api_key="sk-ant-test")
     monkeypatch.setattr(a, "_client", lambda: SimpleNamespace(messages=messages))
     resp = asyncio.run(a.complete(system="s", messages=_msgs(), tools=[], reasoning="medium"))
     kw = messages.calls[0]

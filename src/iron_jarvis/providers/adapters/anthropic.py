@@ -20,7 +20,7 @@ from .base import (
     ToolCall,
     parse_retry_after,
 )
-from ..reasoning import budget_tokens, normalize_level
+from ..reasoning import ADAPTIVE, anthropic_thinking_mode, budget_tokens, normalize_level
 
 
 def _anthropic_provider_error(exc: Exception) -> ProviderError:
@@ -323,9 +323,36 @@ class AnthropicAdapter(LLMAdapter):
             return {}, self.max_tokens
         budget = budget_tokens(level)
         # The budget must fit INSIDE max_tokens with room for the answer.
+        room = max(self.max_tokens, budget + 4096)
+        if anthropic_thinking_mode(self.model) == ADAPTIVE:
+            # v1.330.0: Claude 4.6 and later (Fable, Mythos, Opus 4.7+, Sonnet
+            # 5+, Haiku 5.5) take the level as `output_config.effort` beside
+            # `thinking: {type: "adaptive"}`; 4.7 and later answer a budget
+            # with a 400. Anthropic's docs, read 2026-10-10
+            # (platform.claude.com/docs/en/build-with-claude/extended-thinking):
+            # "Claude 4.7 and later models do not support it and reject
+            # requests that use it, returning a 400 error." / "remove
+            # `budget_tokens`, set `thinking: {type: "adaptive"}`, and control
+            # reasoning depth with `output_config: {effort: ...}`". The three
+            # words are the API's own (low / medium / high), so the receipt's
+            # level is exactly what was sent. `display: "summarized"` keeps
+            # the thinking text the chat shows: these models default to
+            # "omitted" (.../thinking: "`display` works in both modes").
+            # `max_tokens` keeps the same per-level room, because thinking
+            # still counts toward it ("set it high enough to leave room for
+            # both the reasoning and the answer"). No sampling parameter is
+            # sent (they return a 400 on these models), and tool_choice is
+            # never forced here.
+            return (
+                {
+                    "thinking": {"type": "adaptive", "display": "summarized"},
+                    "output_config": {"effort": level},
+                },
+                room,
+            )
         return (
             {"thinking": {"type": "enabled", "budget_tokens": budget}},
-            max(self.max_tokens, budget + 4096),
+            room,
         )
 
     async def stream(
