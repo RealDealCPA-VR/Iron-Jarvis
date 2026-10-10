@@ -90,6 +90,42 @@ _STREAM_ERROR_STATUS = {
 }
 
 
+def _error_status(err: dict[str, Any], default: int | None) -> int | None:
+    """The HTTP status an error OBJECT stands for. The Messages shape names a
+    ``type`` (``overloaded_error`` …); a LiteLLM proxy's own shape
+    (``{"message", "type": null, "param", "code": "500"}``, measured on the
+    user's proxy, v1.330.0) carries the status as ``code``, often a string.
+    The type wins, then a code that reads as an HTTP error status, else
+    *default*."""
+    by_type = _STREAM_ERROR_STATUS.get(str(err.get("type") or ""))
+    if by_type is not None:
+        return by_type
+    code = err.get("code")
+    try:
+        n = int(str(code).strip()) if code is not None and not isinstance(code, bool) else 0
+    except ValueError:
+        n = 0
+    return n if 400 <= n <= 599 else default
+
+
+def _stream_error(event: dict[str, Any]) -> dict[str, Any] | None:
+    """The error object of an in-stream error event, or None.
+
+    Two shapes reach this adapter: the Messages API's ``{"type": "error",
+    "error": {…}}``, and a LiteLLM proxy's ``data: {"error": {…}}`` with NO
+    ``type`` and no ``event:`` line (litellm/proxy ``async_sse_data_generator``,
+    v1.72-v1.77 stable: ``json.dumps({"error": proxy_exception.to_dict()})``).
+    The second used to be skipped as an unknown event, so a proxy whose GPU
+    box failed mid-answer read as a dropped connection and its own words were
+    lost (v1.330.0)."""
+    err = event.get("error")
+    if event.get("type") == "error":
+        return err if isinstance(err, dict) else {}
+    if event.get("type") is None and isinstance(err, dict):
+        return err
+    return None
+
+
 def _new_client() -> Any:
     """The HTTP client: 60 s, and redirects NOT followed (the key stays with
     the host the user typed). A module function so a test can hand in a fake
@@ -411,16 +447,19 @@ class AnthropicFleetAdapter(LLMAdapter):
             transient=False,
         )
 
-    def _parse(self, data: Any, status: int | None = 200) -> LLMResponse:
+    def _parse(self, data: Any, status: int | None = 200, key: str = "") -> LLMResponse:
         if not isinstance(data, dict):
             raise self._shape_error("not with a Messages API reply", status)
         if data.get("type") == "error" or (
             "content" not in data and isinstance(data.get("error"), dict)
         ):
             err = data.get("error") if isinstance(data.get("error"), dict) else {}
-            code = _STREAM_ERROR_STATUS.get(str(err.get("type") or ""), status)
+            # A 200 that carries an error names its real status in the error
+            # (LiteLLM's ``code``); "API error 200" would read as a success.
+            code = _error_status(err, status if (status or 0) >= 400 else 500)
             raise ProviderError(
-                f"{self.provider} API error {code}: {str(err.get('message') or err)[:_DETAIL_MAX]}",
+                f"{self.provider} API error {code}: "
+                f"{self._scrub(str(err.get('message') or err.get('type') or err), key)}",
                 status_code=code,
             )
         content = data.get("content")
@@ -484,7 +523,7 @@ class AnthropicFleetAdapter(LLMAdapter):
             data = resp.json()
         except ValueError:
             raise self._shape_error("not with JSON", status) from None
-        return self._parse(data, status)
+        return self._parse(data, status, key)
 
     async def stream(
         self,
@@ -544,6 +583,14 @@ class AnthropicFleetAdapter(LLMAdapter):
                     continue
                 if not isinstance(event, dict):
                     continue
+                err_obj = _stream_error(event)
+                if err_obj is not None:
+                    code = _error_status(err_obj, 500)
+                    raise ProviderError(
+                        f"{self.provider} API error {code}: "
+                        f"{self._scrub(str(err_obj.get('message') or err_obj.get('type') or 'error'), key)}",
+                        status_code=code,
+                    )
                 kind = event.get("type")
                 if kind == "message_start":
                     msg = event.get("message") or {}
@@ -595,16 +642,6 @@ class AnthropicFleetAdapter(LLMAdapter):
                     usage = _usage(event.get("usage"), usage)
                 elif kind == "message_stop":
                     finished = True
-                elif kind == "error":
-                    err = event.get("error") or {}
-                    if not isinstance(err, dict):
-                        err = {}
-                    code = _STREAM_ERROR_STATUS.get(str(err.get("type") or ""), 500)
-                    raise ProviderError(
-                        f"{self.provider} API error {code}: "
-                        f"{self._scrub(str(err.get('message') or err.get('type') or 'error'), key)}",
-                        status_code=code,
-                    )
 
             if not saw_sse:
                 # The server ignored stream:true and answered one body.
@@ -614,7 +651,7 @@ class AnthropicFleetAdapter(LLMAdapter):
                     data = json.loads("\n".join(raw_tail))
                 except ValueError:
                     raise self._shape_error("not with JSON", status) from None
-                final = self._parse(data, status)
+                final = self._parse(data, status, key)
                 if final.thinking:
                     yield {"type": "thinking", "text": final.thinking}
                 if final.text:
