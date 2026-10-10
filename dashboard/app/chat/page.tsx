@@ -332,7 +332,7 @@ import { PageShell, Reveal } from "@/components/motion";
  *  not lost — the card draws a dashed drop target the moment a file is over
  *  it, which says the same thing at the moment it matters. */
 const CHAT_HINT =
-  "Talk to Iron Jarvis. Ask anything — quick answers come straight back, and " +
+  "Talk to Iron Jarvis. Ask anything. Quick answers come straight back, and " +
   "work that needs files, tools or several steps just gets done. Attach files, " +
   "or drop them anywhere on the page.";
 import type { ProjectSurfaceView } from "@/components/project/ProjectSurfaces";
@@ -1550,7 +1550,7 @@ function PromoteKnowledgeButton({
     }
   }
   const label = disabledReason
-    ? `Add to project knowledge — ${disabledReason}`
+    ? `Add to project knowledge. ${disabledReason}`
     : "Add to project knowledge";
   return (
     <span className="inline-flex min-w-0 items-center gap-1">
@@ -2144,7 +2144,7 @@ const SlashPicker = memo(function SlashPicker({
         <div role="listbox" aria-label="Skills" className="max-h-72 overflow-y-auto p-1">
           <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
             {skillMatches.length} skill{skillMatches.length === 1 ? "" : "s"}
-            {slashQuery ? " matching" : ""} — ↑↓ + Enter, or keep typing
+            {slashQuery ? " matching" : ""}. ↑↓ + Enter, or keep typing
           </div>
           {skillMatches.map((s, i) => (
             <button
@@ -2843,7 +2843,7 @@ const MessageRow = memo(function MessageRow({
               <button
                 type="button"
                 onClick={() => h.editMessage(i)}
-                title="Edit and resend — what follows is kept as an earlier version"
+                title="Edit and resend. What follows is kept as an earlier version."
                 aria-label="Edit and resend"
                 className={REPLY_ACTION_BTN}
               >
@@ -2904,7 +2904,7 @@ const MessageRow = memo(function MessageRow({
               a plain reply — a question, a "done", or "still working". */}
           {m.panelKind && m.panelKind !== "message" && m.panelKind !== "progress" && (
             <span data-testid="panel-kind" className="text-zinc-500">
-              {m.panelKind === "pending" ? "working — will report back" : m.panelKind}
+              {m.panelKind === "pending" ? "working, will report back" : m.panelKind}
             </span>
           )}
           {/* v1.309.0: the "open in Agents →" link is GONE. It sent a live
@@ -2979,10 +2979,10 @@ const MessageRow = memo(function MessageRow({
           <span>
             {m.escalatedTo ? (
               <>
-                Handing this to {m.escalatedTo} — {m.escalated}.
+                Handing this to {m.escalatedTo}: {m.escalated}.
               </>
             ) : (
-              <>Taking this on properly — {m.escalated}.</>
+              <>Taking this on properly: {m.escalated}.</>
             )}
           </span>
         </div>
@@ -3137,7 +3137,7 @@ const MessageRow = memo(function MessageRow({
           </button>
         )}
         <PromoteKnowledgeButton
-          disabledReason={projectId ? null : "bind this chat to a project first"}
+          disabledReason={projectId ? null : "Bind this chat to a project first."}
           onPromote={() => h.promote(m.content)}
         />
         {/* v1.325.0: the answers a Try again kept, "‹ 1 / 2 ›". */}
@@ -6058,7 +6058,7 @@ export default function ChatPage() {
         setError(
           failed.length === 1
             ? `Couldn't attach ${failed[0].name}: ${failed[0].why}`
-            : `Couldn't attach ${failed.length} files (${failed.map((f) => f.name).join(", ")}) — the others are attached.`,
+            : `Couldn't attach ${failed.length} files (${failed.map((f) => f.name).join(", ")}). The others are attached.`,
         );
         // A send queued behind the uploads waits for the user to look.
         if (!ok.length) queuedSendRef.current = false;
@@ -6334,7 +6334,7 @@ export default function ChatPage() {
     setError(null);
     if (commMetaRef.current) {
       setError(
-        "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead.",
+        "This messaging thread is server-owned, so the run card can't persist here. Run it from the Workflows page instead.",
       );
       return;
     }
@@ -6346,7 +6346,7 @@ export default function ChatPage() {
         ...messagesRef.current,
         {
           role: "assistant",
-          content: `Started the “${name}” workflow — it runs here.`,
+          content: `Started the “${name}” workflow. It runs here.`,
           workflowRun: { runId, name },
         },
       ];
@@ -7130,7 +7130,7 @@ export default function ChatPage() {
       // that the transcript and the execution ledger would not corroborate.
       setCompactNote(
         res.stripped > 0
-          ? `Summarized ${res.covers} earlier messages — ${res.stripped} unverifiable claim${
+          ? `Summarized ${res.covers} earlier messages. ${res.stripped} unverifiable claim${
               res.stripped === 1 ? "" : "s"
             } dropped.`
           : `Summarized ${res.covers} earlier messages.`,
@@ -8082,7 +8082,7 @@ export default function ChatPage() {
       // phone — say so instead of letting the banner's promise quietly break.
       if (res.sent === false)
         setError(
-          "Saved to the conversation, but delivery to your phone failed — check the destination on the Notifications page.",
+          "Saved to the conversation, but delivery to your phone failed. Check the destination on the Notifications page.",
         );
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
       const reply = (res.reply ?? "").trim() || "(no response)";
@@ -8098,7 +8098,7 @@ export default function ChatPage() {
             content: "",
             escalated:
               res.escalate_reason ||
-              "working on it — the full reply will land here and on your phone",
+              "the full reply will land here and on your phone",
             // NO escalatedTo here: POST /comm/threads/{id}/send spawns its
             // long-standing supervisor default (routes/comm.py) and does NOT
             // read escalate_agent — naming the turn's pick would put a
@@ -8300,7 +8300,7 @@ export default function ChatPage() {
       return;
     }
     if (queuedRef.current.length >= MAX_QUEUED) {
-      setError(`Up to ${MAX_QUEUED} messages can wait for this reply — send or remove one first.`);
+      setError(`Up to ${MAX_QUEUED} messages can wait for this reply. Send or remove one first.`);
       return;
     }
     const item: QueuedMessage = {
@@ -8422,7 +8422,7 @@ export default function ChatPage() {
     if (!note) return;
     const id = turnIdRef.current;
     if (!id) {
-      setError("Nothing is running to steer — send it as a message.");
+      setError("Nothing is running to steer. Send it as a message.");
       return;
     }
     try {
@@ -8431,7 +8431,7 @@ export default function ChatPage() {
       const status = e instanceof ApiError ? e.status : 0;
       setError(
         status === 404
-          ? "That turn has already finished — send it as a new message."
+          ? "That turn has already finished. Send it as a new message."
           : `Couldn't send the steer note: ${e instanceof Error ? e.message : String(e)}`,
       );
       return;
@@ -8750,7 +8750,7 @@ export default function ChatPage() {
     // silently dropping the files (the composer keeps both text and chips).
     if (commMetaRef.current && attachmentsRef.current.length > 0) {
       setError(
-        "Attachments can't be sent to a messaging thread yet — remove them, or start a new chat.",
+        "Attachments can't be sent to a messaging thread yet. Remove them, or start a new chat.",
       );
       return;
     }
@@ -8892,12 +8892,12 @@ export default function ChatPage() {
         setError(
           `No agent matched ${res.unknown_mentions
             .map((u) => "@" + u)
-            .join(", ")} — check the Agents page.`,
+            .join(", ")}. Check the Agents page.`,
         );
       }
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
-      setError(err.status === 0 ? "Daemon offline — the panel didn't run." : err.message);
+      setError(err.status === 0 ? "Daemon offline. The panel didn't run." : err.message);
       composer.setText(message); // never lose the typed message
       if (atts.length) setAttachments(atts); // ...nor the files (never cleared before the POST landed)
       setMessages(before);
@@ -10051,7 +10051,7 @@ export default function ChatPage() {
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
                     {(railScoped && activeProject) || railLead
                       ? "No chats in this project yet."
-                      : "No saved chats yet — conversations appear here after the first reply."}
+                      : "No saved chats yet. Conversations appear here after the first reply."}
                   </p>
                 ) : (railLead ? visibleThreads.length + visibleOthers.length : visibleThreads.length) === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
@@ -10194,8 +10194,8 @@ export default function ChatPage() {
           aria-label="Switch project"
           title={
             activeProject
-              ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
-              : "Work inside a project — replies ground in its files + knowledge"
+              ? `Working in "${activeProject.name}". Click to switch projects or go plain chat.`
+              : "Work inside a project. Replies draw on its files and knowledge."
           }
           className={
             above
@@ -10240,7 +10240,7 @@ export default function ChatPage() {
               }`}
             >
               <MessageSquare size={13} className="shrink-0" />
-              Plain chat — no project
+              Plain chat, no project
             </button>
             {projects.map((p) => (
               <button
@@ -10704,7 +10704,7 @@ export default function ChatPage() {
                     )}
                   </div>
                   <p className="mt-2 text-[11px] text-zinc-500">
-                    Unsaved prompt edits still apply to your next message — but Save to keep
+                    Unsaved prompt edits still apply to your next message. Save to keep
                     this persona for next time.
                   </p>
                 </div>
@@ -10951,8 +10951,8 @@ export default function ChatPage() {
                               <p key={k} className="text-[12px] text-zinc-500">
                                 <span className="text-accent-soft">Steer sent:</span> {note}
                                 <span className="text-zinc-600">
-                                  {" "}
-                                  — Jarvis reads it at its next step.
+                                  {/[.!?]$/.test(note.trim()) ? " " : ". "}
+                                  Jarvis reads it at its next step.
                                 </span>
                               </p>
                             ))}
@@ -11112,9 +11112,9 @@ export default function ChatPage() {
                         className="flex items-center gap-2 px-3 py-2 text-[12px] text-zinc-400"
                       >
                         <span className="min-w-0 flex-1">
-                          Allowed for this conversation — {grantCapNote} won&apos;t ask
+                          Allowed for this conversation. {grantCapNote} won&apos;t ask
                           again here when it&apos;s in use. All {MAX_TOOLS} tool slots
-                          are in use: remove one, then add it from + to keep it
+                          are in use, so remove one, then add it from + to keep it
                           available.
                         </span>
                         <button
@@ -11134,7 +11134,7 @@ export default function ChatPage() {
                             data-testid="steer-unread"
                             className="min-w-0 flex-1 text-[12px] text-zinc-400"
                           >
-                            Jarvis finished before reading this — press Enter to send it.
+                            Jarvis finished before reading this. Press Enter to send it.
                           </div>
                         )}
                         {/* v1.329.0 (calm chat J1): the turn's error is ONE calm
@@ -11318,7 +11318,7 @@ export default function ChatPage() {
                         className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-zinc-400"
                       >
                         <span className="min-w-0 flex-1">
-                          Editing a sent message — the {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
+                          Editing a sent message. The {editUndo.before.length - messages.length === 1 ? "message" : "messages"} after it{" "}
                           {editUndo.before.length - messages.length === 1 ? "was" : "were"} removed. Send keeps the earlier
                           version one click away (‹ ›).
                         </span>
@@ -11371,8 +11371,7 @@ export default function ChatPage() {
                             {addressee.map(agentDisplayName).join(", ")}
                           </span>
                           <span className="text-zinc-500">
-                            {" "}
-                            — replies come from {addressee.length > 1 ? "them" : "it"}, not Iron
+                            . Replies come from {addressee.length > 1 ? "them" : "it"}, not Iron
                             Jarvis. Use @ to bring in someone else.
                           </span>
                         </span>
@@ -11601,7 +11600,7 @@ export default function ChatPage() {
                         {pageCtx && (
                           <span
                             data-testid="page-context-chip"
-                            title={`${pageCtx.path} — what that page showed goes with your next message`}
+                            title={`${pageCtx.path}. What that page showed goes with your next message.`}
                             className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
                           >
                             <FileText size={11} className="shrink-0 text-accent-soft" />
@@ -11717,7 +11716,7 @@ export default function ChatPage() {
                           <span className="truncate text-tone-danger">{dictation.error}</span>
                         ) : tts.speaking ? (
                           <span className="text-accent-soft/80">
-                            speaking — mic resumes when done
+                            speaking, the mic resumes when done
                           </span>
                         ) : dictation.processing ? (
                           <span className="text-accent-soft/80">transcribing…</span>
@@ -11927,7 +11926,7 @@ export default function ChatPage() {
                                   disabled={Boolean(commMeta)}
                                   title={
                                     commMeta
-                                      ? "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead."
+                                      ? "This messaging thread is server-owned, so the run card can't persist here. Run it from the Workflows page instead."
                                       : undefined
                                   }
                                   className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
@@ -11948,7 +11947,7 @@ export default function ChatPage() {
                                       </p>
                                     ) : savedWorkflows.length === 0 ? (
                                       <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                        No saved workflows yet — draft one by asking,
+                                        No saved workflows yet. Draft one by asking,
                                         or open the editor.
                                       </p>
                                     ) : (
@@ -12052,10 +12051,10 @@ export default function ChatPage() {
                                 aria-checked={webArmed}
                                 title={
                                   webArmed
-                                    ? "Web research armed — click to disarm"
+                                    ? "Web research armed. Click to disarm."
                                     : webRoom
                                       ? "Arm web research for this chat"
-                                      : `All ${MAX_TOOLS} tool slots armed — disarm one first`
+                                      : `All ${MAX_TOOLS} tool slots armed. Disarm one first.`
                                 }
                                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
                               >
@@ -12159,7 +12158,7 @@ export default function ChatPage() {
                                       </div>
                                     ) : connectedConnectors.length === 0 ? (
                                       <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                        Nothing connected yet — pick one below.
+                                        Nothing connected yet. Pick one below.
                                       </p>
                                     ) : (
                                       connectedConnectors.map((c) => {
@@ -12178,8 +12177,8 @@ export default function ChatPage() {
                                             onClick={() => toggleConnector(c.id)}
                                             title={
                                               isMemory
-                                                ? `${c.name} — grounds replies with this memory`
-                                                : `${c.name} — arms its tools for this chat`
+                                                ? `${c.name}: replies draw on this memory`
+                                                : `${c.name}: turns on its tools for this chat`
                                             }
                                             className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
                                               atCap ? "opacity-40" : "hover:bg-white/[0.06]"
@@ -12453,7 +12452,7 @@ export default function ChatPage() {
                                     title={
                                       p.available
                                         ? undefined
-                                        : `${p.label} isn't connected — set it up on Connections`
+                                        : `${p.label} isn't connected. Set it up on Connections.`
                                     }
                                     aria-expanded={modelSub === p.id}
                                     className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${

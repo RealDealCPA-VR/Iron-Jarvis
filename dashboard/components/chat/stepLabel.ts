@@ -80,6 +80,36 @@ function stepPhrase(p: Record<string, unknown>): string | null {
     : `Step ${i + 1}`;
 }
 
+/**
+ * The step line for `provider.downgraded` (v1.329.0, calm chat K1).
+ *
+ * It used to say "using offline mock" for EVERY such event, which was false
+ * on a refusal: since v1.162.0 the router refuses instead of answering with
+ * the mock, and since wave 8 (J1) the payload's `used` says which case it is.
+ * The same split as `downgradeNotice` in ProviderDowngradeBanner:
+ * - `used: "none"`: nothing answered (the turn was refused). The endpoint is
+ *   named by its `label` (else the id in `requested`) and the router's own
+ *   plain reason follows it.
+ * - `used: "mock"`: the offline mock really answered (the default is still
+ *   the mock while a real model is connected).
+ * - any other name: that provider answered instead of the one asked for.
+ * - no `used` at all (an older daemon): it claims neither, only that the
+ *   chosen model was not used, which is true in every case.
+ */
+function downgradedLabel(p: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const used = str(p.used);
+  const name = clip(str(p.label) || str(p.requested), 40);
+  const why = clip(str(p.reason).replace(/[.\s]+$/, ""), 120);
+  if (used === "none") {
+    if (name && why) return `Nothing answered. ${name}: ${why}.`;
+    return name ? `Nothing answered. ${name} did not answer.` : "Nothing answered.";
+  }
+  if (used === "mock") return "The offline mock answered, not a real model.";
+  if (used) return name ? `${clip(used, 40)} answered instead of ${name}.` : `${clip(used, 40)} answered.`;
+  return name ? `${name} was not used.` : "The chosen model was not used.";
+}
+
 // Turn one raw session event into a short, human-friendly progress line (or null
 // to skip events that don't read well as a step).
 export function stepLabel(e: IJEvent): string | null {
@@ -102,11 +132,13 @@ export function stepLabel(e: IJEvent): string | null {
       return tool ? `Skipped ${tool} (not permitted)` : "Skipped a tool";
     }
     case "provider.failed": {
-      const provider = p.provider as string | undefined;
-      return `Provider ${provider} failed — ${String(p.error || "").slice(0, 120)}`;
+      const who =
+        typeof p.provider === "string" && p.provider ? `Provider ${p.provider}` : "A model";
+      const why = String(p.error || "").slice(0, 120).trim();
+      return why ? `${who} failed: ${why}` : `${who} failed`;
     }
     case "provider.downgraded":
-      return "Model not connected — using offline mock (connect a model)";
+      return downgradedLabel(p);
     case "agent.completed":
       return "Finishing up…";
     case "plan.created": {

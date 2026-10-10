@@ -598,7 +598,8 @@ describe("source pins — the call sites the component tests cannot see", () => 
   it("the + menu runs a saved workflow NAME-ONLY (contract 1)", () => {
     expect(pageSrc).toContain("Run a workflow…");
     expect(pageSrc).toContain('post<WorkflowRun>("/workflows/run", { name })');
-    expect(pageSrc).toContain("No saved workflows yet — draft one by asking,");
+    // v1.329.0 (K1): plain sentences, no dash aside.
+    expect(pageSrc).toContain("No saved workflows yet. Draft one by asking,");
     expect(pageSrc).toContain("or open the editor.");
   });
 

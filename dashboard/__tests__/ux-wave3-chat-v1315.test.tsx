@@ -448,7 +448,8 @@ describe("the composer on a phone (phone-composer-cramped)", () => {
     const attach = await screen.findByText("Attach files or photos");
     expect(classes(attach.closest("div.absolute"))).toContain("bottom-full");
     fireEvent.click(within(row).getByRole("button", { name: "Switch project" }));
-    const plain = await screen.findByText("Plain chat — no project");
+    // v1.329.0 (K1): the row reads as plain words, no dash aside.
+    const plain = await screen.findByText("Plain chat, no project");
     const pop = plain.closest("div.absolute") as HTMLElement;
     expect(classes(pop)).toContain("bottom-full");
     expect(within(pop).getByText(PROJECT.name)).toBeTruthy();

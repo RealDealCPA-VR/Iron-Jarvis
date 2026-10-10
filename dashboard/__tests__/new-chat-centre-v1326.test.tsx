@@ -315,7 +315,8 @@ describe("a new chat: one centred group", () => {
     const chip = screen.getByRole("button", { name: "Switch project" });
     expect(chip.textContent).toContain("No project");
     fireEvent.click(chip);
-    const plain = await screen.findByText("Plain chat — no project");
+    // v1.329.0 (K1): the row reads as plain words, no dash aside.
+    const plain = await screen.findByText("Plain chat, no project");
     const pop = plain.closest("div.absolute") as HTMLElement;
     expect(classes(pop)).toContain("top-full");
     fireEvent.click(within(pop).getByText(PROJECT.name));

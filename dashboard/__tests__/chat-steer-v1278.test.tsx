@@ -186,6 +186,8 @@ describe("a chat turn is steered from the composer (v1.278.0)", () => {
     const strip = await screen.findByTestId("steer-notes");
     expect(strip.textContent).toContain("Steer sent: make it shorter");
     expect(strip.textContent).toContain("next step");
+    // v1.329.0 (K1): a sentence after the note, not a dash aside.
+    expect(strip.textContent).toContain("Steer sent: make it shorter. Jarvis reads it at its next step.");
 
     // The turn ends having READ the note (it rode a round frame back).
     H.stream.release!({ reply: "brief answer", steered: ["make it shorter"] });
@@ -225,7 +227,8 @@ describe("a chat turn is steered from the composer (v1.278.0)", () => {
     type(el, "shorter");
     enter(el);
     await waitFor(() => expect(steerPosts()).toHaveLength(1));
-    expect(await screen.findByText(/already finished — send it as a new message/)).not.toBeNull();
+    // v1.329.0 (K1): two plain sentences, no dash aside.
+    expect(await screen.findByText(/already finished\. Send it as a new message/)).not.toBeNull();
     expect(el.value).toBe("shorter");
     expect(screen.queryByTestId("steer-notes")).toBeNull();
     H.stream.release!({ reply: "done" });

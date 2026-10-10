@@ -286,8 +286,9 @@ describe("PreflightNote", () => {
   it("warns in amber, compactly, when the provider is known-unavailable", () => {
     render(<PreflightNote provider="fleet-custom" available={false} />);
     const note = screen.getByTestId("ij-preflight-note");
+    // v1.329.0 (K1): plain sentences, no dash aside.
     expect(note.textContent).toContain(
-      "fleet-custom isn't reachable right now — this turn will fail.",
+      "fleet-custom isn't reachable right now. This turn will fail.",
     );
     expect(note.textContent).toContain("Pick another model or bring the endpoint back.");
     // v1.329.0: the warn TONE (amber on the dark themes, a deep ink on the
@@ -303,7 +304,8 @@ describe("PreflightNote", () => {
     const note = screen.getByTestId("ij-preflight-note");
     expect(note.textContent).toContain("last check couldn't reach the daemon");
     // A stale map is not certain knowledge — never promise the turn WILL fail.
-    expect(note.textContent).not.toContain("this turn will fail");
+    // v1.329.0 (K1): the sentence now starts with a capital, so match either.
+    expect(note.textContent).not.toMatch(/this turn will fail/i);
   });
 });
 

@@ -15,7 +15,16 @@ import { RefreshCw } from "lucide-react";
  * When that provider is known down or still cooling down it also offers
  * "Choose another model…", which only opens the model menu: the page names
  * no model and never switches (v1.162.0) — the user picks, then retries.
+ *
+ * v1.329.0 (calm chat K1): both are CALM GHOSTS beside the calm refusal line,
+ * not the app's bordered btn-ghost: no border, no fill until the pointer is
+ * on one, the theme's hairline fill on hover. They still read as buttons:
+ * the icon and words stay, a keyboard focus draws the accent ring, and on a
+ * touch screen (no hover to reveal it) the faint fill is always there.
  */
+export const CALM_GHOST_BTN =
+  "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 [@media(hover:none)]:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-zinc-300";
+
 export function RetryTurnButton({
   cooldownS,
   onRetry,
@@ -57,8 +66,8 @@ export function RetryTurnButton({
       <button
         type="button"
         onClick={onChooseModel}
-        title={`${provider} ${down ? "is not reachable" : "is cooling down"} — pick a model for this chat, then press Retry`}
-        className="btn-ghost shrink-0 py-1.5 text-[13px]"
+        title={`${provider} ${down ? "is not reachable" : "is cooling down"}. Pick a model for this chat, then press Retry.`}
+        className={CALM_GHOST_BTN}
       >
         Choose another model…
       </button>
@@ -70,8 +79,8 @@ export function RetryTurnButton({
         <button
           type="button"
           disabled
-          title="This model is cooling down — Retry comes back when the wait ends, or choose another model"
-          className="btn-ghost shrink-0 py-1.5 text-[13px] disabled:opacity-60"
+          title="This model is cooling down. Retry comes back when the wait ends, or choose another model."
+          className={CALM_GHOST_BTN}
         >
           <RefreshCw size={14} aria-hidden="true" /> Retry in {left}s
         </button>
@@ -84,7 +93,7 @@ export function RetryTurnButton({
         type="button"
         onClick={onRetry}
         title="Re-send the last message"
-        className="btn-ghost shrink-0 py-1.5 text-[13px]"
+        className={CALM_GHOST_BTN}
       >
         <RefreshCw size={14} /> Retry
       </button>

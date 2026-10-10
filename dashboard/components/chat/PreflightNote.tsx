@@ -60,12 +60,12 @@ export function PreflightNote({
       <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-tone-warn" />
       <span className="truncate">
         {cooldown
-          ? `${provider} is in cooldown, retry in ${cooldownS} s — it failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
+          ? `${provider} is in cooldown, retry in ${cooldownS} s. It failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
           : signedOutCase
-            ? `${provider} is installed but not signed in — this turn will fail. ${signInWords[0].toUpperCase()}${signInWords.slice(1)}, then Test on Connections.`
+            ? `${provider} is installed but not signed in. This turn will fail. ${signInWords[0].toUpperCase()}${signInWords.slice(1)}, then Test on Connections.`
           : stale
-            ? `${provider} may be offline — the last check couldn't reach the daemon. Pick another model or check the endpoint.`
-            : `${provider} isn't reachable right now — this turn will fail. Pick another model or bring the endpoint back.`}
+            ? `${provider} may be offline. The last check couldn't reach the daemon. Pick another model or check the endpoint.`
+            : `${provider} isn't reachable right now. This turn will fail. Pick another model or bring the endpoint back.`}
       </span>
     </div>
   );

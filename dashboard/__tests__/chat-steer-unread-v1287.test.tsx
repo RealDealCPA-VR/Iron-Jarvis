@@ -178,7 +178,8 @@ describe("a note the turn finished before reading goes back in the box (v1.287.0
     const back = await composer();
     await waitFor(() => expect(back.value).toBe("make it shorter"));
     const note = await screen.findByTestId("steer-unread");
-    expect(note.textContent).toBe("Jarvis finished before reading this — press Enter to send it.");
+    // v1.329.0 (K1): two plain sentences, no dash aside.
+    expect(note.textContent).toBe("Jarvis finished before reading this. Press Enter to send it.");
     expect(screen.queryByTestId("steer-notes")).toBeNull();
     // Not in the conversation: the model never saw it.
     expect(screen.queryByTestId("steer-label")).toBeNull();
