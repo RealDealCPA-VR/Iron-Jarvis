@@ -22,7 +22,9 @@
  * them in order, newest first.
  *
  * The words come from the @ menu's own helpers (lib/atMenuRows: chatDay,
- * chatClock), so both places say a chat's time the same way.
+ * chatClock), so both places say a chat's time the same way. Since W8 J2 the
+ * @ menu's chat rows follow this rule too (lib/chatRefsRows): one rule for
+ * the sidebar list, the page's rail and the menu.
  *
  * Pure: the list draws what this returns.
  */

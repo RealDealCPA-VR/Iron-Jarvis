@@ -8,9 +8,9 @@
  *    request field. A FOLDER becomes the working folder exactly as "+ Choose
  *    a working folder" does: `workspace_dir`, and the card says so. No
  *    project = no Files section and no listing asked for.
- * 2. Saved chats that share a title read apart: the row's quiet second part
- *    is the project it belongs to (else the day), plus the time of day when
- *    two rows still read the same.
+ * 2. Saved chats that share a title read apart, by the chat lists' rule
+ *    (W8 J2): one short time or day in place of the age; a title of its own
+ *    shows the age. The project is on the row's tooltip.
  * 3. Agent rows read as names in the normal font ("Builder"), with "@builder"
  *    as a muted hint, under a calm "Agents" heading in sentence case.
  * The keys walk every section as one list, and a squeezed menu keeps the
@@ -30,7 +30,7 @@ import {
   projectFolders,
   sameFolderPath,
 } from "@/lib/atMenuFiles";
-import { atAgentName, chatClock, chatDay, chatRefSecondary } from "@/lib/atMenuRows";
+import { atAgentName, chatClock, chatDay } from "@/lib/atMenuRows";
 import { decodeChatRefRows } from "@/lib/chatRefs";
 import { composerKeyHint } from "@/lib/composerChips";
 
@@ -405,7 +405,13 @@ describe('"@" offers the project\'s files and folders (v1.329.0)', () => {
 });
 
 describe("chats that share a title read apart (v1.329.0)", () => {
-  it("a row names its project (from the daemon or the chat list), else the day; a tie adds the time", async () => {
+  // W8 J2: the menu's chat rows follow the chat lists' same-title rule
+  // (lib/sameTitleRows via lib/chatRefsRows): ONE quiet part per row. A
+  // shared title shows one short time or day IN PLACE of the age; a title of
+  // its own shows the age, as the lists do. The project (from the daemon or
+  // the chat list) moved to the row's tooltip; the old drawn "project · time"
+  // part plus an age was the double label H1 took out of both lists.
+  it("a shared title: one short time or day in place of the age; a unique title: the age; the project on hover", async () => {
     inProject();
     const now = new Date();
     const at = (h: number, m: number) =>
@@ -416,6 +422,7 @@ describe("chats that share a title read apart (v1.329.0)", () => {
       { id: "c2", title: "Check what changed in the repo", updated_at: lastYear, project_id: null },
       { id: "c3", title: "Lease options", updated_at: at(0, 10) },
       { id: "c4", title: "Lease options", updated_at: at(0, 40) },
+      { id: "c5", title: "Menu prices", updated_at: new Date(Date.now() - 3 * 60_000).toISOString() },
     ];
     // The chat list knows c3 and c4 are in this project (the row does not say).
     H.api.threads = [
@@ -427,25 +434,66 @@ describe("chats that share a title read apart (v1.329.0)", () => {
     await projectReady();
     await waitFor(() => expect(H.api.gets.some((p) => p.startsWith("/chat/threads?"))).toBe(true));
     type(el, "@");
-    const where = () =>
-      screen
-        .getAllByTestId("chat-ref-option")
-        .map((o) => o.querySelector('[data-testid="chat-ref-where"]')?.textContent ?? "");
+    const parts = () =>
+      screen.getAllByTestId("chat-ref-option").map((o) => {
+        const times = o.querySelectorAll("time");
+        return `${times.length}:${times[0]?.getAttribute("data-testid") ?? ""}:${times[0]?.textContent ?? ""}`;
+      });
     const y = new Date(lastYear);
     await waitFor(() =>
-      expect(where()).toEqual([
-        "Pier 9",
-        `Mar 4, ${y.getFullYear()}`,
-        "Harbor Street Cafe · 12:10 AM",
-        "Harbor Street Cafe · 12:40 AM",
+      expect(parts()).toEqual([
+        // Alone on its day, each twin says its day.
+        "1:chat-ref-twin:Today",
+        `1:chat-ref-twin:Mar 4, ${y.getFullYear()}`,
+        // Twins on one day say the time.
+        "1:chat-ref-twin:12:10 AM",
+        "1:chat-ref-twin:12:40 AM",
+        // A title of its own: the list's age.
+        "1:chat-ref-age:3m",
       ]),
     );
-    const w = screen.getAllByTestId("chat-ref-where")[0];
-    expect(w.className).toContain("text-zinc-500");
-    // The second part is never sent or saved: the chip keeps id + title.
-    fireEvent.click(screen.getAllByTestId("chat-ref-option")[0]);
+    // Never a second label on the row: no project or day part beside it.
+    expect(screen.queryAllByTestId("chat-ref-where")).toHaveLength(0);
+    const twin = screen.getAllByTestId("chat-ref-twin")[0];
+    expect(twin.className).toContain("text-zinc-500");
+    // The exact time (with seconds) is on hover, as in the lists.
+    expect(twin.getAttribute("title")).toBe("Today · 12:05:00 AM");
+    // The project stays reachable: the row's tooltip names it.
+    const opts = screen.getAllByTestId("chat-ref-option");
+    expect(opts[0].getAttribute("title")).toBe("Check what changed in the repo (Pier 9)");
+    expect(opts[1].getAttribute("title")).toBe("Check what changed in the repo");
+    expect(opts[2].getAttribute("title")).toBe("Lease options (Harbor Street Cafe)");
+    // The quiet part is never sent or saved: the chip keeps id + title.
+    fireEvent.click(opts[0]);
     const body = await send(el, "compare", 1);
     expect(body.thread_refs).toEqual(["c1"]);
+  });
+
+  it("the keys still walk the twin rows and Enter picks the highlighted one", async () => {
+    inProject();
+    const now = new Date();
+    const at = (h: number, m: number) =>
+      new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m).toISOString();
+    H.refs.rows = [
+      { id: "c3", title: "Lease options", updated_at: at(0, 10) },
+      { id: "c4", title: "Lease options", updated_at: at(0, 40) },
+    ];
+    render(<ChatPage />);
+    const el = await box();
+    await projectReady();
+    type(el, "@lease");
+    await waitFor(() =>
+      expect(screen.getAllByTestId("chat-ref-twin").map((t) => t.textContent)).toEqual(["12:10 AM", "12:40 AM"]),
+    );
+    const active = () =>
+      screen.getAllByTestId("chat-ref-option").map((o) => o.getAttribute("data-active") === "true");
+    expect(active()).toEqual([true, false]);
+    fireEvent.keyDown(el, { key: "ArrowDown" });
+    await waitFor(() => expect(active()).toEqual([false, true]));
+    fireEvent.keyDown(el, { key: "Enter" });
+    await waitFor(() => expect(screen.getAllByTestId("chat-ref-chip")).toHaveLength(1));
+    const body = await send(el, "which lease?", 1);
+    expect(body.thread_refs).toEqual(["c4"]);
   });
 });
 
@@ -568,24 +616,14 @@ describe("helpers (v1.329.0)", () => {
     expect(sameFolderPath("C:\\Work\\Harbor\\data", "C:\\Work\\Harbor")).toBe(false);
   });
 
-  it("chat second parts: project, else the day; a tie adds the time", () => {
+  // W8 J2: the rows' one quiet part is lib/chatRefsRows (pinned in
+  // chat-at-same-title-v1329); the day and time words stay here.
+  it("a chat's day and time in words", () => {
     const now = new Date(2026, 9, 9, 15, 0).getTime();
     const iso = (d: Date) => d.toISOString();
-    const rows = [
-      { id: "a", title: "Same", updatedAt: iso(new Date(2026, 9, 9, 9, 5)) },
-      { id: "b", title: "same", updatedAt: iso(new Date(2026, 9, 9, 14, 30)) },
-      { id: "c", title: "Other", updatedAt: iso(new Date(2026, 9, 8, 9, 0)) },
-      { id: "d", title: "Third", updatedAt: iso(new Date(2026, 8, 1, 9, 0)) },
-      { id: "e", title: "Fourth", updatedAt: null },
-    ];
-    const out = chatRefSecondary(rows, (r) => (r.id === "a" || r.id === "b" ? "Harbor" : null), now);
-    expect(Object.fromEntries(out)).toEqual({
-      a: "Harbor · 9:05 AM",
-      b: "Harbor · 2:30 PM",
-      c: "Yesterday",
-      d: "Sep 1",
-      e: "",
-    });
+    expect(chatDay(iso(new Date(2026, 9, 8, 9, 0)), now)).toBe("Yesterday");
+    expect(chatDay(iso(new Date(2026, 8, 1, 9, 0)), now)).toBe("Sep 1");
+    expect(chatDay(null, now)).toBe("");
     expect(chatDay(iso(new Date(2026, 9, 9, 1, 0)), now)).toBe("Today");
     expect(chatDay(iso(new Date(2025, 0, 2, 1, 0)), now)).toBe("Jan 2, 2025");
     expect(chatClock(iso(new Date(2026, 9, 9, 0, 7)))).toBe("12:07 AM");

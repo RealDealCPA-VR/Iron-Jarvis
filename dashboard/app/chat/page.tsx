@@ -165,7 +165,8 @@ import {
   useProjectFiles,
   type ProjectEntry,
 } from "@/lib/atMenuFiles";
-import { atAgentName, chatRefSecondary } from "@/lib/atMenuRows";
+import { atAgentName } from "@/lib/atMenuRows";
+import { chatRefRowParts } from "@/lib/chatRefsRows";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
@@ -2420,9 +2421,10 @@ const AtPicker = memo(function AtPicker({
   const chatsFull = chatRefs.length >= CHAT_REFS_MAX;
   const below = fit?.side === "below";
   const sectionCap = (cls: string) => (roomy ? `${cls} overflow-y-auto` : "");
-  const ageNow = Date.now();
-  // v1.329.0: each chat row's quiet second part (its project, else the day).
-  const chatSecondary = chatRefSecondary(chatMatches, chatProjectName, ageNow);
+  // v1.329.0 (W8 J2): each chat row's ONE quiet part, the chat lists' rule
+  // (lib/chatRefsRows): the age, or for a title another row shares, one
+  // short time or day in its place.
+  const chatParts = chatRefRowParts(chatMatches, Date.now());
 
   return (
     <div
@@ -2582,37 +2584,42 @@ const AtPicker = memo(function AtPicker({
                 : "Read with your next message"
             }
           />
-          {chatMatches.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              role="option"
-              data-testid="chat-ref-option"
-              {...rowProps(`chat:${c.id}`)}
-              onClick={() => pickChat(c)}
-              title={chatSecondary.get(c.id) ? `${c.title} (${chatSecondary.get(c.id)})` : c.title}
-            >
-              <MessageSquare size={12} className="shrink-0 text-accent-soft/70" />
-              <span data-testid="chat-ref-title" className="min-w-0 truncate text-[12px]">{c.title}</span>
-              {/* v1.329.0: the project it belongs to (or the day), so chats
-                  that share a title read apart. */}
-              {chatSecondary.get(c.id) && (
-                <span
-                  data-testid="chat-ref-where"
-                  className="min-w-0 shrink truncate text-[11px] text-zinc-500"
-                >
-                  {chatSecondary.get(c.id)}
+          {chatMatches.map((c) => {
+            const part = chatParts.get(c.id);
+            // The project, when known, stays on the row's tooltip; the row
+            // itself draws one quiet part, like the chat lists.
+            const project = (chatProjectName(c) ?? "").trim();
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="option"
+                data-testid="chat-ref-option"
+                {...rowProps(`chat:${c.id}`)}
+                onClick={() => pickChat(c)}
+                title={project ? `${c.title} (${project})` : c.title}
+              >
+                <MessageSquare size={12} className="shrink-0 text-accent-soft/70" />
+                <span data-testid="chat-ref-title" className="min-w-0 flex-1 truncate text-[12px]">
+                  {c.title}
                 </span>
-              )}
-              {/* When it last changed, so chats that share a title can be
-                  told apart (the chat list's own "8m / 2h" format). */}
-              {formatAge(c.updatedAt, ageNow) && (
-                <span data-testid="chat-ref-age" className="ml-auto shrink-0 pl-2 text-[11px] text-zinc-500">
-                  {formatAge(c.updatedAt, ageNow)}
-                </span>
-              )}
-            </button>
-          ))}
+                {/* v1.329.0 (W8 J2): a title of its own shows its age (the
+                    list's "12m / 3h"); a shared title shows one short time
+                    or day in its place, the exact time on hover. Never
+                    both. */}
+                {part ? (
+                  <time
+                    dateTime={c.updatedAt || undefined}
+                    data-testid={part.kind === "twin" ? "chat-ref-twin" : "chat-ref-age"}
+                    title={part.tooltip || undefined}
+                    className="shrink-0 pl-2 text-[11px] tabular-nums text-zinc-500"
+                  >
+                    {part.text}
+                  </time>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

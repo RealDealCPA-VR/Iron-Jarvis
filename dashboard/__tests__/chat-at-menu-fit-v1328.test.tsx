@@ -11,7 +11,9 @@
  *    scrolls as ONE list (no scroll inside a scroll).
  * 2. Saved chats often share a title ("Check what changed in the repo"), so a
  *    row and a picked chip show a quiet age in the chat list's format; the
- *    age is never sent and never saved on the message.
+ *    age is never sent and never saved on the message. (v1.329.0 W8 J2: a
+ *    menu row whose title another row shares shows the lists' one short
+ *    time or day in place of its age.)
  *
  * Harness: the chat-at-chats-v1328 header. jsdom has no layout, so the tests
  * give the composer card and the chat section boxes of their own.
@@ -28,6 +30,7 @@ import {
   squeezedLeadRows,
 } from "@/lib/chatRefsMenuFit";
 import { decodeChatRefRows } from "@/lib/chatRefs";
+import { sameTitleLabels } from "@/lib/sameTitleRows";
 
 const H = vi.hoisted(() => {
   class FakeApiError extends Error {
@@ -344,15 +347,26 @@ describe("a chat row says how old it is (v1.328.0)", () => {
     ]);
   });
 
-  it("two chats with one title read apart by age, in the menu and on the chips; only ids are sent", async () => {
+  it("two chats with one title read apart, in the menu and on the chips; only ids are sent", async () => {
     render(<ChatPage />);
     const el = await box();
     fireEvent.change(el, { target: { value: "@" } });
-    await waitFor(() =>
-      expect(screen.getAllByTestId("chat-ref-age").map((a) => a.textContent)).toEqual(["12m", "3h"]),
+    // v1.329.0 (W8 J2): in the MENU two rows that share a title follow the
+    // chat lists' rule (lib/sameTitleRows): one short time or day in place
+    // of the age, never both. Expected words come from the rule itself so a
+    // run just after midnight (3h ago = yesterday) still reads right.
+    const want = sameTitleLabels(
+      H.refs.rows.map((r) => ({ id: r.id, title: r.title, updated_at: r.updated_at })),
     );
-    const age = screen.getAllByTestId("chat-ref-age")[0];
-    expect(age.className).toContain("text-zinc-500");
+    await waitFor(() =>
+      expect(screen.getAllByTestId("chat-ref-twin").map((a) => a.textContent)).toEqual([
+        want.get("c-a"),
+        want.get("c-b"),
+      ]),
+    );
+    expect(screen.queryAllByTestId("chat-ref-age")).toHaveLength(0);
+    const twin = screen.getAllByTestId("chat-ref-twin")[0];
+    expect(twin.className).toContain("text-zinc-500");
     // Pick both; each chip carries its own age.
     fireEvent.click(screen.getAllByTestId("chat-ref-option")[0]);
     await waitFor(() => expect(screen.getAllByTestId("chat-ref-chip")).toHaveLength(1));

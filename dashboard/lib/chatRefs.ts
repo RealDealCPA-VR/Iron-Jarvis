@@ -40,8 +40,8 @@ export interface ChatRefPick {
   title: string;
   updatedAt?: string | null;
   /** v1.329.0: the project the chat belongs to, when the daemon says (a
-   *  string id, or null for none). Only for the row's quiet second part
-   *  (`lib/atMenuRows.chatRefSecondary`); never sent, never saved. */
+   *  string id, or null for none). Only for the "@" row's tooltip, which
+   *  names the project; never sent, never saved. */
   projectId?: string | null;
 }
 
