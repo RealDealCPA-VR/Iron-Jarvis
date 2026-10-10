@@ -52,8 +52,8 @@ export const STARTERS: StarterWorkflow[] = [
     name: "client-intake-triage",
     title: "Client intake triage",
     description:
-      "Scan the client documents in this run's workspace (pin the client's project so it scans their folder), classify them, flag what's missing, and write an intake summary — with a human check before anything is written.",
-    blurb: "Pin the client's project, run it: classified document list + gaps out — you approve the triage before the summary is written.",
+      "Scan the client documents in this run's workspace (pin the client's project so it scans their folder), classify them, flag what's missing, and write an intake summary. A person checks the triage before anything is written.",
+    blurb: "Pin the client's project and run it. You get a classified document list and the gaps, and you approve the triage before the summary is written.",
     steps: [
       {
         // `.` = the run's workspace (the pinned project's folder when pinned,
@@ -77,7 +77,7 @@ export const STARTERS: StarterWorkflow[] = [
         name: "Anything to correct?",
         kind: "ask",
         message:
-          "Review the triage above — anything to add or correct before the intake summary is written? (Answer 'no' to continue as-is.)",
+          "Review the triage above. Anything to add or correct before the intake summary is written? (Answer 'no' to continue as-is.)",
       },
       {
         name: "Write intake summary",
@@ -90,7 +90,7 @@ export const STARTERS: StarterWorkflow[] = [
       {
         name: "Tell me it's ready",
         kind: "notify",
-        message: "Client intake triage finished — intake-summary.md is ready.",
+        message: "Client intake triage finished. intake-summary.md is ready.",
       },
     ],
   },
@@ -113,7 +113,7 @@ export const STARTERS: StarterWorkflow[] = [
         kind: "agent",
         agent: "planner",
         task:
-          "Build the month-end close checklist from {{Gather statements}}: reconciliations, accruals, prepaids, fixed assets, payroll tie-out — with a status and any proposed adjusting entry for each.",
+          "Build the month-end close checklist from {{Gather statements}}: reconciliations, accruals, prepaids, fixed assets and payroll tie-out. Give each a status and any proposed adjusting entry.",
       },
       {
         name: "Approve adjustments",
@@ -132,7 +132,7 @@ export const STARTERS: StarterWorkflow[] = [
       {
         name: "Notify",
         kind: "notify",
-        message: "Month-end close run finished — close-memo.md is drafted.",
+        message: "Month-end close run finished. close-memo.md is drafted.",
       },
     ],
   },
@@ -201,12 +201,12 @@ export const STARTERS: StarterWorkflow[] = [
         kind: "agent",
         agent: "builder",
         task:
-          "Write batch-report.md from {{Process each file}} — one row per file, plus a section for anything that could not be read.",
+          "Write batch-report.md from {{Process each file}}, with one row per file and a section for anything that could not be read.",
       },
       {
         name: "Notify",
         kind: "notify",
-        message: "Folder batch finished — batch-report.md is ready.",
+        message: "Folder batch finished. batch-report.md is ready.",
       },
     ],
   },

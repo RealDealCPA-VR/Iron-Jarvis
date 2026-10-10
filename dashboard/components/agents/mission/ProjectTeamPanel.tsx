@@ -35,7 +35,7 @@ export function ProjectTeamPanel({
     <div data-testid="mission-project-team" className="space-y-2.5">
       {team.length === 0 ? (
         <p className="px-1 text-[12px] text-zinc-400">
-          No team picked yet — Jarvis chooses from all your agents. Pick a team to keep this project&apos;s work
+          No team picked yet. Jarvis chooses from all your agents. Pick a team to keep this project&apos;s work
           with the agents you choose.
         </p>
       ) : (
@@ -51,7 +51,7 @@ export function ProjectTeamPanel({
                     {/* v1.316.0: CSS title-case for a built-in only — a custom
                         or remote teammate's name reads exactly as typed. */}
                     <div
-                      className={`truncate text-[12.5px] font-medium text-zinc-200 ${
+                      className={`truncate text-[13px] font-medium text-zinc-200 ${
                         memberSource(m) === "builtin" ? "capitalize" : ""
                       }`}
                     >

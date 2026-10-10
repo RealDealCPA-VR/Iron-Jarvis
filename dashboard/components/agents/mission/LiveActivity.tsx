@@ -10,9 +10,9 @@ import { memo, useEffect, useRef } from "react";
 import { clock, type MissionActivity } from "@/lib/mission";
 
 const DOT: Record<MissionActivity["tone"], string> = {
-  ok: "bg-emerald-400",
-  warn: "bg-rose-400",
-  ask: "bg-amber-300",
+  ok: "bg-tone-success",
+  warn: "bg-tone-danger",
+  ask: "bg-tone-warn",
   info: "bg-accent",
 };
 
@@ -50,7 +50,7 @@ function LiveActivityLog({ lines, running }: { lines: MissionActivity[]; running
             <li
               key={`${line.at ?? ""}-${i}`}
               data-tone={line.tone}
-              className="flex items-start gap-2.5 text-[12.5px] leading-5 text-zinc-300"
+              className="flex items-start gap-2.5 text-[13px] leading-5 text-zinc-300"
             >
               <span className="w-16 shrink-0 whitespace-nowrap tabular-nums text-[11px] leading-5 text-zinc-500">{clock(line.at)}</span>
               <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${DOT[line.tone]}`} />

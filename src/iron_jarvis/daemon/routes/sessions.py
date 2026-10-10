@@ -563,7 +563,7 @@ def register(app: FastAPI, d) -> None:
         if prev.status in (SessionStatus.ACTIVE, SessionStatus.QUEUED):
             raise HTTPException(
                 status_code=409,
-                detail="this mission is still running — wait for it to finish before retrying",
+                detail="This mission is still running. Wait for it to finish before retrying.",
             )
         store = getattr(d.platform, "worklist", None)
         if store is None:  # pragma: no cover - a platform without the store
@@ -584,8 +584,8 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "a follow-up of this mission is already running or "
-                        "queued — wait for it to finish before retrying"
+                        "A follow-up of this mission is already running or "
+                        "queued. Wait for it to finish before retrying."
                     ),
                 )
             try:

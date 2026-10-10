@@ -123,11 +123,11 @@ export function RoomTranscript({ thread, onRail }: { thread: string; onRail: (ta
                       <span className="text-[11px] text-zinc-500">{clock(m.at ?? null)}</span>
                     </div>
                     {m.content ? (
-                      <div className="text-[13.5px] leading-relaxed text-zinc-300">
+                      <div className="text-[14px] leading-relaxed text-zinc-300">
                         <Markdown content={m.content} />
                       </div>
                     ) : null}
-                    {m.error ? <p className="text-[12px] text-rose-300">{m.error}</p> : null}
+                    {m.error ? <p className="text-[12px] text-tone-danger">{m.error}</p> : null}
                   </div>
                 </article>
               );

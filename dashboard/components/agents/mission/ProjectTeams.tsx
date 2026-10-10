@@ -20,7 +20,7 @@ export function ProjectTeams({ onOpen }: { onOpen: (projectId: string) => void }
       <header className="flex items-center gap-2 border-b hairline px-4 py-2.5">
         <FolderKanban size={14} className="text-accent-soft/80" aria-hidden />
         <h2 className="text-[13px] font-semibold text-zinc-200">Your projects</h2>
-        <span className="text-[11px] text-zinc-500">— give a project&apos;s own team an objective</span>
+        <span className="text-[11px] text-zinc-500">Give a project&apos;s own team an objective.</span>
       </header>
       <ul className="divide-y divide-white/5">
         {cards.map((w) => (
@@ -38,7 +38,7 @@ export function ProjectTeams({ onOpen }: { onOpen: (projectId: string) => void }
                 <span className="block truncate text-[11px] text-zinc-500">{countsLine(w.counts)}</span>
               </span>
               {w.counts.waiting > 0 && (
-                <span className="shrink-0 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[11px] text-amber-300">
+                <span className="shrink-0 rounded-full border border-tone-warn/30 bg-tone-warn/10 px-2 py-0.5 text-[11px] text-tone-warn">
                   {w.counts.waiting} waiting on you
                 </span>
               )}

@@ -58,24 +58,24 @@ export function preflightProblem(
   if (stale) {
     return {
       provider,
-      text: `Iron Jarvis could not check your default model, ${provider} — the last check couldn't reach the daemon, and it looked unavailable before that. If a task fails, check it on Connections.`,
+      text: `Iron Jarvis could not check your default model, ${provider}. The last check couldn't reach the daemon, and it looked unavailable before that. If a task fails, check it on Connections.`,
     };
   }
   if (row.available === false) {
     if (row.installed && row.signed_in === false) {
       return {
         provider,
-        text: `Your default model, ${provider}, is installed but not signed in — a task started now will fail. Sign it in on Connections first.`,
+        text: `Your default model, ${provider}, is installed but not signed in. A task started now will fail. Sign it in on Connections first.`,
       };
     }
     return {
       provider,
-      text: `Your default model, ${provider}, isn't reachable right now — a task started now will fail. Bring it back, or choose another default on Connections.`,
+      text: `Your default model, ${provider}, isn't reachable right now. A task started now will fail. Bring it back, or choose another default on Connections.`,
     };
   }
   return {
     provider,
-    text: `Your default model, ${provider}, failed repeatedly and is paused for ${wait} s — a task started now is refused. Wait, or choose another default on Connections.`,
+    text: `Your default model, ${provider}, failed repeatedly and is paused for ${wait} s. A task started now is refused. Wait, or choose another default on Connections.`,
   };
 }
 
@@ -136,7 +136,7 @@ export function MissionComposer({
     } catch (e) {
       setError(
         e instanceof ApiError && (e.status === 404 || e.status === 405)
-          ? "This daemon is older than the mission screen — restart Iron Jarvis to update it."
+          ? "This daemon is older than the mission screen. Restart Iron Jarvis to update it."
           : e instanceof Error
             ? e.message
             : "Could not start the mission.",
@@ -157,7 +157,7 @@ export function MissionComposer({
         <p className="mt-1 text-[13px] text-zinc-400">
           {fixedProject
             ? "Give Jarvis one objective for this project. It works in the project's context and folder, hands each part to the project's team, and puts the result here."
-            : "Give Jarvis one objective. It splits the work, hands each part to the right agent, and puts the result here — you can watch the team work underneath."}
+            : "Give Jarvis one objective. It splits the work, hands each part to the right agent, and puts the result here. You can watch the team work underneath."}
         </p>
         <textarea
           data-testid="mission-input"
@@ -197,10 +197,10 @@ export function MissionComposer({
             <p
               data-testid="mission-preflight"
               role="status"
-              className="basis-full rounded-lg border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-[12.5px] text-amber-100"
+              className="basis-full rounded-lg border border-tone-warn/30 bg-tone-warn/10 px-3 py-2 text-[13px] text-tone-warn"
             >
               {preflight.text}{" "}
-              <Link href="/connections" className="font-medium text-amber-200 underline hover:text-amber-100">
+              <Link href="/connections" className="font-medium text-tone-warn underline hover:opacity-80">
                 Open Connections
               </Link>
             </p>
@@ -216,7 +216,7 @@ export function MissionComposer({
           </button>
         </div>
         {error && (
-          <p data-testid="mission-start-error" className="mt-2 text-[12px] text-rose-300">
+          <p data-testid="mission-start-error" className="mt-2 text-[12px] text-tone-danger">
             {error}
           </p>
         )}
@@ -239,7 +239,7 @@ export function MissionComposer({
                   <span className="shrink-0 text-[11px] text-zinc-500">{clock(r.created_at)}</span>
                   <span
                     className={`w-16 shrink-0 text-right text-[11px] ${
-                      parked(r) ? "font-medium text-amber-300" : "text-zinc-400"
+                      parked(r) ? "font-medium text-tone-warn" : "text-zinc-400"
                     }`}
                   >
                     {rowWord(r)}

@@ -352,10 +352,10 @@ export function statusWord(s: MemberStatus): string {
 /** The one-line headline for the whole mission. */
 export function missionHeadline(v: MissionView): string {
   const st = v.session.status;
-  if (st === "completed") return v.session.outcome === "needs_you" ? "Finished — something needs you" : "Finished";
+  if (st === "completed") return v.session.outcome === "needs_you" ? "Finished, but something needs you" : "Finished";
   if (st === "failed") return "Could not finish";
   if (st === "cancelled") return "Stopped";
-  if (st === "queued") return "Queued — waiting for a free slot";
+  if (st === "queued") return "Queued, waiting for a free slot";
   const { done, total } = v.progress;
   if (v.coordinator.waiting_on || v.members.some((m) => m.status === "waiting_you"))
     return "Waiting for your OK";

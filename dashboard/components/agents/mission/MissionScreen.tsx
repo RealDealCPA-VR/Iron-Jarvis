@@ -102,8 +102,8 @@ function AvailableTeam() {
         <AgentFace name="jarvis" size={28} title="" />
         <div className="min-w-0">
           <div className="text-[13px] font-semibold text-zinc-100">Jarvis</div>
-          <p className="text-[11.5px] leading-snug text-zinc-400">
-            Picks from these teammates. You don&apos;t have to choose — just say what you need.
+          <p className="text-[12px] leading-snug text-zinc-400">
+            Picks from these teammates. You don&apos;t have to choose. Just say what you need.
           </p>
         </div>
       </div>
@@ -121,7 +121,7 @@ function AvailableTeam() {
                 {/* v1.316.0: a "custom:"/"remote:" name reads as typed; only a
                     built-in id is title-cased by CSS. */}
                 <div
-                  className={`truncate text-[12.5px] font-medium text-zinc-200 ${
+                  className={`truncate text-[13px] font-medium text-zinc-200 ${
                     r.name.includes(":") ? "" : "capitalize"
                   }`}
                 >
@@ -247,8 +247,8 @@ export function MissionScreen({
           <MissionOutput view={view} liveStore={m.liveStore} objective="" onChanged={m.reload} onOpen={onOpen} />
         )}
         {m.error && missionId && (
-          <p className="text-[12px] text-amber-300">
-            Can&apos;t reach the daemon right now — showing the last known state.
+          <p className="text-[12px] text-tone-warn">
+            Can&apos;t reach the daemon right now. Showing the last known state.
           </p>
         )}
       </div>
