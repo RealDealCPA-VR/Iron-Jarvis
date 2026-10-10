@@ -364,11 +364,17 @@ describe("live tool calls are grey one-line rows", () => {
 /* ---------------------------------------------------------------- receipt */
 
 describe("the receipt reads 'answered by <model>' inside the action row", () => {
-  it("names the model it is given; the provider when it has none", () => {
+  it("names the model it is given; else the route's model; the provider when it has none", () => {
     const { unmount } = render(<TurnReceipt inline modelName="Opus 5.5" route={ROUTE} documents={["C:\\a.xlsx"]} toolsUsed={["read_file"]} />);
     expect(screen.getByTestId("turn-receipt").textContent).toBe("answered by Opus 5.5·1 tool·1 file");
     unmount();
-    render(<TurnReceipt inline route={ROUTE} />);
+    // v1.329.0 (W6 H1): one way to name who answered. With no name given,
+    // the name the route's model id spells (lib/answeredModel), as a
+    // failover row does; the provider only when the route has no model.
+    const second = render(<TurnReceipt inline route={ROUTE} />);
+    expect(screen.getByTestId("turn-answered-by").textContent).toBe("answered by Opus 5.5");
+    second.unmount();
+    render(<TurnReceipt inline route={{ ...ROUTE, model: "" }} />);
     expect(screen.getByTestId("turn-answered-by").textContent).toBe("answered by Claude Code");
   });
 

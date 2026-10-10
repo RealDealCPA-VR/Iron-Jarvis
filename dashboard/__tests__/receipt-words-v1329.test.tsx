@@ -305,7 +305,11 @@ describe("the receipt speaks in plain sentences, warnings in the warning token",
         expect(el.getAttribute("title") ?? "").not.toContain(DASH);
       }
       // Anti-vacuity: the warnings are still drawn in the warning tone.
-      const warn = within(toggle).getByText(routeWarning(route as never)!);
+      // v1.329.0 (W6 H1): a substitute is named by its MODEL, as a normal
+      // row is (the name the caller gives), never by its provider.
+      const words = routeWarning({ ...(route as object), model: "claude-opus-4-8" } as never, "Opus 4.8")!;
+      if ((route as { provider: string }).provider !== "mock") expect(words).toMatch(/^answered by Opus 4\.8 \(/);
+      const warn = within(toggle).getByText(words);
       expect(warn.className).toContain("text-tone-warn");
       expect(within(toggle).getByText("1 blocked").className).toContain("text-tone-warn");
       expect(within(toggle).getByTestId("turn-trust").className).toContain("text-tone-warn");

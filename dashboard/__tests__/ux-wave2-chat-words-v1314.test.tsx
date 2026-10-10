@@ -469,7 +469,10 @@ describe("turn receipt names who answered in plain words (receipt-raw-provider-i
         }}
       />,
     );
-    const chip = screen.getByText(/answered by Claude Code \(Codex returned HTTP 500\)/);
+    // v1.329.0 (W6 H1): the chip names the model (as a normal row does); the
+    // provider stays in its title and in the expanded detail (asserted below).
+    const chip = screen.getByText(/answered by claude-fable-5 \(Codex returned HTTP 500\)/);
+    expect(chip.getAttribute("title")).toContain("Served by Claude Code.");
     expect(chip.className).toMatch(/text-tone-warn/);
     const toggle = screen.getByRole("button", { expanded: false });
     expect(toggle.textContent).not.toContain("claude-cli");

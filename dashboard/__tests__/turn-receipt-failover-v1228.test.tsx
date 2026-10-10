@@ -92,8 +92,12 @@ describe("TurnReceipt renders the from/why story", () => {
         }}
       />,
     );
-    const chip = screen.getByText(/answered by Claude Code \(fleet-rtx6000ada returned HTTP 500\)/);
+    // v1.329.0 (W6 H1): the chip names the MODEL that answered (an id
+    // lib/friendlyModelName cannot read stays as it is); the provider is in
+    // the chip's title and the expanded detail.
+    const chip = screen.getByText(/answered by claude-fable-5 \(fleet-rtx6000ada returned HTTP 500\)/);
     expect(chip.className).toMatch(/text-tone-warn/);
+    expect(chip.getAttribute("title")).toContain("Served by Claude Code.");
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     // The expanded row is its own span whose whole text is the from/why
     // story (exact match — the collapsed chip also CONTAINS it).

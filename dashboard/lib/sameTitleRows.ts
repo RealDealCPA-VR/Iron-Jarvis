@@ -4,15 +4,22 @@
  * Saved chats often share a title ("Check what changed in the repo" four
  * times), and the short age on the right ("31m") can match too. So when two or
  * more VISIBLE rows share a title, each of those rows (and only those) gets a
- * quiet second part, kept as short as still tells them apart:
+ * quiet second part, ONE short part on every row:
  *
- *   all on the same day   the time of day: "8:48 PM" (today),
- *                         "Yesterday · 8:48 PM", "Oct 8 · 8:48 PM"
- *   on different days     the day: "Yesterday", "Oct 8"; two that share a
- *                         day as well add the time ("Oct 8 · 8:48 PM")
+ *   shares its day with another twin   the time of day: "8:48 PM" (on any
+ *                                      day; today, yesterday or Oct 8)
+ *   alone on its day                   the day: "Today", "Yesterday", "Oct 8"
  *
- * Two that still read the same (made in the same minute) show the seconds
- * too ("6:11:05 PM").
+ * The day always rides the tooltip ("Yesterday · 8:48:05 PM"). Only in the
+ * rare tie where twins on DIFFERENT days would read the same time do those
+ * rows say both ("Oct 8 · 8:48 PM").
+ *
+ * v1.329.0 (calm chat W6 H1): the second part takes the AGE's place on those
+ * rows (the list draws one or the other, never both), and it is always the
+ * short time, never seconds: "6:11:46 PM 5h" clipped the title to about 12
+ * characters. Two made in the same minute read alike; the exact time (with
+ * seconds) is in the label's tooltip (`sameTitleTooltip`), and the list keeps
+ * them in order, newest first.
  *
  * The words come from the @ menu's own helpers (lib/atMenuRows: chatDay,
  * chatClock), so both places say a chat's time the same way.
@@ -50,6 +57,16 @@ function clockWithSeconds(iso: string | null | undefined): string {
   return `${h % 12 === 0 ? 12 : h % 12}:${mm}:${ss} ${h < 12 ? "AM" : "PM"}`;
 }
 
+/** The exact time for a same-titled row's tooltip: "Today · 6:11:05 PM",
+ *  "Oct 8 · 6:11:05 PM" ("" when there is no usable time). */
+export function sameTitleTooltip(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  const clock = clockWithSeconds(iso);
+  return clock ? join(chatDay(iso, now), clock) : "";
+}
+
 /**
  * The second part for each row that shares its title with another visible
  * row, by id. Rows with a title of their own are not in the map.
@@ -69,18 +86,24 @@ export function sameTitleLabels(
   for (const twins of byTitle.values()) {
     if (twins.length < 2) continue;
     const days = twins.map((r) => chatDay(r.updated_at, now));
-    const oneDay = days.every((d) => d === days[0]);
-    const labelFor = (i: number, clock: string): string => {
-      const day = days[i];
-      if (oneDay) return day === "Today" ? clock : join(day, clock);
-      const shareDay = days.filter((d) => d === day).length > 1;
-      return shareDay ? join(day, clock) : day;
-    };
-    const labels = twins.map((r, i) => labelFor(i, chatClock(r.updated_at)));
+    // ONE short part per row, whatever the day: a twin that shares its day
+    // with another twin says the time ("8:48 PM", never seconds), a twin
+    // alone on its day says the day ("Yesterday", "Oct 8"). The day is in
+    // the tooltip either way. "Yesterday · 8:48 PM" clipped the title to
+    // about 10 characters on a 15rem row.
+    const short = twins.map((r, i) => {
+      const shareDay = days.filter((d) => d === days[i]).length > 1;
+      return shareDay ? chatClock(r.updated_at) : days[i];
+    });
     twins.forEach((r, i) => {
-      // Still the same words as another row: the seconds tell them apart.
-      const tie = labels.some((l, j) => j !== i && l === labels[i]);
-      const label = tie ? labelFor(i, clockWithSeconds(r.updated_at)) : labels[i];
+      // The rare tie: two twins on DIFFERENT days would read the same time
+      // (8:48 PM yesterday and 8:48 PM on Oct 8). Only then add the day.
+      // Two made in the same minute of the same day read alike on purpose;
+      // the tooltip has the seconds and the list keeps them in order.
+      const clash = short.some(
+        (s, j) => j !== i && s === short[i] && days[j] !== days[i],
+      );
+      const label = clash ? join(days[i], short[i]) : short[i];
       if (label) out.set(r.id, label);
     });
   }

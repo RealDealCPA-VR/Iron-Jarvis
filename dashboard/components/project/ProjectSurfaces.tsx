@@ -233,7 +233,7 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
   const mine = (sessions ?? []).filter((s) => s.project_id === projectId);
   if (error && error.status === 0 && mine.length === 0)
     return (
-      <p data-testid="project-board-state" className="py-2 text-sm text-zinc-500">
+      <p data-testid="project-board-state" className={`${SURFACE_COLUMN} py-2 text-sm text-zinc-500`}>
         Board unavailable. The daemon looks offline.
       </p>
     );
@@ -250,7 +250,7 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
   // errored" is the same lie wearing a different coat.
   if (!data)
     return (
-      <div data-testid="project-board-state">
+      <div data-testid="project-board-state" className={SURFACE_COLUMN}>
         {loading || !error ? (
           <SkeletonRows rows={3} />
         ) : (
@@ -262,7 +262,7 @@ function SurfaceBoard({ projectId }: { projectId: string }) {
     );
   if (mine.length === 0)
     return (
-      <div data-testid="project-board-state">
+      <div data-testid="project-board-state" className={SURFACE_COLUMN}>
         <Empty icon={<SquareKanban size={22} />}>
           No sessions in this project yet. Run a task from the Tasks tab.
         </Empty>
@@ -345,7 +345,15 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
   );
 }
 
-/** One project surface, selected by `view`, rendered in the chat column. */
+/** The chat transcript's reading column (app/chat/page.tsx: the transcript's
+ *  `max-w-[760px]`). Tasks and Media read in it too, so switching tabs keeps
+ *  the reading line (v1.329.0, calm chat W6 H1). */
+export const SURFACE_COLUMN = "mx-auto w-full max-w-[760px]";
+
+/** One project surface, selected by `view`, rendered in the chat column.
+ *  v1.329.0 (W6 H1): Tasks and Media sit in the chat's centred column. The
+ *  Board keeps the full width for its columns (a four- or five-column board
+ *  in 760px is cramped); its empty and loading states sit in the column. */
 export function ProjectSurface({
   projectId,
   hasRoot,
@@ -356,7 +364,11 @@ export function ProjectSurface({
   view: ProjectSurfaceView;
 }) {
   return (
-    <div className="space-y-4">
+    <div
+      data-testid="project-surface"
+      data-column={view === "board" ? "wide" : "chat"}
+      className={view === "board" ? "space-y-4" : `${SURFACE_COLUMN} space-y-4`}
+    >
       {/* A paused task's ask outranks the surface it interrupted — it rides
           EVERY view, because the run keeps waiting whichever tab you're on. */}
       <ProjectApprovals projectId={projectId} />

@@ -313,6 +313,7 @@ import { useRunStream, type UseRunStream } from "@/lib/useRunStream";
 import dynamic from "next/dynamic";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import ThreadGroups, { GROUP_LIMIT } from "@/components/chat/ThreadGroups";
+import ThreadRailFilter from "@/components/chat/ThreadRailFilter";
 import { formatAge, markViewed, readLastViewed, threadStatuses } from "@/lib/threadStatus";
 import { AT_MENU_ROOMY_PX, squeezedLeadRows, useAtMenuFit } from "@/lib/chatRefsMenuFit";
 import { useThreadListPoll } from "@/lib/threadListPoll";
@@ -9918,74 +9919,66 @@ export default function ChatPage() {
                   iconSize={11}
                 />
               </div>
-              <div className="shrink-0 px-3 pb-2 pt-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  {/* v1.315.0 (thread-rail-scope-silent): a project-scoped
-                      rail SAYS so — the other chats are not gone, they are
-                      one press away ("All chats", which widens this list
-                      only). */}
-                  {railScoped && activeProject ? (
-                    <span
-                      // Two lines before it clips: the project's name is the
-                      // point of this label, and the rail is only 15rem wide.
-                      className="line-clamp-2 min-w-0 flex-1 break-words text-[11px] font-medium leading-snug text-zinc-400"
-                      title={`Showing the chats in ${activeProject.name}`}
-                    >
-                      Threads in {activeProject.name}
-                    </span>
-                  ) : activeProject ? (
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                      All chats
-                    </span>
-                  ) : chatSlot ? (
-                    // In the app sidebar the "Chats" heading already names it.
-                    <span />
-                  ) : (
+              {/* v1.329.0 (calm chat W6 H1): the list's top is the SAME as
+                  off /chat (SidebarChats): one quiet search, at the same
+                  place in the sidebar. In a project chat the filter is a
+                  quiet pair of ghosts just below it ("All chats" / "Only
+                  <project>", the one in effect filled), never a second
+                  uppercase heading or an underlined link. Beside the chat
+                  (no sidebar) the rail keeps its own "Threads" label and
+                  New chat, as before. */}
+              <div className={chatSlot ? "shrink-0 px-1 pb-1.5 pt-0.5" : "shrink-0 px-3 pb-2 pt-1.5"}>
+                {chatSlot ? null : (
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                       Threads
                     </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={newChat}
-                    className={`inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${chatSlot ? "hidden" : ""}`}
-                    title="Start a new conversation"
-                  >
-                    <Plus size={13} /> New chat
-                  </button>
-                </div>
-                {activeProject && (
-                  <button
-                    type="button"
-                    data-testid="thread-rail-filter"
-                    aria-pressed={railScoped}
-                    onClick={() => setRailOnly(!railScoped)}
-                    className="mt-0.5 max-w-full truncate text-left text-[11px] text-zinc-500 underline-offset-2 transition-colors hover:text-accent-soft hover:underline"
-                    title={
-                      railScoped
-                        ? "Show every saved chat here. The open chat and its project stay as they are."
-                        : `Show only the chats in ${activeProject.name}`
-                    }
-                  >
-                    {railScoped ? "All chats" : `Only ${activeProject.name}`}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={newChat}
+                      className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-[10px] px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                      title="Start a new conversation"
+                    >
+                      <Plus size={13} /> New chat
+                    </button>
+                  </div>
                 )}
                 {listedThreads.length > 0 && (
                   // `isolate` + `z-[1]` (the v1.313.0 rule): the icon must
                   // paint OVER the field, not under its fill.
-                  <div className="relative isolate mt-2">
+                  <div className={`relative isolate ${chatSlot ? "" : "mt-2"}`}>
                     <Search
                       size={12}
+                      aria-hidden="true"
                       className="pointer-events-none absolute left-2.5 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
                     />
                     <input
                       value={threadQuery}
                       onChange={(e) => setThreadQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        // As off /chat: Escape clears the box first; the
+                        // phone drawer around it closes only when there is
+                        // nothing left to clear.
+                        if (e.key === "Escape" && threadQuery) {
+                          e.stopPropagation();
+                          setThreadQuery("");
+                        }
+                      }}
                       placeholder="Search chats…"
                       aria-label="Search chats"
                       className="field w-full py-1.5 pl-8 text-[12px]"
                     />
                   </div>
+                )}
+                {/* v1.315.0 (thread-rail-scope-silent): the list says which
+                    chats it shows, and the other chats are one press away;
+                    the switch changes the LIST only. */}
+                {activeProject && (
+                  <ThreadRailFilter
+                    projectName={activeProject.name}
+                    only={railScoped}
+                    onChange={setRailOnly}
+                  />
                 )}
               </div>
               {/* THE ONLY SCROLLING PART of the rail. `min-h-0` is load-bearing:
@@ -9995,7 +9988,7 @@ export default function ChatPage() {
                   more; below md the rail is only ever in the phone drawer.)
                   v1.329.0 (G3): in a one-column slot (the phone drawer) it does
                   not scroll at all; the drawer scrolls, once. */}
-              <div className={slotFlows ? "p-1.5" : "min-h-0 flex-1 overflow-y-auto p-1.5"}>
+              <div className={slotFlows ? "p-0.5" : chatSlot ? "min-h-0 flex-1 overflow-y-auto p-0.5" : "min-h-0 flex-1 overflow-y-auto p-1.5"}>
                 {archivedView ? (
                   /* v1.328.0 (calm chat W3-3): the ARCHIVED view, in the
                      list's place. Every project's archived chats, one plain

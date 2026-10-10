@@ -13,7 +13,10 @@
  * inference, and the dishonesty cases are deliberately NOT hidden behind the
  * expand:
  *   - mock answered        → strongest wording, amber, always visible
- *   - failover / mismatch  → "answered by X — …", amber, always visible
+ *   - failover / mismatch  → "answered by <model> (… was not available)",
+ *                            amber, always visible (v1.329.0: the MODEL, as
+ *                            a normal row names it; the provider is in the
+ *                            title and the expanded detail)
  *   - denied tools         → "N blocked" count in the collapsed line
  *   - envelope adapted     → quiet zinc line, always visible, NEVER amber
  *     (v1.202.0 — the user's own measured local model being fitted is
@@ -69,6 +72,7 @@ import {
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
 import { providerDisplay } from "@/lib/onboarding";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { answeredModelName } from "@/lib/answeredModel";
 import { stepPhrase } from "@/lib/stepWords";
 import { cleanTarget } from "@/lib/workTarget";
 import {
@@ -425,13 +429,21 @@ export function wordWhy(why: string | null | undefined): string {
   }
 }
 
-export function routeWarning(route: TurnRoute | null | undefined): string | null {
+export function routeWarning(
+  route: TurnRoute | null | undefined,
+  modelName?: string | null,
+): string | null {
   if (!route) return null;
   // v1.329.0 (G2): plain short sentences, no dash asides. The reason a
   // substitute answered rides in brackets after the name.
   if (route.provider === "mock") return "Mock answer. No real model ran.";
-  // v1.314.0: plain provider names in the words; the ids stay in titles.
-  const who = providerDisplay(route.provider);
+  // v1.329.0 (W6 H1): ONE way to name who answered. A substitute is named
+  // by its MODEL, as a normal row is ("answered by Sonnet 4.6"): the
+  // caller's name (lib/answeredModel, the catalog's label), else the name
+  // the route's model id spells. The provider stays in the chip's title and
+  // the expanded detail. No model on the route: the provider's name
+  // (v1.314.0: plain words; the ids stay in titles).
+  const who = answeredName(route, modelName);
   if (route.reason === "failover") {
     // v1.228.0: name the provider that FAILED and why, when the router said.
     // This is what makes the DEFAULT route accountable — `requested` is ""
@@ -452,6 +464,18 @@ export function routeWarning(route: TurnRoute | null | undefined): string | null
     return `answered by ${who} (you asked for ${providerDisplay(route.requested)})`;
   }
   return null;
+}
+
+/** Who answered, in the words the receipt uses everywhere (v1.329.0, W6 H1):
+ *  the caller's model name, else the route model's own name
+ *  (lib/answeredModel with no catalog = friendlyModelName), else the
+ *  provider's plain name. */
+function answeredName(route: TurnRoute, modelName?: string | null): string {
+  return (
+    (modelName ?? "").trim() ||
+    answeredModelName(route, []) ||
+    providerDisplay(route.provider)
+  );
 }
 
 /** v1.314.0: the raw route ids behind the plain words — a record, kept in a
@@ -604,7 +628,7 @@ export function TurnReceipt({
   // for one path would be the kind of small lie this strip exists to end.
   const docs = Array.from(new Set(names(documents)));
 
-  const warning = routeWarning(route);
+  const warning = routeWarning(route, modelName);
   // A route object with no provider and nothing to warn about (degenerate
   // persisted shapes) carries no accountability fact — treat it as absent.
   const rt = route && (route.provider || warning) ? route : null;
@@ -664,7 +688,14 @@ export function TurnReceipt({
       warning ? (
         <span
           key="who"
-          title={rawRoute(rt)}
+          data-testid="turn-route-warning"
+          // v1.329.0 (W6 H1): the words name the model; the provider that
+          // served it stays here, in plain words, beside the raw ids.
+          title={
+            rt.provider === "mock"
+              ? rawRoute(rt)
+              : `Served by ${providerDisplay(rt.provider)}. ${rawRoute(rt)}`
+          }
           className="inline-flex min-w-0 items-center gap-1 rounded-full border border-tone-warn/25 bg-tone-warn/[0.06] px-1.5 py-px font-medium text-tone-warn"
         >
           <AlertTriangle size={10} className="shrink-0" />
@@ -676,7 +707,7 @@ export function TurnReceipt({
         <span key="who" data-testid="turn-answered-by" title={rawRoute(rt)}>
           answered by{" "}
           <span className="text-zinc-400">
-            {(modelName ?? "").trim() || providerDisplay(rt.provider)}
+            {answeredName(rt, modelName)}
           </span>
         </span>
       ) : (
@@ -943,7 +974,10 @@ export function TurnReceipt({
             <div className="flex items-start gap-2">
               <FileText size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                {/* v1.329.0 (W6 H1): each file is a plain row in the
+                    normal font, a quiet link like the steps above it,
+                    never a monospace chip. Same press: it opens the file. */}
+                <div className="flex min-w-0 flex-col gap-0.5">
                   {docs.map((path) => {
                     // Undo renders ONLY for a chip the caller matched to a
                     // journal row by path (v1.168.0) — never a guess.
@@ -952,13 +986,14 @@ export function TurnReceipt({
                     return (
                       <span
                         key={path}
-                        className="inline-flex min-w-0 items-center gap-0.5"
+                        className="flex min-w-0 items-center gap-1"
                       >
                         <button
                           type="button"
+                          data-testid="turn-doc"
                           title={path}
                           onClick={() => onOpenDocument?.(path)}
-                          className="max-w-[16rem] truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.08] hover:text-accent-soft"
+                          className="min-w-0 truncate rounded-[6px] text-left text-[12px] leading-5 text-zinc-300 underline-offset-2 transition-colors hover:text-accent-soft hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
                         >
                           {docBasename(path)}
                         </button>

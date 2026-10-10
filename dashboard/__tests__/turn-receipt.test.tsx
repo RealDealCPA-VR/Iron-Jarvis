@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import {
   TurnReceipt,
   docBasename,
@@ -198,7 +198,9 @@ describe("TurnReceipt — expand/collapse", () => {
     // v1.314.0: plain name in the words, the raw id in the span's title.
     expect(screen.getByText(/you asked for Claude Code/).getAttribute("title")).toBe("claude-cli");
     expect(screen.getByText(/\(failover\)/)).toBeTruthy();
-    expect(screen.getByText(/gpt-5\.2/)).toBeTruthy();
+    // v1.329.0 (W6 H1): the collapsed chip names the model too, so read the
+    // id from the expanded detail.
+    expect(within(screen.getByTestId("turn-receipt-detail")).getByText(/gpt-5\.2/)).toBeTruthy();
     // Tools as individual entries.
     expect(screen.getByText("read_file")).toBeTruthy();
     expect(screen.getByText("repl")).toBeTruthy();

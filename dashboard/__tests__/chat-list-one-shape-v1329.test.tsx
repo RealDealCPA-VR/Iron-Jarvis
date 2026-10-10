@@ -272,7 +272,9 @@ describe("inside a project chat the rail is the grouped list", () => {
     const reads = H.gets.length;
     fireEvent.click(within(rail).getByRole("button", { name: "Only Harbor Street Cafe" }));
     await waitFor(() => expect(within(rail).queryByTestId("thread-group-none")).toBeNull());
-    expect(within(rail).getByText(/Threads in Harbor Street Cafe/)).toBeTruthy();
+    // v1.329.0 (W6 H1): the filter says which chats it shows by which of its
+    // two ghosts is filled (no third "Threads in ..." label).
+    expect(within(rail).getByRole("button", { name: "Only Harbor Street Cafe" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(rail).getByTitle("Q3 revenue by location")).toBeTruthy();
     await settle();
     expect(H.gets.slice(reads).filter((p) => p.startsWith("/chat/threads"))).toEqual([]);
@@ -359,7 +361,7 @@ describe("same-titled chats read apart", () => {
     expect(within(list).queryByTestId("thread-twin-a1")).toBeNull();
   });
 
-  it("sameTitleLabels: today says the time, another day says the day, a shared day adds the time", () => {
+  it("sameTitleLabels: a shared day says the time, a day alone says the day, never both unless they tie", () => {
     const at = (d: number, h: number, m: number) => new Date(2026, 9, d, h, m).toISOString();
     const now = new Date(2026, 9, 9, 22, 0).getTime();
     const today = sameTitleLabels(
@@ -381,8 +383,12 @@ describe("same-titled chats read apart", () => {
       ],
       now,
     );
-    expect(yesterday.get("x")).toBe("Yesterday · 9:00 AM");
-    expect(yesterday.get("y")).toBe("Yesterday · 4:30 PM");
+    // v1.329.0 (W6 H1 fix round): ONE short part on every row. These were
+    // "Yesterday · 9:00 AM" / "Yesterday · 4:30 PM", which clipped the title
+    // to about 10 characters from the day after the chats were made. The
+    // day now lives only in the tooltip (sameTitleTooltip).
+    expect(yesterday.get("x")).toBe("9:00 AM");
+    expect(yesterday.get("y")).toBe("4:30 PM");
 
     const mixed = sameTitleLabels(
       [
@@ -392,11 +398,32 @@ describe("same-titled chats read apart", () => {
       ],
       now,
     );
+    // Same fix round: the two that share Oct 6 say only their time (were
+    // "Oct 6 · 9:00 AM" / "Oct 6 · 4:30 PM"); the one alone on its day says
+    // only the day.
     expect(mixed.get("x")).toBe("Today");
-    expect(mixed.get("y")).toBe("Oct 6 · 9:00 AM");
-    expect(mixed.get("w")).toBe("Oct 6 · 4:30 PM");
+    expect(mixed.get("y")).toBe("9:00 AM");
+    expect(mixed.get("w")).toBe("4:30 PM");
 
-    // Made in the same minute: the seconds tell them apart.
+    // The rare tie: twins on DIFFERENT days that would read the same time
+    // get the day as well, and only those rows.
+    const tie = sameTitleLabels(
+      [
+        { id: "a", title: "Same", updated_at: at(8, 20, 48) },
+        { id: "b", title: "Same", updated_at: at(8, 9, 0) },
+        { id: "c", title: "Same", updated_at: at(6, 20, 48) },
+        { id: "d", title: "Same", updated_at: at(6, 11, 15) },
+      ],
+      now,
+    );
+    expect(tie.get("a")).toBe("Yesterday · 8:48 PM");
+    expect(tie.get("c")).toBe("Oct 6 · 8:48 PM");
+    expect(tie.get("b")).toBe("9:00 AM");
+    expect(tie.get("d")).toBe("11:15 AM");
+
+    // Made in the same minute. v1.329.0 (W6 H1): the label is always the
+    // short time (it stands in for the age on a narrow row); the seconds
+    // moved to the label's tooltip (sameTitleTooltip).
     const sameMinute = sameTitleLabels(
       [
         { id: "x", title: "Same", updated_at: new Date(2026, 9, 9, 18, 11, 5).toISOString() },
@@ -405,8 +432,8 @@ describe("same-titled chats read apart", () => {
       ],
       now,
     );
-    expect(sameMinute.get("x")).toBe("6:11:05 PM");
-    expect(sameMinute.get("y")).toBe("6:11:42 PM");
+    expect(sameMinute.get("x")).toBe("6:11 PM");
+    expect(sameMinute.get("y")).toBe("6:11 PM");
     expect(sameMinute.get("w")).toBe("8:48 PM");
 
     // Untitled chats share the list's "Untitled chat".

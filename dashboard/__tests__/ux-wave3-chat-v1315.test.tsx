@@ -591,8 +591,12 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
     expect(await within(rail).findByRole("heading", { name: /Q3 Bookkeeping/ })).toBeTruthy();
     expect(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" })).toBeTruthy();
     fireEvent.click(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }));
-    expect(await within(rail).findByText(/Threads in Q3 Bookkeeping/)).toBeTruthy();
-    expect(within(rail).getByRole("button", { name: "All chats" })).toBeTruthy();
+    // v1.329.0 (W6 H1): the rail says its scope by which of the filter's two
+    // ghosts is filled ("Only Q3 Bookkeeping"), not by a third label.
+    await waitFor(() =>
+      expect(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }).getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(within(rail).getByRole("button", { name: "All chats" }).getAttribute("aria-pressed")).toBe("false");
   });
 
   it("the scope switch changes the RAIL only: no write to the open chat, the project stays, and one press goes back", async () => {
@@ -610,7 +614,7 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
     // Narrow to the project, then back.
     fireEvent.click(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }));
     await waitFor(() => expect(within(rail).queryByTitle("Quick question")).toBeNull());
-    expect(await within(rail).findByText(/Threads in Q3 Bookkeeping/)).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }).getAttribute("aria-pressed")).toBe("true");
     await settle();
     // THE DATA SIDE EFFECT the verifier caught: nothing re-saves the open chat.
     expect(H.api.puts.slice(putsBefore).filter((p) => p.path.startsWith("/chat/threads/"))).toEqual([]);
@@ -622,7 +626,7 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
     // One press back to every chat; the header no longer claims a scope.
     fireEvent.click(within(rail).getByRole("button", { name: "All chats" }));
     expect(await within(rail).findByTitle("Quick question")).toBeTruthy();
-    expect(within(rail).queryByText(/Threads in Q3 Bookkeeping/)).toBeNull();
+    expect(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }).getAttribute("aria-pressed")).toBe("false");
     expect(H.api.puts.slice(putsBefore).filter((p) => p.path.startsWith("/chat/threads/"))).toEqual([]);
   });
 

@@ -378,7 +378,12 @@ describe("pins, a project-scoped rail and the row slots", () => {
     // (that project's group first); the plain one-project list is now the
     // "Only <project>" filter, one press away.
     fireEvent.click(await within(rail).findByRole("button", { name: `Only ${PROJECT.name}` }));
-    expect(await within(rail).findByText(/Threads in Harbor Street Cafe/)).toBeTruthy();
+    // v1.329.0 (W6 H1): the filter's "Only" ghost is filled; no third label.
+    await waitFor(() =>
+      expect(
+        within(rail).getByRole("button", { name: `Only ${PROJECT.name}` }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
     await within(rail).findByTitle("Project chat 7");
     // (The rail's own "Chat" title is an h1; the LIST has no headings.)
     expect(within(within(rail).getByTestId("thread-groups")).queryAllByRole("heading")).toHaveLength(0);

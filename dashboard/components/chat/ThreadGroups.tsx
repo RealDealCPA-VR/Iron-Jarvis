@@ -37,11 +37,13 @@
 // (`forceOpen`) opens every group. And when two or more VISIBLE rows share a
 // title, those rows (only those) get a quiet second part, the time of day or
 // the day (lib/sameTitleRows), so four "Check what changed…" rows read apart.
+// v1.329.0 (W6 H1): that part takes the AGE's place on those rows (one quiet
+// second part, never "6:11:46 PM 5h"), so the title keeps its room.
 
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronRight, Folder, Pin } from "lucide-react";
 
-import { sameTitleLabels } from "@/lib/sameTitleRows";
+import { sameTitleLabels, sameTitleTooltip } from "@/lib/sameTitleRows";
 import {
   formatAge,
   statusWords,
@@ -354,6 +356,13 @@ export default function ThreadGroups<T extends ThreadSummary>({
                 const editor = rowEditor ? rowEditor(t) : null;
                 const action = rowAction && editor == null ? rowAction(t) : null;
                 const badge = rowBadge ? rowBadge(t) : null;
+                const twin = twins.get(t.id) ?? "";
+                // While a row has an action, a hover-capable screen hides the
+                // row's time until hover/focus, where the ⋯ takes its place.
+                const fadeForAction =
+                  action != null
+                    ? "[@media(hover:hover)]:group-focus-within/thread:opacity-0 [@media(hover:hover)]:group-hover/thread:opacity-0"
+                    : "";
                 return (
                   <li key={t.id} className="group/thread relative min-w-0">
                     {editor != null ? (
@@ -392,24 +401,25 @@ export default function ThreadGroups<T extends ThreadSummary>({
                           />
                         ) : null}
                         <span className="min-w-0 flex-1 truncate">{title}</span>
-                        {twins.has(t.id) ? (
-                          <span
-                            data-testid={`thread-twin-${t.id}`}
-                            className="shrink-0 text-[12px] tabular-nums text-zinc-500"
-                          >
-                            {twins.get(t.id)}
-                          </span>
-                        ) : null}
                         {badge}
                         {words ? <span className="sr-only">{`, ${words}`}</span> : null}
-                        {age ? (
+                        {twin ? (
+                          // v1.329.0 (W6 H1): a same-titled row's time or
+                          // day stands in for its age (one quiet second
+                          // part, never both), and the exact time is on
+                          // hover.
                           <time
                             dateTime={t.updated_at || undefined}
-                            className={`shrink-0 text-[12px] tabular-nums text-zinc-500 transition-opacity ${
-                              action != null
-                                ? "[@media(hover:hover)]:group-focus-within/thread:opacity-0 [@media(hover:hover)]:group-hover/thread:opacity-0"
-                                : ""
-                            }`}
+                            data-testid={`thread-twin-${t.id}`}
+                            title={sameTitleTooltip(t.updated_at, clock) || undefined}
+                            className={`shrink-0 text-[12px] tabular-nums text-zinc-500 transition-opacity ${fadeForAction}`}
+                          >
+                            {twin}
+                          </time>
+                        ) : age ? (
+                          <time
+                            dateTime={t.updated_at || undefined}
+                            className={`shrink-0 text-[12px] tabular-nums text-zinc-500 transition-opacity ${fadeForAction}`}
                           >
                             {age}
                           </time>

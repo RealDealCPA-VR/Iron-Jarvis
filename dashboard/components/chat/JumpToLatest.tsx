@@ -41,7 +41,11 @@ export const JumpToLatest = memo(function JumpToLatest({
       type="button"
       data-testid="jump-to-latest"
       onClick={onJump}
-      className="absolute bottom-full left-1/2 z-10 mb-2 flex w-auto -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/40 bg-ink-850/90 px-3 py-1 text-[12px] font-medium text-accent-soft shadow-glow-sm backdrop-blur transition-colors hover:bg-ink-800"
+      // v1.329.0 (W6 H1): a calm ghost chip like the ones around it: a
+      // hairline, a nearly solid ink fill (it floats over text, so it must
+      // not be see-through), quiet text that brightens and fills on hover.
+      // No accent border, no glow.
+      className="absolute bottom-full left-1/2 z-10 mb-2 flex w-auto -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/[0.1] bg-ink-850/95 px-3 py-1 text-[12px] text-zinc-300 backdrop-blur transition-colors hover:border-white/[0.16] hover:bg-ink-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
       title="Scroll to the latest message"
     >
       <ChevronDown size={13} /> Jump to latest
