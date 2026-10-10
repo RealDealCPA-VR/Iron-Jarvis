@@ -96,6 +96,7 @@ import { TurnReceipt, adaptedLabel, routeWarning } from "@/components/chat/TurnR
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { answeredModelName } from "@/lib/answeredModel";
 import { stepPhrase, stepPhraseText } from "@/lib/stepWords";
+import { reasoningTitle } from "@/lib/reasoningChip";
 
 const read = (rel: string) =>
   readFileSync(path.join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
@@ -335,15 +336,22 @@ describe("the receipt speaks in plain sentences, warnings in the warning token",
 
 describe("the reasoning chip and the ask card", () => {
   it("the reasoning tooltip is plain sentences and says what 'Reasoning' means (source pin)", () => {
+    // v1.330.0: the tooltip is computed from the model's documented default
+    // (lib/reasoningChip.reasoningTitle), so the pin reads the select's title
+    // EXPRESSION and the words it produces for the unknown case, where the
+    // chip still says "Reasoning".
     const page = read("app/chat/page.tsx");
     const at = page.indexOf('aria-label="Reasoning level"');
     expect(at).toBeGreaterThan(0);
     const select = page.slice(at, at + 900);
-    const title = /title="([^"]+)"/.exec(select)?.[1] ?? "";
+    expect(select).toMatch(/title=\{reasoningTitle\(reasoningDefaultFor\(choice\)\)\}/);
+    const title = reasoningTitle("");
     expect(title).toBe(
-      "How hard the model thinks before answering. Higher is slower and costs more. Reasoning means the model's own default level.",
+      "How hard the model thinks before answering. Higher is slower and costs more. With nothing picked the model decides.",
     );
-    expect(title).not.toContain(DASH);
+    for (const def of ["", "low", "medium", "high", "off", "auto"]) {
+      expect(reasoningTitle(def)).not.toContain(DASH);
+    }
   });
 
   it("a call with no arguments says '(empty)', never a bare dash", () => {

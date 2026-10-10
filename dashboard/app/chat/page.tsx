@@ -300,6 +300,12 @@ import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButt
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import {
+  reasoningChipLabel,
+  reasoningDefaultOf,
+  reasoningDefaultOption,
+  reasoningTitle,
+} from "@/lib/reasoningChip";
 import { answeredModelName as answeredModelNameFor } from "@/lib/answeredModel";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
@@ -3372,13 +3378,20 @@ export default function ChatPage() {
    *  (/health names it), so the chip shows there too; the daemon still applies
    *  a level only where the serving model offers it. "auto" and an unknown
    *  default match no row and draw nothing. */
-  function reasoningLevelsFor(c: string): string[] {
+  function reasoningRowFor(c: string): ModelOption | undefined {
     const { provider, model } = c
       ? splitChoice(c)
       : { provider: defaultProviderId, model: defaultModelName };
-    if (!provider || !model) return [];
-    const row = models.find((m) => m.provider === provider && m.model === model);
-    return (row?.reasoning ?? []).filter((l) => REASONING_LEVELS.includes(l));
+    if (!provider || !model) return undefined;
+    return models.find((m) => m.provider === provider && m.model === model);
+  }
+  function reasoningLevelsFor(c: string): string[] {
+    return (reasoningRowFor(c)?.reasoning ?? []).filter((l) => REASONING_LEVELS.includes(l));
+  }
+  /** v1.330.0: the level the same row runs at when nothing is sent ("" =
+   *  unknown), so the chip can say it. Words only: nothing extra is sent. */
+  function reasoningDefaultFor(c: string): string {
+    return reasoningDefaultOf(reasoningRowFor(c));
   }
   const [choice, setChoice] = useState(""); // "" => server default model
   // v1.263.0: the reasoning level for this conversation — "" = the model's own
@@ -12283,7 +12296,28 @@ export default function ChatPage() {
                             one (the daemon's catalog says which). A control that does
                             nothing for the picked model is not drawn at all. */}
                         {reasoningLevelsFor(choice).length > 0 && (
-                          <span className="relative inline-flex shrink-0 items-center">
+                          // v1.330.0: the chip's WORDS are this span; the native
+                          // select lies invisibly over it (same box), so its
+                          // menu can say "Medium (default)" while the chip
+                          // says "Medium". The select keeps its name, value,
+                          // keyboard and phone picker.
+                          <span
+                            className={`relative inline-flex h-[30px] shrink-0 items-center rounded-lg pl-2 pr-6 text-[13px] text-zinc-400 transition-colors has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/50 ${
+                              awaiting && sessionId !== null
+                                ? "opacity-40"
+                                : "hover:bg-white/[0.06] hover:text-zinc-200"
+                            }`}
+                          >
+                            <span
+                              aria-hidden
+                              data-testid="reasoning-chip-words"
+                              className="max-w-[10rem] truncate whitespace-nowrap"
+                            >
+                              {reasoningChipLabel(
+                                reasoningLevelsFor(choice).includes(reasoning) ? reasoning : "",
+                                reasoningDefaultFor(choice),
+                              )}
+                            </span>
                             <select
                               aria-label="Reasoning level"
                               data-testid="reasoning-level"
@@ -12293,14 +12327,16 @@ export default function ChatPage() {
                                 markSetupChanged();
                               }}
                               disabled={awaiting && sessionId !== null}
-                              title="How hard the model thinks before answering. Higher is slower and costs more. Reasoning means the model's own default level."
-                              className="h-[30px] max-w-[10rem] cursor-pointer appearance-none rounded-lg border-0 bg-transparent pl-2 pr-6 text-[13px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40"
+                              title={reasoningTitle(reasoningDefaultFor(choice))}
+                              className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-lg border-0 bg-transparent text-[13px] opacity-0 focus-visible:outline-none disabled:cursor-default"
                             >
                               {/* v1.326.0: short words for a chip beside the
                                   model ("High"); the select's name says what
-                                  they measure. */}
+                                  they measure. v1.330.0: the "send nothing"
+                                  row names the model's own default when the
+                                  daemon knows it ("Medium (default)"). */}
                               <option value="" className="bg-ink-900 text-zinc-200">
-                                Reasoning
+                                {reasoningDefaultOption(reasoningDefaultFor(choice))}
                               </option>
                               {reasoningLevelsFor(choice).map((lvl) => (
                                 <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">

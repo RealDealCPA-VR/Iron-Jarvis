@@ -12,7 +12,7 @@ import json
 import time
 from urllib.parse import urlsplit
 
-from ...providers.reasoning import reasoning_levels
+from ...providers.reasoning import reasoning_default, reasoning_levels
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -189,6 +189,15 @@ def selectable_models(d) -> list[dict[str, Any]]:
         # v1.263.0: the reasoning levels this model offers (empty = none), so
         # the chat composer shows the control only where it does something.
         m["reasoning"] = list(reasoning_levels(prov, str(m.get("model") or "")))
+        # v1.330.0: the level that model runs at when NOTHING is sent ("" =
+        # unknown, never a guess), so the chip can say it with no pick. A
+        # keyless API provider served through a CLI runs on that CLI's own
+        # settings, so it is unknown there. Added LAST on the row.
+        m["reasoning_default"] = reasoning_default(
+            prov,
+            str(m.get("model") or ""),
+            served_by=m.get("inherited_from") or None,
+        )
     return models
 
 

@@ -615,6 +615,11 @@ export interface ModelOption {
    *  "high"), from the daemon's one table. Empty or absent = no such knob, so
    *  the composer shows no control for it. */
   reasoning?: string[];
+  /** v1.330.0: the level this model runs at when NO level is sent: "low" |
+   *  "medium" | "high", "off" (does not think unless asked) or "auto" (thinks
+   *  as much as it decides). "" or absent = unknown (the vendor documents no
+   *  default, or an older daemon), so the chip keeps its plain label. */
+  reasoning_default?: string;
   /** v1.230.0: a keyless API provider served through the logged-in CLI names
    *  it here ("claude-cli" / "codex-cli") — flat-rate, so pickers label it
    *  "included", never "metered". Null/absent otherwise. */
