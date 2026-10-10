@@ -1383,27 +1383,102 @@ def handoff_receivers(platform: Any = None) -> tuple[str, ...]:
     return tuple(sorted({n.casefold() for n in names if n}, key=len, reverse=True))
 
 
-def _agent_shaped(receiver: str, names) -> bool:
-    """Is this receiver phrase an AGENT? A name on the roster at its head, a
-    head noun from :data:`_AGENT_WORDS`, or "another model". Markdown emphasis
-    is ignored ("Escalating to **builder**"). A code name that merely SHARES a
-    roster name and is written as code (``builder()``, ``builder.run``) is
-    not the agent."""
-    text = _re.sub(r"[*_`\"“”‘]", "", receiver or "").lstrip()
+#: Builtin agent names that are ALSO everyday software words ("I pass it to
+#: the planner, which optimizes the query" is code talk, not a hand-off).
+#: Such a name counts only with agent context (:func:`_common_word_agent`).
+#: Every other builtin (builder, researcher, automation, maintainer) and every
+#: custom or remote roster name keeps the plain rule: the name is enough.
+#: tests/test_handoff_common_words_v1330.py fails until a NEW builtin is put
+#: on one side or the other.
+_COMMON_WORD_AGENTS = frozenset({"planner", "reviewer", "supervisor", "memory", "guide"})
+#: A mass noun reads as code when bare ("write it to memory"); the others read
+#: as a name when bare ("handing it over to reviewer for a second look").
+_MASS_NOUN_AGENTS = frozenset({"memory"})
+#: Words right after the name that make it a person: "the planner, who …",
+#: "the reviewer will …", "the guide can …".
+_PERSON_FOLLOWERS = frozenset({
+    "who", "whom", "who'll", "who’ll", "who's", "who’s", "will", "can",
+    "they", "they'll", "they’ll", "he", "she",
+})
+#: Words right after the name that make it code: "the planner, which …",
+#: "the reviewer function", "the supervisor process", "the guide module".
+_CODE_FOLLOWERS = frozenset({
+    "which", "that", "function", "functions", "class", "module", "method",
+    "object", "instance", "service", "process", "step", "stage", "layer",
+    "component", "routine", "script", "pipeline", "call", "endpoint", "api",
+    "interface", "implementation", "logic", "code", "phase", "pass", "struct",
+    "type", "node", "handler", "worker", "thread", "queue", "buffer", "cache",
+    "table", "store", "loop", "hook", "callback", "field", "variable", "param",
+    "parameter", "argument", "config", "file", "library", "package",
+})
+_FOLLOWER_RX = _re.compile(r"[\s,;:*_—–-]*([\w'’-]+)(?:\s+([\w'’-]+))?")
+
+
+def _common_word_agent(
+    name: str, text: str, rest: str, mark: str, *, at: bool, bare: bool,
+    person_follows: bool,
+) -> bool:
+    """Is a builtin name from :data:`_COMMON_WORD_AGENTS` used as the AGENT
+    here? ``text`` starts at the name (original case), ``rest`` is what
+    follows it (casefolded), ``mark`` the character written right before it
+    ("*" emphasis, "`" code). In order: "@planner" and "the planner agent"
+    are agents; "the planner, which …" / "the planner function" are code (even
+    capitalised: a class named Planner is code talk); "who" / "will" / "can" /
+    "to do" after it, or "I've asked the reviewer to …" (``person_follows``),
+    make it a person; code formatting never names an agent; then emphasis, a
+    capital ("the Planner") or a bare countable noun ("to reviewer") does."""
+    if at:
+        return True
+    m = _FOLLOWER_RX.match(rest)
+    w1 = m.group(1) if m else ""
+    w2 = (m.group(2) or "") if m else ""
+    if w1 in _AGENT_WORDS:
+        return True
+    if w1 in _CODE_FOLLOWERS:
+        return False
+    if w1 in _PERSON_FOLLOWERS or (w1 == "to" and w2 == "do") or person_follows:
+        return True
+    if mark == "`":
+        return False
+    if mark == "*" or text[:1].isupper():
+        return True
+    return bare and name not in _MASS_NOUN_AGENTS
+
+
+def _agent_shaped(receiver: str, names, *, person_follows: bool = False) -> bool:
+    """Is this receiver phrase an AGENT? A name on the roster at its head
+    ("@builder" too), a head noun from :data:`_AGENT_WORDS`, or "another
+    model". Markdown emphasis is ignored ("Escalating to **builder**"). A code
+    name that merely SHARES a roster name and is written as code
+    (``builder()``, ``builder.run``) is not the agent. A builtin that is also
+    a common software word (:data:`_COMMON_WORD_AGENTS`) needs agent context
+    (:func:`_common_word_agent`). ``person_follows``: the claim's own shape
+    already says a person was asked ("I've asked the reviewer to …")."""
+    raw = (receiver or "").lstrip()
+    text = _re.sub(r"[*_`\"“”‘]", "", raw).lstrip()
     if _RECEIVER_OTHER_MODEL_RX.match(text):
         return True
-    text = _RECEIVER_LEAD_RX.sub("", text, count=1)
+    lead = _RECEIVER_LEAD_RX.match(text)
+    text = text[lead.end():] if lead else text
+    at = text.startswith("@")
+    if at:
+        text = text[1:]
     low = text.casefold()
     for name in names or ():
         if not low.startswith(name):
             continue
         rest = low[len(name):]
-        if not rest:
-            return True
-        if rest[0].isalnum() or rest[0] in "-_(":
+        if rest and (rest[0].isalnum() or rest[0] in "-_("):
             continue  # a longer word ("builders-kit") or a call ("builder()")
-        if rest[0] == "." and len(rest) > 1 and rest[1].isalnum():
+        if rest[:1] == "." and len(rest) > 1 and rest[1].isalnum():
             continue  # an attribute ("builder.run")
+        if name in _COMMON_WORD_AGENTS:
+            at_name = raw.lower().find(name)
+            mark = raw[at_name - 1] if at_name > 0 else ""
+            return _common_word_agent(
+                name, text, rest, mark, at=at, bare=lead is None,
+                person_follows=person_follows,
+            )
         return True
     head = ""
     for word in _re.match(r"[\w\s'’-]*", text).group(0).split()[:4]:
@@ -1447,7 +1522,7 @@ def _claimed_handoff_note(
         if _HANDOFF_HEDGE_RX.search(lead):
             continue  # a condition or an offer, not a claim
         receiver = m.group("asked") or reply[m.end() : m.end() + 80]
-        if not _agent_shaped(receiver, names):
+        if not _agent_shaped(receiver, names, person_follows=m.group("asked") is not None):
             continue  # "to the parser", "to sorted()", "to stdout": not an agent
         if tool_note_follows:
             return "\n\n_Note: nothing was handed off._"
