@@ -267,7 +267,12 @@ describe("opening Chat asks for the thread list once, already scoped", () => {
     await settle();
     // Today: ["/chat/threads", "/chat/threads?project_id=p1"] — the unscoped
     // list is fetched on mount, then fetched again once /projects resolves.
-    expect(listGets()).toEqual(["/chat/threads?project_id=p1"]);
+    // v1.329.0 (calm chat W5 G3): the project's list is still asked for ONCE
+    // and FIRST. The rail now also lists the other chats, folded under their
+    // own headings (dots on them), so ONE unscoped read follows it; it is
+    // never painted as the project's list (the next tests pin that).
+    expect(listGets()).toEqual(["/chat/threads?project_id=p1", "/chat/threads"]);
+    expect(screen.queryByTitle("Unscoped chat")).toBeNull();
   });
 
   it("never paints another scope's list while /projects is still loading", async () => {

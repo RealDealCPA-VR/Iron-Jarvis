@@ -3691,14 +3691,21 @@ export default function ChatPage() {
   // slow answer for an old scope can never repaint the rail; and a request for
   // the scope already asked for is not sent again.
   const listScopeRef = useRef<string | null | undefined>(undefined);
-  // v1.315.0 (thread-rail-scope-silent): "All chats" widens the RAIL only.
-  // The open chat, its project, the composer's project and every save stay
-  // exactly as they are — the verifier caught that wiring it to
-  // chooseProject("") would re-save the open chat as "no project". The ref is
-  // what refreshThreads reads (it fires from the autosave chain, where
-  // closures go stale); the state is what the header renders.
-  const [railAll, setRailAll] = useState(false);
-  const railAllRef = useRef(false);
+  // v1.315.0 (thread-rail-scope-silent): the rail's scope switch changes the
+  // RAIL only. The open chat, its project, the composer's project and every
+  // save stay exactly as they are (the verifier caught that wiring it to
+  // chooseProject("") would re-save the open chat as "no project").
+  // v1.329.0 (calm chat W5 G3): inside a project chat the rail is the SAME
+  // grouped list as everywhere else: that project's group first and open,
+  // every other group folded to a heading that still shows its dot. The
+  // project's own chats still come from the scoped read (complete; the
+  // unscoped list is the newest 100), the rest from one unscoped read
+  // (`otherThreads`). The switch is now a FILTER: `railOnly` shows just this
+  // project's chats as one plain list ("Only <project>"), nothing re-read.
+  const [railOnly, setRailOnly] = useState(false);
+  // The project the rail is showing (the render's copy of listScopeRef).
+  const [railScope, setRailScope] = useState<string | null>(null);
+  const [otherThreads, setOtherThreads] = useState<ThreadSummary[]>([]);
   // True once the page KNOWS its project: /projects answered (or failed), or
   // the user picked/cleared one. Before that a null projectId is "not known
   // yet", not "no project".
@@ -3739,6 +3746,23 @@ export default function ChatPage() {
     const q = threadQuery.trim().toLowerCase();
     return q ? threads.filter((t) => (t.title || "").toLowerCase().includes(q)) : threads;
   }, [threads, threadQuery]);
+  // v1.329.0 (G3): the chats OUTSIDE the rail's project (other projects and
+  // No project), from the unscoped read. A row of the rail's own project is
+  // the scoped list's to show (it may be newer), so it is left out here.
+  const railOthers = useMemo(() => {
+    if (!railScope) return [] as ThreadSummary[];
+    const own = new Set(threads.map((t) => t.id));
+    return otherThreads.filter((t) => t.project_id !== railScope && !own.has(t.id));
+  }, [otherThreads, threads, railScope]);
+  // Every row the rail can show, for the row ⋯ menu and the actions behind it.
+  const listedThreads = useMemo(
+    () => (railOthers.length ? [...threads, ...railOthers] : threads),
+    [threads, railOthers],
+  );
+  const visibleOthers = useMemo(() => {
+    const q = threadQuery.trim().toLowerCase();
+    return q ? railOthers.filter((t) => (t.title || "").toLowerCase().includes(q)) : railOthers;
+  }, [railOthers, threadQuery]);
   // v1.328.0: the same title filter over the archived list.
   const visibleArchived = useMemo(() => {
     const q = threadQuery.trim().toLowerCase();
@@ -3842,7 +3866,7 @@ export default function ChatPage() {
     try {
       // Daemon-owned (messaging) threads reject `messages` writes with 409 —
       // tag them with a project_id-only body (the route's carve-out).
-      if (threads.find((x) => x.id === id)?.owner === "daemon") {
+      if (listedThreads.find((x) => x.id === id)?.owner === "daemon") {
         await put(`/chat/threads/${encodeURIComponent(id)}`, { project_id: pid });
       } else {
         const t = await get<ThreadDetail>(
@@ -3884,7 +3908,7 @@ export default function ChatPage() {
     try {
       // Same 409 carve-out as assignThreadProject: rename a messaging thread
       // with a title-only body — its messages belong to the daemon.
-      if (threads.find((x) => x.id === id)?.owner === "daemon") {
+      if (listedThreads.find((x) => x.id === id)?.owner === "daemon") {
         await put(`/chat/threads/${encodeURIComponent(id)}`, { title: clean });
       } else {
         const t = await get<ThreadDetail>(
@@ -3959,10 +3983,17 @@ export default function ChatPage() {
     () => (projectId ? (projects.find((p) => p.id === projectId) ?? null) : null),
     [projects, projectId],
   );
-  // v1.315.0: the rail is showing one project's chats (not widened to "All
-  // chats"). Drives the rail header, the phone toggle, the empty wording and
-  // which rows name their project.
-  const railScoped = Boolean(projectId) && !railAll;
+  // v1.315.0: the rail is showing ONLY one project's chats, as one plain list.
+  // v1.329.0 (G3): that is now the "Only <project>" filter; a project chat
+  // opens on the grouped list with the project's group first.
+  const railScoped = Boolean(projectId) && railOnly;
+  // The project whose group leads the grouped rail (none on the plain list).
+  const railLead = useMemo(() => {
+    if (!railScope || railScoped) return null;
+    const name =
+      projects.find((p) => p.id === railScope)?.name?.trim() || "This project";
+    return { projectId: railScope, name };
+  }, [railScope, railScoped, projects]);
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -4360,11 +4391,11 @@ export default function ChatPage() {
   // (the list it holds was fetched before the turn reached the daemon).
   const [viewedTick, setViewedTick] = useState(0);
   const threadStatusMap = useMemo(() => {
-    const map = threadStatuses(threads, readLastViewed(), threadId);
+    const map = threadStatuses(listedThreads, readLastViewed(), threadId);
     if (busy && threadId && map[threadId] !== "waiting") map[threadId] = "running";
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- viewedTick re-reads the stamps
-  }, [threads, threadId, busy, viewedTick]);
+  }, [listedThreads, threadId, busy, viewedTick]);
   /** Stamp a chat as seen now (opened, or left). Never throws. */
   function noteViewed(id: string | null | undefined, updatedAt?: string | null) {
     if (!id) return;
@@ -4374,7 +4405,9 @@ export default function ChatPage() {
   // While a row is running or waiting, re-read the list every few seconds:
   // those flags are live in the daemon and nothing pushes their change. Stops
   // when no row is live, while the window is hidden, and on unmount.
-  useThreadListPoll(threads, () => void refreshThreads());
+  // v1.329.0 (G3): the other groups' rows count too while they are shown
+  // (their folded headings carry the dot); the filtered rail polls its own.
+  useThreadListPoll(railOnly ? threads : listedThreads, () => void refreshThreads());
   // v1.328.0: how many chats are archived, for the rail's quiet
   // "Archived (N)" link. Once on mount; archive/unarchive re-read it.
   useEffect(() => {
@@ -4434,10 +4467,9 @@ export default function ChatPage() {
   useLayoutEffect(() => {
     const scope =
       projectId === null && !projectsSettledRef.current ? wantedProjectId() : projectId;
-    // v1.315.0: picking (or leaving) a project shows that project's chats
-    // again — "All chats" was a look around, not a new selection.
-    railAllRef.current = false;
-    setRailAll(false);
+    // v1.315.0: picking (or leaving) a project shows the rail as it opens on
+    // a project again: the filter was a look around, not a new selection.
+    setRailOnly(false);
     void showThreadsFor(scope);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -4940,21 +4972,10 @@ export default function ChatPage() {
     // The scope the rail is SHOWING (v1.311.0) — before /projects confirms a
     // remembered project that is the remembered one, not the still-null
     // projectId, so a refresh never swaps in another scope's list.
-    // v1.315.0: a rail widened to "All chats" stays wide through a refresh.
-    const scope = railAllRef.current
-      ? null
-      : listScopeRef.current === undefined
-        ? projectIdRef.current
-        : listScopeRef.current;
+    // v1.329.0: a project's rail re-reads its other groups as well.
+    const scope =
+      listScopeRef.current === undefined ? projectIdRef.current : listScopeRef.current;
     await showThreadsFor(scope, true);
-  }
-
-  /** v1.315.0: "All chats" ↔ "Only {project}" — the rail's scope alone. Never
-   *  chooseProject/clearProject/markSetupChanged: nothing is written. */
-  function setRailScopeAll(all: boolean) {
-    railAllRef.current = all;
-    setRailAll(all);
-    void showThreadsFor(all ? null : projectIdRef.current);
   }
 
   /** Point the sidebar at `scope`'s conversations (v1.311.0). A scope already
@@ -4973,14 +4994,39 @@ export default function ChatPage() {
       }
     }
     listScopeRef.current = scope;
+    setRailScope(scope);
+    // The rail's OWN list is asked for first; a project's rail then reads the
+    // other chats (its folded groups), never painted as this project's list.
+    const own = get<{ threads: ThreadSummary[] }>(path);
+    if (scope) void showOtherThreads(scope, force);
+    else setOtherThreads([]);
     try {
-      const d = await get<{ threads: ThreadSummary[] }>(path);
+      const d = await own;
       cacheSet(path, d);
       if (mountedRef.current && listScopeRef.current === scope) setThreads(d.threads ?? []);
     } catch {
       /* quiet — the sidebar keeps what it shows */
     } finally {
       if (mountedRef.current && listScopeRef.current === scope) setThreadsLoading(false);
+    }
+  }
+
+  /** v1.329.0 (calm chat W5 G3): the chats outside the rail's project, for
+   *  its other (folded) groups and their dots. The unscoped list, painted from
+   *  the cache when the rail moves to a project, and dropped if the rail has
+   *  left that project before the answer lands. Quiet on failure. */
+  async function showOtherThreads(scope: string, force: boolean): Promise<void> {
+    const path = threadsPath(null);
+    if (!force) {
+      const cached = cachedGet<{ threads?: ThreadSummary[] }>(path);
+      if (cached) setOtherThreads(cached.threads ?? []);
+    }
+    try {
+      const d = await get<{ threads: ThreadSummary[] }>(path);
+      cacheSet(path, d);
+      if (mountedRef.current && listScopeRef.current === scope) setOtherThreads(d.threads ?? []);
+    } catch {
+      /* quiet — the folded groups keep what they show */
     }
   }
 
@@ -5512,7 +5558,7 @@ export default function ChatPage() {
     }
     leaveConversation();
     // v1.327.0 (W2-1): opening a chat is looking at it — its unread dot goes.
-    noteViewed(id, threads.find((t) => t.id === id)?.updated_at);
+    noteViewed(id, listedThreads.find((t) => t.id === id)?.updated_at);
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
     const openGen = chatGenRef.current;
@@ -5805,7 +5851,7 @@ export default function ChatPage() {
    *  new chat, as Delete does. */
   async function archiveThread(id: string, stop = false) {
     const title =
-      threads.find((x) => x.id === id)?.title ??
+      listedThreads.find((x) => x.id === id)?.title ??
       (archiveAsk?.id === id ? archiveAsk.title : "");
     setThreadMenu(null);
     setDeleteArmedId(null);
@@ -9176,7 +9222,7 @@ export default function ChatPage() {
           type="button"
           data-testid="chat-open-chats"
           onClick={() => window.dispatchEvent(new CustomEvent("ij:toggle-nav"))}
-          aria-label={`Chats${railScoped && activeProject ? ` in ${activeProject.name}` : ""}${
+          aria-label={`Chats${activeProject ? ` in ${activeProject.name}` : ""}${
             threads.length ? ` (${threads.length})` : ""
           }`}
           title="Your chats"
@@ -9836,6 +9882,10 @@ export default function ChatPage() {
   newChatRef.current = newChat;
   // Redesign S7: the thread rail, lifted into a value so it can render in the
   // app sidebar (portal) or in place — one element, one behaviour.
+  // v1.329.0 (calm chat W5 G3): a slot that scrolls as ONE column (the phone
+  // nav drawer, `data-flow="column"`) takes the rail at its full height, so
+  // the list is never a short scroll box inside the drawer's own scroll.
+  const slotFlows = chatSlot?.getAttribute("data-flow") === "column";
   const threadRail = (
             <section
               data-testid="chat-thread-rail"
@@ -9843,9 +9893,11 @@ export default function ChatPage() {
               className={
                 // v1.329.0: no card around it beside the chat either (a
                 // pop-out, a collapsed sidebar): one hairline divides it.
-                chatSlot
-                  ? "flex min-h-0 flex-1 flex-col"
-                  : "flex h-full min-h-0 flex-col overflow-hidden border-r hairline pr-2"
+                slotFlows
+                  ? "flex flex-col"
+                  : chatSlot
+                    ? "flex min-h-0 flex-1 flex-col"
+                    : "flex h-full min-h-0 flex-col overflow-hidden border-r hairline pr-2"
               }
             >
               {/* THE MODULE'S NAME, TOP LEFT, INSIDE THIS CARD (v1.215.0) —
@@ -9900,18 +9952,20 @@ export default function ChatPage() {
                 {activeProject && (
                   <button
                     type="button"
-                    onClick={() => setRailScopeAll(railScoped)}
+                    data-testid="thread-rail-filter"
+                    aria-pressed={railScoped}
+                    onClick={() => setRailOnly(!railScoped)}
                     className="mt-0.5 max-w-full truncate text-left text-[11px] text-zinc-500 underline-offset-2 transition-colors hover:text-accent-soft hover:underline"
                     title={
                       railScoped
-                        ? "Show every saved chat here — the open chat and its project stay as they are"
+                        ? "Show every saved chat here. The open chat and its project stay as they are."
                         : `Show only the chats in ${activeProject.name}`
                     }
                   >
                     {railScoped ? "All chats" : `Only ${activeProject.name}`}
                   </button>
                 )}
-                {threads.length > 0 && (
+                {listedThreads.length > 0 && (
                   // `isolate` + `z-[1]` (the v1.313.0 rule): the icon must
                   // paint OVER the field, not under its fill.
                   <div className="relative isolate mt-2">
@@ -9933,8 +9987,10 @@ export default function ChatPage() {
                   a flex child's default `min-height:auto` refuses to shrink
                   below its content, so without it the list grows the card past
                   the bottom of the window. (v1.329.0: no `max-h` floor any
-                  more; below md the rail is only ever in the phone drawer.) */}
-              <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+                  more; below md the rail is only ever in the phone drawer.)
+                  v1.329.0 (G3): in a one-column slot (the phone drawer) it does
+                  not scroll at all; the drawer scrolls, once. */}
+              <div className={slotFlows ? "p-1.5" : "min-h-0 flex-1 overflow-y-auto p-1.5"}>
                 {archivedView ? (
                   /* v1.328.0 (calm chat W3-3): the ARCHIVED view, in the
                      list's place. Every project's archived chats, one plain
@@ -9986,31 +10042,47 @@ export default function ChatPage() {
                       <div key={i} className="skeleton h-9 w-full" />
                     ))}
                   </div>
-                ) : threads.length === 0 ? (
+                ) : (railLead ? listedThreads.length : threads.length) === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
-                    {railScoped && activeProject
+                    {(railScoped && activeProject) || railLead
                       ? "No chats in this project yet."
                       : "No saved chats yet — conversations appear here after the first reply."}
                   </p>
-                ) : visibleThreads.length === 0 ? (
+                ) : (railLead ? visibleThreads.length + visibleOthers.length : visibleThreads.length) === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
                     No chats match “{threadQuery.trim()}”.
                   </p>
                 ) : (
                   /* v1.327.0 (calm chat W2-1): grouped under projects, each
                      row a status dot (running / waiting / unread), the title
-                     and a short age. A rail scoped to one project is one
+                     and a short age. The "Only <project>" filter makes it one
                      plain list (its header already names the project) and a
                      search shows every match; otherwise five per group, then
                      "Show more". Rename, pin and the ⋯ menu ride the rows'
-                     slots exactly as before. */
+                     slots exactly as before.
+                     v1.329.0 (G3): in a project chat the same grouped list,
+                     that project's group first and open (`lead`), the other
+                     groups folded to a heading with its dot (`foldOthers`); a
+                     search opens them all. */
+                  <>
+                  {railLead && threads.length === 0 && !threadQuery.trim() ? (
+                    <p
+                      data-testid="thread-rail-project-empty"
+                      className="px-2.5 pb-1 pt-2 text-[12px] leading-relaxed text-zinc-500"
+                    >
+                      No chats in this project yet.
+                    </p>
+                  ) : null}
                   <ThreadGroups
-                    threads={visibleThreads}
+                    threads={railLead ? [...visibleThreads, ...visibleOthers] : visibleThreads}
                     projects={projects}
                     activeId={threadId}
                     onOpen={(id) => void openThread(id)}
                     statuses={threadStatusMap}
                     pinnedIds={pinnedIds}
+                    lead={railLead}
+                    foldOthers={Boolean(railLead)}
+                    forceOpen={Boolean(threadQuery.trim())}
                     headings={!(railScoped && activeProject)}
                     limit={(railScoped && activeProject) || threadQuery.trim() ? Infinity : GROUP_LIMIT}
                     rowEditor={(t) =>
@@ -10050,6 +10122,7 @@ export default function ChatPage() {
                     }
                     rowAction={threadRowAction}
                   />
+                  </>
                 )}
                 {/* v1.328.0: work an archive could not stop from here is
                     named, never called stopped. */}
@@ -10271,7 +10344,7 @@ export default function ChatPage() {
                   (() => {
                     // v1.328.0: a menu opened in the Archived view is about
                     // an archived chat: Unarchive and Delete only.
-                    const mt = (archivedView ? archivedThreads : threads).find(
+                    const mt = (archivedView ? archivedThreads : listedThreads).find(
                       (x) => x.id === threadMenu.id,
                     );
                     if (!mt) return null;

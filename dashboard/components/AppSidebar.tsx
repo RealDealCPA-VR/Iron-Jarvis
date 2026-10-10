@@ -385,10 +385,17 @@ export function SidebarBody({
             <MessageSquare size={11} aria-hidden /> Chats
           </div>
           {onChat ? (
+            // v1.329.0 (calm chat W5 G3): the phone drawer scrolls as ONE
+            // column. Its slot takes the chat list at full height
+            // (`data-flow="column"` tells the chat page not to make the list
+            // a scroll box of its own); a short box inside the drawer's
+            // scroll showed one row above Projects and Theme. The wide
+            // rail keeps the list filling the space above Projects.
             <div
               id={variant === "rail" ? "ij-sidebar-chat-slot" : "ij-drawer-chat-slot"}
               ref={setSlotEl}
-              className="flex min-h-[12rem] flex-1 flex-col"
+              data-flow={variant === "drawer" ? "column" : undefined}
+              className={variant === "drawer" ? "flex shrink-0 flex-col" : "flex min-h-[12rem] flex-1 flex-col"}
             />
           ) : (
             <SidebarChats onNavigate={onNavigate} />

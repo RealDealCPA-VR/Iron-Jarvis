@@ -374,6 +374,10 @@ describe("pins, a project-scoped rail and the row slots", () => {
     H.api.responses["/chat/threads?project_id=p1"] = { threads: many };
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
+    // v1.329.0 (calm chat W5 G3): a project chat opens on the grouped list
+    // (that project's group first); the plain one-project list is now the
+    // "Only <project>" filter, one press away.
+    fireEvent.click(await within(rail).findByRole("button", { name: `Only ${PROJECT.name}` }));
     expect(await within(rail).findByText(/Threads in Harbor Street Cafe/)).toBeTruthy();
     await within(rail).findByTitle("Project chat 7");
     // (The rail's own "Chat" title is an h1; the LIST has no headings.)

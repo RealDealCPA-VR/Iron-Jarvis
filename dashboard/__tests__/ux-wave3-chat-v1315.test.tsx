@@ -579,15 +579,23 @@ describe("the project views are real tabs in the card header (project-tabs-shift
 /* =============================================== thread-rail-scope-silent */
 
 describe("the thread rail says which chats it shows (thread-rail-scope-silent)", () => {
-  it("a project-scoped rail reads 'Threads in {project}' and offers 'All chats'", async () => {
+  // v1.329.0 (calm chat W5 G3): a project chat now OPENS on the grouped list
+  // (the project's group first, the other groups folded under headings that
+  // keep their dots), and the old project-only list is the "Only {project}"
+  // filter. The rule pinned here is unchanged: the switch changes the RAIL
+  // only, it says which chats it shows, and one press goes back.
+  it("a project chat's rail is grouped, the project first, with 'Only {project}' one press away", async () => {
     withProject();
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
+    expect(await within(rail).findByRole("heading", { name: /Q3 Bookkeeping/ })).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" })).toBeTruthy();
+    fireEvent.click(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }));
     expect(await within(rail).findByText(/Threads in Q3 Bookkeeping/)).toBeTruthy();
     expect(within(rail).getByRole("button", { name: "All chats" })).toBeTruthy();
   });
 
-  it("'All chats' widens the RAIL only: no write to the open chat, the project stays, and one press goes back", async () => {
+  it("the scope switch changes the RAIL only: no write to the open chat, the project stays, and one press goes back", async () => {
     withProject();
     render(<ChatPage />);
     const rail = await screen.findByTestId("chat-thread-rail");
@@ -595,12 +603,15 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
     await screen.findByText("Q3 ledger sums to 88k.");
     await settle();
     const putsBefore = H.api.puts.length;
-    fireEvent.click(await within(rail).findByRole("button", { name: "All chats" }));
-    expect(await within(rail).findByTitle("Quick question")).toBeTruthy();
+    // The other chats are listed (folded under their own heading).
     expect(H.api.gets).toContain("/chat/threads");
+    fireEvent.click(await within(rail).findByRole("button", { name: /No project/ }));
+    expect(await within(rail).findByTitle("Quick question")).toBeTruthy();
+    // Narrow to the project, then back.
+    fireEvent.click(within(rail).getByRole("button", { name: "Only Q3 Bookkeeping" }));
+    await waitFor(() => expect(within(rail).queryByTitle("Quick question")).toBeNull());
+    expect(await within(rail).findByText(/Threads in Q3 Bookkeeping/)).toBeTruthy();
     await settle();
-    // Still unscoped after the dust settles (a refresh honours the rail scope).
-    expect(within(rail).getByTitle("Quick question")).toBeTruthy();
     // THE DATA SIDE EFFECT the verifier caught: nothing re-saves the open chat.
     expect(H.api.puts.slice(putsBefore).filter((p) => p.path.startsWith("/chat/threads/"))).toEqual([]);
     expect(window.localStorage.getItem(PROJECT_KEY)).toBe(PROJECT.id);
@@ -608,13 +619,11 @@ describe("the thread rail says which chats it shows (thread-rail-scope-silent)",
       PROJECT.name,
     );
     expect(screen.getByText("Q3 ledger sums to 88k.")).toBeTruthy();
-    // The header no longer claims a scope it is not showing.
+    // One press back to every chat; the header no longer claims a scope.
+    fireEvent.click(within(rail).getByRole("button", { name: "All chats" }));
+    expect(await within(rail).findByTitle("Quick question")).toBeTruthy();
     expect(within(rail).queryByText(/Threads in Q3 Bookkeeping/)).toBeNull();
-    // One press back to the project's chats.
-    const back = within(rail).getByRole("button", { name: /^(Only|Back to|Just|Show only) (Q3 Bookkeeping|this project)$/i });
-    fireEvent.click(back);
-    await waitFor(() => expect(within(rail).queryByTitle("Quick question")).toBeNull());
-    expect(await within(rail).findByText(/Threads in Q3 Bookkeeping/)).toBeTruthy();
+    expect(H.api.puts.slice(putsBefore).filter((p) => p.path.startsWith("/chat/threads/"))).toEqual([]);
   });
 
   it("an empty project scope says the project has no chats yet", async () => {

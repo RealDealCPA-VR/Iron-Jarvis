@@ -27,10 +27,21 @@
 // chat's channel). While a row has an action, a hover-capable screen shows
 // the age until the row is hovered or focused and the ⋯ takes its place; a
 // touch screen keeps both, the age left of the always-visible ⋯.
+//
+// v1.329.0 (calm chat W5 G3): ONE shape in every scope. Inside a project chat
+// the page passes `lead` (that project) and `foldOthers`: the project's group
+// comes first and open (its pinned chats stay in it, first, marked with a
+// pin), and every other group starts folded to its heading, which still
+// shows the most urgent dot of its chats (waiting, working, new) and how
+// many chats it holds; pressing the heading opens it in place. A search
+// (`forceOpen`) opens every group. And when two or more VISIBLE rows share a
+// title, those rows (only those) get a quiet second part, the time of day or
+// the day (lib/sameTitleRows), so four "Check what changed…" rows read apart.
 
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Folder, Pin } from "lucide-react";
+import { ChevronRight, Folder, Pin } from "lucide-react";
 
+import { sameTitleLabels } from "@/lib/sameTitleRows";
 import {
   formatAge,
   statusWords,
@@ -81,16 +92,49 @@ export interface ThreadGroupsProps<T extends ThreadSummary = ThreadSummary> {
   rowEditor?: (t: T) => ReactNode;
   /** A short word after the title (a messaging chat's channel). */
   rowBadge?: (t: T) => ReactNode;
+  /** The project the page is working in: its group comes first and open,
+   *  named `name` even before the project list has answered. */
+  lead?: LeadProject | null;
+  /** Every group but `lead`'s starts folded to its heading (a dot and a
+   *  count on it); the heading opens it. */
+  foldOthers?: boolean;
+  /** Open every group (a search is showing its matches). */
+  forceOpen?: boolean;
+}
+
+/** The project a list is opened in (ThreadGroups' `lead`). */
+export interface LeadProject {
+  projectId: string;
+  name: string;
+}
+
+/** The most urgent status among `ids` (waiting, then working, then new), or
+ *  "idle" when none is lit: what a folded group's heading shows. */
+export function groupStatus(
+  threads: readonly ThreadSummary[],
+  statuses: Record<string, ThreadStatus>,
+): ThreadStatus {
+  let best: ThreadStatus = "idle";
+  const rank: Record<ThreadStatus, number> = { waiting: 3, running: 2, unread: 1, idle: 0 };
+  for (const t of threads) {
+    const s = statuses[t.id] ?? "idle";
+    if (rank[s] > rank[best]) best = s;
+  }
+  return best;
 }
 
 /** Group chats by project: newest chat first inside a group, groups ordered
  *  by their newest chat, "No project" last. A chat whose project is not in
  *  `projects` goes to "No project". Pinned chats (by id) form a "Pinned"
- *  group that comes first and are left out of their project's group. */
+ *  group that comes first and are left out of their project's group.
+ *  v1.329.0: with a `lead` project its group comes FIRST (before Pinned),
+ *  under the lead's name even when `projects` does not list it yet, and its
+ *  own pinned chats stay in it, first. */
 export function groupThreads<T extends ThreadSummary>(
   threads: T[],
   projects: { id: string; name: string }[],
   pinnedIds: string[] = [],
+  lead: LeadProject | null = null,
 ): ThreadGroup<T>[] {
   const names = new Map(projects.map((p) => [p.id, p.name]));
   const pinned = new Set(pinnedIds);
@@ -101,7 +145,15 @@ export function groupThreads<T extends ThreadSummary>(
   const groups = new Map<string, ThreadGroup<T>>();
   let none: ThreadGroup<T> | null = null;
   let top: ThreadGroup<T> | null = null;
+  let first: ThreadGroup<T> | null = null;
+  const leadPinned: T[] = [];
   for (const t of sorted) {
+    if (lead && t.project_id === lead.projectId) {
+      first ??= { key: `p:${lead.projectId}`, projectId: lead.projectId, name: lead.name, threads: [] };
+      if (pinned.has(t.id)) leadPinned.push(t);
+      else first.threads.push(t);
+      continue;
+    }
     if (pinned.has(t.id)) {
       top ??= { key: "pinned", projectId: null, name: PINNED_LABEL, threads: [] };
       top.threads.push(t);
@@ -124,6 +176,10 @@ export function groupThreads<T extends ThreadSummary>(
   const out = [...groups.values()];
   if (top) out.unshift(top);
   if (none) out.push(none);
+  if (first) {
+    first.threads = [...leadPinned, ...first.threads];
+    out.unshift(first);
+  }
   return out;
 }
 
@@ -163,15 +219,50 @@ export default function ThreadGroups<T extends ThreadSummary>({
   rowAction,
   rowEditor,
   rowBadge,
+  lead = null,
+  foldOthers = false,
+  forceOpen = false,
 }: ThreadGroupsProps<T>) {
   const pinKey = (pinnedIds ?? []).join("\u0000");
+  const leadId = lead?.projectId ?? null;
+  const leadName = lead?.name ?? "";
   const groups = useMemo(
-    () => groupThreads(threads, projects, pinnedIds ?? []),
+    () =>
+      groupThreads(
+        threads,
+        projects,
+        pinnedIds ?? [],
+        leadId ? { projectId: leadId, name: leadName } : null,
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pinKey stands for pinnedIds
-    [threads, projects, pinKey],
+    [threads, projects, pinKey, leadId, leadName],
   );
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // v1.329.0: groups the user unfolded (or folded back) by hand, by key.
+  const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
   const clock = now ?? Date.now();
+
+  // What each group shows: folded (heading only), or its rows up to the cut.
+  const shown = groups.map((g) => {
+    const leadGroup = leadId != null && g.key === `p:${leadId}`;
+    const foldable = headings && foldOthers && !leadGroup;
+    // The open chat's group never starts folded: the chat on screen stays
+    // findable in the list.
+    const startsOpen = !foldable || g.threads.some((t) => t.id === activeId);
+    const folded = foldable && !forceOpen && !(unfolded[g.key] ?? startsOpen);
+    const expanded = !!open[g.key];
+    const visible = folded
+      ? []
+      : expanded
+        ? g.threads
+        : g.threads.filter((t, i) => i < limit || t.id === activeId);
+    return { g, leadGroup, foldable, folded, expanded, visible };
+  });
+  // Same-titled rows among the ones on screen get a quiet second part.
+  const twins = sameTitleLabels(
+    shown.flatMap((s) => s.visible),
+    clock,
+  );
 
   if (groups.length === 0) return null;
 
@@ -182,36 +273,78 @@ export default function ThreadGroups<T extends ThreadSummary>({
       className="flex min-w-0 flex-col"
       onKeyDown={moveFocus}
     >
-      {groups.map((g, gi) => {
-        const expanded = !!open[g.key];
-        const visible = expanded
-          ? g.threads
-          : g.threads.filter((t, i) => i < limit || t.id === activeId);
+      {shown.map(({ g, leadGroup, foldable, folded, expanded, visible }, gi) => {
         const hidden = g.threads.length - visible.length;
         const headingId = `thread-group-heading-${g.key}`;
+        const listId = `thread-group-list-${g.key}`;
         const pinnedGroup = g.key === "pinned";
+        const icon = pinnedGroup ? (
+          <Pin size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+        ) : (
+          <Folder size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+        );
+        // A folded heading still says whether something in it needs a look.
+        const summary = folded ? groupStatus(g.threads, statuses) : "idle";
+        const summaryWords = statusWords(summary);
         return (
           <section
             key={g.key}
             aria-labelledby={headings ? headingId : undefined}
             aria-label={headings ? undefined : g.name}
             data-testid={`thread-group-${g.key}`}
+            data-folded={foldable ? (folded ? "true" : "false") : undefined}
             className="min-w-0"
           >
             {headings ? (
               <h3
                 id={headingId}
-                className={`${gi === 0 ? "mt-1.5" : "mt-3.5"} flex min-w-0 items-center gap-1.5 px-2.5 text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500`}
+                className={`${gi === 0 ? "mt-1.5" : "mt-3.5"} flex min-w-0 items-center gap-1.5 ${foldable ? "" : "px-2.5"} text-[11px] font-medium uppercase tracking-[0.06em] text-zinc-500`}
               >
-                {pinnedGroup ? (
-                  <Pin size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+                {foldable ? (
+                  <button
+                    type="button"
+                    data-testid={`thread-group-toggle-${g.key}`}
+                    aria-expanded={!folded}
+                    aria-controls={folded ? undefined : listId}
+                    onClick={() => setUnfolded((u) => ({ ...u, [g.key]: folded }))}
+                    title={folded ? `Show the chats in ${g.name}` : `Fold ${g.name}`}
+                    className="flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-[8px] px-2.5 text-left uppercase tracking-[0.06em] transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                  >
+                    {icon}
+                    <span className="min-w-0 truncate">{g.name}</span>
+                    {folded && summary !== "idle" ? (
+                      <span
+                        aria-hidden="true"
+                        data-testid={`thread-group-dot-${g.key}`}
+                        data-status={summary}
+                        title={summaryWords || undefined}
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[summary]}`}
+                      />
+                    ) : null}
+                    {folded && summaryWords ? (
+                      <span className="sr-only">{`, ${summaryWords}`}</span>
+                    ) : null}
+                    {folded ? (
+                      <span className="ml-auto shrink-0 normal-case tracking-normal tabular-nums">
+                        {g.threads.length}
+                      </span>
+                    ) : null}
+                    <ChevronRight
+                      size={12}
+                      aria-hidden="true"
+                      className={`shrink-0 transition-transform ${folded ? "" : "ml-auto rotate-90"}`}
+                    />
+                  </button>
                 ) : (
-                  <Folder size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+                  <>
+                    {icon}
+                    <span className="truncate">{g.name}</span>
+                  </>
                 )}
-                <span className="truncate">{g.name}</span>
               </h3>
             ) : null}
-            <ul className={`${headings ? "mt-1" : ""} flex min-w-0 flex-col gap-px`}>
+            {folded ? null : (
+            <ul id={listId} className={`${headings ? "mt-1" : ""} flex min-w-0 flex-col gap-px`}>
               {visible.map((t) => {
                 const status = statuses[t.id] ?? "idle";
                 const words = statusWords(status);
@@ -251,7 +384,7 @@ export default function ThreadGroups<T extends ThreadSummary>({
                           title={words || undefined}
                           className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[status]}`}
                         />
-                        {!headings && pinnedIds?.includes(t.id) ? (
+                        {(!headings || leadGroup) && pinnedIds?.includes(t.id) ? (
                           <Pin
                             size={11}
                             aria-label="Pinned"
@@ -259,6 +392,14 @@ export default function ThreadGroups<T extends ThreadSummary>({
                           />
                         ) : null}
                         <span className="min-w-0 flex-1 truncate">{title}</span>
+                        {twins.has(t.id) ? (
+                          <span
+                            data-testid={`thread-twin-${t.id}`}
+                            className="shrink-0 text-[12px] tabular-nums text-zinc-500"
+                          >
+                            {twins.get(t.id)}
+                          </span>
+                        ) : null}
                         {badge}
                         {words ? <span className="sr-only">{`, ${words}`}</span> : null}
                         {age ? (
@@ -280,7 +421,8 @@ export default function ThreadGroups<T extends ThreadSummary>({
                 );
               })}
             </ul>
-            {g.threads.length > limit && (expanded || hidden > 0) ? (
+            )}
+            {!folded && g.threads.length > limit && (expanded || hidden > 0) ? (
               <button
                 type="button"
                 data-testid={`thread-show-more-${g.key}`}
