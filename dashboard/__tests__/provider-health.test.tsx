@@ -290,7 +290,9 @@ describe("PreflightNote", () => {
       "fleet-custom isn't reachable right now — this turn will fail.",
     );
     expect(note.textContent).toContain("Pick another model or bring the endpoint back.");
-    expect(note.className).toContain("text-amber-300");
+    // v1.329.0: the warn TONE (amber on the dark themes, a deep ink on the
+    // light ones), not a literal amber that only reads through an override.
+    expect(note.className).toContain("text-tone-warn");
     expect(note.className).toContain("text-[11px]");
     expect(note.className).toContain("h-5"); // fixed height — no layout jump
     expect(note.querySelector("button")).toBeNull(); // no buttons, ever
