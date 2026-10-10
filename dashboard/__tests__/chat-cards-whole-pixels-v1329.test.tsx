@@ -24,8 +24,17 @@ import { describe, expect, it } from "vitest";
 
 const CHAT_DIR = path.join(__dirname, "..", "components", "chat");
 
+/** Files OUTSIDE components/chat that a chat card renders classes from, keyed
+ *  by the name the scan reports. Wave 6 (H4): WorkflowDraftCard draws its
+ *  agent-type and step-kind chips from components/workflow/agents.ts
+ *  (AGENT_META / KIND_META), so those class strings are chat-card classes
+ *  too and the guard reads that file as well. */
+const EXTRA: Record<string, string> = {
+  "workflow/agents.ts": path.join(__dirname, "..", "components", "workflow", "agents.ts"),
+};
+
 const read = (name: string) =>
-  readFileSync(path.join(CHAT_DIR, name), "utf8").replace(/\r\n/g, "\n");
+  readFileSync(EXTRA[name] ?? path.join(CHAT_DIR, name), "utf8").replace(/\r\n/g, "\n");
 
 /** The cards this wave moved onto whole pixels and tone tokens. Each must
  *  exist and be scanned (anti-vacuity: a rename must not silently drop one). */
@@ -105,16 +114,30 @@ function offenders(name: string, src: string): string[] {
   return hits;
 }
 
-const scanned = readdirSync(CHAT_DIR)
-  .filter((f) => /\.(tsx|ts)$/.test(f))
-  .filter((f) => !(f in NOT_SCANNED))
-  .sort();
+const scanned = [
+  ...readdirSync(CHAT_DIR)
+    .filter((f) => /\.(tsx|ts)$/.test(f))
+    .filter((f) => !(f in NOT_SCANNED))
+    .sort(),
+  ...Object.keys(EXTRA),
+];
 
 describe("chat cards: whole pixels and theme tokens only", () => {
   it("scans every chat component, including each card this wave moved", () => {
     for (const card of CARDS) expect(scanned, card).toContain(card);
     // Anti-vacuity: the folder really holds the chat components.
     expect(scanned.length).toBeGreaterThan(30);
+  });
+
+  it("also reads the workflow chip classes WorkflowDraftCard renders (agents.ts)", () => {
+    expect(scanned).toContain("workflow/agents.ts");
+    const src = read("workflow/agents.ts");
+    // Anti-vacuity: this is the file that holds the chips, and they are real
+    // class strings the patterns would see.
+    expect(src).toContain("export const AGENT_META");
+    expect(src).toContain("export const KIND_META");
+    expect((src.match(/chip: "/g) ?? []).length).toBeGreaterThanOrEqual(9);
+    expect(read("WorkflowDraftCard.tsx")).toMatch(/from "@\/components\/workflow\/agents"/);
   });
 
   it("no chat component has a half-pixel size, a literal hue or a colour value outside the allowlist", () => {

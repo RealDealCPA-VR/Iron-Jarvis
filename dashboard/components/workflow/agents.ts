@@ -1,7 +1,15 @@
 // Agent-type metadata shared by the workflow node editor.
 // Each agent type gets an icon, a disciplined accent and chip styling so the
-// graph reads at a glance — cyan builder, violet planner, amber reviewer,
-// emerald supervisor, sky researcher.
+// graph reads at a glance: the accent for builder, then the theme's tone
+// tokens (violet planner, warn reviewer, success supervisor, info
+// researcher).
+//
+// v1.329.0 (calm chat wave 6): every colour here is a THEME token. The chips
+// render on the workflow canvas, the node inspector AND the chat's
+// WorkflowDraftCard, and literal hues (violet-300, amber-300, sky-300,
+// emerald-300) only read on Daylight through the generated light overrides,
+// while `tone-*` is re-inked by every theme itself. The S3 source guard
+// (__tests__/chat-cards-whole-pixels-v1329.test.tsx) reads this file too.
 
 import type { ComponentType } from "react";
 import { Hammer, MapPinned, ScanEye, Search, ShieldCheck } from "lucide-react";
@@ -30,9 +38,11 @@ export interface AgentMeta {
   chip: string;
   /** Icon-tile classes. */
   tile: string;
-  /** Selected-ring accent (box-shadow color, rgba). */
+  /** Selected-ring accent (a box-shadow colour; a theme variable). */
   glow: string;
-  /** Hex used by the React Flow MiniMap. */
+  /** The React Flow MiniMap's fill. The MiniMap applies it as a STYLE fill
+   *  (`style={{ fill }}`), so a theme variable resolves and the minimap
+   *  follows the theme like the chips do. */
   hex: string;
 }
 
@@ -43,39 +53,39 @@ export const AGENT_META: Record<AgentType, AgentMeta> = {
     chip: "border-accent/30 bg-accent/10 text-accent-soft",
     tile: "border-accent/30 bg-accent/10 text-accent-soft",
     glow: "rgb(var(--accent-rgb)/0.55)",
-    hex: "#22d3ee",
+    hex: "rgb(var(--accent-rgb))",
   },
   planner: {
     label: "Planner",
     icon: MapPinned,
-    chip: "border-violet-500/30 bg-violet-500/10 text-violet-300",
-    tile: "border-violet-500/30 bg-violet-500/10 text-violet-300",
-    glow: "rgba(167,139,250,0.55)",
-    hex: "#a78bfa",
+    chip: "border-tone-violet/30 bg-tone-violet/10 text-tone-violet",
+    tile: "border-tone-violet/30 bg-tone-violet/10 text-tone-violet",
+    glow: "rgb(var(--tone-violet)/0.55)",
+    hex: "rgb(var(--tone-violet))",
   },
   reviewer: {
     label: "Reviewer",
     icon: ScanEye,
-    chip: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-    tile: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-    glow: "rgba(251,191,36,0.55)",
-    hex: "#fbbf24",
+    chip: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
+    tile: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
+    glow: "rgb(var(--tone-warn)/0.55)",
+    hex: "rgb(var(--tone-warn))",
   },
   supervisor: {
     label: "Supervisor",
     icon: ShieldCheck,
-    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-    tile: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-    glow: "rgba(52,211,153,0.55)",
-    hex: "#34d399",
+    chip: "border-tone-success/30 bg-tone-success/10 text-tone-success",
+    tile: "border-tone-success/30 bg-tone-success/10 text-tone-success",
+    glow: "rgb(var(--tone-success)/0.55)",
+    hex: "rgb(var(--tone-success))",
   },
   researcher: {
     label: "Researcher",
     icon: Search,
-    chip: "border-sky-500/30 bg-sky-500/10 text-sky-300",
-    tile: "border-sky-500/30 bg-sky-500/10 text-sky-300",
-    glow: "rgba(56,189,248,0.55)",
-    hex: "#38bdf8",
+    chip: "border-tone-info/30 bg-tone-info/10 text-tone-info",
+    tile: "border-tone-info/30 bg-tone-info/10 text-tone-info",
+    glow: "rgb(var(--tone-info)/0.55)",
+    hex: "rgb(var(--tone-info))",
   },
 };
 
@@ -103,18 +113,18 @@ export const KIND_META: Record<StepKind, { label: string; blurb: string; chip: s
   },
   tool: {
     label: "Tool call",
-    blurb: "ONE deterministic tool call — same every run, no model.",
-    chip: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    blurb: "One tool call, the same every run, with no model.",
+    chip: "border-tone-info/30 bg-tone-info/10 text-tone-info",
   },
   ask: {
     label: "Ask you",
-    blurb: "The run pauses and asks you — it resumes when you answer.",
-    chip: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+    blurb: "The run pauses and asks you. It resumes when you answer.",
+    chip: "border-tone-warn/30 bg-tone-warn/10 text-tone-warn",
   },
   notify: {
     label: "Notify",
     blurb: "Sends a message to your destinations.",
-    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+    chip: "border-tone-success/30 bg-tone-success/10 text-tone-success",
   },
 };
 

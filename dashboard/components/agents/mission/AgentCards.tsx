@@ -37,12 +37,15 @@ function moodFor(s: MemberStatus): FaceMood {
   return "idle";
 }
 
+// v1.329.0 (calm chat wave 6): theme tokens only, never a literal hue, so a
+// card reads the same way on every theme (Daylight included) as the chat's
+// receipt does.
 const STATUS_TONE: Record<MemberStatus, string> = {
   queued: "text-zinc-400",
   working: "text-accent",
-  waiting_you: "text-amber-300",
-  done: "text-emerald-300",
-  failed: "text-rose-300",
+  waiting_you: "text-tone-warn",
+  done: "text-tone-success",
+  failed: "text-tone-danger",
   cancelled: "text-zinc-400",
 };
 
@@ -58,11 +61,11 @@ export function ProgressBar({
   const pct = progress.pct;
   const fill =
     status === "done"
-      ? "bg-emerald-400/80"
+      ? "bg-tone-success/80"
       : status === "failed"
-        ? "bg-rose-400/70"
+        ? "bg-tone-danger/70"
         : status === "waiting_you"
-          ? "bg-amber-300/80"
+          ? "bg-tone-warn/80"
           : "bg-accent";
   return (
     <div className="flex items-center gap-2">
@@ -91,6 +94,26 @@ export function ProgressBar({
   );
 }
 
+/** The mock's line (v1.329.0), in the chat receipt's words: "Mock answer. No
+ *  real model ran." (TurnReceipt) for an answer, the same second sentence for
+ *  a run that has not answered. Plain sentences, no dash aside. The mission
+ *  receipt (MissionOutput) and every teammate card read it from here; a card
+ *  names what it ran on in parentheses before the last stop (MockRanOn). */
+export function mockLine(answered: boolean): string {
+  return answered ? "Mock answer. No real model ran." : "On the mock. No real model ran.";
+}
+
+/** The card's mock line with what it ran on: "Mock answer. No real model ran
+ *  (mock · mock-1)." The parentheses never break inside (a narrow card used
+ *  to wrap "mock-" from "1"). */
+function MockRanOn({ answered, ranOn }: { answered: boolean; ranOn: string }) {
+  return (
+    <>
+      {mockLine(answered).replace(/\.$/, "")} <span className="whitespace-nowrap">({ranOn})</span>.
+    </>
+  );
+}
+
 /** A teammate that is still running (or parked on an ask) can be stopped. */
 const STOPPABLE: ReadonlySet<MemberStatus> = new Set(["queued", "working", "waiting_you"]);
 
@@ -104,7 +127,7 @@ function StopTeammate({ m, onChanged }: { m: MissionMember; onChanged: () => voi
     setNote(null);
     try {
       await post(`/sessions/${encodeURIComponent(sid)}/cancel`, {});
-      setNote("Stopping — Jarvis carries on with the rest of the team.");
+      setNote("Stopping. Jarvis carries on with the rest of the team.");
       onChanged();
     } catch (e) {
       setNote(e instanceof Error && e.message ? e.message : "Could not stop it.");
@@ -119,11 +142,11 @@ function StopTeammate({ m, onChanged }: { m: MissionMember; onChanged: () => voi
         data-testid={`mission-card-stop-${m.agent}`}
         disabled={busy}
         onClick={() => void stop()}
-        className="btn-ghost px-2.5 py-1 text-[11.5px]"
+        className="btn-ghost px-2.5 py-1 text-[12px]"
       >
         <Square size={11} /> Stop {m.name}
       </button>
-      {note && <div className="mt-1 text-[11.5px] text-zinc-400">{note}</div>}
+      {note && <div className="mt-1 text-[12px] text-zinc-400">{note}</div>}
     </div>
   );
 }
@@ -183,13 +206,21 @@ function AgentCard({
         >
           {m.progress.label && <div className="text-zinc-400">{m.progress.label}</div>}
           {ranOn && (
-            <div data-testid={`mission-card-model-${m.agent}`} className="text-[11.5px] text-zinc-500">
+            <div
+              data-testid={`mission-card-model-${m.agent}`}
+              className={`text-[12px] ${m.provider === "mock" ? "text-tone-warn" : "text-zinc-500"}`}
+            >
               {/* v1.310.0: the coordinator receipt's tense, by THIS
                   teammate's status (./receipt) — a failed teammate "tried"
-                  its model, it was never "answered by" it. */}
-              {m.provider === "mock"
-                ? `${m.status === "done" ? "Mock answer" : "On the mock"} — no real model ran (${ranOn})`
-                : `${receiptVerbFor(m.status)} ${ranOn}`}
+                  its model, it was never "answered by" it.
+                  v1.329.0: the mock line says it in the chat receipt's own
+                  words ("Mock answer. No real model ran.") and its warn
+                  tone, with what it ran on in parentheses. */}
+              {m.provider === "mock" ? (
+                <MockRanOn answered={m.status === "done"} ranOn={ranOn} />
+              ) : (
+                `${receiptVerbFor(m.status)} ${ranOn}`
+              )}
             </div>
           )}
           {m.task && (
@@ -205,7 +236,7 @@ function AgentCard({
             </div>
           )}
           {m.waiting_on && (
-            <div className="text-amber-200">
+            <div className="text-tone-warn">
               Waiting for your OK to use {m.waiting_on.tool.replace(/_/g, " ")}.
             </div>
           )}

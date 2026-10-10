@@ -49,6 +49,7 @@ import {
 import { settledSplit } from "@/lib/streamSplit";
 import { useMissionLive, type MissionLive, type MissionLiveStore } from "@/lib/useMission";
 import { receiptVerbFor } from "./receipt";
+import { mockLine } from "./AgentCards";
 
 export type OutputTab = "report" | "markdown" | "preview";
 
@@ -99,7 +100,7 @@ function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: s
   return (
     <div
       data-testid="mission-approval"
-      className="mt-3 rounded-xl border border-amber-400/30 bg-amber-300/10 px-3 py-2.5 text-[13px] text-amber-100"
+      className="mt-3 rounded-xl border border-tone-warn/30 bg-tone-warn/10 px-3 py-2.5 text-[13px] text-zinc-100"
     >
       <div>
         <strong>{who}</strong> wants to use <strong>{waiting.tool.replace(/_/g, " ")}</strong>. Nothing runs until
@@ -121,7 +122,7 @@ function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: s
           Decline
         </button>
       </div>
-      {note && <div className="mt-1 text-[12px] text-amber-200/80">{note}</div>}
+      {note && <div className="mt-1 text-[12px] text-tone-warn">{note}</div>}
     </div>
   );
 }
@@ -221,13 +222,29 @@ function openedRow(row: unknown): { id: string; project: string } | null {
  *  reaches the screen. */
 function retryRefusal(message: string): string {
   const said = message.trim();
-  if (/nothing failed/i.test(said)) return "Nothing is marked failed any more — the list may have changed.";
+  if (/nothing failed/i.test(said)) return "Nothing is marked failed any more. The list may have changed.";
   if (/no worklist/i.test(said)) return "This mission kept no list of items, so there is nothing to retry.";
   if (!said || /^\d{3}\b|[{}\[\]]|\bdetail\b/i.test(said)) {
-    return "Iron Jarvis could not retry this right now — try again in a moment.";
+    return "Iron Jarvis could not retry this right now. Try again in a moment.";
   }
-  const sentence = said[0].toUpperCase() + said.slice(1);
-  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+  return plainSentences(said);
+}
+
+/** The daemon's own refusal as plain sentences (v1.329.0): its 409 words join
+ *  two clauses with a dash ("… is still running — wait for it to finish …");
+ *  the calm copy rule has no dash asides, so each dash becomes a full stop and
+ *  every sentence starts with a capital and ends with a stop. The words
+ *  themselves are the daemon's, unchanged. */
+export function plainSentences(said: string): string {
+  return said
+    .split(/\s+[\u2014\u2013]\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const sentence = part[0].toUpperCase() + part.slice(1);
+      return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+    })
+    .join(" ");
 }
 
 function actionError(e: unknown, what: string): string {
@@ -236,7 +253,7 @@ function actionError(e: unknown, what: string): string {
   }
   if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
     return what === "retry"
-      ? "This daemon can't retry failed items yet — restart Iron Jarvis to update it."
+      ? "This daemon can't retry failed items yet. Restart Iron Jarvis to update it."
       : "This objective no longer exists.";
   }
   return e instanceof Error && e.message ? e.message : "Could not start it.";
@@ -270,12 +287,13 @@ function MissionReceipt({ view }: { view: MissionView }) {
     <div
       data-testid="mission-receipt"
       data-mock={mock ? "true" : undefined}
-      className={`border-t hairline px-5 py-2 text-[11.5px] ${mock ? "text-amber-300" : "text-zinc-500"}`}
+      className={`border-t hairline px-5 py-2 text-[12px] ${mock ? "text-tone-warn" : "text-zinc-500"}`}
     >
       {mock ? (
         <span>
-          {answered ? "Mock answer — no real model ran." : "On the mock — no real model ran."}{" "}
-          <Link href="/connections" className="underline hover:text-amber-200">
+          {/* v1.329.0: the chat receipt's words, plain sentences. */}
+          {mockLine(answered)}{" "}
+          <Link href="/connections" className="underline hover:opacity-80">
             Connect a model on Connections
           </Link>
         </span>
@@ -284,7 +302,7 @@ function MissionReceipt({ view }: { view: MissionView }) {
           {receiptVerb(view)} {pair}
         </span>
       ) : null}
-      {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-amber-300/90`}>{note}</div>}
+      {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-tone-warn`}>{note}</div>}
     </div>
   );
 }
@@ -478,15 +496,15 @@ export function MissionOutput({
             <Link
               data-testid="mission-open-run"
               href={`/sessions/${enc}`}
-              className="shrink-0 text-[11.5px] text-zinc-500 hover:text-zinc-300 hover:underline"
+              className="shrink-0 text-[12px] text-zinc-500 hover:text-zinc-300 hover:underline"
             >
               Open the full run
             </Link>
           )}
         </div>
-        {stopNote && <div className="mt-1 text-[12px] text-rose-300">{stopNote}</div>}
+        {stopNote && <div className="mt-1 text-[12px] text-tone-danger">{stopNote}</div>}
         {actNote && (
-          <div data-testid="mission-action-note" className="mt-1 text-[12px] text-rose-300">
+          <div data-testid="mission-action-note" className="mt-1 text-[12px] text-tone-danger">
             {actNote}
           </div>
         )}
@@ -522,7 +540,7 @@ export function MissionOutput({
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {out.source === "draft" && (
           <div data-testid="mission-draft-note" className="mb-2 text-[12px] text-zinc-500">
-            Draft in progress — {out.who} is writing
+            Draft in progress. {out.who} is writing.
           </div>
         )}
         {tab === "report" &&
@@ -541,7 +559,7 @@ export function MissionOutput({
           (out.text ? (
             <pre
               data-testid="mission-markdown"
-              className="whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed text-zinc-300"
+              className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300"
             >
               {out.text}
             </pre>
@@ -553,7 +571,7 @@ export function MissionOutput({
             <p data-testid="mission-preview-empty" className="text-[13px] text-zinc-500">
               {running
                 ? "Files the team creates appear here as they are written."
-                : "The team did not create any files — the result is in Report."}
+                : "The team did not create any files. The result is in Report."}
             </p>
           ) : (
             <div data-testid="mission-preview" className="space-y-3">
@@ -598,7 +616,7 @@ export function MissionOutput({
               }
             }}
             rows={1}
-            placeholder="Ask for changes — e.g. make it shorter, add a summary table"
+            placeholder="Ask for changes, for example make it shorter or add a summary table"
             aria-label="Ask for changes"
             className="field min-h-[2.25rem] flex-1 resize-y text-[13px]"
           />
@@ -624,7 +642,7 @@ function EmptyOutput({ running, failed }: { running: boolean; failed: boolean })
         {running
           ? "Your result appears here as the team writes it. Watch the work underneath."
           : failed
-            ? "The team could not finish this objective — the activity below says where it stopped."
+            ? "The team could not finish this objective. The activity below says where it stopped."
             : "No result was written."}
       </p>
     </div>
