@@ -316,9 +316,10 @@ _ENDPOINT_PROBE_MAX_MODELS = 1000
 #: ``GET /v1/models`` with a Bearer key (plus the /models and Ollama
 #: fallbacks); ``anthropic`` (v1.329.0) is the Anthropic Models API: ``GET
 #: /v1/models`` with ``x-api-key`` + ``anthropic-version``, paged by
-#: ``after_id``. Listing is all this does: a SAVED endpoint is still a fleet
-#: node, which is an OpenAI-compatible adapter (fleet/adapter.py), so the form
-#: says so when only the Anthropic way answered.
+#: ``after_id``. Listing is all this does. Since v1.329.0 (H3) a saved
+#: endpoint carries the same word as its fleet node's ``protocol``, and
+#: ``fleet/adapter.adapter_for`` then CHATS that way too, so a model listed the
+#: Anthropic way also answers the Anthropic way.
 _ENDPOINT_PROTOCOLS = ("openai", "anthropic")
 #: The Anthropic Models API version header (the one stable value it documents).
 _ANTHROPIC_VERSION = "2023-06-01"

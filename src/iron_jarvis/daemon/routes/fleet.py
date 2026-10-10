@@ -79,6 +79,10 @@ class FleetNodeBody(BaseModel):
     api_key_name: str = ""
     routable: bool = False
     default_model: str = ""
+    #: v1.329.0: the API the node chats in — "openai" (default) or
+    #: "anthropic". A plain str checked in the handler, so a wrong value gets
+    #: one plain sentence instead of a pydantic 422.
+    protocol: str = "openai"
 
 
 class FleetNodePatch(BaseModel):
@@ -92,6 +96,30 @@ class FleetNodePatch(BaseModel):
     vision: bool | None = None
     api_key_name: str | None = None
     default_model: str | None = None
+    protocol: str | None = None
+
+
+def _protocol_or_400(value: str | None, base_url: str = "") -> str | None:
+    """The protocol word, folded, or a 400 in plain words (v1.329.0). An
+    Anthropic node must also have an http(s) address: its adapter calls
+    ``<base>/v1/messages`` and will not guess a scheme."""
+    if value is None:
+        return None
+    from ...fleet.models import NODE_PROTOCOLS
+
+    word = value.strip().lower()
+    if word not in NODE_PROTOCOLS:
+        raise HTTPException(
+            status_code=400,
+            detail="The protocol must be openai or anthropic.",
+        )
+    if word == "anthropic" and base_url:
+        from ...fleet.anthropic_compat import address_problem
+
+        problem = address_problem(base_url)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+    return word
 
 
 class FleetProbeBody(BaseModel):
@@ -397,6 +425,7 @@ def register(app: FastAPI, d) -> None:
         base_url = (body.base_url or "").strip()
         if not base_url:
             raise HTTPException(status_code=400, detail="base_url is required")
+        protocol = _protocol_or_400(body.protocol or "openai", base_url) or "openai"
 
         kind, _reason = await asyncio.to_thread(detect_kind, base_url)
         node = FleetNode(
@@ -409,6 +438,7 @@ def register(app: FastAPI, d) -> None:
             api_key_name=(body.api_key_name or "").strip(),
             routable=bool(body.routable),
             default_model=(body.default_model or "").strip(),
+            protocol=protocol,
         )
         try:
             node = d.fleet.add(node) or node
@@ -439,8 +469,12 @@ def register(app: FastAPI, d) -> None:
     @app.patch("/fleet/nodes/{node_id}")
     def fleet_patch_node(node_id: str, body: FleetNodePatch) -> dict[str, Any]:
         """Edit a node. Only the fields actually sent are written."""
-        _node_or_404(node_id)
+        current = _node_or_404(node_id)
         fields = {k: v for k, v in body.model_dump().items() if v is not None}
+        if "protocol" in fields:
+            fields["protocol"] = _protocol_or_400(
+                fields["protocol"], getattr(current, "base_url", "") or ""
+            )
         if not fields:
             return {"node": _dump(d.fleet.get(node_id))}
         try:

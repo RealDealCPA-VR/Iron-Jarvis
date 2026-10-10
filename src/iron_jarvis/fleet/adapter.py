@@ -53,3 +53,23 @@ class FleetAdapter(OpenAIAdapter):
         caps["tool_use"] = bool(self.node.tool_use)
         caps["vision"] = bool(self.node.vision)
         return caps
+
+
+def adapter_for(
+    node: FleetNode,
+    model: str | None = None,
+    credential: Callable[[], str | None] | None = None,
+) -> Any:
+    """The adapter that speaks *node*'s protocol (v1.329.0).
+
+    ``anthropic`` → :class:`~iron_jarvis.fleet.anthropic_compat.AnthropicFleetAdapter`
+    (``POST /v1/messages``, ``x-api-key``); anything else → :class:`FleetAdapter`
+    (the OpenAI chat-completions shape every node spoke before the field
+    existed). Both report the node's recorded capabilities and both are named
+    ``fleet-<id>``, so a failing node refuses under its own name like any
+    other local provider; nothing here ever substitutes another provider."""
+    if getattr(node, "protocol", "openai") == "anthropic":
+        from .anthropic_compat import AnthropicFleetAdapter
+
+        return AnthropicFleetAdapter(node=node, model=model, credential=credential)
+    return FleetAdapter(node=node, model=model, credential=credential)

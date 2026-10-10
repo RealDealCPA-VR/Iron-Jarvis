@@ -33,7 +33,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { get, post, put, patch, del, ApiError } from "@/lib/api";
-import { EndpointModelPicker } from "@/components/connections/EndpointModelPicker";
+import {
+  EndpointModelPicker,
+  EndpointProtocolChoice,
+  type EndpointProtocol,
+} from "@/components/connections/EndpointModelPicker";
 import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
@@ -56,6 +60,8 @@ interface EndpointRow {
   tool_use: boolean | null;
   /** Live-verified vision support (same probe run): null = unknown. */
   vision: boolean | null;
+  /** v1.329.0: the API the endpoint chats in ("openai" when absent). */
+  protocol: EndpointProtocol;
 }
 
 /** The node fields we read out of GET /fleet's snapshot rows. */
@@ -69,6 +75,7 @@ interface EndpointNodeDump {
   api_key_name?: string;
   tool_use?: boolean | null;
   vision?: boolean | null;
+  protocol?: string;
 }
 
 /** POST /fleet/nodes/{id}/verify response (tool + vision capability probes). */
@@ -515,6 +522,11 @@ function ConnectionCard({
   // probe ran on every keystroke of the address AND the key, sending a
   // half-typed key to a half-typed host.
   const [model, setModel] = useState("");
+  // v1.329.0 (H3): the API the endpoint chats in. Saved on the node
+  // (POST /fleet/nodes `protocol`) and used for every reply, so a model the
+  // server listed the Anthropic way also answers the Anthropic way. Set by
+  // the user's choice, or by the way "Fetch available models" got an answer.
+  const [protocol, setProtocol] = useState<EndpointProtocol>("openai");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
@@ -607,6 +619,7 @@ function ConnectionCard({
             api_key_name: n.api_key_name || "",
             tool_use: n.tool_use ?? null,
             vision: n.vision ?? null,
+            protocol: (n.protocol === "anthropic" ? "anthropic" : "openai") as EndpointProtocol,
           })),
       );
     } catch {
@@ -714,6 +727,7 @@ function ConnectionCard({
             label: epName.trim(),
             routable: true,
             default_model: model.trim(),
+            protocol,
           },
         );
         const nodeId = created.node?.id ?? "";
@@ -759,6 +773,7 @@ function ConnectionCard({
         setEpName("");
         setBaseUrl("");
         setModel("");
+        setProtocol("openai");
         void reloadEndpoints();
       } else {
         await post(`/connections/${conn.provider}/key`, { key: key.trim() });
@@ -921,17 +936,27 @@ function ConnectionCard({
                 <div className="text-[11px] text-zinc-600">{conn.account}</div>
               ) : null
             ) : (
-              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                {conn.method === "oauth" ? (
-                  <>
-                    <ShieldCheck size={11} /> OAuth 2.0
-                  </>
-                ) : (
-                  <>
-                    <KeyRound size={11} /> API key
-                  </>
+              // v1.329.0 (H3): the method chip never breaks inside itself
+              // ("API / key" on the Pixio card) and the account wraps under
+              // it, word by word, when the card is narrow.
+              <div
+                data-testid="conn-card-auth"
+                className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-zinc-500"
+              >
+                <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                  {conn.method === "oauth" ? (
+                    <>
+                      <ShieldCheck size={11} /> OAuth 2.0
+                    </>
+                  ) : (
+                    <>
+                      <KeyRound size={11} /> API key
+                    </>
+                  )}
+                </span>
+                {conn.account && (
+                  <span className="min-w-0 break-words text-zinc-600">· {conn.account}</span>
                 )}
-                {conn.account && <span className="text-zinc-600">· {conn.account}</span>}
               </div>
             )}
           </div>
@@ -959,11 +984,16 @@ function ConnectionCard({
           key required.
         </p>
       ) : conn.connected ? (
-        <div className="flex items-center gap-2">
+        // v1.329.0 (H3): the actions row WRAPS inside the card. Three across
+        // beside the Settings sidebar, "Make default" + Test + Disconnect did
+        // not fit one line, so Disconnect spilled past the card's right edge
+        // and "Make default" broke onto two lines. Each label stays whole and
+        // the last button drops to its own line instead.
+        <div data-testid="conn-card-actions" className="flex min-w-0 flex-wrap items-center gap-2">
           {isDefault ? (
             <span
               title="Sessions use this provider by default"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300"
             >
               <Check size={14} /> Default
             </span>
@@ -972,12 +1002,12 @@ function ConnectionCard({
               onClick={makeDefault}
               disabled={busy}
               title={`Use ${conn.display_name} for new sessions`}
-              className="btn-ghost py-1.5 text-xs"
+              className="btn-ghost whitespace-nowrap py-1.5 text-xs"
             >
               {busy ? <LoaderInline label="Setting…" /> : <><Star size={14} /> Make default</>}
             </button>
           )}
-          <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 py-1.5 text-xs">
+          <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 whitespace-nowrap py-1.5 text-xs">
             {busy ? <LoaderInline label="Testing…" /> : <><CheckCircle2 size={14} /> Test</>}
           </button>
           {/* Nothing to disconnect for an inherited login — the key lives in
@@ -987,7 +1017,7 @@ function ConnectionCard({
               onConfirm={disconnect}
               label="Disconnect"
               title={`Disconnect ${conn.display_name}`}
-              className="py-1.5"
+              className="whitespace-nowrap py-1.5"
             />
           )}
         </div>
@@ -1186,6 +1216,18 @@ function ConnectionCard({
                   >
                     {ep.base_url}
                   </span>
+                  {/* v1.329.0: an endpoint that chats the Anthropic way says
+                      so; the OpenAI way is the long-standing default and stays
+                      unmarked. */}
+                  {ep.protocol === "anthropic" && (
+                    <span
+                      data-testid="endpoint-row-protocol"
+                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400"
+                      title="Replies use the Anthropic Messages API"
+                    >
+                      Anthropic
+                    </span>
+                  )}
                   {ep.default_model && (
                     <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
                       {ep.default_model}
@@ -1322,12 +1364,16 @@ function ConnectionCard({
                         type="text"
                         value={baseUrl}
                         onChange={(e) => setBaseUrl(e.target.value)}
-                        placeholder="http://localhost:1234/v1 — any OpenAI-compatible server"
+                        placeholder="http://localhost:1234/v1"
                         autoComplete="off"
                         autoFocus
                         className="field font-mono text-xs"
                       />
                     </label>
+                    {/* v1.329.0 (H3): which API the server speaks. Quiet,
+                        two options; Fetch below sets it to the way the server
+                        answered, and the user can always change it. */}
+                    <EndpointProtocolChoice value={protocol} onChange={setProtocol} />
                     {/* v1.328.0 (B6): the Model field + "Fetch available
                         models" — the server lists its own models on request,
                         a searchable list fills the field, typing still works. */}
@@ -1336,6 +1382,8 @@ function ConnectionCard({
                       apiKey={key}
                       value={model}
                       onChange={setModel}
+                      protocol={protocol}
+                      onProtocol={setProtocol}
                     />
                   </>
                 )}
@@ -1351,7 +1399,7 @@ function ConnectionCard({
                 />
                 <p className="text-[11px] leading-relaxed text-zinc-500">
                   {isCustom
-                    ? "The key is optional (local servers usually don't need one) — if set, it's stored encrypted and never shown again."
+                    ? "The key is optional. Local servers usually don't need one. If you set it, it is stored encrypted."
                     : "Paste your API key — it's stored encrypted and never shown again."}
                   {meta.keyUrl && (
                     <>
@@ -1368,11 +1416,12 @@ function ConnectionCard({
                     </>
                   )}
                 </p>
-                <div className="flex items-center gap-2">
+                {/* v1.329.0 (H3): wraps like the actions row; "Save endpoint" stays one line. */}
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="submit"
                     disabled={busy || (isCustom ? !baseUrl.trim() : !key.trim())}
-                    className="btn-accent flex-1 py-1.5 text-xs"
+                    className="btn-accent flex-1 whitespace-nowrap py-1.5 text-xs"
                   >
                     {busy ? (
                       <LoaderInline label={isCustom ? "Saving…" : "Connecting…"} />

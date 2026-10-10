@@ -36,6 +36,15 @@ NodeKind = Literal["ollama", "vllm", "litellm", "openai-compat", "unknown"]
 #: machine, so it gets a bind hint instead of invented numbers.
 NodeStatus = Literal["online", "offline", "not-probeable", "unknown"]
 
+#: Which API a node CHATS in (v1.329.0). ``"openai"`` (the default, and every
+#: node saved before this field existed) is ``POST /v1/chat/completions`` with
+#: a Bearer key; ``"anthropic"`` is the Messages API (``POST /v1/messages``,
+#: ``x-api-key``). ``fleet/adapter.adapter_for`` picks the adapter by it.
+NodeProtocol = Literal["openai", "anthropic"]
+
+#: The values a route or an edit may set, in one place.
+NODE_PROTOCOLS: tuple[str, ...] = ("openai", "anthropic")
+
 
 class FleetNode(BaseModel):
     """One inference endpoint the user owns — config, not observation.
@@ -71,6 +80,9 @@ class FleetNode(BaseModel):
     tool_use: bool | None = None
     vision: bool | None = None
     verified_at: float = 0.0
+    #: The API this node chats in (see :data:`NodeProtocol`). Last, and with a
+    #: default, so every stored row written before v1.329.0 loads unchanged.
+    protocol: NodeProtocol = "openai"
 
 
 class ModelEntry(BaseModel):

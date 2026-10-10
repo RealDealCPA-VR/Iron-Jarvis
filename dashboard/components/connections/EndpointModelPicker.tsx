@@ -18,15 +18,80 @@
  * When that answer is a refused or missing key, or "not a model server", it is
  * asked ONCE more the Anthropic way (`protocol: "anthropic"`: x-api-key +
  * anthropic-version, same server, same key). Only a real list from that second
- * ask replaces the first answer; otherwise the first answer's words stand. A
- * list that came the Anthropic way says so, because a saved endpoint still
- * talks to its server the OpenAI way.
+ * ask replaces the first answer; otherwise the first answer's words stand.
+ *
+ * v1.329.0 (calm chat wave 6, H3): a saved endpoint now CHATS in the protocol
+ * it is saved with (fleet node `protocol`), so the old "a saved endpoint
+ * chats the OpenAI way" warning is gone. The form owns the protocol: the
+ * picker asks the form's chosen way first, the other way once on the same
+ * reasons, and tells the form (`onProtocol`) which way the server answered,
+ * with one quiet line when that changed the choice.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { post, ApiError } from "@/lib/api";
 
 const PROBE = "/connections/endpoints/models";
+
+/** The two APIs a custom endpoint can speak (fleet node `protocol`). */
+export type EndpointProtocol = "openai" | "anthropic";
+
+/** The words each protocol is shown with, in one place. */
+export const PROTOCOL_LABELS: Record<EndpointProtocol, string> = {
+  openai: "OpenAI-compatible",
+  anthropic: "Anthropic-compatible",
+};
+
+/** The other protocol. */
+function otherProtocol(p: EndpointProtocol): EndpointProtocol {
+  return p === "anthropic" ? "openai" : "anthropic";
+}
+
+/**
+ * A quiet two-option choice of the API the server speaks. Real radio inputs
+ * (arrow keys move between them, the group has one tab stop), drawn as two
+ * hairline chips; the chosen one fills.
+ */
+export function EndpointProtocolChoice({
+  value,
+  onChange,
+}: {
+  value: EndpointProtocol;
+  onChange: (p: EndpointProtocol) => void;
+}) {
+  const uid = useId();
+  return (
+    <fieldset className="space-y-1" data-testid="endpoint-protocol">
+      <legend className="text-[11px] font-medium text-zinc-400">Server type</legend>
+      <div className="flex flex-wrap gap-1.5">
+        {(["openai", "anthropic"] as const).map((p) => {
+          const on = value === p;
+          return (
+            <label
+              key={p}
+              className={`inline-flex cursor-pointer items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] transition-colors has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/50 ${
+                on
+                  ? "border-accent/40 bg-accent/10 text-zinc-100"
+                  : "border-white/[0.08] text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
+              }`}
+            >
+              <input
+                type="radio"
+                name={`${uid}-protocol`}
+                value={p}
+                checked={on}
+                onChange={() => onChange(p)}
+                data-testid={`endpoint-protocol-${p}`}
+                className="sr-only"
+              />
+              {PROTOCOL_LABELS[p]}
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
 
 /** What the daemon answers (routes/connections.py `endpoint_models_probe`).
  *  `protocol` / `labels` / `partial` come only with an Anthropic answer. */
@@ -93,11 +158,17 @@ export function EndpointModelPicker({
   apiKey,
   value,
   onChange,
+  protocol = "openai",
+  onProtocol,
 }: {
   baseUrl: string;
   apiKey: string;
   value: string;
   onChange: (model: string) => void;
+  /** The way to ask first (the form's current choice). */
+  protocol?: EndpointProtocol;
+  /** Told which way the server answered when a list came back. */
+  onProtocol?: (p: EndpointProtocol) => void;
 }) {
   const uid = useId();
   const inputId = `${uid}-model`;
@@ -105,10 +176,11 @@ export function EndpointModelPicker({
   const optId = (i: number) => `${uid}-opt-${i}`;
 
   const [models, setModels] = useState<string[] | null>(null);
-  // v1.329.0: display names (Anthropic answers), whether the list came the
-  // Anthropic way, and whether the server has more than was listed.
+  // v1.329.0: display names (Anthropic answers), the way the server answered
+  // when it was NOT the way first asked (the form's choice moved to it), and
+  // whether the server has more than was listed.
   const [labels, setLabels] = useState<Record<string, string>>({});
-  const [anthropic, setAnthropic] = useState(false);
+  const [switchedTo, setSwitchedTo] = useState<EndpointProtocol | null>(null);
   const [partial, setPartial] = useState(false);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -125,7 +197,7 @@ export function EndpointModelPicker({
     gen.current += 1;
     setModels(null);
     setLabels({});
-    setAnthropic(false);
+    setSwitchedTo(null);
     setPartial(false);
     setOpen(false);
     setError(null);
@@ -148,16 +220,20 @@ export function EndpointModelPicker({
     setError(null);
     try {
       const ask = { base_url: url, api_key: apiKey.trim() };
-      let res = await post<ProbeAnswer>(PROBE, { ...ask, protocol: "openai" });
+      const first: EndpointProtocol = protocol;
+      let answered: EndpointProtocol = first;
+      let res = await post<ProbeAnswer>(PROBE, { ...ask, protocol: first });
       if (mine !== gen.current) return;
       let list = idsOf(res);
       if ((res.error || list.length === 0) && res.reason && ANTHROPIC_RETRY_REASONS.has(res.reason)) {
+        const second = otherProtocol(first);
         try {
-          const alt = await post<ProbeAnswer>(PROBE, { ...ask, protocol: "anthropic" });
+          const alt = await post<ProbeAnswer>(PROBE, { ...ask, protocol: second });
           const altList = idsOf(alt);
           if (!alt.error && altList.length > 0) {
             res = alt;
             list = altList;
+            answered = second;
           }
         } catch {
           // An older daemon refuses the word, or the second ask failed:
@@ -172,7 +248,8 @@ export function EndpointModelPicker({
         return;
       }
       setLabels(labelsOf(res, list));
-      setAnthropic(res.protocol === "anthropic");
+      setSwitchedTo(answered !== first ? answered : null);
+      onProtocol?.(answered);
       setPartial(res.partial === true);
       setModels(list);
       setQuery("");
@@ -348,10 +425,10 @@ export function EndpointModelPicker({
                 : `${count} model${count === 1 ? "" : "s"} on this server`
               : `${shown.length} of ${count} models`}
           </p>
-          {anthropic && (
+          {switchedTo && (
             <p data-testid="endpoint-models-protocol-note" className="px-2 text-[11px] leading-relaxed text-zinc-500">
-              This server answered the Anthropic way. A saved endpoint chats the OpenAI way, so replies
-              work only if the server speaks both.
+              This server answered the {switchedTo === "anthropic" ? "Anthropic" : "OpenAI"} way, so the
+              server type is now {PROTOCOL_LABELS[switchedTo]}.
             </p>
           )}
         </div>

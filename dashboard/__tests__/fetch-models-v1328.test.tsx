@@ -371,7 +371,8 @@ describe("on the Connections page", () => {
     fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
 
     vi.useFakeTimers();
-    fireEvent.change(within(card).getByPlaceholderText(/any OpenAI-compatible server/), {
+    // v1.329.0 (H3): the placeholder lost its em-dash aside; it is the bare example address now.
+    fireEvent.change(within(card).getByPlaceholderText("http://localhost:1234/v1"), {
       target: { value: "http://box:1234/v1" },
     });
     fireEvent.change(within(card).getByLabelText("API key (optional)"), {
@@ -395,6 +396,8 @@ describe("on the Connections page", () => {
         label: "",
         routable: true,
         default_model: "llama3.2:3b",
+        // v1.329.0 (H3): the node carries the API it chats in; an OpenAI list keeps "openai".
+        protocol: "openai",
       }),
     );
   });

@@ -7,8 +7,10 @@
  * "not a model server", earns ONE more ask the Anthropic way (same address,
  * same key). Only a real list from that ask replaces the first answer; every
  * other outcome keeps the first answer's words. A list that came the
- * Anthropic way says so (a saved endpoint still chats the OpenAI way) and
- * shows the server's display names, which the filter also searches.
+ * Anthropic way says so and shows the server's display names, which the
+ * filter also searches. (v1.329.0 H3 changed the note: a saved endpoint now
+ * chats in its own protocol, so the note says the server type moved to
+ * Anthropic-compatible instead of warning that replies go the OpenAI way.)
  *
  * Harness: the page's data seams are mocked like fetch-models-v1328.
  */
@@ -208,7 +210,7 @@ describe("an Anthropic-compatible server", () => {
       "Sonnet 9",
     ]);
     expect(within(panel).getByTestId("endpoint-models-protocol-note").textContent).toMatch(
-      /answered the Anthropic way.*saved endpoint chats the OpenAI way/s,
+      /answered the Anthropic way, so the server type is now Anthropic-compatible/s,
     );
     fireEvent.click(within(panel).getByText("Sonnet 9"));
     expect(modelField().value).toBe("claude-sonnet-9");

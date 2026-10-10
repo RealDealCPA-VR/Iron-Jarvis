@@ -539,6 +539,52 @@ def _probe_openai_compat(node: FleetNode, root: str, get: Getter) -> NodeSnapsho
     )
 
 
+#: Sent on the Anthropic-compatible listing GET (the same value the chat
+#: adapter and the "Fetch available models" probe send).
+_ANTHROPIC_VERSION = "2023-06-01"
+
+
+def _probe_anthropic(node: FleetNode, root: str, get: Getter) -> NodeSnapshot:
+    """An Anthropic-compatible node (v1.329.0): ``GET /v1/models`` the
+    Anthropic way. The sampler holds no keys, and such servers usually list
+    their models only to a keyed caller, so a 401/403 is still a server that
+    ANSWERED: the node is reachable and its model list is simply not readable
+    from here (said in ``metrics_reason``, never shown as an empty list that
+    means "no models"). Any other non-2xx, or no answer, is offline."""
+    url = f"{root}/v1/models"
+    try:
+        resp = get(url, headers={"anthropic-version": _ANTHROPIC_VERSION})
+    except Exception as exc:  # noqa: BLE001 — every transport failure is data
+        raise ProbeUnreachable(_human_error(exc), str(exc)) from exc
+    code = int(getattr(resp, "status_code", 0) or 0)
+    reason = "This server speaks the Anthropic Messages API and has no metrics endpoint"
+    models: list[ModelEntry] = []
+    if code in (401, 403):
+        reason = (
+            "This server speaks the Anthropic Messages API; it lists its models "
+            "only to a caller with the key, and has no metrics endpoint"
+        )
+    elif 200 <= code < 300:
+        listing = _payload(resp)
+        models = [
+            ModelEntry(id=str(m.get("id")))
+            for m in (listing.get("data") or [])
+            if isinstance(m, dict) and m.get("id")
+        ]
+    else:
+        raise ProbeUnreachable(f"http {code}", f"{url} returned http {code}")
+    return NodeSnapshot(
+        node=node,
+        status="online",
+        evidence="direct",
+        metrics_supported=False,
+        metrics_reason=reason,
+        metrics=None,
+        rates=None,
+        models=models,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # public probe
 # --------------------------------------------------------------------------- #
@@ -578,7 +624,15 @@ def probe_node(
 
     children: list[FleetNode] = []
     try:
-        if node.kind == "ollama":
+        if getattr(node, "protocol", "openai") == "anthropic" and node.kind in (
+            "unknown",
+            "openai-compat",
+        ):
+            # v1.329.0: a node that chats the Anthropic way is asked the
+            # Anthropic way. A kind detection DID establish (Ollama, vLLM, a
+            # LiteLLM proxy) keeps its own richer probe below.
+            snap = _probe_anthropic(node, root, get)
+        elif node.kind == "ollama":
             snap = _probe_ollama(node, root, get)
         elif node.kind == "vllm":
             snap = _probe_vllm(node, root, get)

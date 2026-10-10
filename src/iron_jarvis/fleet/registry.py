@@ -21,8 +21,8 @@ import re
 from typing import Any, Callable
 
 from ..core.config import persist_config_values
-from .adapter import FleetAdapter
-from .models import FleetNode
+from .adapter import FleetAdapter, adapter_for  # noqa: F401 — FleetAdapter re-exported
+from .models import NODE_PROTOCOLS, FleetNode
 
 #: Node ids become provider names (``fleet-<id>``), and provider names cannot
 #: contain a colon — ``providers/routing.py::parse_pm`` partitions on the first
@@ -34,6 +34,12 @@ _PROVIDER_PREFIX = "fleet-"
 
 def provider_name(node_id: str) -> str:
     return f"{_PROVIDER_PREFIX}{node_id}"
+
+
+def _check_protocol(value: object) -> None:
+    """Refuse a protocol this build cannot speak (v1.329.0), in one sentence."""
+    if value not in NODE_PROTOCOLS:
+        raise ValueError("protocol must be openai or anthropic")
 
 
 class FleetRegistry:
@@ -136,6 +142,7 @@ class FleetRegistry:
             )
         if not (node.base_url or "").strip():
             raise ValueError("base_url is required")
+        _check_protocol(node.protocol)
         rows = [n for n in self._stored() if n.id != node.id]
         rows.append(node)
         self._save(rows)
@@ -145,6 +152,10 @@ class FleetRegistry:
         current = self.get(node_id)
         if current is None:
             raise KeyError(node_id)
+        # model_copy(update=) does not validate, so a bad protocol would be
+        # stored as typed and then drop the whole row on the next load.
+        if fields.get("protocol") is not None:
+            _check_protocol(fields["protocol"])
         merged = current.model_copy(update={k: v for k, v in fields.items() if v is not None})
         # A seed edited for the first time is PROMOTED to a stored node so the
         # label/capability flags survive, while its base_url stays config-driven.
@@ -258,10 +269,12 @@ class FleetRegistry:
                     except Exception:  # noqa: BLE001 — a vault fault ≠ a crash
                         return None
 
+                # v1.329.0: the node's PROTOCOL picks the adapter (OpenAI
+                # chat-completions, or the Anthropic Messages API).
                 manager.register(
                     provider_name(node.id),
-                    lambda model=None, n=node, c=_cred: FleetAdapter(
-                        node=n, model=model, credential=c
+                    lambda model=None, n=node, c=_cred: adapter_for(
+                        n, model=model, credential=c
                     ),
                 )
                 count += 1
