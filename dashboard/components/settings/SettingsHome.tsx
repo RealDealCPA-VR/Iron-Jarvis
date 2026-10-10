@@ -364,7 +364,7 @@ export function SettingsHome() {
         </nav>
 
         <div
-          className={`min-w-0 max-w-[720px] space-y-6 ${phoneList && !q ? "hidden md:block" : ""}`}
+          className={`min-w-0 max-w-[936px] space-y-6 ${phoneList && !q ? "hidden md:block" : ""}`}
           data-testid="settings-group"
           data-group={q ? "search" : active}
         >
