@@ -42,6 +42,12 @@ def _check_protocol(value: object) -> None:
         raise ValueError("protocol must be openai or anthropic")
 
 
+class ChildNodeError(ValueError):
+    """Removing a model a proxy reports (v1.330.0). The proxy names its
+    backends again on every sampling pass, so removing one here would be undone
+    within seconds; the honest answer is "remove the proxy", in plain words."""
+
+
 class FleetRegistry:
     """Nodes = derived config seeds + persisted user nodes + absorbed children."""
 
@@ -103,16 +109,43 @@ class FleetRegistry:
 
     # -- reads ---------------------------------------------------------------
 
-    def nodes(self) -> list[FleetNode]:
-        """Every known node. A stored node OVERRIDES the seed with its id, so a
-        user can label / flag their Ollama box without leaving the config slot."""
+    def _top_level(self) -> dict[str, FleetNode]:
+        """Seeds + stored nodes by id. A stored node OVERRIDES the seed with its
+        id, so a user can label / flag their Ollama box without leaving the
+        config slot."""
         by_id: dict[str, FleetNode] = {n.id: n for n in self.seeded()}
         for node in self._stored():
             by_id[node.id] = node
+        return by_id
+
+    def nodes(self) -> list[FleetNode]:
+        """Every known node: the top-level ones, then each proxy's children.
+
+        A proxy's children are listed ONLY while that proxy is itself listed
+        and switched on (v1.330.0). They are the proxy's own report, so once the
+        proxy is gone (or off) they are not part of the fleet any more. Before
+        this, removing a LiteLLM proxy left its backends on the Fleet page,
+        Online, each with a Remove button that did nothing, until a restart.
+        """
+        by_id = self._top_level()
         out = list(by_id.values())
-        for kids in self._children.values():
+        for parent_id, kids in self._children.items():
+            parent = by_id.get(parent_id)
+            if parent is None or not parent.enabled:
+                continue
             out.extend(kids)
         return out
+
+    def children_of(self, parent_id: str) -> list[FleetNode]:
+        """The topology children currently held for one proxy (a copy)."""
+        return list(self._children.get(parent_id, ()))
+
+    def family(self, node_id: str) -> list[str]:
+        """``node_id`` plus every child id that :meth:`remove` takes with it,
+        so a caller can clear what it holds per node (the sampler's readings)."""
+        ids = [node_id] + [k.id for k in self.children_of(node_id)]
+        ids += [n.id for n in self._stored() if n.parent_id == node_id and n.id not in ids]
+        return ids
 
     def get(self, node_id: str) -> FleetNode | None:
         return next((n for n in self.nodes() if n.id == node_id), None)
@@ -190,10 +223,30 @@ class FleetRegistry:
         if node is None:
             raise KeyError(node_id)
 
-        # Drop any stored row first (a promoted seed has one; a user node is one).
-        rows = [n for n in self._stored() if n.id != node_id]
-        if len(rows) != len(self._stored()):
+        # v1.330.0: a model a proxy reports is not ours to remove. Its row is
+        # rebuilt from the proxy's own list on the next sampling pass, so this
+        # used to answer {"ok": true} and change nothing. Say what does work.
+        if node.parent_id:
+            parent = self._top_level().get(node.parent_id)
+            if parent is not None:
+                raise ChildNodeError(
+                    f"{node.alias or node.id} comes from the proxy "
+                    f"{parent.label or parent.id}. Remove the proxy to remove it."
+                )
+
+        # Drop any stored row first (a promoted seed has one; a user node is
+        # one). A child row an edit once saved goes with its proxy too.
+        stored = self._stored()
+        rows = [n for n in stored if n.id != node_id and n.parent_id != node_id]
+        if len(rows) != len(stored):
             self._save(rows)
+
+        # v1.330.0: a proxy's children go with it, from every place they are
+        # held here: the topology list and the reachability cache. They used
+        # to stay listed, Online, until the daemon restarted.
+        for kid in self._children.pop(node_id, []):
+            self._reachable.pop(kid.id, None)
+        self._reachable.pop(node_id, None)
 
         if node.source != "config":
             return []
@@ -208,7 +261,16 @@ class FleetRegistry:
         return cleared
 
     def absorb_children(self, parent_id: str, children: list[FleetNode]) -> None:
-        """Replace a proxy's discovered backends (in memory only)."""
+        """Replace a proxy's discovered backends (in memory only).
+
+        Ignored when the proxy is no longer a node (v1.330.0): a sampling pass
+        that probed it just before the user removed it lands its result after
+        the removal, and adopting those children would put the removed proxy's
+        backends straight back on the page.
+        """
+        if parent_id not in self._top_level():
+            self._children.pop(parent_id, None)
+            return
         self._children[parent_id] = list(children)
 
     # -- reachability (routing hot path) -------------------------------------

@@ -150,16 +150,20 @@ def test_removing_a_user_node_clears_no_settings(tmp_path):
 def test_absorbed_children_are_in_memory_and_replaced_wholesale(tmp_path):
     cfg = _config(tmp_path)
     reg = FleetRegistry(cfg)
+    # v1.330.0: children are only adopted for a proxy that is itself a node
+    # (a removed proxy's late sampling result must not bring them back), so
+    # the proxy is added first; only the proxy is ever persisted.
+    reg.add(FleetNode(id="p", base_url="http://proxy:4000", kind="litellm"))
     kids = [
         FleetNode(id="p-brain", parent_id="p", alias="brain", source="topology"),
         FleetNode(id="p-coder", parent_id="p", alias="coder", source="topology"),
     ]
     reg.absorb_children("p", kids)
-    assert {n.id for n in reg.nodes()} == {"p-brain", "p-coder"}
-    assert cfg.fleet_nodes == []  # never persisted
+    assert {n.id for n in reg.nodes()} == {"p", "p-brain", "p-coder"}
+    assert [row["id"] for row in cfg.fleet_nodes] == ["p"]  # children never persisted
     # An alias removed on the proxy disappears here on the next absorb.
     reg.absorb_children("p", kids[:1])
-    assert {n.id for n in reg.nodes()} == {"p-brain"}
+    assert {n.id for n in reg.nodes()} == {"p", "p-brain"}
 
 
 def test_topology_children_are_never_routable(tmp_path):

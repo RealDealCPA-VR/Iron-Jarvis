@@ -318,6 +318,21 @@ function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () =>
     }
   }
 
+  // v1.330.0: a model a proxy reports is rebuilt from the proxy's own list on
+  // every pass, so the daemon refuses to remove (or rename) it on its own.
+  // Say where the real control is instead of offering one that cannot work.
+  if (node.parent_id) {
+    return (
+      <span
+        data-testid="fleet-child-note"
+        className="text-[11px] text-zinc-500"
+        title={`Reported by the proxy ${node.parent_id}`}
+      >
+        Remove the proxy to remove this.
+      </span>
+    );
+  }
+
   if (editing) {
     return (
       <span className="flex items-center gap-1.5">

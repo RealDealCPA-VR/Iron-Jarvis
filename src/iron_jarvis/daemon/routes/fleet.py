@@ -188,6 +188,35 @@ def _node_rows(sampler: Any) -> list[Any]:
     return rows
 
 
+def _forget_readings(sampler: Any, node_ids: list[str]) -> None:
+    """Drop the sampler's last reading, history and backoff for removed nodes
+    (v1.330.0, the node delete route only).
+
+    ``GET /fleet`` lists by the registry, so a removed node is already gone
+    from the page; this keeps an old reading from greeting a node re-added
+    under the same id (a proxy's children come back with the same ids) and
+    stops the per-node state growing forever. Uses the sampler's own
+    ``forget`` when it has one; otherwise clears its state under its lock.
+    Best-effort: a removal never fails over its telemetry.
+    """
+    if sampler is None or not node_ids:
+        return
+    try:
+        forget = getattr(sampler, "forget", None)
+        if callable(forget):
+            forget(list(node_ids))
+            return
+        state = getattr(sampler, "_state", None)
+        lock = getattr(sampler, "_lock", None)
+        if not isinstance(state, dict) or lock is None:
+            return
+        with lock:
+            for node_id in node_ids:
+                state.pop(node_id, None)
+    except Exception:  # noqa: BLE001 — telemetry never fails a removal
+        pass
+
+
 def _err(exc: BaseException) -> str:
     """Verbatim, bounded error text. Never a friendly lie."""
     return f"{type(exc).__name__}: {exc}"[:300]
@@ -549,7 +578,19 @@ def register(app: FastAPI, d) -> None:
         retires the matching top-level provider.
         """
         _node_or_404(node_id)
-        cleared = d.fleet.remove(node_id)
+        # v1.330.0: what goes with it (a proxy's children), read BEFORE the
+        # removal empties the registry's list.
+        family = getattr(d.fleet, "family", None)
+        gone = family(node_id) if callable(family) else [node_id]
+        from ...fleet.registry import ChildNodeError
+
+        try:
+            cleared = d.fleet.remove(node_id)
+        except ChildNodeError as exc:
+            # A model a proxy reports comes back on the next sampling pass;
+            # never answer ok for a removal that did not happen.
+            raise HTTPException(status_code=409, detail=str(exc))
+        _forget_readings(getattr(d, "fleet_sampler", None), gone)
         # No ghost providers: drop the factory too (reachable() also answers
         # False for deleted fleet ids — belt and suspenders).
         for name in (f"fleet-{node_id}", node_id if cleared else ""):

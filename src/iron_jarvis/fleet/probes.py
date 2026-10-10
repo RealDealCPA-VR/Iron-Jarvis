@@ -256,8 +256,8 @@ def _bind_hint(node: FleetNode) -> dict[str, Any] | None:
     if not base:
         return {
             "text": (
-                "Served by a remote provider through the proxy — there is "
-                "nothing local to probe."
+                "This model runs at a remote provider and is reached "
+                "through the proxy. There is nothing local to probe."
             ),
             "action": "none",
             "commands": [],
@@ -270,7 +270,7 @@ def _bind_hint(node: FleetNode) -> dict[str, Any] | None:
     return {
         "text": (
             f"{host} listens on localhost/LAN only, so this machine cannot "
-            "reach it directly — the proxy can. What is shown for it comes "
+            "reach it directly. The proxy can, so what is shown for it comes "
             "from the proxy, not the server."
         ),
         "action": "bind-to-tailscale",
@@ -302,7 +302,7 @@ def _unreadable(node: FleetNode, error: str, started: float) -> NodeSnapshot:
         # node the user added themselves, "it's down" is the whole story.
         hint=_bind_hint(node) if child else None,
         metrics_supported=False,
-        metrics_reason="not read — the node could not be reached",
+        metrics_reason="Not read, because the node could not be reached.",
         metrics=None,
         rates=None,
         models=[],
@@ -430,7 +430,7 @@ def _litellm_metrics_reason(root: str, get: Getter) -> str:
         return f"LiteLLM /metrics returned http {code}"
     return (
         "LiteLLM /metrics is enabled, but proxy counters are not engine "
-        "metrics — per-node numbers come from the servers behind it"
+        "metrics. Per-node numbers come from the servers behind it."
     )
 
 
@@ -612,7 +612,10 @@ def probe_node(
                     error="",
                     hint=_bind_hint(node),
                     metrics_supported=False,
-                    metrics_reason="remote provider — nothing local to measure",
+                    metrics_reason=(
+                        "It runs at a remote provider, so there is nothing "
+                        "local to measure."
+                    ),
                     metrics=None,
                     rates=None,
                     latency_ms=None,
@@ -646,7 +649,7 @@ def probe_node(
             # question is what produces the not-probeable state and its hint.
             snap = _probe_openai_compat(node, root, get)
             snap.metrics_reason = (
-                "Node kind not detected yet — run detection for full metrics"
+                "The server type is not known yet, so only a basic check runs."
             )
     except ProbeUnreachable as exc:
         return _unreadable(node, exc.phrase, started), []
