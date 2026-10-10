@@ -241,7 +241,7 @@ export function ShareChatDialog({
               {mode === "compact" ? "compacting the conversation…" : "loading…"}
             </div>
           ) : error ? (
-            <div className="rounded-xl border border-rose-500/30 bg-rose-500/[0.06] px-3 py-2.5 text-[12.5px] leading-relaxed text-rose-300">
+            <div className="rounded-xl border border-tone-danger/30 bg-tone-danger/[0.06] px-3 py-2.5 text-[13px] leading-relaxed text-tone-danger">
               {error}
             </div>
           ) : (

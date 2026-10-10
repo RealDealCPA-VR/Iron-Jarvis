@@ -159,7 +159,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
                 setError(null);
               }
             }}
-            className="min-w-[16rem] max-w-full flex-1 rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[11.5px] text-zinc-200 outline-none focus:border-accent/40"
+            className="min-w-[16rem] max-w-full flex-1 rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[12px] text-zinc-200 outline-none focus:border-accent/40"
           />
         ) : (
           <span className="min-w-0">
@@ -254,7 +254,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
         </span>
       </div>
       {error && (
-        <p data-testid="pref-suggestion-error" className="mt-1 text-[10.5px] text-rose-300/90">
+        <p data-testid="pref-suggestion-error" className="mt-1 text-[11px] text-tone-danger">
           {error}
         </p>
       )}
@@ -267,7 +267,7 @@ export function PreferenceSuggestion({ suggestion, onSettle }: PreferenceSuggest
           {s.quotes.map((q, i) => {
             const meta = quoteMeta(q);
             return (
-              <p key={i} className="text-[11.5px] leading-relaxed">
+              <p key={i} className="text-[12px] leading-relaxed">
                 <span className="text-zinc-300">&ldquo;{q.quote}&rdquo;</span>
                 {meta && <span className="text-zinc-500"> — {meta}</span>}
               </p>

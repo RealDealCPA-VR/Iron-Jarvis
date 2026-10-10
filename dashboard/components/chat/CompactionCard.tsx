@@ -163,7 +163,7 @@ export function CompactionCard({
     >
         <div className="flex items-center gap-2 border-b hairline px-4 py-3">
           <Layers size={15} className="shrink-0 text-accent-soft" />
-          <h2 className="min-w-0 truncate text-[13.5px] font-medium text-zinc-200">
+          <h2 className="min-w-0 truncate text-[14px] font-medium text-zinc-200">
             {chipLabel(info.covers ?? 0)}
           </h2>
           <button
@@ -185,19 +185,19 @@ export function CompactionCard({
           {/* The summary VERBATIM — pre-wrapped, not re-rendered as markdown:
               what the model reads is plain text, and showing a prettified
               version would be showing something else. */}
-          <pre className="whitespace-pre-wrap break-words rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 font-sans text-[12.5px] leading-relaxed text-zinc-300">
+          <pre className="whitespace-pre-wrap break-words rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 font-sans text-[13px] leading-relaxed text-zinc-300">
             {info.summary ?? ""}
           </pre>
 
           <div>
-            <h3 className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-amber-300/90">
+            <h3 className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-tone-warn">
               <EyeOff size={12} className="shrink-0" />
               Removed because the record could not corroborate it
             </h3>
             {note ? (
               <p
                 className={`text-[12px] leading-relaxed ${
-                  stripped > 0 ? "text-amber-200/80" : "text-zinc-500"
+                  stripped > 0 ? "text-tone-warn" : "text-zinc-500"
                 }`}
               >
                 {note}
@@ -208,14 +208,14 @@ export function CompactionCard({
                   {claims.map((c, i) => (
                     <li
                       key={`${c}-${i}`}
-                      className="rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-2.5 py-1.5 font-mono text-[11.5px] text-amber-200/90"
+                      className="rounded-lg border border-tone-warn/20 bg-tone-warn/[0.05] px-2.5 py-1.5 font-mono text-[12px] text-tone-warn"
                     >
                       {c}
                     </li>
                   ))}
                 </ul>
                 {truncNote && (
-                  <p className="mt-1.5 text-[12px] leading-relaxed text-amber-200/80">
+                  <p className="mt-1.5 text-[12px] leading-relaxed text-tone-warn">
                     {truncNote}
                   </p>
                 )}

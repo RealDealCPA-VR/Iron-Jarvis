@@ -178,27 +178,27 @@ export function BatchSuggestCard({
         <FileStack size={15} className="mt-0.5 shrink-0 text-accent-soft" />
         <div className="min-w-0 flex-1">
           {done ? (
-            <p className="text-[12.5px] leading-snug text-zinc-200">
-              <CheckCircle2 size={13} className="mr-1 inline text-emerald-400" />
+            <p className="text-[13px] leading-snug text-zinc-200">
+              <CheckCircle2 size={13} className="mr-1 inline text-tone-success" />
               {done.length > 0
                 ? `Summary sheet made from ${noun} — it's in this chat's files.`
                 : `Read ${noun}, but no sheet was written.`}
             </p>
           ) : (
             <>
-              <p className="text-[12.5px] leading-snug text-zinc-200">
+              <p className="text-[13px] leading-snug text-zinc-200">
                 This folder has {noun}. I can read them all and make one summary
                 sheet — {estimateWords(preview.estimate_calls)}.
               </p>
               {preview.truncated && (
-                <p className="mt-0.5 text-[11.5px] leading-snug text-amber-300">
+                <p className="mt-0.5 text-[12px] leading-snug text-tone-warn">
                   It will do the first {preview.cap} this time; the rest are
                   listed as skipped so nothing goes missing quietly.
                 </p>
               )}
               {preview.skipped.length > 0 && !preview.truncated && (
                 <p
-                  className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-zinc-500"
+                  className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-zinc-500"
                   title={preview.skipped
                     .map((s) => `${s.file.split(/[\\/]/).pop()}: ${s.reason}`)
                     .join("\n")}
@@ -214,13 +214,13 @@ export function BatchSuggestCard({
 
           {running && (
             <div className="mt-1.5" data-testid="batch-progress">
-              <p className="flex items-center gap-1.5 text-[11.5px] text-zinc-400">
+              <p className="flex items-center gap-1.5 text-[12px] text-zinc-400">
                 <Loader2 size={12} className="animate-spin text-accent-soft" />
                 {latest
                   ? `Reading ${latest.index} of ${latest.total || preview.count}: ${latest.name}`
                   : `Starting on ${noun}…`}
                 {failedSoFar > 0 && (
-                  <span className="text-amber-300">
+                  <span className="text-tone-warn">
                     · {failedSoFar} couldn&apos;t be read
                   </span>
                 )}
@@ -245,7 +245,7 @@ export function BatchSuggestCard({
           )}
 
           {error && (
-            <p className="mt-1.5 text-[11.5px] leading-snug text-rose-300">{error}</p>
+            <p className="mt-1.5 text-[12px] leading-snug text-tone-danger">{error}</p>
           )}
         </div>
 

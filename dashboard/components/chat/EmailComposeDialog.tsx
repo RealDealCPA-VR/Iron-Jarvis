@@ -185,7 +185,7 @@ export function EmailComposeDialog({
             <p className="text-[13px] leading-relaxed text-zinc-200">
               No email account is connected yet.
             </p>
-            <p className="text-[12.5px] leading-relaxed text-zinc-400">
+            <p className="text-[13px] leading-relaxed text-zinc-400">
               Add your email in Channels — its SMTP server to send, and its IMAP
               server to save drafts — then use this button again. Until then,
               Copy still puts the draft on your clipboard with its formatting.
@@ -288,13 +288,13 @@ export function EmailComposeDialog({
                             return next;
                           })
                         }
-                        className="accent-cyan-400"
+                        className="accent-accent"
                       />
                       <Paperclip size={11} className="shrink-0 text-zinc-500" aria-hidden="true" />
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200">
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">
                         {basename(f)}
                       </span>
-                      <span className="max-w-[40%] truncate text-[10.5px] text-zinc-600">
+                      <span className="max-w-[40%] truncate text-[11px] text-zinc-600">
                         {folderOf(f)}
                       </span>
                     </label>
@@ -303,13 +303,13 @@ export function EmailComposeDialog({
               )}
             </div>
 
-            <p data-testid="compose-note" className="text-[11.5px] leading-relaxed text-zinc-500">
+            <p data-testid="compose-note" className="text-[12px] leading-relaxed text-zinc-500">
               {mode === "draft"
                 ? "Goes to your mailbox's Drafts folder — nothing is sent. Open it in Outlook to review and send."
                 : `Sends now from your email account${account ? ` (${account})` : ""}. This can't be undone.`}
             </p>
             {error && (
-              <p role="alert" className="text-[12px] leading-relaxed text-rose-300">
+              <p role="alert" className="text-[12px] leading-relaxed text-tone-danger">
                 {error}
               </p>
             )}

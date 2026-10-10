@@ -105,13 +105,13 @@ function Row({
           {items.map((f) => (
             <code
               key={f}
-              className="max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11.5px] text-zinc-300"
+              className="max-w-full truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[12px] text-zinc-300"
             >
               {f}
             </code>
           ))}
           {hidden > 0 && (
-            <span className="text-[11.5px] text-zinc-500">+{hidden} more</span>
+            <span className="text-[12px] text-zinc-500">+{hidden} more</span>
           )}
         </div>
       </div>
@@ -186,13 +186,13 @@ export function RunResultCard({
   return (
     <div
       className={`max-w-[640px] rounded-xl border ${
-        failed ? "border-rose-500/25 bg-rose-500/[0.04]" : "border-white/[0.08] bg-white/[0.02]"
+        failed ? "border-tone-danger/25 bg-tone-danger/[0.04]" : "border-white/[0.08] bg-white/[0.02]"
       }`}
     >
       <div className="flex items-start gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
         <span
           className={`mt-0.5 shrink-0 ${
-            failed ? "text-rose-400" : short ? "text-amber-300" : "text-emerald-400"
+            failed ? "text-tone-danger" : short ? "text-tone-warn" : "text-tone-success"
           }`}
         >
           {failed ? (
@@ -207,7 +207,7 @@ export function RunResultCard({
           <div className="text-[13px] font-medium text-zinc-200" data-testid="run-result-headline">
             {resultHeadline(result)}
           </div>
-          <div className="mt-0.5 text-[11.5px] text-zinc-500">
+          <div className="mt-0.5 text-[12px] text-zinc-500">
             {result.steps > 0 && `${result.steps} step${result.steps === 1 ? "" : "s"}`}
             {result.duration_s != null && ` · ${result.duration_s.toFixed(1)}s`}
             {result.tools_used.length > 0 &&
@@ -222,7 +222,7 @@ export function RunResultCard({
         {/* The honesty case this card exists for: a run that completed without
             touching a single tool is an agent that TALKED about the work. */}
         {didNothing && !failed && (
-          <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-amber-300">
+          <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
             No tools ran and no files changed — this turn described the work
             rather than doing it. Ask again more concretely, or check that the
             tools it needed were available.
@@ -232,7 +232,7 @@ export function RunResultCard({
             needed were never answered, or mutating calls failed. Say what is
             left for the user instead of a green tick. */}
         {short && (
-          <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-amber-300">
+          <div className="rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-tone-warn">
             {(result.unanswered_asks ?? 0) > 0 || result.outcome === "needs_you"
               ? "The run paused for your approval and the asks expired unanswered — those calls were not run. Open the session to re-run the failed items, or grant the tool and try again."
               : "Some of the changes this run tried failed — check the errors below and the worklist on the session page."}
@@ -267,9 +267,9 @@ export function RunResultCard({
                   return (
                     <span
                       key={t.tool}
-                      className={`rounded px-1.5 py-0.5 font-mono text-[11.5px] ${
+                      className={`rounded px-1.5 py-0.5 font-mono text-[12px] ${
                         bad
-                          ? "bg-rose-500/10 text-rose-300"
+                          ? "bg-tone-danger/10 text-tone-danger"
                           : "bg-white/[0.04] text-zinc-300"
                       }`}
                       title={bad ? `${bad.count} failed` : undefined}
@@ -290,7 +290,7 @@ export function RunResultCard({
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
-              className="flex items-center gap-1.5 text-[12px] text-rose-300 transition-colors hover:text-rose-200"
+              className="flex items-center gap-1.5 text-[12px] text-tone-danger/90 transition-colors hover:text-tone-danger"
             >
               {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               <AlertTriangle size={13} />
@@ -301,10 +301,10 @@ export function RunResultCard({
                 {result.errors.map((e, i) => (
                   <div
                     key={i}
-                    className="rounded-lg border border-rose-500/20 bg-rose-500/[0.05] px-2.5 py-1.5"
+                    className="rounded-lg border border-tone-danger/20 bg-tone-danger/[0.05] px-2.5 py-1.5"
                   >
-                    <div className="font-mono text-[11px] text-rose-300">{e.tool}</div>
-                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[11.5px] text-zinc-400">
+                    <div className="font-mono text-[11px] text-tone-danger">{e.tool}</div>
+                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-zinc-400">
                       {e.error}
                     </div>
                   </div>
@@ -315,14 +315,14 @@ export function RunResultCard({
         )}
 
         {(result.reverted ?? 0) > 0 && (
-          <div className="text-[11.5px] text-zinc-500">
+          <div className="text-[12px] text-zinc-500">
             {result.reverted} action{result.reverted === 1 ? "" : "s"} from this task
             {result.reverted === 1 ? " has" : " have"} already been reverted.
           </div>
         )}
 
-        {note && <div className="text-[12px] text-emerald-300">{note}</div>}
-        {err && <div className="text-[12px] text-rose-300">{err}</div>}
+        {note && <div className="text-[12px] text-tone-success">{note}</div>}
+        {err && <div className="text-[12px] text-tone-danger">{err}</div>}
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 border-t border-white/[0.05] px-3.5 py-2">
@@ -330,7 +330,7 @@ export function RunResultCard({
           <button
             type="button"
             onClick={onRetry}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[11.5px] font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
           >
             <RotateCcw size={12} /> Try again
           </button>
@@ -343,7 +343,7 @@ export function RunResultCard({
             title={`Undo the ${result.revertable} reversible action${
               result.revertable === 1 ? "" : "s"
             } this task took`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[11.5px] font-medium text-zinc-300 transition-colors hover:border-amber-400/40 hover:text-amber-300 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-zinc-300 transition-colors hover:border-tone-warn/40 hover:text-tone-warn disabled:opacity-40"
           >
             <Undo2 size={12} /> {busy === "revert" ? "Reverting…" : `Revert (${result.revertable})`}
           </button>
@@ -353,14 +353,14 @@ export function RunResultCard({
             type="button"
             onClick={() => void cancel()}
             disabled={busy !== null}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[11.5px] font-medium text-zinc-300 transition-colors hover:border-rose-400/40 hover:text-rose-300 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-zinc-300 transition-colors hover:border-tone-danger/40 hover:text-tone-danger disabled:opacity-40"
           >
             <Ban size={12} /> Stop
           </button>
         )}
         <a
           href={`/sessions/${result.session_id}`}
-          className="ml-auto text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300"
+          className="ml-auto text-[12px] text-zinc-500 transition-colors hover:text-zinc-300"
         >
           Full transcript →
         </a>

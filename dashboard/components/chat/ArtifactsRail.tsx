@@ -545,7 +545,7 @@ export function ArtifactsRail({
                     {base}
                   </span>
                   {dir && (
-                    <span className="block truncate text-[10.5px] text-zinc-600">
+                    <span className="block truncate text-[11px] text-zinc-600">
                       {dir}
                     </span>
                   )}
@@ -562,7 +562,7 @@ export function ArtifactsRail({
                   <Check
                     size={12}
                     data-testid="copied-check"
-                    className="text-emerald-400"
+                    className="text-tone-success"
                   />
                 ) : (
                   <Copy size={12} />
@@ -600,7 +600,7 @@ export function ArtifactsRail({
                       ? `Undo this write — revert ${base}`
                       : `Can't undo: ${undoState.reason ?? "not undoable"}`
                   }
-                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-amber-300 disabled:opacity-40"
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-warn disabled:opacity-40"
                 >
                   {undoingPath === it.path ? (
                     <Loader2 size={12} className="animate-spin" />
@@ -631,7 +631,7 @@ export function ArtifactsRail({
                     <Check
                       size={12}
                       data-testid="promoted-check"
-                      className="text-emerald-400"
+                      className="text-tone-success"
                     />
                   ) : (
                     <BookmarkPlus size={12} />
@@ -665,7 +665,7 @@ export function ArtifactsRail({
                   }}
                   aria-label={`Remove ${base} from this chat`}
                   title="Remove — forget this file on this thread"
-                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-rose-300"
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-danger"
                 >
                   <X size={12} />
                 </button>
@@ -676,13 +676,13 @@ export function ArtifactsRail({
       </ul>
 
       {cap !== undefined && cap > 0 && rows.length >= cap && (
-        <p className="shrink-0 px-2.5 pb-2 text-[10.5px] text-zinc-600">
+        <p className="shrink-0 px-2.5 pb-2 text-[11px] text-zinc-600">
           Showing the latest {cap} files — older ones rolled off this list.
         </p>
       )}
 
       {error && (
-        <p className="shrink-0 px-2.5 pb-2 text-[11px] text-rose-300/90">{error}</p>
+        <p className="shrink-0 px-2.5 pb-2 text-[11px] text-tone-danger">{error}</p>
       )}
     </div>
   );

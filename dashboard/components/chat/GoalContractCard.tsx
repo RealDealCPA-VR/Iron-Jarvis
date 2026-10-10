@@ -231,7 +231,7 @@ export function GoalContractCard({
             value={name}
             onChange={(e) => setName(e.target.value)}
             aria-label="Goal name"
-            className="field mt-1 w-full py-1.5 text-[12.5px]"
+            className="field mt-1 w-full py-1.5 text-[13px]"
           />
         </label>
 
@@ -244,7 +244,7 @@ export function GoalContractCard({
             onChange={(e) => setContract(e.target.value)}
             aria-label="Goal contract"
             rows={5}
-            className="field mt-1 w-full py-1.5 text-[12.5px] leading-snug"
+            className="field mt-1 w-full py-1.5 text-[13px] leading-snug"
           />
         </label>
 
@@ -258,7 +258,7 @@ export function GoalContractCard({
               onChange={(e) => setSchedule(e.target.value)}
               aria-label="Goal schedule"
               placeholder="empty = manual — you run it; a cron fires on schedule"
-              className="field mt-1 w-full py-1.5 text-[12.5px]"
+              className="field mt-1 w-full py-1.5 text-[13px]"
             />
           </label>
           <label className="block w-32">
@@ -270,18 +270,18 @@ export function GoalContractCard({
               onChange={(e) => setBudget(e.target.value)}
               aria-label="Goal budget in dollars"
               inputMode="decimal"
-              className="field mt-1 w-full py-1.5 text-[12.5px]"
+              className="field mt-1 w-full py-1.5 text-[13px]"
             />
           </label>
         </div>
         {!budgetOk && (
-          <p className="text-[11.5px] text-rose-300">
+          <p className="text-[12px] text-tone-danger">
             The budget must be a number above zero — it gates every run
             before it starts.
           </p>
         )}
 
-        <p className="text-[11.5px] leading-snug text-zinc-500">
+        <p className="text-[12px] leading-snug text-zinc-500">
           Verifier: manual — you mark it satisfied; automatic checks can be
           added later. No tools are pre-granted: if a run needs one, the ask
           reaches your notifications like any other run.
@@ -289,7 +289,7 @@ export function GoalContractCard({
       </div>
 
       {error && (
-        <div className="mx-3.5 mb-2.5 rounded-lg border border-rose-500/25 bg-rose-500/[0.06] px-2.5 py-1.5 text-[12px] text-rose-300">
+        <div className="mx-3.5 mb-2.5 rounded-lg border border-tone-danger/25 bg-tone-danger/[0.06] px-2.5 py-1.5 text-[12px] text-tone-danger">
           {error}
         </div>
       )}
@@ -297,18 +297,18 @@ export function GoalContractCard({
       <div className="border-t border-white/[0.05] px-3.5 py-2.5">
         {/* The guarantees live AT the button — the sentence read at the
             moment of decision, pinned verbatim by the test. */}
-        <p className="mb-2 text-[11.5px] leading-snug text-zinc-400">
+        <p className="mb-2 text-[12px] leading-snug text-zinc-400">
           {GOAL_GUARANTEES}
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
           {created ? (
             <>
-              <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-300">
+              <span className="inline-flex items-center gap-1.5 text-[12px] text-tone-success">
                 <Check size={13} /> Goal created
               </span>
               <Link
                 href="/autonomy"
-                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[11.5px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[12px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
               >
                 <DoorOpen size={11} className="shrink-0 text-accent-soft/70" />
                 See your goal
@@ -383,7 +383,7 @@ export function GoalBirth({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12]"
+        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.12]"
       >
         <Target size={12} />
         Keep doing this? → Make it a goal

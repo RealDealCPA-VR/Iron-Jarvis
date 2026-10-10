@@ -247,7 +247,7 @@ function withMarkersHighlighted(text: string): ReactNode[] {
       <mark
         key={key++}
         data-testid="redaction-marker"
-        className="rounded bg-amber-400/20 px-0.5 text-amber-200"
+        className="rounded bg-tone-warn/20 px-0.5 text-tone-warn"
       >
         {m[0]}
       </mark>,
@@ -647,7 +647,7 @@ export function DocPreview({
             aria-label="Copy the full file path"
             className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
           >
-            {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+            {copied ? <Check size={13} className="text-tone-success" /> : <Copy size={13} />}
           </button>
           <button
             type="button"
@@ -703,13 +703,13 @@ export function DocPreview({
         </button>
       </div>
       {savedNote && (
-        <p className="shrink-0 px-1 text-[11px] text-emerald-300/90">{savedNote}</p>
+        <p className="shrink-0 px-1 text-[11px] text-tone-success">{savedNote}</p>
       )}
       {saveError && (
-        <p className="shrink-0 px-1 text-[11px] text-rose-300/90">{saveError}</p>
+        <p className="shrink-0 px-1 text-[11px] text-tone-danger">{saveError}</p>
       )}
       {openNote && (
-        <p className="shrink-0 px-1 text-[11px] text-emerald-300/90">{openNote}</p>
+        <p className="shrink-0 px-1 text-[11px] text-tone-success">{openNote}</p>
       )}
       {/* The file changed between viewings (v1.166.0): offer the diff. The row
           only exists when a re-preview genuinely differed from the snapshot —
@@ -730,7 +730,7 @@ export function DocPreview({
           >
             <FileDiff size={11} /> {showChanges ? "Current" : "Changes"}
           </button>
-          <span className="text-[10.5px] text-zinc-500">
+          <span className="text-[11px] text-zinc-500">
             this file changed since you last previewed it
           </span>
         </div>
@@ -759,7 +759,7 @@ export function DocPreview({
                   ? "Hide comparison"
                   : "Compare to original"}
               </button>
-              <span className="text-[10.5px] text-zinc-500">
+              <span className="text-[11px] text-zinc-500">
                 a redacted copy of {redactionSourceName}
               </span>
             </>
@@ -833,8 +833,8 @@ export function DocPreview({
             {!compare || compare.loading ? (
               <LoaderInline label="Reading both files…" />
             ) : compare.error ? (
-              <div className="text-[11.5px]">
-                <p className="text-rose-300/90">
+              <div className="text-[12px]">
+                <p className="text-tone-danger">
                   Couldn&apos;t compare: {compare.error}
                 </p>
                 {compare.errorHint && (
@@ -858,7 +858,7 @@ export function DocPreview({
                         <span
                           key={label}
                           data-testid="redaction-badge"
-                          className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                          className="inline-flex items-center gap-1 rounded-md border border-tone-warn/30 bg-tone-warn/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-tone-warn"
                         >
                           {label} × {n}
                         </span>
@@ -867,14 +867,14 @@ export function DocPreview({
                     {(compare.markers?.blocks ?? 0) > 0 && (
                       <span
                         data-testid="redaction-badge"
-                        className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                        className="inline-flex items-center gap-1 rounded-md border border-tone-warn/30 bg-tone-warn/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-tone-warn"
                       >
                         █ × {compare.markers!.blocks}
                       </span>
                     )}
                   </div>
                 )}
-                <p className="pb-2 text-[10.5px] text-zinc-500">
+                <p className="pb-2 text-[11px] text-zinc-500">
                   {compareWith ? (
                     <>
                       Comparing {name} with {compareWithName}. Red lines are{" "}
@@ -894,16 +894,16 @@ export function DocPreview({
                     // a payload AT the cap means later PII is out of view.
                     ` Compared over the first ${READ_CAP.toLocaleString()} extracted characters of each file only.`}
                 </p>
-                <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
+                <div className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed">
                   {(compare.diff ?? []).map((l, i) => (
                     <div
                       key={i}
                       data-testid={`cmp-${l.kind}`}
                       className={
                         l.kind === "added"
-                          ? "bg-emerald-500/[0.08] text-emerald-300"
+                          ? "bg-tone-success/[0.08] text-tone-success"
                           : l.kind === "removed"
-                            ? "bg-rose-500/[0.08] text-rose-300/90"
+                            ? "bg-tone-danger/[0.08] text-tone-danger"
                             : "text-zinc-500"
                       }
                     >
@@ -919,7 +919,7 @@ export function DocPreview({
           // The line diff, "since you last previewed": green added, red
           // removed, unchanged lines dimmed for reading context.
           <div className="p-3">
-            <p className="pb-2 text-[10.5px] text-zinc-500">
+            <p className="pb-2 text-[11px] text-zinc-500">
               Changes since you last previewed — added lines green, removed red.
               {data.truncated &&
                 // The diff compares CLIPPED payloads (the server sends only
@@ -931,16 +931,16 @@ export function DocPreview({
                     : `${(data.content ?? "").length.toLocaleString()} characters`
                 } are not shown.`}
             </p>
-            <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
+            <div className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed">
               {diff.map((l, i) => (
                 <div
                   key={i}
                   data-testid={`diff-${l.kind}`}
                   className={
                     l.kind === "added"
-                      ? "bg-emerald-500/[0.08] text-emerald-300"
+                      ? "bg-tone-success/[0.08] text-tone-success"
                       : l.kind === "removed"
-                        ? "bg-rose-500/[0.08] text-rose-300/90"
+                        ? "bg-tone-danger/[0.08] text-tone-danger"
                         : "text-zinc-500"
                   }
                 >
@@ -963,7 +963,7 @@ export function DocPreview({
             }}
           >
             {imgError ? (
-              <p className="max-w-[24rem] text-center text-[11.5px] text-zinc-400">
+              <p className="max-w-[24rem] text-center text-[12px] text-zinc-400">
                 Couldn&apos;t load this image — it may have moved or been
                 deleted. Try Download or Open in {appLabelFor(path)}.
               </p>
@@ -993,7 +993,7 @@ export function DocPreview({
               className="min-h-0 w-full flex-1 border-0"
             />
             {data.truncated && (
-              <p className="shrink-0 py-1 text-center text-[10.5px] text-zinc-400">
+              <p className="shrink-0 py-1 text-center text-[11px] text-zinc-400">
                 {typeof data.total_chars === "number"
                   ? `Preview clipped — ${data.total_chars.toLocaleString()} characters total; open the file for everything.`
                   : "Preview clipped — open the file for everything."}
@@ -1008,7 +1008,7 @@ export function DocPreview({
               </ReactMarkdown>
             </div>
             {data.truncated && (
-              <p className="pb-3 text-center text-[10.5px] text-zinc-300">
+              <p className="pb-3 text-center text-[11px] text-zinc-300">
                 {typeof data.total_chars === "number"
                   ? `Preview clipped — showing ${(data.content ?? "").length.toLocaleString()} of ${data.total_chars.toLocaleString()} characters; open the file for everything.`
                   : "Preview clipped — open the file for everything."}
@@ -1024,7 +1024,7 @@ export function DocPreview({
                     key={s}
                     type="button"
                     onClick={() => void load(s)}
-                    className={`rounded-md border px-2 py-0.5 text-[10.5px] transition-colors ${
+                    className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
                       s === data.sheet
                         ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
                         : "border-white/10 text-zinc-400 hover:text-zinc-200"
@@ -1057,7 +1057,7 @@ export function DocPreview({
                 </tbody>
               </table>
               {data.truncated && (
-                <p className="px-1.5 py-2 text-[10.5px] text-zinc-600">
+                <p className="px-1.5 py-2 text-[11px] text-zinc-600">
                   {/* Truncation honesty (v1.166.0): name the REAL row count
                       when the daemon reports one — a bare "first 80" still
                       reads as "almost everything" on a 40,000-row sheet. */}
@@ -1070,11 +1070,11 @@ export function DocPreview({
           </div>
         ) : (
           <div className="p-3">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-zinc-300">
+            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-zinc-300">
               {data.content ?? ""}
             </pre>
             {data.truncated && (
-              <p className="pt-2 text-[10.5px] text-zinc-600">
+              <p className="pt-2 text-[11px] text-zinc-600">
                 {typeof data.total_chars === "number"
                   ? `Preview clipped — showing ${(data.content ?? "").length.toLocaleString()} of ${data.total_chars.toLocaleString()} characters; open the file for everything.`
                   : "Preview clipped — open the file for everything."}

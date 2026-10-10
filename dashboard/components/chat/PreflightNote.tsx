@@ -55,9 +55,9 @@ export function PreflightNote({
       role="status"
       data-testid="ij-preflight-note"
       data-kind={cooldown ? "cooldown" : signedOutCase ? "signed-out" : "unreachable"}
-      className="flex h-5 min-h-5 items-center gap-1.5 overflow-hidden px-1 text-[11px] leading-none text-amber-300"
+      className="flex h-5 min-h-5 items-center gap-1.5 overflow-hidden px-1 text-[11px] leading-none text-tone-warn"
     >
-      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-tone-warn" />
       <span className="truncate">
         {cooldown
           ? `${provider} is in cooldown, retry in ${cooldownS} s — it failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`

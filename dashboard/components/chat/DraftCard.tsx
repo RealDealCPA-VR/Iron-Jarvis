@@ -494,7 +494,7 @@ export function DraftCard({
         <Mail size={12} className="shrink-0 text-accent-soft/80" />
         {subject ? (
           <>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200">
+            <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">
               <span className="text-zinc-500">Subject: </span>
               {subject}
             </span>
@@ -506,21 +506,21 @@ export function DraftCard({
               className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
             >
               {subjectCopied ? (
-                <Check size={11} className="text-emerald-400" />
+                <Check size={11} className="text-tone-success" />
               ) : (
                 <Copy size={11} />
               )}
             </button>
           </>
         ) : (
-          <span className="flex-1 text-[12.5px] text-zinc-400">Draft</span>
+          <span className="flex-1 text-[13px] text-zinc-400">Draft</span>
         )}
       </div>
 
       <div
         ref={bodyRef}
         data-testid="draft-body"
-        className="px-3.5 py-2.5 text-[13.5px] leading-relaxed text-zinc-200"
+        className="px-3.5 py-2.5 text-[14px] leading-relaxed text-zinc-200"
       >
         {children}
       </div>
@@ -532,7 +532,7 @@ export function DraftCard({
       <div className="flex flex-wrap items-center gap-2 border-t border-white/[0.06] px-3 py-1.5">
         <span
           data-testid="draft-note"
-          className={`min-w-0 basis-full truncate text-[11px] sm:mr-auto sm:basis-auto ${mailed ? "text-emerald-400" : "text-zinc-500"}`}
+          className={`min-w-0 basis-full truncate text-[11px] sm:mr-auto sm:basis-auto ${mailed ? "text-tone-success" : "text-zinc-500"}`}
         >
           {mailed
             ? mailed
@@ -544,7 +544,7 @@ export function DraftCard({
           type="button"
           data-testid="draft-save-draft"
           onClick={() => setCompose("draft")}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
         >
           <Inbox size={11} />
           Save to Drafts
@@ -553,7 +553,7 @@ export function DraftCard({
           type="button"
           data-testid="draft-send"
           onClick={() => setCompose("send")}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.07] hover:text-zinc-100"
         >
           <Send size={11} />
           Send…
@@ -561,10 +561,10 @@ export function DraftCard({
         <button
           type="button"
           onClick={() => void copyAll()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.08] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.16]"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.08] px-2.5 py-1 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.16]"
         >
           {state === "rich" || state === "plain" ? (
-            <Check size={11} className="text-emerald-400" />
+            <Check size={11} className="text-tone-success" />
           ) : (
             <Copy size={11} />
           )}

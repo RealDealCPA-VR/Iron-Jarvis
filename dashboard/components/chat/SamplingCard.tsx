@@ -72,12 +72,12 @@ export function SamplingCard({
       className={
         docked
           ? "space-y-2.5 px-4 pb-4 pt-3"
-          : "space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
+          : "space-y-2.5 rounded-xl border border-tone-warn/30 bg-tone-warn/[0.06] p-3"
       }
     >
       <div className="flex items-center gap-2">
-        <Sparkles size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
-        <p data-testid="mcp-sampling-title" className="text-sm font-medium text-amber-100">
+        <Sparkles size={15} className="shrink-0 text-tone-warn" aria-hidden="true" />
+        <p data-testid="mcp-sampling-title" className="text-sm font-medium text-zinc-100">
           {who} wants to ask {modelWords(ask)} a question for its own use
         </p>
       </div>

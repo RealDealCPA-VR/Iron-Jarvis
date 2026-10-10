@@ -285,8 +285,8 @@ type RunState = ReturnType<typeof useWorkflowRun>;
 function WaitingBox({ run }: { run: RunState }) {
   if (run.runStatus !== "waiting" || !run.waitingQ) return null;
   return (
-    <div className="mx-3.5 mb-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2">
-      <p className="text-[12px] text-amber-200">{run.waitingQ}</p>
+    <div className="mx-3.5 mb-2.5 rounded-lg border border-tone-warn/25 bg-tone-warn/[0.06] px-2.5 py-2">
+      <p className="text-[12px] text-tone-warn">{run.waitingQ}</p>
       <div className="mt-1.5 flex items-center gap-1.5">
         <input
           value={run.answerText}
@@ -296,7 +296,7 @@ function WaitingBox({ run }: { run: RunState }) {
           }}
           placeholder="Type your answer — the run continues from here"
           aria-label="Answer the workflow"
-          className="field flex-1 py-1.5 text-[12.5px]"
+          className="field flex-1 py-1.5 text-[13px]"
         />
         <button
           type="button"
@@ -326,8 +326,8 @@ function OutcomeBanner({ status }: { status: string | null }) {
     <div
       className={`mx-3.5 mb-2.5 rounded-lg border px-2.5 py-1.5 text-[12px] ${
         status === "completed"
-          ? "border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-300"
-          : "border-rose-500/25 bg-rose-500/[0.06] text-rose-300"
+          ? "border-tone-success/25 bg-tone-success/[0.06] text-tone-success"
+          : "border-tone-danger/25 bg-tone-danger/[0.06] text-tone-danger"
       }`}
     >
       {status === "completed"
@@ -345,9 +345,9 @@ function StepGlyph({ live, index }: { live?: LiveStep; index: number }) {
       {live?.state === "running" ? (
         <Loader2 size={13} className="inline animate-spin text-accent-soft" />
       ) : live?.state === "completed" ? (
-        <Check size={13} className="inline text-emerald-300" />
+        <Check size={13} className="inline text-tone-success" />
       ) : live?.state === "failed" ? (
-        <CircleAlert size={13} className="inline text-rose-300" />
+        <CircleAlert size={13} className="inline text-tone-danger" />
       ) : (
         <span
           className={`font-mono text-[11px] ${
@@ -406,12 +406,12 @@ export function WorkflowRunChip({
         </div>
         {terminal ? (
           status === "completed" ? (
-            <Check size={14} className="shrink-0 text-emerald-300" />
+            <Check size={14} className="shrink-0 text-tone-success" />
           ) : (
-            <CircleAlert size={14} className="shrink-0 text-rose-300" />
+            <CircleAlert size={14} className="shrink-0 text-tone-danger" />
           )
         ) : status === "waiting" ? (
-          <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/[0.08] px-2 py-0.5 text-[10.5px] text-amber-300">
+          <span className="shrink-0 rounded-full border border-tone-warn/25 bg-tone-warn/[0.08] px-2 py-0.5 text-[11px] text-tone-warn">
             waiting on you
           </span>
         ) : live ? (
@@ -424,10 +424,10 @@ export function WorkflowRunChip({
             <li key={stepName} className="flex items-start gap-2.5">
               <StepGlyph live={live} index={i} />
               <div className="min-w-0 flex-1">
-                <span className="text-[12.5px] text-zinc-200">{stepName}</span>
+                <span className="text-[13px] text-zinc-200">{stepName}</span>
                 {live.summary && live.state !== "running" && (
                   <p
-                    className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-zinc-400"
+                    className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-zinc-400"
                     title={live.summary}
                   >
                     {live.summary}
@@ -439,7 +439,7 @@ export function WorkflowRunChip({
         </ol>
       ) : (
         live && (
-          <p className="px-3.5 py-2.5 text-[11.5px] text-zinc-500">
+          <p className="px-3.5 py-2.5 text-[12px] text-zinc-500">
             Run started — steps light up here as they happen.
           </p>
         )
@@ -447,7 +447,7 @@ export function WorkflowRunChip({
       <WaitingBox run={run} />
       <OutcomeBanner status={status} />
       {run.answerError && (
-        <div className="mx-3.5 mb-2.5 rounded-lg border border-rose-500/25 bg-rose-500/[0.06] px-2.5 py-1.5 text-[12px] text-rose-300">
+        <div className="mx-3.5 mb-2.5 rounded-lg border border-tone-danger/25 bg-tone-danger/[0.06] px-2.5 py-1.5 text-[12px] text-tone-danger">
           {run.answerError}
         </div>
       )}
@@ -590,7 +590,7 @@ export function WorkflowDraftCard({
               <StepGlyph live={live} index={i} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="text-[12.5px] text-zinc-200">{s.name}</span>
+                  <span className="text-[13px] text-zinc-200">{s.name}</span>
                   {kind === "agent" ? (
                     <span
                       className={`rounded-full border px-1.5 py-px text-[10px] ${meta.chip}`}
@@ -605,7 +605,7 @@ export function WorkflowDraftCard({
                         {kindMeta.label}
                       </span>
                       {kind === "tool" && s.tool && (
-                        <span className="font-mono text-[10.5px] text-sky-300/80">
+                        <span className="font-mono text-[11px] text-tone-info">
                           {s.tool}
                         </span>
                       )}
@@ -613,14 +613,14 @@ export function WorkflowDraftCard({
                   )}
                 </div>
                 <p
-                  className="line-clamp-2 text-[11.5px] leading-snug text-zinc-500"
+                  className="line-clamp-2 text-[12px] leading-snug text-zinc-500"
                   title={detail}
                 >
                   {detail}
                 </p>
                 {live?.summary && live.state !== "running" && (
                   <p
-                    className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-zinc-400"
+                    className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-zinc-400"
                     title={live.summary}
                   >
                     {live.summary}
@@ -635,7 +635,7 @@ export function WorkflowDraftCard({
       <WaitingBox run={run} />
       <OutcomeBanner status={run.runStatus} />
       {(error || run.answerError) && (
-        <div className="mx-3.5 mb-2.5 rounded-lg border border-rose-500/25 bg-rose-500/[0.06] px-2.5 py-1.5 text-[12px] text-rose-300">
+        <div className="mx-3.5 mb-2.5 rounded-lg border border-tone-danger/25 bg-tone-danger/[0.06] px-2.5 py-1.5 text-[12px] text-tone-danger">
           {error || run.answerError}
         </div>
       )}
@@ -649,7 +649,7 @@ export function WorkflowDraftCard({
         >
           {saved ? (
             <>
-              <Check size={13} className="text-emerald-300" /> Saved
+              <Check size={13} className="text-tone-success" /> Saved
             </>
           ) : (
             <>
