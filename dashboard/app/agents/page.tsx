@@ -60,14 +60,31 @@ import {
   type AgentsRoute,
 } from "@/lib/mission";
 
-/** What a deferred screen shows for the moment its module is loading. */
+/** What a deferred screen shows for the moment its module is loading.
+ *  v1.330.0 (calm chat wave 10): no card. The screens it stands in for sit
+ *  on the page without a box, so the wait does too: one quiet line a screen
+ *  reader hears (role=status) and three faint lines under a hairline. It
+ *  keeps the screen's full height, so nothing below jumps when the real
+ *  screen arrives. */
 function ScreenLoading() {
   return (
     <div
       data-testid="agents-screen-loading"
+      role="status"
       aria-busy="true"
-      className="card-surface h-[calc(100vh-7rem-var(--ij-strip-h,0px))] min-h-[32rem] animate-pulse"
-    />
+      aria-live="polite"
+      className="h-[calc(100vh-7rem-var(--ij-strip-h,0px))] min-h-[32rem] px-1 pt-1"
+    >
+      <p className="flex items-center gap-2 text-[13px] text-zinc-500">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-zinc-500 motion-safe:animate-pulse" />
+        Loading…
+      </p>
+      <div aria-hidden="true" className="mt-4 space-y-3 border-t border-white/[0.06] pt-5 motion-safe:animate-pulse">
+        <div className="h-2 w-2/3 max-w-[28rem] rounded-full bg-white/[0.05]" />
+        <div className="h-2 w-1/2 max-w-[20rem] rounded-full bg-white/[0.05]" />
+        <div className="h-2 w-3/5 max-w-[24rem] rounded-full bg-white/[0.05]" />
+      </div>
+    </div>
   );
 }
 

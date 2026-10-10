@@ -17,16 +17,14 @@
  *    on hover, a focus ring for the keyboard and a faint fill on touch.
  *
  * The guard at the bottom reads every STRING LITERAL and JSX TEXT node of the
- * four files through the TypeScript parser (comments never count), the same
- * reading as mission-copy-v1329's guard. Three strings in the page are the
+ * four files through the TypeScript parser (comments never count). Since
+ * v1.330.0 the reader is ONE shared helper (__tests__/helpers/dashGuard.ts)
+ * that mission-copy-v1329 imports too. Three strings in the page are the
  * MODEL's words, not the user's (an agent's reply label that the daemon spells
  * the same way, and two task texts handed to an agent run); they are listed by
  * name below, and the list is checked so it cannot rot.
  */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
@@ -34,9 +32,8 @@ import { stepLabel } from "@/components/chat/stepLabel";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import type { IJEvent } from "@/lib/types";
-
-const ROOT = path.join(__dirname, "..");
-const readSrc = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
+// v1.330.0: the walker is shared with mission-copy-v1329 (one reader).
+import { asides, copyPieces, readSrc } from "./helpers/dashGuard";
 
 afterEach(() => cleanup());
 
@@ -213,88 +210,6 @@ describe("Retry beside the refusal line is a calm ghost, still clearly a button"
 
 /* --------------------------------------------------- 3. the source guard --- */
 
-/** Every string literal, template piece and JSX text node, with its line.
- *  Comments are not nodes, so they never count. (mission-copy-v1329's reader.) */
-function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string; jsx: boolean }> {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: Array<{ line: number; text: string; jsx: boolean }> = [];
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isStringLiteral(node) ||
-      ts.isNoSubstitutionTemplateLiteral(node) ||
-      ts.isTemplateHead(node) ||
-      ts.isTemplateMiddle(node) ||
-      ts.isTemplateTail(node) ||
-      ts.isJsxText(node)
-    ) {
-      const text = ts.isJsxText(node) ? node.getText(file) : (node as ts.LiteralLikeNode).text;
-      out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text, jsx: ts.isJsxText(node) });
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return out;
-}
-
-const ASIDE = /(^|\s)[—–](\s|$)/;
-const DASH_ONLY = /^[—–]$/;
-
-function jsxRendered(raw: string): string {
-  const lines = raw.split(/\r\n|\n|\r/);
-  if (lines.length === 1) return raw;
-  return lines
-    .map((l, i) => {
-      let s = l;
-      if (i !== 0) s = s.replace(/^[ \t]+/, "");
-      if (i !== lines.length - 1) s = s.replace(/[ \t]+$/, "");
-      return s;
-    })
-    .filter((s) => s.length > 0)
-    .join(" ");
-}
-
-/** A JSX child that is only a dash, read with its siblings: `{" "}\n—{" "}`
- *  renders "x — y". A dash that is the element's whole text is a placeholder. */
-function jsxDashAsides(rel: string, src = readSrc(rel)): string[] {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: string[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
-      let joined = "";
-      const parts: Array<{ start: number; text: string; node: ts.Node }> = [];
-      for (const child of node.children) {
-        let text: string;
-        if (ts.isJsxText(child)) text = jsxRendered(child.getText(file));
-        else if (ts.isJsxExpression(child) && !child.expression) text = "";
-        else if (
-          ts.isJsxExpression(child) &&
-          child.expression &&
-          (ts.isStringLiteral(child.expression) || ts.isNoSubstitutionTemplateLiteral(child.expression))
-        )
-          text = child.expression.text;
-        else text = "\u0001";
-        parts.push({ start: joined.length, text, node: child });
-        joined += text;
-      }
-      if (!DASH_ONLY.test(joined.trim())) {
-        for (const p of parts) {
-          const dash = p.text.trim();
-          if (!DASH_ONLY.test(dash)) continue;
-          const at = p.start + p.text.indexOf(dash);
-          const spaced = (c: string | undefined) => c !== undefined && /\s/.test(c);
-          if (spaced(joined[at - 1]) || spaced(joined[at + 1])) {
-            const line = file.getLineAndCharacterOfPosition(p.node.getStart(file)).line + 1;
-            out.push(`${rel}:${line}: ${joined.replace(/\u0001/g, "{…}").trim().slice(0, 80)}`);
-          }
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return out;
-}
-
 /** Strings in the page that are the MODEL's words, never shown as a notice.
  *  Each is matched by a fragment and must still be found (see below). */
 const MODEL_FACING: Record<string, string> = {
@@ -306,19 +221,6 @@ const MODEL_FACING: Record<string, string> = {
   // The task text "Have <agent> do this" hands the agent run.
   doItTask: "above) — now DO it with your tools, and report the files you made.",
 };
-
-function asides(rel: string, src?: string, allow: string[] = []): string[] {
-  const text = src ?? readSrc(rel);
-  const placeholder = (p: { text: string; jsx: boolean }) =>
-    p.jsx ? DASH_ONLY.test(p.text.trim()) : DASH_ONLY.test(p.text);
-  return [
-    ...copyPieces(rel, text)
-      .filter((p) => !placeholder(p) && ASIDE.test(p.text))
-      .filter((p) => !allow.some((a) => p.text.includes(a)))
-      .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`),
-    ...jsxDashAsides(rel, text),
-  ];
-}
 
 const FILES = [
   "components/chat/stepLabel.ts",

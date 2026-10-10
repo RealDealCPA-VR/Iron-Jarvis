@@ -385,9 +385,11 @@ describe("the mission files keep their labels quiet", () => {
       .filter((rel) => !TEAM_TAB_FILES.includes(rel))
       .filter((rel) => code(rel).includes("card-surface"))
       .sort();
+    // v1.330.0 (calm chat wave 10, L3): the page's loading skeleton dropped
+    // its card too (a quiet status line now), so app/agents/page.tsx left
+    // this list.
     expect(boxed).toEqual(
       [
-        "app/agents/page.tsx",
         `${DIR}/MissionOutput.tsx`,
         `${DIR}/MissionScreen.tsx`,
         `${DIR}/RoomTranscript.tsx`,

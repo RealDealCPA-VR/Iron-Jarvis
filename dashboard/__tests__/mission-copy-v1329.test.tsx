@@ -16,11 +16,12 @@
  * these files through the TypeScript parser (so comments never count) and
  * fails if a spaced em or en dash comes back. Wave 8 (J5) widened it to the
  * whole workflow editor (components/workflow) and the notification bell.
+ * Since v1.330.0 the reader is ONE shared helper
+ * (__tests__/helpers/dashGuard.ts) that chat-notices-v1329 imports too.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
@@ -37,9 +38,8 @@ import { ProjectTeams } from "@/components/agents/mission/ProjectTeams";
 import { LiveActivity } from "@/components/agents/mission/LiveActivity";
 import { missionHeadline, type MissionView } from "@/lib/mission";
 import { STARTERS } from "@/components/workflow/starters";
-
-const ROOT = path.join(__dirname, "..");
-const readSrc = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
+// v1.330.0: the walker is shared with chat-notices-v1329 (one reader).
+import { asides, copyPieces, readSrc, DASHBOARD_ROOT as ROOT } from "./helpers/dashGuard";
 
 afterEach(() => {
   cleanup();
@@ -198,110 +198,6 @@ describe("the workflow starter cards read as sentences", () => {
 });
 
 /* ------------------------------------------------ 5. the source guards --- */
-
-/** Every string literal, template piece and JSX text node in a source file,
- *  with its line. Comments are not nodes, so they never count. */
-function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string; jsx: boolean }> {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: Array<{ line: number; text: string; jsx: boolean }> = [];
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isStringLiteral(node) ||
-      ts.isNoSubstitutionTemplateLiteral(node) ||
-      ts.isTemplateHead(node) ||
-      ts.isTemplateMiddle(node) ||
-      ts.isTemplateTail(node) ||
-      ts.isJsxText(node)
-    ) {
-      const text = ts.isJsxText(node) ? node.getText(file) : (node as ts.LiteralLikeNode).text;
-      out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text, jsx: ts.isJsxText(node) });
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return out;
-}
-
-/** A dash used as an aside: an em or en dash with a space (or the edge of
- *  the text) on both sides. A lone dash placeholder ("—") is not an aside. */
-const ASIDE = /(^|\s)[—–](\s|$)/;
-const DASH_ONLY = /^[—–]$/;
-
-/** What a JSX text node renders, by React's whitespace rule: a run of
- *  whitespace that holds a line break is dropped at the start and end of a
- *  line; whitespace on one line is kept. */
-function jsxRendered(raw: string): string {
-  const lines = raw.split(/\r\n|\n|\r/);
-  if (lines.length === 1) return raw;
-  return lines
-    .map((l, i) => {
-      let s = l;
-      if (i !== 0) s = s.replace(/^[ \t]+/, "");
-      if (i !== lines.length - 1) s = s.replace(/[ \t]+$/, "");
-      return s;
-    })
-    .filter((s) => s.length > 0)
-    .join(" ");
-}
-
-/** A JSX child that is only a dash, read together with its siblings. On its
- *  own it looks like a placeholder, but `{" "}\n—{" "}` renders "x — y": a
- *  space next to it (from a `{" "}` sibling, or whitespace the node keeps) makes
- *  it an aside. A dash that is the element's whole text stays a placeholder. */
-function jsxDashAsides(rel: string, src = readSrc(rel)): string[] {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: string[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
-      let joined = "";
-      const parts: Array<{ start: number; text: string; node: ts.Node }> = [];
-      for (const child of node.children) {
-        let text: string;
-        if (ts.isJsxText(child)) text = jsxRendered(child.getText(file));
-        else if (ts.isJsxExpression(child) && !child.expression) text = ""; // {/* a comment */}
-        else if (
-          ts.isJsxExpression(child) &&
-          child.expression &&
-          (ts.isStringLiteral(child.expression) || ts.isNoSubstitutionTemplateLiteral(child.expression))
-        )
-          text = child.expression.text;
-        else text = "\u0001"; // an element or a computed value: never a space
-        parts.push({ start: joined.length, text, node: child });
-        joined += text;
-      }
-      if (!DASH_ONLY.test(joined.trim())) {
-        for (const p of parts) {
-          const dash = p.text.trim();
-          if (!DASH_ONLY.test(dash)) continue; // longer copy is the per-piece check's job
-          const at = p.start + p.text.indexOf(dash);
-          const spaced = (c: string | undefined) => c !== undefined && /\s/.test(c);
-          if (spaced(joined[at - 1]) || spaced(joined[at + 1])) {
-            const line = file.getLineAndCharacterOfPosition(p.node.getStart(file)).line + 1;
-            out.push(`${rel}:${line}: ${joined.replace(/\u0001/g, "{…}").trim().slice(0, 80)}`);
-          }
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return out;
-}
-
-function asides(rel: string, src?: string): string[] {
-  const text = src ?? readSrc(rel);
-  // A string that is exactly a dash ("—") is a placeholder; " — " is not. A
-  // JSX text node that trims to a dash is judged with its siblings by
-  // jsxDashAsides (its raw text carries the source's indentation).
-  const placeholder = (p: { text: string; jsx: boolean }) =>
-    p.jsx ? DASH_ONLY.test(p.text.trim()) : DASH_ONLY.test(p.text);
-  return [
-    ...copyPieces(rel, text)
-      .filter((p) => !placeholder(p) && ASIDE.test(p.text))
-      .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`),
-    ...jsxDashAsides(rel, text),
-  ];
-}
 
 const MISSION_DIR = "components/agents/mission";
 const FILES = [
