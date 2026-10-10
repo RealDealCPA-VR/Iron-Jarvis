@@ -12894,8 +12894,8 @@ export default function ChatPage() {
                       )}
                     </PanelSection>
                     {/* v1.329.0 (calm chat wave 5, G4): the CALM file list,
-                        no card, file names in the normal font. Build keeps
-                        its own card look. */}
+                        no card, file names in the normal font. Build uses
+                        the calm variant too since wave 6 (H2). */}
                     <div className="min-h-0 flex-1">
                       <FilesPanel
                         variant="calm"
@@ -12906,7 +12906,7 @@ export default function ChatPage() {
                   </>
                 ) : (
                   // The folder picker is shared with Build (which keeps its
-                  // card and its "Open terminal here"); here it is the CALM
+                  // "Open terminal here"); here it is the CALM
                   // picker (v1.329.0: no card, no accent header, quiet
                   // sentence-case labels, hairline inputs, a ghost Go) and
                   // without that action, which never did anything from chat.
