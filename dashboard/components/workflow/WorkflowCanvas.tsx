@@ -637,14 +637,15 @@ export function RunProgress({
   return (
     <div data-testid="run-progress" className="space-y-2.5">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        {/* waiting/resuming get a REAL badge (amber/cyan), not the raw slate
-            fallback the generic status map would render. */}
+        {/* waiting/resuming get a REAL tone (amber/cyan), not the raw slate
+            fallback the generic status map would render. The calm chip
+            (v1.330.0): no border, the dot carries the tone. */}
         {status === "waiting" ? (
-          <Badge value="waiting on you" tone="amber" />
+          <Badge variant="calm" value="waiting on you" tone="amber" />
         ) : status === "resuming" ? (
-          <Badge value="resuming" tone="cyan" />
+          <Badge variant="calm" value="resuming" tone="cyan" />
         ) : (
-          <Badge value={status} />
+          <Badge variant="calm" value={status} />
         )}
         <span className="text-zinc-300">
           Run <b className="font-semibold text-zinc-100">{run.workflow_name}</b>
@@ -763,7 +764,7 @@ export function RunProgress({
                     >
                       {s.name}
                     </span>
-                    <Badge value={s.status} />
+                    <Badge variant="calm" value={s.status} />
                   </button>
                   {isOpen && (
                     <p

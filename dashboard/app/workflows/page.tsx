@@ -754,6 +754,7 @@ function RunHistory() {
                       <td className="px-2 py-2.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge
+                            variant="calm"
                             value={r.status || "unknown"}
                             tone={runBadgeTone(r.status)}
                           />
@@ -882,7 +883,7 @@ function RunHistory() {
                                         · {stepKindHint(d)}
                                       </span>
                                     )}
-                                    <Badge value={st} />
+                                    <Badge variant="calm" value={st} />
                                   </div>
                                   {o?.summary && (
                                     <p

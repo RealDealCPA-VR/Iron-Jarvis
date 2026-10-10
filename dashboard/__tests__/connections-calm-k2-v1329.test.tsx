@@ -21,9 +21,8 @@
  *     connections folder). A parser-based guard keeps them out.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -121,14 +120,12 @@ vi.mock("framer-motion", async () => {
 import FleetPage from "@/app/fleet/page";
 import { EnvelopeRowControls, sourceBadge } from "@/components/connections/EnvelopeCard";
 import { ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON } from "@/components/connections/endpointChip";
+import { DASHBOARD_ROOT as ROOT, asides, copyPieces, readSrc } from "./helpers/dashGuard";
 
 beforeEach(() => {
   hooks.responses = {};
 });
 afterEach(() => cleanup());
-
-const ROOT = path.join(__dirname, "..");
-const readSrc = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
 
 /* ========================================== 1. the Fleet node header wraps */
 
@@ -230,7 +227,8 @@ describe("EnvelopeRowControls: the provenance chip wears the endpoint rows' one 
     expect(chip.getAttribute("title")).toBe(
       "Measuring failed. Using the floor defaults: safe, conservative settings, not measured ones.",
     );
-    // The Measure button is the same shell as a ghost that fills on hover.
+    // The Measure button is the row's calm action (v1.330.0: no longer
+    // chip-shaped), a ghost that fills on hover.
     const btn = screen.getByTestId("measure-fleet-abc-gpt-oss-120b");
     expect(btn.className).toBe(ENDPOINT_CHIP_BUTTON);
     expect(btn.className).toMatch(/hover:bg-white\/\[0\.06\]/);
@@ -274,7 +272,8 @@ describe("EnvelopeRowControls: the provenance chip wears the endpoint rows' one 
   it("the rows' chip shell has ONE definition, shared by ConnectionsPage and EnvelopeCard", () => {
     const page = readSrc("components/settings/pages/ConnectionsPage.tsx");
     const env = readSrc("components/connections/EnvelopeCard.tsx");
-    expect(page).toMatch(/import \{ ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON \} from "@\/components\/connections\/endpointChip"/);
+    // v1.330.0 (calm M3): the page also takes CALM_ACTION from the same module.
+    expect(page).toMatch(/import \{ (?:CALM_ACTION, )?ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON \} from "@\/components\/connections\/endpointChip"/);
     expect(env).toMatch(/import \{ ENDPOINT_CHIP, ENDPOINT_CHIP_BUTTON \} from "@\/components\/connections\/endpointChip"/);
     expect(page).not.toMatch(/const ENDPOINT_CHIP\s*=/);
     expect(env).not.toMatch(/const ENDPOINT_CHIP\s*=/);
@@ -287,40 +286,10 @@ describe("EnvelopeRowControls: the provenance chip wears the endpoint rows' one 
 
 /* ===================================== 3. no dash asides in Connections copy */
 
-/** Every string literal, template piece and JSX text node in a source file,
- *  with its line. Comments are not nodes, so they never count. (The same
- *  reader as mission-copy-v1329.) */
-function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string; jsx: boolean }> {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: Array<{ line: number; text: string; jsx: boolean }> = [];
-  const visit = (n: ts.Node) => {
-    if (
-      ts.isStringLiteral(n) ||
-      ts.isNoSubstitutionTemplateLiteral(n) ||
-      ts.isTemplateHead(n) ||
-      ts.isTemplateMiddle(n) ||
-      ts.isTemplateTail(n) ||
-      ts.isJsxText(n)
-    ) {
-      const text = ts.isJsxText(n) ? n.getText(file) : (n as ts.LiteralLikeNode).text;
-      out.push({ line: file.getLineAndCharacterOfPosition(n.getStart(file)).line + 1, text, jsx: ts.isJsxText(n) });
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(file);
-  return out;
-}
-
-/** A dash used as an aside: an em or en dash with a space (or the edge of
- *  the text) on both sides. A lone dash placeholder ("—") is not an aside. */
-const ASIDE = /(^|\s)[—–](\s|$)/;
-const DASH_ONLY = /^[—–]$/;
-
-function asides(rel: string, src?: string): string[] {
-  return copyPieces(rel, src)
-    .filter((p) => !(p.jsx ? DASH_ONLY.test(p.text.trim()) : DASH_ONLY.test(p.text)) && ASIDE.test(p.text))
-    .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`);
-}
+/* The no-dash reader is the shared one (__tests__/helpers/dashGuard.ts,
+   v1.330.0): string literals, template pieces and JSX text through the
+   TypeScript parser (comments never count), plus a lone dash that a `{" "}`
+   sibling turns into an aside. */
 
 const CONN_DIR = "components/connections";
 const COPY_FILES = [

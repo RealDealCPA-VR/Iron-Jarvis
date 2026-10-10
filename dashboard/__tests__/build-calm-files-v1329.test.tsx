@@ -120,6 +120,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 }));
 
 import TerminalsPage from "@/app/terminals/page";
+import { calmUses, uncalm, type KeptDefault } from "./helpers/calmVariant";
 
 type FilesPanelModule = typeof import("@/components/terminal/FilesPanel");
 type DirectoryTreeModule = typeof import("@/components/terminal/DirectoryTree");
@@ -483,5 +484,51 @@ describe("Build page source: whole pixels and theme tokens only", () => {
     ]) {
       expect(patternHits(ok), ok).toEqual([]);
     }
+  });
+});
+
+/* v1.330.0 (calm chat wave 11, M4): every <Badge> and <ConfirmButton> on the
+   Build page and in the terminal components is the calm variant, with ONE
+   use kept in the default look on purpose (named here, with why). A new
+   default one, or a spread that could hide the variant, fails. */
+const BUILD_KEPT: KeptDefault[] = [
+  {
+    rel: PAGE,
+    tag: "ConfirmButton",
+    label: "Close terminal",
+    why: "it sits in the 'Close this terminal?' confirm card over the pane, a deliberately boxed dialog, beside that dialog's bordered Cancel; a calm ghost there would put two looks in one row",
+  },
+];
+
+describe("Build: Badge and ConfirmButton are calm, except the one kept on purpose", () => {
+  const files = scanned.filter((f) => f.endsWith(".tsx"));
+
+  it.each(files)("%s has no default Badge or ConfirmButton outside the kept list", (rel) => {
+    expect(uncalm(rel, readRel(rel), BUILD_KEPT)).toEqual([]);
+  });
+
+  it("every kept use still exists, still is the default look, and says why", () => {
+    for (const k of BUILD_KEPT) {
+      const hit = calmUses(k.rel, readRel(k.rel)).filter((u) => u.tag === k.tag && u.label === k.label);
+      expect(hit, `${k.rel} <${k.tag} ${k.label}>`).toHaveLength(1);
+      expect(hit[0].calm).toBe(false);
+      expect(k.why.length).toBeGreaterThan(40);
+    }
+    // The dialog really is a box: the kept button's parent card has a border.
+    const page = readRel(PAGE);
+    const at = page.indexOf("Close this terminal?");
+    expect(at).toBeGreaterThan(-1);
+    const card = page.slice(Math.max(0, at - 400), at);
+    expect(card).toMatch(/rounded-2xl border border-white\/10 bg-ink-850/);
+  });
+
+  it("the kept list does not excuse a second default use (anti-vacuity)", () => {
+    const probe = [
+      'const a = <ConfirmButton onConfirm={go} label="Close terminal" />;',
+      'const b = <ConfirmButton onConfirm={go} label="Remove pane" />;',
+      'const c = <Badge value="idle" />;',
+      'const d = <ConfirmButton {...p} label="Close terminal" />;',
+    ].join("\n");
+    expect(uncalm(PAGE, probe, BUILD_KEPT).map((x) => x.split(" ")[0].split(":")[1])).toEqual(["2", "3", "4"]);
   });
 });

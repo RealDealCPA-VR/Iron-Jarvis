@@ -96,6 +96,10 @@ vi.mock("next/link", async () => {
 import WorkflowsPage from "@/app/workflows/page";
 import { RunProgress } from "@/components/workflow/WorkflowCanvas";
 import type { WorkflowRun } from "@/lib/types";
+import { readdirSync } from "node:fs";
+import path from "node:path";
+import { calmUses, uncalm } from "./helpers/calmVariant";
+import { DASHBOARD_ROOT } from "./helpers/dashGuard";
 
 const RUNS_PATH = "/workflows/runs?limit=50";
 
@@ -275,5 +279,56 @@ describe("the run strip speaks in tone tokens", () => {
     expect(LITERAL_HUE.test("rounded border-rose-500/25 text-rose-200")).toBe(true);
     expect(LITERAL_HUE.test("hover:bg-amber-500/20")).toBe(true);
     expect(LITERAL_HUE.test("text-tone-danger bg-tone-warn/10")).toBe(false);
+  });
+});
+
+/* v1.330.0 (calm chat wave 11, M4): the run history's status chip, a run's
+   step chips and the canvas's run strip were the default (bordered, tinted)
+   Badge. Every <Badge> and <ConfirmButton> on the Workflows page and in the
+   workflow editor's files is the calm variant now: no border, no fill, the
+   dot carries the tone. A default one (or a spread that could hide the
+   variant) fails here. */
+describe("the Workflows page draws every Badge and ConfirmButton calm", () => {
+  const WORKFLOW_DIR = "components/workflow";
+  const FILES = [
+    "app/workflows/page.tsx",
+    ...readdirSync(path.join(DASHBOARD_ROOT, WORKFLOW_DIR))
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => `${WORKFLOW_DIR}/${f}`),
+  ];
+
+  it.each(FILES)("%s has no default Badge or ConfirmButton", (rel) => {
+    expect(uncalm(rel)).toEqual([]);
+  });
+
+  it("the guard sees the page's and the canvas's chips (anti-vacuity)", () => {
+    const n = (rel: string) => calmUses(rel).length;
+    // The run history chip + a run's step chip (page); the run strip's three
+    // status chips + each step's chip (canvas).
+    expect(n("app/workflows/page.tsx")).toBeGreaterThanOrEqual(2);
+    expect(n("components/workflow/WorkflowCanvas.tsx")).toBeGreaterThanOrEqual(4);
+  });
+
+  it("the run strip's status chips render calm: no border, the dot carries the tone", () => {
+    const run = {
+      id: "r2",
+      workflow_name: "Monthly close",
+      status: "waiting",
+      steps_json: JSON.stringify([{ name: "Gather", agent: "planner", task: "x" }]),
+      outputs_json: JSON.stringify({ Gather: { status: "completed", summary: "ok" } }),
+      waiting_json: JSON.stringify({ index: 0, step: "Gather", question: "Go on?", options: ["Yes"] }),
+    } as unknown as WorkflowRun;
+    render(<RunProgress run={run} onCancel={() => {}} cancelling={false} />);
+    const strip = screen.getByTestId("run-progress");
+    const chips = [...strip.querySelectorAll("[data-badge-variant]")];
+    // The run's own chip and the step's chip.
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    for (const chip of chips) {
+      expect(chip.getAttribute("data-badge-variant")).toBe("calm");
+      expect(tokens(chip).filter((c) => /^border/.test(c))).toEqual([]);
+    }
+    const waiting = within(strip).getByText("waiting on you");
+    expect(waiting.getAttribute("data-badge-variant")).toBe("calm");
+    expect(tokens(waiting.querySelector("span") as Element)).toContain("bg-tone-warn");
   });
 });

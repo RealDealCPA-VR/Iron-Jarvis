@@ -465,16 +465,18 @@ describe("RunHistory (via the page)", () => {
     };
     renderHistory();
 
-    const resuming = await screen.findByText("resuming");
-    expect(resuming.closest("span")?.className).toContain("text-accent-soft");
-    // v1.313.0: the Badge reads through the tone tokens (warn / success),
-    // which stay amber / emerald on the dark Marks and deepen on the light ones.
-    expect(screen.getByText("waiting").closest("span")?.className).toContain(
-      "text-tone-warn",
-    );
-    expect(screen.getByText("completed").closest("span")?.className).toContain(
-      "text-tone-success",
-    );
+    // v1.330.0 (calm chat wave 11): the run history draws the CALM Badge, so
+    // the tone moved from the words to the dot (accent / warn / success
+    // tokens, which deepen on the light Marks). The words are neutral.
+    const dot = (word: string) => {
+      const chip = screen.getByText(word);
+      expect(chip.getAttribute("data-badge-variant"), word).toBe("calm");
+      return chip.querySelector("span")?.className ?? "";
+    };
+    await screen.findByText("resuming");
+    expect(dot("resuming")).toContain("bg-accent");
+    expect(dot("waiting")).toContain("bg-tone-warn");
+    expect(dot("completed")).toContain("bg-tone-success");
   });
 
   it("polls while a run is live, using the shared terminal set", async () => {

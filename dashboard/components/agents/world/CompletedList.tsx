@@ -46,7 +46,7 @@ export function CompletedList({
                   {timeAgo(it.finished_at ?? null)}
                 </span>
               </span>
-              {it.outcome && <Badge value={it.outcome} />}
+              {it.outcome && <Badge variant="calm" value={it.outcome} />}
             </div>
             {files.length > 0 && (
               <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Files">

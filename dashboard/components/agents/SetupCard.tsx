@@ -48,6 +48,10 @@ import { GHOST_BTN, QUIET_FIELD, SECTION_LABEL, SUB_LABEL, primaryBtn } from "./
 import { agentLabel } from "@/lib/agentWorlds";
 import type { RemoteAgentInfo } from "./identity";
 
+/** An agent's model on its row (v1.330.0): quiet mono words beside the calm
+ *  Badge, not a second bordered chip. */
+const MODEL_CHIP = "inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-zinc-400";
+
 // The disclosure key lives on the PAGE now (v1.185.0) — one owner, one write,
 // one read. See the `open` prop on SetupCard for what that replaced.
 
@@ -1120,7 +1124,7 @@ function DynamicRow({
           {agent.name}
         </span>
         {agent.model && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/30 bg-accent/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-accent-soft">
+          <span className={MODEL_CHIP}>
             <Cpu size={10} />
             {agent.provider ? `${agent.provider} · ${agent.model}` : agent.model}
           </span>
@@ -1165,7 +1169,7 @@ function DynamicRow({
               <Pencil size={12} />
             </button>
           )}
-          <ConfirmButton onConfirm={remove} label="Delete" title={`Delete agent "${agent.name}"`} />
+          <ConfirmButton variant="calm" onConfirm={remove} label="Delete" title={`Delete agent "${agent.name}"`} />
         </span>
       </div>
       {agent.description && !editing && (
@@ -2006,17 +2010,13 @@ function RemoteRow({
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
           {agent.name}
         </span>
-        <Badge value={agent.kind} tone="cyan" />
+        <Badge variant="calm" value={agent.kind} tone="cyan" keepCase />
         {agent.model && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/30 bg-accent/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-accent-soft">
+          <span className={MODEL_CHIP}>
             <Cpu size={10} /> {agent.model}
           </span>
         )}
-        {agent.enabled === false && (
-          <span className="rounded-md border border-zinc-500/25 bg-zinc-500/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
-            disabled
-          </span>
-        )}
+        {agent.enabled === false && <Badge variant="calm" value="disabled" tone="slate" keepCase />}
         {agent.inbound_enabled && (
           <span
             data-testid="inbound-on"
@@ -2078,6 +2078,7 @@ function RemoteRow({
             <Pencil size={12} /> Edit
           </button>
           <ConfirmButton
+            variant="calm"
             onConfirm={remove}
             label="Delete"
             title={`Remove remote agent "${agent.name}"`}
@@ -2372,7 +2373,7 @@ export function BuiltinFaces({
               {b}
             </button>
           ) : (
-            <Badge key={b} value={b} tone="cyan" />
+            <Badge key={b} variant="calm" value={b} tone="cyan" />
           ),
         )}
       </div>

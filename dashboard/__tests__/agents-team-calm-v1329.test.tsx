@@ -21,9 +21,8 @@
  */
 
 import React from "react";
-import { readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -108,6 +107,8 @@ import { AgentsModal, AgentsPanel } from "@/components/agents/AgentsModal";
 import { AgentInbox, healthLine, queuedSentence } from "@/components/agents/AgentInbox";
 import { LivePill, type RosterEntry } from "@/components/agents/RosterStrip";
 import { WorldBoard } from "@/components/agents/world/WorldBoard";
+import { DASHBOARD_ROOT, asides, copyPieces, readSrc } from "./helpers/dashGuard";
+import { calmUses, uncalm } from "./helpers/calmVariant";
 
 const classes = (el: Element | null | undefined) => (el?.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
 
@@ -429,9 +430,6 @@ describe("the team tab's words are plain and its marks are tone tokens", () => {
 
 /* ----------------------------------------------------- 6. source guard --- */
 
-const ROOT = path.join(__dirname, "..");
-const readSrc = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8").replace(/\r\n/g, "\n");
-
 /** The team tab's files: everything the Your team panel draws, plus the
  *  WorldBoard and the shared look module. */
 const TEAM_FILES = [
@@ -447,38 +445,10 @@ const TEAM_FILES = [
   "components/agents/world/WorldBoard.tsx",
 ];
 
-/** Every string literal, template piece and JSX text node, with its line.
- *  Comments are not nodes, so they never count (the mission-copy-v1329
- *  guard's reader). */
-function copyPieces(rel: string, src = readSrc(rel)): Array<{ line: number; text: string; jsx: boolean }> {
-  const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, rel.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const out: Array<{ line: number; text: string; jsx: boolean }> = [];
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isStringLiteral(node) ||
-      ts.isNoSubstitutionTemplateLiteral(node) ||
-      ts.isTemplateHead(node) ||
-      ts.isTemplateMiddle(node) ||
-      ts.isTemplateTail(node) ||
-      ts.isJsxText(node)
-    ) {
-      const text = ts.isJsxText(node) ? node.getText(file) : (node as ts.LiteralLikeNode).text;
-      out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text, jsx: ts.isJsxText(node) });
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return out;
-}
-
-const ASIDE = /(^|\s)[—–](\s|$)/;
-const DASH_ONLY = /^[—–]$/;
-
-function asides(rel: string, src?: string): string[] {
-  return copyPieces(rel, src)
-    .filter((p) => !(p.jsx ? DASH_ONLY.test(p.text.trim()) : DASH_ONLY.test(p.text)) && ASIDE.test(p.text))
-    .map((p) => `${rel}:${p.line}: ${p.text.trim().slice(0, 80)}`);
-}
+/* The no-dash reader is the shared one (__tests__/helpers/dashGuard.ts,
+   v1.330.0): it reads every string literal, template piece and JSX text node
+   through the TypeScript parser (comments never count) and also catches a
+   lone dash that a `{" "}` sibling turns into an aside. */
 
 const HUES =
   "slate|gray|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
@@ -515,5 +485,42 @@ describe("the team tab's files keep to the calm rules", () => {
     expect(team).not.toContain("card-surface");
     // It still keeps its window height from md (the coordinator pin's var).
     expect(team).toContain("md:h-[calc(100vh-9rem-var(--ij-strip-h,0px))]");
+  });
+});
+
+/* v1.330.0 (calm chat wave 11, M4): the inbox's status chip, a custom agent's
+   and a remote agent's Delete, a remote's kind chip, the built-in fallback
+   chips and a project's Completed outcome chip were the default (bordered,
+   tinted) Badge and ConfirmButton. Every <Badge> and <ConfirmButton> in the
+   team tab's files and the project lists (components/agents/world) is the
+   calm variant now; a default one, or a spread that could hide the variant,
+   fails here. */
+describe("the team tab and the project lists draw every Badge and ConfirmButton calm", () => {
+  const WORLD_DIR = "components/agents/world";
+  const CALM_FILES = [
+    ...TEAM_FILES.filter((f) => f.endsWith(".tsx")),
+    ...readdirSync(path.join(DASHBOARD_ROOT, WORLD_DIR))
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => `${WORLD_DIR}/${f}`),
+  ];
+
+  it.each(CALM_FILES)("%s has no default Badge or ConfirmButton", (rel) => {
+    expect(uncalm(rel)).toEqual([]);
+  });
+
+  it("the guard sees the real chips and buttons (anti-vacuity)", () => {
+    expect(CALM_FILES).toContain("components/agents/world/CompletedList.tsx");
+    const n = (rel: string) => calmUses(rel).length;
+    // The custom row's Delete, the remote row's kind chip, disabled chip and
+    // Delete, the built-ins' fallback chip.
+    expect(n("components/agents/SetupCard.tsx")).toBeGreaterThanOrEqual(5);
+    expect(n("components/agents/AgentInbox.tsx")).toBeGreaterThanOrEqual(1);
+    expect(n("components/agents/world/CompletedList.tsx")).toBeGreaterThanOrEqual(1);
+  });
+
+  it("no hand-rolled bordered status pill is left on an agent row", () => {
+    const setup = readSrc("components/agents/SetupCard.tsx");
+    expect(setup).not.toMatch(/rounded-md border border-zinc-500\/25 bg-zinc-500\/10/);
+    expect(setup).not.toMatch(/rounded-md border border-accent\/30 bg-accent\/\[0\.08\][^"]*font-mono/);
   });
 });
