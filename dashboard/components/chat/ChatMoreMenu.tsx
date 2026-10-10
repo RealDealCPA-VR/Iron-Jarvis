@@ -25,6 +25,11 @@
  * chat's own Rename, Pin, Archive and Delete here, the same handlers the
  * chat list's row menu uses, so the chat you are reading can be managed
  * without finding it in the list (on a phone the list is behind a drawer).
+ *
+ * v1.329.0 (calm chat W5 G1): and the rest of the row menu's actions, Commit
+ * to memory, Turn into workflow and Add to project (an inline list, like the
+ * row's), so the two ⋯ menus offer the same chat actions. With all of them
+ * the panel can outgrow a short phone screen, so it scrolls inside itself.
  */
 
 import { MoreHorizontal } from "lucide-react";
@@ -136,7 +141,7 @@ export function ChatMoreMenu({
           aria-label="Chat options"
           data-testid="chat-more-panel"
           tabIndex={-1}
-          className="absolute right-0 top-full z-40 mt-1.5 w-[min(18rem,calc(100vw-2rem))] rounded-xl border hairline bg-ink-900 p-1.5 shadow-lg outline-none"
+          className="absolute right-0 top-full z-40 mt-1.5 max-h-[calc(100dvh-7.5rem)] w-[min(18rem,calc(100vw-2rem))] overflow-y-auto overscroll-contain rounded-xl border hairline bg-ink-900 p-1.5 shadow-lg outline-none"
         >
           {children(
             () => close(false),

@@ -53,6 +53,10 @@ export interface PermissionChipProps {
   /** Below sm show only the shield, like the other toolbar chips on a phone.
    *  The level's name stays in the chip's aria-label and title. */
   iconOnlyOnPhone?: boolean;
+  /** v1.329.0: told each time the menu opens or closes (and closed when the
+   *  chip unmounts with it open), so the page can keep "Jump to latest" off
+   *  an open menu. Not called on mount. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -173,10 +177,25 @@ export function PermissionChip({
   disabled = false,
   id,
   iconOnlyOnPhone = false,
+  onOpenChange,
 }: PermissionChipProps) {
   const current = asPermissionMode(value);
   const level = PERMISSION_LEVELS[current];
   const [open, setOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const toldOpenRef = useRef(false);
+  useEffect(() => {
+    if (toldOpenRef.current === open) return;
+    toldOpenRef.current = open;
+    onOpenChangeRef.current?.(open);
+  }, [open]);
+  useEffect(
+    () => () => {
+      if (toldOpenRef.current) onOpenChangeRef.current?.(false);
+    },
+    [],
+  );
   const [active, setActive] = useState(0);
   const [place, setPlace] = useState<MenuPlacement>({ side: "above", align: "start" });
   const [pos, setPos] = useState<MenuPosition>({});

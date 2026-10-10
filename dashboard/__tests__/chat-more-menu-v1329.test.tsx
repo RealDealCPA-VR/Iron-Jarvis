@@ -249,7 +249,17 @@ describe("which chats get the actions", () => {
       .getAllByRole("button")
       .map((b) => (b.textContent ?? "").trim())
       .filter(Boolean);
-    expect(rows.slice(0, 3)).toEqual(["Rename", "Pin to top", "Archive"]);
+    // W5 G1 put the row menu's other three actions (Commit to memory, Turn
+    // into workflow, Add to project) between Pin and Archive, in the row's
+    // order; chat-topbar-actions-v1329 pins them.
+    expect(rows.slice(0, 6)).toEqual([
+      "Rename",
+      "Pin to top",
+      "Commit to memory",
+      "Turn into workflow",
+      "Add to project",
+      "Archive",
+    ]);
     expect(rows[rows.length - 1]).toBe("Delete chat");
     // The menu still holds its old controls between them.
     expect(within(panel).getByRole("button", { name: "Voice chat" })).toBeTruthy();

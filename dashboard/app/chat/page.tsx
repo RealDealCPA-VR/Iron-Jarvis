@@ -229,6 +229,8 @@ import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView, TurnUsage } from "@/lib/types";
 import { turnUsageFrom } from "@/lib/types";
 import { slashTokenAt, tokenAt, spliceToken } from "@/lib/slash";
+import { anyComposerMenuOpen, atMenuOpen, slashMenuOpen } from "@/lib/composerMenus";
+import { JumpToLatest } from "@/components/chat/JumpToLatest";
 
 /** An agent reachable with "@" from chat (GET /agents/mentionable). */
 interface MentionableAgent {
@@ -1866,7 +1868,8 @@ const ComposerInput = memo(function ComposerInput({
    *  attachments exactly as a drop does; text pastes fall through untouched. */
   onPasteFiles: (files: File[]) => void;
 }) {
-  const { text, caret, slashDismissed } = useComposer(store);
+  const composerState = useComposer(store);
+  const { text, caret } = composerState;
   // v1.315.0: a touch screen has no Enter/Shift/Esc keys to hint at, and on a
   // 390px phone the hints wrapped the placeholder onto three lines.
   const wide = useWideScreen();
@@ -1881,7 +1884,8 @@ const ComposerInput = memo(function ComposerInput({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [text, inputRef]);
 
-  const slashToken = busy || slashDismissed ? null : slashTokenAt(text, caret);
+  // The "/" menu's one open rule (lib/composerMenus), as the picker reads it.
+  const slashToken = slashMenuOpen(composerState, busy) ? slashTokenAt(text, caret) : null;
   const slashActive = slashToken !== null;
   const slashQuery = slashToken?.query ?? "";
   // Ask the page for the catalog the first time a "/" token opens.
@@ -2057,8 +2061,11 @@ const SlashPicker = memo(function SlashPicker({
   /** Picking one consumes the "/token" and opens its little form. */
   onPickPrompt: (p: PackPrompt) => void;
 }) {
-  const { text, caret, slashDismissed, skillIndex } = useComposer(store);
-  const slashToken = busy || slashDismissed ? null : slashTokenAt(text, caret);
+  const composerState = useComposer(store);
+  const { text, caret, skillIndex } = composerState;
+  // One open rule (lib/composerMenus) shared with the "@" menu and the Jump
+  // to latest pill, so a change to it cannot leave the pill out of step.
+  const slashToken = slashMenuOpen(composerState, busy) ? slashTokenAt(text, caret) : null;
   const slashQuery = slashToken?.query ?? "";
   const openedRef = useRef(onOpened);
   openedRef.current = onOpened;
@@ -2225,11 +2232,13 @@ const AtPicker = memo(function AtPicker({
   /** v1.329.0: the project a saved chat belongs to, by name, when known. */
   chatProjectName: (c: ChatRefPick) => string | null;
 }) {
-  const { text, caret, slashDismissed, atDismissed } = useComposer(store);
+  const composerState = useComposer(store);
+  const { text, caret, atDismissed } = composerState;
   const atToken = busy || atDismissed ? null : tokenAt(text, caret, "@");
-  const slashOpen =
-    !(busy || slashDismissed) && slashTokenAt(text, caret) !== null;
-  const open = atToken !== null && !slashOpen;
+  // v1.329.0: one definition with the "Jump to latest" pill, which hides
+  // while this menu (or the "/" one) is open (lib/composerMenus).
+  const slashOpen = slashMenuOpen(composerState, busy);
+  const open = atMenuOpen(composerState, busy);
   const openedRef = useRef(onOpened);
   openedRef.current = onOpened;
   useEffect(() => {
@@ -3775,6 +3784,9 @@ export default function ChatPage() {
     up: boolean;
   } | null>(null);
   const [threadMenuProjects, setThreadMenuProjects] = useState(false);
+  // v1.329.0 (calm chat W5 G1): the top bar ⋯'s own "Add to project" list,
+  // folded each time that menu opens.
+  const [moreProjectsOpen, setMoreProjectsOpen] = useState(false);
   const [assigningThread, setAssigningThread] = useState(false);
   const threadMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -3824,7 +3836,7 @@ export default function ChatPage() {
   /** Tag a thread to a project (or null to untag) — the same read-then-PUT
    *  shape renameThread uses; the daemon treats an explicit project_id key as
    *  assign-or-clear and never infers one on update. */
-  async function assignThreadProject(id: string, pid: string | null) {
+  async function assignThreadProject(id: string, pid: string | null): Promise<boolean> {
     setAssigningThread(true);
     try {
       // Daemon-owned (messaging) threads reject `messages` writes with 409 —
@@ -3840,11 +3852,23 @@ export default function ChatPage() {
           project_id: pid,
         });
       }
+      // v1.329.0 (calm chat W5 G1): moving the OPEN chat (its top-bar ⋯, or
+      // its own row) moves the page with it. Every autosave sends the page's
+      // project (`projectIdRef`), so without this the next save put the chat
+      // straight back where it was. The thread's own setup still owns the
+      // folder, as when it is opened: keepFolder stops "Remove from project"
+      // from resetting it to the user's default, which the next save would
+      // then write over the chat's saved folder.
+      if (saveTargetRef.current.id === id) {
+        followThreadProject({ project_id: pid } as ThreadDetail, false, { keepFolder: true });
+      }
       void refreshThreads();
       setThreadMenu(null);
+      return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      return false;
     } finally {
       setAssigningThread(false);
     }
@@ -3996,6 +4020,9 @@ export default function ChatPage() {
   // tools, web, the tools armed by hand, connections).
   const toolMenuRef = useRef<HTMLDivElement>(null);
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
+  // v1.329.0 (calm chat W5 G1): the permission chip's menu is open (the chip
+  // owns it; the "Jump to latest" pill steps aside while it is).
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   // The rail IS the project workspace now (Projects left the nav): Files or
   // Knowledge inline; the wide surfaces (tasks/board/media) open from here.
   const [railTab, setRailTab] = useState<"files" | "knowledge">("files");
@@ -4837,8 +4864,10 @@ export default function ChatPage() {
   }
 
   /** Back to plain chat: unscope the list, stop tagging, release anything the
-   *  panel auto-armed, and return the workspace to the user's own default. */
-  function clearProject() {
+   *  panel auto-armed, and return the workspace to the user's own default.
+   *  `keepFolder` leaves the working folder alone: the open chat was taken
+   *  out of its project, and its own saved folder must ride the next save. */
+  function clearProject({ keepFolder = false }: { keepFolder?: boolean } = {}) {
     setProjectView("chat"); // a plain chat has no project surfaces
     projectsSettledRef.current = true;
     setProjectId(null);
@@ -4860,6 +4889,7 @@ export default function ChatPage() {
         prev.every((t) => PROJECT_FILE_TOOLS.includes(t)) ? [] : prev,
       );
     }
+    if (keepFolder) return;
     try {
       setWorkspaceDir(window.localStorage.getItem(WORKSPACE_KEY) || null);
     } catch {
@@ -5349,8 +5379,15 @@ export default function ChatPage() {
    *  context-follows-the-conversation step of openThread). `folder` lets the
    *  project folder become the workspace when the thread saved none; it is
    *  off while a turn sent on a cached paint is running (v1.311.0), whose
-   *  folder was already chosen when it was sent. */
-  function followThreadProject(t: ThreadDetail, folder: boolean) {
+   *  folder was already chosen when it was sent. `keepFolder` (a chat moved
+   *  while open) leaves the working folder as it is when the chat leaves its
+   *  project: nothing re-applies the thread's setup after a move, so a reset
+   *  here would be saved over the chat's own folder. */
+  function followThreadProject(
+    t: ThreadDetail,
+    folder: boolean,
+    { keepFolder = false }: { keepFolder?: boolean } = {},
+  ) {
     const tpid = t.project_id ?? null;
     if (tpid === projectIdRef.current) return;
     const proj = tpid ? projects.find((x) => x.id === tpid) : undefined;
@@ -5362,7 +5399,7 @@ export default function ChatPage() {
       projectIdRef.current = tpid;
       syncProjectUrl(tpid);
     } else {
-      clearProject();
+      clearProject({ keepFolder });
     }
     if (folder && proj?.root && proj.root_exists !== false && !t.setup?.workspace_dir) {
       setWorkspaceDir(proj.root);
@@ -9283,7 +9320,11 @@ export default function ChatPage() {
         <ChatMoreMenu
           // A fresh visit never opens with Delete already half-pressed, and
           // leaving the menu disarms it (the list row's menu does the same).
-          onOpenChange={() => setDeleteArmedId(null)}
+          onOpenChange={() => {
+            setDeleteArmedId(null);
+            // v1.329.0 (W5 G1): every visit opens with the project list folded.
+            setMoreProjectsOpen(false);
+          }}
         >
           {(closeMenu, menuTrigger) => (
             <>
@@ -9330,6 +9371,131 @@ export default function ChatPage() {
                       {pinnedIds.includes(threadId) ? "Unpin" : "Pin to top"}
                     </span>
                   </button>
+                  {/* v1.329.0 (calm chat W5 G1): the rest of the row ⋯'s
+                      actions, the same handlers: rememberThread,
+                      crystallizeThread and assignThreadProject. A busy row
+                      says so with aria-disabled rather than `disabled`, so
+                      focus stays on it while it works (a disabled button
+                      drops focus to the page). Memory keeps the menu open
+                      (its spinner and check are the only feedback, as on the
+                      row); the workflow card and a project move close it. */}
+                  <button
+                    type="button"
+                    data-testid="chat-more-remember"
+                    aria-disabled={rememberingId !== null || undefined}
+                    onClick={() => void rememberThread(threadId)}
+                    className={`${menuRow} aria-disabled:cursor-default aria-disabled:opacity-60`}
+                  >
+                    {rememberingId === threadId ? (
+                      <Loader2 size={15} className="shrink-0 animate-spin text-accent-soft" />
+                    ) : rememberedId === threadId ? (
+                      <Check size={15} className="shrink-0 text-tone-success" />
+                    ) : (
+                      <Brain size={15} className="shrink-0 text-zinc-400" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      {rememberedId === threadId ? "Saved to memory" : "Commit to memory"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="chat-more-workflow"
+                    aria-disabled={crystallizingId !== null || undefined}
+                    onClick={async () => {
+                      if (crystallizingId) return;
+                      const trigger = menuTrigger();
+                      await crystallizeThread(threadId);
+                      // Focus goes back to ⋯ only if it is still in this menu
+                      // (the call takes seconds; the user may have moved on).
+                      if (trigger?.parentElement?.contains(document.activeElement)) {
+                        trigger.focus();
+                      }
+                      closeMenu();
+                    }}
+                    className={`${menuRow} aria-disabled:cursor-default aria-disabled:opacity-60`}
+                  >
+                    {crystallizingId === threadId ? (
+                      <Loader2 size={15} className="shrink-0 animate-spin text-accent-soft" />
+                    ) : (
+                      <GitBranch size={15} className="shrink-0 text-zinc-400" />
+                    )}
+                    <span className="min-w-0 flex-1">Turn into workflow</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="chat-more-project"
+                    aria-expanded={moreProjectsOpen}
+                    onClick={() => setMoreProjectsOpen((v) => !v)}
+                    className={menuRow}
+                  >
+                    <FolderKanban size={15} className="shrink-0 text-zinc-400" />
+                    <span className="min-w-0 flex-1">Add to project</span>
+                    <ChevronRight
+                      size={13}
+                      className={`shrink-0 text-zinc-500 transition-transform ${
+                        moreProjectsOpen ? "rotate-90" : ""
+                      }`}
+                    />
+                  </button>
+                  {moreProjectsOpen && (
+                    <div
+                      data-testid="chat-more-project-list"
+                      role="group"
+                      aria-label="Add to project"
+                      className="max-h-44 overflow-y-auto pl-4"
+                    >
+                      {projects.length === 0 ? (
+                        <p className="px-2.5 py-2 text-[12px] text-zinc-500">
+                          No projects yet. Make one with the Project button
+                          above the chat.
+                        </p>
+                      ) : (
+                        <>
+                          {projects.map((pr) => (
+                            <button
+                              key={pr.id}
+                              type="button"
+                              aria-pressed={projectId === pr.id}
+                              aria-disabled={assigningThread || undefined}
+                              onClick={async () => {
+                                if (assigningThread) return;
+                                const trigger = menuTrigger();
+                                if (await assignThreadProject(threadId, pr.id)) {
+                                  trigger?.focus();
+                                  closeMenu();
+                                }
+                              }}
+                              className={`${menuRow} aria-disabled:cursor-default aria-disabled:opacity-60`}
+                            >
+                              <span className="min-w-0 flex-1 truncate">{pr.name}</span>
+                              {projectId === pr.id && (
+                                <Check size={13} className="shrink-0 text-accent-soft" />
+                              )}
+                            </button>
+                          ))}
+                          {projectId && (
+                            <button
+                              type="button"
+                              data-testid="chat-more-project-remove"
+                              aria-disabled={assigningThread || undefined}
+                              onClick={async () => {
+                                if (assigningThread) return;
+                                const trigger = menuTrigger();
+                                if (await assignThreadProject(threadId, null)) {
+                                  trigger?.focus();
+                                  closeMenu();
+                                }
+                              }}
+                              className={`${menuRow} text-zinc-400 aria-disabled:cursor-default aria-disabled:opacity-60`}
+                            >
+                              <X size={13} className="shrink-0" />
+                              <span className="min-w-0 flex-1">Remove from project</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                   <button
                     type="button"
                     data-testid="chat-more-archive"
@@ -10784,18 +10950,26 @@ export default function ChatPage() {
                     v1.315.0: never over the empty state (the same condition as
                     that branch) — a pill pointing at messages that do not exist
                     covered the "I have an API key" door on a phone. A first
-                    reply still streaming is not the empty state. */}
-                {showJump && !(messages.length === 0 && !busy) && (
-                  <button
-                    type="button"
-                    data-testid="jump-to-latest"
-                    onClick={jumpToLatest}
-                    className="absolute bottom-full left-1/2 z-10 mb-2 flex w-auto -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/40 bg-ink-850/90 px-3 py-1 text-[12px] font-medium text-accent-soft shadow-glow-sm backdrop-blur transition-colors hover:bg-ink-800"
-                    title="Scroll to the latest message"
-                  >
-                    <ChevronDown size={13} /> Jump to latest
-                  </button>
-                )}
+                    reply still streaming is not the empty state.
+                    v1.329.0 (calm chat W5 G1): it also steps aside while any
+                    composer menu is open, which opens upward into this same
+                    space (on a phone it covered the "@" menu's Chats rows).
+                    The typed "@" and "/" menus are read from the composer
+                    store inside JumpToLatest, never here. */}
+                <JumpToLatest
+                  store={composer}
+                  busy={busy}
+                  show={showJump && !(messages.length === 0 && !busy)}
+                  menuOpen={anyComposerMenuOpen({
+                    plus: toolsOpen,
+                    tools: toolMenuOpen,
+                    model: modelMenuOpen,
+                    project: projMenuOpen,
+                    permission: permissionMenuOpen,
+                    promptForm: promptForm !== null,
+                  })}
+                  onJump={jumpToLatest}
+                />
                 <div className="mx-auto w-full max-w-[792px]">
                   {/* Calm chat W1-3: on a new chat the project chip sits just above
                       the card (in a conversation it is in the card's toolbar). */}
@@ -11756,6 +11930,7 @@ export default function ChatPage() {
                             }
                             markSetupChanged();
                           }}
+                          onOpenChange={setPermissionMenuOpen}
                         />
                         {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
                             for this chat, counted so a pick leaves a trace. Its menu holds the
