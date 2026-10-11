@@ -30,6 +30,7 @@ from ..schemas import (
 #: The origin the mission door stamps (v1.307.0). Starts with "job", so it is
 #: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
 from ...agents.team import MISSION_ORIGIN  # noqa: E402  (one definition)
+from ...providers.egress import LocalOnlyRefused  # noqa: E402  (v1.332.0)
 
 #: How many recent missions ``GET /missions`` lists.
 _MISSIONS_LIMIT = 30
@@ -393,7 +394,12 @@ def register(app: FastAPI, d) -> None:
                 # THE POSTURE RIDES (v1.232.0, A7); yolo is normalised away
                 # inside create_session, the one door every session passes.
                 approval_mode=body.approval_mode,
+                # LOCAL ONLY RIDES TOO (v1.332.0): stored on the row; a
+                # provider off this network is refused inside create_session.
+                options={"local_only": True} if body.local_only else None,
             )
+        except LocalOnlyRefused:
+            raise  # v1.332.0: the app's 409 local-only shape, not a 400
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))
         if body.wait:

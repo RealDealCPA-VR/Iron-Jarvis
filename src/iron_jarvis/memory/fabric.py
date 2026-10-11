@@ -829,6 +829,15 @@ class MemoryFabric:
         index = self._index()
         if index is None:
             return []
+        # LOCAL ONLY (v1.332.0): a chat switched to local only is recalled
+        # only into work that itself stays on this network; for anything else
+        # its passages are left out (and when the setting cannot be read, the
+        # desktop chats are: fail closed). One indexed read, only then.
+        from ..providers import egress as _egress
+
+        kept_home: "frozenset[str] | None" = frozenset()
+        if not _egress.may_recall_local_only_chats():
+            kept_home = _egress.local_only_thread_ids(self.engine)
         raw = self._index_search(
             index, query, list(_CHAT_KINDS), max(k, 4) * _CHAT_OVERSCAN
         )
@@ -837,6 +846,10 @@ class MemoryFabric:
         for h in raw:
             ref = h.ref or h.thread_id
             if not ref or ref in seen:
+                continue
+            if h.kind == "chat" and (
+                kept_home is None or (h.thread_id or ref) in kept_home
+            ):
                 continue
             seen.add(ref)
             out.append(

@@ -40,6 +40,7 @@ from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.grants import args_hash as _grant_hash
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...eval.pricing import UsageTally
+from ...providers import egress as _egress
 from ...providers.reasoning import normalize_level
 from ..doors import collect_doors, door_for
 
@@ -687,7 +688,7 @@ def _clean_setup(raw: Any) -> str:
 
     Keeps ONLY the known keys ({tools, connectors, documents, skill,
     workspace_dir, provider, model, approval_mode, reasoning,
-    granted_tools}), correctly typed (the lists: strings, capped at their
+    granted_tools, local_only}), correctly typed (the lists: strings, capped at their
     live-turn maxima — except granted_tools, which is uncapped; the rest:
     strings); unknown keys and
     mistyped values are dropped rather than erroring. Returns "" when nothing
@@ -751,7 +752,84 @@ def _clean_setup(raw: Any) -> str:
                 kept.append(g.strip())
         if kept:
             out["granted_tools"] = kept
+    # LOCAL ONLY persists with the thread (v1.332.0) — the v1.279.0 bug class
+    # again, closed before it ships: a whitelist that dropped it would switch
+    # the chat back to cloud-capable on the next reopen. Stored ONLY as True
+    # (a real JSON true); absent = off, so the user turns it off by leaving it
+    # out, exactly like the posture's default above.
+    if raw.get("local_only") is True:
+        out["local_only"] = True
     return json.dumps(out, separators=(",", ":")) if out else ""
+
+
+def _local_one_shot_pick(
+    platform, provider: str, model: str, setup_json: str
+) -> "tuple[str, str] | None":
+    """The model a LOCAL-ONLY chat's one-shot (share's digest, remember's
+    distillation, crystallize) runs on (v1.332.0): the request's own pick if
+    it stays on this network, else the chat's saved pick if that does, else
+    the first rung of the local ladder that does. ``None`` = nothing on this
+    network can do it. Never raises."""
+    mgr = getattr(platform, "providers", None)
+    cfg = getattr(platform, "config", None)
+
+    def _ok(p: str) -> bool:
+        return bool(p) and p != "mock" and _egress.stays_on_this_network(p, mgr, cfg)
+
+    if _ok((provider or "").strip()):
+        return provider.strip(), (model or "").strip()
+    try:
+        setup = json.loads(setup_json or "{}")
+    except Exception:  # noqa: BLE001
+        setup = {}
+    if isinstance(setup, dict):
+        sp = str(setup.get("provider") or "").strip()
+        if _ok(sp):
+            return sp, str(setup.get("model") or "").strip()
+    try:
+        from ...providers.local import local_ladder
+
+        for rung in local_ladder(mgr, cfg):
+            rp = str(rung.get("provider") or "")
+            if _ok(rp):
+                return rp, str(rung.get("model") or "")
+    except Exception:  # noqa: BLE001 — no ladder = nothing local to pick
+        pass
+    return None
+
+
+def _local_pick_or_refuse(platform, provider: str, model: str, setup_json: str) -> tuple[str, str]:
+    """:func:`_local_one_shot_pick`, or the 409 local-only refusal naming the
+    model the request would have used. The offline demo (``mock``) is kept as
+    asked: its own route already hops to a real model (filtered to this
+    network under the scope) or says none is connected (v1.332.0)."""
+    pick = _local_one_shot_pick(platform, provider, model, setup_json)
+    if pick is not None:
+        return pick
+    if _egress.stays_on_this_network(
+        provider, getattr(platform, "providers", None), getattr(platform, "config", None)
+    ):
+        return provider, model
+    raise _egress.LocalOnlyRefused(provider, model, manager=getattr(platform, "providers", None))
+
+
+async def _thread_scope_for(d, thread_id: str, body) -> tuple[bool, str]:
+    """``(local_only, setup_json)`` for a per-thread route (v1.332.0): on when
+    the body says so OR the saved chat's setup does. One row read, off the
+    loop; a read failure is "the body decides"."""
+    from ...core.models import ChatThreadRecord
+
+    def _read() -> str:
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+            return (r.setup_json or "") if r is not None else ""
+
+    try:
+        setup = await asyncio.to_thread(_read)
+    except Exception:  # noqa: BLE001
+        setup = ""
+    on = bool(getattr(body, "local_only", False)) or _egress.setup_says_local_only(setup)
+    return on, setup
 
 
 def _approvals(d) -> ChatApprovals:
@@ -1473,7 +1551,18 @@ def register(app: FastAPI, d) -> None:
         """Render a saved thread for sharing: ``mode`` full (verbatim
         transcript) or compact (a faithful digest via the one-shot LLM path),
         as markdown or a self-contained HTML page. Returns the text — the
-        dashboard copies/downloads it; the daemon never publishes anything."""
+        dashboard copies/downloads it; the daemon never publishes anything.
+
+        LOCAL ONLY (v1.332.0): a local-only chat's digest is written by a
+        model on this network (:func:`_local_one_shot_pick`), under the
+        scope; with none, 409 in the local-only shape."""
+        on, setup = await _thread_scope_for(d, thread_id, body)
+        with _egress.local_only_scope(on):
+            return await _share_chat_thread(thread_id, body, on, setup)
+
+    async def _share_chat_thread(
+        thread_id: str, body: ChatShareBody, local_only: bool = False, setup: str = ""
+    ) -> dict[str, Any]:
         from ...core.models import ChatThreadRecord
 
         mode = (body.mode or "full").strip().lower()
@@ -1502,6 +1591,8 @@ def register(app: FastAPI, d) -> None:
 
             provider = body.provider or d.platform.config.default_provider
             model = body.model or d.platform.config.default_model
+            if local_only:
+                provider, model = _local_pick_or_refuse(d.platform, provider, model, setup)
             try:
                 adapter = d.platform.providers.get(provider, model)
             except Exception as exc:  # noqa: BLE001
@@ -1577,7 +1668,19 @@ def register(app: FastAPI, d) -> None:
         the verbatim transcript. With no real model connected, distill falls
         back to an honest verbatim excerpt — a mock must never fabricate a
         "memory" of a real conversation. ``source`` targets any registered
-        LTM store (the default brain, an MCP-served brain, Notion, …)."""
+        LTM store (the default brain, an MCP-served brain, Notion, …).
+
+        LOCAL ONLY (v1.332.0): a local-only chat is distilled by a model on
+        this network (:func:`_local_one_shot_pick`), under the scope; with
+        none it keeps the verbatim excerpt (``memory/commit``), never a 409.
+        Where the memory is WRITTEN is the user's own pick of ``source``."""
+        on, setup = await _thread_scope_for(d, thread_id, body)
+        with _egress.local_only_scope(on):
+            return await _remember_chat_thread(thread_id, body, on, setup)
+
+    async def _remember_chat_thread(
+        thread_id: str, body: ChatRememberBody, local_only: bool = False, setup: str = ""
+    ) -> dict[str, Any]:
         from ...core.models import ChatThreadRecord
 
         mode = (body.mode or "distill").strip().lower()
@@ -1605,14 +1708,21 @@ def register(app: FastAPI, d) -> None:
         # THE LADDER IS SHARED (v1.185.0). It used to live right here, inline in
         # this closure, which is precisely why the round table could not call it
         # and grew a second copy instead. See ``memory/commit.py``.
+        _rp, _rm = body.provider or "", body.model or ""
+        if local_only:
+            _pick = _local_one_shot_pick(
+                d.platform, _rp or d.platform.config.default_provider, _rm, setup
+            )
+            if _pick is not None:
+                _rp, _rm = _pick
         outcome = await _commit.distill_or_excerpt(
             d,
             transcript=transcript,
             mode=mode,
             system=CHAT_DISTILL_SYSTEM,
             subject="conversation",
-            provider=body.provider or "",
-            model=body.model or "",
+            provider=_rp,
+            model=_rm,
         )
         content_body = outcome.body
         distilled = outcome.distilled
@@ -1659,7 +1769,18 @@ def register(app: FastAPI, d) -> None:
         so the workflow works next time too. Returns the draft; nothing is
         saved — the card's Save button decides (suggest-don't-act). Unlike
         /remember there is no verbatim fallback: a fabricated workflow from a
-        mock model would be worse than none, so offline → an honest 400."""
+        mock model would be worse than none, so offline → an honest 400.
+
+        LOCAL ONLY (v1.332.0): a local-only chat's draft is written by a
+        model on this network (:func:`_local_one_shot_pick`), under the
+        scope; with none, 409 in the local-only shape."""
+        on, setup = await _thread_scope_for(d, thread_id, body)
+        with _egress.local_only_scope(on):
+            return await _crystallize_chat_thread(thread_id, body, on, setup)
+
+    async def _crystallize_chat_thread(
+        thread_id: str, body: ChatCrystallizeBody, local_only: bool = False, setup: str = ""
+    ) -> dict[str, Any]:
         from ...core.models import ChatThreadRecord
         from ...providers.adapters.base import LLMMessage
         from ...providers.adapters.mock import MockLLMAdapter
@@ -1679,6 +1800,8 @@ def register(app: FastAPI, d) -> None:
 
         provider = body.provider or d.platform.config.default_provider
         model = body.model or d.platform.config.default_model
+        if local_only:
+            provider, model = _local_pick_or_refuse(d.platform, provider, model, setup)
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
@@ -1720,8 +1843,10 @@ def register(app: FastAPI, d) -> None:
                 provider, adapter, system=system,
                 messages=[LLMMessage(role="user", content=transcript)],
             )
-        except HTTPException:
-            raise  # _one_shot_complete raises CLEAN typed errors (429 etc.)
+        except (HTTPException, _egress.LocalOnlyRefused):
+            # _one_shot_complete raises CLEAN typed errors (429 etc.); a
+            # local-only refusal keeps its own 409 shape (v1.332.0).
+            raise
         except Exception as exc:  # noqa: BLE001 — honest failure, no fabrication
             raise HTTPException(status_code=502, detail=f"the model failed: {exc}")
         from ..app import _extract_workflow_json
@@ -1812,6 +1937,20 @@ def register(app: FastAPI, d) -> None:
     async def chat_compact(body: ChatCompactBody) -> dict[str, Any]:
         """Compact this conversation because the USER asked (the 70% offer).
 
+        LOCAL ONLY (v1.332.0): a local-only chat (``body.local_only`` or the
+        saved chat ``body.thread_id`` says so) is compacted under the scope:
+        a model off this network is refused with the 409 local-only shape.
+        """
+        on = await _egress.effective_local_only(
+            d.platform.engine, getattr(body, "local_only", False),
+            getattr(body, "thread_id", ""),
+        )
+        with _egress.local_only_scope(on):
+            return await _chat_compact(body)
+
+    async def _chat_compact(body: ChatCompactBody) -> dict[str, Any]:
+        """The compaction itself (see :func:`chat_compact`).
+
         Returns the summary itself, not just a receipt: the user is agreeing to
         let a paraphrase stand in for their own words in every later turn, so
         they get to read what it says. ``stripped_claims`` is the honest half of
@@ -1858,6 +1997,8 @@ def register(app: FastAPI, d) -> None:
         complete = None
         try:
             complete = d._compaction_complete(provider, model)
+        except _egress.LocalOnlyRefused:
+            raise  # v1.332.0: the 409 local-only shape, never "no real model"
         except Exception:  # noqa: BLE001 — classified as "no real model" below
             complete = None
         if complete is None:
@@ -2178,6 +2319,12 @@ async def stream_chat_turn(
     a dropped connection cancels the stream wherever it is, as it always did.
     """
     _eager_checks(platform, body)
+    # LOCAL ONLY (v1.332.0): the scope is decided HERE (one row read when the
+    # body names a saved chat) and set around the WHOLE stream by
+    # `egress.scoped_frames`, in the task that iterates it — so the model pump
+    # and every tool round the lane creates copy it. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn runs under the same scope.
+    _lo_scope = await _chat_turn.local_only_scope_for(platform, body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -2195,12 +2342,18 @@ async def stream_chat_turn(
     # v1.312.0: chat_stream is an async GENERATOR now — calling it runs
     # nothing, so it cannot raise here; the eager checks above already did,
     # BEFORE the id was registered, so a refused turn never holds one.
-    inner = _honest_failures(chat_stream(
+    # v1.332.0 (speed S2): the turn's prep steps start together; this group
+    # is closed however the stream ends, so a Stop, an error or a dropped
+    # connection leaves no step running. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn closes its own through `_settles_its_prep`.
+    _prep = _chat_turn._PrepGroup()
+    inner = _honest_failures(_egress.scoped_frames(_chat_turn._prep_settled_frames(chat_stream(
         platform, personas, body, should_stop=should_stop,
         steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
         arm_family=arm_family, trust=trust, trust_reason=trust_reason,
         suggest_preferences=suggest_preferences, thread_turn=thread_turn,
-    ))
+        prep=_prep,
+    ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
         # "Stop and archive" can stop exactly the turns running for the chat.
@@ -2306,6 +2459,12 @@ async def _honest_failures(frames):
     except HTTPException as exc:
         yield _sse("error", {"detail": str(exc.detail)})
     except Exception as exc:  # noqa: BLE001 — an honest error, never a cut stream
+        _refused = _egress.refusal_of(exc)
+        if _refused is not None:
+            # LOCAL ONLY (v1.332.0): nothing was sent; the frame carries the
+            # keys the page offers "send once" from (detail kept).
+            yield _sse("error", _refused.payload())
+            return
         log.warning("chat turn failed inside its stream", exc_info=True)
         detail = _error_detail(exc)
         yield _sse(
@@ -2322,6 +2481,7 @@ async def chat_stream(
     trust_reason: str = "",
     suggest_preferences: bool = False,
     thread_turn=None,
+    prep=None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -2565,6 +2725,85 @@ async def chat_stream(
         model_choice or d.platform.config.default_model,
     )
 
+    # PREPARATION AT THE SAME TIME (v1.332.0, speed S2) — the lock-step copy
+    # of chat_turn's: every step that needs only the body and the project
+    # STARTS here as a task (`_PrepGroup`, closed by `stream_chat_turn`
+    # however the stream ends) and is AWAITED below at its old place, raced
+    # against Stop exactly as before, so the prompt, the phase frames and
+    # their order are unchanged. A Stop abandons the step it lands in and the
+    # group cancels the rest. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+    _prep = prep if prep is not None else _chat_turn._PrepGroup()
+    _prep.start("attachments", _prepare_attachments(
+        d, body,
+        inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
+        provider_choice=provider_choice, model_choice=model_choice,
+        # MIRROR NOTE (lock-step): same argument in chat_turn.run_chat_turn.
+        # The grounded project's folder, which the preparer needs to decide
+        # whether an IN-PLACE edit of an attachment can actually reach it —
+        # everything else about the live-file handoff lives INSIDE
+        # `_prepare_attachments`, so this lane inherits it (v1.196.0).
+        project_root=(
+            (resolved_proj.root or "") if resolved_proj is not None else ""
+        ),
+    ))
+    if getattr(body, "page_context", None) is not None:
+        _prep.start("page", _page_context_section(d, body))
+    if getattr(body, "resources", None):
+        _prep.start("resources", read_turn_resources(d, body))
+    if getattr(body, "thread_refs", None):
+        # v1.332.0: the turn's chosen provider decides whether a LOCAL-ONLY
+        # chat it points to keeps its text home. MIRROR NOTE (lock-step).
+        _prep.start("refs", read_thread_refs(
+            d, body, provider=provider_choice or d.platform.config.default_provider,
+        ))
+    _skill_early = (
+        d.platform.skills.get(body.skill.strip()) if (body.skill or "").strip() else None
+    )
+    if _skill_early is not None:
+        from ...skills.framework import guarded_instructions
+
+        _prep.start("skill", asyncio.to_thread(
+            guarded_instructions,
+            _skill_early, event_bus=getattr(d.platform, "event_bus", None),
+            session_id="chat", cap=8000,
+        ))
+    if (getattr(body, "workspace_dir", "") or "").strip():
+        _prep.start("workspace", _chat_turn._none_on_error(asyncio.to_thread(
+            _resolve_tool_workspace,
+            d.platform.config.home / "uploads",
+            body.workspace_dir or "",
+            (resolved_proj.root or "") if resolved_proj is not None else "",
+        )))
+    if not text_only_pick:
+        # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
+        # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
+        # about a weak model facing a wide menu; explicit user tool picks
+        # are consent and the autoselect contract already protects them.
+        # Resolved for the model that will ANSWER (explicit/project pin,
+        # else the config default route); trusted (cloud/CLI/mock) and
+        # unmeasured profiles answer None -> arming byte-identical.
+        # MIRROR NOTE (lock-step): edit both or neither.
+        _env_model = model_choice or d.platform.config.default_model
+        _tool_cap: "int | None" = None
+        try:
+            _profiler = getattr(
+                d.platform.providers, "capability_profile", None
+            )
+            if _profiler is not None:
+                _tool_cap = _profiler(
+                    provider_choice or d.platform.config.default_provider,
+                    _env_model,
+                ).max_tools()
+        except Exception:  # noqa: BLE001 — never break a turn
+            _tool_cap = None
+        # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
+        # `chat_turn.run_chat_turn`; see the reasoning there. This lane
+        # matters more, not less: it is the one the user watches token by
+        # token, so a parked loop here reads as the app having died.
+        _prep.start("arming", asyncio.to_thread(
+            _resolve_armed_tools, d, body, _tool_cap
+        ))
+
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED IMPLEMENTATION (v1.174.0): this lane and
     # chat_turn.run_chat_turn both call `_prepare_attachments`. It was a
@@ -2578,19 +2817,7 @@ async def chat_stream(
     # Raced against Stop: a scanned PDF's OCR stops between pages.
     if getattr(body, "attachments", None):
         yield _sse("phase", {"phase": "reading_files"})
-    _attached = await _prep_step(_prepare_attachments(
-        d, body,
-        inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
-        provider_choice=provider_choice, model_choice=model_choice,
-        # MIRROR NOTE (lock-step): same argument in chat_turn.run_chat_turn.
-        # The grounded project's folder, which the preparer needs to decide
-        # whether an IN-PLACE edit of an attachment can actually reach it —
-        # everything else about the live-file handoff lives INSIDE
-        # `_prepare_attachments`, so this lane inherits it (v1.196.0).
-        project_root=(
-            (resolved_proj.root or "") if resolved_proj is not None else ""
-        ),
-    ))
+    _attached = await _prep_step(_prep.take("attachments"))
     if _attached is _PREP_STOPPED or await _stop():
         return
     images, attach_block = _attached
@@ -2599,8 +2826,8 @@ async def chat_stream(
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, under an
     # attachment's policy, raced against Stop like the attachments.
-    if getattr(body, "page_context", None) is not None:
-        _page = await _prep_step(_page_context_section(d, body))
+    if _prep.has("page"):
+        _page = await _prep_step(_prep.take("page"))
         if _page is _PREP_STOPPED:
             return
         system += _page
@@ -2608,8 +2835,8 @@ async def chat_stream(
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
     # like the attachments. Only a turn that carries resources pays anything.
     resources_receipt: list[dict[str, Any]] = []
-    if getattr(body, "resources", None):
-        _res = await _prep_step(read_turn_resources(d, body))
+    if _prep.has("resources"):
+        _res = await _prep_step(_prep.take("resources"))
         if _res is _PREP_STOPPED:
             return
         _res_block, resources_receipt = _res
@@ -2619,8 +2846,8 @@ async def chat_stream(
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
     # like the attachments. Only a turn that carries thread_refs pays anything.
     thread_refs_receipt: list[dict[str, Any]] = []
-    if getattr(body, "thread_refs", None):
-        _refs = await _prep_step(read_thread_refs(d, body))
+    if _prep.has("refs"):
+        _refs = await _prep_step(_prep.take("refs"))
         if _refs is _PREP_STOPPED:
             return
         _refs_block, thread_refs_receipt = _refs
@@ -2641,10 +2868,14 @@ async def chat_stream(
 
         # Off the loop, clipped to the playbook's 8,000 BEFORE the scan
         # (PERF, wave-4a review). Lock-step with chat_turn.
-        _playbook = await asyncio.to_thread(
-            guarded_instructions,
-            sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
-            cap=8000,
+        # v1.332.0: started with the other prep steps above; read inline only
+        # when the registry gained the skill since then.
+        _playbook = await (
+            _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
+                guarded_instructions,
+                sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
+                cap=8000,
+            )
         )
         system += (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
@@ -2672,19 +2903,12 @@ async def chat_stream(
     # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
     # edit both or neither.
     _ws_resolved: "tuple[Path, bool] | None" = None
-    if (getattr(body, "workspace_dir", "") or "").strip():
-        try:
-            _ws_resolved = await asyncio.to_thread(
-                _resolve_tool_workspace,
-                d.platform.config.home / "uploads",
-                body.workspace_dir or "",
-                (resolved_proj.root or "") if resolved_proj is not None else "",
-            )
-        except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the
-            # user picked; that can fail. None renders the honest "not
-            # accessible" wording rather than a grounding claim tools
-            # cannot back.
-            _ws_resolved = None
+    if _prep.has("workspace"):
+        # Started with the other prep steps above (v1.332.0). Resolution
+        # MKDIRs a folder the user picked; that can fail, and None
+        # (`_none_on_error`) renders the honest "not accessible" wording
+        # rather than a grounding claim tools cannot back.
+        _ws_resolved = await _prep.take("workspace")
         system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
 
     # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
@@ -2789,34 +3013,10 @@ async def chat_stream(
         # v1.312.0: the last preparation stage — said, then done. A text-only
         # pick arms nothing and so says nothing.
         yield _sse("phase", {"phase": "choosing_tools"})
-        # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
-        # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
-        # about a weak model facing a wide menu; explicit user tool picks
-        # are consent and the autoselect contract already protects them.
-        # Resolved for the model that will ANSWER (explicit/project pin,
-        # else the config default route); trusted (cloud/CLI/mock) and
-        # unmeasured profiles answer None -> arming byte-identical.
-        # MIRROR NOTE (lock-step): edit both or neither.
-        _env_model = model_choice or d.platform.config.default_model
-        _tool_cap: "int | None" = None
-        try:
-            _profiler = getattr(
-                d.platform.providers, "capability_profile", None
-            )
-            if _profiler is not None:
-                _tool_cap = _profiler(
-                    provider_choice or d.platform.config.default_provider,
-                    _env_model,
-                ).max_tools()
-        except Exception:  # noqa: BLE001 — never break a turn
-            _tool_cap = None
-        # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
-        # `chat_turn.run_chat_turn`; see the reasoning there. This lane
-        # matters more, not less: it is the one the user watches token by
-        # token, so a parked loop here reads as the app having died.
-        _selection = await asyncio.to_thread(
-            _resolve_armed_tools, d, body, _tool_cap
-        )
+        # The envelope's tool cap and the arming pass (off the event loop,
+        # v1.196.0) were started with the other prep steps above (v1.332.0).
+        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        _selection = await _prep.take("arming")
         armed, auto_armed = _selection
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
         # the gate is the MEASURED drop signal, and the number printed is
@@ -2942,6 +3142,15 @@ async def chat_stream(
             armed = [t for t in armed if t not in LOW_TRUST_DENY]
             auto_armed = [t for t in auto_armed if t not in LOW_TRUST_DENY]
             ask_armed = [t for t in ask_armed if t not in LOW_TRUST_DENY]
+        # LOCAL ONLY (v1.332.0): a tool whose job is to reach the internet
+        # (`egress.INTERNET_TOOLS`) leaves EVERY list that reaches the model,
+        # whatever armed it — the "+" menu, a skill, the sentence, a saved
+        # setup. Same seam as low trust, for the same reason: before specs
+        # and grants. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        if _egress.current_scope().on:
+            armed = [t for t in armed if t not in _egress.INTERNET_TOOLS]
+            auto_armed = [t for t in auto_armed if t not in _egress.INTERNET_TOOLS]
+            ask_armed = [t for t in ask_armed if t not in _egress.INTERNET_TOOLS]
         _exit_specs = [
             spec
             for spec in (_ESCALATE_SPEC, _WORKFLOW_DRAFT_SPEC)
@@ -3479,11 +3688,42 @@ async def chat_stream(
                     except Exception:  # noqa: BLE001
                         return ""
 
+                # LOCAL ONLY ASKS FIRST (v1.332.0, L3). In a local-only turn a
+                # tool that reaches past this PC (`egress.ask_first_tools`: a
+                # browser tool that acts or loads an address, a channel send,
+                # a command runner, a pack tool) is carded in EVERY approval
+                # mode, yolo and approve-for-me included, unless its base
+                # policy is deny (the registry refuses that anyway). Nothing
+                # covers it: not the tab grant, not a standing or a
+                # conversation grant, and the card offers "Allow once" only.
+                # Each call is its own card (`_ask_first_key`), never a batch:
+                # a shared perm key (`mcp_call`) must not let one answer cover
+                # another pack's tool. MIRROR NOTE: `_would_card` and the
+                # per-call branch below read this the same way.
+                def _ask_first(_c) -> bool:
+                    try:
+                        return _egress.asks_first(d.platform.registry, _c.name)
+                    except Exception:  # noqa: BLE001 — fail closed: ask (local only)
+                        return _egress.current_scope().on
+
+                def _ask_first_key(_c, _cp: str) -> str:
+                    # The call OBJECT, not its id: an adapter may send ""
+                    # for every id, and two calls must never share a card.
+                    return f"{_cp}\x1f{id(_c)}"
+
                 def _would_card(_c) -> str:
                     # A PROTECTED setting is carded even in Auto-approve
                     # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
                     # per-call branch below repeats this rule.
-                    if (approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS) or _c.name not in {*armed, *ask_armed}:
+                    if _c.name not in {*armed, *ask_armed}:
+                        return ""
+                    if _ask_first(_c):
+                        _ct = d.platform.registry.get(_c.name)
+                        _cp = _ct.perm_key() if _ct is not None else _c.name
+                        if d.platform.permissions.mode_for(_cp, overrides) is PermissionMode.DENY:
+                            return ""
+                        return _ask_first_key(_c, _cp)
+                    if approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS:
                         return ""
                     _ct = d.platform.registry.get(_c.name)
                     _cp = _ct.perm_key() if _ct is not None else _c.name
@@ -3612,7 +3852,18 @@ async def chat_stream(
                         _needs_card = _engine_asks
                     if _unarmed:
                         _needs_card = False
-                    if _needs_card and _tab_covered(tc):
+                    # LOCAL ONLY ASKS FIRST (v1.332.0, L3; see `_ask_first`
+                    # above — MIRROR NOTE: `_would_card` reads it the same
+                    # way). Whatever the posture decided, a reaching-out call
+                    # cards, alone, and no grant below may skip it.
+                    _local_ask = (
+                        not _unarmed and _ask_first(tc)
+                        and _mode is not PermissionMode.DENY
+                    )
+                    _card_key = _ask_first_key(tc, _perm_name) if _local_ask else _perm_name
+                    if _local_ask:
+                        _needs_card = True
+                    if _needs_card and not _local_ask and _tab_covered(tc):
                         # A COVERED CALL CARRIES ITS GRANT (v1.270.1). The
                         # card is skipped, but the registry's own permission
                         # gate still runs inside `invoke` and refuses an
@@ -3626,7 +3877,7 @@ async def chat_stream(
                         _needs_card = False
                         if _engine_asks:
                             _grant_extra = {tc.name, _perm_name}
-                    if _needs_card and _grant_covers(
+                    if _needs_card and not _local_ask and _grant_covers(
                         d.platform, _grant_scopes, tc.name, tc.arguments
                     ):
                         # A STANDING GRANT COVERS IT (v1.299.0): no card. The
@@ -3639,15 +3890,15 @@ async def chat_stream(
                         _needs_card = False
                     _plan["carded"] = _needs_card
                     if _needs_card:
-                        if _perm_name in _round_answers:
+                        if _card_key in _round_answers:
                             # ONE CARD FOR THE BATCH (v1.247.0): this call's
                             # group was answered on its first card, and the
                             # same answer covers it — 'once' is the batch,
                             # 'deny' refuses all of it.
-                            _decision = _round_answers[_perm_name]
+                            _decision = _round_answers[_card_key]
                         else:
                             _apr = _approvals(d)
-                            _group = _round_asks.get(_perm_name) or [tc]
+                            _group = _round_asks.get(_card_key) or [tc]
                             _count = len(_group)
                             _frame = {
                                 "id": "", "call_id": tc.id,
@@ -3660,9 +3911,10 @@ async def chat_stream(
                                 # never offered "Always" and the card says
                                 # it is new in its pack.
                                 "quarantined": _quarantined(d.platform, tc.name),
+                                # v1.332.0 (L3): never on a local-only card.
                                 "can_always": _can_always(
                                     d.platform, _grant_scopes, _trust_state, tc.name
-                                ),
+                                ) and not _local_ask,
                                 # 0 = no expiry (v1.247.0): the turn waits
                                 # for the person it asked.
                                 "timeout_s": (
@@ -3670,6 +3922,11 @@ async def chat_stream(
                                     if CHAT_ASK_TIMEOUT_S else 0
                                 ),
                             }
+                            if _local_ask:
+                                # v1.332.0 (L3): this card offers "Allow
+                                # once" and "Deny" only; any wider answer is
+                                # read as once below.
+                                _frame["once_only"] = True
                             if _count > 1:
                                 _examples = [
                                     _redacted(_c) for _c in _group[:3]
@@ -3741,6 +3998,11 @@ async def chat_stream(
                                 # no frame is emitted (as every stop path).
                                 _persist_once(AgentState.CANCELLED)
                                 return
+                            if _local_ask and _decision in ("tab", "conversation", "always"):
+                                # v1.332.0 (L3): a local-only card is "Allow
+                                # once": no tab grant, no conversation grant,
+                                # no standing grant is recorded from it.
+                                _decision = "once"
                             if _decision == "tab":
                                 # Recorded BEFORE the resolved frame goes
                                 # out, so a panel painting "allowed in this
@@ -3750,10 +4012,10 @@ async def chat_stream(
                                 "id": _ap_id, "call_id": tc.id,
                                 "tool": tc.name, "decision": _decision,
                             })
-                            _round_answers[_perm_name] = _decision
+                            _round_answers[_card_key] = _decision
                         if _decision == "tab":
                             # The tab is granted (above); THIS call is "once".
-                            _round_answers[_perm_name] = "once"
+                            _round_answers[_card_key] = "once"
                             _decision = "once"
                         if _decision == "always":
                             # ALWAYS (v1.299.0): this call runs as "once" AND
@@ -4040,7 +4302,15 @@ async def chat_stream(
             # frame (mirrors chat_complete's failure path); the client sees
             # the same error either way.
             _persist_once(AgentState.FAILED)
-            yield _sse("error", {"detail": _error_detail(exc)})
+            # LOCAL ONLY (v1.332.0): a refusal's frame also carries `code`,
+            # `provider` and `model` (detail kept). MIRROR NOTE (lock-step):
+            # chat_turn.run_chat_turn re-raises it for the 409.
+            _refused = _egress.refusal_of(exc)
+            yield _sse(
+                "error",
+                _refused.payload() if _refused is not None
+                else {"detail": _error_detail(exc)},
+            )
             return
         except BaseException:
             # STOP MID-GENERATION. When the client aborts DURING a round,
@@ -4322,6 +4592,12 @@ async def chat_stream(
                 # (lock-step): chat_turn.run_chat_turn's route carries both.
                 "label": _chat_turn.route_label(d.platform, route_provider),
                 "text_only": bool(text_only_pick),
+                # v1.332.0 (additive, LAST): ran under the local-only toggle /
+                # answered off this network with the user's one-message OK.
+                # MIRROR NOTE (lock-step): chat_turn.run_chat_turn's route.
+                **_egress.route_flags(
+                    route_provider, getattr(d.platform, "providers", None)
+                ),
             },
             "tools_used": tools_used,
             # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present

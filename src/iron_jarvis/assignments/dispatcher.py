@@ -348,13 +348,15 @@ class AssignmentDispatcher:
             # that parent's posture when the parent is low — trust flows
             # down, never up; a user-queued or retried row is full.
             _trust, _trust_reason = None, ""
+            _local_only = False  # v1.332.0: a local-only parent's job stays local
             _src = str(getattr(row, "source", "") or "")
             if _src.startswith("agent:"):
-                from ..agents.orchestrator import inherited_trust
+                from ..agents.orchestrator import inherited_local_only, inherited_trust
 
                 # Off the loop, like every other store/DB read in this file.
                 _parent = await asyncio.to_thread(orch.get_session, _src[len("agent:"):])
                 _trust, _trust_reason = inherited_trust(_parent)
+                _local_only = inherited_local_only(_parent)
             session = await orch.create_session(
                 task,
                 agent_type,
@@ -369,6 +371,7 @@ class AssignmentDispatcher:
                 approval_mode=str(getattr(record, "approval_mode", "") or "") or None,
                 trust=_trust,
                 trust_reason=_trust_reason,
+                **({"options": {"local_only": True}} if _local_only else {}),
             )
         except Exception as exc:  # noqa: BLE001 — a job that cannot start FAILS, honestly
             log.warning("assignment %s could not start: %s", row.id, exc)

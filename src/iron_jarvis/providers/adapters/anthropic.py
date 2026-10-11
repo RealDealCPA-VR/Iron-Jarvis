@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import weakref
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -128,6 +130,11 @@ class AnthropicAdapter(LLMAdapter):
         self.max_tokens = max_tokens
         self._api_key = api_key
         self._credential = credential  # Callable[[], str | None] | None
+        #: v1.332.0: one SDK client per event loop, reused while the key is
+        #: the same — id(loop) -> (weakref to the loop, key, client). See
+        #: :meth:`_client_for_loop`.
+        self._loop_clients: dict[int, tuple[Any, str, Any]] = {}
+        self._loop_clients_lock = threading.Lock()
 
     def _key(self) -> str | None:
         if self._api_key:
@@ -138,14 +145,14 @@ class AnthropicAdapter(LLMAdapter):
                 return key
         return os.environ.get("ANTHROPIC_API_KEY")
 
-    def _client(self):
+    def _checked_key(self) -> str:
+        """The key this call will use, refused when it must never reach the
+        raw API. Blocking (the credential may refresh): call it off the loop."""
         key = self._key()
         if not key:
             raise RuntimeError(
                 "No Anthropic credential — connect it on the Connections page."
             )
-        from anthropic import AsyncAnthropic  # lazy import
-
         # The raw Messages API is API-KEY-ONLY. A Claude Pro/Max subscription is
         # used the sanctioned way — inherited from the logged-in `claude` CLI
         # (providers/adapters/subprocess_cli.py), never by sending an account
@@ -157,10 +164,61 @@ class AnthropicAdapter(LLMAdapter):
                 "Connect an API key (sk-ant-…), or use your logged-in Claude CLI "
                 "(inherited automatically)."
             )
+        return key
+
+    @staticmethod
+    def _build(key: str):
+        from anthropic import AsyncAnthropic  # lazy import
+
         # A 60s request timeout (matching the OpenAI/Google adapters) so a slow or
         # half-open connection trips the router's PROVIDER_FAILED fallback promptly
         # instead of hanging a session on the SDK's ~600s default.
         return AsyncAnthropic(api_key=key, timeout=60.0)
+
+    def _client(self):
+        """A NEW client for the current key (no reuse). The calls themselves go
+        through :meth:`_session_client`; tests replace this seam with
+        ``adapter._client = lambda: fake``, and that replacement still wins."""
+        return self._build(self._checked_key())
+
+    def _client_for_loop(self, loop: asyncio.AbstractEventLoop):
+        """The client for ``loop``, built once and reused (v1.332.0). Blocking —
+        run it off the loop, as the old per-call build was.
+
+        Every complete/stream call used to build a fresh ``AsyncAnthropic`` —
+        a new httpx connection pool and a new TLS handshake on every tool round
+        of a turn — and never closed it. The adapter lives as long as the
+        manager's cache, so it now keeps one client per (event loop, key). A
+        client is NEVER handed to a loop other than the one it was built on: an
+        httpx pool's connections belong to their loop, and the daemon has more
+        than one (a schedule fire runs under ``asyncio.run`` on the scheduler's
+        thread). A new key builds a new client; the one it replaces is dropped,
+        not closed, because a call still running on it must finish. A loop that
+        has closed or been collected takes its client out of the table."""
+        key = self._checked_key()
+        with self._loop_clients_lock:
+            for lid, (ref, _k, _c) in list(self._loop_clients.items()):
+                held = ref()
+                if held is None or held.is_closed():
+                    del self._loop_clients[lid]
+            hit = self._loop_clients.get(id(loop))
+            if hit is not None and hit[0]() is loop and hit[1] == key:
+                return hit[2]
+            client = self._build(key)
+            self._loop_clients[id(loop)] = (weakref.ref(loop), key, client)
+            return client
+
+    async def _session_client(self):
+        """The client for this call, built off the loop (credential resolution
+        may trigger a blocking OAuth token refresh). A replaced ``_client``
+        (the tests' seam, or a subclass's) is called exactly as before."""
+        seam = self._client
+        # Compared with the function as DEFINED (``_DEFAULT_CLIENT``), not with
+        # ``AnthropicAdapter._client`` read now: a seam patched onto the CLASS
+        # would otherwise read as the default and be skipped.
+        if getattr(seam, "__func__", None) is not _DEFAULT_CLIENT:
+            return await asyncio.to_thread(seam)
+        return await asyncio.to_thread(self._client_for_loop, asyncio.get_running_loop())
 
     @staticmethod
     def _to_anthropic_messages(messages: list[LLMMessage]) -> list[dict[str, Any]]:
@@ -237,9 +295,8 @@ class AnthropicAdapter(LLMAdapter):
         extra_body: dict | None = None,
         reasoning: str = "",
     ) -> LLMResponse:
-        # Build the client off the loop — credential resolution may trigger a
-        # blocking OAuth token refresh that must not stall the event loop.
-        client = await asyncio.to_thread(self._client)
+        # Off the loop (credential resolution may refresh), reused per loop.
+        client = await self._session_client()
         tool_defs: list[dict[str, Any]] = [
             {
                 "name": t["name"],
@@ -375,9 +432,8 @@ class AnthropicAdapter(LLMAdapter):
         call. Errors are wrapped in the same :func:`_anthropic_provider_error` so the
         router classifies transient/permanent exactly as on the non-streaming path.
         """
-        # Build the client off the loop — credential resolution may trigger a
-        # blocking OAuth token refresh that must not stall the event loop.
-        client = await asyncio.to_thread(self._client)
+        # Off the loop (credential resolution may refresh), reused per loop.
+        client = await self._session_client()
         tool_defs: list[dict[str, Any]] = [
             {
                 "name": t["name"],
@@ -476,3 +532,9 @@ class AnthropicAdapter(LLMAdapter):
                 thinking=_thinking_text(final.content),
             ),
         }
+
+
+#: v1.332.0: ``_client`` as defined here. :meth:`AnthropicAdapter._session_client`
+#: reuses a client per loop only while ``_client`` is still this function;
+#: any replacement (on the instance, on the class, in a subclass) is called.
+_DEFAULT_CLIENT = AnthropicAdapter._client

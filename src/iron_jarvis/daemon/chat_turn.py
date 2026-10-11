@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json as _json
 import logging
 import re as _re
@@ -47,6 +48,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from ..providers import egress as _egress
 from ..providers.reasoning import normalize_level
 from ..core.db import session_scope
 from ..mcp.tools import packs_starting_note
@@ -2279,6 +2281,10 @@ def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
     """
     tools: list[str] = []
     memory: list[str] = []
+    # LOCAL ONLY (v1.332.0): a toggled memory base that is not on this PC is
+    # left out of a local-only turn (its search would carry the turn's words
+    # off the network). MCP connector tools are out of this release's scope.
+    _local_only = _egress.current_scope().on
     for raw in (getattr(body, "connectors", None) or [])[:_MAX_CONNECTORS]:
         cid = (raw or "").strip()
         if not cid:
@@ -2290,7 +2296,10 @@ def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
                 tools.extend(n for n in names[:room] if n not in tools)
             continue
         try:
-            if d.platform.ltm.get(cid) is not None and cid not in memory:
+            _conn = d.platform.ltm.get(cid)
+            if _local_only and _conn is not None and not _egress.ltm_connector_is_local(_conn):
+                continue
+            if _conn is not None and cid not in memory:
                 memory.append(cid)
         except Exception:  # noqa: BLE001 — a broken store must not break a turn
             pass
@@ -4681,10 +4690,21 @@ async def _gather_grounding(
         # tool. Grounding reads the DB and, for a remote base, the NETWORK
         # (v1.173.0) — never on the loop.
         try:
+            # LOCAL ONLY (v1.332.0): a local-only turn grounds only in memory
+            # bases on this PC — a remote base (a cloud drive, Notion, an HTTP
+            # retrieval service, an SSH machine, an MCP brain) would be sent
+            # the turn's own words as its query. Files, notes on this PC, the
+            # memory graph, lessons and past chats stay.
+            _fab = fabric
+            if _egress.current_scope().on:
+                import copy as _copy
+
+                _fab = _copy.copy(fabric)
+                _fab.ltm = _egress.local_ltm(getattr(fabric, "ltm", None))
             # Every store: files, notes, memory graph, lessons, past sessions
             # and — v1.142.0 — past CONVERSATIONS (project knowledge is the
             # project block's).
-            return fabric.ground(
+            return _fab.ground(
                 recall_query,
                 project_id=pid,
                 sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
@@ -4793,6 +4813,122 @@ async def _gather_grounding(
     return out
 
 
+class _PrepGroup:
+    """A turn's independent preparation steps, STARTED together and AWAITED
+    one by one at their old places (v1.332.0, speed S2).
+
+    After the project and the model are known, the attachments, the page the
+    user asked about, the apps' resources, the earlier chats pointed to, the
+    "/" skill's playbook, the bound folder and the arming pass depend only on
+    the body and the project, yet each lane ran them one after another. Both
+    lanes now :meth:`start` each as a task the moment its inputs are known and
+    :meth:`take` it where it always was, so the system prompt is assembled in
+    the same order, byte for byte, and every phase frame stays where it was.
+
+    A task copies the context it was created in, so the local-only scope
+    (``providers.egress.LOCAL_ONLY``) reaches every step and its threads.
+
+    FAILURES SURFACE AS BEFORE. The lane awaits the steps in their old order,
+    so the first error it meets is the one the serial turn would have met.
+    When a step fails, every step started AFTER it is cancelled at once (the
+    serial turn would never have started them); the ones before it keep
+    running because the lane still awaits them first. Every finished task's
+    exception is read in a done-callback, so a step nobody reached never
+    prints "Task exception was never retrieved". :meth:`close` cancels what
+    is still running when the turn ends however it ends (a reply, an error,
+    Stop, a dropped connection); a worker thread a step handed work to
+    finishes on its thread and its result is dropped (the v1.228.0 rule).
+    """
+
+    def __init__(self) -> None:
+        self._tasks: dict[str, "asyncio.Future[Any]"] = {}
+
+    def start(self, name: str, aw) -> None:
+        task = asyncio.ensure_future(aw)
+        self._tasks[name] = task
+        task.add_done_callback(self._settled)
+
+    def has(self, name: str) -> bool:
+        return name in self._tasks
+
+    def take(self, name: str) -> "asyncio.Future[Any]":
+        """The step's task, for the lane to await at the step's own place."""
+        return self._tasks[name]
+
+    def _settled(self, task: "asyncio.Future[Any]") -> None:
+        if task.cancelled() or task.exception() is None:
+            return
+        later = False
+        for other in self._tasks.values():
+            if later and not other.done():
+                other.cancel()
+            later = later or other is task
+
+    def cancel_pending(self) -> list["asyncio.Future[Any]"]:
+        pending = [t for t in self._tasks.values() if not t.done()]
+        for t in pending:
+            t.cancel()
+        return pending
+
+    async def close(self) -> None:
+        pending = self.cancel_pending()
+        if pending:
+            await asyncio.wait(pending)
+
+
+#: The POST lane's group for the turn in flight (set by :func:`_settles_its_prep`).
+_PREP_GROUP: "contextvars.ContextVar[_PrepGroup | None]" = contextvars.ContextVar(
+    "chat_prep_group", default=None
+)
+
+
+def _settles_its_prep(turn):
+    """Give the POST lane's turn a :class:`_PrepGroup` and close it however
+    the turn ends (v1.332.0). A decorator for the reason
+    :func:`_counts_for_its_chat` is one: the turn's body is read by pins with
+    ``inspect.getsource`` and must not be re-indented. MIRROR NOTE
+    (lock-step): ``routes/chat.stream_chat_turn`` closes the stream lane's
+    group through :func:`_prep_settled_frames`."""
+    import functools
+
+    @functools.wraps(turn)
+    async def settled(platform, personas, body, *args, **kwargs):
+        group = _PrepGroup()
+        token = _PREP_GROUP.set(group)
+        try:
+            return await turn(platform, personas, body, *args, **kwargs)
+        finally:
+            _PREP_GROUP.reset(token)
+            await group.close()
+
+    return settled
+
+
+async def _prep_settled_frames(frames, group: _PrepGroup):
+    """The stream lane's twin of :func:`_settles_its_prep`: *frames* iterated,
+    then the group closed however the stream ends. Closing this closes
+    *frames* first, so the lane's own ``finally`` blocks run at once."""
+    try:
+        async for frame in frames:
+            yield frame
+    finally:
+        try:
+            close = getattr(frames, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            await group.close()
+
+
+async def _none_on_error(aw):
+    """*aw*'s result, or None when it raises (the bound folder's resolution,
+    whose failure the lane renders as "not accessible" and goes on)."""
+    try:
+        return await aw
+    except Exception:  # noqa: BLE001 — the caller's honest fallback
+        return None
+
+
 def _counts_for_its_chat(turn):
     """The POST lane's half of the chat list's "running" dot (v1.327.0).
 
@@ -4816,7 +4952,66 @@ def _counts_for_its_chat(turn):
     return counted
 
 
+async def local_only_scope_for(platform, body) -> "_egress.LocalOnlyScope":
+    """The LOCAL-ONLY scope one chat turn runs under (v1.332.0).
+
+    On when ``body.local_only`` says so OR the saved chat ``body.thread_id``
+    names is switched to local only (a read failure → the body decides): a
+    stale client that leaves the flag out cannot turn a saved local-only chat
+    off. ``allow_cloud_once`` is honoured only when it names the turn's CHOSEN
+    provider — the body's pick, else the project's default, else the
+    configured default (the same ladder the lanes route by) — and otherwise
+    ignored. It is never remembered: it lives in this one scope. Both lanes
+    call this (MIRROR NOTE, lock-step)."""
+    on = await _egress.effective_local_only(
+        getattr(platform, "engine", None),
+        getattr(body, "local_only", False),
+        getattr(body, "thread_id", ""),
+    )
+    if not on:
+        return _egress.make_scope(False)
+    once = str(getattr(body, "allow_cloud_once", "") or "").strip()
+    if once:
+        chosen = (getattr(body, "provider", "") or "").strip()
+        if not chosen:
+            pid = (getattr(body, "project_id", "") or "").strip()
+            try:
+                proj = await asyncio.to_thread(_load_project, platform, pid) if pid else None
+            except Exception:  # noqa: BLE001 — no project: the default decides
+                proj = None
+            chosen = (getattr(proj, "default_provider", "") or "").strip() if proj else ""
+        if not chosen:
+            chosen = str(getattr(platform.config, "default_provider", "") or "").strip()
+        if once.lower() != chosen.lower():
+            once = ""
+    return _egress.make_scope(True, once)
+
+
+def _local_only_turn(turn):
+    """Run the POST lane's WHOLE turn under its local-only scope (v1.332.0):
+    preparation (the attachments' OCR goes through the router), every tool
+    round, the final-answer nudge, the language rewrite, the automatic
+    compaction and every tool's own model call all see it. A decorator for
+    the reason :func:`_counts_for_its_chat` is one: the turn's body is read by
+    pins with ``inspect.getsource`` and must not be re-indented. MIRROR NOTE
+    (lock-step): ``routes/chat.stream_chat_turn`` sets the same scope around
+    the stream lane."""
+    import functools
+
+    @functools.wraps(turn)
+    async def scoped(platform, personas, body, *args, **kwargs):
+        scope = await local_only_scope_for(platform, body)
+        if not scope.on:
+            return await turn(platform, personas, body, *args, **kwargs)
+        with _egress.local_only_scope(scope.on, scope.allowed_once):
+            return await turn(platform, personas, body, *args, **kwargs)
+
+    return scoped
+
+
 @_counts_for_its_chat
+@_local_only_turn
+@_settles_its_prep
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
     suggest_preferences: bool = False,
@@ -4960,10 +5155,29 @@ async def run_chat_turn(
         model_choice or d.platform.config.default_model,
     )
 
+    # PREPARATION AT THE SAME TIME (v1.332.0, speed S2): from here on the
+    # attachments, the page, the apps' resources, the earlier chats, the "/"
+    # skill's playbook, the bound folder and the arming pass need only the
+    # body and the project, so each STARTS now as a task (`_PrepGroup`) and is
+    # AWAITED below at its old place: the prompt is assembled in the same
+    # order, byte for byte, and the first failure met is the serial one.
+    # MIRROR NOTE (lock-step): routes/chat.py's stream lane starts the same
+    # steps at the same seam.
+    # An unknown "/" skill is refused HERE, before any step starts: the steps
+    # below run at once, so a later refusal would land after the bound folder
+    # was made, the apps were read and events were published for a turn that
+    # never ran. The stream lane refuses it even earlier (`_eager_checks`,
+    # before the response opens); same 404, same words.
+    _skill_early = (
+        d.platform.skills.get(body.skill.strip()) if (body.skill or "").strip() else None
+    )
+    if (body.skill or "").strip() and _skill_early is None:
+        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+    _prep = _PREP_GROUP.get() or _PrepGroup()
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED with POST /chat/stream (v1.174.0) — the two lanes ran
     # hand-copied loops until a scanned PDF had to be fixed in both.
-    images, attach_block = await _prepare_attachments(
+    _prep.start("attachments", _prepare_attachments(
         d, body,
         inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
         provider_choice=provider_choice, model_choice=model_choice,
@@ -4973,7 +5187,75 @@ async def run_chat_turn(
         # project-grounded chat promised excel_edit on a file in <home>/uploads
         # that excel_edit refuses. MIRROR NOTE (lock-step): routes/chat.py.
         project_root=(resolved_proj.root or "") if resolved_proj is not None else "",
-    )
+    ))
+    if getattr(body, "page_context", None) is not None:
+        _prep.start("page", _page_context_section(d, body))
+    if getattr(body, "resources", None):
+        _prep.start("resources", _read_turn_resources(d, body))
+    if getattr(body, "thread_refs", None):
+        _prep.start("refs", _read_thread_refs(
+            d, body,
+            # v1.332.0: the turn's chosen provider decides whether a LOCAL-ONLY
+            # chat it points to keeps its text home. MIRROR NOTE (lock-step).
+            provider=provider_choice or d.platform.config.default_provider,
+        ))
+    if _skill_early is not None:
+        from ..skills.framework import guarded_instructions
+
+        _prep.start("skill", asyncio.to_thread(
+            guarded_instructions,
+            _skill_early, event_bus=getattr(d.platform, "event_bus", None),
+            session_id="chat", cap=8000,
+        ))
+    if (getattr(body, "workspace_dir", "") or "").strip():
+        _prep.start("workspace", _none_on_error(asyncio.to_thread(
+            _resolve_tool_workspace,
+            d.platform.config.home / "uploads",
+            body.workspace_dir or "",
+            (resolved_proj.root or "") if resolved_proj is not None else "",
+        )))
+    if not text_only_pick:
+        # ENVELOPE TOOL CAP (v1.202.0): consult the answering model's measured
+        # capability profile BEFORE arming. The cap is about a weak model
+        # facing a wide menu — a small local model measured below the native
+        # tool-form bar picks `shell` over `read_file` from six options —
+        # while explicit user tool picks are consent and the autoselect
+        # contract already protects them (`_resolve_armed_tools` never drops
+        # one). The profile is resolved for the model that will ANSWER: the
+        # explicit body pin (or the project default) when there is one, else
+        # the config default route — the same ladder `_attachment_budgets`
+        # scales by above. Trusted (cloud/CLI/mock) and unmeasured profiles
+        # answer None, which keeps arming byte-identical (pinned in
+        # tests/test_chat_envelope_v1202.py).
+        # MIRROR NOTE (lock-step): routes/chat.py — edit both or neither.
+        _env_model = model_choice or d.platform.config.default_model
+        _tool_cap: "int | None" = None
+        try:
+            _profiler = getattr(d.platform.providers, "capability_profile", None)
+            if _profiler is not None:
+                _tool_cap = _profiler(
+                    provider_choice or d.platform.config.default_provider,
+                    _env_model,
+                ).max_tools()
+        except Exception:  # noqa: BLE001 — the envelope must never break a turn
+            _tool_cap = None
+        # OFF THE EVENT LOOP (v1.196.0). `_resolve_armed_tools` is pure regex
+        # scoring — it was ~2 ms and nobody minded. v1.196.0 fronted fourteen
+        # rules with the imperative test, and a pasted document full of blank
+        # lines drove a 4,000-newline input to SEVENTEEN SECONDS of quadratic
+        # backtracking on this one synchronous call. Possessive quantifiers took
+        # that to ~190 ms, but ~190 ms is still ~190 ms of the whole daemon
+        # stopped — and the loop it stops is the one serving every other
+        # request, which is why v1.153.1's outage presented as "Daemon offline"
+        # rather than as a slow reply. The scorer is CPU-bound and pure, so a
+        # worker thread is the honest home for it; the mirror in
+        # `routes/chat.py` gets the same hop, because these two lanes are
+        # LOCK-STEP and the streaming one is the lane the user watches.
+        _prep.start("arming", asyncio.to_thread(
+            _resolve_armed_tools, d, body, _tool_cap
+        ))
+
+    images, attach_block = await _prep.take("attachments")
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0): "Ask Jarvis about this
@@ -4981,8 +5263,8 @@ async def run_chat_turn(
     # at the attachments seam, under an attachment's policy (scanned, fenced,
     # no trust change, priced by the planner). MIRROR NOTE (lock-step):
     # routes/chat.py's stream lane calls the same helper at the same seam.
-    if getattr(body, "page_context", None) is not None:
-        system += await _page_context_section(d, body)
+    if _prep.has("page"):
+        system += await _prep.take("page")
     # RESOURCES FROM THE USER'S APPS (v1.324.0): what the user picked with "@"
     # from a pack rides THIS message like an attachment — read off the loop
     # through the pack's client (≤15 s each), promptguard-scanned, injected
@@ -4990,8 +5272,7 @@ async def run_chat_turn(
     # receipt and the turn goes on. MIRROR NOTE (lock-step): routes/chat.py's
     # stream lane calls the same helper at the same seam.
     _res_block, resources_receipt = (
-        await _read_turn_resources(d, body)
-        if getattr(body, "resources", None) else ("", [])
+        await _prep.take("resources") if _prep.has("resources") else ("", [])
     )
     if _res_block:
         system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
@@ -5002,8 +5283,7 @@ async def run_chat_turn(
     # response ALWAYS. MIRROR NOTE (lock-step): routes/chat.py's stream lane
     # calls the same helper at the same seam.
     _refs_block, thread_refs_receipt = (
-        await _read_thread_refs(d, body)
-        if getattr(body, "thread_refs", None) else ("", [])
+        await _prep.take("refs") if _prep.has("refs") else ("", [])
     )
     system += _refs_block
 
@@ -5020,10 +5300,14 @@ async def run_chat_turn(
 
         # Off the loop, clipped to the playbook's 8,000 BEFORE the scan
         # (PERF, wave-4a review). MIRROR NOTE (lock-step): routes/chat.py.
-        _playbook = await asyncio.to_thread(
-            guarded_instructions,
-            sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
-            cap=8000,
+        # v1.332.0: started with the other prep steps above; read inline only
+        # when the registry gained the skill since then.
+        _playbook = await (
+            _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
+                guarded_instructions,
+                sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
+                cap=8000,
+            )
         )
         system += (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
@@ -5055,18 +5339,12 @@ async def run_chat_turn(
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py — edit both or
     # neither.
     _ws_resolved: "tuple[Path, bool] | None" = None
-    if (getattr(body, "workspace_dir", "") or "").strip():
-        try:
-            _ws_resolved = await asyncio.to_thread(
-                _resolve_tool_workspace,
-                d.platform.config.home / "uploads",
-                body.workspace_dir or "",
-                (resolved_proj.root or "") if resolved_proj is not None else "",
-            )
-        except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the user
-            # picked; that can fail. None renders the honest "not accessible"
-            # wording rather than a grounding claim tools cannot back.
-            _ws_resolved = None
+    if _prep.has("workspace"):
+        # Started with the other prep steps above (v1.332.0). Resolution
+        # MKDIRs a folder the user picked; that can fail, and None
+        # (`_none_on_error`) renders the honest "not accessible" wording
+        # rather than a grounding claim tools cannot back.
+        _ws_resolved = await _prep.take("workspace")
         system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
 
     # CONTEXT PROTECTION (v1.146.0): the history is budgeted against the WINDOW
@@ -5133,45 +5411,10 @@ async def run_chat_turn(
         armed, auto_armed = [], []
         tool_specs = []
     else:
-        # ENVELOPE TOOL CAP (v1.202.0): consult the answering model's measured
-        # capability profile BEFORE arming. The cap is about a weak model
-        # facing a wide menu — a small local model measured below the native
-        # tool-form bar picks `shell` over `read_file` from six options —
-        # while explicit user tool picks are consent and the autoselect
-        # contract already protects them (`_resolve_armed_tools` never drops
-        # one). The profile is resolved for the model that will ANSWER: the
-        # explicit body pin (or the project default) when there is one, else
-        # the config default route — the same ladder `_attachment_budgets`
-        # scales by above. Trusted (cloud/CLI/mock) and unmeasured profiles
-        # answer None, which keeps arming byte-identical (pinned in
-        # tests/test_chat_envelope_v1202.py).
-        # MIRROR NOTE (lock-step): routes/chat.py — edit both or neither.
-        _env_model = model_choice or d.platform.config.default_model
-        _tool_cap: "int | None" = None
-        try:
-            _profiler = getattr(d.platform.providers, "capability_profile", None)
-            if _profiler is not None:
-                _tool_cap = _profiler(
-                    provider_choice or d.platform.config.default_provider,
-                    _env_model,
-                ).max_tools()
-        except Exception:  # noqa: BLE001 — the envelope must never break a turn
-            _tool_cap = None
-        # OFF THE EVENT LOOP (v1.196.0). `_resolve_armed_tools` is pure regex
-        # scoring — it was ~2 ms and nobody minded. v1.196.0 fronted fourteen
-        # rules with the imperative test, and a pasted document full of blank
-        # lines drove a 4,000-newline input to SEVENTEEN SECONDS of quadratic
-        # backtracking on this one synchronous call. Possessive quantifiers took
-        # that to ~190 ms, but ~190 ms is still ~190 ms of the whole daemon
-        # stopped — and the loop it stops is the one serving every other
-        # request, which is why v1.153.1's outage presented as "Daemon offline"
-        # rather than as a slow reply. The scorer is CPU-bound and pure, so a
-        # worker thread is the honest home for it; the mirror in
-        # `routes/chat.py` gets the same hop, because these two lanes are
-        # LOCK-STEP and the streaming one is the lane the user watches.
-        _selection = await asyncio.to_thread(
-            _resolve_armed_tools, d, body, _tool_cap
-        )
+        # The envelope's tool cap and the arming pass (off the event loop,
+        # v1.196.0) were started with the other prep steps above (v1.332.0);
+        # see the reasoning there. MIRROR NOTE (lock-step): routes/chat.py.
+        _selection = await _prep.take("arming")
         armed, auto_armed = _selection
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the
         # runtime's arm_for_task rule; both failure shapes were empirically
@@ -5197,6 +5440,20 @@ async def run_chat_turn(
             _trust_state["kept"] = kept_away(armed)
             armed = [t for t in armed if t not in LOW_TRUST_DENY]
             auto_armed = [t for t in auto_armed if t not in LOW_TRUST_DENY]
+        # LOCAL ONLY (v1.332.0): the internet-reaching tools
+        # (`egress.INTERNET_TOOLS`) are never armed in a local-only turn,
+        # whatever picked them. MIRROR NOTE (lock-step): routes/chat.py drops
+        # the same names from armed, auto_armed AND ask_armed.
+        # L3 (v1.332.0): the tools that reach past this PC
+        # (`egress.ask_first_tools`) must ASK in a local-only turn, and this
+        # lane never cards, so nobody could be asked: they are not armed
+        # here at all. The stream lane keeps them armed and cards each call.
+        if _egress.current_scope().on:
+            _away = _egress.INTERNET_TOOLS | _egress.ask_first_tools(
+                d.platform.registry, [*armed, *auto_armed]
+            )
+            armed = [t for t in armed if t not in _away]
+            auto_armed = [t for t in auto_armed if t not in _away]
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
             _ESCALATE_SPEC,
             _WORKFLOW_DRAFT_SPEC,
@@ -5719,6 +5976,13 @@ async def run_chat_turn(
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started, cost_usd=_tally.cost_usd,
             )
+        # LOCAL ONLY (v1.332.0): a refusal leaves as itself, so the app's
+        # handler answers the 409 {detail, code, provider, model} shape the
+        # page keys its "send once" action on. MIRROR NOTE (lock-step): the
+        # stream lane's error frame carries the same keys.
+        _refused = _egress.refusal_of(exc)
+        if _refused is not None:
+            raise _refused from exc
         raise HTTPException(status_code=502, detail=_error_detail(exc))
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
     # completion is billed like any other. Operates on the MODEL's text, not on
@@ -5887,6 +6151,11 @@ async def run_chat_turn(
             # The receipt says "no tools" from this, never from a guess.
             "label": route_label(d.platform, route.provider),
             "text_only": bool(text_only_pick),
+            # v1.332.0 (additive, LAST): ``local_only`` = this turn ran under
+            # the chat's toggle; ``allowed_once`` = it was answered off this
+            # network with the user's one-message OK (the receipt's "sent
+            # with your OK"). MIRROR NOTE (lock-step): routes/chat.py.
+            **_egress.route_flags(route.provider, getattr(d.platform, "providers", None)),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user

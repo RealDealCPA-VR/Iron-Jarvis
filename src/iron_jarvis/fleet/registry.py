@@ -68,6 +68,17 @@ class FleetRegistry:
         #: node id -> last known reachability, fed by the sampler. Read by
         #: ``reachable`` on the routing hot path, so it is never a network call.
         self._reachable: dict[str, bool] = {}
+        #: v1.332.0: moves whenever the node LIST changes (a node added,
+        #: edited or removed, a proxy's children replaced by different ones).
+        #: The model catalog reads it as part of its fingerprint, so a cached
+        #: picker list is rebuilt after a fleet change and NOT after a sampler
+        #: pass that changed nothing (it calls ``absorb_children`` every pass).
+        self._revision = 0
+
+    @property
+    def revision(self) -> int:
+        """A counter that moves whenever the node list changes (v1.332.0)."""
+        return self._revision
 
     # -- seeds ---------------------------------------------------------------
 
@@ -178,6 +189,8 @@ class FleetRegistry:
         payload = [
             {k: v for k, v in n.model_dump().items() if v is not None} for n in rows
         ]
+        if payload != list(getattr(self.config, "fleet_nodes", None) or []):
+            self._revision += 1
         self.config.fleet_nodes = payload  # keep the live object in agreement
         self._persist(self.config.home, {"fleet_nodes": payload})
 
@@ -278,7 +291,10 @@ class FleetRegistry:
         # v1.330.0: a proxy's children go with it, from every place they are
         # held here: the topology list and the reachability cache. They used
         # to stay listed, Online, until the daemon restarted.
-        for kid in self._children.pop(node_id, []):
+        kids = self._children.pop(node_id, [])
+        if kids:
+            self._revision += 1
+        for kid in kids:
             self._reachable.pop(kid.id, None)
         self._reachable.pop(node_id, None)
 
@@ -291,6 +307,7 @@ class FleetRegistry:
                 setattr(self.config, key, "")  # keep the live object in agreement
                 cleared.append(key)
         if cleared:
+            self._revision += 1
             self._persist(self.config.home, {k: "" for k in cleared})
         return cleared
 
@@ -303,9 +320,14 @@ class FleetRegistry:
         backends straight back on the page.
         """
         if parent_id not in self._top_level():
-            self._children.pop(parent_id, None)
+            if self._children.pop(parent_id, None):
+                self._revision += 1
             return
-        self._children[parent_id] = list(children)
+        new = list(children)
+        old = self._children.get(parent_id)
+        if old is None or [k.model_dump() for k in old] != [k.model_dump() for k in new]:
+            self._revision += 1
+        self._children[parent_id] = new
 
     # -- reachability (routing hot path) -------------------------------------
 

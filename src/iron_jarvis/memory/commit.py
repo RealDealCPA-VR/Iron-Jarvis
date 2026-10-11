@@ -148,6 +148,27 @@ async def distill_or_excerpt(
             ),
         )
 
+    # LOCAL ONLY (v1.332.0): a local-only chat is distilled by a model on this
+    # network or not at all. A model off it is never called; the memory is
+    # kept as the verbatim excerpt, and the note says why.
+    from ..providers import egress as _egress
+
+    if not _egress.egress_ok(
+        str(getattr(adapter, "provider", "") or want_provider),
+        manager=getattr(d.platform, "providers", None),
+        config=getattr(d.platform, "config", None),
+        also=(want_provider,),
+    ):
+        return Distillation(
+            body=verbatim,
+            distilled=False,
+            provider="",
+            note=(
+                "This chat is local only and the model is not on this PC, so a"
+                " verbatim excerpt was stored, not a distillation."
+            ),
+        )
+
     clipped = clip_with_marker(
         transcript, REMEMBER_INPUT, omission_marker(subject, for_model=True)
     )

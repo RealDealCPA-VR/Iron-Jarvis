@@ -13,6 +13,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from ..core.db import session_scope
 from ..core.events import EventType
@@ -1439,12 +1440,23 @@ class AgentRuntime:
         nothing is left — the door already refused an exhausted agent, and a
         zero arms no flag. Builtins and unmetered agents arm nothing.
         """
+        from ..providers import egress as _egress
         from ..providers.budget import reset_run_budget, set_run_budget
+        from .orchestrator import session_local_only
 
         # Off the loop: the figure is a ledger read (one agent's month).
         token = set_run_budget(await asyncio.to_thread(self._run_budget_usd, session))
+        # LOCAL ONLY (v1.332.0): a local-only session's EVERY model call — each
+        # step, compaction, a consult, a child's run (which awaits inside this
+        # one) — runs under the scope, so the router refuses a model off this
+        # network and nothing fails over to one. A session that is not local
+        # only keeps whatever scope its caller already had (none, normally).
+        _lo = session_local_only(session) or _egress.current_scope().on
         try:
-            return await self._run_body(session, agent_def, parent_id)
+            if not _lo:
+                return await self._run_body(session, agent_def, parent_id)
+            with _egress.local_only_scope(True):
+                return await self._run_body(session, agent_def, parent_id)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
         finally:

@@ -61,6 +61,7 @@ from .adapters.base import (
 from .adapters.prompted_tools import PromptedToolsAdapter
 from .reasoning import normalize_level, supports
 from .guided import GuidedToolsAdapter, profile_supports_guided
+from . import egress as _egress
 from .local import is_local_provider
 from .manager import ProviderManager
 
@@ -404,6 +405,14 @@ def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:
 #: its models, short enough that a dead one refuses before the user wonders.
 _LIVENESS_TIMEOUT_S = 2.5
 
+#: How long a LOCAL box that just answered is trusted without a new
+#: liveness probe (v1.332.0). One chat turn makes many router calls (every
+#: tool round, the final-answer nudge, the language rewrite, every agent
+#: step); each used to pay its own ``GET /v1/models``. Any failure for that
+#: endpoint forgets the answer at once, so a box that died is still refused
+#: by name on the very next call.
+_LIVENESS_TRUST_S = 15.0
+
 
 #: The refusal's "why nothing stood in" sentence (v1.329.0, calm chat J1):
 #: two plain sentences where it used to be one with a dash aside. Shared by
@@ -701,6 +710,10 @@ class ModelRouter:
         # Circuit breaker + timing shared across requests (process-lived).
         self.health = health or ProviderHealth()
         self._clock = time.monotonic
+        #: models URL -> ``self._clock()`` of the last proof that the LOCAL box
+        #: behind it answered (a probe, or a real answer). Read by
+        #: :meth:`_local_liveness`; cleared on every failure (v1.332.0).
+        self._answered_at: dict[str, float] = {}
         # Overall per-request budget: bounds the same-adapter retry backoff so a
         # sticky provider fails over promptly instead of burning the whole turn.
         self._deadline_s = deadline_s
@@ -785,7 +798,15 @@ class ModelRouter:
                 pick = None
             if pick is not None:
                 lprov, lmodel = pick
-                if lprov != "mock" and self.manager.available(lprov):
+                # LOCAL ONLY (v1.332.0): the oracle's pick is "local" by NAME;
+                # under the toggle it must also stay on this network by
+                # ADDRESS, else the request falls through to normal routing
+                # (where the egress gate decides).
+                if (
+                    lprov != "mock"
+                    and self.manager.available(lprov)
+                    and (not _egress.current_scope().on or self._stays(lprov))
+                ):
                     self._resolve_reason = "local-oracle"
                     return self.manager.get(lprov, lmodel), lprov, False
 
@@ -942,6 +963,55 @@ class ModelRouter:
                 " connection or pick another model for this chat."
             )
         return ProviderError(detail + fix)
+
+    # -- local only (v1.332.0) ----------------------------------------------
+    def _stays(self, provider: str) -> bool:
+        """``egress.stays_on_this_network`` against this router's manager."""
+        return _egress.stays_on_this_network(provider, self.manager)
+
+    def _egress_ok(self, provider: str) -> bool:
+        """A failover/swap candidate is allowed under the current scope only
+        when it stays on this network. The one-message OK never reaches a
+        candidate: it covers the provider the user named, nothing else."""
+        return (not _egress.current_scope().on) or self._stays(provider)
+
+    def _local_only_gate(
+        self, adapter: LLMAdapter, wanted: str, downgraded: bool,
+        *, auto_selected: bool = False,
+    ) -> bool:
+        """THE LOCAL-ONLY GATE (v1.332.0), run on the resolved primary BEFORE
+        any probe, breaker or attempt. Returns True when the primary is the
+        cloud provider the user allowed for this ONE message — the call is
+        then PINNED (no capability swap, no default fallback, no sideways
+        failover, no mock), because the OK was for that provider and nothing
+        else. Raises :class:`~.egress.LocalOnlyRefused` when the primary
+        does not stay on this network and was not allowed. False (no change)
+        when the scope is off or the primary stays on this network.
+        MIRROR NOTE (lock-step): called from BOTH complete() and stream()."""
+        scope = _egress.current_scope()
+        if not scope.on:
+            return False
+        if downgraded:
+            # An unconnected REAL provider: the honest "not connected" refusal
+            # below still applies when it is local or allowed — but a cloud
+            # pick is refused by the toggle first, so the words say why.
+            if wanted in ("", "mock", "auto") or self._stays(wanted):
+                return False
+            if _egress.is_allowed_once(scope, wanted):
+                return True
+            raise _egress.LocalOnlyRefused(wanted, manager=self.manager)
+        served = adapter.provider
+        if self._stays(served):
+            return False
+        # An AUTO turn the user allowed as "Auto" for this message: Auto
+        # chose (``_resolve_auto`` and the classifier already widened to the
+        # cloud for exactly that OK), so the model it chose is covered.
+        if _egress.is_allowed_once(scope, served, wanted, "auto" if auto_selected else ""):
+            return True
+        name = wanted if (wanted and wanted not in ("auto", "mock")) else served
+        raise _egress.LocalOnlyRefused(
+            name, str(getattr(adapter, "model", "") or ""), manager=self.manager
+        )
 
     def _endpoint_label(self, wanted: str) -> str:
         """The name the user gave a ``fleet-<id>`` endpoint (its node's
@@ -1113,6 +1183,33 @@ class ModelRouter:
             u = u[: -len("/v1")].rstrip("/")
         return f"{u}/v1/models"
 
+    # -- "it just answered" memo (v1.332.0, speed S2) ----------------------
+    def _liveness_url(self, adapter: LLMAdapter) -> str | None:
+        """The models URL :meth:`_local_liveness` would probe for ``adapter``,
+        or None when it would not probe at all (cloud, mock, no endpoint)."""
+        try:
+            if not is_local_provider(adapter.provider):
+                return None
+            inner = self._innermost(adapter)
+            return self._models_url(str(getattr(inner, "_endpoint", "") or ""))
+        except Exception:  # noqa: BLE001 — a memo must never break a turn
+            return None
+
+    def _note_answered(self, adapter: LLMAdapter) -> None:
+        """Remember that the LOCAL box behind ``adapter`` just answered, so
+        the next call within :data:`_LIVENESS_TRUST_S` skips the probe."""
+        url = self._liveness_url(adapter)
+        if url is not None:
+            self._answered_at[url] = self._clock()
+
+    def _forget_answered(self, adapter: LLMAdapter) -> None:
+        """Drop the memo for ``adapter``'s box. Called on EVERY failure path
+        for it (probe, primary, committed, failover candidate), so the next
+        call probes again and a dead box refuses by name."""
+        url = self._liveness_url(adapter)
+        if url is not None:
+            self._answered_at.pop(url, None)
+
     async def _local_liveness(self, adapter: LLMAdapter) -> str | None:
         """A ~2.5 s ``GET /v1/models`` against a LOCAL primary BEFORE the
         real attempt. Returns the refusal kind (``"unreachable"`` /
@@ -1135,12 +1232,19 @@ class ModelRouter:
         is listening, and anything else (a fake client without ``get``, an
         odd transport) is INCONCLUSIVE and lets the real attempt decide. A
         false "isn't connected" would be as dishonest as the wait it saves.
+
+        v1.332.0: a box that answered (this probe, or a real answer) within
+        :data:`_LIVENESS_TRUST_S` is not probed again, so one turn's tool
+        rounds, nudge and rewrite share one probe. Every failure forgets it.
         """
         if not is_local_provider(adapter.provider):
             return None
         inner = self._innermost(adapter)
         url = self._models_url(str(getattr(inner, "_endpoint", "") or ""))
         if url is None:
+            return None
+        seen = self._answered_at.get(url)
+        if seen is not None and (self._clock() - seen) < _LIVENESS_TRUST_S:
             return None
         make_client = getattr(inner, "_client", None)
         if not callable(make_client):
@@ -1153,18 +1257,22 @@ class ModelRouter:
             await asyncio.wait_for(
                 get(url, timeout=_LIVENESS_TIMEOUT_S), timeout=_LIVENESS_TIMEOUT_S + 0.5
             )
+            self._answered_at[url] = self._clock()
             return None
         except (asyncio.TimeoutError, TimeoutError):
-            return "timeout"
+            dead = "timeout"
         except ConnectionError:
-            return "unreachable"
+            dead = "unreachable"
         except Exception as exc:  # noqa: BLE001 — classified by type below
+            dead = None
             if _httpx is not None:
                 if isinstance(exc, (_httpx.ConnectError, _httpx.ConnectTimeout)):
-                    return "unreachable"
-                if isinstance(exc, _httpx.TimeoutException):
-                    return "timeout"
-            return None
+                    dead = "unreachable"
+                elif isinstance(exc, _httpx.TimeoutException):
+                    dead = "timeout"
+        if dead:
+            self._answered_at.pop(url, None)
+        return dead
 
     async def _refuse_if_dead(
         self, adapter: LLMAdapter, *, auto_selected: bool, pinned: bool, session_id
@@ -1236,6 +1344,7 @@ class ModelRouter:
         reply wording. WORDING ONLY: nothing is swapped (the no-swap rule
         stands), and the endpoint banner stays local-only."""
         self.health.record_failure(adapter.provider)
+        self._forget_answered(adapter)  # v1.332.0: a death mid-answer is a failure
         await self.event_bus.publish(
             EventType.PROVIDER_FAILED,
             {
@@ -1306,13 +1415,18 @@ class ModelRouter:
                 return GuidedToolsAdapter(adapter)
         return wrap_prompted_tools(adapter)
 
-    def _first_available_real(self, *, need_tools: bool = False) -> str | None:
+    def _first_available_real(
+        self, *, need_tools: bool = False, allow: "Callable[[str], bool] | None" = None
+    ) -> str | None:
         """The strongest connected REAL provider (capability-ordered failover
         list), used as the Auto fallback so a request never drops to mock while a
         real model is connected. Skips OPEN circuits and, when the request has
-        tools, providers whose adapter can't call tools."""
+        tools, providers whose adapter can't call tools. ``allow`` (v1.332.0,
+        local only) skips every provider it says no to."""
         for p in self._candidate_order():
             if p == "mock" or not self._safe_available(p) or not self.health.allow(p):
+                continue
+            if allow is not None and not allow(p):
                 continue
             if need_tools:
                 try:
@@ -1325,7 +1439,8 @@ class ModelRouter:
 
     # -- capability enforcement --------------------------------------------
     def _first_capable(
-        self, *, need_tools: bool, need_vision: bool, exclude: LLMAdapter, avail: set[str]
+        self, *, need_tools: bool, need_vision: bool, exclude: LLMAdapter, avail: set[str],
+        allow: "Callable[[str], bool] | None" = None,
     ) -> LLMAdapter | None:
         """First AVAILABLE, circuit-CLOSED, capability-satisfying REAL adapter to
         REPLACE a primary that can't serve the request. Prefers the default
@@ -1347,6 +1462,10 @@ class ModelRouter:
                 continue
             if alt is exclude or alt.provider == exclude.provider:
                 continue
+            # LOCAL ONLY (v1.332.0): a candidate the scope refuses is never a
+            # replacement, not even as the vision fallback.
+            if allow is not None and not allow(alt.provider):
+                continue
             if need_tools and not _supports_tools(alt):
                 continue
             if need_vision and not _supports_vision(alt):
@@ -1362,7 +1481,16 @@ class ModelRouter:
         """Return a replacement adapter when the primary can't satisfy the
         request's hard capability (tools), else ``None`` to keep it. A tool-using
         request MUST NOT run on a text-only adapter (it returns tool_calls=[] and
-        silently breaks the agent loop). Vision is a softer preference."""
+        silently breaks the agent loop). Vision is a softer preference.
+
+        LOCAL ONLY (v1.332.0): under the scope only candidates that stay on
+        this network may replace the primary. When none of them can do what
+        the request needs and a cloud one could, the swap is REFUSED by name
+        (:class:`~.egress.LocalOnlyRefused` naming the provider it WOULD have
+        used) so the user can allow that one for this message, never a
+        silent swap to the cloud. MIRROR NOTE (lock-step): both lanes."""
+        if _egress.current_scope().on:
+            return self._enforce_capabilities_local(adapter, need_tools, need_vision, avail)
         if need_tools and not _supports_tools(adapter):
             return self._first_capable(
                 need_tools=True, need_vision=need_vision, exclude=adapter, avail=avail
@@ -1372,6 +1500,32 @@ class ModelRouter:
                 need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail
             )
         return None
+
+    def _enforce_capabilities_local(
+        self, adapter: LLMAdapter, need_tools: bool, need_vision: bool, avail: set[str]
+    ) -> LLMAdapter | None:
+        """:meth:`_enforce_capabilities` under the local-only scope."""
+        if need_tools and not _supports_tools(adapter):
+            lacking, kw = "tools", {"need_tools": True, "need_vision": need_vision}
+        elif need_vision and not _supports_vision(adapter):
+            lacking, kw = "vision", {"need_tools": need_tools, "need_vision": True}
+        else:
+            return None
+        local = self._first_capable(exclude=adapter, avail=avail, allow=self._stays, **kw)
+        if local is not None and (lacking != "vision" or _supports_vision(local)):
+            return local
+        would = self._first_capable(exclude=adapter, avail=avail, **kw)
+        if would is not None and not self._stays(would.provider):
+            # The provider the refusal below would name, already allowed by
+            # the user for THIS message (they answered that refusal with "send
+            # once"): the swap may go there, and only there. A scan read for
+            # the allowed message (OCR's own default-route call) lands here.
+            if _egress.is_allowed_once(_egress.current_scope(), would.provider):
+                return would
+            raise _egress.LocalOnlyRefused(
+                would.provider, str(getattr(would, "model", "") or ""), manager=self.manager
+            )
+        return local
 
     async def _resolve_auto(
         self, system, messages, tools, task_class
@@ -1386,10 +1540,23 @@ class ModelRouter:
                 decision = await self._auto_route(system, messages, tools, task_class)
             except Exception:  # never let routing break a request
                 decision = None
+        # LOCAL ONLY (v1.332.0): Auto under the scope picks only among models
+        # that stay on this network, unless the user allowed Auto itself for
+        # this message. MIRROR NOTE (lock-step): complete() and stream() both
+        # resolve Auto through here.
+        scope = _egress.current_scope()
+        allow = (
+            self._stays
+            if scope.on and not _egress.is_allowed_once(scope, "auto")
+            else None
+        )
         if decision:
             tp = str(decision.get("provider") or "")
             tm = decision.get("model") or None
-            if tp and tp != "mock" and self.manager.available(tp):
+            if (
+                tp and tp != "mock" and self.manager.available(tp)
+                and (allow is None or allow(tp))
+            ):
                 return self.manager.get(tp, tm), tp, False, {
                     "tier": decision.get("tier", ""),
                     "provider": tp,
@@ -1397,13 +1564,19 @@ class ModelRouter:
                     "classifier": decision.get("classifier", ""),
                 }
         # Fallback: the strongest connected real provider (its own default model).
-        fp = self._first_available_real(need_tools=need_tools)
+        fp = self._first_available_real(need_tools=need_tools, allow=allow)
         if fp is None and need_tools:
             # Only text-only providers are connected (a local-fleet-only box):
             # take the strongest anyway — the capability block downstream wraps
             # it in the prompted-tools scaffold. Before v1.131.0 this dropped a
             # tool request to MOCK while a real model was connected.
-            fp = self._first_available_real(need_tools=False)
+            fp = self._first_available_real(need_tools=False, allow=allow)
+        if fp is None and allow is not None:
+            # Nothing on this network can answer: name what Auto WOULD have
+            # used, so the user can allow it for this one message.
+            would = self._first_available_real(need_tools=False)
+            if would is not None:
+                raise _egress.LocalOnlyRefused(would, manager=self.manager)
         if fp is not None:
             return self.manager.get(fp), fp, False, {
                 "tier": (decision or {}).get("tier", "") if decision else "",
@@ -1533,6 +1706,12 @@ class ModelRouter:
         # request (MCP sampling) is answered by the turn's own model or not
         # at all — never sent to a fallback. MIRROR NOTE (lock-step).
         pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
+        # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
+        # HERE, before any probe, breaker or attempt; the one the user allowed
+        # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
+        egress_pin = self._local_only_gate(
+            adapter, wanted, downgraded, auto_selected=auto_selected
+        )
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
             raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
@@ -1553,7 +1732,7 @@ class ModelRouter:
         # seam to guided decoding; everything else keeps the fenced contract
         # byte-identical. MIRROR NOTE (lock-step): stream() carries the
         # identical seam — edit both or neither.
-        if not pinned and not downgraded and adapter.provider != "mock":
+        if not pinned and not egress_pin and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
@@ -1622,6 +1801,10 @@ class ModelRouter:
                 reasoning=applied,
             )
             self.health.record_success(adapter.provider)
+            # It answered: the next call within the trust window skips the
+            # liveness probe (v1.332.0). MIRROR NOTE (lock-step): stream()
+            # notes it at the first answer frame.
+            self._note_answered(adapter)
             # ROUTE DISCLOSURE (v1.165.0): thread the SAME requested/reason the
             # provider.routed event carries onto the result, so the chat lanes
             # can disclose them without re-deriving routing truth client-side.
@@ -1634,7 +1817,15 @@ class ModelRouter:
                 reason=_disclosed_reason(reason, adapter.provider),
                 reasoning=applied,
             )
+        except asyncio.CancelledError:
+            # Stopped before it answered (v1.332.0): not trusted on the next
+            # call. MIRROR NOTE (lock-step): stream().
+            self._forget_answered(adapter)
+            raise
         except Exception as exc:
+            # Any primary failure forgets "it just answered" (v1.332.0), so
+            # the next call probes again. MIRROR NOTE (lock-step): stream().
+            self._forget_answered(adapter)
             # IRON-PROXY ACCOUNTS (v1.301.0): an account sentence is raised as
             # it is — no default-provider fallback (A), no sideways failover
             # (B), and no breaker strike (the provider is not unhealthy; its
@@ -1664,8 +1855,10 @@ class ModelRouter:
                 session_id=session_id,
             )
             # STRICT MODEL PIN: the explicit pick failed — surface ITS error
-            # verbatim rather than answering from a different provider.
-            if pinned:
+            # verbatim rather than answering from a different provider. The
+            # local-only one-message OK pins the same way (v1.332.0): it was
+            # for THIS provider, never for whatever would stand in.
+            if pinned or egress_pin:
                 raise
             # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails
             # over, whether it was never reached or merely never replied in
@@ -1707,6 +1900,9 @@ class ModelRouter:
                     and id(alt) not in tried_ids
                     and alt.provider not in tried_providers
                     and (not need_tools or _supports_tools(alt))
+                    # LOCAL ONLY (v1.332.0): the default never stands in from
+                    # off this network. MIRROR NOTE (lock-step): stream() (A).
+                    and self._egress_ok(alt.provider)
                 ):
                     try:
                         response = await self._timed_complete(
@@ -1733,6 +1929,7 @@ class ModelRouter:
                         )
                     except Exception as dexc:  # noqa: BLE001 — the default failed too
                         self.health.record_failure(alt.provider)
+                        self._forget_answered(alt)  # v1.332.0
                         tried_ids.add(id(alt))
                         tried_providers.add(alt.provider)
                         await self.event_bus.publish(
@@ -1760,6 +1957,10 @@ class ModelRouter:
                         continue
                     if need_tools and not _supports_tools(alt):
                         continue
+                    # LOCAL ONLY (v1.332.0): never sideways off this network.
+                    # MIRROR NOTE (lock-step): stream() (B).
+                    if not self._egress_ok(alt.provider):
+                        continue
                     try:
                         response = await self._timed_complete(
                             alt, system=system, messages=messages, tools=tools
@@ -1782,6 +1983,7 @@ class ModelRouter:
                         )
                     except Exception:  # noqa: BLE001 — try the next candidate
                         self.health.record_failure(alt.provider)
+                        self._forget_answered(alt)  # v1.332.0
                         tried_ids.add(id(alt))
                         tried_providers.add(alt.provider)
                         continue
@@ -1977,6 +2179,12 @@ class ModelRouter:
         # request (MCP sampling) is answered by the turn's own model or not
         # at all — never sent to a fallback. MIRROR NOTE (lock-step).
         pinned = bool(provider) and provider != "auto" and (pin or self._strict_pin())
+        # LOCAL ONLY (v1.332.0): a primary that leaves this network is refused
+        # HERE, before any probe, breaker or attempt; the one the user allowed
+        # for this message is pinned (``egress_pin``). MIRROR NOTE (lock-step).
+        egress_pin = self._local_only_gate(
+            adapter, wanted, downgraded, auto_selected=auto_selected
+        )
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
             raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
@@ -1988,7 +2196,7 @@ class ModelRouter:
         # (_wrap_for_tools — MIRROR NOTE, lock-step with complete(): edit
         # both or neither), vision keeps the reroute. Under the pin the
         # user's pick keeps the request, tools offered RAW (no wrap).
-        if not pinned and not downgraded and adapter.provider != "mock":
+        if not pinned and not egress_pin and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
                 adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
@@ -2053,8 +2261,12 @@ class ModelRouter:
             ):
                 # v1.323.0: a `thinking` frame is display-only and commits
                 # nothing — only an answer frame closes the failover window.
-                if _is_answer_frame(frame):
+                if _is_answer_frame(frame) and not committed:
                     committed = True
+                    # It answered: noted at the FIRST answer frame (v1.332.0),
+                    # so a reply the user then Stopped still counts. MIRROR
+                    # NOTE (lock-step): complete() notes it after success.
+                    self._note_answered(adapter)
                 # Route disclosure rides the final frame (v1.165.0) — the
                 # stream twin of complete()'s RouteResult fields.
                 yield self._enrich_final(
@@ -2063,6 +2275,14 @@ class ModelRouter:
             self._record_stream_latency(adapter, t0)
             self.health.record_success(adapter.provider)
             return
+        except (asyncio.CancelledError, GeneratorExit):
+            # Stopped or dropped BEFORE the first answer frame (v1.332.0): the
+            # box never answered this call (it may be the reason the user
+            # pressed Stop), so the next call probes again. A stream that had
+            # answered stays trusted. MIRROR NOTE (lock-step): complete().
+            if not committed:
+                self._forget_answered(adapter)
+            raise
         except Exception as exc:  # noqa: BLE001 — classified below
             if committed:
                 # Already streaming this provider — never swap mid-stream. But
@@ -2072,6 +2292,9 @@ class ModelRouter:
                 if wrapped is None:
                     raise
                 raise wrapped from exc
+            # Any primary failure forgets "it just answered" (v1.332.0).
+            # MIRROR NOTE (lock-step): complete().
+            self._forget_answered(adapter)
             # IRON-PROXY ACCOUNTS (v1.301.0): never fallback (A) or failover (B)
             # on an account sentence, no breaker strike — except on an AUTO
             # turn (the user's one opted-in exception). MIRROR NOTE
@@ -2098,8 +2321,10 @@ class ModelRouter:
                 session_id=session_id,
             )
             # STRICT MODEL PIN: the explicit pick failed — surface ITS error
-            # verbatim rather than streaming from a different provider.
-            if pinned:
+            # verbatim rather than streaming from a different provider. The
+            # local-only one-message OK pins the same way (v1.332.0).
+            # MIRROR NOTE (lock-step): complete().
+            if pinned or egress_pin:
                 raise
             # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails over.
             # MIRROR NOTE (lock-step): complete() carries the identical guard.
@@ -2135,6 +2360,8 @@ class ModelRouter:
                 and id(alt) not in tried_ids
                 and alt.provider not in tried_providers
                 and (not need_tools or _supports_tools(alt))
+                # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (A).
+                and self._egress_ok(alt.provider)
             ):
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)
@@ -2167,6 +2394,7 @@ class ModelRouter:
                             raise
                         raise wrapped from dexc
                     self.health.record_failure(alt.provider)
+                    self._forget_answered(alt)  # v1.332.0
                     tried_ids.add(id(alt))
                     tried_providers.add(alt.provider)
                     await self.event_bus.publish(
@@ -2190,6 +2418,9 @@ class ModelRouter:
                 if id(alt) in tried_ids or alt.provider in tried_providers:
                     continue
                 if need_tools and not _supports_tools(alt):
+                    continue
+                # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (B).
+                if not self._egress_ok(alt.provider):
                     continue
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)
@@ -2220,6 +2451,7 @@ class ModelRouter:
                             raise
                         raise wrapped from sexc
                     self.health.record_failure(alt.provider)
+                    self._forget_answered(alt)  # v1.332.0
                     tried_ids.add(id(alt))
                     tried_providers.add(alt.provider)
                     continue

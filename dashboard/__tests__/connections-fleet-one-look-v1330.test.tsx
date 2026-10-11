@@ -404,7 +404,9 @@ describe("Iron-Proxy card: one look per account row", () => {
   it("the parked chip reads its reason after a middle dot, never a dash aside", async () => {
     await mountIron();
     const chip = within(accountRow("c")).getByTestId("iron-proxy-chip").textContent ?? "";
-    expect(chip).toMatch(/^Parked until \d{1,2}:\d{2}\s[AP]M · plan limit reached$/u);
+    // The fixture's time is fixed, so on a later day the chip names the date
+    // too ("Sat, Oct 10, 7:24 AM"); either way the reason follows a middle dot.
+    expect(chip).toMatch(/^Parked until (?:[^·—–]+, )?\d{1,2}:\d{2}\s[AP]M · plan limit reached$/u);
     expect(chip).not.toMatch(/[—–]/);
   });
 });

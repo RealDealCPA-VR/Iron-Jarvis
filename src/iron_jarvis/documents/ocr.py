@@ -572,6 +572,19 @@ def _vision_route_kwargs(router: Any, config: Any) -> "dict[str, Any]":
     return {}
 
 
+def local_only_ocr_note(name: str) -> str:
+    """The note a scan carries when a local-only chat could not read it
+    (v1.332.0): reading it needs *name*, a model off this PC, so nothing was
+    sent. It tells the answering model to say so, because this note is the
+    only way an unread attachment reaches the user."""
+    return (
+        f"scanned document — NOT read: this chat is local only, and reading"
+        f" this scan needs {name}, which is not on this PC, so nothing was sent."
+        " Tell the user this file was not read. They can pick a local model"
+        f" that can read images, or allow {name} for this one message"
+    )
+
+
 async def _transcribe(
     blobs: "list[bytes]",
     router: Any,
@@ -610,6 +623,16 @@ async def _transcribe(
         except Exception as exc:  # noqa: BLE001 — a provider fault ends OCR honestly
             if pages:
                 break  # keep what was already transcribed; the note discloses
+            # LOCAL ONLY (v1.332.0): the vision model that would read the scan
+            # is off this network and the chat is local only. Not a fault and
+            # not "connect a vision model": say what happened and what the user
+            # can do, in words the answering model passes on.
+            from ..providers.egress import friendly_name, refusal_of
+
+            refused = refusal_of(exc)
+            if refused is not None:
+                name = friendly_name(refused.provider, getattr(router, "manager", None))
+                return [], local_only_ocr_note(name)
             return [], (
                 "scanned document — OCR needs a vision-capable model and the "
                 f"current one failed ({type(exc).__name__}: {exc}); connect a "

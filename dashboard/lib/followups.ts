@@ -26,13 +26,24 @@ export const FOLLOWUP_MAX_SUGGESTIONS = 3;
 /** A suggestion longer than this is not a chip; it is cut. */
 const FOLLOWUP_MAX_SUGGESTION_CHARS = 300;
 
+/** The request body's shape. v1.332.0: `local_only` (sent only when on) and
+ *  `thread_id` let the daemon keep a "local only" chat's suggestions local. */
+export interface FollowupBody {
+  messages: FollowupMessage[];
+  provider?: string;
+  model?: string;
+  local_only?: boolean;
+  thread_id?: string;
+}
+
 /** The request body: the last six usable messages, each cut to 4000 chars.
  *  Pure — exported for the tests. */
 export function followupBody(
   messages: readonly FollowupMessage[],
   provider?: string,
   model?: string,
-): { messages: FollowupMessage[]; provider?: string; model?: string } {
+  chat: { localOnly?: boolean; threadId?: string } = {},
+): FollowupBody {
   const usable = (Array.isArray(messages) ? messages : []).filter(
     (m): m is FollowupMessage =>
       !!m &&
@@ -41,13 +52,15 @@ export function followupBody(
       typeof m.content === "string" &&
       m.content.trim().length > 0,
   );
-  const body: { messages: FollowupMessage[]; provider?: string; model?: string } = {
+  const body: FollowupBody = {
     messages: usable
       .slice(-FOLLOWUP_MAX_MESSAGES)
       .map((m) => ({ role: m.role, content: m.content.slice(0, FOLLOWUP_MAX_CHARS) })),
   };
   if (provider) body.provider = provider;
   if (model) body.model = model;
+  if (chat.localOnly) body.local_only = true;
+  if (chat.threadId) body.thread_id = chat.threadId;
   return body;
 }
 
@@ -76,10 +89,13 @@ export async function fetchFollowups(
   messages: readonly FollowupMessage[],
   provider?: string,
   model?: string,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; localOnly?: boolean; threadId?: string } = {},
 ): Promise<string[]> {
   try {
-    const body = followupBody(messages, provider, model);
+    const body = followupBody(messages, provider, model, {
+      localOnly: opts.localOnly,
+      threadId: opts.threadId,
+    });
     if (!body.messages.length) return [];
     const res = await post<unknown>("/chat/followups", body, {
       timeoutMs: 30_000,

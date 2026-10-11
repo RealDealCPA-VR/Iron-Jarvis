@@ -348,6 +348,16 @@ class ConfigWriter:
                 self.platform.providers.refresh_opencode()
             except Exception:  # noqa: BLE001
                 pass
+        if updated:
+            # v1.332.0: the model catalog is cached; a written setting (an
+            # endpoint, a default, a key name) rebuilds it on the next read.
+            # Called here, after the write, for apply AND restore alike.
+            try:
+                from ..daemon.routes.connections import invalidate_model_catalog
+
+                invalidate_model_catalog()
+            except Exception:  # noqa: BLE001 — the catalog's own expiry still applies
+                pass
 
     # ---------------------------------------------------------------- record
     def _journal(self, prior: dict[str, Any], *, actor: str, device_id: str, session_id: str) -> str:

@@ -1005,14 +1005,26 @@ def register(app: FastAPI, d) -> None:
             threads.add_participants(rec.id, clean_participants(resolved))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        # LOCAL ONLY (v1.332.0): the round runs under the chat's scope — the
+        # body's ``local_only``, or the saved chat (``thread_id``, else
+        # ``chat_thread_id``) says so. A seat whose model is off this network
+        # sits the round out with one plain line (``AgentThreads.run_round``).
+        from ...providers import egress as _egress
+
+        local_only = await _egress.effective_local_only(
+            d.platform.engine,
+            body.get("local_only") is True,
+            str(body.get("thread_id") or "").strip() or chat_thread_id,
+        )
         try:
-            round_out = await threads.run_round(
-                rec.id,
-                message,
-                d,
-                directed=[p["name"] for p in resolved],
-                chat_history=history,
-            )
+            with _egress.local_only_scope(local_only):
+                round_out = await threads.run_round(
+                    rec.id,
+                    message,
+                    d,
+                    directed=[p["name"] for p in resolved],
+                    chat_history=history,
+                )
         except KeyError:
             raise HTTPException(status_code=404, detail="panel thread vanished")
         except ValueError as exc:
@@ -2865,6 +2877,9 @@ def register(app: FastAPI, d) -> None:
             approval_mode=body.approval_mode
             or (str(getattr(rec, "approval_mode", "") or "") if rec is not None else ""),
             max_steps=getattr(rec, "max_steps", None) if rec is not None else None,
+            # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
+            # provider off this network is refused inside create_session (409).
+            options={"local_only": True} if getattr(body, "local_only", False) else None,
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and

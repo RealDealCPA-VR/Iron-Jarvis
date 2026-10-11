@@ -106,8 +106,9 @@ def test_text_only_pick_says_so_on_the_post_lane(client, monkeypatch):
     assert fake.seen_tools == []  # the daemon really offered nothing
     assert route["text_only"] is True
     assert route["label"] == _LABEL
-    # Additive: the two new keys are the LAST two of the route object.
-    assert list(route)[-2:] == ["label", "text_only"]
+    # Additive: the two new keys follow every older key; v1.332.0's
+    # local-only keys are appended after them.
+    assert list(route)[-4:] == ["label", "text_only", "local_only", "allowed_once"]
 
 
 def test_text_only_pick_says_so_on_the_stream_lane(client, monkeypatch):
@@ -119,7 +120,7 @@ def test_text_only_pick_says_so_on_the_stream_lane(client, monkeypatch):
     assert route["provider"] == _PID
     assert route["text_only"] is True
     assert route["label"] == _LABEL
-    assert list(route)[-2:] == ["label", "text_only"]
+    assert list(route)[-4:] == ["label", "text_only", "local_only", "allowed_once"]
 
 
 def test_a_model_that_can_use_tools_is_not_text_only(client, monkeypatch):

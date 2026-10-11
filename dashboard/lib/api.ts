@@ -72,11 +72,16 @@ export class ApiError extends Error {
    *  consumer keeps working, but this is not the daemon being unreachable
    *  and it fires no app-wide network signal. */
   cancelled: boolean;
-  constructor(message: string, status: number, cancelled = false) {
+  /** v1.332.0: the JSON body of a refused request, when it had one (a
+   *  "local only" 409 names the provider and model it did not send to).
+   *  Undefined otherwise; `message` stays the flattened `detail`. */
+  body?: unknown;
+  constructor(message: string, status: number, cancelled = false, body?: unknown) {
     super(message);
     this.status = status;
     this.cancelled = cancelled;
     this.name = "ApiError";
+    if (body !== undefined) this.body = body;
   }
 }
 
@@ -204,13 +209,15 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     // (a 4xx like 404/400/422 is a normal per-request condition the page handles —
     //  never flash a global banner for it)
     let detail = `${res.status} ${res.statusText}`;
+    let parsed: unknown;
     try {
       const body = await res.json();
+      parsed = body;
       if (body?.detail) detail = flattenDetail(body.detail);
     } catch {
       /* ignore */
     }
-    throw new ApiError(detail, res.status);
+    throw new ApiError(detail, res.status, false, parsed);
   }
   // A successful DATA response clears the error signals. Skip /health for BOTH: it
   // is auth-exempt (a bad token still 200s) AND it polls every 5s, so clearing on it

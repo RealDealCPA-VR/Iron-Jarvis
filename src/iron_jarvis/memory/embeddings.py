@@ -118,6 +118,20 @@ class OllamaEmbedder:
         return self._http
 
     def embed(self, text: str) -> list[float]:
+        # LOCAL ONLY (v1.332.0): an embedding request carries the text itself
+        # (a chat's question, an attachment's chunk). Under a local-only
+        # chat's scope it is never sent to a server off this network: it is
+        # refused HERE, at the one embedder that touches the network, as an
+        # EmbedderError, so every grounding caller takes its existing no-vector
+        # path (lexical scoring, or that store answers nothing). A cached
+        # vector (CachingEmbedder) still serves: it never leaves the PC.
+        from ..providers import egress as _egress
+
+        if _egress.current_scope().on and not _egress.private_host(self.base_url):
+            raise EmbedderError(
+                "this chat is local only and the embedding server is not on this"
+                " network, so nothing was sent to it"
+            )
         url = f"{self.base_url}/api/embeddings"
         try:
             resp = self._client().post(

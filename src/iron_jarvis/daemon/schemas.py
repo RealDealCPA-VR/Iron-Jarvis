@@ -118,6 +118,11 @@ class SessionCreate(BaseModel):
     # caller. A big job ("rename all 26 files in this folder") can ask for the
     # room it needs without raising the global default for every small task.
     max_steps: int | None = None
+    # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): a local-only chat's
+    # hand-off is a local-only session. Stored on the row (options_json),
+    # refused at creation (409) when the session's provider leaves this
+    # network, and inherited by every child run like ``inherited_trust``.
+    local_only: bool = False
 
     @field_validator("origin")
     @classmethod
@@ -392,6 +397,20 @@ class ChatBody(BaseModel):
     #: chat not saved yet). Read only to keep that chat out of
     #: ``thread_refs``; it grants and grounds nothing.
     thread_id: str = ""
+    #: v1.332.0 LOCAL ONLY: nothing in this turn may reach a model off the
+    #: user's own network (``providers/egress``). The turn is local only when
+    #: this is true OR the saved chat ``thread_id`` names says so — a client
+    #: that leaves it out cannot switch a saved local-only chat off.
+    local_only: bool = False
+    #: v1.332.0: the ONE cloud provider the user said yes to for THIS message
+    #: ("" = none). Honoured only when it equals the turn's chosen provider
+    #: and only for this turn; never remembered.
+    allow_cloud_once: str = ""
+
+    @field_validator("allow_cloud_once", mode="before")
+    @classmethod
+    def _allow_once_text(cls, v: Any) -> Any:
+        return "" if v is None else " ".join(str(v).split())[:80]
 
     @field_validator("thread_refs", mode="before")
     @classmethod
@@ -432,6 +451,10 @@ class ChatCompactBody(BaseModel):
     messages: list[ChatMessageBody]
     provider: str = ""
     model: str = ""
+    #: v1.332.0: compact a LOCAL-ONLY chat under its scope (``ChatBody.
+    #: local_only``'s rule: this OR the saved chat ``thread_id`` says so).
+    local_only: bool = False
+    thread_id: str = ""
 
 
 class ChatRememberBody(BaseModel):
@@ -445,6 +468,8 @@ class ChatRememberBody(BaseModel):
     source: str = ""  # LTM source name ("" = default brain)
     provider: str = ""  # distill-mode LLM override ("" = default)
     model: str = ""
+    #: v1.332.0: the chat is local only (OR its saved setup says so).
+    local_only: bool = False
 
 
 class ChatCrystallizeBody(BaseModel):
@@ -456,6 +481,8 @@ class ChatCrystallizeBody(BaseModel):
 
     provider: str = ""  # one-shot LLM override ("" = default)
     model: str = ""
+    #: v1.332.0: the chat is local only (OR its saved setup says so).
+    local_only: bool = False
 
 
 class DocumentOpenBody(BaseModel):
@@ -473,6 +500,8 @@ class ChatShareBody(BaseModel):
     format: str = "markdown"  # markdown | html (self-contained page)
     provider: str = ""  # compact-mode LLM override ("" = default)
     model: str = ""
+    #: v1.332.0: the chat is local only (OR its saved setup says so).
+    local_only: bool = False
 
 
 class ChatArchiveBody(BaseModel):
@@ -577,6 +606,11 @@ class BatchFolderBody(BaseModel):
     max_files: int = 25
     workspace_dir: str = ""
     session_id: str = "chat"
+    #: v1.332.0: the batch runs for a LOCAL-ONLY chat (this, OR the saved chat
+    #: ``thread_id`` names says so): every per-document model call stays on
+    #: this network, and a run that could only go off it is refused (409).
+    local_only: bool = False
+    thread_id: str = ""
 
 
 class SettingsBody(BaseModel):
@@ -1580,6 +1614,8 @@ class SpawnBody(BaseModel):
     # dynamic agent escalated from a folder-grounded chat works IN that folder.
     workspace_root: str = ""
     origin: str | None = None
+    # Same contract as SessionCreate.local_only (v1.332.0).
+    local_only: bool = False
 
     @field_validator("origin")
     @classmethod

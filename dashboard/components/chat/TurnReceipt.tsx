@@ -75,6 +75,7 @@ import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
 import { stepPhrase } from "@/lib/stepWords";
 import { cleanTarget } from "@/lib/workTarget";
+import { SENT_WITH_OK } from "@/lib/localOnly";
 import {
   folderRulesLine,
   refWarningCount,
@@ -189,6 +190,11 @@ export interface TurnRoute {
    *  the picked model has not shown it can use them (nothing was armed or
    *  offered). Daemon truth, never inferred here. */
   text_only?: boolean;
+  /** v1.332.0: the chat was "local only" for this turn (daemon truth). */
+  local_only?: boolean;
+  /** v1.332.0: the user allowed this ONE message to leave this PC (the
+   *  ask-first card's "Send once"); the receipt says "sent with your OK". */
+  allowed_once?: boolean;
 }
 
 /** v1.330.0: the "no tools" part's words on hover, and the expanded line. */
@@ -739,6 +745,16 @@ export function TurnReceipt({
           {servedName(rt)}
         </span>
       ),
+    );
+  }
+  if (rt?.allowed_once === true) {
+    // v1.332.0: a local-only chat sent this one message off this PC because
+    // the user said yes for it. Quiet, beside who answered: their choice,
+    // honoured, never a warning.
+    parts.push(
+      <span key="allowed-once" data-testid="turn-allowed-once" className="text-zinc-500">
+        {SENT_WITH_OK}
+      </span>,
     );
   }
   if (rt?.text_only === true) {

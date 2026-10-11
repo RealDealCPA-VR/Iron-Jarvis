@@ -2962,6 +2962,74 @@ does not need a bump, stop and bump it.
   raw id. Now a `waitFor` on the words; a 300 ms delay on the mocked /models
   reproduced CI's exact error.
 
+- **A LOCAL-ONLY chat keeps its content on this network; the catalog is
+  cached and asked all at once; a box that just answered is not probed**
+  (v1.332.0; the user: "a local toggle in the chat to indicate nothing hits
+  the cloud in a specific session without user permission" + "the speed fixes
+  as they apply to the current version"). LOCAL ONLY: `providers/egress.py` is
+  the ONE module — `stays_on_this_network(provider)` (local-kind AND the URL
+  host is loopback/RFC1918/link-local/CGNAT 100.64/10/ULA/single-label/.local
+  .lan .home.arpa .internal .ts.net, judged with NO DNS; a bare-number host is
+  judged as the address it spells; mock counts as local; no URL = cloud), the
+  `LOCAL_ONLY` ContextVar (`local_only_scope(on, allowed_once)`,
+  `scoped_frames` for a generator), `check_egress` → `LocalOnlyRefused`
+  (`no_failover`, `code="local_only"`, `payload()` = {detail, code, provider,
+  model}). The scope is SERVER-authoritative: effective = `body.local_only` OR
+  the saved thread's `setup.local_only` (`_clean_setup` stores only a real
+  true); `allow_cloud_once` counts only when it names the turn's chosen
+  provider and makes that call PINNED. Guarded: router `_local_only_gate`
+  (before breaker/probe), (A) default fallback and (B) sideways filtered,
+  `_enforce_capabilities_local`, Auto pool + the `_auto_route` classifier,
+  `_one_shot_complete`/`_failover_candidates`/`_compaction_complete`,
+  followups (empty, never an error), compact/share/remember/crystallize
+  (`_local_one_shot_pick`; remember keeps the excerpt), `/chat/panel` (a cloud
+  seat "sat this one out"; a remote seat only on a private host),
+  `/documents/batch`, sessions (`options_json.local_only`, refused at create,
+  runtime sets the scope, children inherit), the embedder (a public
+  `ollama_base_url` raises `EmbedderError` under the scope), OCR (a plain
+  "nothing was sent" note), thread refs + fabric chat recall + `history_search`
+  (local-only chats withheld from work that leaves the network),
+  `ltm_search`/`ltm_append`/grounding (local bases only; a named remote base
+  is refused). Tools: `INTERNET_TOOLS` are
+  never armed; `reaches_outside`/`ask_first_tools` (acting browser tools by
+  `min_access`, comm send, shell/run_code/repl/pane tools, custom command
+  tools, MCP pack tools, webhook_add/webhook_update) ALWAYS card in a local-only stream turn
+  — yolo and approve-for-me included, no tab/conversation/standing grant
+  skips it, `once_only` cards, wider answers read as once — and are not armed
+  in a local-only POST turn. Errors: stream `error` frame and HTTP 409 carry
+  `code/provider/model`; route objects end with `local_only`, `allowed_once`.
+  Dashboard: `lib/localOnly.ts`, the composer chip (`local-only-chip`, after
+  PermissionChip), ⋯ "Keep this chat on this PC", the DockAsk `cloud` card
+  (Send once / Keep it local) on EVERY send door, the refusal's "Send to X
+  once" / "Choose a local model", "sent with your OK" on the receipt, one menu
+  line. Known limits (Handbook): voice, read-aloud, saved memory/lessons, a
+  schedule made from the chat, post-run reflection, a LAN proxy that forwards
+  to a cloud, and an ESCALATED agent run's own approval cards (the runtime
+  lane does not force `once_only` cards; its model calls are still scoped). SPEED: `routes/connections.ModelCatalog` caches
+  `selectable_models` per platform (fingerprint = invalidation counter, fleet
+  `registry` revision (bumped only on a REAL change — the sampler absorbs
+  every pass), CLI presence generation, Claude catalog stamp, discovery
+  generation, the endpoint settings, and every `available()` answer
+  re-asked on each read; 60 s expiry served stale while one rebuild runs;
+  deep copies; ETag/304 on GET /models); invalidated by the settings writer,
+  connection routes (`_SLOT_TWINS`: custom/ollama and their fleet seed rows
+  clear together), rescan, fleet routes. Discovery runs concurrently (≤ 8,
+  merged in the old order), serves stale lists while refreshing, retries a
+  failed fetch after 60 s, connects with a 1.5 s cap, and fleet-* endpoints
+  are really asked (protocol-aware). Ollama is not probed with no binary/
+  OLLAMA_HOST/local setting (a miss remembered 30 s); Grok's `models`
+  subprocess is memoised 10 min by path+mtime; rescan forgets both
+  (`forget_detection_memos`). `AnthropicAdapter` reuses one SDK client per
+  (loop, key). `core/http.py` shares one TLS context. Router: a local box
+  whose `/v1/models` answered within `_LIVENESS_TRUST_S` (15 s) is not probed;
+  every failure path AND a cancel before the first answer forgets it. Chat
+  prep: `_PrepGroup` starts attachments/page/resources/refs/skill/folder/
+  arming together in BOTH lanes, each awaited at its old place (byte-identical
+  prompt, same phase frames, Stop/aclose cancel them, the unknown-skill 404
+  comes first). Pins: `tests/test_local_only_{chat,review,always_ask}_v1332.py`,
+  `tests/test_{catalog_speed,liveness_memo,prep_overlap}_v1332.py`,
+  `dashboard/__tests__/local-only-*-v1332.test.ts(x)`.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

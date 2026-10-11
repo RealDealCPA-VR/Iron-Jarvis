@@ -30,6 +30,15 @@ from .base import slugify
 from .manager import LongTermMemory
 
 
+def _local_only_refusal(source: str, done: str) -> str:
+    """The one sentence a local-only chat gets for a memory base that is not
+    on this PC (v1.332.0)."""
+    return (
+        f"This chat is local only, so nothing was {done} {source}: "
+        "that memory base is not on this PC."
+    )
+
+
 class LTMSearchTool(Tool):
     """Search long-term memory connectors (Obsidian / brain / Notion)."""
 
@@ -56,13 +65,25 @@ class LTMSearchTool(Tool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         k = int(args.get("k", 5))
         source = args.get("source")
+        # LOCAL ONLY (v1.332.0): in a local-only chat the query is the chat's
+        # own words, so only the bases that stay on this PC are searched (the
+        # rule grounding uses, `egress.local_ltm`); a remote base named
+        # outright is refused in a sentence rather than searched.
+        manager = self.manager
+        from ..providers import egress as _egress
+
+        if _egress.current_scope().on:
+            conn = manager.get(source) if source else None
+            if conn is not None and not _egress.ltm_connector_is_local(conn):
+                return ToolResult(ok=False, error=_local_only_refusal(source, "searched in"))
+            manager = _egress.local_ltm(manager)
         try:
             # OFF THE EVENT LOOP (v1.173.0): a remote base is a network call,
             # and the multi-term fallback can spend several passes. This tool
             # is on every agent definition now (the shared brain), so a slow
             # base here would stall the whole daemon, not just this session.
             hits = await asyncio.to_thread(
-                self.manager.search, args["query"], k, source
+                manager.search, args["query"], k, source
             )
         except Exception as exc:  # incl. a real embedder failing on a named source
             # Never raise into the agent loop: a flaky embedder / store degrades
@@ -220,6 +241,14 @@ class LTMAppendTool(Tool):
         source = args.get("source") or self.manager.default_source()
         if source is None:
             return ToolResult(ok=False, error="no LTM connector registered")
+        # LOCAL ONLY (v1.332.0): the note is the chat's own words, so in a
+        # local-only chat it goes only to a base on this PC.
+        from ..providers import egress as _egress
+
+        if _egress.current_scope().on:
+            conn = self.manager.get(source)
+            if conn is not None and not _egress.ltm_connector_is_local(conn):
+                return ToolResult(ok=False, error=_local_only_refusal(source, "written to"))
         try:
             ref = self.manager.append(args["title"], args["content"], source)
         except ValueError as exc:

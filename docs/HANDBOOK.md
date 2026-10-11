@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.331.0 (2026-10-04).*
+holds itself to. Current as of v1.332.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,66 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Local-only chats, and a faster app (v1.332.0)
+
+**Keep a chat on this PC.** The "Local only" chip under the message box (or
+⋯ → "Keep this chat on this PC") switches it on for that chat. While it is
+on, nothing from the chat goes to a model that runs off your own network
+unless you say yes for that one message.
+
+- **Picking a cloud model asks first.** Send with Claude, Codex, Grok or an
+  API model picked and the message box is replaced by "This chat is local
+  only. Send this message to <model>? It will leave this PC." Send once
+  (Enter) sends that one message; Keep it local (Esc) keeps your words in the
+  box. The next message asks again. A reply sent this way says "sent with your
+  OK" on its "answered by" line.
+- **Nothing switches on its own.** In a local-only chat a failing model never
+  falls back to your default or to another connected service, Auto only picks
+  among your own models, and a picture or scan that only a cloud model could
+  read is refused by name, with a "Send to <model> once" button.
+- **Where "your own network" ends.** Ollama, your custom endpoint and your
+  Fleet machines count as local only when their address is this PC, a private
+  network address, a Tailscale address or a plain machine name. A custom
+  endpoint pointed at an internet address (for example Ollama's cloud) counts
+  as cloud. A machine on your network that itself forwards to a cloud service
+  still counts as local; the app can only judge the address.
+- **What else stays home.** Web search and web fetch are switched off in a
+  local-only chat. Memory sources outside this PC are skipped. Follow-up
+  suggestions, summaries, Share, Commit to memory, Turn into workflow, the
+  summary-sheet card and @-mentioned agents all use local models only (an agent
+  that runs on a cloud model sits that round out and says so). An agent session
+  started from the chat stays local only, and so do its helpers. Another chat
+  that @-mentions a local-only chat, or searches past chats, does not get its
+  text.
+- **Tools that reach the internet always ask.** Browser control, sending a
+  message on a channel, shell commands and app packs show their approval card
+  in a local-only chat even when the chat is set to approve things for you.
+- **Not covered yet.** Voice dictation, read-aloud, memory notes and lessons you
+  already saved, a schedule made from the chat (it runs later without the rule),
+  and the background reflection after a session.
+
+**Faster.**
+
+- **The model menu stops waiting.** It no longer waits 1.5 seconds checking for
+  Ollama when Ollama is not installed, no longer re-runs Grok's 20-second model
+  listing on every load, asks every provider and machine at the same time, and
+  keeps the list ready between loads (a change to your connections, settings,
+  Fleet or sign-ins rebuilds it). A dead server gives up after 1.5 seconds.
+- **Fleet machines list their real models** instead of only their default one.
+- **Fewer health checks.** A local model that answered in the last 15 seconds
+  is not checked again before the next step, so a turn with several tool steps
+  checks once. A model that fails is checked again (and refused by name) on
+  the next call.
+- **A turn gets ready sooner.** Attachments, page text, app resources, linked
+  chats, the skill, the folder and the tools are prepared at the same time
+  instead of one after another. What the model is sent is unchanged.
+- **API-key Claude calls reuse their connection** instead of opening a new one
+  every step.
+
+Also in this release: "Retry with the default model" now really uses your
+default model (it resent to the model that had just failed). And v1.331.0 made
+the Settings cards about 30% wider.
 
 ## The calm chat, finished (v1.330.0)
 

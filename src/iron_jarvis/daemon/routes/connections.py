@@ -7,19 +7,266 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import copy
 import html as _html
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 from ...providers.reasoning import reasoning_default, reasoning_levels
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, Callable
 
+from ...core import http as _http
 from ..schemas import ConnectionKeyBody, EndpointModelsBody, OAuthCompleteBody
+
+
+# --------------------------------------------------------------------------- #
+#  The model catalog cache (v1.332.0)
+# --------------------------------------------------------------------------- #
+
+#: Bumped by :func:`invalidate_model_catalog` — every change that can change a
+#: catalog row and is not visible in the fingerprint itself (a key saved, a
+#: setting written, Re-detect, an endpoint added, an Iron-Proxy account list).
+_CATALOG_GEN = 0
+_CATALOG_GEN_LOCK = threading.Lock()
+#: The most discovery calls asked at once while a catalog is built.
+_DISCOVERY_WORKERS = 8
+#: The Ollama and Custom settings slots are listed twice: as their own provider
+#: and as a fleet endpoint (``fleet/registry.seeded``), which reads the same
+#: vault key (``custom_api_key``). A change to one is a change to both.
+_SLOT_TWINS = {
+    "ollama": "fleet-ollama",
+    "custom": "fleet-custom",
+    "fleet-ollama": "ollama",
+    "fleet-custom": "custom",
+}
+
+
+def invalidate_model_catalog(*, discovery: bool = False, provider: str = "") -> None:
+    """Make the next catalog read rebuild (v1.332.0). ``discovery=True`` also
+    forgets the live model lists (only ``provider``'s, and its settings-slot
+    twin's, when one is named), so the rebuild asks those servers again
+    (Re-detect, a connection or an endpoint changed). Returns at once."""
+    global _CATALOG_GEN
+    with _CATALOG_GEN_LOCK:
+        _CATALOG_GEN += 1
+    if discovery:
+        try:
+            from ...providers import discovery as _discovery
+
+            _discovery.clear(provider)
+            twin = _SLOT_TWINS.get(provider)
+            if twin:
+                _discovery.clear(twin)
+        except Exception:  # noqa: BLE001 — an invalidation never breaks a route
+            pass
+
+
+class _AvailabilitySnapshot:
+    """The provider manager, with ``available`` / ``inherited_from`` asked at
+    most ONCE per provider during one catalog build (v1.332.0).
+
+    The old build asked ``available()`` once per ROW (vault reads each time)
+    and could stamp two rows of one provider with two different answers if a
+    sign-in landed mid-build. The answers it recorded are also the catalog's
+    fingerprint: the cached rows are served only while every one of them still
+    reads the same, so a provider that goes away is never shown as available
+    from the cache, and one that comes back is never hidden by it. Everything
+    else passes through to the manager."""
+
+    def __init__(self, providers: Any) -> None:
+        self._p = providers
+        self._lock = threading.Lock()
+        self.availability: dict[str, bool] = {}
+        self.inherited: dict[str, Any] = {}
+
+    def available(self, name: str) -> bool:
+        with self._lock:
+            if name in self.availability:
+                return self.availability[name]
+        value = bool(self._p.available(name))
+        with self._lock:
+            return self.availability.setdefault(name, value)
+
+    def inherited_from(self, name: str) -> Any:
+        with self._lock:
+            if name in self.inherited:
+                return self.inherited[name]
+        value = self._p.inherited_from(name)
+        with self._lock:
+            return self.inherited.setdefault(name, value)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._p, attr)
+
+
+def _ask(fn: Callable[[str], Any], name: str) -> Any:
+    try:
+        return ("ok", fn(name))
+    except Exception as exc:  # noqa: BLE001 — a fault is an answer that differs
+        return ("error", type(exc).__name__)
+
+
+class _CatalogEntry:
+    __slots__ = ("gens", "availability", "inherited", "rows", "at")
+
+    def __init__(self, gens: tuple, snap: _AvailabilitySnapshot, rows: list, at: float) -> None:
+        self.gens = gens
+        self.availability = {n: ("ok", v) for n, v in snap.availability.items()}
+        self.inherited = {n: ("ok", v) for n, v in snap.inherited.items()}
+        self.rows = rows
+        self.at = at
+
+
+class ModelCatalog:
+    """``selectable_models`` for one platform, built once and shared by
+    ``GET /models``, the templates' requirement check and the browser
+    sidebar (v1.332.0).
+
+    A read serves the cached rows while the FINGERPRINT still matches — the
+    generations of everything that changes rows (:func:`invalidate_model_catalog`,
+    the fleet registry's revision, the CLI presence memo, the Claude catalog,
+    discovery, the endpoint settings) AND every availability answer the build
+    used. A mismatch rebuilds before answering. A match older than
+    :attr:`ttl_s` is served as it is while ONE rebuild runs behind it. Builds
+    are single-flight, and every caller gets its own deep copy (callers edit
+    rows)."""
+
+    ttl_s = 60.0
+
+    def __init__(self, platform: Any) -> None:
+        self._lock = threading.Lock()  # _entry and _refreshing
+        self._build_lock = threading.Lock()  # one build at a time
+        self._entry: _CatalogEntry | None = None
+        self._refreshing = False
+        #: How many times the rows were built (tests count these).
+        self.builds = 0
+        iron_proxy = getattr(platform, "iron_proxy", None)
+        listen = getattr(iron_proxy, "add_accounts_listener", None)
+        if callable(listen):
+            try:
+                listen(invalidate_model_catalog)
+            except Exception:  # noqa: BLE001 — the fingerprint still covers availability
+                pass
+
+    @staticmethod
+    def _gens(d) -> tuple:
+        from ...providers import claude_models, discovery
+        from ...providers import manager as _manager
+
+        cfg = d.platform.config
+        fleet = getattr(d, "fleet", None)
+        return (
+            _CATALOG_GEN,
+            getattr(fleet, "revision", None),
+            _manager._CLI_PRESENCE_GEN,  # noqa: SLF001
+            getattr(claude_models, "_mem_at", None),
+            discovery.generation(),
+            getattr(cfg, "ollama_base_url", None),
+            getattr(cfg, "ollama_model", None),
+            getattr(cfg, "custom_base_url", None),
+            getattr(cfg, "custom_model", None),
+        )
+
+    def _matches(self, d, entry: _CatalogEntry) -> bool:
+        if self._gens(d) != entry.gens:
+            return False
+        providers = d.platform.providers
+        for name, answer in entry.availability.items():
+            got = _ask(providers.available, name)
+            if got[0] == "ok":
+                got = ("ok", bool(got[1]))
+            if got != answer:
+                return False
+        for name, answer in entry.inherited.items():
+            if _ask(providers.inherited_from, name) != answer:
+                return False
+        return True
+
+    def rows(self, d) -> list[dict[str, Any]]:
+        entry = self._entry
+        if entry is not None and self._matches(d, entry):
+            if time.monotonic() - entry.at >= self.ttl_s:
+                self._refresh_behind(d)
+            return copy.deepcopy(entry.rows)
+        return copy.deepcopy(self._build(d).rows)
+
+    #: Providers whose rows come from on-disk DETECTION rather than from
+    #: ``available()`` (the Grok CLI) or are decided by it (the subscription
+    #: CLIs): asked before every build so a sign-in or sign-out moves the
+    #: fingerprint even when no curated row names them.
+    _WATCHED = ("grok-cli", "claude-cli", "codex-cli")
+
+    def _build(self, d) -> _CatalogEntry:
+        with self._build_lock:
+            entry = self._entry
+            if (
+                entry is not None
+                and time.monotonic() - entry.at < self.ttl_s
+                and self._matches(d, entry)
+            ):
+                return entry  # built while this caller waited for the lock
+            gens = self._gens(d)  # BEFORE the build: a change during it rebuilds
+            snap = _AvailabilitySnapshot(d.platform.providers)
+            for name in self._WATCHED:
+                try:
+                    snap.available(name)
+                except Exception:  # noqa: BLE001 — not watched, then
+                    pass
+            rows = build_selectable_models(d, providers=snap)
+            entry = _CatalogEntry(gens, snap, rows, time.monotonic())
+            with self._lock:
+                self._entry = entry
+                self.builds += 1
+            return entry
+
+    def _refresh_behind(self, d) -> None:
+        with self._lock:
+            if self._refreshing:
+                return
+            self._refreshing = True
+
+        def _run() -> None:
+            try:
+                self._build(d)
+            except Exception:  # noqa: BLE001 — the next read builds in the open
+                import logging
+
+                logging.getLogger(__name__).debug(
+                    "background model catalog build failed", exc_info=True
+                )
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        try:
+            threading.Thread(target=_run, name="model-catalog", daemon=True).start()
+        except Exception:  # noqa: BLE001
+            with self._lock:
+                self._refreshing = False
+
+
+_CATALOGS_LOCK = threading.Lock()
+
+
+def model_catalog(d) -> ModelCatalog:
+    """The platform's one :class:`ModelCatalog` (made on first use)."""
+    platform = d.platform
+    cat = getattr(platform, "_model_catalog", None)
+    if isinstance(cat, ModelCatalog):
+        return cat
+    with _CATALOGS_LOCK:
+        cat = getattr(platform, "_model_catalog", None)
+        if not isinstance(cat, ModelCatalog):
+            cat = ModelCatalog(platform)
+            platform._model_catalog = cat  # noqa: SLF001
+        return cat
 
 
 def selectable_models(d) -> list[dict[str, Any]]:
@@ -27,9 +274,39 @@ def selectable_models(d) -> list[dict[str, Any]]:
 
     Extracted from GET /models (v1.128.0) so the templates requirements
     engine checks pinned models against EXACTLY what the pickers show —
-    a narrower list would raise false “not connected” warnings."""
+    a narrower list would raise false “not connected” warnings.
+
+    v1.332.0: served from the platform's :class:`ModelCatalog` (the same
+    rows, in the same order, built by :func:`build_selectable_models`); the
+    caller owns the list it gets."""
+    return model_catalog(d).rows(d)
+
+
+def _run_concurrently(jobs: list[Callable[[], Any]]) -> list[Any]:
+    """Run ``jobs`` at once (at most :data:`_DISCOVERY_WORKERS`) and return
+    their results IN THE ORDER GIVEN. A job that raises answers its exception."""
+
+    def _safe(job: Callable[[], Any]) -> Any:
+        try:
+            return job()
+        except Exception as exc:  # noqa: BLE001 — merged as "nothing learned"
+            return exc
+
+    if len(jobs) <= 1:
+        return [_safe(j) for j in jobs]
+    with ThreadPoolExecutor(
+        max_workers=min(_DISCOVERY_WORKERS, len(jobs)), thread_name_prefix="model-discovery"
+    ) as pool:
+        return list(pool.map(_safe, jobs))
+
+
+def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]:
+    """The catalog rows, built NOW (uncached). ``providers`` defaults to the
+    platform's manager; the cache passes an :class:`_AvailabilitySnapshot`."""
     from ...agents.dynamic import available_models
 
+    if providers is None:
+        providers = d.platform.providers
     # Hide the internal offline 'mock' model — not a selectable option in
     # the pickers (it stays the engine's silent fallback).
     models = [m for m in available_models() if m.get("provider") != "mock"]
@@ -47,8 +324,8 @@ def selectable_models(d) -> list[dict[str, Any]]:
     # hardware. Its hosted tier and any paid passthrough alias are excluded
     # upstream, so a picker can never offer a model this provider refuses.
     try:
-        if d.platform.providers.available("opencode-cli"):
-            for entry in d.platform.providers._opencode_allowed():  # noqa: SLF001
+        if providers.available("opencode-cli"):
+            for entry in providers._opencode_allowed():  # noqa: SLF001
                 models.append({"provider": "opencode-cli", "model": entry})
     except Exception:  # noqa: BLE001 — a picker never breaks on detection
         pass
@@ -56,24 +333,56 @@ def selectable_models(d) -> list[dict[str, Any]]:
     # (cached ~10 min). Discovered ids are ADDED; curated ids drop only when
     # the live list is non-empty (a failed probe — e.g. an OAuth token that
     # can't list models — degrades safely to the curated set).
-    from ...providers.discovery import discover_models
+    # v1.332.0: every provider below AND every fleet endpoint is asked AT THE
+    # SAME TIME (they were asked one after another, so a picker load waited
+    # for the sum of every server's answer); the answers are merged in the
+    # original order, so the rows are exactly what the serial loop produced.
+    from ...providers import discovery as _discovery
 
+    discovering: list[str] = []
     for prov in ("anthropic", "openai", "openrouter", "ollama", "custom"):
         try:
-            if not d.platform.providers.available(prov):
-                continue
-            live = discover_models(
-                prov,
-                lambda p=prov: d.platform.providers._cred(p),  # noqa: SLF001
-                base_url=(
-                    cfg.ollama_base_url
-                    if prov == "ollama"
-                    else cfg.custom_base_url
-                    if prov == "custom"
-                    else ""
-                ),
+            if providers.available(prov):
+                discovering.append(prov)
+        except Exception:  # noqa: BLE001 — discovery must never break the picker
+            continue
+    try:
+        nodes = list(d.fleet.routable_nodes())
+    except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
+        nodes = []
+
+    def _provider_job(prov: str) -> Callable[[], Any]:
+        return lambda: _discovery.discover_models(
+            prov,
+            lambda p=prov: providers._cred(p),  # noqa: SLF001
+            base_url=(
+                cfg.ollama_base_url
+                if prov == "ollama"
+                else cfg.custom_base_url
+                if prov == "custom"
+                else ""
+            ),
+        )
+
+    def _node_job(node: Any) -> Callable[[], Any]:
+        def _cred(n=node):  # noqa: ANN202 — the node's vault key, read when asked
+            return d.platform.secrets.get(n.api_key_name) if n.api_key_name else None
+
+        protocol = getattr(node, "protocol", "openai") or "openai"
+        if protocol == "openai":
+            return lambda: _discovery.discover_models(
+                f"fleet-{node.id}", _cred, base_url=node.base_url
             )
-            if not live:
+        return lambda: _discovery.discover_models(
+            f"fleet-{node.id}", _cred, base_url=node.base_url, protocol=protocol
+        )
+
+    answers = _run_concurrently(
+        [_provider_job(p) for p in discovering] + [_node_job(n) for n in nodes]
+    )
+    for prov, live in zip(discovering, answers[: len(discovering)]):
+        try:
+            if isinstance(live, Exception) or not live:
                 continue
             live_set = set(live)
             models = [
@@ -90,25 +399,14 @@ def selectable_models(d) -> list[dict[str, Any]]:
     # provider ("fleet-<id>"), so EVERY endpoint the user added shows in
     # every picker — not just the single legacy custom slot. `name` carries
     # the user's label so pickers can render it instead of the raw id.
-    # Per-endpoint live discovery reuses the same URL-keyed cache.
+    # Per-endpoint live discovery reuses the same URL-keyed cache, asked the
+    # way the endpoint chats (v1.332.0: it was never actually asked before);
+    # an endpoint that lists nothing keeps its default model.
     try:
-        for node in d.fleet.routable_nodes():
+        for node, ids in zip(nodes, answers[len(discovering):]):
             prov = f"fleet-{node.id}"
             label = node.label or node.id
-            ids: list[str] = []
-            try:
-                ids = discover_models(
-                    prov,
-                    lambda n=node: (
-                        d.platform.secrets.get(n.api_key_name)
-                        if n.api_key_name
-                        else None
-                    ),
-                    base_url=node.base_url,
-                )
-            except Exception:  # noqa: BLE001 — discovery never breaks the picker
-                ids = []
-            if not ids:
+            if isinstance(ids, Exception) or not ids:
                 ids = [node.default_model or "default"]
             for mid in ids:
                 models.append(
@@ -131,7 +429,7 @@ def selectable_models(d) -> list[dict[str, Any]]:
     # are checked against this list). Never blocks: claude_catalog() serves
     # the cache and refreshes behind it.
     try:
-        models = _with_claude_catalog(d, models)
+        models = _with_claude_catalog(d, models, providers=providers)
     except Exception:  # noqa: BLE001 — the picker never breaks on the catalog
         pass
     # Honesty flag: which entries the user can ACTUALLY run right now
@@ -139,7 +437,7 @@ def selectable_models(d) -> list[dict[str, Any]]:
     # and grey/hide the rest — no more dead options that silently fail.
     for m in models:
         try:
-            m["available"] = bool(d.platform.providers.available(m["provider"]))
+            m["available"] = bool(providers.available(m["provider"]))
         except Exception:  # noqa: BLE001
             m["available"] = False
     # Locally-installed CLI providers (e.g. the `grok` CLI) are DETECTED on
@@ -149,7 +447,7 @@ def selectable_models(d) -> list[dict[str, Any]]:
     try:
         from ...providers.cli_detect import detect_cli_providers
 
-        for dm in detect_cli_providers():
+        for dm in detect_cli_providers(configured={"ollama": cfg.ollama_base_url}):
             models.append(
                 {
                     "provider": dm.provider,
@@ -183,7 +481,7 @@ def selectable_models(d) -> list[dict[str, Any]]:
         # CLI is flat-rate — the picker says "included", not "metered". Same
         # answer /health and /connections give (manager.inherited_from).
         try:
-            m["inherited_from"] = d.platform.providers.inherited_from(prov)
+            m["inherited_from"] = providers.inherited_from(prov)
         except Exception:  # noqa: BLE001 — never breaks the picker
             m["inherited_from"] = None
         # v1.263.0: the reasoning levels this model offers (empty = none), so
@@ -273,8 +571,11 @@ def _claude_block(
     return block
 
 
-def _with_claude_catalog(d, models: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    providers = d.platform.providers
+def _with_claude_catalog(
+    d, models: list[dict[str, Any]], *, providers: Any = None
+) -> list[dict[str, Any]]:
+    if providers is None:
+        providers = d.platform.providers
     catalog_fn = getattr(providers, "claude_catalog", None)
     if not callable(catalog_fn):
         return models
@@ -445,7 +746,7 @@ def _probe_endpoint_models(base_url: str, key: str, *, timeout_s: float) -> dict
     if key:
         headers["Authorization"] = f"Bearer {key}"
     saw: set[str] = set()
-    with httpx.Client(follow_redirects=False) as client:
+    with _http.client(follow_redirects=False) as client:  # v1.332.0: shared TLS context
         for url in _model_list_urls(base_url):
             left = deadline - time.monotonic()
             if left <= 0:
@@ -559,7 +860,7 @@ def _probe_anthropic_models(base_url: str, key: str, *, timeout_s: float) -> dic
             "partial": partial,
         }
 
-    with httpx.Client(follow_redirects=False) as client:
+    with _http.client(follow_redirects=False) as client:  # v1.332.0: shared TLS context
         for page in range(_ANTHROPIC_MAX_PAGES):
             first = page == 0
             left = deadline - time.monotonic()
@@ -670,6 +971,8 @@ def register(app: FastAPI, d) -> None:
             rec = d.platform.connections.set_api_key(provider, body.key)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0: a new key, new rows
         promoted = d._maybe_autopromote_default(rec.provider)
         return {"provider": rec.provider, "status": rec.status, "promoted_default": promoted}
 
@@ -677,11 +980,17 @@ def register(app: FastAPI, d) -> None:
     async def connect_test(provider: str) -> dict[str, Any]:
         # test() may do a real network probe (when wired) → run it off the event
         # loop so a slow provider can't stall the daemon.
-        return await asyncio.to_thread(d.platform.connections.test, provider)
+        try:
+            return await asyncio.to_thread(d.platform.connections.test, provider)
+        finally:
+            invalidate_model_catalog()  # v1.332.0: a test can change a status
 
     @app.delete("/connections/{provider}")
     def connect_disconnect(provider: str) -> dict[str, Any]:
-        d.platform.connections.disconnect(provider)
+        try:
+            d.platform.connections.disconnect(provider)
+        finally:
+            invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0
         return {"provider": provider, "status": "disconnected"}
 
     @app.get("/oauth/{provider}/start")
@@ -703,7 +1012,10 @@ def register(app: FastAPI, d) -> None:
                 old.stop()
 
             def _complete(code: str, state: str, _p: str = provider) -> None:
-                d.platform.connections.complete_oauth(_p, code=code, state=state)
+                try:
+                    d.platform.connections.complete_oauth(_p, code=code, state=state)
+                finally:
+                    invalidate_model_catalog(discovery=True, provider=_p)  # v1.332.0
                 d._maybe_autopromote_default(_p)
 
             srv = OAuthLoopbackServer(
@@ -736,6 +1048,8 @@ def register(app: FastAPI, d) -> None:
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0
         promoted = d._maybe_autopromote_default(provider)
         return {
             "provider": rec.provider,
@@ -746,7 +1060,10 @@ def register(app: FastAPI, d) -> None:
     @app.get("/oauth/{provider}/callback")
     def oauth_callback(provider: str, code: str = "", state: str = "") -> HTMLResponse:
         try:
-            d.platform.connections.complete_oauth(provider, code=code, state=state)
+            try:
+                d.platform.connections.complete_oauth(provider, code=code, state=state)
+            finally:
+                invalidate_model_catalog(discovery=True, provider=provider)  # v1.332.0
             d._maybe_autopromote_default(provider)
             msg, ok = f"Connected to {provider}. You can close this window.", True
         except Exception as exc:  # noqa: BLE001
@@ -781,8 +1098,15 @@ def register(app: FastAPI, d) -> None:
         )
 
     @app.get("/models")
-    def list_models() -> dict[str, Any]:
-        return {"models": selectable_models(d)}
+    def list_models(request: Request) -> Response:
+        """The catalog (v1.332.0: cached, see :class:`ModelCatalog`), with a
+        weak ETag and a bodiless 304 when ``If-None-Match`` names this content
+        — the same answer ``GET /sessions`` gives (``_etagged_json``). The
+        dashboard's ``useApi`` sends the tag it holds, so a picker that
+        revalidates an unchanged catalog costs no body."""
+        from .sessions import _etagged_json
+
+        return _etagged_json({"models": selectable_models(d)}, request)
 
     @app.post("/providers/rescan")
     def rescan_cli_providers() -> dict[str, Any]:
@@ -792,15 +1116,22 @@ def register(app: FastAPI, d) -> None:
         next time any picker fetches ``/models``, but this lets the dashboard
         force an immediate refresh (and is what the periodic boot loop calls).
         """
-        from ...providers.cli_detect import detect_cli_providers
+        from ...providers.cli_detect import detect_cli_providers, forget_detection_memos
         from ...providers.manager import invalidate_cli_presence
 
         # v1.311.0 review: the PATH lookup is memoised now (cli-binary-probe-
         # uncached-on-loop), so a CLI installed a moment ago would read "not
         # installed" until its entry expired. Re-detect means LOOK AGAIN: drop
         # the memo first (a sync route on the threadpool, so the scan is fine).
+        # v1.332.0: and every other memo the catalog leans on: the Ollama
+        # "not answering" and Grok fallback memos, every live model list, and
+        # the catalog itself (again at the end, after the sign-in probes).
         invalidate_cli_presence()
-        detected = detect_cli_providers()
+        forget_detection_memos()
+        invalidate_model_catalog(discovery=True)
+        detected = detect_cli_providers(
+            configured={"ollama": getattr(d.platform.config, "ollama_base_url", None)}
+        )
         rows = [dm.as_dict() for dm in detected]
         # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
         # (blocking is fine — this is a sync route on the threadpool), so
@@ -828,6 +1159,7 @@ def register(app: FastAPI, d) -> None:
                 )
         except Exception:  # noqa: BLE001 — a probe fault never breaks the rescan
             pass
+        invalidate_model_catalog()
         return {"detected": rows}
 
     @app.post("/providers/endpoint-models")

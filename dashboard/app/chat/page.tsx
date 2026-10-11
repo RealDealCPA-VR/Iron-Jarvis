@@ -71,6 +71,7 @@ import {
   FolderPen,
   GitBranch,
   Globe,
+  House,
   Loader2,
   MessageSquare,
   Mic,
@@ -296,6 +297,21 @@ import {
 import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
 import { CONTINUE_PROMPT, mergeContinuation } from "@/lib/continueReply";
 import { canRetryWithDefault, providerTrouble } from "@/lib/providerFallback";
+import {
+  LOCAL_ONLY_MENU_ROW,
+  LOCAL_ONLY_MODEL_MENU_LINE,
+  LOCAL_ONLY_TITLE_OFF,
+  LOCAL_ONLY_TITLE_ON,
+  cloudAskFor,
+  cloudModelName,
+  firstModelFor,
+  localOnlyRefusalFrom,
+  readLocalOnlyDefault,
+  turnModel,
+  writeLocalOnlyDefault,
+  type CloudAsk,
+  type LocalOnlyRefusal,
+} from "@/lib/localOnly";
 import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import { ModelRowChips, modelText } from "@/components/ModelRowBits";
@@ -697,6 +713,8 @@ type ChatRequestBody = {
   mcp_cards?: boolean; // v1.324.0: this page draws the apps' question/model-request cards
   page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
   thread_refs?: string[]; // v1.328.0: "@" → saved chats read as reference material (≤ 3 ids)
+  local_only?: boolean; // v1.332.0: this chat is "local only" (sent every turn)
+  allow_cloud_once?: string; // v1.332.0: the ONE provider the user let this turn reach
 };
 interface ChatResponse {
   reply: string;
@@ -1134,6 +1152,10 @@ interface ThreadSetup {
    *  daemon honours a name only when that turn armed it by some other path.
    *  Uncapped — it holds no arming slot. */
   granted_tools?: string[];
+  /** v1.332.0: "Local only": nothing in this chat leaves this PC without the
+   *  user's OK for that one message. The daemon stores `true` only (absent =
+   *  off) and enforces it for every later turn of a saved chat. */
+  local_only?: boolean;
 }
 
 /** The three approval postures (v1.188.0). Since v1.327.0 the words and the
@@ -3602,6 +3624,27 @@ export default function ChatPage() {
       /* storage unavailable — the default stands */
     }
   }, []);
+  // v1.332.0: "LOCAL ONLY". Wired like the posture above: hydrated from the
+  // user's last choice after mount, a thread's saved setup overrides it on
+  // open, New chat returns to the last choice, and a change persists with the
+  // thread. The ref is what sends and saves read (they fire from stale
+  // closures); `setLocalOnlyNow` writes both.
+  const [localOnly, setLocalOnly] = useState(false);
+  const localOnlyRef = useRef(false);
+  function setLocalOnlyNow(on: boolean) {
+    localOnlyRef.current = on;
+    setLocalOnly(on);
+  }
+  useEffect(() => {
+    setLocalOnlyNow(readLocalOnlyDefault());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, after mount
+  }, []);
+  // v1.332.0: the send waiting on the ask-first card (drawn in the dock), and
+  // the daemon's refusal of the last turn (shown with its two actions).
+  const [cloudAsk, setCloudAsk] = useState<
+    (CloudAsk & { id: string; proceed: () => void; keep: () => void }) | null
+  >(null);
+  const [localRefusal, setLocalRefusal] = useState<LocalOnlyRefusal | null>(null);
   // Bumped on every USER edit to the thread setup (tools/skill/workspace/model)
   // — drives the persist-on-change effect below. Restores never bump it, so
   // merely opening a thread can't churn its updated_at with an echo save.
@@ -5212,6 +5255,9 @@ export default function ChatPage() {
       workspace_dir: workspaceDir ?? "",
       provider: provider ?? "",
       model: model ?? "",
+      // v1.332.0: "Local only", via the ref (a turn's end save runs in its
+      // start closure). The daemon stores true only; false reads as absent.
+      local_only: localOnlyRef.current,
       approval_mode: approvalMode,
       reasoning,
     };
@@ -5224,6 +5270,18 @@ export default function ChatPage() {
     sendSetupRef.current = true;
     setupEditsRef.current += 1;
     setSetupVersion((v) => v + 1);
+  }
+
+  /** v1.332.0: flip "Local only" for this chat. Like the posture: it is this
+   *  conversation's setting (saved with its setup) AND the user's choice for
+   *  new chats. Turning it off closes a waiting ask-first card ("Keep it
+   *  local" semantics: nothing is sent, the words stay in the box). */
+  function toggleLocalOnly() {
+    const on = !localOnlyRef.current;
+    setLocalOnlyNow(on);
+    writeLocalOnlyDefault(on);
+    if (!on) setCloudAsk(null);
+    markSetupChanged();
   }
 
   /** "Allow for this conversation" on an approval card (chat's mid-turn ask and
@@ -5497,6 +5555,8 @@ export default function ChatPage() {
     } catch {
       setApprovalMode("approve_for_me");
     }
+    // v1.332.0: so does "Local only": the user's last choice.
+    setLocalOnlyNow(readLocalOnlyDefault());
     threadDocsRef.current = [];
     setThreadDocs([]);
     sendSetupRef.current = false;
@@ -5547,6 +5607,9 @@ export default function ChatPage() {
       // on — a YOLO thread reopening as ask-everything would re-card work
       // the user already waved through.
       setApprovalMode(asApprovalMode(setup.approval_mode));
+      // v1.332.0: the chat comes back local only exactly when it was saved so
+      // (the daemon stores true only; absent = off).
+      setLocalOnlyNow(setup.local_only === true);
       // Thread-local restore: the panel points at this conversation's folder
       // without touching the localStorage default (New chat returns to it).
       setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
@@ -6963,6 +7026,8 @@ export default function ChatPage() {
   const dockAsks = useMemo(
     () =>
       collectDockAsks({
+        // v1.332.0: the page's own ask-first card ("local only").
+        cloud: cloudAsk,
         approval: chatBusy ? stream.approval : null,
         mcpAsks: chatBusy ? stream.mcpAsks : null,
         sessionApprovals: awaiting
@@ -6977,7 +7042,7 @@ export default function ChatPage() {
             }))
           : null,
       }),
-    [chatBusy, stream.approval, stream.mcpAsks, awaiting, sessionAsks],
+    [cloudAsk, chatBusy, stream.approval, stream.mcpAsks, awaiting, sessionAsks],
   );
   const askInDock = dockAsks.length > 0;
   // The question answered and the card gone: the caret goes back to the box.
@@ -7134,6 +7199,10 @@ export default function ChatPage() {
           ? { provider: splitChoice(choice).provider }
           : {}),
         ...(splitChoice(choice).model ? { model: splitChoice(choice).model } : {}),
+        // v1.332.0: a "local only" chat is summarized on a local model, or
+        // the daemon refuses (409) and the sentence shows below.
+        ...(localOnlyRef.current ? { local_only: true } : {}),
+        ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
       });
       setContextUsage((u) =>
         u ? { ...u, level: "ok", compacted: true, covers: res.covers } : u,
@@ -7246,6 +7315,10 @@ export default function ChatPage() {
       // so a level chosen for one model never rides a request to another and
       // a pre-v1.263.0 daemon sees a body it already understands.
       ...(reasoning && reasoningLevelsFor(turnChoice).includes(reasoning) ? { reasoning } : {}),
+      // v1.332.0: "Local only", every turn (via the ref: sends fire from
+      // stale closures). The daemon enforces it; it also reads the saved
+      // chat's own setup, so a stale window cannot turn it off.
+      local_only: localOnlyRef.current,
     };
   }
 
@@ -7258,6 +7331,58 @@ export default function ChatPage() {
     const requested = splitChoice(turnChoiceRef.current ?? choice).provider ?? "";
     if (!served || !requested || served === requested) return "";
     return served;
+  }
+
+  /** v1.332.0: what the ask-first gate would ask about for a send on
+   *  `turnChoice` (null = the chat's own choice), or null when the message
+   *  may go as it is: the chat is not local only, or its model is local. The
+   *  model is the one-turn choice, else the chat's pick, else the project's
+   *  default, else the app's (/health), the order the daemon resolves.
+   *  `chatChoice` stands in for the chat's pick when the caller has just
+   *  changed it in this same press ("Retry with the default model" clears
+   *  it, and this closure still holds the old one). */
+  function needsCloudAsk(turnChoice: string | null, chatChoice: string = choice): CloudAsk | null {
+    if (!localOnlyRef.current) return null;
+    const proj = projectIdRef.current
+      ? projects.find((x) => x.id === projectIdRef.current)
+      : undefined;
+    const { provider, model } = turnModel({
+      turnChoice,
+      choice: chatChoice,
+      projectProvider: proj?.default_provider,
+      projectModel: proj?.default_model,
+      defaultProvider: defaultProviderId,
+      defaultModel: defaultModelName,
+    });
+    return cloudAskFor(provider, model, models);
+  }
+
+  /** v1.332.0: THE ASK-FIRST GATE of a "local only" chat. When the model this
+   *  message would use is not a local one, nothing is sent: the card takes
+   *  the composer's place and waits. "Send once" runs `proceed` with that
+   *  provider (sent as `allow_cloud_once`, never remembered); "Keep it local"
+   *  runs `keep` and the words stay in the box. Returns true when the send is
+   *  waiting on the card. The daemon enforces the same rule on every model
+   *  call; this is only the polite front door. */
+  function askBeforeCloud(
+    turnChoice: string | null,
+    proceed: (provider: string) => void,
+    keep: () => void = () => {},
+    chatChoice: string = choice,
+  ): boolean {
+    const ask = needsCloudAsk(turnChoice, chatChoice);
+    if (!ask) return false;
+    setCloudAsk({ ...ask, id: mintTurnId(), proceed: () => proceed(ask.provider), keep });
+    return true;
+  }
+
+  /** v1.332.0: the ask-first card's answer. */
+  function answerCloudAsk(send: boolean) {
+    const ask = cloudAsk;
+    setCloudAsk(null);
+    if (!ask) return;
+    if (send) ask.proceed();
+    else ask.keep();
   }
 
   /** Feed streamed text into incremental TTS: reset the per-turn counter on the
@@ -7585,6 +7710,8 @@ export default function ChatPage() {
       toRequestMessages(list.filter((x) => !x.continuation)),
       route?.provider || undefined,
       route?.model || undefined,
+      // v1.332.0: a "local only" chat gets no suggestions from a cloud reply.
+      { localOnly: localOnlyRef.current, threadId: saveTargetRef.current.id ?? undefined },
     ).then((items) => {
       if (chatGenRef.current !== gen || !items.length) return;
       setFollowups({ forLen: len, items });
@@ -7612,7 +7739,9 @@ export default function ChatPage() {
   async function completeChat(
     history: ChatMessage[],
     atts: UploadedFile[],
-    opts: { choice?: string } = {},
+    // v1.332.0: `cloudOnce` = the provider the user let THIS turn reach from
+    // a "local only" chat ("Send once"); sent as allow_cloud_once, never kept.
+    opts: { choice?: string; cloudOnce?: string } = {},
   ) {
     const gen = chatGenRef.current;
     // v1.325.0: "Try again with…" — this turn only; read by buildChatBody and
@@ -7632,6 +7761,7 @@ export default function ChatPage() {
     pinnedRef.current = true; // a fresh turn always scrolls into view
     setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
+    setLocalRefusal(null); // v1.332.0: and its "local only" refusal
     setGrantCapNote(null); // read by now; this turn carries the grant regardless
     setChatBusy(true);
     ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
@@ -7641,6 +7771,7 @@ export default function ChatPage() {
     // completion later fails. Persists via the same setup save made-docs use.
     if (atts.length) rememberThreadDocs(atts.map((a) => a.path));
     const body = buildChatBody(history, atts);
+    if (opts.cloudOnce) body.allow_cloud_once = opts.cloudOnce;
     // v1.324.0: this page draws the apps' cards, and carries what the user
     // attached from their apps to the message being answered — read from that
     // message, so a Regenerate reads them again (as attachments re-ground).
@@ -7898,6 +8029,9 @@ export default function ChatPage() {
           if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
             setOffline(true);
           else setError(e instanceof ApiError ? e.message : String(e));
+          // v1.332.0: a "local only" refusal names the provider it did not
+          // send to, so the row can offer to send it there once.
+          setLocalRefusal(localOnlyRefusalFrom(e));
           setFailedTurn({ history, atts });
           // The failed turn must survive navigation: persist the typed message
           // (+ the interrupted partial) through the same autosave path a
@@ -8047,6 +8181,7 @@ export default function ChatPage() {
       // attachments are NOT consumed on failure.
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      setLocalRefusal(localOnlyRefusalFrom(e)); // v1.332.0: the POST lane's 409
       setFailedTurn({ history, atts });
       // Persist the typed message so navigating away doesn't lose it, and
       // restore it to the composer for an immediate edit/resend.
@@ -8153,7 +8288,7 @@ export default function ChatPage() {
   /** CHAT MODE: append the user's message and run one completion. */
   async function sendChat(
     message: string,
-    opts: { queued?: QueuedMessage; editBefore?: ChatMessage[] | null } = {},
+    opts: { queued?: QueuedMessage; editBefore?: ChatMessage[] | null; cloudOnce?: string } = {},
   ) {
     // v1.323.0: the draft's words are now a message — never restore them.
     if (!opts.queued && saveTargetRef.current.id) clearDraft(saveTargetRef.current.id);
@@ -8199,7 +8334,7 @@ export default function ChatPage() {
       before && before.length > messages.length && messages.every((m, k) => m === before[k])
         ? forkTail(before, messages.length, [userMsg]).messages
         : [...messages, userMsg];
-    await completeChat(history, atts);
+    await completeChat(history, atts, opts.cloudOnce ? { cloudOnce: opts.cloudOnce } : {});
   }
 
   // v1.325.0: FILE A TRY AGAIN once its turn is over. The new reply (or the
@@ -8257,7 +8392,7 @@ export default function ChatPage() {
    * through the same single completeChat site, overwriting the thread with the
    * regenerated reply.
    */
-  function regenerate(choice?: string) {
+  function regenerate(choice?: string, cloudOnce?: string) {
     if (busy) return;
     const msgs = messages;
     const last = msgs[msgs.length - 1];
@@ -8265,6 +8400,8 @@ export default function ChatPage() {
     const history = msgs.slice(0, -1);
     const lastUser = history[history.length - 1];
     if (history.length === 0 || lastUser.role !== "user") return;
+    // v1.332.0: a "local only" chat asks before a Try again leaves this PC.
+    if (!cloudOnce && askBeforeCloud(choice ?? null, (p) => regenerate(choice, p))) return;
     setError(null);
     setOffline(false);
     // v1.325.0: the reply being replaced is KEPT as another version — the
@@ -8274,7 +8411,10 @@ export default function ChatPage() {
     // Re-ground on the SAME attachments the turn carried — otherwise the re-run
     // answers blind while the user bubble still shows the file chip.
     // v1.325.0: `choice` = "Try again with…" another model, for this turn only.
-    void completeChat(history, attachmentsOf(lastUser), choice ? { choice } : {});
+    void completeChat(history, attachmentsOf(lastUser), {
+      ...(choice ? { choice } : {}),
+      ...(cloudOnce ? { cloudOnce } : {}),
+    });
   }
 
   /** v1.325.0: a selection quoted from a reply joins the box (never sent). */
@@ -8378,7 +8518,11 @@ export default function ChatPage() {
       addresseeRef.current.length > 0 ||
       liveMentionsIn(text).length > 0 ||
       (text && looksLikeSecret(text)) ||
-      (!text && item.files.length === 0)
+      (!text && item.files.length === 0) ||
+      // v1.332.0: a "local only" chat whose model would leave this PC asks
+      // first, and nobody is there to answer for a queued message: it goes
+      // back to the box, where Enter asks.
+      needsCloudAsk(null) !== null
     ) {
       putBackInBox([item]);
       inputRef.current?.focus();
@@ -8401,11 +8545,13 @@ export default function ChatPage() {
   /** v1.323.0: CONTINUE the newest reply, cut off by the model's output
    *  limit or by Stop — a hidden "carry on" turn whose answer is merged into
    *  it (lib/continueReply). Plain chat replies only. */
-  function continueReply() {
+  function continueReply(cloudOnce?: string) {
     if (busy) return;
     const msgs = messages;
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant" || !(last.truncated || last.interrupted)) return;
+    // v1.332.0: a "local only" chat asks before the rest leaves this PC.
+    if (!cloudOnce && askBeforeCloud(null, (p) => continueReply(p))) return;
     setError(null);
     setOffline(false);
     const ask: ChatMessage = {
@@ -8414,7 +8560,7 @@ export default function ChatPage() {
       continuation: true,
       at: new Date().toISOString(),
     };
-    void completeChat([...msgs, ask], []);
+    void completeChat([...msgs, ask], [], cloudOnce ? { cloudOnce } : {});
   }
 
   /** The attachments a saved user bubble carried, as a re-run needs them. */
@@ -8453,10 +8599,20 @@ export default function ChatPage() {
     setPendingSteers((prev) => [...prev, note]);
   }
 
-  /** Re-send the last failed chat turn — same history + attachments, verbatim. */
-  function retryTurn() {
+  /** Re-send the last failed chat turn — same history + attachments, verbatim.
+   *  v1.332.0: `onDefault` is "Retry with the default model": the press also
+   *  clears the chat's pick, but this closure still holds the old one, so the
+   *  turn says "no pick" itself (an empty one-turn choice) and the ask-first
+   *  gate judges the default, not the model that just failed. */
+  function retryTurn(cloudOnce?: string, opts: { onDefault?: boolean } = {}) {
     if (!failedTurn || busy) return;
     const { history, atts } = failedTurn;
+    // v1.332.0: a "local only" chat asks before a Retry leaves this PC.
+    if (
+      !cloudOnce &&
+      askBeforeCloud(null, (p) => retryTurn(p, opts), undefined, opts.onDefault ? "" : choice)
+    )
+      return;
     setError(null);
     setOffline(false);
     // Retire the auto-restored composer draft (it duplicates the message Retry
@@ -8464,7 +8620,30 @@ export default function ChatPage() {
     const lastUser = [...history].reverse().find((m) => m.role === "user");
     if (lastUser)
       if (composer.get().text.trim() === lastUser.content.trim()) composer.reset();
-    void completeChat(history, atts);
+    void completeChat(history, atts, {
+      ...(opts.onDefault ? { choice: "" } : {}),
+      ...(cloudOnce ? { cloudOnce } : {}),
+    });
+  }
+
+  /** v1.332.0: the refusal's "Send to {name} once": the refused turn again,
+   *  on the model the daemon would not send to, with the user's OK for this
+   *  one message (the press is the consent, so no card). A refusal that named
+   *  no model takes that provider's first connected model. */
+  function sendRefusedOnce() {
+    const r = localRefusal;
+    if (!r || !failedTurn || busy) return;
+    const { history, atts } = failedTurn;
+    const model = r.model || firstModelFor(r.provider, models);
+    setError(null);
+    setOffline(false);
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
+    if (lastUser)
+      if (composer.get().text.trim() === lastUser.content.trim()) composer.reset();
+    void completeChat(history, atts, {
+      ...(model ? { choice: `${r.provider}::${model}` } : {}),
+      cloudOnce: r.provider,
+    });
   }
 
   /** AGENT MODE: the original session flow (wait:false + live steps + finalize). */
@@ -8637,6 +8816,8 @@ export default function ChatPage() {
                 ...posture,
                 // THE FOLDER RIDES TOO (v1.189.0) — see below.
                 ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
+                // v1.332.0: a "local only" chat's run stays local too.
+                ...(localOnlyRef.current ? { local_only: true } : {}),
                 // Presence asserted — see the POST /sessions branch below.
                 origin: "chat",
               },
@@ -8676,6 +8857,9 @@ export default function ChatPage() {
               // workspace the user never chose, and the agent filing a
               // capability request for a tool it already had.
               ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
+              // v1.332.0: a "local only" chat's run stays local too (the
+              // daemon refuses a cloud model with a 409 sentence, shown here).
+              ...(localOnlyRef.current ? { local_only: true } : {}),
               // PRESENCE IS ASSERTED, never assumed (v1.189.0): "chat" is what
               // lets the run PAUSE on an ask-tier tool and render its card
               // here — an unattributed session keeps the instant denial,
@@ -8734,7 +8918,7 @@ export default function ChatPage() {
     }
   }
 
-  function send(text: string) {
+  function send(text: string, opts: { cloudOnce?: string } = {}) {
     const message = text.trim();
     // v1.275.0: a message can be a file alone ("here" + a PDF), and a send
     // pressed mid-upload is QUEUED — it fires with the box's text the moment
@@ -8756,6 +8940,31 @@ export default function ChatPage() {
     }
     secretSendOkRef.current = false;
     setHeldSecret(null);
+    // v1.332.0: A "LOCAL ONLY" CHAT ASKS FIRST, before anything is consumed
+    // (the box, the files, an edit's Undo), so "Keep it local" leaves all of
+    // it where it was. Only the chat lane: a messaging thread, an @-mention
+    // and a conversation with an agent go their own way, and the daemon
+    // guards those. "Send once" comes back here with the provider, past the
+    // key guard the user already answered.
+    if (
+      !opts.cloudOnce &&
+      !commMetaRef.current &&
+      liveMentionsIn(message).length === 0 &&
+      addresseeRef.current.length === 0 &&
+      askBeforeCloud(
+        null,
+        (p) => {
+          secretSendOkRef.current = true;
+          send(text, { cloudOnce: p });
+        },
+        () => {
+          // A send that did not come from the box (a suggestion) keeps its
+          // words there instead, so nothing the user chose is lost.
+          if (!composer.get().text.trim()) composer.setText(text);
+        },
+      )
+    )
+      return;
     // v1.325.0: an edit being sent keeps what it replaced as another version.
     const editBefore = editUndo?.before ?? null;
     setEditUndo(null);
@@ -8806,7 +9015,7 @@ export default function ChatPage() {
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
     // escalates itself when it needs the full agent (see completeChat), so the
     // user never routes their own request.
-    void sendChat(message, { editBefore });
+    void sendChat(message, { editBefore, ...(opts.cloudOnce ? { cloudOnce: opts.cloudOnce } : {}) });
   }
 
   /**
@@ -8855,6 +9064,10 @@ export default function ChatPage() {
         ...(priorRoom ? { panel_thread_id: priorRoom } : {}),
         history: panelHistoryOf(before),
         ...(atts.length ? { hands: true } : {}),
+        // v1.332.0: a "local only" chat's agents speak only on local models
+        // (the daemon reads the saved chat's setup too).
+        ...(localOnlyRef.current ? { local_only: true } : {}),
+        ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
       });
       if (atts.length) setAttachments([]); // consumed — the daemon has them now
       if (res.mode === "session" && res.target) {
@@ -9043,6 +9256,9 @@ export default function ChatPage() {
     }
     pendingForkRef.current = null;
     setPageCtx(null);
+    // v1.332.0: the ask-first card and a refusal belong to this conversation.
+    setCloudAsk(null);
+    setLocalRefusal(null);
     // v1.323.0: what is half-typed for a SAVED conversation is kept for it
     // (an empty box removes the old draft); an unsaved chat has nowhere to
     // come back to, so New chat still starts empty.
@@ -9140,6 +9356,9 @@ export default function ChatPage() {
     } catch {
       setApprovalMode("approve_for_me");
     }
+    // v1.332.0: a new chat starts local only when the user's last choice was.
+    setLocalOnlyNow(readLocalOnlyDefault());
+    setLocalRefusal(null);
     setPreviewPath(null); // a fresh conversation starts without a preview
     setThreadDocs([]); // document chips belong to their conversation
     // The standing summary belongs to its thread — and clearing it must ALSO
@@ -9630,6 +9849,22 @@ export default function ChatPage() {
                   <span className="text-[12px] text-zinc-500">{tts.enabled ? "On" : "Off"}</span>
                 </button>
               )}
+              {/* v1.332.0: the same "Local only" switch as the composer chip. */}
+              <button
+                type="button"
+                data-testid="chat-more-local-only"
+                aria-pressed={localOnly}
+                onClick={() => toggleLocalOnly()}
+                title={localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF}
+                className={menuRow}
+              >
+                <House
+                  size={15}
+                  className={`shrink-0 ${localOnly ? "text-tone-success" : "text-zinc-400"}`}
+                />
+                <span className="min-w-0 flex-1">{LOCAL_ONLY_MENU_ROW}</span>
+                {localOnly && <Check size={13} className="shrink-0 text-tone-success" />}
+              </button>
               <div className="my-1 h-px bg-white/[0.06]" />
               <div className="px-2.5 pb-1 pt-1.5">
                 <label
@@ -11182,10 +11417,39 @@ export default function ChatPage() {
                             cooling, the button also offers "Choose another model…",
                             which opens the model menu and nothing else: the page
                             names no model and switches nothing (v1.162.0). */}
-                        {failedTurn && !busy && (
+                        {/* v1.332.0: A "LOCAL ONLY" REFUSAL. The daemon's sentence
+                            is the error line above; the two quiet actions are the
+                            ways forward: send this one message to the model it
+                            named (the press is the OK), or pick a local model.
+                            Retry would only be refused again, so it waits. */}
+                        {failedTurn && !busy && localRefusal && (
+                          <>
+                            <button
+                              type="button"
+                              data-testid="local-refusal-send-once"
+                              onClick={sendRefusedOnce}
+                              title="Send only this message there. The chat stays local only."
+                              className={CALM_GHOST_BTN}
+                            >
+                              Send to {cloudModelName(localRefusal.provider, localRefusal.model, models)} once
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="local-refusal-choose-local"
+                              onClick={() => {
+                                setModelSub(null);
+                                setModelMenuOpen(true);
+                              }}
+                              className={CALM_GHOST_BTN}
+                            >
+                              Choose a local model
+                            </button>
+                          </>
+                        )}
+                        {failedTurn && !busy && !localRefusal && (
                           <RetryTurnButton
                             cooldownS={trouble.cooldownS}
-                            onRetry={retryTurn}
+                            onRetry={() => retryTurn()}
                             provider={trouble.provider}
                             down={trouble.down}
                             onChooseModel={() => {
@@ -11199,12 +11463,17 @@ export default function ChatPage() {
                             instead of the model menu after a typed request. Only
                             that case: a different provider is the user's choice,
                             never a fallback the page makes (the v1.162.0 rule). */}
-                        {failedTurn && !busy && canRetryWithDefault(choice, health) && (
+                        {failedTurn &&
+                          !busy &&
+                          canRetryWithDefault(choice, health) &&
+                          // v1.332.0: never offered when the default would
+                          // leave this PC from a "local only" chat.
+                          !(localOnly && cloudAskFor(health.defaultProvider, defaultModelName, models)) && (
                           <button
                             type="button"
                             onClick={() => {
                               setChoice("");
-                              retryTurn();
+                              retryTurn(undefined, { onDefault: true });
                             }}
                             title={`${splitChoice(choice).provider} is not reachable; ${health.defaultProvider} is. Re-send with the default model.`}
                             className={CALM_GHOST_BTN}
@@ -11235,6 +11504,9 @@ export default function ChatPage() {
                         // The sheet lands in this conversation's own folder when it
                         // has one (v1.244.0), else beside the documents themselves.
                         workspaceDir={workfolder ?? workspaceDir}
+                        // v1.332.0: a local-only chat's batch stays on this network.
+                        localOnly={localOnly}
+                        getThreadId={() => saveTargetRef.current.id ?? ""}
                         onDone={(made) => {
                           // The Files rail is how a made file is ever found again.
                           if (made.length) {
@@ -11417,6 +11689,7 @@ export default function ChatPage() {
                     onConversation={armFromApproval}
                     onAnswerElicitation={answerElicitation}
                     onDecideSampling={decideSampling}
+                    onCloudAnswer={answerCloudAsk}
                     onStop={stop}
                     returnFocus={focusComposerAfterAsk}
                   />
@@ -12027,6 +12300,25 @@ export default function ChatPage() {
                           }}
                           onOpenChange={setPermissionMenuOpen}
                         />
+                        {/* v1.332.0: "LOCAL ONLY". On, nothing from this chat reaches
+                            a model off this PC unless the user says yes for that one
+                            message (the ask-first card); the daemon enforces it. Quiet
+                            like the other chips when off; the success tone with its
+                            house when on. A phone shows the house alone when off and
+                            "Local" when on. Also the user's choice for new chats. */}
+                        <button
+                          type="button"
+                          data-testid="local-only-chip"
+                          aria-pressed={localOnly}
+                          aria-label="Local only"
+                          title={localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF}
+                          onClick={() => toggleLocalOnly()}
+                          className={composerChipClass(localOnly, "success")}
+                        >
+                          <House size={14} className="shrink-0" aria-hidden="true" />
+                          {localOnly && <span className="sm:hidden">Local</span>}
+                          <span className="hidden sm:inline">Local only</span>
+                        </button>
                         {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
                             for this chat, counted so a pick leaves a trace. Its menu holds the
                             web and Auto tools switches with their plain lines, the armed tools
@@ -12391,6 +12683,15 @@ export default function ChatPage() {
                               data-testid="model-menu"
                               className="absolute bottom-full right-0 z-20 mb-1.5 w-60 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
                             >
+                              {/* v1.332.0: the one line a "local only" chat adds here. */}
+                              {localOnly && (
+                                <p
+                                  data-testid="model-menu-local-only"
+                                  className="px-2.5 pb-1 pt-0.5 text-[12px] text-zinc-500"
+                                >
+                                  {LOCAL_ONLY_MODEL_MENU_LINE}
+                                </p>
+                              )}
                               {/* v1.277.0: type to find a model across every provider. */}
                               <input
                                 data-testid="model-filter"

@@ -429,6 +429,10 @@ def project_room_context(
 #: and it is told so rather than left to think the room is silent.
 PROJECT_ROOM_PRIVATE_NOTE = "Other seats' replies are not shared with you in a project room."
 
+#: v1.332.0: what a seat says INSTEAD of speaking in a local-only chat when
+#: the model it runs on (or the machine it lives on) is off this network.
+LOCAL_ONLY_SAT_OUT = "{agent} sat this one out: this chat is local only and {agent} runs on {where}."
+
 
 def ungrounded_reason(provider: str) -> str:
     """The phrase a withheld seat's message carries (``ungrounded_reason``);
@@ -1016,6 +1020,39 @@ class AgentThreads:
                 return str(getattr(row, "provider", "") or "").strip()
         return ""
 
+    @classmethod
+    def _local_only_sat_out(
+        cls, p: dict[str, str], seat: dict[str, str], d: Any, remote_record: Any = None
+    ) -> str:
+        """The one line a seat says INSTEAD of speaking in a local-only chat
+        (v1.332.0), or ``""`` when it may speak. A local seat sits out when the
+        model it answers with (:meth:`_provider_model_for`, the same resolver
+        that calls it) leaves this network; a remote seat when its machine's
+        address is not on this network. Outside the scope: always ``""``.
+        Never raises (a seat that cannot be judged sits out: fail closed)."""
+        from ..providers import egress as _egress
+
+        if not _egress.current_scope().on:
+            return ""
+        name = str(p.get("name") or "This agent")
+        try:
+            if p.get("source") == "remote":
+                url = str(getattr(remote_record, "base_url", "") or "")
+                if _egress.private_host(url):
+                    return ""
+                from urllib.parse import urlsplit
+
+                where = urlsplit(url if "://" in url else "http://" + url).hostname or "another machine"
+            else:
+                provider, _model = cls._provider_model_for(seat, d)
+                mgr = getattr(d.platform, "providers", None)
+                if _egress.stays_on_this_network(provider, mgr, getattr(d.platform, "config", None)):
+                    return ""
+                where = _egress.friendly_name(provider, mgr)
+        except Exception:  # noqa: BLE001 — cannot judge: it sits out
+            where = "a model off this PC"
+        return LOCAL_ONLY_SAT_OUT.format(agent=name, where=where)
+
     @staticmethod
     def _provider_model_for(p: dict[str, str], d: Any) -> tuple[str, str]:
         """The (provider, model) a LOCAL seat answers with: the seat's own pin,
@@ -1359,6 +1396,19 @@ class AgentThreads:
                     count = self._append(thread_id, [entry])
                     await self._publish_updated(thread_id, p["key"], count, d)
                     continue
+            # LOCAL ONLY (v1.332.0): in a local-only chat a seat whose model
+            # runs off this network does not speak — no adapter call, no
+            # network hop — and says so in one plain line instead. A remote
+            # seat speaks only when its machine's address is on this network.
+            sat_out = self._local_only_sat_out(p, seat, d, remote_record)
+            if sat_out:
+                entry["content"] = sat_out
+                entry["sat_out"] = "local_only"
+                messages.append(entry)
+                new_entries.append(entry)
+                count = self._append(thread_id, [entry])
+                await self._publish_updated(thread_id, p["key"], count, d)
+                continue
             try:
                 if p["source"] == "remote":
                     # A CONVERSATION for the remote (v1.285.0): the chat rows

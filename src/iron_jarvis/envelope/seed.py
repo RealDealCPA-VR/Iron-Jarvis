@@ -135,7 +135,9 @@ async def seed_profile(
         return None
     profile = CapabilityProfile(model_id=model_id, provider=provider, source="seeded")
     own_client = client is None
-    active = client or httpx.AsyncClient(timeout=_TIMEOUT)
+    from ..core import http as _http  # v1.332.0: the shared TLS context
+
+    active = client or _http.async_client(timeout=_TIMEOUT)
     try:
         try:
             if await _seed_from_ollama(active, root, model_id, profile):

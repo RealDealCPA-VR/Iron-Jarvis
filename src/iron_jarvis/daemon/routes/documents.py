@@ -94,6 +94,29 @@ def _open_native(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+def _batch_egress_check(platform: Any) -> None:
+    """Refuse a LOCAL-ONLY chat's batch BEFORE any document is read when the
+    model it would run on leaves this network (v1.332.0): the "extract" and
+    "synthesize" roles when mapped, else the default route. Auto is left to
+    the router, which picks only on this network under the scope. Raises
+    :class:`~iron_jarvis.providers.egress.LocalOnlyRefused` (the app's 409)."""
+    from ...providers import egress as _egress
+    from ...providers.roles import resolve_role
+
+    cfg = getattr(platform, "config", None)
+    mgr = getattr(platform, "providers", None)
+    default = str(getattr(cfg, "default_provider", "") or "")
+    for role in ("extract", "synthesize"):
+        llm = resolve_role(cfg, mgr, role, fallback_provider=None, fallback_model=None)
+        prov = (llm.provider if getattr(llm, "applied", False) and llm.provider else default) or ""
+        if prov.strip().lower() == "auto":
+            continue
+        if not _egress.stays_on_this_network(prov, mgr, cfg):
+            model = str((llm.model if getattr(llm, "applied", False) else None)
+                        or getattr(cfg, "default_model", "") or "")
+            raise _egress.LocalOnlyRefused(prov, model, manager=mgr)
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/documents/upload")
@@ -289,9 +312,19 @@ def register(app: FastAPI, d) -> None:
         ``created_paths`` comes back absolute, which is what puts it on the
         chat's Files rail.
         """
+        from ...providers import egress as _egress
         from ...tools.base import ToolContext
 
         folder = _batch_folder(body.folder)
+        # LOCAL ONLY (v1.332.0): a local-only chat's batch reads the folder on
+        # models on this network only. Refused up front (409, the local-only
+        # shape) when the model it would use leaves this network, and run
+        # under the scope so the router refuses any call the check missed.
+        local_only = await _egress.effective_local_only(
+            d.platform.engine, body.local_only, body.thread_id
+        )
+        if local_only:
+            _batch_egress_check(d.platform)
         tool = d.platform.registry.get("batch_documents")
         if tool is None:
             raise HTTPException(status_code=501, detail="batch_documents is not registered")
@@ -311,18 +344,19 @@ def register(app: FastAPI, d) -> None:
             event_bus=d.platform.event_bus,
             engine=d.platform.engine,
         )
-        result = await d.platform.registry.invoke(
-            "batch_documents",
-            {
-                "folder": str(folder),
-                "instructions": body.instructions or "",
-                "output": body.output or "both",
-                "max_files": max(1, min(int(body.max_files or 25), 100)),
-            },
-            ctx,
-            d.platform.permissions,
-            None,
-        )
+        with _egress.local_only_scope(local_only):
+            result = await d.platform.registry.invoke(
+                "batch_documents",
+                {
+                    "folder": str(folder),
+                    "instructions": body.instructions or "",
+                    "output": body.output or "both",
+                    "max_files": max(1, min(int(body.max_files or 25), 100)),
+                },
+                ctx,
+                d.platform.permissions,
+                None,
+            )
         if not result.ok:
             raise HTTPException(status_code=409, detail=result.error or "batch failed")
         return {

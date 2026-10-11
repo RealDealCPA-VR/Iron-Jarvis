@@ -11,19 +11,47 @@ list; discovery must never break the picker.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable
+from urllib.parse import quote
+
+import httpx
 
 log = logging.getLogger(__name__)
 
 _CACHE_TTL = 600.0  # 10 min — model lists move slowly; pickers load often
+#: A fetch that learned NOTHING (failed, no key, an empty listing) is asked
+#: again after this (v1.332.0). It used to be remembered for the full 10
+#: minutes, so a server started a moment after the first picker load stayed
+#: invisible for ten minutes.
+_NEGATIVE_TTL = 60.0
 _cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_lock = threading.Lock()
+#: Keys with a background refresh in flight (one refresh per key at a time).
+_refreshing: set[str] = set()
+#: Bumped by :func:`clear` and by a background refresh that CHANGED a list,
+#: so the model catalog (``routes.connections``) knows its rows are older
+#: than what discovery now holds.
+_generation = 0
+
+
+def generation() -> int:
+    """A counter that moves whenever cached lists were dropped or changed."""
+    return _generation
+
+
+#: A listing gets 4 s to answer but only 1.5 s to CONNECT (v1.332.0). A dead
+#: local port takes the whole budget to refuse on Windows (measured 4.19 s),
+#: and a fleet node is now asked on the first catalog build, so the connect
+#: cap keeps a dead endpoint from costing more than the old Ollama probe did.
+_TIMEOUT = httpx.Timeout(4.0, connect=1.5)
 
 
 def _get_json(url: str, headers: dict[str, str]) -> Any:
-    import httpx
+    from ..core import http as _http
 
-    resp = httpx.get(url, headers=headers, timeout=4)
+    resp = _http.get(url, headers=headers, timeout=_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -109,26 +137,86 @@ def list_endpoint_models(base_url: str, key: str = "") -> list[str]:
         return _ollama_models(host)
 
 
-def discover_models(
-    provider: str, credential: Callable[[], str | None], *, base_url: str = ""
+_ANTHROPIC_VERSION = "2023-06-01"
+#: Rows per page and the most pages followed for an Anthropic-compatible
+#: listing (the same 1,000-id ceiling the Connections form's probe keeps).
+_ANTHROPIC_PAGE_LIMIT = 100
+_ANTHROPIC_MAX_PAGES = 10
+
+
+def _anthropic_compatible_models(base_url: str, key: str = "") -> list[str]:
+    """``GET <base>/v1/models`` the Anthropic way (v1.332.0): ``x-api-key`` +
+    ``anthropic-version``, paged by ``after_id`` while ``has_more``. A pasted
+    messages or models URL is cut back to its base first (the same rule as
+    the Connections form's probe, ``routes.connections._anthropic_models_url``)."""
+    u = (base_url or "").strip().rstrip("/")
+    for suffix in ("/messages", "/models"):
+        if u.endswith(suffix):
+            u = u[: -len(suffix)].rstrip("/")
+            break
+    url = f"{u}/models" if u.endswith("/v1") else f"{u}/v1/models"
+    headers = {"anthropic-version": _ANTHROPIC_VERSION}
+    if key:
+        headers["x-api-key"] = key
+    ids: list[str] = []
+    after = ""
+    for _ in range(_ANTHROPIC_MAX_PAGES):
+        query = f"?limit={_ANTHROPIC_PAGE_LIMIT}"
+        if after:
+            query += "&after_id=" + quote(after, safe="")
+        data = _get_json(url + query, headers)
+        rows = data.get("data") if isinstance(data, dict) else None
+        page = [str(m.get("id")) for m in rows or [] if isinstance(m, dict) and m.get("id")]
+        for mid in page:
+            if mid not in ids:
+                ids.append(mid)
+        if not page or data.get("has_more") is not True:
+            break
+        nxt = str(data.get("last_id") or page[-1])
+        if nxt == after:
+            break
+        after = nxt
+    return ids
+
+
+def _fleet_endpoint_models(base_url: str, key: str, protocol: str) -> list[str]:
+    """One fleet endpoint's live model ids, asked the way it chats (v1.332.0):
+    ``anthropic`` → the Anthropic Models API; anything else → the
+    OpenAI-compatible ``/v1/models``, then Ollama's native ``/api/tags`` only
+    when the server ANSWERED with an error status (a dead host is asked once,
+    not twice)."""
+    if protocol == "anthropic":
+        return _anthropic_compatible_models(base_url, key)
+    try:
+        return _openai_compatible_models(base_url, key)
+    except Exception as exc:
+        import httpx
+
+        if not isinstance(exc, httpx.HTTPStatusError):
+            raise
+        host = (base_url or "").strip().rstrip("/")
+        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if host.endswith(suffix):
+                host = host[: -len(suffix)].rstrip("/")
+                break
+        return _ollama_models(host)
+
+
+def _fetch(
+    provider: str, credential: Callable[[], str | None], base_url: str, protocol: str
 ) -> list[str]:
-    """Live model ids for one provider (cached). Empty list = nothing learned
-    (caller keeps the curated entries)."""
-    now = time.monotonic()
-    # Key by provider AND endpoint URL: a re-pointed local/custom endpoint is a
-    # DIFFERENT server, so its cache entry must miss — with a provider-only key
-    # the old endpoint's model list kept serving for the full TTL (live-hit
-    # 2026-07-18: a freshly saved endpoint showed the previous endpoint's models).
-    cache_key = f"{provider}|{base_url}"
-    hit = _cache.get(cache_key)
-    if hit and now - hit[0] < _CACHE_TTL:
-        return [m["model"] for m in hit[1]]
+    """Ask the provider NOW. Never raises: a failure is ``[]`` (nothing learned)."""
     ids: list[str] = []
     try:
         if provider == "ollama" and base_url:
             ids = _ollama_models(base_url)
         elif provider == "custom" and base_url:
             ids = _openai_compatible_models(base_url, credential() or "")
+        elif provider.startswith("fleet-") and base_url:
+            # v1.332.0: a fleet endpoint ("fleet-<id>") is asked for its real
+            # list. Before this every one fell through to the key branch below,
+            # matched no provider, and listed only its default model.
+            ids = _fleet_endpoint_models(base_url, credential() or "", protocol)
         else:
             key = credential() or ""
             if not key:
@@ -142,9 +230,101 @@ def discover_models(
     except Exception as exc:  # noqa: BLE001 — degrade to curated, never break
         log.debug("model discovery failed for %s: %s", provider, exc)
         ids = []
-    _cache[cache_key] = (now, [{"model": i} for i in ids])
     return ids
 
 
-def clear_cache() -> None:  # test hook
-    _cache.clear()
+def _store(cache_key: str, ids: list[str], *, at: float) -> bool:
+    """Remember ``ids`` for ``cache_key``; True when that changed the list."""
+    rows = [{"model": i} for i in ids]
+    with _lock:
+        old = _cache.get(cache_key)
+        _cache[cache_key] = (at, rows)
+    return old is None or old[1] != rows
+
+
+def _refresh_in_background(
+    cache_key: str,
+    provider: str,
+    credential: Callable[[], str | None],
+    base_url: str,
+    protocol: str,
+) -> None:
+    """Start ONE refresh thread for ``cache_key`` unless one is running."""
+    with _lock:
+        if cache_key in _refreshing:
+            return
+        _refreshing.add(cache_key)
+
+    def _run() -> None:
+        global _generation
+        try:
+            ids = _fetch(provider, credential, base_url, protocol)
+            if _store(cache_key, ids, at=time.monotonic()):
+                with _lock:
+                    _generation += 1
+        except Exception:  # noqa: BLE001 — a refresh never breaks anything
+            log.debug("background model discovery failed", exc_info=True)
+        finally:
+            with _lock:
+                _refreshing.discard(cache_key)
+
+    try:
+        threading.Thread(target=_run, name=f"discover-{provider}", daemon=True).start()
+    except Exception:  # noqa: BLE001 — no thread: the next caller tries again
+        with _lock:
+            _refreshing.discard(cache_key)
+
+
+def discover_models(
+    provider: str,
+    credential: Callable[[], str | None],
+    *,
+    base_url: str = "",
+    protocol: str = "openai",
+) -> list[str]:
+    """Live model ids for one provider (cached). Empty list = nothing learned
+    (caller keeps the curated entries).
+
+    v1.332.0: a list older than its TTL (10 min when something was learned,
+    :data:`_NEGATIVE_TTL` when nothing was) is returned AT ONCE and refreshed
+    behind it, one refresh per key, so a picker never waits on a provider it
+    already has an answer from; only a key never asked (or :func:`clear`-ed)
+    waits for the fetch. ``protocol`` is a fleet endpoint's
+    (``FleetNode.protocol``)."""
+    now = time.monotonic()
+    # Key by provider AND endpoint URL: a re-pointed local/custom endpoint is a
+    # DIFFERENT server, so its cache entry must miss — with a provider-only key
+    # the old endpoint's model list kept serving for the full TTL (live-hit
+    # 2026-07-18: a freshly saved endpoint showed the previous endpoint's models).
+    cache_key = f"{provider}|{base_url}"
+    if protocol and protocol != "openai":
+        cache_key += f"|{protocol}"
+    with _lock:
+        hit = _cache.get(cache_key)
+    if hit is not None:
+        ids = [m["model"] for m in hit[1]]
+        ttl = _CACHE_TTL if ids else _NEGATIVE_TTL
+        if now - hit[0] >= ttl:
+            _refresh_in_background(cache_key, provider, credential, base_url, protocol)
+        return ids
+    ids = _fetch(provider, credential, base_url, protocol)
+    _store(cache_key, ids, at=now)
+    return ids
+
+
+def clear(provider: str = "") -> None:
+    """Forget cached lists, so the next picker load asks again (Re-detect, a
+    connection or an endpoint changed): every list, or only ``provider``'s
+    (any URL). The catalog sees the generation move."""
+    global _generation
+    with _lock:
+        if provider:
+            for key in [k for k in _cache if k.split("|", 1)[0] == provider]:
+                del _cache[key]
+        else:
+            _cache.clear()
+        _generation += 1
+
+
+def clear_cache() -> None:  # test hook (the app calls clear())
+    clear()

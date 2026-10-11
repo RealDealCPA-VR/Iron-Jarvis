@@ -125,7 +125,9 @@ async def transcribe_clip(
     #    or any server that names its model differently, only ever 404'd).
     override = (getattr(d.platform.config, "voice_transcribe_model", "") or "").strip()
     last_err = "transcription failed"
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    from ...core import http as _http  # v1.332.0: the shared TLS context
+
+    async with _http.async_client(timeout=60.0) as client:
         if override:
             models = [override]
         elif label == "openai":

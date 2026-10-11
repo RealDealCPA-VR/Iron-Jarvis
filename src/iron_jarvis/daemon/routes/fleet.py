@@ -210,6 +210,18 @@ def _forget_readings(sampler: Any, node_ids: list[str]) -> None:
         pass
 
 
+def _catalog_changed(node_id: str) -> None:
+    """v1.332.0: an endpoint was added, edited or removed — the cached model
+    catalog rebuilds on its next read, and that endpoint's live model list is
+    asked again (its URL, key or protocol may have changed). Never raises."""
+    try:
+        from .connections import invalidate_model_catalog
+
+        invalidate_model_catalog(discovery=True, provider=f"fleet-{node_id}")
+    except Exception:  # noqa: BLE001 — the registry revision still moved
+        pass
+
+
 def _err(exc: BaseException) -> str:
     """Verbatim, bounded error text. Never a friendly lie."""
     return f"{type(exc).__name__}: {exc}"[:300]
@@ -508,6 +520,7 @@ def register(app: FastAPI, d) -> None:
                 d.fleet.register_providers(d.platform.providers)
             except Exception:  # noqa: BLE001 — registration can't fail the add
                 pass
+        _catalog_changed(node.id)
 
         snapshot, children = await asyncio.to_thread(probe_node, node)
         if children:
@@ -573,6 +586,7 @@ def register(app: FastAPI, d) -> None:
                 d.platform.providers.unregister(f"fleet-{node_id}")
         except Exception:  # noqa: BLE001 — registry sync can't fail the edit
             pass
+        _catalog_changed(node_id)
         return {"node": _dump(final)}
 
     @app.delete("/fleet/nodes/{node_id}")
@@ -609,6 +623,7 @@ def register(app: FastAPI, d) -> None:
                 d.platform.providers.unregister(name)
             except Exception:  # noqa: BLE001
                 pass
+        _catalog_changed(node_id)
         return {"ok": True, "cleared_settings": cleared}
 
     @app.post("/fleet/nodes/{node_id}/detect")

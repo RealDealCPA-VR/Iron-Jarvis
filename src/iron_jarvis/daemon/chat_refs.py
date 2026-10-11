@@ -206,16 +206,73 @@ def _load(engine: Any, ids: list[str]) -> dict[str, tuple[str, str]]:
     return {tid: (title or "", msgs or "[]") for tid, title, msgs in rows}
 
 
+def _local_only_ids(engine: Any, ids: list[str]) -> set[str]:
+    """The ids among *ids* whose saved setup says local only (v1.332.0).
+    Blocking: the caller runs it off the loop. A read failure is EVERY id —
+    fail closed: a chat whose setting cannot be read keeps its text home."""
+    from sqlmodel import select
+
+    from ..core.db import session_scope
+    from ..core.models import ChatThreadRecord as T
+    from ..providers.egress import setup_says_local_only
+
+    if not ids:
+        return set()
+    try:
+        with session_scope(engine) as db:
+            rows = list(db.exec(
+                select(T.id, T.setup_json).where(T.id.in_(ids))  # type: ignore[attr-defined]
+            ))
+    except Exception:  # noqa: BLE001 — fail closed
+        return set(ids)
+    return {tid for tid, setup in rows if setup_says_local_only(setup)}
+
+
+#: v1.332.0: what a turn that leaves this network is told about a LOCAL-ONLY
+#: chat the user pointed to, in place of its text.
+LOCAL_ONLY_REF_LINE = "({title} is a local-only chat, so its text stays on this PC.)"
+NOTE_LOCAL_ONLY = "It is a local-only chat, so its text stayed on this PC."
+
+
+def _turn_leaves_network(d: Any, body: Any, provider: str) -> bool:
+    """True when THIS turn's answer comes from a model off the user's network
+    (v1.332.0). Under the local-only scope a turn leaves only with the user's
+    one-message OK; otherwise the turn's provider decides, and anything that
+    cannot be judged (Auto, an unreadable address) counts as leaving."""
+    from ..providers import egress as _egress
+
+    scope = _egress.current_scope()
+    if scope.on:
+        return bool(scope.allowed_once)
+    platform = getattr(d, "platform", None)
+    prov = (provider or getattr(body, "provider", "") or "").strip()
+    if not prov:
+        prov = str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
+    if prov.strip().lower() == "auto":
+        return True
+    return not _egress.stays_on_this_network(
+        prov, getattr(platform, "providers", None), getattr(platform, "config", None)
+    )
+
+
 def _row(tid: str, title: str = "", chars: int = 0, ok: bool = False, note: str = "") -> dict[str, Any]:
     return {"id": tid, "title": title, "chars": chars, "ok": ok, "note": note}
 
 
-async def read_thread_refs(d: Any, body: Any) -> tuple[str, list[dict[str, Any]]]:
+async def read_thread_refs(
+    d: Any, body: Any, *, provider: str = ""
+) -> tuple[str, list[dict[str, Any]]]:
     """``(block, receipt)`` for the saved chats THIS message points to.
 
     ``block`` is ``""`` or ``"\\n\\n" + section`` and joins the system prompt at
     the attachments seam; ``receipt`` is ``[{id, title, chars, ok, note}]``
     (``chars`` = the snapshot characters injected). Never raises.
+
+    LOCAL ONLY (v1.332.0): when THIS turn is answered off the user's network
+    (``provider`` = the turn's chosen provider; see
+    :func:`_turn_leaves_network`) a referenced chat that is switched to local
+    only is NOT read into the prompt: its text is replaced by ONE line,
+    :data:`LOCAL_ONLY_REF_LINE`, and its receipt row says so.
     """
     ids = clean_ids(getattr(body, "thread_refs", None))
     if not ids:
@@ -245,6 +302,13 @@ async def read_thread_refs(d: Any, body: Any) -> tuple[str, list[dict[str, Any]]
             else:
                 wanted.append(row["id"])
         per_chat = min(THREAD_REF_CHARS, THREAD_REFS_TOTAL_CHARS // max(1, len(wanted)))
+        # LOCAL ONLY (v1.332.0): which of the picked chats keep their text home
+        # from a turn that leaves this network (one row read, only then).
+        kept_home: set[str] = set()
+        if wanted and _turn_leaves_network(d, body, provider):
+            kept_home = await asyncio.to_thread(
+                _local_only_ids, getattr(platform, "engine", None), wanted
+            )
         sections: list[str] = []
         for row in receipt:
             tid = row["id"]
@@ -253,6 +317,15 @@ async def read_thread_refs(d: Any, body: Any) -> tuple[str, list[dict[str, Any]]
             raw_title, msgs_json = found[tid]
             title = _browser_line_value(raw_title, THREAD_REF_TITLE_CHARS) or "(untitled)"
             row["title"] = title
+            if tid in kept_home:
+                line = LOCAL_ONLY_REF_LINE.format(title=title)
+                # The title is still user text landing in a SYSTEM prompt:
+                # a title that reads as an injection is not repeated.
+                if (await asyncio.to_thread(scan_context, line, source="chat title", cap=None)).blocked:
+                    line = LOCAL_ONLY_REF_LINE.format(title="That chat")
+                row.update(chars=0, ok=True, note=NOTE_LOCAL_ONLY)
+                sections.append("## Earlier chat\n" + line)
+                continue
             try:
                 messages = json.loads(msgs_json or "[]")
             except Exception:  # noqa: BLE001 — a malformed row is an unreadable chat

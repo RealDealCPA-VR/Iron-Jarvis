@@ -69,6 +69,8 @@ OFF_REASON = "off"
 NOTHING_REASON = "nothing to suggest from"
 MOCK_REASON = "the demo model does not suggest"
 NO_ROUTER_REASON = "No model is connected, so there are no suggestions."
+#: v1.332.0: a local-only chat whose reply came from a model off this network.
+LOCAL_ONLY_REASON = "This chat is local only, so there are no suggestions from a model off this PC."
 EMPTY_REASON = "The model had no follow-up questions to suggest."
 
 SYSTEM_PROMPT = (
@@ -96,6 +98,11 @@ class FollowupsBody(BaseModel):
     messages: list[FollowupMessage] = Field(default_factory=list)
     provider: str = ""
     model: str = ""
+    #: v1.332.0: the chat is local only (this, OR the saved chat ``thread_id``
+    #: names says so). Suggestions then come only from a model on this
+    #: network: a reply that came from off it gets none, never an error.
+    local_only: bool = False
+    thread_id: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -270,21 +277,44 @@ def register(app: FastAPI, d) -> None:
         if router is None:
             return {"suggestions": [], "reason": NO_ROUTER_REASON}
 
+        # LOCAL ONLY (v1.332.0): the suggestion call is an EXTRA model call the
+        # user never approved one by one. In a local-only chat it runs only on
+        # a model that stays on this network, PINNED (nothing stands in), under
+        # the scope; a reply that came from off this network (even with the
+        # user's one-message OK, which covered that message only) gets no
+        # suggestions and no call.
+        from ...providers import egress as _egress
+
+        local_only = await _egress.effective_local_only(
+            getattr(platform, "engine", None), body.local_only, body.thread_id
+        )
+        if local_only:
+            serving = provider or str(getattr(cfg, "default_provider", "") or "").strip()
+            if serving.lower() == "auto" or not _egress.stays_on_this_network(
+                serving, getattr(platform, "providers", None), cfg
+            ):
+                return {"suggestions": [], "reason": LOCAL_ONLY_REASON}
+
         from ...providers.adapters.base import LLMMessage
 
         bound = asyncio.timeout(FOLLOWUP_TIMEOUT_S)
         try:
             async with bound:
-                route = await router.complete(
-                    provider=provider or None,
-                    model=model or None,
-                    system=SYSTEM_PROMPT,
-                    messages=[LLMMessage(role="user", content=build_prompt(window))],
-                    # EMPTY LIST, never None: no tools, and the adapters build
-                    # their tool payload with `for t in tools`.
-                    tools=[],
-                    task_class="chat",
-                )
+                with _egress.local_only_scope(local_only):
+                    route = await router.complete(
+                        provider=provider or None,
+                        model=model or None,
+                        system=SYSTEM_PROMPT,
+                        messages=[LLMMessage(role="user", content=build_prompt(window))],
+                        # EMPTY LIST, never None: no tools, and the adapters
+                        # build their tool payload with `for t in tools`.
+                        tools=[],
+                        task_class="chat",
+                        # v1.332.0: pinned in a local-only chat (passed ONLY
+                        # then, so a router double that predates the knob
+                        # sees the call it always saw).
+                        **({"pin": True} if local_only else {}),
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a model failure is a reason, never a 500

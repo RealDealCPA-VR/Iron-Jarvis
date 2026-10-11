@@ -86,6 +86,28 @@ def _isolate_cli_provider_home():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_local_ollama_probe():
+    """No test asks the REAL Ollama on this machine's 127.0.0.1:11434 (v1.332.0).
+
+    ``cli_detect.detect_ollama`` runs on every catalog build (``GET /models``,
+    the templates list, the browser sidebar) and probes ``/api/tags`` whenever
+    an ``ollama`` binary is found. On a dev box with Ollama installed and
+    running, a bare test would list that machine's models (and wait on its
+    answer); with Ollama installed and stopped, every build waited out the
+    probe. The probe now reads "not answering" for the whole session, which is
+    exactly what CI sees. Tests that exercise the probe itself set
+    ``cli_detect._OLLAMA_PROBE_FORCED_OFF`` back to False via monkeypatch."""
+    from iron_jarvis.providers import cli_detect
+
+    original = cli_detect._OLLAMA_PROBE_FORCED_OFF
+    cli_detect._OLLAMA_PROBE_FORCED_OFF = True
+    try:
+        yield
+    finally:
+        cli_detect._OLLAMA_PROBE_FORCED_OFF = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_subscription_cli_detection():
     """Keep Claude/OpenAI subscription INHERITANCE out of bare tests.
 

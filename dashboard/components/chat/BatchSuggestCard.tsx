@@ -94,6 +94,8 @@ export function BatchSuggestCard({
   getInstructions,
   workspaceDir,
   sessionId = "chat",
+  localOnly = false,
+  getThreadId,
   onDone,
   onDismiss,
 }: {
@@ -111,6 +113,11 @@ export function BatchSuggestCard({
   /** Where the sheet lands: the conversation's folder (v1.244.0). */
   workspaceDir?: string | null;
   sessionId?: string;
+  /** v1.332.0: this chat is local only, so the batch must stay on this PC's
+   *  network (the daemon also reads the saved chat's own setting). */
+  localOnly?: boolean;
+  /** The open SAVED chat's id, read at the press ("" = not saved yet). */
+  getThreadId?: () => string;
   /** Called with the ABSOLUTE deliverable paths so they join the Files rail. */
   onDone?: (createdPaths: string[], report: Record<string, unknown>) => void;
   onDismiss?: () => void;
@@ -154,6 +161,10 @@ export function BatchSuggestCard({
         max_files: preview!.cap,
         workspace_dir: workspaceDir || "",
         session_id: sessionId,
+        // v1.332.0: a local-only chat's batch stays on this network; a 409
+        // says so in the error line below.
+        local_only: localOnly,
+        thread_id: getThreadId?.() || "",
       });
       const made = res.created_paths || [];
       setDone(made);

@@ -19,12 +19,25 @@
 //
 // ORDER: several open questions show the first with "1 of N"; the one on
 // screen stays first while it is still open (lib/dockAsk.withHeadFirst).
+//
+// v1.332.0: the page's OWN question joins them (kind `cloud`): a "local only"
+// chat about to send a message to a model that would leave this PC asks
+// first. Enter is "Send once", Esc is "Keep it local", like the others.
 
 import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { House } from "lucide-react";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { Button } from "@/components/ui";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import { dockKeyAction, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
+import {
+  CLOUD_ASK_KEEP,
+  CLOUD_ASK_SEND,
+  CLOUD_ASK_TITLE,
+  cloudAskBody,
+  type CloudAsk,
+} from "@/lib/localOnly";
 import type { AnswerResult } from "@/lib/mcpInteract";
 
 /** How long after a question appears before Enter / Esc answer it. */
@@ -40,7 +53,54 @@ const EDGE: Record<DockAskItem["kind"], string> = {
     "shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.55),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.6),0_4px_18px_rgb(var(--white)/0.08)]",
   elicitation:
     "shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.5),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--accent-rgb)/0.55),0_4px_18px_rgb(var(--white)/0.08)]",
+  cloud:
+    "shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.55),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.6),0_4px_18px_rgb(var(--white)/0.08)]",
 };
+
+/** v1.332.0: a "local only" chat asks before a message leaves this PC. The
+ *  page owns what each answer does (`onAnswer(true)` sends this one message
+ *  with the user's OK, `onAnswer(false)` closes and leaves the words in the
+ *  box). Drawn inside the dock's card, so no border or tint of its own. */
+function CloudAskCard({ ask, onAnswer }: { ask: CloudAsk; onAnswer: (send: boolean) => void }) {
+  return (
+    <div
+      role="alertdialog"
+      aria-label={CLOUD_ASK_TITLE}
+      data-testid="cloud-ask-card"
+      data-provider={ask.provider}
+      className="space-y-2.5 px-4 pb-4 pt-3"
+    >
+      <div className="flex items-center gap-2">
+        <House size={15} className="shrink-0 text-tone-success" aria-hidden="true" />
+        <p className="text-[13px] font-medium text-zinc-100">{CLOUD_ASK_TITLE}</p>
+      </div>
+      <p data-testid="cloud-ask-body" className="text-[13px] leading-relaxed text-zinc-300">
+        {cloudAskBody(ask.name)}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {/* The dock's Enter / Esc press these buttons (lib/dockAsk). */}
+        <Button
+          variant="primary"
+          size="sm"
+          data-testid="cloud-ask-send"
+          onClick={() => onAnswer(true)}
+          data-dock-primary=""
+        >
+          {CLOUD_ASK_SEND}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          data-testid="cloud-ask-keep"
+          onClick={() => onAnswer(false)}
+          data-dock-decline=""
+        >
+          {CLOUD_ASK_KEEP}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function bodyHasFocus(): boolean {
   const ae = document.activeElement;
@@ -52,6 +112,7 @@ export function DockAsk({
   onConversation,
   onAnswerElicitation,
   onDecideSampling,
+  onCloudAnswer,
   onStop,
   returnFocus,
   armDelayMs = DOCK_KEY_ARM_MS,
@@ -66,6 +127,8 @@ export function DockAsk({
     content?: Record<string, unknown>,
   ) => Promise<AnswerResult>;
   onDecideSampling: (id: string, decision: "approve" | "deny") => Promise<boolean>;
+  /** v1.332.0: the answer to a `cloud` question: true = "Send once". */
+  onCloudAnswer?: (send: boolean) => void;
   /** Stop the running reply. The composer (and its Stop) is hidden while a
    *  question is up, so the dock offers it too. */
   onStop?: () => void;
@@ -154,6 +217,8 @@ export function DockAsk({
 
   if (!head) return null;
   const total = ordered.length;
+  // Nothing is running behind the page's own question (v1.332.0): no Stop.
+  const stopHere = head.kind === "cloud" ? undefined : onStop;
   return (
     <div
       ref={wrapRef}
@@ -165,14 +230,14 @@ export function DockAsk({
       onKeyDownCapture={onKeyDownCapture}
       className={`relative z-[1] rounded-[20px] bg-ink-800 outline-none ${EDGE[head.kind]}`}
     >
-      {(total > 1 || onStop) && (
+      {(total > 1 || stopHere) && (
         <div className="-mb-1 flex items-center gap-3 px-4 pt-2.5 text-[12px] text-zinc-500">
           {total > 1 && <span data-testid="dock-ask-count">1 of {total}</span>}
-          {onStop && (
+          {stopHere && (
             <button
               type="button"
               data-testid="dock-ask-stop"
-              onClick={onStop}
+              onClick={stopHere}
               title="Stop this reply"
               className="ml-auto rounded-md px-2 py-0.5 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
             >
@@ -181,7 +246,9 @@ export function DockAsk({
           )}
         </div>
       )}
-      {head.kind === "approval" ? (
+      {head.kind === "cloud" ? (
+        <CloudAskCard key={head.id} ask={head.ask} onAnswer={(send) => onCloudAnswer?.(send)} />
+      ) : head.kind === "approval" ? (
         <ApprovalCard key={head.id} approval={head.approval} onConversation={onConversation} docked />
       ) : head.kind === "elicitation" ? (
         <ElicitationCard

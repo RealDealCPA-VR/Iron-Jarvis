@@ -10,6 +10,9 @@
 //     request to use the turn's model); an answered one has an `outcome`
 //     and is not a question any more,
 //   - the approvals an escalated run is paused on (a batch can be several).
+//   - v1.332.0: the page's own question before a send in a "local only"
+//     chat whose model would leave this PC (`cloud`, client-side: nothing is
+//     running while it is up, so it is the only one).
 // The screen shows the FIRST, with "1 of N" when there are more.
 //
 // THE FIRST STAYS FIRST: a question that arrives while the user is halfway
@@ -19,21 +22,26 @@
 
 import type { PendingApproval } from "@/lib/useChatStream";
 import type { McpAsk, McpElicitationAsk, McpSamplingAsk } from "@/lib/mcpInteract";
+import type { CloudAsk } from "@/lib/localOnly";
 
 export type DockAskItem =
   | { kind: "approval"; id: string; approval: PendingApproval }
   | { kind: "elicitation"; id: string; ask: McpElicitationAsk }
-  | { kind: "sampling"; id: string; ask: McpSamplingAsk };
+  | { kind: "sampling"; id: string; ask: McpSamplingAsk }
+  | { kind: "cloud"; id: string; ask: CloudAsk };
 
 /** Every open question, in the order they are answered. */
 export function collectDockAsks({
   approval,
   mcpAsks,
   sessionApprovals,
+  cloud,
 }: {
   approval?: PendingApproval | null;
   mcpAsks?: readonly McpAsk[] | null;
   sessionApprovals?: readonly PendingApproval[] | null;
+  /** v1.332.0: the send waiting on "Send once" / "Keep it local". */
+  cloud?: (CloudAsk & { id: string }) | null;
 }): DockAskItem[] {
   const out: DockAskItem[] = [];
   const seen = new Set<string>();
@@ -42,6 +50,7 @@ export function collectDockAsks({
     seen.add(item.id);
     out.push(item);
   };
+  if (cloud) push({ kind: "cloud", id: cloud.id, ask: cloud });
   if (approval) push({ kind: "approval", id: approval.id, approval });
   for (const a of mcpAsks ?? []) {
     if (a.outcome) continue; // answered or ended: a record, not a question
@@ -63,6 +72,7 @@ export function withHeadFirst(list: readonly DockAskItem[], headId: string | nul
 
 /** The keys line under the card while a question is in the composer's place. */
 export function dockAskKeyHint(kind: DockAskItem["kind"]): string {
+  if (kind === "cloud") return "Enter to send once · Esc to keep it local";
   return kind === "elicitation" ? "Enter to send · Esc to decline" : "Enter to allow · Esc to decline";
 }
 

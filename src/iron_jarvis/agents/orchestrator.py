@@ -152,6 +152,33 @@ def inherited_trust(parent: Session | None) -> tuple[str | None, str]:
     return TRUST_LOW, reason or "inherited from a low-trust parent run"
 
 
+def session_local_only(session: Any) -> bool:
+    """True when a session row is LOCAL ONLY (v1.332.0): its
+    ``options_json`` carries ``local_only: true``. A legacy row, a stub
+    without the column or junk in it reads False."""
+    raw = getattr(session, "options_json", None)
+    if not raw:
+        return False
+    try:
+        import json as _json
+
+        opts = _json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return False
+    return isinstance(opts, dict) and opts.get("local_only") is True
+
+
+def inherited_local_only(parent: Session | None) -> bool:
+    """The LOCAL-ONLY posture a child inherits from its parent (v1.332.0),
+    the way :func:`inherited_trust` hands trust down: a local-only parent's
+    children are local only. Only ever flows DOWN. A child created INSIDE a
+    local-only run (delegate, spawn_agent, a mission teammate) also inherits
+    it through the context (``create_session`` reads the scope); this
+    predicate is for the doors that create the child LATER, outside that
+    context (an agent-queued assignment)."""
+    return parent is not None and session_local_only(parent)
+
+
 def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
     """The up-front tool grant and approval posture a DELEGATED/SPAWNED child
     inherits from its parent: ``(allow_tools, approval_mode)`` (v1.288.0).
@@ -705,6 +732,32 @@ class Orchestrator:
         would manufacture a track record for a prompt that never ran.
         """
         import json as _json
+
+        # LOCAL ONLY (v1.332.0). A session is local only when the door says so
+        # (``options["local_only"]``: the chat's escalation, an assignment
+        # queued by a local-only run) OR it is created INSIDE a local-only
+        # scope — a delegate / spawn_agent child, a mission teammate, anything
+        # a local-only turn starts — so the posture spreads down like trust.
+        # Refused HERE, at the one door every session passes, when its model
+        # leaves this network: nothing is created, the caller gets
+        # ``LocalOnlyRefused`` (the routes' 409 shape). Rerun and continue
+        # keep it, because they copy the options.
+        from ..providers import egress as _egress
+
+        options = dict(options) if isinstance(options, dict) else {}
+        if options.get("local_only") is True or _egress.current_scope().on:
+            options["local_only"] = True
+            _lo_provider = provider or self.p.config.default_provider
+            if not _egress.stays_on_this_network(
+                _lo_provider, getattr(self.p, "providers", None), self.p.config
+            ):
+                raise _egress.LocalOnlyRefused(
+                    _lo_provider,
+                    str(model or self.p.config.default_model or ""),
+                    manager=getattr(self.p, "providers", None),
+                )
+        else:
+            options.pop("local_only", None)
 
         repo_for_worktree: Path | None = None
         # A project-folder task runs DIRECTLY in the user's folder (full

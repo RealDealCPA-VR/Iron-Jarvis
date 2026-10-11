@@ -26,6 +26,7 @@ same tier as ``recall``/``ltm_search``.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -175,6 +176,19 @@ class HistorySearchTool(Tool):
             mode = self.index.mode
         except Exception as exc:  # noqa: BLE001 — a search must never crash a run
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        # LOCAL ONLY (v1.332.0): a chat switched to local only is found only
+        # by work that itself stays on this network (fabric recall's rule);
+        # unreadable setting → every desktop chat is left out (fail closed).
+        from ..providers import egress as _egress
+
+        if not _egress.may_recall_local_only_chats():
+            kept_home = await asyncio.to_thread(
+                _egress.local_only_thread_ids, getattr(self.index, "engine", None)
+            )
+            hits = [
+                h for h in hits
+                if not (h.kind == "chat" and (kept_home is None or h.thread_id in kept_home))
+            ]
 
         lines: list[str] = []
         for i, hit in enumerate(hits, start=1):

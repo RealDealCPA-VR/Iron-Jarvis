@@ -856,10 +856,24 @@ def build_platform(
         user's routing model) and map it to the best CONNECTED model. Returns
         ``{provider, model, tier, classifier}`` or ``None`` to let the router fall
         back. Never raises — the router treats a raised/None result as fallback."""
+        from .providers import egress as _egress
         from .providers import routing as _routing
         from .providers.adapters.base import LLMMessage
 
         connected = _routing.connected_real_models(providers, config)
+        # LOCAL ONLY (v1.332.0): under the chat's toggle Auto chooses only
+        # among models that stay on this network (unless the user allowed
+        # Auto itself for this message), and the classifier below runs only
+        # when IT stays on this network too; otherwise the zero-cost
+        # heuristic decides. The classifier is called DIRECTLY (not through
+        # the router), so this is its only guard.
+        _scope = _egress.current_scope()
+        _local_only = _scope.on and not _egress.is_allowed_once(_scope, "auto")
+        if _local_only:
+            connected = [
+                e for e in connected
+                if _egress.stays_on_this_network(str(e.get("provider") or ""), providers, config)
+            ]
         if not connected:
             return None
         # LATENCY-AWARE tie-break: among equally-cheap models for a tier, the
@@ -883,7 +897,14 @@ def build_platform(
         tier = _routing.heuristic_tier(messages, tools, task_class)
         if tier is None:
             # Ambiguous → ask the cheap routing model to classify.
-            if classifier and providers.available(classifier[0]):
+            if (
+                classifier
+                and providers.available(classifier[0])
+                and (
+                    not _local_only
+                    or _egress.stays_on_this_network(classifier[0], providers, config)
+                )
+            ):
                 try:
                     adapter = providers.get(classifier[0], classifier[1] or None)
                     resp = await adapter.complete(

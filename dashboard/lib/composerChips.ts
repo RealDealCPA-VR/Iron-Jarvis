@@ -17,11 +17,14 @@ const CHIP_BASE =
   "inline-flex h-[30px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
 const CHIP_IDLE = "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200";
 const CHIP_ON = "text-accent-soft hover:bg-accent/10";
+/** v1.332.0: the "Local only" chip when on reads in the success tone. */
+const CHIP_ON_SUCCESS = "text-tone-success hover:bg-tone-success/10";
 
 /** The class for a toolbar chip; `on` tints it with the accent (a project is
- *  chosen, a switch is on, tools are armed). */
-export function composerChipClass(on = false): string {
-  return `${CHIP_BASE} ${on ? CHIP_ON : CHIP_IDLE}`;
+ *  chosen, a switch is on, tools are armed), or with the success tone when
+ *  `tone` says so (v1.332.0: the chat is local only). */
+export function composerChipClass(on = false, tone: "accent" | "success" = "accent"): string {
+  return `${CHIP_BASE} ${on ? (tone === "success" ? CHIP_ON_SUCCESS : CHIP_ON) : CHIP_IDLE}`;
 }
 
 /** A round icon button in the toolbar (the mic). Same quiet rules. */

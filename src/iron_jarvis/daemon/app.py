@@ -124,6 +124,10 @@ def _first_code_block(text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+#: Local only (v1.332.0): the egress guard for the one-shot utilities below,
+#: which call adapters directly and so never pass the router's gate.
+from ..providers import egress as _egress  # noqa: E402
+
 #: Transient-failure classification lives with the router (single source of
 #: truth — it now retries/fails-over for full agent sessions too).
 from ..providers.router import is_transient_error as _is_transient_provider_error  # noqa: E402
@@ -1768,6 +1772,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
     for _exc_type in (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError):
         app.add_exception_handler(_exc_type, _input_error)
 
+    async def _local_only_refused(request: Request, exc: Exception):  # noqa: ANN202
+        # LOCAL ONLY (v1.332.0): nothing was sent because the chat is local
+        # only. ONE shape on every route a local-only chat can reach — POST
+        # /chat, compaction, follow-ups, share/remember/crystallize, the panel,
+        # session escalation: HTTP 409 {detail, code: "local_only", provider,
+        # model}, so the dashboard can offer "send to X once" from any of them.
+        return JSONResponse(status_code=409, content=exc.payload())  # type: ignore[attr-defined]
+
+    app.add_exception_handler(_egress.LocalOnlyRefused, _local_only_refused)
+
     from fastapi.exceptions import RequestValidationError
 
     @app.exception_handler(RequestValidationError)
@@ -2135,6 +2149,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         out: list[tuple[Any, str]] = []
         seen_ids: set[int] = set()
         seen_providers: set[str] = set()
+        # LOCAL ONLY (v1.332.0): under a local-only chat's scope a candidate
+        # must stay on this network — the one-message OK covers the provider
+        # the user named, never a stand-in. Fleet nodes join the order here
+        # (they are this network's machines) so a local-only one-shot still
+        # has somewhere to go when the default is a cloud.
+        _local_only = _egress.current_scope().on
+        if _local_only:
+            try:
+                order += [n for n in platform.router._fleet_names() if n not in order]
+            except Exception:  # noqa: BLE001 — candidate discovery never breaks a call
+                pass
         for p in order:
             if p == "mock" or p in excluded_providers or not platform.providers.available(p):
                 continue
@@ -2146,6 +2171,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 id(adapter) in seen_ids
                 or adapter.provider in seen_providers
                 or adapter.provider in excluded_providers
+            ):
+                continue
+            if _local_only and not _egress.stays_on_this_network(
+                adapter.provider, platform.providers, platform.config
             ):
                 continue
             seen_ids.add(id(adapter))
@@ -2164,7 +2193,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
         with retry-on-transient, then CROSS-PROVIDER failover when the provider
         stays rate-limited. Mirrors the router: iterate ALL connected candidates
         (CLI-first) until one succeeds, not just the first. Returns
-        (response, used_provider, used_model). Raises a clean HTTPException."""
+        (response, used_provider, used_model). Raises a clean HTTPException.
+
+        LOCAL ONLY (v1.332.0): these utilities call the adapter DIRECTLY, so
+        the router's egress gate never sees them. Under a local-only chat's
+        scope an adapter that leaves this network is refused BEFORE the call
+        (:class:`~iron_jarvis.providers.egress.LocalOnlyRefused`, which the
+        app's handler answers as 409), and the failover candidates below are
+        already filtered to this network (``_failover_candidates``)."""
+        _egress.check_egress(
+            getattr(adapter, "provider", "") or provider,
+            str(getattr(adapter, "model", "") or ""),
+            manager=platform.providers,
+            config=platform.config,
+            also=(provider,),
+        )
         try:
             resp = await _complete_with_retry(
                 adapter, system=system, messages=messages, tools=[]
@@ -2277,6 +2320,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
             adapter, prov = _failover_adapter("mock")
         if adapter is None:
             return None
+        # LOCAL ONLY (v1.332.0): under a local-only chat's scope the summary
+        # is written by a model on this network or by nobody — refused by
+        # name HERE (the manual compact answers 409; the turn's automatic one
+        # swallows it and keeps the deterministic recap). The failover pick
+        # above is already filtered to this network.
+        _egress.check_egress(
+            getattr(adapter, "provider", "") or prov,
+            str(getattr(adapter, "model", "") or ""),
+            manager=platform.providers, config=platform.config, also=(prov,),
+        )
 
         from ..providers.adapters.base import LLMMessage
 

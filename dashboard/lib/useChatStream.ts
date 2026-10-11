@@ -14,7 +14,8 @@
 //   done      {"reply","provider","model","tools_used","denied_tools","usage",
 //              "adapted": {model,changes}|null, "unread_steers"?: [text],
 //              ...}                                   (unread_steers: v1.287.0)
-//   error     {"detail","status"?}
+//   error     {"detail","status"?}  (+ "code","provider","model" on a
+//              "local only" refusal: code "local_only", v1.332.0)
 //   thinking  {"text":"…"}  reasoning deltas, display-only, any round (v1.323.0)
 //   (done also carries "truncated": bool since v1.323.0 — the answer ran out
 //    of output tokens; "folder_rules" and "thread_refs" since v1.326.0)
@@ -97,6 +98,9 @@ export type SSEEvent =
        *  arguments in this scope for 30 days); `args_hash` names the set. */
       can_always?: boolean;
       args_hash?: string;
+      /** v1.332.0: a "local only" chat's card for a tool that reaches past
+       *  this PC. It offers "Allow once" and "Deny" only. */
+      once_only?: boolean;
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -191,7 +195,17 @@ export type SSEEvent =
        *  with "@", read or left out — lib/turnReads. */
       thread_refs?: ThreadRefReceipt[];
     }
-  | { type: "error"; detail: string; status?: number; offline?: boolean }
+  | {
+      type: "error";
+      detail: string;
+      status?: number;
+      offline?: boolean;
+      /** v1.332.0: "local_only" when a local-only chat refused a cloud model,
+       *  with the provider and model it did not send to. */
+      code?: string;
+      provider?: string;
+      model?: string;
+    }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
    *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
   | { type: "mcp_elicitation"; ask: McpElicitationAsk }
@@ -467,6 +481,9 @@ export function sseEventFrom(
       // hash only.
       if (data.can_always === true) ev.can_always = true;
       if (typeof data.args_hash === "string" && data.args_hash) ev.args_hash = data.args_hash;
+      // v1.332.0: whitelisted too, a real `true` only, or a local-only card
+      // would quietly offer the wider answers again.
+      if (data.once_only === true) ev.once_only = true;
       return ev;
     }
     case "approval_resolved": {
@@ -603,6 +620,10 @@ export function sseEventFrom(
         detail: str(data.detail) || "stream error",
       };
       if (typeof data.status === "number") ev.status = data.status;
+      // v1.332.0: a "local only" refusal names what it did not send to.
+      if (str(data.code)) ev.code = str(data.code);
+      if (str(data.provider)) ev.provider = str(data.provider);
+      if (str(data.model)) ev.model = str(data.model);
       return ev;
     }
     // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
@@ -774,14 +795,24 @@ export async function* streamSSE(
 
     if (!res.ok) {
       let detail = `${res.status} ${res.statusText}`;
+      let refusal: { code?: string; provider?: string; model?: string } = {};
       try {
-        const parsed = (await res.json()) as { detail?: unknown };
+        const parsed = (await res.json()) as {
+          detail?: unknown;
+          code?: unknown;
+          provider?: unknown;
+          model?: unknown;
+        };
         // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
         if (parsed?.detail) detail = flattenDetail(parsed.detail);
+        // v1.332.0: a 409 "local only" refusal names what it did not send to.
+        if (str(parsed?.code)) {
+          refusal = { code: str(parsed.code), provider: str(parsed.provider), model: str(parsed.model) };
+        }
       } catch {
         /* body wasn't JSON — keep the status line */
       }
-      yield { type: "error", detail, status: res.status };
+      yield { type: "error", detail, status: res.status, ...refusal };
       return;
     }
 
@@ -916,18 +947,27 @@ export class StreamError extends ApiError {
   /** Text streamed before the failure (empty if none) — so the caller can keep
    *  what the user already watched appear rather than dropping it on error. */
   readonly partial: string;
+  /** v1.332.0: "local_only" when a local-only chat refused a cloud model, and
+   *  the provider / model it did not send to ("" otherwise). */
+  readonly code: string;
+  readonly provider: string;
+  readonly model: string;
   constructor(
     message: string,
     status: number,
     committed: boolean,
     offline: boolean,
     partial = "",
+    refusal: { code?: string; provider?: string; model?: string } = {},
   ) {
     super(message, status);
     this.name = "StreamError";
     this.committed = committed;
     this.offline = offline;
     this.partial = partial;
+    this.code = refusal.code ?? "";
+    this.provider = refusal.provider ?? "";
+    this.model = refusal.model ?? "";
   }
 }
 
@@ -945,6 +985,8 @@ export interface PendingApproval {
   /** v1.299.0: "Always allow exactly this" is offered only when true. */
   canAlways?: boolean;
   argsHash?: string;
+  /** v1.332.0: a "local only" chat's card; "Allow once" and "Deny" only. */
+  onceOnly?: boolean;
 }
 
 /**
@@ -1284,6 +1326,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 examples: ev.examples,
                 canAlways: ev.can_always === true,
                 argsHash: ev.args_hash,
+                ...(ev.once_only === true ? { onceOnly: true } : {}),
               });
               break;
             case "approval_resolved":
@@ -1379,6 +1422,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 committed,
                 ev.offline ?? false,
                 acc,
+                { code: ev.code, provider: ev.provider, model: ev.model },
               );
             default:
               break; // round / unknown — nothing to accumulate

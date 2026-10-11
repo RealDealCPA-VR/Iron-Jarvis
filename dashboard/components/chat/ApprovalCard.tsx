@@ -38,6 +38,11 @@
 // `git status` here" is a decision. The button exists ONLY when the daemon
 // offered it: an older daemon never sent the field and sees today's card.
 // The grant is visible and revocable on the Autonomy page (StandingGrants).
+//
+// ONCE ONLY (v1.332.0): in a "local only" chat a tool that reaches past this PC
+// asks on every call, so its card (`onceOnly`) offers Allow once and Deny and
+// nothing wider (no tab, no conversation, no Always), with one quiet line that
+// says why. The daemon reads any wider answer as once anyway.
 
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
@@ -118,10 +123,12 @@ export function ApprovalCard({
   // BUILT-IN browser tools by exact name (lib/toolWords) — an agent-made custom
   // tool called `browser_backup` runs its author's command, has no tab, and the
   // daemon never grants it one, so offering "Allow for this tab" was a lie.
-  const browserAction = isBuiltinBrowserTool(approval.tool);
+  // v1.332.0: a local-only card answers for this one call and no wider.
+  const onceOnly = approval.onceOnly === true;
+  const browserAction = isBuiltinBrowserTool(approval.tool) && !onceOnly;
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
-  const canAlways = approval.canAlways === true;
+  const canAlways = approval.canAlways === true && !onceOnly;
 
   async function decide(decision: "once" | "conversation" | "deny" | "tab" | "always") {
     if (sent) return;
@@ -215,7 +222,12 @@ export function ApprovalCard({
         {waitingLine(approval.timeoutS)}
       </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
-        {batch ? (
+        {onceOnly ? (
+          <>
+            The turn is paused until you answer. “Allow once” runs only this
+            call; Deny refuses it and the assistant is told you declined.
+          </>
+        ) : batch ? (
           <>
             “Allow these {count}” runs exactly these calls; “this conversation”
             stops asking for {approval.tool} here; Deny refuses all {count} and
@@ -229,6 +241,12 @@ export function ApprovalCard({
           </>
         )}
       </p>
+
+      {onceOnly && (
+        <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
+          This chat is local only, so this asks every time.
+        </p>
+      )}
 
       {browserAction && (
         <p data-testid="approval-tab-note" className="text-[11px] leading-relaxed text-zinc-400">
@@ -275,18 +293,20 @@ export function ApprovalCard({
             "Allow once"
           )}
         </button>
-        <button
-          type="button"
-          onClick={() => void decide("conversation")}
-          disabled={!!sent}
-          className="btn-ghost text-xs"
-        >
-          {sent === "conversation" ? (
-            <LoaderInline label="Allowing…" />
-          ) : (
-            "Allow for this conversation"
-          )}
-        </button>
+        {!onceOnly && (
+          <button
+            type="button"
+            onClick={() => void decide("conversation")}
+            disabled={!!sent}
+            className="btn-ghost text-xs"
+          >
+            {sent === "conversation" ? (
+              <LoaderInline label="Allowing…" />
+            ) : (
+              "Allow for this conversation"
+            )}
+          </button>
+        )}
         {canAlways && (
           <button
             type="button"
