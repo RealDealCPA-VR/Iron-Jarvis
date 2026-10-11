@@ -107,7 +107,14 @@ def watch_signin(session: Any, svc: Any) -> None:
             checks = int(getattr(session, "_signin_checks", 0) or 0)
             if checks >= MAX_CHECKS:
                 return
+            # v1.333.0: the tail is read again only when the pane PRINTED
+            # since a read that found nothing — the activity poll asked
+            # every 2.5 s and decoded and scanned the tail each time.
+            seq = getattr(session, "output_seq", None)
+            if seq is not None and seq == getattr(session, "_signin_scanned_seq", None):
+                return
             if not login_succeeded(session.output_tail(), getattr(session, "signin_provider", "")):
+                session._signin_scanned_seq = seq
                 return
             fut = svc.request_refresh(pid, force=checks == 0)
             if fut is not None:

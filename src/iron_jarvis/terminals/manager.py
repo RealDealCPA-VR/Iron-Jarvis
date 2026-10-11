@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -14,6 +15,7 @@ from typing import Any
 
 from ..core.ids import new_id
 from .backend import PipeBackend, PtyBackend
+from .modes import restore_reset
 from .session import TerminalSession, normalise_pane_capabilities
 from .shells import resolve_shell
 
@@ -144,25 +146,46 @@ def _capabilities_or_none(raw: Any) -> dict[str, bool] | None:
     return normalise_pane_capabilities(raw) if isinstance(raw, Mapping) else None
 
 
-def _snapshot_key(sessions: "list[TerminalSession]") -> tuple:
-    """What a snapshot of these sessions covers (v1.245.0): which panes, how
-    far each one's output had got (``output_seq``), and the identity fields a
-    snapshot carries. Equal keys mean the snapshot on disk is already current."""
-    return tuple(
-        sorted(
-            (
-                s.id,
-                getattr(s, "output_seq", 0),
-                s.pane_name or "",
-                s.agent_cli or "",
-                getattr(s, "resume_cli", None) or "",
-                getattr(s, "claude_session_id", None) or "",
-                # v1.303.2: a pane "continue on the next account" opened.
-                json.dumps(getattr(s, "continued_from", None) or {}, sort_keys=True),
-            )
-            for s in sessions
-        )
-    )
+#: v1.333.0: a pane id that can name its scrollback file. Every id this app
+#: mints matches; anything else (a hand-edited snapshot) keeps its scrollback
+#: inline in the index, as every pane did before.
+_FILE_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _scrollback_dir(state_path: Path) -> Path:
+    """Where each pane's scrollback file lives: ``terminals-scrollback/``
+    beside ``terminals.json``."""
+    return state_path.with_name(state_path.stem + "-scrollback")
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
+def _stop_background_of(sessions: "list[TerminalSession]") -> None:
+    """v1.333.0 (review): a pane whose shell ended ON ITS OWN (``exit``) and
+    that nobody closed is dropped by ``purge_dead`` without a ``kill()`` —
+    so its job was never swept and its hidden background processes (a
+    ``Start-Process`` dev server) ran on with no pane left to stop them, and
+    the job handle leaked. Sweep it as a close would, on its own thread:
+    ``purge_dead`` runs under the manager's lock, often on a request."""
+    sweeps = [
+        getattr(s.backend, "stop_background", None) for s in sessions
+    ]
+    sweeps = [fn for fn in sweeps if callable(fn)]
+    if not sweeps:
+        return
+
+    def _run() -> None:
+        for fn in sweeps:
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 — a sweep never breaks the manager
+                log.debug("dropped pane sweep failed", exc_info=True)
+
+    threading.Thread(target=_run, name="pane-sweep", daemon=True).start()
 
 
 _CONTINUED_KEYS = ("from_id", "from_title", "session_id", "carried_path", "at")
@@ -333,6 +356,7 @@ class TerminalManager:
         recipe: str | None = None,
         accounts: Any | None = None,
         claude_session_id: str | None = None,
+        below_normal: bool = False,
     ) -> TerminalSession:
         """Create, start, and register a new session.
 
@@ -352,6 +376,10 @@ class TerminalManager:
         resolved here through :attr:`account_resolver` — BLOCKING, and a
         refusal raises before anything is spawned) or an already-resolved
         ``PaneAccounts``. ``None`` = today's behaviour exactly.
+
+        ``below_normal`` (v1.333.0) starts the shell below normal priority —
+        for a pane an AGENT opens (``pane_spawn``); what the shell starts
+        inherits it. Panes the user opens leave it False.
         """
         cwd = cwd or str(Path.home())
         # `shell_name` (was `name`): the PARAMETER `name` is the pane's
@@ -376,7 +404,7 @@ class TerminalManager:
         try:
             return self._create_reserved(
                 cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
-                capabilities, recipe, accounts, claude_session_id,
+                capabilities, recipe, accounts, claude_session_id, below_normal,
             )
         finally:
             with self._lock:
@@ -384,7 +412,7 @@ class TerminalManager:
 
     def _create_reserved(
         self, cwd, shell_name, argv, cols, rows, backend, env, name, agent_cli,
-        capabilities, recipe, accounts, claude_session_id,
+        capabilities, recipe, accounts, claude_session_id, below_normal=False,
     ) -> TerminalSession:
         """The body of :meth:`create` once its cap slot is reserved."""
         if accounts is not None and isinstance(accounts, Mapping):
@@ -431,6 +459,9 @@ class TerminalManager:
                 rows,
                 backend,
                 _with_pane_env(env, pane_env, accounts),
+                # Passed only when set: a user's pane calls `_spawn` exactly
+                # as before v1.333.0 (tests and seams replace `_spawn`).
+                **({"below_normal": True} if below_normal else {}),
             )
             session.id = pane_id
             session.pane_name = name
@@ -526,7 +557,7 @@ class TerminalManager:
                 self._revoke_pane_tokens_for(store, pane_ids)
 
     def _spawn(
-        self, cwd, name, argv, cols, rows, backend, env
+        self, cwd, name, argv, cols, rows, backend, env, *, below_normal: bool = False
     ) -> TerminalSession:
         """Spawn a session, transparently falling back to a pipe-based shell if
         the real PTY spawns a shell that dies immediately.
@@ -537,20 +568,21 @@ class TerminalManager:
         remember it (``_pty_ok = False``) and use :class:`PipeBackend` for this
         and all future terminals — commands still run, just without a full TTY.
         """
+        low = {"below_normal": True} if below_normal else {}
         if backend is not None:  # explicit backend (tests) — no verify/fallback
             session = TerminalSession(
-                cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=backend
+                cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=backend, **low
             )
             session.start(env=env)
             return session
 
         # Known-bad PTY in this environment → pipe shell straight away (no wait).
         if self._pty_ok is False:
-            return self._pipe_session(cwd, name, argv, cols, rows, env)
+            return self._pipe_session(cwd, name, argv, cols, rows, env, **low)
 
         from .backend import ConPtyUnavailable, mark_conpty_broken
 
-        session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows)
+        session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, **low)
         try:
             session.start(env=env)
         except ConPtyUnavailable:
@@ -560,7 +592,7 @@ class TerminalManager:
             # spawn on the next backend in `default_backend`'s order.
             log.warning("raw ConPTY unavailable; using the next backend", exc_info=True)
             mark_conpty_broken()
-            session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows)
+            session = TerminalSession(cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, **low)
             session.start(env=env)
 
         if self._pty_ok is True:  # already verified healthy — trust it, no wait
@@ -582,12 +614,13 @@ class TerminalManager:
             session.kill()
         except Exception:  # pragma: no cover - defensive
             pass
-        return self._pipe_session(cwd, name, argv, cols, rows, env)
+        return self._pipe_session(cwd, name, argv, cols, rows, env, **low)
 
     @staticmethod
-    def _pipe_session(cwd, name, argv, cols, rows, env) -> TerminalSession:
+    def _pipe_session(cwd, name, argv, cols, rows, env, below_normal=False) -> TerminalSession:
         session = TerminalSession(
-            cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=PipeBackend()
+            cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=PipeBackend(),
+            below_normal=below_normal,
         )
         session.start(env=env)
         session.degraded = True  # UI hint: basic shell, no full TTY
@@ -612,8 +645,11 @@ class TerminalManager:
         with self._lock:
             dead = [sid for sid, s in self._sessions.items() if not s.alive]
             stale = dead[: -self.max_dead_retained] if self.max_dead_retained else dead
+            dropped = []
             for sid in stale:
-                self._sessions.pop(sid, None)  # tolerate an already-removed key
+                gone_session = self._sessions.pop(sid, None)  # tolerate an already-removed key
+                if gone_session is not None:
+                    dropped.append(gone_session)
             live = [sid for sid, s in self._sessions.items() if s.alive]
             gone = [sid for sid in dead if sid not in live]
             # A pane mid-`create()` holds a minted token and no session row yet.
@@ -635,6 +671,7 @@ class TerminalManager:
                 log.warning("could not sync pane capability tokens", exc_info=True)
         if self.mcp_sessions is not None:
             self._revoke_pane_tokens_for(self.mcp_sessions, gone)
+        _stop_background_of(dropped)
         return len(stale)
 
     def kill(self, id: str) -> bool:
@@ -653,6 +690,19 @@ class TerminalManager:
         return True
 
     def kill_all(self) -> None:
+        # v1.333.0 (review): THE SHUTDOWN SNAPSHOT CARRIES THE SCROLLBACK
+        # INLINE too. Since v1.333.0 the 30 s snapshot keeps each pane's
+        # history in its own file and the index holds none; an OLDER app
+        # (a downgrade, or a reinstall of the previous version) reads only
+        # the index and would restore every pane EMPTY. Written once per
+        # clean shutdown, so an update or downgrade after a normal quit keeps
+        # the history; a crash still has the per-pane files. A restore
+        # prefers the inline copy: it is written only here (or by an older
+        # app), always after the files, so it is never the older one.
+        try:
+            self.snapshot(inline=True)
+        except Exception:  # noqa: BLE001 — persistence never blocks a shutdown
+            log.debug("shutdown terminal snapshot failed", exc_info=True)
         with self._lock:
             items = list(self._sessions.values())
         for session in items:
@@ -686,95 +736,203 @@ class TerminalManager:
         except Exception:  # pragma: no cover - persistence must never break terminals
             log.debug("terminal snapshot failed", exc_info=True)
 
-    def snapshot(self) -> None:
-        """Persist all LIVE sessions to ``state_path`` (atomic write; no-op when
-        persistence is disabled)."""
-        if not self.state_path:
-            return
-        with self._lock:
-            sessions = [s for s in self._sessions.values() if s.alive]
-        # What this write covers, so snapshot_if_changed can tell "nothing
-        # printed since" from "a pane printed" without writing to find out.
-        self._last_snapshot_key = _snapshot_key(sessions)
-        out: list[dict[str, Any]] = []
-        for s in sessions:
+    # SCROLLBACK IS ONE FILE PER PANE (v1.333.0, B5). The snapshot was ONE
+    # file holding every pane's last 64 KB as base64, rewritten whole every
+    # 30 s whenever ANY pane printed: one busy Claude beside five quiet
+    # shells rewrote all six (~88 KB each), ~1.5 GB of disk writes a day for
+    # six busy panes. Now `terminals.json` is the INDEX (identity, folder,
+    # size, accounts, ...; small) and each pane's raw scrollback lives in
+    # `terminals-scrollback/<id>.bin`, written only when THAT pane printed
+    # since its last write. The index is rewritten only when what it says
+    # changed. Same promise: a crash loses at most ~30 s of scrollback.
+    # Reading stays compatible: an index entry that still carries
+    # `scrollback_b64` (written before v1.333.0) is restored from it.
+
+    def _entry(self, s: TerminalSession, inline: bool = False) -> dict[str, Any]:
+        """One pane's index entry (no scrollback unless its id cannot name a
+        file — see :data:`_FILE_SAFE_ID` — or ``inline``: the shutdown
+        snapshot, see :meth:`kill_all`)."""
+        entry: dict[str, Any] = {
+            "id": s.id,
+            "shell": s.shell,
+            "argv": list(s.argv),
+            "cwd": s.cwd,
+            "cols": s.cols,
+            "rows": s.rows,
+            # v1.217.0: the pane's identity is part of the pane.
+            # Dropping it here would silently un-name every pane
+            # on restart, and an agent addressing panes by name
+            # would find none of them after a daemon restart —
+            # which is exactly when it most needs to.
+            "name": s.pane_name,
+            "agent_cli": s.agent_cli,
+            # v1.245.0: an unanswered Resume offer survives
+            # another restart (restore reads either field).
+            "resume_cli": s.resume_cli,
+            # v1.238.0: WITHOUT THIS LINE the pane's capabilities
+            # silently reset to none on every daemon restart, and
+            # every unit test stays green because they all ask the
+            # live object. `capabilities` is written as stored —
+            # `null` for a pane that was never configured — so a
+            # reader can still tell "never set" from "all unticked".
+            "capabilities": (
+                dict(s.capabilities)
+                if isinstance(s.capabilities, dict)
+                else None
+            ),
+            # v1.302.0: which account each CLI ran as (ids +
+            # titles + source; never a note — a restore writes
+            # its own). Only for a pane that has accounts, so
+            # every other entry is byte-identical to v1.301.0.
+            **(
+                {"accounts": _persisted_accounts(s.accounts)}
+                if getattr(s, "accounts", None)
+                else {}
+            ),
+            # v1.303.0: the conversation this app started here.
+            **(
+                {"claude_session_id": s.claude_session_id}
+                if getattr(s, "claude_session_id", None)
+                else {}
+            ),
+            # v1.303.2: where this pane's conversation came from
+            # (its resume-failure check and handoff read it).
+            **(
+                {"continued_from": dict(s.continued_from)}
+                if getattr(s, "continued_from", None)
+                else {}
+            ),
+            # v1.333.0: a pane an agent opened comes back below normal.
+            **({"below_normal": True} if getattr(s, "below_normal", False) else {}),
+        }
+        # v1.333.0: what a daemon CRASH would leave running from this pane —
+        # its hidden background processes, by (pid, start time); the next
+        # boot stops the exact matches (terminals/pane_jobs.py).
+        members = getattr(s.backend, "background_members", None)
+        if callable(members):
             try:
-                sb = s.scrollback_bytes()[-_SNAPSHOT_SCROLLBACK:]
-                out.append(
-                    {
-                        "id": s.id,
-                        "shell": s.shell,
-                        "argv": list(s.argv),
-                        "cwd": s.cwd,
-                        "cols": s.cols,
-                        "rows": s.rows,
-                        # v1.217.0: the pane's identity is part of the pane.
-                        # Dropping it here would silently un-name every pane
-                        # on restart, and an agent addressing panes by name
-                        # would find none of them after a daemon restart —
-                        # which is exactly when it most needs to.
-                        "name": s.pane_name,
-                        "agent_cli": s.agent_cli,
-                        # v1.245.0: an unanswered Resume offer survives
-                        # another restart (restore reads either field).
-                        "resume_cli": s.resume_cli,
-                        # v1.238.0: WITHOUT THIS LINE the pane's capabilities
-                        # silently reset to none on every daemon restart, and
-                        # every unit test stays green because they all ask the
-                        # live object. `capabilities` is written as stored —
-                        # `null` for a pane that was never configured — so a
-                        # reader can still tell "never set" from "all unticked".
-                        "capabilities": (
-                            dict(s.capabilities)
-                            if isinstance(s.capabilities, dict)
-                            else None
-                        ),
-                        # v1.302.0: which account each CLI ran as (ids +
-                        # titles + source; never a note — a restore writes
-                        # its own). Only for a pane that has accounts, so
-                        # every other entry is byte-identical to v1.301.0.
-                        **(
-                            {"accounts": _persisted_accounts(s.accounts)}
-                            if getattr(s, "accounts", None)
-                            else {}
-                        ),
-                        # v1.303.0: the conversation this app started here.
-                        **(
-                            {"claude_session_id": s.claude_session_id}
-                            if getattr(s, "claude_session_id", None)
-                            else {}
-                        ),
-                        # v1.303.2: where this pane's conversation came from
-                        # (its resume-failure check and handoff read it).
-                        **(
-                            {"continued_from": dict(s.continued_from)}
-                            if getattr(s, "continued_from", None)
-                            else {}
-                        ),
-                        "scrollback_b64": base64.b64encode(sb).decode("ascii"),
-                    }
-                )
-            except Exception:  # pragma: no cover - skip an odd session, keep the rest
+                background = members()
+            except Exception:  # noqa: BLE001
+                background = []
+            if background:
+                entry["background"] = background
+        if inline or not _FILE_SAFE_ID.match(str(s.id)):
+            sb = s.scrollback_bytes()[-_SNAPSHOT_SCROLLBACK:]
+            entry["scrollback_b64"] = base64.b64encode(sb).decode("ascii")
+        return entry
+
+    def _write_scrollbacks(self, sessions: list[TerminalSession]) -> int:
+        """Write the scrollback file of each pane that printed since its last
+        write (its ``output_seq`` moved). Returns how many were written."""
+        folder = _scrollback_dir(self.state_path)
+        wrote = 0
+        for s in sessions:
+            # What the file holds: how far the output got, and WHICH tail (a
+            # restore replaces the buffer without printing anything).
+            tail = getattr(s, "_tail", b"")
+            seq = (getattr(s, "output_seq", 0), len(tail), id(tail))
+            if not _FILE_SAFE_ID.match(str(s.id)) or getattr(s, "_snap_seq", None) == seq:
                 continue
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                _write_atomic(folder / f"{s.id}.bin", s.scrollback_bytes()[-_SNAPSHOT_SCROLLBACK:])
+            except OSError:  # retried on the next tick: _snap_seq is not advanced
+                log.debug("could not write a pane's scrollback", exc_info=True)
+                continue
+            s._snap_seq = seq
+            wrote += 1
+        return wrote
+
+    def _write_index(self, entries: list[dict[str, Any]], text: str) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"terminals": out}), encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8")
         tmp.replace(self.state_path)
+        self._last_index = text
+        # A scrollback file whose pane is no longer in the index is history
+        # nobody can restore: remove it (and any torn temp file). Never while
+        # a pane is being created or restored (a restore reads its file), and
+        # never the file of a LIVE pane this manager holds: two snapshots
+        # can overlap (the 30 s loop and a create's), and the one that listed
+        # the panes first must not delete what the other just wrote (review).
+        with self._lock:
+            if self._reserved:
+                return
+            held = {sid for sid, s in self._sessions.items() if s.alive}
+        keep = {f"{i}.bin" for i in held | {e["id"] for e in entries}}
+        folder = _scrollback_dir(self.state_path)
+        try:
+            names = [p for p in folder.iterdir() if p.is_file()]
+        except OSError:
+            return
+        for p in names:
+            if p.name not in keep:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+    def _live_for_snapshot(self) -> list[TerminalSession]:
+        with self._lock:
+            return [s for s in self._sessions.values() if s.alive]
+
+    def _index_text(
+        self, sessions: list[TerminalSession], inline: bool = False
+    ) -> tuple[list[dict[str, Any]], str]:
+        entries: list[dict[str, Any]] = []
+        for s in sessions:
+            try:
+                entries.append(self._entry(s, inline))
+            except Exception:  # pragma: no cover - skip an odd session, keep the rest
+                continue
+        return entries, json.dumps({"terminals": entries})
+
+    def snapshot(self, *, inline: bool = False) -> None:
+        """Persist all LIVE sessions under ``state_path`` (atomic writes; no-op
+        when persistence is disabled): every scrollback that changed, and the
+        index, always. ``inline`` also puts each pane's scrollback in the
+        index, as every snapshot did before v1.333.0 (see :meth:`kill_all`)."""
+        if not self.state_path:
+            return
+        sessions = self._live_for_snapshot()
+        self._write_scrollbacks(sessions)
+        entries, text = self._index_text(sessions, inline)
+        self._write_index(entries, text)
 
     def snapshot_if_changed(self) -> bool:
-        """Write the snapshot only when it would differ from the last one
-        (v1.245.0). The daemon's 30 s loop calls this, so a quiet afternoon
-        costs nothing and a crash loses at most ~30 s of scrollback. Returns
-        True when it wrote. BLOCKING (JSON + atomic write): call it off the loop.
-        """
+        """Write only what changed since the last write (v1.245.0; per pane
+        since v1.333.0): the scrollback file of each pane that printed, and
+        the index only when what it says changed. The daemon's 30 s loop
+        calls this, so a quiet afternoon costs nothing, one busy pane costs
+        one file, and a crash loses at most ~30 s of scrollback. Returns True
+        when it wrote. BLOCKING (file writes): call it off the loop."""
         if not self.state_path:
             return False
-        with self._lock:
-            sessions = [s for s in self._sessions.values() if s.alive]
-        if _snapshot_key(sessions) == getattr(self, "_last_snapshot_key", None):
-            return False
-        self.snapshot()
-        return True
+        sessions = self._live_for_snapshot()
+        wrote = self._write_scrollbacks(sessions) > 0
+        entries, text = self._index_text(sessions)
+        if text != getattr(self, "_last_index", None):
+            self._write_index(entries, text)
+            wrote = True
+        return wrote
+
+    def _saved_scrollback(self, entry: Mapping[str, Any], rid: str) -> bytes:
+        """A snapshot entry's scrollback: inline (an index written before
+        v1.333.0, or an id that cannot name a file), else its own file."""
+        sb = entry.get("scrollback_b64")
+        if sb:
+            try:
+                return base64.b64decode(sb)
+            except Exception:  # pragma: no cover - bad data, keep the fresh shell
+                return b""
+        if not self.state_path or not _FILE_SAFE_ID.match(str(rid)):
+            return b""
+        try:
+            return (_scrollback_dir(self.state_path) / f"{rid}.bin").read_bytes()[
+                -_SNAPSHOT_SCROLLBACK:
+            ]
+        except OSError:
+            return b""
 
     def restore(
         self,
@@ -831,6 +989,7 @@ class TerminalManager:
             rows,
             backend,
             _with_pane_env(env, pane_env, accounts),
+            **({"below_normal": True} if entry.get("below_normal") is True else {}),
         )
         session.accounts = _account_records(accounts)
         sid = entry.get("claude_session_id")
@@ -858,15 +1017,21 @@ class TerminalManager:
         # re-minting would hand a live credential to whatever now occupies that
         # pane. `/mcp` answers 401 until the user relaunches the harness.
         session.pane_env_extra = pane_env
-        sb = entry.get("scrollback_b64")
-        if sb:
-            try:
-                session._tail = bytearray(base64.b64decode(sb))
-                # A snapshot that FILLED its cap was sliced at a raw byte
-                # offset — serve its replay from a safe boundary, not the cut.
-                session._tail_truncated = len(session._tail) >= _SNAPSHOT_SCROLLBACK
-            except Exception:  # pragma: no cover - bad data, keep the fresh shell
-                pass
+        old = self._saved_scrollback(entry, rid)
+        if old:
+            # v1.333.0: the old program's bytes are followed by
+            # `restore_reset`. That program is DEAD, and a replay that left
+            # xterm in its mouse mode sent a mouse report for every cell the
+            # pointer crossed — the wheel stopped scrolling, selecting needed
+            # Shift, and the reports were typed into the fresh shell as text
+            # (terminals/modes.py).
+            # Once: a tail that already ends with it (a pane restored and
+            # closed again before its new shell printed) gets no second copy.
+            reset = restore_reset(old)
+            session._tail = bytearray(old if old.endswith(reset) else old + reset)
+            # A snapshot that FILLED its cap was sliced at a raw byte
+            # offset — serve its replay from a safe boundary, not the cut.
+            session._tail_truncated = len(old) >= _SNAPSHOT_SCROLLBACK
         if register:
             with self._lock:
                 self._sessions[rid] = session
@@ -957,6 +1122,18 @@ class TerminalManager:
         entries = [e for e in entries if isinstance(e, dict)]
         if not entries:
             return 0
+        # v1.333.0: a daemon that CRASHED closed no pane, so the hidden
+        # background processes its panes started are still running. Stop the
+        # exact (pid, start time) matches that are still hidden — never one
+        # with a window (terminals/pane_jobs.py). After a clean shutdown they
+        # are already gone and nothing matches.
+        leftovers = [
+            pair for e in entries for pair in (e.get("background") or []) if isinstance(pair, list)
+        ]
+        if leftovers:
+            from .pane_jobs import stop_leftovers
+
+            stop_leftovers(leftovers)
         # THE PANES COME BACK CONCURRENTLY (v1.311.0, finding
         # boot-blocked-by-mcp-and-pane-respawn). Each restore is a shell spawn
         # (~0.3 s for pwsh under ConPTY) and they ran one after another inside

@@ -155,18 +155,17 @@ async def test_docker_availability_probe_runs_off_the_event_loop(
 async def test_custom_command_tool_runs_off_the_event_loop(tmp_path, monkeypatch):
     """Every ``custom:*`` tool built by an agent offloads too (v1.175.0)."""
     seen: dict[str, str] = {}
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def _slow_run(*args, **kwargs):
+    # v1.333.0: the tool spawns through `core.procs` (Popen + a bounded
+    # communicate), so the blocking SPAWN is what is slowed and watched; the
+    # child it hands back is real.
+    def _slow_popen(*args, **kwargs):
         seen["thread"] = threading.current_thread().name
         time.sleep(_BLOCK_S)
-        return real_run(
-            [sys.executable, "-c", "print('hi')"],
-            capture_output=True,
-            text=True,
-        )
+        return real_popen(*args, **kwargs)
 
-    monkeypatch.setattr("iron_jarvis.tools.dynamic.subprocess.run", _slow_run)
+    monkeypatch.setattr("iron_jarvis.core.procs.subprocess.Popen", _slow_popen)
 
     record = DynamicToolRecord(
         name="echoer",

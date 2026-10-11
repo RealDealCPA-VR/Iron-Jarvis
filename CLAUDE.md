@@ -3030,6 +3030,93 @@ does not need a bump, stop and bump it.
   `tests/test_{catalog_speed,liveness_memo,prep_overlap}_v1332.py`,
   `dashboard/__tests__/local-only-*-v1332.test.ts(x)`.
 
+- **Iron Jarvis must not eat the PC** (v1.333.0; the user: "how this app
+  utilizes computer resources … sustain a multiday workload without making the
+  PC slow … dont change any of the look and feel"). Five lanes, each reviewed
+  against the real diff. MEMORY: numpy is imported ONLY through
+  `core/_numpy.py` (sets OPENBLAS_NUM_THREADS=1 only if unset, imports, then
+  restores/pops it so children keep full BLAS) — OpenBLAS otherwise commits
+  ~750 MB + 23 threads at import on a 24-core PC (daemon 860 → 84 MB private,
+  33 → 10 threads); a source pin forbids a bare `import numpy`.
+  `packaging/ironjarvis_entry._fast_path` serves `repl-worker` and
+  `mcp-stdio [url]` without the Typer app (each child was ~820 MB commit; now
+  ~12/19 MB) — keep them byte-identical to the subcommands. REPL children are
+  reclaimed: `_repl_sweep_loop` (60 s, IDLE_TTL_S) spares sessions a run
+  HOLDS (`ReplRegistry.hold/release`, runtime `_hold_repl`/`_release_repl`),
+  a run's end disposes its namespaces (never "chat"), `dispose_all` at
+  shutdown. `gc.collect(); gc.freeze()` once after boot + a gen-2 pause watch
+  removed in the lifespan finally. `/health` & co. read CLI sign-in verdicts
+  through `cli_auth.cached_verdicts()`: signed-in = cache only (0 spawns),
+  signed-out/unknown re-checked every `UNSIGNED_RECHECK_S` (120 s) so the
+  wizard still turns green by itself; the router keeps the 900 s TTL; presence
+  TTLs 600/60 s. Bounded: filesearch float32 rows + 50k chunk cap, registry
+  read cache 8M chars + `forget_session`, MCP idle stdout 4096 lines, small
+  maps LRU'd. Idle wake-ups: fleet sampler and the browser socket wait on
+  events (browser keeps a 2 s backstop; KEEPALIVE_S unchanged), the
+  assignments dispatcher idles 60 s with nothing queued (wake() is
+  thread-safe). PROCESSES: every child goes through `core/procs`
+  (`run`/`run_async`/`spawn`/`kill_tree`/`release`): per-child Windows Job,
+  created SUSPENDED → assigned → resumed (NT_SUCCESS, never a double spawn),
+  KILL_ON_JOB_CLOSE so nothing outlives the daemon even after a crash, a
+  timeout kills the TREE and the drain is bounded (`DRAIN_TIMEOUT_S`) —
+  `subprocess.run(timeout=)` used to park a worker thread for a grandchild's
+  life. `keep_windows` (shell, run_code, custom:*): no kill-on-close; on
+  timeout/cancel stop members with no visible window that are not GUI
+  programs; on SUCCESS keep them for the session (`owned_by(sid)`,
+  `end_session` from the runtime's run finally, `end_all` at shutdown, cap
+  64) — a dev server an agent started survives until its run ends. Iron-Proxy,
+  MCP packs, panes and the REPL keep their own spawns:
+  `tests/test_process_hygiene_v1333.py::ALLOWED_RAW_SPAWNS` fails on a new raw
+  spawn. THE LANE: `procs.background_lane()` (a ContextVar) is set ONCE by
+  `Orchestrator.run_session` for an UNATTENDED origin (a tagged door —
+  schedule/goal/workflow/reflex/comm/assignment/autonomy; an EMPTY origin is a
+  person and stays attended) → children get BELOW_NORMAL (flag + job limit);
+  never IDLE/EcoQoS. GOVERNOR: run_session counts unattended live runs from
+  every door; with no cap (`max_concurrent_sessions` 0, the default — the
+  user's decision) more than `busy_runs_notice_at` (4) publishes ONE
+  `runs.busy` per episode (≤1/h, `POST /runs/busy/not-now` snoozes 24 h in
+  memory) and the bell asks "Queue extras" (PUT /settings/values, Undo-able) /
+  "Not now"; with a cap, unattended non-nested runs park in the SAME `_queued`
+  FIFO via `_SlotTicket` (woken with call_soon_threadsafe on their own loop);
+  a run started inside a run (`_IN_RUN`) never parks (no deadlock), promoted
+  runs start in a fresh Context on `_home_loop`. BUILD: `terminals/modes.py`
+  tracks mouse/paste/alt-screen switches; a restored tail gets
+  `restore_reset(tail)`; a mouse report typed into a native shell with no child
+  is dropped and MODE_RESET pushed; when the program that turned tracking on
+  dies, MODE_RESET is pushed once (the 2026-10-11 overnight "nonsense typed
+  into the pane"). ConPTY shells live in a per-pane Job
+  (PROC_THREAD_ATTRIBUTE_JOB_LIST, no kill-on-close; `IRONJARVIS_PANE_JOB=off`
+  escape hatch): closing a pane / kill_all stops hidden members
+  (`pane_jobs.stop_hidden` spares window owners, their helpers and their
+  launchers, incl. a visible console window via its host — and a console a
+  TERMINAL draws (`PseudoConsoleWindow`: Windows 11 hands every new console
+  to Windows Terminal, so `start npm run dev` from a pane is a Terminal tab)
+  ALWAYS counts as a window; the pane's own console is excluded via
+  `own_host`); only children on the pane's OWN console make the shell
+  "busy" for the mouse filter/watcher (a hidden dev server must not disable
+  them); a pane whose shell ended by itself is swept when `purge_dead` drops
+  it; the snapshot records outside-console members (pid, start) and boot
+  stops exact matches (deciding with their current descendants). A clean
+  shutdown (`kill_all`) writes the index WITH inline `scrollback_b64` so an
+  older app (downgrade) keeps history.
+  `pane_spawn` panes run BELOW_NORMAL. Snapshot scrollback lives in
+  `terminals-scrollback/<id>.bin` written only on change, `terminals.json` is
+  an index (legacy inline read kept). Coalesced waker, IDLE_WAKE_S 60, WS input
+  written off the loop in order, incremental resume check, a 1013 while hidden
+  reconnects when the window is seen. DASHBOARD/DESKTOP: `useApi` background
+  ticks wait on their own young request and keep ≤ 2 outstanding PER PATH;
+  `GET /sessions/{id}?transcript=0` is the slim (still nested) status read
+  (chat finalize, ProjectTasks, the quick task, the MoodOrb reconnect check);
+  every `useEvents()` subscriber passes `{types}` unless it shows every event
+  (pinned); hidden windows stop the project-task, workflow-run and creative
+  clocks; the quick task treats cancelled as an end and says "Still running"
+  at its cap; a hidden Spotlight is destroyed after 10 min; pop-outs reload
+  after a renderer crash through the shared breaker (supersedes the v1.283.0
+  "not attached to pop-outs" note for crash reload only). Pins: every
+  `*_v1333.py` in tests/ and `*-v1333.test.ts(x)` in dashboard/__tests__.
+  RELEASE CHECK (frozen build): a REPL cell `import numpy` under confinement,
+  and the `mcp-stdio` initialize line, both through the new fast paths.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

@@ -192,18 +192,16 @@ def _grok_models_from_binary(exec_path: str) -> list[dict[str, Any]]:
     """
     try:
         import re
-        import subprocess
 
-        proc = subprocess.run(
-            [exec_path, "models"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        from ..core import procs
+
+        # `core.procs.run` (v1.333.0): a timeout kills the whole tree and the
+        # drain after it is bounded (a timed-out run raises, answered [] below).
+        res = procs.run([exec_path, "models"], timeout=20).check_timeout()
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
         # Grok model ids look like ``grok-build`` / ``grok-composer-2.5-fast``.
-        for token in re.findall(r"grok[a-z0-9.\-]+", proc.stdout or ""):
+        for token in re.findall(r"grok[a-z0-9.\-]+", procs.text(res.stdout)):
             mid = token.strip(".-")
             if mid and mid not in seen:
                 seen.add(mid)

@@ -215,6 +215,10 @@ CACHEABLE_READ_TOOLS: frozenset[str] = frozenset(
 #: remembered (an optimisation that declines is still correct).
 _READ_CACHE_MAX_ENTRIES = 256
 _READ_CACHE_MAX_CHARS = 400_000
+#: v1.333.0 (D8): a budget on the cache's TOTAL text as well. By count alone
+#: the cache could hold 256 x 400k chars (~100M characters, a few hundred MB
+#: of str) for the life of the daemon; eviction stays least-recently-used.
+_READ_CACHE_MAX_TOTAL_CHARS = 8_000_000
 
 #: Tools whose SUCCESS means the filesystem may have changed under the cache.
 #:
@@ -269,6 +273,8 @@ class ToolRegistry:
         #: READ CACHE (contract 3, v1.174.0). ``key -> {output, data, tool,
         #: step}``, LRU-ordered. See ``CACHEABLE_READ_TOOLS``.
         self._read_cache: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
+        #: Characters held across every cached read (v1.333.0, D8).
+        self._read_cache_chars = 0
         #: Per-scope mutation generation. Bumped by every SUCCESSFUL non-readonly
         #: tool call, which also purges that scope's cached reads — see
         #: ``_invalidate_scope`` for why mtime+size alone is not enough.
@@ -1186,6 +1192,8 @@ class ToolRegistry:
         if len(text) > _READ_CACHE_MAX_CHARS:
             return
         data = dict(result.data) if isinstance(result.data, dict) else {}
+        self._drop_read(key)  # a refreshed entry replaces, never double-counts
+        self._read_cache_chars += len(text)
         self._read_cache[key] = {
             "output": text,
             "data": data,
@@ -1197,8 +1205,29 @@ class ToolRegistry:
             "ocr_capable": self._ocr_capable(tool),
         }
         self._read_cache.move_to_end(key)
-        while len(self._read_cache) > _READ_CACHE_MAX_ENTRIES:
-            self._read_cache.popitem(last=False)
+        while self._read_cache and (
+            len(self._read_cache) > _READ_CACHE_MAX_ENTRIES
+            or self._read_cache_chars > _READ_CACHE_MAX_TOTAL_CHARS
+        ):
+            self._drop_read(next(iter(self._read_cache)))
+
+    def _drop_read(self, key: tuple) -> None:
+        """Forget one cached read and its characters (v1.333.0)."""
+        entry = self._read_cache.pop(key, None)
+        if entry is not None:
+            self._read_cache_chars -= len(entry.get("output") or "")
+
+    def forget_session(self, session_id: str) -> None:
+        """Forget every cached read (and scope generation) of a FINISHED
+        session (v1.333.0, D8): the runtime calls this when a run ends. A
+        continuation is a new session id, so nothing reads these again, and
+        they used to stay until 256 newer reads pushed them out. Chat
+        (session ``"chat"``) is never passed here."""
+        prefix = f"{session_id}@"
+        for key in [k for k in self._read_cache if str(k[0]).startswith(prefix)]:
+            self._drop_read(key)
+        for scope in [s for s in self._scope_gen if s.startswith(prefix)]:
+            self._scope_gen.pop(scope, None)
 
     def _invalidate_scope(self, scope: str) -> None:
         """Forget this scope's reads after any successful mutation.
@@ -1214,7 +1243,7 @@ class ToolRegistry:
         """
         self._scope_gen[scope] = self._scope_gen.get(scope, 0) + 1
         for key in [k for k in self._read_cache if k[0] == scope]:
-            self._read_cache.pop(key, None)
+            self._drop_read(key)
 
     def _cached_result(self, entry: dict[str, Any]) -> ToolResult:
         """The remembered text plus a note that SAYS it was not re-read.

@@ -161,7 +161,7 @@ describe("Tasks in the chat column: the run form without its card", () => {
       created_at: "2026-10-09T10:00:00Z",
     };
     // GET /sessions/{id} is NESTED ({session, transcript}).
-    api.responses["/sessions/s-new"] = {
+    api.responses["/sessions/s-new?transcript=0"] = {
       session: { id: "s-new", task: "sum it", status: "active", created_at: "2026-10-09T10:00:00Z" },
       transcript: [],
     };

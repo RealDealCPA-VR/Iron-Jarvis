@@ -281,6 +281,8 @@ def test_access_filter_ignores_records_of_another_shape():
             # interrupted-jobs poll (72% of one daemon.log between them).
             "/fs/files",
             "/sessions/interrupted",
+            # v1.333.0: the home line's ~20 s poll.
+            "/ui/status-line",
         }
     )
 

@@ -8,6 +8,7 @@ import pytest
 
 from iron_jarvis.terminals import TerminalManager
 from iron_jarvis.terminals.backend import FakeBackend
+from iron_jarvis.terminals.modes import restore_reset
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +42,10 @@ def test_rehydrate_restores_same_id_cwd_and_scrollback(tmp_path):
     assert restored.id == s.id                     # same id -> UI layout matches
     assert restored.cwd == str(tmp_path)           # same directory
     assert restored.alive                          # a fresh, live shell
-    assert bytes(restored.scrollback_bytes()) == b"prior session history\r\n$ "
+    # v1.333.0: the old program is dead, so the replay ends by switching off
+    # any mouse/paste mode it left on (terminals/modes.restore_reset).
+    prior = b"prior session history\r\n$ "
+    assert bytes(restored.scrollback_bytes()) == prior + restore_reset(prior)
 
 
 def test_closed_terminals_do_not_come_back(tmp_path):

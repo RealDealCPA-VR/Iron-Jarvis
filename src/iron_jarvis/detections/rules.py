@@ -175,8 +175,23 @@ _HEREDOC = re.compile(r"""<<(-?)[ \t]*(['"]?)([A-Za-z_][\w.-]*)\2""")
 _DATA_SINK = re.compile(r"^\s*(sudo\s+)?(cat|tee)\b", re.IGNORECASE)
 
 
-@lru_cache(maxsize=2048)
+#: Commands up to this long are remembered between rules (v1.333.0, D9). The
+#: cache was keyed on the UNCAPPED text, so 2,048 entries could each pin a
+#: megabyte-long command for the daemon's life; a longer command is split
+#: again for each rule that reads it (rare, and bounded by COMMAND_CAP).
+_CACHED_COMMAND_CHARS = 4096
+
+
 def command_lines(text: str) -> tuple[str, ...]:
+    """A command as the rules see it (see :func:`_split_command_lines`). The
+    text is capped BEFORE anything is cached, and only short commands are."""
+    text = text[:COMMAND_CAP]
+    if len(text) > _CACHED_COMMAND_CHARS:
+        return _split_command_lines(text)
+    return _cached_command_lines(text)
+
+
+def _split_command_lines(text: str) -> tuple[str, ...]:
     """A command as the rules see it: one entry per line, capped, with the
     BODY of a heredoc that is only written to a file (``cat > f <<'EOF'``,
     ``tee f <<EOF``) left out — that body is file content, not something the
@@ -203,6 +218,9 @@ def command_lines(text: str) -> tuple[str, ...]:
         # the terminator line itself (if present) is skipped too
         i += 1
     return tuple(out)
+
+
+_cached_command_lines = lru_cache(maxsize=2048)(_split_command_lines)
 
 
 @dataclass(frozen=True)

@@ -1196,7 +1196,14 @@ class SearchIndex:
         return _PHASES[i + 1] if i + 1 < len(_PHASES) else None
 
     def _keyset(self, model: Any, when: datetime | None, last: str, batch: int) -> list[Any]:
-        stmt = select(model).order_by(model.created_at, model.id).limit(batch)
+        """One page of ``(id, created_at)`` only, in keyset order (v1.333.0, D11).
+
+        The hourly re-check walks EVERY thread and session from the start and
+        skips the ones already indexed; it used to load each page's full rows,
+        ``messages_json`` and all, only to throw most of them away. The keys
+        decide what is skipped; :meth:`_load_rows` reads full rows only for the
+        rest."""
+        stmt = select(model.id, model.created_at).order_by(model.created_at, model.id).limit(batch)
         if when is not None:
             stmt = stmt.where(
                 (model.created_at > when)
@@ -1204,6 +1211,27 @@ class SearchIndex:
             )
         with session_scope(self.engine) as db:
             return list(db.exec(stmt))
+
+    def _load_rows(self, model: Any, ids: list[str]) -> list[Any]:
+        """Full rows for *ids*, in the order given (ids not found are left out)."""
+        if not ids:
+            return []
+        loaded: dict[str, Any] = {}
+        with session_scope(self.engine) as db:
+            for i in range(0, len(ids), _CHUNK):
+                for row in db.exec(select(model).where(model.id.in_(ids[i : i + _CHUNK]))):
+                    loaded[str(row.id)] = row
+        return [loaded[i] for i in ids if i in loaded]
+
+    def _unindexed(
+        self, keys: list[Any], column: str, kinds: list[str], force: bool
+    ) -> list[str]:
+        """The page's ids that still need indexing (all of them under ``force``)."""
+        ids = [str(k.id) for k in keys]
+        if force:
+            return ids
+        known = self._already_indexed(column, ids, kinds)
+        return [i for i in ids if i not in known]
 
     def _already_indexed(self, column: str, values: list[str], kinds: list[str]) -> set[str]:
         if not values or not kinds:
@@ -1379,18 +1407,12 @@ class SearchIndex:
     ) -> tuple[int, int, str]:
         from ..core.models import ChatThreadRecord  # local import: avoids cycles
 
-        rows = self._keyset(ChatThreadRecord, when, last, batch)
-        if not rows:
+        keys = self._keyset(ChatThreadRecord, when, last, batch)
+        if not keys:
             return 0, 0, ""
-        known: set[str] = set()
-        if not force:
-            known = self._already_indexed(
-                "thread_id", [r.id for r in rows], ["chat", "comm"]
-            )
+        todo = self._unindexed(keys, "thread_id", ["chat", "comm"], force)
         indexed = 0
-        for rec in rows:
-            if rec.id in known:
-                continue
+        for rec in self._load_rows(ChatThreadRecord, todo):
             kind = "comm" if (rec.owner == "daemon" or rec.comm_channel) else "chat"
             try:
                 msgs = json.loads(rec.messages_json or "[]")
@@ -1404,7 +1426,7 @@ class SearchIndex:
             indexed += self.sync_thread(
                 rec.id, kind, rec.title or "", rec.project_id or "", msgs
             )
-        return indexed, len(rows), self._tail_cursor(rows[-1])
+        return indexed, len(keys), self._tail_cursor(keys[-1])
 
     def _backfill_round(
         self, batch: int, when: datetime | None, last: str, force: bool
@@ -1415,19 +1437,15 @@ class SearchIndex:
             # level would close the cycle.
             from ..agents.threads import AgentThreadRecord
 
-            rows = self._keyset(AgentThreadRecord, when, last, batch)
+            keys = self._keyset(AgentThreadRecord, when, last, batch)
         except Exception:  # noqa: BLE001 — no round tables in this DB: skip the phase
             log.debug("round-table backfill skipped", exc_info=True)
             return 0, 0, ""
-        if not rows:
+        if not keys:
             return 0, 0, ""
-        known: set[str] = set()
-        if not force:
-            known = self._already_indexed("thread_id", [r.id for r in rows], ["round"])
+        todo = self._unindexed(keys, "thread_id", ["round"], force)
         indexed = 0
-        for rec in rows:
-            if rec.id in known:
-                continue
+        for rec in self._load_rows(AgentThreadRecord, todo):
             try:
                 msgs = json.loads(rec.messages_json or "[]")
             except (TypeError, ValueError):
@@ -1443,22 +1461,18 @@ class SearchIndex:
             # NULL (a row older than the column) reads as general.
             room_project = str(getattr(rec, "project_id", "") or "").strip()
             indexed += self.sync_thread(rec.id, "round", rec.title or "", room_project, msgs)
-        return indexed, len(rows), self._tail_cursor(rows[-1])
+        return indexed, len(keys), self._tail_cursor(keys[-1])
 
     def _backfill_sessions(
         self, batch: int, when: datetime | None, last: str, force: bool
     ) -> tuple[int, int, str]:
         from ..core.models import Session  # local import: avoids cycles
 
-        rows = self._keyset(Session, when, last, batch)
-        if not rows:
+        keys = self._keyset(Session, when, last, batch)
+        if not keys:
             return 0, 0, ""
-        known: set[str] = set()
-        if not force:
-            known = self._already_indexed("ref", [r.id for r in rows], ["session"])
+        todo = self._unindexed(keys, "ref", ["session"], force)
         indexed = 0
-        for rec in rows:
-            if rec.id in known:
-                continue
+        for rec in self._load_rows(Session, todo):
             indexed += self.sync_session(rec)
-        return indexed, len(rows), self._tail_cursor(rows[-1])
+        return indexed, len(keys), self._tail_cursor(keys[-1])

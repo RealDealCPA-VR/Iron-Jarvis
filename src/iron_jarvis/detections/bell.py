@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections import OrderedDict
 from typing import Any
 
 from ..core.events import EventType
@@ -51,7 +52,12 @@ _IN_FLIGHT = 0
 _DROPPED = 0
 _FLIGHT_LOCK = threading.Lock()
 
-_PUBLISHED: set[tuple[str, str]] = set()
+#: Keys already published (v1.333.0, D9: bounded — it was a set that grew by
+#: one key per session for the daemon's life; the oldest keys past
+#: ``PUBLISHED_MAX`` are forgotten, so at worst a long-gone session could be
+#: announced once more).
+PUBLISHED_MAX = 4096
+_PUBLISHED: "OrderedDict[tuple[str, str], None]" = OrderedDict()
 _PUBLISH_LOCK = threading.Lock()
 _WORKERS: list[threading.Thread] = []
 _WORKERS_LOCK = threading.Lock()
@@ -106,7 +112,9 @@ def scan_and_publish(bus: Any, engine: Any, scope: str) -> list[dict]:
             except Exception:  # noqa: BLE001 — publishing is best-effort
                 log.exception("could not publish detection %s for %s", key[0], scope)
                 continue
-            _PUBLISHED.add(key)
+            _PUBLISHED[key] = None
+            while len(_PUBLISHED) > PUBLISHED_MAX:
+                _PUBLISHED.popitem(last=False)
         published.append(payload)
     return published
 

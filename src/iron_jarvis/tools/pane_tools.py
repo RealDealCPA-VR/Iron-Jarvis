@@ -196,8 +196,12 @@ class PaneSpawnTool(_PaneTool):
             )
         cwd = (args.get("cwd") or "").strip() or getattr(ctx, "workspace", None)
         try:
+            # v1.333.0: a pane an AGENT opens runs below normal priority (and
+            # so does everything started in it), so a build an agent kicks
+            # off never competes with what the user is doing. Never idle.
             session = await asyncio.to_thread(
-                mgr.create, str(cwd) if cwd else None, None, 100, 30, name=name
+                mgr.create, str(cwd) if cwd else None, None, 100, 30, name=name,
+                below_normal=True,
             )
         except RuntimeError as exc:  # the session cap
             return ToolResult(ok=False, error=str(exc))

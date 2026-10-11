@@ -118,18 +118,21 @@ def probe_video(path: Path) -> dict[str, Any]:
     """ffprobe a video → {codec, pix_fmt, has_ffprobe}. Never raises; on any
     failure returns unknowns so callers degrade gracefully."""
     import json as _json
-    import subprocess
+
+    from ..core import procs
 
     fp = ffprobe_exe()
     if not fp:
         return {"codec": "", "pix_fmt": "", "has_ffprobe": False}
     try:
-        proc = subprocess.run(
+        # `procs.run` (v1.333.0): tree-killed on a timeout, bounded drain,
+        # below-normal in the background lane (a timeout raises, caught below).
+        res = procs.run(
             [fp, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=codec_name,pix_fmt", "-of", "json", str(path)],
-            capture_output=True, timeout=20,
-        )
-        data = _json.loads((proc.stdout or b"{}").decode("utf-8", "replace"))
+            timeout=20,
+        ).check_timeout()
+        data = _json.loads((res.stdout or b"{}").decode("utf-8", "replace"))
         stream = (data.get("streams") or [{}])[0]
         return {
             "codec": str(stream.get("codec_name", "")).lower(),
@@ -164,7 +167,7 @@ def transcode_to_playable(src: Path, dst: Path, *, timeout: int = 900) -> Path:
     """Re-encode ``src`` to a universally-playable MP4 (H.264 High @ yuv420p,
     +faststart, AAC audio, even dimensions) at ``dst``. Raises RuntimeError with
     an honest message when ffmpeg is missing or the encode fails."""
-    import subprocess
+    from ..core import procs
 
     ff = ffmpeg_exe()
     if not ff:
@@ -183,10 +186,11 @@ def transcode_to_playable(src: Path, dst: Path, *, timeout: int = 900) -> Path:
         "-movflags", "+faststart",
         str(dst),
     ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("ffmpeg timed out transcoding the video") from exc
+    # `procs.run` (v1.333.0): libx264 uses every core for up to 15 minutes, so
+    # in the background lane it runs below normal and a timeout kills its tree.
+    proc = procs.run(cmd, timeout=timeout)
+    if proc.timed_out:
+        raise RuntimeError("ffmpeg timed out transcoding the video")
     if proc.returncode != 0 or not (dst.is_file() and dst.stat().st_size > 0):
         tail = (proc.stderr or b"")[-400:].decode("utf-8", "replace")
         raise RuntimeError(f"ffmpeg failed to transcode: {tail}")
@@ -214,9 +218,10 @@ def thumbnail_for(platform, src: Path, *, size: int = THUMB_SIZE) -> Path | None
     ``home/creative-thumbs`` and is size-capped."""
     import hashlib
     import os
-    import shutil
     import subprocess
     import uuid
+
+    from ..core import procs
 
     kind = media_kind(src.name)
     if kind not in ("image", "video") or src.suffix.lower() == ".svg":
@@ -257,11 +262,11 @@ def thumbnail_for(platform, src: Path, *, size: int = THUMB_SIZE) -> Path | None
                     return None
                 proc = None
                 for seek in ("1", "0"):  # 1s in; retry at 0 for very short clips
-                    proc = subprocess.run(
+                    proc = procs.run(
                         [ff, "-y", "-ss", seek, "-i", str(src), "-frames:v", "1",
                          "-vf", f"scale='min({size},iw)':-2", str(tmp)],
-                        capture_output=True, timeout=30,
-                    )
+                        timeout=30,
+                    ).check_timeout()
                     if tmp.is_file() and tmp.stat().st_size > 0:
                         break
                 else:  # both seeks produced nothing — say so, don't just 404

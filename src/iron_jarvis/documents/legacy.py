@@ -18,6 +18,14 @@ protected document fail at once instead of waiting on an invisible prompt, and
 the whole conversion is bounded by a timeout that kills the PowerShell tree.
 Paths reach the script through environment variables, never through string
 interpolation, so a file name cannot become code.
+
+WORD IS NOT THE SCRIPT'S CHILD (v1.333.0): COM starts WINWORD.EXE through the
+DCOM launcher, so killing the PowerShell tree left a stuck, invisible Word
+running forever (one per timed-out file). The script now prints the PID of
+the Word it started (``IJ-WORD-PID:``, only when exactly one new WINWORD
+appeared), and on a timeout that process is stopped, but only after checking
+it is WINWORD.EXE and was created after this conversion began, so a Word the
+user opened themselves is never touched.
 """
 
 from __future__ import annotations
@@ -29,8 +37,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+
+from ..core import procs
 
 #: A .doc conversion that takes longer than this is abandoned (Word stuck on a
 #: dialog, a huge file). The PowerShell tree is killed.
@@ -44,6 +55,7 @@ XLS_MAX_ROWS = 20000
 #: stderr: see :func:`_word_reason` for why stderr cannot carry a message here.
 _OK_MARK = "IJ-OK"
 _ERR_MARK = "IJ-ERROR:"
+_PID_MARK = "IJ-WORD-PID:"
 
 _WORD_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -51,7 +63,16 @@ $src = $env:IJ_LEGACY_SRC
 $dst = $env:IJ_LEGACY_DST
 $word = $null
 try {
+  $before = @()
+  try { $before = @(Get-Process -Name WINWORD -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) } catch { }
   $word = New-Object -ComObject Word.Application
+  # WORD IS NOT OUR CHILD (DCOM starts it), so say which one we started: the
+  # caller stops exactly that process if the conversion hangs. Flushed now,
+  # because a hang comes next.
+  try {
+    $mine = @(Get-Process -Name WINWORD -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id })
+    if ($mine.Count -eq 1) { [Console]::Out.WriteLine('IJ-WORD-PID: ' + $mine[0].Id); [Console]::Out.Flush() }
+  } catch { }
   $word.Visible = $false
   $word.DisplayAlerts = 0
   $word.AutomationSecurity = 3
@@ -264,14 +285,34 @@ def _cache_dir() -> Path:
     return d
 
 
-def _kill_tree(pid: int) -> None:
+def _stop_started_word(stdout: bytes | None, started: float) -> int | None:
+    """Stop the WINWORD.EXE a timed-out conversion started; return its pid.
+
+    Only the pid the script printed, only when that process is WINWORD.EXE,
+    and only when it was created after ``started`` (the conversion's own
+    start, wall clock) -- a recycled pid or a Word the user opened before the
+    conversion is never touched. Never raises."""
+    pid = None
+    for line in (stdout or b"").decode("utf-8", "replace").splitlines():
+        if line.startswith(_PID_MARK):
+            try:
+                pid = int(line[len(_PID_MARK):].strip())
+            except ValueError:
+                pid = None
+    if not pid:
+        return None
     try:
-        subprocess.run(
-            ["taskkill", "/T", "/F", "/PID", str(pid)],
-            capture_output=True, timeout=15,
-        )
-    except Exception:  # noqa: BLE001 — best effort
-        pass
+        import psutil
+
+        word = psutil.Process(pid)
+        if word.name().lower() != "winword.exe":
+            return None
+        if word.create_time() < started - 1.0:
+            return None
+        word.kill()
+        return pid
+    except Exception:  # noqa: BLE001 — gone already, or not ours to stop
+        return None
 
 
 def convert_doc_to_docx(src: Path, dst: Path, *, timeout: float = DOC_CONVERT_TIMEOUT_S) -> None:
@@ -288,24 +329,32 @@ def convert_doc_to_docx(src: Path, dst: Path, *, timeout: float = DOC_CONVERT_TI
     env = dict(os.environ)
     env["IJ_LEGACY_SRC"] = str(src.resolve())
     env["IJ_LEGACY_DST"] = str(dst.resolve())
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    proc = subprocess.Popen(
+    started = time.time()
+    # `procs.spawn` (v1.333.0): no window, its own kill-on-close job, below
+    # normal in the background lane. Streams are read here so the drain after
+    # a timeout still yields the Word pid the script printed.
+    proc = procs.spawn(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
          "-EncodedCommand", encoded],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags,
+        env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc.pid)
         try:
-            proc.communicate(timeout=5)
-        except Exception:  # noqa: BLE001
-            pass
-        raise LegacyReadError(
-            f"Microsoft Word did not finish opening {src.name} within "
-            f"{int(timeout)} s — the conversion was stopped"
-        )
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            procs.kill_tree(proc)
+            said = b""
+            try:
+                said, _ = proc.communicate(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+            _stop_started_word(said, started)
+            raise LegacyReadError(
+                f"Microsoft Word did not finish opening {src.name} within "
+                f"{int(timeout)} s — the conversion was stopped"
+            )
+    finally:
+        procs.release(proc)
     stdout = (out or b"").decode("utf-8", "replace")
     # THE VERDICT IS THE SCRIPT'S MARKER PLUS THE FILE, not the exit code. A
     # non-zero exit from the cleanup half of the script sat on top of a finished

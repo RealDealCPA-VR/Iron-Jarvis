@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
+from ..core._numpy import np  # one-thread BLAS (v1.333.0)
 
 #: Directory names pruned from every walk by default.
 DEFAULT_IGNORE: frozenset[str] = frozenset(
@@ -49,6 +49,13 @@ _CHUNK_LINES = 40
 #: Default cap on the number of files visited per search (keeps a walk of a huge
 #: drive like ``C:\`` responsive rather than open-ended).
 DEFAULT_MAX_WALK = 20_000
+
+#: Most text chunks the semantic index holds (v1.333.0, D8). The index used to
+#: keep every chunk's TEXT plus a float64 vector for the life of the daemon,
+#: over an unbounded walk; it now keeps one normalised float32 row per chunk
+#: and a (file, line) reference, reads snippets back only for the top hits,
+#: and stops here, which the search's notes say out loud.
+MAX_SEMANTIC_CHUNKS = 50_000
 
 
 class BadSearchPattern(ValueError):
@@ -105,6 +112,9 @@ class SearchNotes:
 
     unreadable: int = 0
     oversize: int = 0
+    #: Text files the semantic index could not hold (v1.333.0): past
+    #: :data:`MAX_SEMANTIC_CHUNKS`, or past the walk cap when it was built.
+    not_indexed: int = 0
 
     def note(self) -> str:
         """The line(s) to append to a tool's output, or ``""`` when clean."""
@@ -119,6 +129,11 @@ class SearchNotes:
                 f"[{self.oversize} file(s) skipped as oversize (over "
                 f"{MAX_FILE_BYTES // 1_000_000} MB each). This search did NOT cover "
                 f"them; open one directly with read_file if it matters.]"
+            )
+        if self.not_indexed:
+            parts.append(
+                f"[The meaning index is full, so {self.not_indexed} file(s) or more "
+                f"were not searched by meaning. Search by name or content to reach them.]"
             )
         return "\n".join(parts)
 
@@ -191,6 +206,17 @@ def list_drives() -> list[dict]:
     return drives
 
 
+@dataclass
+class _SemanticIndex:
+    """What semantic search keeps between calls (v1.333.0): each chunk as a
+    ``(file slot, first line)`` reference and one normalised float32 row."""
+
+    paths: list[Path]
+    refs: list[tuple[int, int]]
+    matrix: "np.ndarray"
+    not_indexed: int = 0
+
+
 class FileSearchService:
     """Search by name, content, or semantics across configured roots."""
 
@@ -210,7 +236,10 @@ class FileSearchService:
         self.embedder = embedder
         self.ignore: set[str] = set(ignore) if ignore is not None else set(DEFAULT_IGNORE)
         self._indexed: list[Path] = []  # cached text-file paths after index()
-        self._chunk_cache: list[tuple[Path, int, str, np.ndarray]] | None = None
+        #: True when index() stopped at DEFAULT_MAX_WALK files (v1.333.0).
+        self._index_capped = False
+        #: The semantic index (v1.333.0): None until first needed.
+        self._chunk_cache: _SemanticIndex | None = None
 
     # -- root resolution ----------------------------------------------------
 
@@ -486,12 +515,19 @@ class FileSearchService:
     # -- index --------------------------------------------------------------
 
     def index(self) -> int:
-        """Walk roots and cache the set of readable text files. Returns the count."""
+        """Walk roots and cache the set of readable text files. Returns the count.
+
+        Bounded by :data:`DEFAULT_MAX_WALK` like every other walk here (v1.333.0;
+        it was the one unbounded walk); a capped walk is remembered so a
+        semantic search can say what it did not cover."""
         paths: list[Path] = []
-        for path in self._iter_files():
+        walked = 0
+        for path in self._iter_files(max_walk=DEFAULT_MAX_WALK):
+            walked += 1
             if self._read_text(path) is not None:
                 paths.append(path)
         self._indexed = paths
+        self._index_capped = walked >= DEFAULT_MAX_WALK
         self._chunk_cache = None  # invalidate semantic cache
         return len(paths)
 
@@ -508,39 +544,71 @@ class FileSearchService:
     def _build_chunk_cache(self) -> None:
         if not self._indexed:
             self.index()
-        cache: list[tuple[Path, int, str, np.ndarray]] = []
-        for path in self._indexed:
+        paths: list[Path] = []
+        refs: list[tuple[int, int]] = []
+        rows: list[np.ndarray] = []
+        not_indexed = 0
+        for n, path in enumerate(self._indexed):
+            if len(refs) >= MAX_SEMANTIC_CHUNKS:
+                not_indexed = len(self._indexed) - n
+                break
             text = self._read_text(path)
             if not text:
                 continue
+            slot = -1
             for start, chunk in self._chunks(text):
-                vec = np.asarray(self.embedder.embed(chunk), dtype=np.float64)
-                cache.append((path, start, chunk, vec))
-        self._chunk_cache = cache
+                if len(refs) >= MAX_SEMANTIC_CHUNKS:
+                    break
+                if slot < 0:
+                    paths.append(path)
+                    slot = len(paths) - 1
+                vec = np.asarray(self.embedder.embed(chunk), dtype=np.float32)
+                norm = float(np.linalg.norm(vec))
+                rows.append(vec / norm if norm > 0.0 else vec)  # a zero row scores 0
+                refs.append((slot, start))
+        matrix = np.vstack(rows) if rows else np.zeros((0, 0), dtype=np.float32)
+        self._chunk_cache = _SemanticIndex(paths, refs, matrix, not_indexed)
 
-    def search_semantic(self, query: str, k: int = 5) -> list[dict]:
-        """Cosine-similarity search over embedded file chunks (needs an embedder)."""
+    def _chunk_text(self, path: Path, start: int) -> str:
+        """Re-read one chunk's text for a hit (only the top hits pay this)."""
+        text = self._read_text(path) or ""
+        lines = text.splitlines()[start - 1 : start - 1 + _CHUNK_LINES]
+        return "\n".join(lines).strip()
+
+    def search_semantic(
+        self, query: str, k: int = 5, notes: SearchNotes | None = None
+    ) -> list[dict]:
+        """Cosine-similarity search over embedded file chunks (needs an embedder).
+
+        One matrix product over normalised float32 rows (v1.333.0); ties keep
+        file order, as the old per-chunk loop's stable sort did."""
         if self.embedder is None:
             return []
         if self._chunk_cache is None:
             self._build_chunk_cache()
-        assert self._chunk_cache is not None
-        qv = np.asarray(self.embedder.embed(query), dtype=np.float64)
+        index = self._chunk_cache
+        assert index is not None
+        if notes is not None:
+            notes.not_indexed += index.not_indexed + (1 if self._index_capped else 0)
+        if not index.refs:
+            return []
+        qv = np.asarray(self.embedder.embed(query), dtype=np.float32)
         qn = float(np.linalg.norm(qv))
-        scored: list[dict] = []
-        for path, start, chunk, vec in self._chunk_cache:
-            denom = qn * float(np.linalg.norm(vec))
-            score = float(qv @ vec / denom) if denom > 0.0 else 0.0
-            scored.append(
+        scores = index.matrix @ (qv / qn) if qn > 0.0 else np.zeros(len(index.refs))
+        order = np.argsort(-scores, kind="stable").tolist()[:k]
+        out: list[dict] = []
+        for i in order:
+            slot, start = index.refs[i]
+            path = index.paths[slot]
+            out.append(
                 {
                     "path": str(path),
                     "line": start,
-                    "text": chunk[:200],
-                    "score": score,
+                    "text": self._chunk_text(path, start)[:200],
+                    "score": float(scores[i]),
                 }
             )
-        scored.sort(key=lambda r: r["score"], reverse=True)
-        return scored[:k]
+        return out
 
     # -- dispatcher ---------------------------------------------------------
 
@@ -565,7 +633,7 @@ class FileSearchService:
         if mode == "name":
             return self.search_name(query, limit=limit, roots=roots, max_walk=max_walk)
         if mode == "semantic":
-            return self.search_semantic(query, k=limit)
+            return self.search_semantic(query, k=limit, notes=notes)
         return self.search_content(
             query, limit=limit, roots=roots, max_walk=max_walk, notes=notes
         )

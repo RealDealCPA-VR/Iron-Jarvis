@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -392,6 +393,141 @@ def _checkpoint_wal(engine) -> None:
             conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
     except Exception:  # noqa: BLE001 — best-effort; shutdown never raises
         log.debug("wal checkpoint at shutdown skipped", exc_info=True)
+
+
+#: A full (generation 2) garbage collection longer than this is logged
+#: (v1.333.0, D7). Every other pause is silent.
+_GC_PAUSE_WARN_S = 0.1
+
+#: Whether this process has already frozen its boot heap (see _freeze_boot_heap).
+_GC_FROZEN = False
+
+
+class _GcPauseWatch:
+    """A ``gc.callbacks`` hook that logs one WARNING per full collection that
+    paused the daemon longer than ``threshold_s`` (v1.333.0, D7).
+
+    The daemon is one event loop: a 100 ms gen-2 collection is 100 ms in which
+    no request, terminal or chat stream moved, and nothing measured it. Names
+    and numbers only, never an object."""
+
+    def __init__(self, threshold_s: float = _GC_PAUSE_WARN_S, clock=time.perf_counter) -> None:
+        self.threshold_s = threshold_s
+        self._clock = clock
+        self._started: float | None = None
+
+    def __call__(self, phase: str, info: dict) -> None:
+        try:
+            # An interpreter shutting down has closed the log's stream: a
+            # collection there would print "--- Logging error ---" instead.
+            if info.get("generation") != 2 or sys.is_finalizing():
+                return
+            if phase == "start":
+                self._started = self._clock()
+                return
+            if phase != "stop" or self._started is None:
+                return
+            paused = self._clock() - self._started
+            self._started = None
+            if paused > self.threshold_s:
+                log.warning(
+                    "garbage collection paused the daemon for %d ms (full collection, %d objects freed)",
+                    int(paused * 1000),
+                    int(info.get("collected") or 0),
+                )
+        except Exception:  # noqa: BLE001 — a gc callback must never raise
+            pass
+
+
+def _freeze_boot_heap() -> "_GcPauseWatch | None":
+    """Collect once and freeze what boot built, so later full collections skip
+    it (v1.333.0, D7). Measured on a scratch boot: ~229k objects, a full
+    collection 103 ms; after ``gc.freeze()`` almost nothing is left to walk.
+    The freeze is once per process (one daemon per process; a test process
+    builds many apps). The pause watch is installed unless one already is, and
+    RETURNED so the lifespan takes it out again at shutdown
+    (:func:`_remove_gc_watch`): left in place, a collection after the log's
+    stream closed printed "I/O operation on closed file". Never raises."""
+    global _GC_FROZEN
+    import gc
+
+    watch: _GcPauseWatch | None = None
+    try:
+        if not _GC_FROZEN:
+            _GC_FROZEN = True
+            gc.collect()
+            gc.freeze()
+        if not any(isinstance(cb, _GcPauseWatch) for cb in gc.callbacks):
+            watch = _GcPauseWatch()
+            gc.callbacks.append(watch)
+    except Exception:  # noqa: BLE001 — tuning must never break a boot
+        log.debug("gc freeze at boot failed", exc_info=True)
+    return watch
+
+
+def _remove_gc_watch(watch: "_GcPauseWatch | None") -> None:
+    """Take out the pause watch :func:`_freeze_boot_heap` installed. Never raises."""
+    if watch is None:
+        return
+    import gc
+
+    try:
+        gc.callbacks.remove(watch)
+    except ValueError:  # already gone
+        pass
+
+
+#: How often the event-log retention sweep runs after boot (v1.333.0, D12).
+_EVENT_PRUNE_S = 24 * 3600.0
+
+
+async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> None:
+    """Apply ``event_retention_days`` once a day, not only at boot (v1.333.0).
+
+    A daemon that stays up for weeks (the desktop app does) never pruned
+    again, so the event table grew past its own retention setting. The setting
+    is read on every pass (0 = keep forever); the delete runs off the loop."""
+    from ..core.db import prune_events
+
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            days = int(getattr(platform.config, "event_retention_days", 0) or 0)
+            if days > 0:
+                pruned = await asyncio.to_thread(prune_events, platform.engine, days)
+                if pruned:
+                    log.info(
+                        "event-log retention: pruned %d event(s) older than %d days",
+                        pruned, days,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
+            log.debug("event-log retention sweep failed", exc_info=True)
+
+
+#: How often the daemon reclaims idle REPL namespaces (v1.333.0, D3).
+_REPL_SWEEP_S = 60.0
+
+
+async def _repl_sweep_loop(repl, *, interval_s: float = _REPL_SWEEP_S) -> None:
+    """Dispose REPL namespaces idle past their TTL, once a minute (v1.333.0).
+
+    Every ``repl`` namespace is a child process. ``ReplRegistry.sweep`` had no
+    caller: an idle child was reclaimed only when a 17th namespace was asked
+    for, so the 15-minute TTL never applied and a chat's interpreter lived as
+    long as the daemon. The sweep itself is cheap (a dict scan; a dispose hops
+    off the loop to kill). Never lets a failure kill the daemon."""
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            gone = await repl.sweep()
+            if gone:
+                log.info("reclaimed %d idle python session(s)", len(gone))
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
+            log.debug("repl idle sweep failed", exc_info=True)
 
 
 async def _fts_backfill_loop(
@@ -1219,6 +1355,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         bg_tasks["terminal_snapshot"] = asyncio.create_task(_terminal_snapshot_loop())
 
+        # IDLE PYTHON SESSIONS ARE RECLAIMED (v1.333.0, D3): see
+        # _repl_sweep_loop. A finished agent run disposes its own namespaces
+        # (runtime._release_repl); this catches chat's and any left behind.
+        if getattr(platform, "repl", None) is not None:
+            bg_tasks["repl_sweep"] = asyncio.create_task(_repl_sweep_loop(platform.repl))
+        # EVENT RETENTION EVERY DAY (v1.333.0, D12), not only at boot.
+        bg_tasks["event_prune"] = asyncio.create_task(_event_prune_loop(platform))
+
         # EVENT-LOOP STALL TELEMETRY (v1.245.0). The daemon is ONE loop: a
         # blocking call anywhere freezes every terminal, chat stream and poll,
         # and a long enough freeze trips the desktop watchdog, which kills the
@@ -1578,9 +1722,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             log.info("%s", _boot_line(float(_boot["total_ms"]), _boot["steps_ms"]))
         except Exception:  # noqa: BLE001 — never let the summary abort a boot
             log.debug("boot summary failed", exc_info=True)
+        # v1.333.0 (D7): AFTER the boot line, so the boot's own number is not
+        # charged for it. One collection now instead of one in every later
+        # full pass for the life of the daemon.
+        _gc_watch = _freeze_boot_heap()
         try:
             yield
         finally:
+            _remove_gc_watch(_gc_watch)  # v1.333.0: before the log closes
             _live_rearm.clear()  # daemon going down — no more live re-arms
             # Stop the session-queue governor FIRST (v1.166.0): cancelling a
             # running session below fires its slot-free hook, which would
@@ -1661,9 +1810,29 @@ def create_app(project_root: str | None = None) -> FastAPI:
             except Exception:  # pragma: no cover
                 pass
             try:
-                platform.terminals.kill_all()
+                # v1.333.0: off the loop — each pane now waits briefly for its
+                # shell and stops the hidden programs it started.
+                await asyncio.wait_for(
+                    asyncio.to_thread(platform.terminals.kill_all), timeout=30.0
+                )
             except Exception:  # pragma: no cover
                 pass
+            try:
+                # v1.333.0: the hidden programs finished shell/run_code calls
+                # left running for their session (chat's dev server) end too.
+                from ..core import procs as _procs
+
+                await asyncio.to_thread(_procs.end_all)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                log.debug("kept process jobs at shutdown failed", exc_info=True)
+            # v1.333.0 (D3): every REPL child goes with the daemon. The kills
+            # run off the loop; bounded so a stuck kill cannot hold exit.
+            _repl = getattr(platform, "repl", None)
+            if _repl is not None:
+                try:
+                    await asyncio.wait_for(_repl.dispose_all(), timeout=10.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("repl dispose at shutdown failed", exc_info=True)
             try:  # close any launched computer-use browser (Chromium + driver)
                 br = getattr(platform.computeruse, "browser", None)
                 if br is not None and hasattr(br, "aclose"):

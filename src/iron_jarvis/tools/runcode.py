@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ..core import procs
 from ..sandbox.native import _as_text, child_env
 from .base import Reversibility, Tool, ToolContext, ToolResult
 
@@ -79,10 +80,10 @@ def script_argv(language: str, script: "Path") -> list[str]:
     return ["bash", str(script)]
 
 
-def _run_captured(argv: list[str], cwd: "Path", timeout: int) -> "tuple[int, str, str]":
+async def _run_captured(argv: list[str], cwd: "Path", timeout: int) -> "tuple[int, str, str]":
     """Run ``argv`` and return ``(returncode, stdout, stderr)`` as text -- the
-    ONE capture both script paths share (v1.288.0, agents-01/-09). Blocking:
-    callers run it in a worker thread.
+    ONE capture both script paths share (v1.288.0, agents-01/-09). Raises
+    ``subprocess.TimeoutExpired`` on a timeout, as it always has.
 
     Same capture as ``NativeSandbox.run``: BYTES decoded by the sandbox's one
     decode (``text=True`` let a single byte the locale codec could not map --
@@ -90,12 +91,23 @@ def _run_captured(argv: list[str], cwd: "Path", timeout: int) -> "tuple[int, str
     and return ``""`` with exit 0), ``stdin=DEVNULL`` (a ``Read-Host`` or
     ``input()`` reads EOF at once instead of parking on the daemon's
     never-written stdin for the whole timeout), and ``child_env`` (Python
-    children print UTF-8)."""
-    proc = subprocess.run(
-        argv, cwd=str(cwd), stdin=subprocess.DEVNULL, capture_output=True,
-        env=child_env(None), timeout=timeout, shell=False,
+    children print UTF-8). v1.333.0: through ``procs.run_async`` -- a timeout
+    kills the script's whole tree, and so does a cancelled await (Stop, a
+    tool deadline) instead of leaving it running to its own timeout. A
+    script can open a window (tkinter, ``webbrowser.open``), so it gets the
+    shell's ``keep_windows`` rule: what shows the user a window survives,
+    and what a FINISHED script left running hidden lives until the owning
+    session's run ends (``procs.owned_by`` / ``procs.end_session``)."""
+    res = await procs.run_async(
+        argv, cwd=cwd, env=child_env(None), timeout=timeout,
+        no_window=False, keep_windows=True,
     )
-    return proc.returncode, _as_text(proc.stdout), _as_text(proc.stderr)
+    res.check_timeout()
+    # Decoded in a worker thread: scoring a large non-UTF-8 output is not
+    # work for the event loop.
+    return await asyncio.to_thread(
+        lambda: (res.returncode, _as_text(res.stdout), _as_text(res.stderr))
+    )
 
 
 async def execute_script(
@@ -124,7 +136,7 @@ async def execute_script(
         argv = script_argv(language, script)
 
         try:
-            rc, out, err = await asyncio.to_thread(_run_captured, argv, cwd, timeout)
+            rc, out, err = await _run_captured(argv, cwd, timeout)
         except subprocess.TimeoutExpired:
             raise ScriptRunFailed(f"script timed out after {timeout}s")
         except FileNotFoundError:
@@ -248,7 +260,10 @@ class RunCodeTool(Tool):
             return ToolResult(ok=False, error=str(exc))
 
         try:
-            rc, out, err = await asyncio.to_thread(_run_captured, argv, ws, timeout)
+            # What a finished script leaves running (a server it started on
+            # purpose) belongs to this session until its run ends.
+            with procs.owned_by(ctx.session_id):
+                rc, out, err = await _run_captured(argv, ws, timeout)
         except subprocess.TimeoutExpired:
             if not keep:
                 script.unlink(missing_ok=True)

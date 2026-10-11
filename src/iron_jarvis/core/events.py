@@ -33,6 +33,12 @@ class EventType:
     # ``max_concurrent_sessions`` slot was busy. {task, position} — position is
     # the 1-based place in the queue at park time. Tagged session_id.
     SESSION_QUEUED = "session.queued"
+    # v1.333.0: an unusual number of UNATTENDED runs are working at once
+    # (more than ``busy_runs_notice_at``) and no cap is set. {running,
+    # threshold, cap} — cap is what the bell's "Queue extras" offers. ONE per
+    # episode, at most one an hour, none during the bell's "Not now" quiet
+    # (Orchestrator._busy_notice_due). Not tagged with a session_id.
+    RUNS_BUSY = "runs.busy"
     SESSION_COMPLETED = "session.completed"
     # v1.249.0 (R-02): the boot reconcile found work a restart cut off —
     # {count, session_ids, cause}. ONE event per boot, not one per session;

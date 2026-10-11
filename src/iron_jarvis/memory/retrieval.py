@@ -30,7 +30,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 
-import numpy as np
+from ..core._numpy import np  # one-thread BLAS (v1.333.0)
 from sqlalchemy import Engine
 from sqlmodel import select
 

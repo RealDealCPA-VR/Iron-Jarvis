@@ -7,20 +7,28 @@ spawns child sessions through ``AgentRuntime.run(parent_id=...)`` (depth-capped,
 parallel siblings via the runtime's gathered tool calls). Since v1.166.0 the
 orchestrator is also the background-run concurrency governor: ``spawn_managed``
 runs or parks (QUEUED) session work under ``config.max_concurrent_sessions``.
+Since v1.333.0 ``run_session`` itself is the door every root run passes: it
+marks an unattended run as background work (``core.procs.background_lane``),
+counts it, offers the "busy" notice, and holds the cap for the doors that
+never went through ``spawn_managed`` (schedules, goals, workflow steps, phone).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import threading
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from sqlmodel import select
 
+from ..core import procs
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
@@ -45,7 +53,12 @@ from ..git.review import (
     build_review,
     reject as _reject_review,
 )
-from .runtime import AgentRuntime, inherited_approval_mode, is_direct_workspace
+from .runtime import (
+    ATTENDED_ORIGINS,
+    AgentRuntime,
+    inherited_approval_mode,
+    is_direct_workspace,
+)
 from .team import MISSION_ORIGIN
 from .decompose import is_bulk_task
 from .supervisor import run_supervised, with_worklist
@@ -346,6 +359,95 @@ async def child_slot(config, key: str) -> AsyncIterator[None]:
             _child_slots.pop(slot_key, None)
 
 
+# --- background runs: the lane, the count, the busy notice (v1.333.0) -------
+
+#: True while the current task is inside a ``run_session``. A run started from
+#: inside another run (an agent tool that runs a workflow, a goal iteration a
+#: run kicked off) is never PARKED by the cap: its ancestor holds a governed
+#: slot and may be awaiting it, so parking it would wait on its own parent —
+#: the deadlock ``child_slot`` documents. It still counts as running. The cost,
+#: said plainly: work a run fires off and does NOT await is exempt too; the
+#: context cannot tell the two apart.
+_IN_RUN: ContextVar[bool] = ContextVar("ij_in_run", default=False)
+
+#: Default for ``config.busy_runs_notice_at``: more than this many unattended
+#: runs at once (with no cap set) rings the bell once and asks about a queue.
+BUSY_NOTICE_DEFAULT = 4
+#: A new busy episode may ring again, but never sooner than this after the last.
+BUSY_NOTICE_GAP_S = 3600.0
+#: "Not now" keeps the daemon quiet about busy runs this long.
+BUSY_SNOOZE_S = 24 * 3600.0
+#: The cap "Queue extras" offers (never above the notice threshold itself).
+BUSY_SUGGESTED_CAP = 3
+
+
+def is_unattended_origin(origin: str | None) -> bool:
+    """True when nobody is watching a run of ``origin``: a tagged origin that
+    does not start with ``runtime.ATTENDED_ORIGINS`` (schedules, goals,
+    workflows, reflex, the phone, autonomy, assignments, memory review).
+
+    An UNTAGGED run (no origin, or "") is attended. Every door that creates
+    one is a person: the Sessions page's New form, Spotlight, the first-run
+    wizard, the self-development page, ``ij run`` and a custom agent's Run
+    (``POST /sessions`` / ``/agents/{name}/spawn`` with no origin), and a
+    rerun of one of those. Every unattended door stamps ``<door>:<name>``
+    (the v1.231.0 rule), so a run a person started by hand never lands in
+    the background lane, the busy count or the cap's queue for want of a
+    tag. (The approval clock still reads an untagged run as unattended:
+    that is ``runtime._ask_timeout_for``'s own rule.)"""
+    text = str(origin or "").strip()
+    if not text:
+        return False
+    return not text.startswith(ATTENDED_ORIGINS)
+
+
+def busy_notice_threshold(config) -> int:
+    """``config.busy_runs_notice_at``, defaulted and sanitized (0 = never)."""
+    raw = getattr(config, "busy_runs_notice_at", None)
+    if raw is None:
+        return BUSY_NOTICE_DEFAULT
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return BUSY_NOTICE_DEFAULT
+
+
+class _SlotTicket:
+    """A run waiting at ``run_session``'s gate for a governed slot.
+
+    It sits in the SAME FIFO as ``spawn_managed``'s parked coroutines (in the
+    coroutine's place), so ``_dequeue_next``, cancel, delete and shutdown treat
+    both alike. The waiter may live on another event loop — a schedule fire
+    runs under ``asyncio.run`` on APScheduler's thread — so it is woken with
+    ``call_soon_threadsafe`` on its own loop, never by touching its future from
+    here."""
+
+    __slots__ = ("loop", "future")
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.future: asyncio.Future = loop.create_future()
+
+    def admit(self) -> bool:
+        """Wake the waiter: it has a slot. False when its loop is gone."""
+        return self._settle(True)
+
+    def close(self) -> None:
+        """Wake the waiter WITHOUT a slot (shutdown, removed from the queue)."""
+        self._settle(False)
+
+    def _settle(self, admitted: bool) -> bool:
+        def _set() -> None:
+            if not self.future.done():
+                self.future.set_result(admitted)
+
+        try:
+            self.loop.call_soon_threadsafe(_set)
+        except RuntimeError:  # the loop closed: its run is already gone
+            return False
+        return True
+
+
 def _completion_payload(session: Session, **extra: Any) -> dict:
     """The ``session.completed`` payload, the SAME keys at every publish site
     (success, ``_finalize_failed``, ``_finalize_cancelled``).
@@ -462,6 +564,24 @@ class Orchestrator:
         # Strong refs to fire-and-forget event publishes from sync code paths
         # (an unreferenced Task can be garbage-collected mid-flight).
         self._event_tasks: set[asyncio.Task] = set()
+        # v1.333.0: the governor is shared across THREADS. A schedule fire
+        # runs ``run_session`` under ``asyncio.run`` on APScheduler's thread,
+        # so the check-then-take of a slot, the FIFO and the busy count are
+        # guarded by one lock (re-entrant, so a helper that takes it may be
+        # called by one that already holds it). ``_home_loop`` is the
+        # daemon loop ``spawn_managed`` runs on: a parked coroutine promoted
+        # by a run finishing on another thread is started THERE, not on a
+        # scheduler loop that is about to close.
+        self._gov_lock = threading.RLock()
+        self._home_loop: asyncio.AbstractEventLoop | None = None
+        # The busy notice (v1.333.0): ids of UNATTENDED runs working right
+        # now (every door, counted in run_session); whether this episode
+        # already rang; when the last notice went out; "Not now" quiet until.
+        self._unattended_live: set[str] = set()
+        self._busy_notified = False
+        self._busy_last_at: float | None = None
+        self._busy_quiet_until = 0.0
+        self._clock = time.monotonic  # a seam: tests count with a fake clock
 
     def register_running(self, session_id: str, task: asyncio.Task) -> None:
         """Track a background run so it can be cancelled (called by the daemon).
@@ -514,33 +634,46 @@ class Orchestrator:
             coro.close()
             log.warning("refused background spawn for %s: shutting down", session_id)
             return None
-        limit = int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
+        try:
+            self._home_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # no loop: _start_managed raises as it always did
+        limit = self._session_limit()
         if limit <= 0:
             return self._start_managed(session_id, coro)
         session = self.get_session(session_id)
         if session is None:  # non-session background work is never governed
             return self._start_managed(session_id, coro)
-        if len(self._governed) < limit:  # count SESSIONS, not every bg task
-            self._governed.add(session_id)
-            return self._start_managed(session_id, coro)
-        if session.status is not SessionStatus.ACTIVE:
-            coro.close()  # never park a terminal row (see docstring); honest no-op
-            log.info(
-                "not queueing session %s: already %s", session_id, session.status.value
-            )
-            return None
-        self._queued.append((session_id, coro, True))
-        session.status = SessionStatus.QUEUED
-        self._save(session)
+        with self._gov_lock:
+            if len(self._governed) < limit:  # count SESSIONS, not every bg task
+                self._governed.add(session_id)
+                return self._start_managed(session_id, coro)
+            if session.status is not SessionStatus.ACTIVE:
+                coro.close()  # never park a terminal row (see docstring); honest no-op
+                log.info(
+                    "not queueing session %s: already %s", session_id, session.status.value
+                )
+                return None
+            self._queued.append((session_id, coro, True))
+            session.status = SessionStatus.QUEUED
+            self._save(session)
+            position = len(self._queued)
         self._publish_bg(
             EventType.SESSION_QUEUED,
             {
                 "task": session.task,
-                "position": len(self._queued),
+                "position": position,
             },
             session_id,
         )
         return None
+
+    def _session_limit(self) -> int:
+        """``config.max_concurrent_sessions`` as an int (0 = no cap)."""
+        try:
+            return int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _start_managed(self, session_id: str, coro) -> asyncio.Task:
         """Today's ``_spawn_bg`` semantics: create + register + surface crashes.
@@ -572,39 +705,86 @@ class Orchestrator:
         done-callback when it finishes. Inert while draining: lifespan teardown
         cancels the running tasks and each cancellation lands here via
         ``_release`` — promoting a parked row to ACTIVE and create_task'ing a
-        brand-new agent run mid-shutdown is exactly wrong."""
+        brand-new agent run mid-shutdown is exactly wrong.
+
+        v1.333.0: an entry is either an un-started coroutine (``spawn_managed``)
+        or a :class:`_SlotTicket` (a run already started by a door that never
+        went through ``spawn_managed``, waiting at ``run_session``'s gate) —
+        one FIFO, so the two are served in arrival order. A ticket is ADMITTED
+        (woken on its own loop) instead of started. A coroutine promoted by a
+        run that finished on another thread (a schedule fire) is started on
+        the daemon loop it was parked from (``_start_promoted``)."""
         if self._draining:
             return
-        limit = int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
-        while self._queued:
-            if limit > 0 and len(self._governed) >= limit:
-                return  # every governed slot still busy
-            session_id, coro, had_row = self._queued.popleft()
-            session = self.get_session(session_id)
-            if had_row and (
-                session is None or session.status is not SessionStatus.QUEUED
-            ):
-                coro.close()  # cancelled/deleted while parked — never start it
-                continue
-            if session is not None:
-                session.status = SessionStatus.ACTIVE
-                self._save(session)
-            try:
+        limit = self._session_limit()
+        with self._gov_lock:
+            while self._queued:
+                if limit > 0 and len(self._governed) >= limit:
+                    return  # every governed slot still busy
+                session_id, coro, had_row = self._queued.popleft()
+                session = self.get_session(session_id)
+                if had_row and (
+                    session is None or session.status is not SessionStatus.QUEUED
+                ):
+                    coro.close()  # cancelled/deleted while parked — never start it
+                    continue
+                if session is not None:
+                    session.status = SessionStatus.ACTIVE
+                    self._save(session)
                 self._governed.add(session_id)  # promoted into a governed slot
-                self._start_managed(session_id, coro)
-            except RuntimeError:  # event loop gone (shutdown) — never started
-                self._governed.discard(session_id)
-                coro.close()  # reconcile marks the stranded row on next boot
-                log.warning("could not start queued session %s (no loop)", session_id)
-            return  # one dequeue per freed slot
+                if isinstance(coro, _SlotTicket):
+                    if coro.admit():
+                        return  # one dequeue per freed slot
+                    # Its loop is gone, so no run will ever take the slot.
+                    self._governed.discard(session_id)
+                    continue
+                self._start_promoted(session_id, coro)
+                return  # one dequeue per freed slot
+
+    def _start_promoted(self, session_id: str, coro) -> None:
+        """Start a promoted coroutine on the daemon loop (v1.333.0). Called on
+        a scheduler thread, ``create_task`` would put the run on THAT loop,
+        which ``asyncio.run`` closes (cancelling the run) the moment its fire
+        returns — so it hops to ``_home_loop`` when that loop is live and is
+        not the one running here."""
+        home = self._home_loop
+        try:
+            here = asyncio.get_running_loop()
+        except RuntimeError:
+            here = None
+        if home is not None and home is not here and home.is_running():
+            try:
+                home.call_soon_threadsafe(self._start_promoted_here, session_id, coro)
+                return
+            except RuntimeError:  # closed between the check and the call
+                pass
+        self._start_promoted_here(session_id, coro)
+
+    def _start_promoted_here(self, session_id: str, coro) -> None:
+        # A FRESH context (v1.333.0 review). This runs in whatever context
+        # freed the slot: ``register_running``'s done-callback captured the
+        # context of the run that registered it, and a self-registered run
+        # registers INSIDE ``run_session`` — so a person's parked run promoted
+        # by a schedule fire's end inherited that fire's background lane
+        # (below-normal priority for every child it starts) and its
+        # ``_IN_RUN`` mark. A promoted run is a root run: it starts clean and
+        # ``run_session`` sets its own lane.
+        try:
+            contextvars.Context().run(self._start_managed, session_id, coro)
+        except RuntimeError:  # event loop gone (shutdown) — never started
+            self._governed.discard(session_id)
+            coro.close()  # reconcile marks the stranded row on next boot
+            log.warning("could not start queued session %s (no loop)", session_id)
 
     def _remove_queued(self, session_id: str) -> bool:
-        """Drop a parked entry, closing its un-started coroutine. True if found."""
-        for i, entry in enumerate(self._queued):
-            if entry[0] == session_id:
-                del self._queued[i]
-                entry[1].close()
-                return True
+        """Drop a parked entry, closing its un-started coroutine (or waking a
+        gate ticket without a slot). True if found."""
+        with self._gov_lock:
+            for i, entry in enumerate(self._queued):
+                if entry[0] == session_id:
+                    del self._queued[i]
+                    entry[1].close()
+                    return True
         return False
 
     def shutdown_queue(self) -> int:
@@ -622,10 +802,13 @@ class Orchestrator:
         Wired into daemon/app.py's lifespan finally by the coordinator."""
         self._draining = True
         discarded = 0
-        while self._queued:
-            _sid, coro, _had_row = self._queued.popleft()
-            coro.close()
-            discarded += 1
+        with self._gov_lock:
+            while self._queued:
+                # A gate ticket's close() wakes its run WITHOUT a slot: that
+                # run returns its row still QUEUED, for the same reconcile.
+                _sid, coro, _had_row = self._queued.popleft()
+                coro.close()
+                discarded += 1
         if discarded:
             log.info("discarded %d queued session(s) at shutdown", discarded)
         return discarded
@@ -897,9 +1080,44 @@ class Orchestrator:
     async def run_session(
         self, session_id: str, definition: "AgentDefinition | None" = None
     ) -> Session:
+        """Run one session to its end. EVERY root run passes here, whichever
+        door started it, so this is the one place (v1.333.0) that:
+
+        * marks an UNATTENDED run (a tagged origin not in
+          ``runtime.ATTENDED_ORIGINS``; see ``is_unattended_origin``) as
+          background work for its whole length — ``procs.background_lane``
+          rides the context into every task and worker thread the run makes,
+          so the children it spawns run below normal priority while the user's
+          own window keeps the CPU;
+        * counts it among the unattended runs in flight and, past
+          ``busy_runs_notice_at`` with no cap set, rings the bell ONCE
+          (``runs.busy``) to ask whether to queue the extras;
+        * holds ``max_concurrent_sessions`` for the doors that never went
+          through ``spawn_managed`` (see ``_run_session_body``).
+        """
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"unknown session '{session_id}'")
+        unattended = is_unattended_origin(getattr(session, "origin", None))
+        nested = _IN_RUN.get()
+        token = _IN_RUN.set(True)
+        try:
+            with procs.background_lane(on=unattended):
+                return await self._run_session_body(
+                    session, definition, unattended=unattended, nested=nested
+                )
+        finally:
+            _IN_RUN.reset(token)
+
+    async def _run_session_body(
+        self,
+        session: Session,
+        definition: "AgentDefinition | None",
+        *,
+        unattended: bool,
+        nested: bool,
+    ) -> Session:
+        session_id = session.id
         # Honor a terminal status that WON the create→register race: a cancel that
         # landed while create_session was parked awaiting the SESSION_CREATED publish
         # leaves no _running task, so cancel_session's else-branch marked the row
@@ -926,13 +1144,53 @@ class Orchestrator:
         current = asyncio.current_task()
         if current is not None and self._running.get(session_id) is None:
             self.register_running(session_id, current)
-            # A wait:true / schedule-fired run is a REAL concurrent session —
-            # it occupies a governed slot too (v1.167.0), so parked background
-            # runs don't over-promote past the limit while it works.
-            self._governed.add(session_id)
             self_registered = True
+        # THE CAP HOLDS AT EVERY DOOR (v1.333.0). Only ``spawn_managed`` used
+        # to park, and schedule fires, goal iterations, workflow agent steps
+        # and the phone never pass it — a cap of 2 let three 3am schedules
+        # run at once. A run that ``spawn_managed`` (or a promotion) already
+        # admitted is in ``_governed``; any OTHER unattended run takes its
+        # slot here, waiting QUEUED in the same FIFO when every slot is busy.
+        # A run started from INSIDE another run (``nested``) never waits: its
+        # ancestor holds a slot and may be awaiting it (see ``_IN_RUN``).
+        # Attended runs (chat, a job the user pressed Run on) never wait —
+        # the person is right there — but, as since v1.167.0, they occupy a
+        # governed slot while they work, so parked runs don't over-promote.
+        # Every run with a row is counted, whoever launched it: a run
+        # ``spawn_managed`` started with no cap set is in ``_governed`` too,
+        # so a cap set mid-flight ("Queue extras") counts what is already
+        # running. The slot is released by ``register_running``'s callback
+        # (or the self-registered finally below).
+        gated = (
+            unattended
+            and not nested
+            and session_id not in self._governed
+            and self._session_limit() > 0
+        )
+        if not gated:
+            self._governed.add(session_id)
+        counted = False
         try:
             try:
+                if gated:
+                    admitted = await self._wait_for_slot(session)
+                    if admitted is None:
+                        # Woken WITHOUT a slot: it never ran. At shutdown the
+                        # row stays QUEUED for the boot reconcile, exactly like
+                        # a parked spawn_managed run. A cancel from another
+                        # thread stamps the row CANCELLED before its
+                        # ``task.cancel`` lands, and a promotion that reads
+                        # that row first drops the ticket — so the stop must
+                        # be finalized HERE (event, worktree, assignment), or
+                        # the run returns and the cancel lands on nothing.
+                        row = self.get_session(session_id) or session
+                        if row.status is SessionStatus.CANCELLED:
+                            await self._finalize_cancelled(row)
+                        return row
+                    session = admitted
+                if unattended:
+                    counted = True
+                    await self._busy_enter(session_id)
                 if session.agent_type is AgentType.SUPERVISOR:
                     run = await run_supervised(self.p, session)  # §12 delegate to subagents
                 else:
@@ -1052,13 +1310,125 @@ class Orchestrator:
                     )
                 except Exception:  # noqa: BLE001
                     log.exception("failed to build review for session %s", session.id)
+                    # v1.333.0 (D9): no review was stored, so nothing will
+                    # ever approve or reject this one; do not hold it forever.
+                    if session.id not in self._reviews:
+                        self._git_sessions.pop(session.id, None)
 
             return session
         finally:
+            if counted:
+                self._busy_leave(session_id)
             if self_registered and self._running.get(session_id) is current:
                 self._running.pop(session_id, None)
                 self._governed.discard(session_id)
                 self._dequeue_next()  # the governed slot frees NOW, not at task end
+
+    async def _wait_for_slot(self, session: Session) -> Session | None:
+        """Take a governed slot for a door that bypassed ``spawn_managed``
+        (v1.333.0), parking QUEUED in the shared FIFO while every slot is
+        busy. Returns the refreshed row once admitted, or None when the entry
+        was discarded at shutdown (or dropped as cancelled by a promotion). A
+        cancel while parked (``cancel_session`` cancels the run's registered
+        task) leaves the queue and propagates, so ``run_session`` finalizes it
+        CANCELLED like any other stop. While DRAINING it never parks: the
+        queue was already discarded, so nothing would ever wake the wait, and
+        a schedule fire parked there would hold APScheduler's worker thread
+        (which the interpreter joins at exit) forever."""
+        session_id = session.id
+        loop = asyncio.get_running_loop()
+        with self._gov_lock:
+            limit = self._session_limit()
+            if limit <= 0 or len(self._governed) < limit:
+                self._governed.add(session_id)
+                return session
+            if self._draining:
+                return None
+            ticket = _SlotTicket(loop)
+            # The row says QUEUED BEFORE the entry is visible: a promotion
+            # skips an entry whose row is not QUEUED as cancelled-while-parked.
+            session.status = SessionStatus.QUEUED
+            self._save(session)
+            self._queued.append((session_id, ticket, True))
+            position = len(self._queued)
+        try:
+            try:
+                await self.p.event_bus.publish(
+                    EventType.SESSION_QUEUED,
+                    {"task": session.task, "position": position},
+                    session_id=session_id,
+                )
+            except Exception:  # noqa: BLE001 — the event is a courtesy; the wait is not
+                log.exception("could not publish session.queued for %s", session_id)
+            admitted = await ticket.future
+        except asyncio.CancelledError:
+            self._remove_queued(session_id)
+            raise
+        if not admitted:
+            return None
+        return self.get_session(session_id) or session
+
+    # --- the busy notice (v1.333.0) -----------------------------------------
+
+    async def _busy_enter(self, session_id: str) -> None:
+        """Count an unattended run as working and ring the bell when this
+        start makes the count unusual. Never raises: the notice is a
+        courtesy, the run is the point."""
+        with self._gov_lock:
+            self._unattended_live.add(session_id)
+            payload = self._busy_notice_due(len(self._unattended_live))
+        if payload is None:
+            return
+        try:
+            await self.p.event_bus.publish(EventType.RUNS_BUSY, payload)
+        except Exception:  # noqa: BLE001
+            log.exception("could not publish runs.busy")
+
+    def _busy_leave(self, session_id: str) -> None:
+        """The run ended: uncount it. Dropping back to the threshold ends the
+        episode, so a LATER pile-up may ring again (at most once an hour)."""
+        with self._gov_lock:
+            self._unattended_live.discard(session_id)
+            if len(self._unattended_live) <= busy_notice_threshold(self.p.config):
+                self._busy_notified = False
+
+    def _busy_notice_due(self, running: int) -> dict[str, Any] | None:
+        """The ``runs.busy`` payload when a notice should go out now, else
+        None. Caller holds ``_gov_lock``. ONE notice per episode (an episode
+        lasts while the count stays above the threshold), never sooner than
+        BUSY_NOTICE_GAP_S after the last one, never inside a "Not now" quiet,
+        and never while a cap is set — a cap already answers the question.
+        An episode that could not ring when it began (the hour, the quiet)
+        may still ring on a later start inside it, once that has passed."""
+        threshold = busy_notice_threshold(self.p.config)
+        if threshold <= 0 or running <= threshold or self._busy_notified:
+            return None
+        if self._session_limit() > 0:
+            return None
+        now = self._clock()
+        if now < self._busy_quiet_until:
+            return None
+        if self._busy_last_at is not None and now - self._busy_last_at < BUSY_NOTICE_GAP_S:
+            return None
+        self._busy_notified = True
+        self._busy_last_at = now
+        return {
+            "running": running,
+            "threshold": threshold,
+            "cap": max(1, min(BUSY_SUGGESTED_CAP, threshold)),
+        }
+
+    def snooze_busy_notice(self, seconds: float = BUSY_SNOOZE_S) -> float:
+        """The bell's "Not now": no ``runs.busy`` for ``seconds``. In memory
+        on purpose — a restart starts with nothing running, so a fresh pile-up
+        after one is worth one line in the bell. Returns the quiet length."""
+        with self._gov_lock:
+            self._busy_quiet_until = self._clock() + max(float(seconds), 0.0)
+        return float(seconds)
+
+    def unattended_running(self) -> int:
+        """How many unattended runs are working right now (every door)."""
+        return len(self._unattended_live)
 
     # --- the truth about a finished run (v1.227.0) ------------------------
 

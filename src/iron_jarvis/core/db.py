@@ -126,6 +126,12 @@ _HOT_INDEXES = (
     # temp B-tree over every thread on each reply; with it, the LIMIT reads the
     # newest N rows straight off the index (contract W3-3).
     ("ix_chatthreadrecord_updated_at", "chatthreadrecord", "updated_at"),
+    # v1.333.0: the home's status line (GET /ui/status-line) and the bell's
+    # GET /sessions/interrupted ask "which jobs did a restart cut off in the
+    # last 3 days", newest first, on every poll. Without this index SQLite
+    # scanned every session row each time; with it, the range and the ORDER BY
+    # read straight off the index (routes/sessions.interrupted_rows).
+    ("ix_session_interrupted_at", "session", "interrupted_at"),
 )
 
 

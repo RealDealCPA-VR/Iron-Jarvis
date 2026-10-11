@@ -440,6 +440,8 @@ const BEST_PRACTICES: { icon: LucideIcon; text: string }[] = [
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
+const RUN_FINISHED_EVENTS = { types: ["computeruse.run_finished"] };
+
 export default function ComputerUsePage() {
   const { data, error, loading, reload } = useApi<ComputerUseStatus>("/computeruse");
   const approvalsState = usePolledApi<{ approvals: ApprovalWithScreenshot[] }>(
@@ -529,7 +531,8 @@ export default function ComputerUsePage() {
   // Auto-refresh the list when a run reaches a terminal state. The buffer is
   // newest-first, so the first computeruse.run_finished id changes on each new
   // finish — a stable key that re-triggers exactly one reload per event.
-  const { events } = useEvents(30);
+  // v1.333.0: only run_finished frames reach this window.
+  const { events } = useEvents(30, RUN_FINISHED_EVENTS);
   const lastFinishedEventId = useMemo(
     () => events.find((e) => e.type === "computeruse.run_finished")?.id ?? null,
     [events],

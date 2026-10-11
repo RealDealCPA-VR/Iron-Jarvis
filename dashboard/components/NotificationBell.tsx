@@ -9,6 +9,7 @@ import {
   GitBranch,
   GraduationCap,
   KeyRound,
+  Layers,
   Lightbulb,
   MonitorCog,
   Inbox,
@@ -24,7 +25,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { ApiError, post } from "@/lib/api";
+import { ApiError, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
@@ -134,6 +135,8 @@ export const BELL_EVENT_TYPES: readonly string[] = [
   "grant.revoked",
   "coach.proposal",
   "computeruse.run_finished",
+  // the busy-runs ask (v1.333.0)
+  "runs.busy",
 ];
 
 /** Map one live event to an activity notification (null = not a notified type). */
@@ -586,6 +589,105 @@ function WaitingRunRow({
   );
 }
 
+/** v1.333.0: the daemon saw an unusual number of BACKGROUND runs (schedules,
+ *  goals, workflows, assignments, the phone) going at once with no cap set,
+ *  and asks whether to start a queue. The user's decision: no cap by
+ *  default, ask instead. Payload {running, threshold, cap}; cap is what
+ *  "Queue extras" sets. */
+export interface BusyRunsAsk {
+  id: string;
+  ts: string;
+  running: number;
+  cap: number;
+}
+
+/** The newest runs.busy event as an ask (null = none, or a malformed one). */
+export function parseBusyRuns(events: readonly IJEvent[]): BusyRunsAsk | null {
+  const e = events.find((ev) => ev.type === "runs.busy");
+  if (!e) return null;
+  const p = e.payload ?? {};
+  const running = typeof p.running === "number" && Number.isFinite(p.running) ? p.running : 0;
+  const cap =
+    typeof p.cap === "number" && Number.isInteger(p.cap) && p.cap > 0 ? p.cap : 3;
+  if (running < 2) return null;
+  return { id: e.id, ts: e.ts, running, cap };
+}
+
+/** The busy-runs ask as a bell row: the interrupted-job row's exact look
+ *  (same tile, title, amber line and the same two buttons). "Queue extras"
+ *  saves `max_concurrent_sessions` through the one settings writer (a ledger
+ *  row with Undo, like any setting); "Not now" keeps the daemon quiet about
+ *  it for a day. */
+function BusyRunsRow({
+  ask,
+  onGone,
+}: {
+  ask: BusyRunsAsk;
+  onGone: (id: string) => void;
+}) {
+  const [busy, setBusy] = useState<"queue" | "later" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function act(kind: "queue" | "later") {
+    if (busy) return;
+    setBusy(kind);
+    setError(null);
+    try {
+      if (kind === "queue") {
+        await put("/settings/values", { values: { max_concurrent_sessions: ask.cap } });
+      } else {
+        await post("/runs/busy/not-now", {});
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setBusy(null); // a daemon blip keeps the buttons live
+      return;
+    }
+    onGone(ask.id); // unmounts this row: no state updates past this point
+  }
+
+  return (
+    <li data-testid="bell-busy-runs" className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+          <Layers size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-zinc-100">
+            {ask.running} background runs are going at once
+          </span>
+          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
+            Queue the extras so only {ask.cap} run at a time?
+          </p>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void act("queue")}
+              disabled={busy !== null}
+              className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+            >
+              {busy === "queue" ? "Queuing…" : "Queue extras"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void act("later")}
+              disabled={busy !== null}
+              title="Don't ask about this again today"
+              className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100 disabled:opacity-50"
+            >
+              Not now
+            </button>
+          </div>
+          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          <span className="mt-1 block font-mono text-[10px] text-zinc-600">
+            {clockTime(ask.ts)}
+          </span>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 /** A mid-turn tool approval an AGENT RUN is paused on (v1.200.0). Job-origin
  *  runs (the Agents page) genuinely pause on ask-tier tools, but only the chat
  *  stream rendered a card — the job-poster never saw the ask and it timed out
@@ -867,6 +969,17 @@ export function NotificationBell() {
     reloadAgentAsks();
   };
 
+  // v1.333.0: the busy-runs ask (the newest runs.busy), until it is answered
+  // here. The daemon sends one per episode, so nothing re-polls it.
+  const [answeredBusy, setAnsweredBusy] = useState<ReadonlySet<string>>(new Set());
+  const busyAsk = useMemo(() => {
+    const ask = parseBusyRuns(events);
+    return ask && !answeredBusy.has(ask.id) ? ask : null;
+  }, [events, answeredBusy]);
+  const handleBusyGone = (id: string) => {
+    setAnsweredBusy((prev) => new Set(prev).add(id));
+  };
+
   // A live `workflow.waiting` event means the polled list is already stale —
   // refetch right away so the question appears without the up-to-15s lag.
   const reloadRuns = runsApi.reload;
@@ -942,7 +1055,8 @@ export function NotificationBell() {
     waiting.length +
     agentAsks.length +
     failingLoops.length +
-    interrupted.jobs.length;
+    interrupted.jobs.length +
+    (busyAsk ? 1 : 0);
   // v1.226.0: a polled source that FAILED (non-0 status, e.g. a 500) makes the
   // badge under-count — "You're all caught up" would then be a false empty
   // state. Offline (status 0) is the banner's story, not the bell's.
@@ -995,6 +1109,7 @@ export function NotificationBell() {
         parts.push(
           `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped by a restart`,
         );
+      if (busyAsk) parts.push(`${busyAsk.running} background runs going at once`);
       const body = parts.join(" · ") || "Something needs your attention.";
       notify(`Iron Jarvis: ${count} pending`, body, () => setOpen(true));
     }
@@ -1006,6 +1121,7 @@ export function NotificationBell() {
     agentAsks.length,
     failingLoops.length,
     interrupted.jobs.length,
+    busyAsk,
     notify,
   ]);
 
@@ -1121,6 +1237,10 @@ export function NotificationBell() {
                   {interrupted.jobs.map((job) => (
                     <InterruptedJobRow key={job.id} job={job} onGone={interrupted.forget} />
                   ))}
+
+                  {/* v1.333.0: many background runs at once, no cap set:
+                      the ask whether to start a queue. */}
+                  {busyAsk && <BusyRunsRow ask={busyAsk} onGone={handleBusyGone} />}
 
                   {pendingApprovals > 0 && (
                     <li>

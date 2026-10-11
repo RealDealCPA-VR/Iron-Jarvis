@@ -63,6 +63,14 @@ DEFAULT_REQUEST_TIMEOUT_S = 120.0
 #: Grace given to a killed server before its pipes are closed under it.
 _KILL_GRACE_S = 2.0
 
+#: Most unread stdout lines a stdio server's queue holds (v1.333.0, D8). The
+#: reader thread drains the pipe forever, but lines are only TAKEN while a
+#: call waits for its answer, so a pack that logs or notifies on stdout while
+#: idle grew the queue without bound. Past this the OLDEST line is dropped: a
+#: call in flight reads its answer as it arrives, so what ages out is idle
+#: chatter (or the answer to a call that already gave up).
+STDOUT_QUEUE_MAX = 4096
+
 #: How many ``tools/list`` pages :meth:`MCPClient.list_tools` follows before it
 #: stops (v1.322.0). A server whose ``nextCursor`` never runs out would
 #: otherwise page for ever; past the cap the tools already listed are kept and
@@ -645,10 +653,16 @@ class StdioTransport:
 
     @staticmethod
     def _pump_stdout(stream: Any, out: "queue.Queue[str | None]") -> None:
-        """Drain the server's stdout into a queue, forever, in its own thread."""
+        """Drain the server's stdout into a queue, forever, in its own thread.
+        Holds at most ``STDOUT_QUEUE_MAX`` lines, dropping the oldest."""
         try:
             if stream is not None:
                 for line in stream:
+                    while out.qsize() >= STDOUT_QUEUE_MAX:
+                        try:
+                            out.get_nowait()
+                        except queue.Empty:  # the caller took it first
+                            break
                     out.put(line)
         except Exception:  # pragma: no cover - pipe torn down mid-read
             pass

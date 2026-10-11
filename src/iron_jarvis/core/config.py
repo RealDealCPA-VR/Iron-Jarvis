@@ -375,6 +375,11 @@ class Config(BaseModel):
     # free (agents/orchestrator.spawn_managed). 0 (the default) = unlimited,
     # keeping spawn semantics byte-identical to before the queue existed.
     max_concurrent_sessions: int = 0
+    #: THE BUSY NOTICE (v1.333.0): with no cap set, more than this many
+    #: unattended runs (schedules, goals, workflows, assignments, the phone)
+    #: working at once rings the bell once and asks whether to queue the
+    #: extras. 0 = never. Never rings while ``max_concurrent_sessions`` > 0.
+    busy_runs_notice_at: int = 4
     #: OCR (v1.174.0) — scanned documents are transcribed by a VISION model
     #: (there is no tesseract in this app); off means a scan honestly reports
     #: "no text layer" instead of costing vision calls. `ocr_max_pages` bounds

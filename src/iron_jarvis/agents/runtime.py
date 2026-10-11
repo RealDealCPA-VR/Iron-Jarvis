@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from ..core import procs as _procs
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
@@ -261,6 +262,10 @@ _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
 
 #: What a teammate's run records when the user stopped it (v1.309.0).
 STOPPED_BY_USER_RESULT = "Stopped by the user before it finished."
+
+#: REPL disposals started at a run's end (v1.333.0, D3), held so a shielded
+#: dispose outlives a cancelled run without being garbage-collected mid-kill.
+_REPL_DISPOSALS: set[asyncio.Future] = set()
 
 
 class RunStoppedByUser(Exception):
@@ -1452,6 +1457,7 @@ class AgentRuntime:
         # network and nothing fails over to one. A session that is not local
         # only keeps whatever scope its caller already had (none, normally).
         _lo = session_local_only(session) or _egress.current_scope().on
+        self._hold_repl(session.id)  # v1.333.0: released in _release_repl
         try:
             if not _lo:
                 return await self._run_body(session, agent_def, parent_id)
@@ -1461,6 +1467,76 @@ class AgentRuntime:
             return await self._end_stopped(stop.run, session)
         finally:
             reset_run_budget(token)
+            # v1.333.0 (D9): this run's in-run grants and taint flag are
+            # dropped when it ENDS. They used to be popped only when the next
+            # run of the same id started, and a continuation is a NEW id, so
+            # every finished session left its entries here for the daemon's
+            # life on a runtime the orchestrator keeps forever.
+            self._run_grants.pop(session.id, None)
+            self._tainted.pop(session.id, None)
+            # …and so are its cached file reads (D8): nothing reads them again.
+            forget = getattr(getattr(self.p, "registry", None), "forget_session", None)
+            if callable(forget) and session.id != "chat":
+                try:
+                    forget(session.id)
+                except Exception:  # noqa: BLE001 — housekeeping never fails a run
+                    pass
+            await self._release_repl(session.id)
+            # …and the hidden programs its shell/run_code/custom-tool calls
+            # left running on purpose (a dev server the next step used) end
+            # with the run; a window the user now has is spared (v1.333.0).
+            if session.id != "chat":
+                try:
+                    await asyncio.to_thread(_procs.end_session, session.id)
+                except Exception:  # noqa: BLE001 — housekeeping never fails a run
+                    pass
+
+    def _hold_repl(self, session_id: str) -> None:
+        """Tell the REPL registry this session's run is in progress, so the
+        daemon's idle sweep leaves its namespaces alone while the run waits on
+        an ask or a slow model call (v1.333.0 review). Chat is never held."""
+        hold = getattr(getattr(self.p, "repl", None), "hold", None)
+        if callable(hold) and session_id and session_id != "chat":
+            try:
+                hold(session_id)
+            except Exception:  # noqa: BLE001 — housekeeping never fails a run
+                pass
+
+    async def _release_repl(self, session_id: str) -> None:
+        """End the session's Python namespaces when its run ends (v1.333.0, D3).
+
+        Each ``repl`` namespace is a child process. Nothing used to dispose
+        one: the registry only reclaimed idle children when a 17th namespace
+        was asked for, so every finished agent run kept its interpreter alive.
+        A continuation is a NEW session id, so nothing reads this namespace
+        again once the run is over. Chat's namespaces (session id ``"chat"``)
+        outlive any one turn and are left to the daemon's idle sweep.
+
+        The dispose runs in its own task, shielded: a run cancelled while it
+        tears down still has its child killed. Never raises anything but a
+        cancellation."""
+        repl = getattr(self.p, "repl", None)
+        if repl is None or not session_id or session_id == "chat":
+            return
+        release = getattr(repl, "release", None)
+        if callable(release):
+            try:
+                release(session_id)  # pairs with _hold_repl
+            except Exception:  # noqa: BLE001
+                pass
+        task = asyncio.ensure_future(repl.dispose(session_id))
+        _REPL_DISPOSALS.add(task)
+        task.add_done_callback(_REPL_DISPOSALS.discard)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise  # the shielded dispose carries on in its own task
+        except Exception:  # noqa: BLE001 — a failed dispose must not fail the run
+            import logging
+
+            logging.getLogger("iron_jarvis.agents.runtime").debug(
+                "repl dispose at run end failed", exc_info=True
+            )
 
     def _stop_requested(self, session_id: str) -> bool:
         """Has the user CANCELLED this session's row? BLOCKING (one primary-key

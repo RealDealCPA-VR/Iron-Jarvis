@@ -252,7 +252,7 @@ describe("F-D-1 — the in-flight turn is durable", () => {
   it("agent lane: the hand-off is saved with the session on the last bubble", async () => {
     H.stream.result = { reply: "", escalate: true, escalateReason: "needs the agent" };
     H.api.postResponses["/sessions"] = { id: "s1", status: "running" };
-    H.api.getResponses["/sessions/s1"] = { session: { id: "s1", status: "running" } };
+    H.api.getResponses["/sessions/s1?transcript=0"] = { session: { id: "s1", status: "running" } };
     render(<ChatPage />);
     await typeAndSend("do the long thing");
     await waitFor(() =>
@@ -282,7 +282,7 @@ describe("F-D-1 — the in-flight turn is durable", () => {
     H.stream.result = { reply: "", escalate: true, escalateReason: "needs the agent" };
     let answer!: (v: unknown) => void;
     H.api.postResponses["/sessions"] = new Promise((r) => (answer = r));
-    H.api.getResponses["/sessions/s1"] = { session: { id: "s1", status: "running" } };
+    H.api.getResponses["/sessions/s1?transcript=0"] = { session: { id: "s1", status: "running" } };
     render(<ChatPage />);
     await typeAndSend("do the long thing");
     await waitFor(() =>
@@ -318,12 +318,12 @@ describe("F-D-1 — the in-flight turn is durable", () => {
       expect(screen.getByRole("button", { name: "Send" })).toBeEnabled(),
     );
     expect(screen.queryByText("do the long thing")).toBeNull();
-    expect(H.api.gets.filter((g) => g === "/sessions/s1")).toEqual([]);
+    expect(H.api.gets.filter((g) => g === "/sessions/s1?transcript=0")).toEqual([]);
   });
 
   it("reopening a thread whose stored session completed appends the reply and saves", async () => {
     storeThread([{ role: "user", content: "do the thing", awaitingSession: "s9" }]);
-    H.api.getResponses["/sessions/s9"] = {
+    H.api.getResponses["/sessions/s9?transcript=0"] = {
       session: { id: "s9", status: "completed", summary: "Done: 42" },
     };
     render(<ChatPage />);

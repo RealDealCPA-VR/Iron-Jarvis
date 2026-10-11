@@ -86,9 +86,12 @@ export function GrantRow({
   );
 }
 
+// v1.333.0: only grant.* frames reach this window.
+const GRANT_EVENTS = { types: ["grant.*"] };
+
 export function StandingGrants() {
   const grants = useApi<{ grants: StandingGrant[] }>("/grants?live=1");
-  const { events } = useEvents(40);
+  const { events } = useEvents(40, GRANT_EVENTS);
   const seenRef = useRef<string | null>(null);
   const reload = grants.reload;
   // The useLiveGoals idiom: a grant.* event since the last look = stale.

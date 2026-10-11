@@ -277,6 +277,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", check=_range(0, 86400)),
     S("max_concurrent_sessions", "Runs at once", "automation", "number",
       "How many agent runs may work at the same time. 0 = no cap.", tier="ask", check=_range(0, 64)),
+    S("busy_runs_notice_at", "Busy notice after", "automation", "number",
+      "When there is no cap and more than this many background runs are going at once, "
+      "the bell asks whether to queue the extras. 0 = never ask.",
+      tier="allow", check=_range(0, 64), aliases=("busy notice", "busy runs")),
     S("autonomy_enabled", "Autonomy (the pulse)", "automation", "bool",
       "Let Iron Jarvis deliberate on your goals and propose (or, within budget, act).",
       tier="ask-floor", section="Autonomy", aliases=("autonomy",)),

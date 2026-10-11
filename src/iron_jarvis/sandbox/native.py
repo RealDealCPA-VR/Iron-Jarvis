@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+from ..core import procs
 from .base import Sandbox, SandboxResult
 from .policy import SandboxPolicy
 
@@ -314,42 +314,21 @@ def scrubbed_env_description(os_name: str | None = None) -> str:
 
 
 def _kill_tree(proc: "subprocess.Popen[bytes]") -> None:
-    """Kill ``proc`` AND every descendant (v1.228.0, RT3).
+    """Kill ``proc`` AND every descendant (v1.228.0, RT3; v1.333.0: the one
+    implementation is :func:`iron_jarvis.core.procs.kill_tree`).
 
     ``subprocess.run(shell=True, timeout=...)`` killed only the shell
     (cmd.exe / sh): the command it had started kept running to completion,
     held the pipes open, and ``communicate()`` blocked until it exited on its
-    own — measured 6 s for a 1 s timeout, marker file written after the
-    "timeout". Windows: ``taskkill /T /F`` walks the process tree. POSIX: the
-    child was started in its own session (``start_new_session=True``), so the
-    whole process group is one ``killpg`` away. Best-effort — a kill that
-    fails falls back to ``proc.kill()`` so the drain below can never hang on a
-    dead handle.
+    own -- measured 6 s for a 1 s timeout, marker file written after the
+    "timeout". Kept under this name because other modules import it (a child
+    started outside ``procs`` gets the plain ``taskkill /T /F`` / ``killpg``).
     """
-    try:
-        if os.name == "nt":
-            windir = os.environ.get("SystemRoot", r"C:\Windows")
-            taskkill = os.path.join(windir, "System32", "taskkill.exe")
-            if not os.path.exists(taskkill):
-                taskkill = "taskkill"
-            subprocess.run(
-                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
-                capture_output=True,
-                timeout=15,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:  # noqa: BLE001 — fall through to the plain kill
-        pass
-    try:
-        proc.kill()
-    except Exception:  # noqa: BLE001 — already gone
-        pass
+    procs.kill_tree(proc)
 
 
 class NativeSandbox(Sandbox):
-    """Run commands via ``subprocess.Popen`` on the host (§16, best-effort)."""
+    """Run commands on the host through ``core.procs`` (§16, best-effort)."""
 
     def __init__(self, policy: SandboxPolicy | None = None) -> None:
         self.policy = policy or SandboxPolicy()
@@ -368,49 +347,43 @@ class NativeSandbox(Sandbox):
         # misreads. A Python child keeps its own page; `_as_text` judges it.
         env = scrubbed_env() if self.policy.modify_env == "deny" else None
         start = time.monotonic()
-        # Popen + communicate(timeout) instead of subprocess.run (v1.228.0,
-        # RT3): on a timeout the WHOLE tree is killed (see `_kill_tree`) and
-        # the pipes are then drained, so the tool returns at ~timeout and the
-        # command is genuinely gone — not merely reported as timed out while
-        # it keeps running.
-        popen_kw: dict = {}
-        if os.name != "nt":
-            popen_kw["start_new_session"] = True
-        # BYTES, decoded by `_as_text` (v1.288.0, agents-01): `text=True` let
-        # one undecodable byte empty the output. stdin=DEVNULL (agents-09):
-        # the packaged daemon's own stdin is a pipe Electron never writes, so
-        # an inherited stdin parked every prompting command (`set /p`,
-        # `pause`, `del *.*`'s Y/N) for the full timeout; now it reads EOF at
-        # once and its prompt text reaches the model.
-        proc = subprocess.Popen(
+        # `procs.run` (v1.333.0; Popen + communicate(timeout) since v1.228.0,
+        # RT3): on a timeout the WHOLE tree is killed and the pipes are then
+        # drained for at most 15 s, so the tool returns at ~timeout and the
+        # command is genuinely gone -- not merely reported as timed out while
+        # it keeps running. BYTES, decoded by `_as_text` (v1.288.0,
+        # agents-01): `text=True` let one undecodable byte empty the output.
+        # stdin=DEVNULL (agents-09): the packaged daemon's own stdin is a pipe
+        # Electron never writes, so an inherited stdin parked every prompting
+        # command (`set /p`, `pause`, `del *.*`'s Y/N) for the full timeout.
+        # keep_windows: a `start notepad` the user asked for is a window they
+        # now have and is never stopped. On a timeout the members that show
+        # nothing are stopped at once; a command that FINISHED keeps what it
+        # left running (a dev server started on purpose) until the session
+        # that ran it ends (`procs.owned_by` in the shell tool,
+        # `procs.end_session`). no_window=False: the shell keeps the console
+        # it always had.
+        res = procs.run(
             command,
             shell=True,
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            cwd=cwd,
             env=env,
-            **popen_kw,
+            timeout=limit,
+            no_window=False,
+            keep_windows=True,
         )
-        try:
-            out, err = proc.communicate(timeout=limit)
-        except subprocess.TimeoutExpired:
-            _kill_tree(proc)
-            try:
-                out, err = proc.communicate(timeout=15)
-            except Exception:  # noqa: BLE001 — a wedged drain still returns
-                out, err = b"", b""
+        if res.timed_out:
             return SandboxResult(
-                stdout=_as_text(out),
-                stderr=_as_text(err) or f"timed out after {limit}s",
+                stdout=_as_text(res.stdout),
+                stderr=_as_text(res.stderr) or f"timed out after {limit}s",
                 returncode=-1,
                 timed_out=True,
                 duration_s=time.monotonic() - start,
             )
         return SandboxResult(
-            stdout=_as_text(out),
-            stderr=_as_text(err),
-            returncode=proc.returncode,
+            stdout=_as_text(res.stdout),
+            stderr=_as_text(res.stderr),
+            returncode=res.returncode,
             timed_out=False,
             duration_s=time.monotonic() - start,
         )

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { get } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import type { IJEvent } from "@/lib/types";
 
@@ -22,6 +23,15 @@ import type { IJEvent } from "@/lib/types";
  * thing that does nothing. The spokes now appear only while thinking (where
  * they spin, so they read as motion, not a gear). Its box is the bar's one
  * control height (TitleBar's BAR_CONTROL_H).
+ *
+ * v1.333.0: it no longer spins "thinking" forever after a daemon restart cut a
+ * run off. A restart publishes no session.completed for the runs it ended:
+ * the boot reconcile publishes ONE `sessions.interrupted` {session_ids} (now
+ * read here: those ids are done), and since that frame is sent before the
+ * window's socket is back (an unknown `?since=` id replays nothing), the orb
+ * also asks once, on each socket RECONNECT, how the runs it still thinks are
+ * in flight really stand (the slim `GET /sessions/{id}?transcript=0`, one per
+ * run, usually none or one). Nothing is read while connected.
  */
 
 type Mood = "idle" | "thinking" | "alert";
@@ -55,10 +65,90 @@ export const MOOD_EVENT_TYPES: readonly string[] = [
   "session.completed",
   "agent.started",
   "agent.completed",
+  "sessions.interrupted",
 ];
+
+/** Session statuses that end a run (models.SessionStatus). */
+const ENDED = new Set(["completed", "failed", "cancelled"]);
+const NONE: ReadonlySet<string> = new Set();
 
 export function MoodOrb() {
   const { events, connected } = useEvents(100, { types: MOOD_EVENT_TYPES });
+  // The START frames of runs the daemon said had ended when asked after a
+  // reconnect (see above). Keyed by the frame, not the session: a continue
+  // re-publishes session.created under the SAME session id, and that new
+  // start must spin the orb again.
+  const [settled, setSettled] = useState<ReadonlySet<string>>(NONE);
+
+  // THINKING: the sessions/agents that started and have not completed yet.
+  const inFlight = useMemo<string[]>(() => {
+    const done = new Set<string>();
+    for (const e of events) {
+      if (e.type === "session.completed" || e.type === "agent.completed")
+        done.add(sid(e));
+      if (e.type === "sessions.interrupted") {
+        const ids = (e.payload as { session_ids?: unknown } | null)?.session_ids;
+        if (Array.isArray(ids)) for (const id of ids) done.add(String(id));
+      }
+    }
+    const live: string[] = [];
+    for (const e of events) {
+      if (
+        (e.type === "session.created" || e.type === "agent.started") &&
+        !done.has(sid(e)) &&
+        !settled.has(String(e.id)) &&
+        !live.includes(sid(e))
+      )
+        live.push(sid(e));
+    }
+    return live;
+  }, [events, settled]);
+  const inFlightRef = useRef(inFlight);
+  inFlightRef.current = inFlight;
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+
+  // On a socket RECONNECT (never the first connect), ask once how the runs
+  // still shown as in flight really stand; a run the daemon says ended (or no
+  // longer knows) stops the spin.
+  const openedRef = useRef(false);
+  const droppedRef = useRef(false);
+  useEffect(() => {
+    if (!connected) {
+      if (openedRef.current) droppedRef.current = true;
+      return;
+    }
+    openedRef.current = true;
+    if (!droppedRef.current) return;
+    droppedRef.current = false;
+    const ids = inFlightRef.current;
+    if (ids.length === 0) return;
+    let alive = true;
+    void Promise.all(
+      ids.map(async (id) => {
+        try {
+          const d = await get<{ session?: { status?: string } }>(
+            `/sessions/${encodeURIComponent(id)}?transcript=0`,
+          );
+          const st = d?.session?.status;
+          return st && ENDED.has(st) ? id : null;
+        } catch (err) {
+          return (err as { status?: number } | null)?.status === 404 ? id : null;
+        }
+      }),
+    ).then((ended) => {
+      const gone = new Set(ended.filter((x): x is string => x !== null));
+      if (!alive || gone.size === 0) return;
+      // The start frames those runs had when asked: a later start is new.
+      const starts = eventsRef.current
+        .filter((e) => (e.type === "session.created" || e.type === "agent.started") && gone.has(sid(e)))
+        .map((e) => String(e.id));
+      setSettled((prev) => new Set([...prev, ...starts]));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [connected]);
 
   const mood = useMemo<Mood>(() => {
     // ALERT: an unresolved review request or a fresh autonomy proposal wins.
@@ -74,21 +164,10 @@ export function MoodOrb() {
     }
 
     // THINKING: a session/agent that started but hasn't completed yet.
-    const done = new Set<string>();
-    for (const e of events) {
-      if (e.type === "session.completed" || e.type === "agent.completed")
-        done.add(sid(e));
-    }
-    for (const e of events) {
-      if (
-        (e.type === "session.created" || e.type === "agent.started") &&
-        !done.has(sid(e))
-      )
-        return "thinking";
-    }
+    if (inFlight.length > 0) return "thinking";
 
     return "idle";
-  }, [events]);
+  }, [events, inFlight]);
 
   const color = COLOR[mood];
   const thinking = mood === "thinking";

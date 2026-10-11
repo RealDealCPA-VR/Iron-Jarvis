@@ -30,10 +30,11 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
+
+from ..core import procs
 
 log = logging.getLogger(__name__)
 
@@ -139,11 +140,10 @@ def config_providers(paths: list[Path] | None = None) -> dict[str, str]:
 
 
 def _run(argv: list[str], timeout: float = 25.0) -> tuple[int, str, str]:
-    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        argv, capture_output=True, text=True, timeout=timeout,
-        encoding="utf-8", errors="replace",
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    # `core.procs.run` (v1.333.0): a timeout kills the whole tree (opencode is
+    # an npm shim) and the drain is bounded; it still raises TimeoutExpired.
+    res = procs.run(argv, timeout=timeout).check_timeout()  # fixed argv, no shell
+    return res.returncode, procs.text(res.stdout, "utf-8"), procs.text(res.stderr, "utf-8")
 
 
 def list_models(runner: Callable[..., tuple[int, str, str]] | None = None,

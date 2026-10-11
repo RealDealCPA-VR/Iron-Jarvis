@@ -62,6 +62,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -85,6 +86,12 @@ DECISIONS = ("once", "conversation", "deny", "tab", "always")
 #: enough to read what the tool wants and decide; short enough that a stream
 #: whose user walked away ends instead of pinning a connection forever.
 APPROVAL_TIMEOUT_S = 180.0
+
+#: Sessions whose waited-on-asks total is remembered (v1.333.0, D9). The map
+#: is read right after a run ends (the goal engine), and it gained one entry
+#: per session that ever asked, for the daemon's life; the least recently
+#: updated entries past this are forgotten.
+WAITED_SESSIONS_MAX = 1024
 
 
 class ChatApprovals:
@@ -110,7 +117,7 @@ class ChatApprovals:
         #: audit AE13). Accumulated in :meth:`pop` from ``requested_at``, on
         #: every exit — answer, timeout, cancel — so a budget that charges
         #: wall-clock can subtract the time nobody was working.
-        self._waited: dict[str, float] = {}
+        self._waited: "OrderedDict[str, float]" = OrderedDict()
 
     def request(
         self,
@@ -271,6 +278,9 @@ class ChatApprovals:
         if sid:
             waited = max(0.0, time.time() - float((meta or {}).get("requested_at") or time.time()))
             self._waited[sid] = self._waited.get(sid, 0.0) + waited
+            self._waited.move_to_end(sid)
+            while len(self._waited) > WAITED_SESSIONS_MAX:
+                self._waited.popitem(last=False)
 
     def waited_s(self, session_id: str | None) -> float:
         """Seconds ``session_id``'s run has spent waiting on asks so far

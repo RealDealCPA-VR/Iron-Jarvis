@@ -329,6 +329,31 @@ def _quit_claude(session) -> bool:
     return False
 
 
+def coalesced_waker(loop: asyncio.AbstractEventLoop, wake: asyncio.Event):
+    """The attach pump's waker, callable from any thread (v1.333.0): ONE loop
+    callback per burst, not one per chunk. A TUI repainting pushes many
+    chunks between two runs of the pump, and each used to schedule its own
+    ``call_soon_threadsafe`` (a lock and a self-pipe write apiece). The flag
+    is cleared on the loop BEFORE the event is set, so a chunk pushed after
+    that schedules again — no chunk is ever left without a wake."""
+    armed = [False]
+
+    def fire() -> None:
+        armed[0] = False
+        wake.set()
+
+    def waker() -> None:
+        if armed[0]:
+            return  # a wake is already on its way; it covers this chunk
+        armed[0] = True
+        try:
+            loop.call_soon_threadsafe(fire)
+        except RuntimeError:  # the loop is closing (shutdown): nothing to wake
+            armed[0] = False
+
+    return waker
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -781,19 +806,13 @@ def register(app: FastAPI, d) -> None:
         # the read-and-sleep cadence it always had.
         loop = asyncio.get_running_loop()
         wake = asyncio.Event()
-
-        def _wake_from_any_thread() -> None:
-            try:
-                loop.call_soon_threadsafe(wake.set)
-            except RuntimeError:  # the loop is closing (shutdown): nothing to wake
-                pass
-
-        sub.set_waker(_wake_from_any_thread)
+        sub.set_waker(coalesced_waker(loop, wake))
         wake.set()  # anything pushed between subscribe() and here goes out first
         pushes = session.pushes_output
         #: A pushing pump's safety net only — a chunk, an overflow and the end
-        #: of the output all wake it immediately.
-        IDLE_WAKE_S = 5.0
+        #: of the output all wake it immediately. 60 s (v1.333.0; was 5): an
+        #: idle attached pane woke 12 times a minute to find nothing.
+        IDLE_WAKE_S = 60.0
         # FLOW CONTROL (v1.248.0). The pane sends {"type":"flow","paused":true}
         # when its renderer's backlog passes its high mark and false once it
         # drains below its low mark (the dashboard only sends it to a daemon
@@ -901,9 +920,17 @@ def register(app: FastAPI, d) -> None:
                                 if not paused:
                                     wake.set()  # flush what queued, in order
                         else:
-                            session.write(text)
+                            # OFF the loop, in order (v1.333.0): a write into a
+                            # console that is not reading blocks in WriteFile,
+                            # and on the loop that froze every pane, chat and
+                            # poll. This handler awaits each write before it
+                            # receives the next frame, so keystrokes never
+                            # reorder. `write_input` also drops a mouse report
+                            # sent to a shell with nothing running in it
+                            # (terminals/modes.py, the overnight bug).
+                            await asyncio.to_thread(session.write_input, text)
                     elif msg.get("bytes") is not None:
-                        session.write(msg["bytes"])
+                        await asyncio.to_thread(session.write_input, msg["bytes"])
                 except Exception:  # noqa: BLE001 — input must never crash the WS
                     # v1.245.0: only a DEAD shell gets 4000 ("shell exited") —
                     # the one close a pane never reconnects from. A malformed

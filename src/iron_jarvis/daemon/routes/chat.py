@@ -13,6 +13,7 @@ import json
 import logging
 import re as _re
 import threading
+import weakref
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -2375,7 +2376,23 @@ async def stream_chat_turn(
         finally:
             TURNS.release(turn_id, handle)
 
-    return _tracked()
+    tracked = _tracked()
+    # v1.333.0 (D9): a generator that is never STARTED never runs its
+    # `finally` — a client gone before the first frame was asked for left
+    # this turn registered for the daemon's life. When the generator is
+    # collected, release it on the loop (never inside the collector: the
+    # registry's lock may be held right there). Idempotent and scoped to this
+    # handle, so a turn that ran normally loses nothing.
+    loop = asyncio.get_running_loop()
+
+    def _release_if_never_run() -> None:
+        try:
+            loop.call_soon_threadsafe(TURNS.release, turn_id, handle)
+        except RuntimeError:  # the loop is gone (shutdown): nothing to keep
+            pass
+
+    weakref.finalize(tracked, _release_if_never_run)
+    return tracked
 
 
 async def _counted_for_thread(frames, entry, handle=None):

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.332.0 (2026-10-04).*
+holds itself to. Current as of v1.333.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,56 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Lighter on your PC, steadier over days (v1.333.0)
+
+Nothing looks different. Iron Jarvis now uses far less of your computer while
+it runs, and a Build workload can run for days without slowing the PC down.
+
+- **Much less memory.** The app's background service used about 900 MB the
+  moment it started, almost all of it reserved by a maths library for 24
+  threads it never used. It now starts at under 100 MB. The helper programs it
+  starts for Python cells and for Codex's connection to Iron Jarvis used to
+  load the whole app each (about 800 MB apiece); they now load only what they
+  need (about 15 MB).
+- **Background work stays in the background.** Programs started by schedules,
+  goals, workflows, queued assignments and the phone, and Build panes an agent
+  opens, run at below-normal priority, so the window you are working in stays
+  quick. Anything you start yourself keeps normal priority.
+- **Nothing is left running after it should stop.** Programs the app starts
+  (agent command-line tools, video encoding, git, Python cells, scripts) end
+  with the app, even after a crash, and a command that runs past its time limit
+  is stopped together with everything it started. Hidden programs a successful
+  shell command started (a dev server, for example) keep running until that
+  agent's run ends, so the next step can use them; a program with a window you
+  can see is never stopped.
+- **Closing a Build pane cleans up after it.** Hidden programs the pane started
+  (a dev server, a watcher) stop when you close the pane or quit the app. Apps
+  with a window you can see (VS Code, a browser, Notepad) are left alone. If the
+  app ever stops unexpectedly, the next start cleans up what those panes left.
+- **No more text typing itself into a terminal.** When a full-screen program
+  (Claude Code, for example) crashed while it was tracking the mouse, every move
+  of the pointer over the pane typed something like `[<35;10;5M` into the
+  shell. Iron Jarvis now switches that mode off when the program is gone, drops
+  stray mouse text sent to a bare prompt, and switches it off for panes
+  restored after a restart (the mouse wheel scrolls again there too).
+- **Too many background runs at once? The bell asks.** There is still no limit
+  by default. When more than four background runs are going at the same time,
+  the bell says so once and offers "Queue extras" (only three run at a time;
+  the rest wait their turn, shown as Queued) or "Not now" (it stays quiet for a
+  day). Change the number in Settings → Agents & automation → "Busy notice
+  after", and the limit itself under "Runs at once"; Undo works from the
+  Settings changes list like any other setting.
+- **Less disk, fewer wake-ups.** Build panes save their history only when they
+  print something new (about 8 times less writing with several panes open). The
+  health check no longer starts the Claude and Codex programs every couple of
+  minutes to ask whether you are signed in. Hidden windows stop polling, a
+  stalled service no longer collects a pile of waiting requests, and the quick
+  task window frees its memory after ten minutes unused.
+- **Small fixes found on the way.** The chat list in the sidebar kept updating
+  only for its first twenty changes; a quick task you cancelled was announced
+  as "Task done"; the mood orb could spin "thinking" for days after a restart;
+  a pop-out window that crashed now reloads like the main window.
 
 ## Local-only chats, and a faster app (v1.332.0)
 

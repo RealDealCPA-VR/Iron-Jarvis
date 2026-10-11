@@ -6,7 +6,7 @@ isolated checkout to mutate without ever touching the user's main checkout —
 the change only lands in the base branch when a review is explicitly approved
 (see :mod:`iron_jarvis.git.review`).
 
-We shell out to ``git`` with :mod:`subprocess` (no GitPython dependency) and
+We shell out to ``git`` through ``core.procs`` (no GitPython dependency) and
 always inject identity defaults via ``-c`` so commits succeed even in a fresh
 repo with no configured ``user.email`` / ``user.name``.
 """
@@ -14,16 +14,22 @@ repo with no configured ``user.email`` / ``user.name``.
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core import procs
 from ..core.ids import utcnow
 
 # Identity defaults injected on every git call so commits work in fresh repos
 # (§27 — sessions must be able to commit regardless of host git config).
 _DEFAULT_EMAIL = "ironjarvis@local"
 _DEFAULT_NAME = "Iron Jarvis"
+
+#: Wall-clock bound on one git call (v1.333.0 — there was none). Generous on
+#: purpose: a worktree checkout of a very large repository is slow, but a git
+#: waiting on a credential prompt, a lock or a hung hook must not park a
+#: worker thread forever.
+GIT_TIMEOUT_S = 300.0
 
 
 class GitError(RuntimeError):
@@ -40,16 +46,14 @@ def _git(args: list[str], cwd: Path) -> str:
         f"user.name={_DEFAULT_NAME}",
         *args,
     ]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
-        raise GitError(f"git {' '.join(args)} failed ({proc.returncode}): {detail}")
-    return proc.stdout
+    res = procs.run(cmd, cwd=cwd, timeout=GIT_TIMEOUT_S)
+    if res.timed_out:
+        raise GitError(f"git {' '.join(args)} did not finish within {GIT_TIMEOUT_S:.0f} s")
+    stdout, stderr = procs.text(res.stdout), procs.text(res.stderr)
+    if res.returncode != 0:
+        detail = (stderr or stdout or "").strip()
+        raise GitError(f"git {' '.join(args)} failed ({res.returncode}): {detail}")
+    return stdout
 
 
 def _git_code(args: list[str], cwd: Path) -> int:
@@ -62,7 +66,8 @@ def _git_code(args: list[str], cwd: Path) -> int:
         f"user.name={_DEFAULT_NAME}",
         *args,
     ]
-    return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True).returncode
+    res = procs.run(cmd, cwd=cwd, timeout=GIT_TIMEOUT_S)
+    return -1 if res.timed_out else res.returncode
 
 
 def _slugify(value: str) -> str:

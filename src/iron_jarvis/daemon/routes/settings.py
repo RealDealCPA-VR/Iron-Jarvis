@@ -242,6 +242,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=str(exc))
         return change.as_dict()
 
+    @app.post("/runs/busy/not-now")
+    def runs_busy_not_now() -> dict[str, Any]:
+        """The bell's "Not now" on the busy notice (v1.333.0): the daemon says
+        nothing more about busy background runs for 24 hours. "Queue extras"
+        is a plain ``PUT /settings/values`` of ``max_concurrent_sessions``."""
+        quiet_s = d.orchestrator.snooze_busy_notice()
+        return {"ok": True, "quiet_s": quiet_s}
+
     @app.get("/config/ledger")
     def config_ledger(limit: int = 30) -> dict[str, Any]:
         """The record of configuration changes, newest first (redesign S10,

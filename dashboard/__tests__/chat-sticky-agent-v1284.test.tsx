@@ -199,7 +199,7 @@ beforeEach(() => {
     "/tools": { tools: [] },
     "/undo?session_id=chat": { actions: [] },
     "/chat/approvals/pending": { approvals: [] },
-    "/sessions/s1": SESSION_DONE,
+    "/sessions/s1?transcript=0": SESSION_DONE,
     "/sessions/s1/result": RESULT_DONE,
   };
   window.history.replaceState({}, "", "/chat");
@@ -386,7 +386,7 @@ describe("work goes to a real session of that agent (v1.284.0)", () => {
         : { mode: "session", target: "custom:taxpro", who: "dynamic:taxpro", tools: ["write_document"], reason: "work", unknown_mentions: [] };
     H.api.postResponses["/sessions"] = { id: "s1", status: "active", task: "x", agent_type: "builder" };
     H.api.postResponses["/agents/taxpro/spawn"] = { id: "s2", status: "active", task: "y", agent_type: "builder" };
-    H.api.getResponses["/sessions/s2"] = {
+    H.api.getResponses["/sessions/s2?transcript=0"] = {
       session: { ...SESSION_DONE.session, id: "s2", summary: "Memo drafted." },
       transcript: [],
     };

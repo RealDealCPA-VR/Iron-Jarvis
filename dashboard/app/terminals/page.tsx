@@ -241,6 +241,10 @@ export default function TerminalsPage() {
   // recency check. New frames reschedule it — no interval ever runs.
   const [, bumpPeekEval] = useState(0);
   const termPeekTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // When each pane's newest output frame landed (v1.333.0) — the quiet
+  // window is measured from HERE, so a frame that changes nothing on screen
+  // needs no state update.
+  const termPeekAt = useRef<Record<string, number>>({});
   useEffect(() => {
     const timers = termPeekTimers.current;
     return () => {
@@ -360,12 +364,29 @@ export default function TerminalsPage() {
     if (viewsRef.current[id] !== "chat") return;
     setUnseenTermOutput((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
     const line = lastLine(chunk, TERM_LINE_CHARS);
+    // v1.333.0: the newest frame's time lives in a ref, so a frame that
+    // leaves the peek exactly as it is (same line, still inside the quiet
+    // window) changes no state and re-renders nothing. A TUI repainting its
+    // status line made a new object ~3 times a second per pane. A frame
+    // that brings a line back after the quiet window still renders.
+    const now = Date.now();
+    const lastAt = termPeekAt.current[id];
     setTermPeek((prev) => {
       const cur = prev[id];
       if (!line && !cur) return prev; // nothing to show — no empty husk
+      termPeekAt.current[id] = now;
+      const next = line || (cur?.lastLine ?? "");
+      if (
+        cur &&
+        cur.lastLine === next &&
+        lastAt !== undefined &&
+        now - lastAt < TERM_PEEK_QUIET_MS
+      ) {
+        return prev;
+      }
       return {
         ...prev,
-        [id]: { lastLine: line || (cur?.lastLine ?? ""), at: Date.now() },
+        [id]: { lastLine: next, at: now },
       };
     });
     const timers = termPeekTimers.current;
@@ -1109,7 +1130,8 @@ export default function TerminalsPage() {
                       peek &&
                       peek.lastLine &&
                       (unseenTermOutput[t.id] ||
-                        Date.now() - peek.at < TERM_PEEK_QUIET_MS)
+                        Date.now() - (termPeekAt.current[t.id] ?? peek.at) <
+                          TERM_PEEK_QUIET_MS)
                         ? peek.lastLine
                         : null;
                     // ONE pane body, TWO frames (v1.218.0). Everything below

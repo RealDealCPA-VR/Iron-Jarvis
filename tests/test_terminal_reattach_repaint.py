@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.terminals.backend import FakeBackend
 from iron_jarvis.terminals.manager import _SNAPSHOT_SCROLLBACK, TerminalManager
+from iron_jarvis.terminals.modes import restore_reset
 from iron_jarvis.terminals.session import (
     TAIL_MAX_BYTES,
     TerminalSession,
@@ -159,7 +160,11 @@ def test_restore_flags_a_cap_filling_snapshot_as_truncated(tmp_path, monkeypatch
     restored = m2.get(s.id)
     assert restored is not None
     assert restored._tail_truncated is True
-    assert len(restored._tail) == _SNAPSHOT_SCROLLBACK
+    # v1.333.0: the replayed slice is followed by restore_reset (the old
+    # program is dead; its mouse/paste modes must not outlive it).
+    reset = restore_reset(b"y" * _SNAPSHOT_SCROLLBACK)
+    assert len(restored._tail) == _SNAPSHOT_SCROLLBACK + len(reset)
+    assert bytes(restored._tail).endswith(reset)
 
     # A small (never-sliced) snapshot replays verbatim from byte 0.
     sp2 = tmp_path / "t2.json"

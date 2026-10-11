@@ -52,7 +52,9 @@ def test_the_entry_fast_path_only_claims_the_inert_server():
     entry = _load_entry()
     assert entry.INERT_MCP_SUBCOMMAND == "claude-inert-mcp"
     # Not the inert server -> the Typer app handles it (None = no fast path).
-    for argv in ([], ["serve"], ["mcp-stdio"], ["claude-inert-mcp"], ["claude-inert-mcp", "a", "b"]):
+    # v1.333.0: `mcp-stdio` and `repl-worker` gained fast paths of their own
+    # (tests/test_entry_fast_paths_v1333.py), so they are no longer listed here.
+    for argv in ([], ["serve"], ["claude-inert-mcp"], ["claude-inert-mcp", "a", "b"]):
         assert entry._fast_path(argv) is None, argv
     # The subcommand name agrees with what the adapter writes into --mcp-config.
     from iron_jarvis.providers.adapters.claude_native import inert_mcp

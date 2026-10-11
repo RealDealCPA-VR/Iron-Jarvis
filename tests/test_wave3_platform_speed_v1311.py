@@ -622,8 +622,10 @@ def test_health_in_steady_state_scans_path_zero_times(find_counter):
 def test_presence_memo_is_invalidated_and_bounded(find_counter, monkeypatch):
     from iron_jarvis.providers import manager as mgr
 
-    assert 0 < mgr.CLI_PRESENCE_TTL_S <= 60
-    assert 0 <= mgr.CLI_ABSENT_TTL_S <= 5
+    # v1.333.0 (D5): 10 min / 60 s (was 30 s / 5 s) — Re-detect invalidates
+    # at once, so the bound is how stale an UNPROMPTED answer may get.
+    assert 0 < mgr.CLI_PRESENCE_TTL_S <= 600
+    assert 0 <= mgr.CLI_ABSENT_TTL_S <= 60
     calls = find_counter["calls"]
 
     assert mgr.cli_binary_present("claude") is True

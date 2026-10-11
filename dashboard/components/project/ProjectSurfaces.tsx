@@ -54,8 +54,12 @@ export interface ProjectApproval {
  * rendered, because showing another project's pause here would be a lie about
  * whose work is paused.
  */
+// v1.333.0: only approvals reach this window (any other frame used to
+// re-render the project surface and re-run the scan for nothing).
+const APPROVAL_EVENTS = { types: ["approval.requested", "approval.resolved"] };
+
 export function useProjectApprovals(projectId: string): ProjectApproval[] {
-  const { events } = useEvents(100);
+  const { events } = useEvents(100, APPROVAL_EVENTS);
   const [pending, setPending] = useState<ProjectApproval[]>([]);
   // approval ids already routed (so a re-scan of the same buffer is a no-op),
   // ids already resolved (so an in-flight membership lookup cannot resurrect a

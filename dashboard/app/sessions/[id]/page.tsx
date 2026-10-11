@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { useRunStream } from "@/lib/useRunStream";
 import { useTTS } from "@/lib/useTTS";
 import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
@@ -81,6 +82,16 @@ const REFETCH_EVENTS = new Set([
   "approval.requested",
   "approval.resolved",
 ]);
+
+/** The next paint (a timer where there is no animation frame). */
+function nextFrame(fn: () => void): number {
+  if (typeof requestAnimationFrame === "function") return requestAnimationFrame(() => fn());
+  return window.setTimeout(fn, 16);
+}
+function cancelFrame(id: number): void {
+  if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(id);
+  else window.clearTimeout(id);
+}
 
 export default function SessionDetailPage({
   params,
@@ -202,13 +213,40 @@ export default function SessionDetailPage({
    * Bumping the nonce makes the panel refetch so its counts/rows never
    * present a just-reverted handover as current. */
   const [filesNonce, setFilesNonce] = useState(0);
-  useEffect(() => {
-    if (!latestRefetch) return;
+  // v1.333.0: one refetch per FRAME, and none while the window is hidden. A
+  // busy run sends tool.executed in bursts, and each one re-read the whole
+  // transcript, the evaluation and the files panel, minimised too. Now a
+  // burst inside one frame costs one refetch, and frames that land while
+  // hidden cost one refetch the moment the window is visible again.
+  const visible = useDocumentVisible();
+  const refetchOwedRef = useRef(false);
+  const refetchFrameRef = useRef<number | null>(null);
+  const refetchNow = useRef(() => {});
+  refetchNow.current = () => {
+    refetchOwedRef.current = false;
     detail.reload();
     evaluation.reload();
     setFilesNonce((n) => n + 1);
+  };
+  useEffect(() => {
+    if (!latestRefetch) return;
+    refetchOwedRef.current = true;
+    if (!visible || refetchFrameRef.current !== null) return;
+    refetchFrameRef.current = nextFrame(() => {
+      refetchFrameRef.current = null;
+      if (refetchOwedRef.current) refetchNow.current();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestRefetch?.id]);
+  useEffect(() => {
+    if (visible && refetchOwedRef.current && refetchFrameRef.current === null) refetchNow.current();
+  }, [visible]);
+  useEffect(
+    () => () => {
+      if (refetchFrameRef.current !== null) cancelFrame(refetchFrameRef.current);
+    },
+    [],
+  );
 
   /* ---- Lifecycle actions -------------------------------------------------- */
   const [acting, setActing] = useState<string | null>(null);

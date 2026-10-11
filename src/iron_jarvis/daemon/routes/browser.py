@@ -80,6 +80,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
 import time
 import types
 from typing import Any
@@ -120,10 +121,55 @@ _PAIRING_DEADLINE_S = P.PAIRING_DEADLINE_S
 #: then close a PAIRED browser with 1008. Nothing asserts this duration.
 _PAIRING_POLL_S = 0.25
 
-#: How long a socket held INERT (Browser access is off) waits before re-reading the
-#: access level. A SLICE, like ``_PAIRING_POLL_S``: the setting is changed by another
-#: task (``PUT /settings``), and nothing asserts this duration.
-_ACCESS_POLL_S = 0.25
+#: The longest a PAIRED or INERT socket sleeps before re-reading the access level
+#: on its own (v1.333.0; it used to wake every 0.25 s, ~345,000 wakeups a day for
+#: one idle browser). It now sleeps until a frame arrives, the settings writer
+#: announces a ``browser_access`` change (``config.changed`` → :class:`_AccessSignal`,
+#: which wakes it at once), or the next keepalive is due. This backstop is only for
+#: a ``Config`` changed WITHOUT the writer (tests assign the attribute directly).
+#: Nothing asserts this duration.
+_ACCESS_POLL_S = 2.0
+
+#: A keepalive due within this many seconds is sent now (see ``_keepalive``).
+_CLOCK_SLACK_S = 0.02
+
+
+class _AccessSignal:
+    """Wakes every live browser socket when the settings writer changes
+    ``browser_access`` (v1.333.0). The bus runs handlers on a worker thread, so
+    each waiter is woken on its OWN loop with ``call_soon_threadsafe``."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+
+    def add(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        with self._lock:
+            self._waiters.add((loop, event))
+
+    def discard(self, loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> None:
+        with self._lock:
+            self._waiters.discard((loop, event))
+
+    def fire(self) -> None:
+        with self._lock:
+            waiters = list(self._waiters)
+        for loop, event in waiters:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:  # that loop has closed; its socket is gone
+                pass
+
+    def on_event(self, event: Any) -> None:
+        """Event-bus handler: fire on a ``config.changed`` naming the setting."""
+        try:
+            if getattr(event, "type", "") != "config.changed":
+                return
+            keys = (getattr(event, "payload", None) or {}).get("keys") or ()
+            if "browser_access" in keys:
+                self.fire()
+        except Exception:  # noqa: BLE001 — a bus handler never raises
+            logger.debug("browser access signal failed", exc_info=True)
 
 #: The ONE method ``POST /browser/test`` may send, and a member of
 #: ``protocol.READ_METHODS`` — asserted by test, because a diagnostic that
@@ -808,6 +854,13 @@ def register(app: FastAPI, d) -> None:
     # told so — never left spinning.
     _panel.install(d)
 
+    # v1.333.0 (D6): one access signal per app, fed by the settings writer's
+    # `config.changed` event, so an idle socket sleeps instead of polling.
+    access_signal = _AccessSignal()
+    _bus = getattr(getattr(d, "platform", None), "event_bus", None)
+    if _bus is not None and hasattr(_bus, "add_handler"):
+        _bus.add_handler(access_signal.on_event)
+
     # ----------------------------------------------------------------- socket
 
     async def _open_pairing(runtime: Any, conn: ExtensionConnection) -> bool:
@@ -869,7 +922,10 @@ def register(app: FastAPI, d) -> None:
         a restricted one, which may receive nothing but its pairing frames.
         """
         now = loop.time()
-        if now < next_ping:
+        # Due within one clock tick counts as due (v1.333.0): asyncio fires a
+        # timer up to one Windows tick (15.6 ms) early, and an idle socket now
+        # sleeps exactly until this moment instead of polling past it.
+        if now + _CLOCK_SLACK_S < next_ping:
             return next_ping
         await conn.send(P.ping_frame(int(now * 1000)))
         return now + KEEPALIVE_S
@@ -935,13 +991,29 @@ def register(app: FastAPI, d) -> None:
         next_ping = loop.time() + KEEPALIVE_S
         reason, detail = "closed", ""
         recv = asyncio.ensure_future(ws.receive())
+        # v1.333.0 (D6): an idle paired or inert socket sleeps until a frame,
+        # an access change the writer announced, or the next keepalive — never
+        # in 0.25 s slices. `_idle_wait` is the one place that sleep happens.
+        access_changed = asyncio.Event()
+        access_signal.add(loop, access_changed)
+        access_wait: asyncio.Future | None = None
+
+        async def _idle_wait() -> bool:
+            """Wait for a frame or an idle tick; True when ``recv`` is done."""
+            nonlocal access_wait
+            if access_wait is None or access_wait.done():
+                access_changed.clear()
+                access_wait = asyncio.ensure_future(access_changed.wait())
+            timeout = max(0.0, min(next_ping - loop.time(), _ACCESS_POLL_S))
+            await asyncio.wait(
+                {recv, access_wait}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            return recv.done()
+
         try:
             while True:
                 if inert:
-                    done, _ = await asyncio.wait(
-                        {recv}, timeout=_ACCESS_POLL_S, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    if not done:
+                    if not await _idle_wait():
                         if _access_off(runtime):
                             next_ping = await _keepalive(conn, loop, next_ping)
                             continue
@@ -964,11 +1036,7 @@ def register(app: FastAPI, d) -> None:
                     recv = asyncio.ensure_future(ws.receive())
                     continue
                 if conn.paired:
-                    done, _ = await asyncio.wait(
-                        {recv}, timeout=_ACCESS_POLL_S,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if not done:
+                    if not await _idle_wait():
                         # THE ACCESS WORD IS PUSHED ON EVERY CHANGE (v1.242.0).
                         # `access` reached the add-on only in `browser.ready`,
                         # sent at adopt() and on the off->on recovery above —
@@ -1028,6 +1096,9 @@ def register(app: FastAPI, d) -> None:
                 recv = asyncio.ensure_future(ws.receive())
         finally:
             recv.cancel()
+            access_signal.discard(loop, access_changed)
+            if access_wait is not None:
+                access_wait.cancel()
             # A PAIRING SOCKET TAKES ITS OFFER WITH IT (v1.265.0). ``release`` forgets
             # the socket, but its pending request lived in the store, which knew
             # only the five-minute deadline — so the card kept offering Pair for a

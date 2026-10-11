@@ -2263,11 +2263,28 @@ function StudioView({
 
   // Idle clock: re-evaluate the "working → done" transition each second while the
   // run is alive (the tail poll goes quiet when the CLI stops emitting output).
+  // v1.333.0: only while this view is the one SHOWN — the Create tab active
+  // (StudioView stays mounted under the Gallery) and the window visible. The
+  // clock only feeds what is drawn (the boot counter, the working dots), so
+  // nothing is lost: it is set at once on the way back (the tab switch below,
+  // useVisibleInterval's catch-up for the window).
+  const tickOn = Boolean(session) && alive && !gone;
+  useVisibleInterval(() => setNowTick(Date.now()), 1000, tickOn && active);
+  const tickPausedRef = useRef(false);
   useEffect(() => {
-    if (!session || !alive || gone) return;
-    const id = setInterval(() => setNowTick(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [session, alive, gone]);
+    if (!tickOn) {
+      tickPausedRef.current = false;
+      return;
+    }
+    if (!active) {
+      tickPausedRef.current = true;
+      return;
+    }
+    if (tickPausedRef.current) {
+      tickPausedRef.current = false;
+      setNowTick(Date.now());
+    }
+  }, [tickOn, active]);
 
   const resetLive = useCallback((clearStore: boolean) => {
     if (clearStore) writeStudioStore({ session: undefined });
@@ -3566,6 +3583,8 @@ const VIEWS: { id: View; label: string; icon: ReactNode }[] = [
   { id: "create", label: "Create", icon: <Wand2 size={14} /> },
 ];
 
+const ARTIFACT_EVENTS = { types: ["artifact.generated"] };
+
 export default function CreativePage() {
   const { data, error, loading, reload } = useApi<{ items: CreativeItem[]; count: number }>(
     "/creative/items?limit=500",
@@ -3681,7 +3700,8 @@ export default function CreativePage() {
   }, [view, libDir, libRefresh]);
 
   // Live: refetch the moment the daemon emits artifact.generated (dedupe by event id).
-  const { events } = useEvents(50);
+  // v1.333.0: only artifact.generated frames reach this window.
+  const { events } = useEvents(50, ARTIFACT_EVENTS);
   const lastGeneratedId = events.find((e) => e.type === "artifact.generated")?.id;
   const [flash, setFlash] = useState(false);
   useEffect(() => {

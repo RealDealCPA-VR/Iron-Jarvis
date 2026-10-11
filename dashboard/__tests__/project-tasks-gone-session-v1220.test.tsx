@@ -94,13 +94,13 @@ describe("ProjectTasks — a stashed run whose session is gone", () => {
 
   it("drops the strip and forgets the stash on a 404", async () => {
     stashRun("sess_gone");
-    api.responses["/sessions/sess_gone"] = new api.FakeApiError("no such session", 404);
+    api.responses["/sessions/sess_gone?transcript=0"] = new api.FakeApiError("no such session", 404);
 
     render(
       <ProjectTasks projectId="proj_1" hasRoot={false} sessions={[]} />,
     );
 
-    await waitFor(() => expect(api.calls).toContain("/sessions/sess_gone"));
+    await waitFor(() => expect(api.calls).toContain("/sessions/sess_gone?transcript=0"));
     await waitFor(() => expect(window.localStorage.getItem(RUN_KEY)).toBeNull());
     expect(screen.queryByText(/open session/)).not.toBeInTheDocument();
     expect(screen.queryByText(/status check failed/)).not.toBeInTheDocument();
@@ -108,7 +108,7 @@ describe("ProjectTasks — a stashed run whose session is gone", () => {
 
   it("keeps retrying on any other failure (a transient error is not 'gone')", async () => {
     stashRun("sess_flaky");
-    api.responses["/sessions/sess_flaky"] = new api.FakeApiError("daemon offline", 0);
+    api.responses["/sessions/sess_flaky?transcript=0"] = new api.FakeApiError("daemon offline", 0);
 
     render(
       <ProjectTasks projectId="proj_1" hasRoot={false} sessions={[]} />,

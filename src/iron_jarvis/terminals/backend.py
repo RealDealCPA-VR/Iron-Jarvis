@@ -154,8 +154,19 @@ class WinPtyBackend:
     cooperative with a single async poll loop.
     """
 
+    #: v1.333.0: pywinpty cannot pass creation flags, so a below-normal pane
+    #: lowers its shell's class right after the spawn (later children inherit it).
+    below_normal = False
+
     def __init__(self) -> None:
         self._proc = None  # winpty.PtyProcess
+
+    @property
+    def pid(self) -> int | None:
+        try:
+            return int(self._proc.pid) if self._proc is not None else None
+        except Exception:  # noqa: BLE001
+            return None
 
     def start(
         self,
@@ -179,6 +190,13 @@ class WinPtyBackend:
             self._proc.fileobj.setblocking(False)
         except Exception:  # pragma: no cover - defensive
             pass
+        if self.below_normal and sys.platform == "win32":
+            try:
+                import psutil
+
+                psutil.Process(self._proc.pid).nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            except Exception:  # noqa: BLE001 — a pane never fails over its priority
+                pass
 
     def write(self, data: str | bytes) -> None:
         if self._proc is None:
@@ -555,6 +573,13 @@ class PipeBackend:
     child's output into a queue so ``read_nonblocking`` never blocks.
     """
 
+    #: v1.333.0: start the shell below normal priority (see ConPtyBackend).
+    below_normal = False
+
+    @property
+    def pid(self) -> int | None:
+        return self._proc.pid if self._proc is not None else None
+
     def __init__(self) -> None:
         self._proc: subprocess.Popen | None = None
         self._queue: "queue.Queue[bytes]" = queue.Queue()
@@ -570,6 +595,11 @@ class PipeBackend:
         cols: int,
         rows: int,
     ) -> None:
+        extra = {}
+        if self.below_normal and _WINDOWS:  # v1.333.0: a pane an agent opened
+            from ..core.procs import priority_flags
+
+            extra["creationflags"] = priority_flags(background=True)
         self._proc = subprocess.Popen(
             list(argv),
             cwd=cwd or None,
@@ -578,6 +608,7 @@ class PipeBackend:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
+            **extra,
         )
         if _WINDOWS:
             # Assign immediately: a shell takes far longer to reach its prompt
@@ -696,6 +727,7 @@ CONPTY_HOST_ENV = "IRONJARVIS_CONPTY_HOST"
 _CONPTY_BROKEN = False
 
 _PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
+_PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _STARTF_USESTDHANDLES = 0x00000100
@@ -907,7 +939,16 @@ class ConPtyBackend:
 
     pushes_output = True
 
+    #: v1.333.0: start the shell below normal priority (a pane an AGENT
+    #: opened); everything it starts inherits that class. Set before start.
+    below_normal = False
+
     def __init__(self) -> None:
+        # v1.333.0: the pane's Job (terminals/pane_jobs.py) — everything the
+        # shell starts, including what leaves its console, so a close can stop
+        # the hidden ones. None = no job (switched off or unavailable).
+        self._job: int | None = None
+        self._own_host = 0
         self._hpc = None  # HPCON (ctypes.c_void_p), made in start()
         self._in_write: int | None = None
         self._out_read: int | None = None
@@ -978,9 +1019,27 @@ class ConPtyBackend:
             )
         self._in_write = in_write.value
         self._out_read = out_read.value
+        from . import pane_jobs
+
+        self._job = pane_jobs.create_job()
         try:
-            self._spawn(api, argv, cwd, env)
+            try:
+                self._spawn(api, argv, cwd, env, self._job)
+            except ConPtyUnavailable:
+                raise
+            except OSError:
+                if self._job is None:
+                    raise
+                # A Windows that refuses the job attribute (or a program
+                # that cannot start inside a job): the pane matters more
+                # than its job — start it exactly as before v1.333.0. A bad
+                # command or folder fails here the same way again.
+                pane_jobs.close_job(self._job)
+                self._job = None
+                self._spawn(api, argv, cwd, env, None)
         except BaseException:
+            pane_jobs.close_job(self._job)
+            self._job = None
             k.ClosePseudoConsole(self._hpc)
             self._pty_closed = True
             k.CloseHandle(self._in_write)
@@ -991,15 +1050,19 @@ class ConPtyBackend:
         threading.Thread(target=self._read_loop, name="conpty-read", daemon=True).start()
         threading.Thread(target=self._wait_loop, name="conpty-wait", daemon=True).start()
 
-    def _spawn(self, api, argv, cwd, env) -> None:
+    def _spawn(self, api, argv, cwd, env, job: int | None = None) -> None:
         ctypes, k = api.ctypes, api.k32
+        count = 2 if job else 1
         size = ctypes.c_size_t(0)
-        k.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+        k.InitializeProcThreadAttributeList(None, count, 0, ctypes.byref(size))
         attrs = ctypes.create_string_buffer(size.value)
-        if not k.InitializeProcThreadAttributeList(attrs, 1, 0, ctypes.byref(size)):
+        if not k.InitializeProcThreadAttributeList(attrs, count, 0, ctypes.byref(size)):
             raise ConPtyUnavailable(
                 f"InitializeProcThreadAttributeList failed ({ctypes.get_last_error()})"
             )
+        # The job list's VALUE is a pointer to an array of handles; it must
+        # stay alive until CreateProcessW has read it.
+        job_list = (ctypes.c_void_p * 1)(job) if job else None
         try:
             # The VALUE is the HPCON itself, not a pointer to it.
             if not k.UpdateProcThreadAttribute(
@@ -1008,6 +1071,17 @@ class ConPtyBackend:
             ):
                 raise ConPtyUnavailable(
                     f"UpdateProcThreadAttribute failed ({ctypes.get_last_error()})"
+                )
+            # v1.333.0: the shell is BORN in the pane's job (no assignment
+            # race): everything it starts joins it, even what leaves the
+            # console (terminals/pane_jobs.py). A plain OSError, never
+            # ConPtyUnavailable — a refused job must not switch ConPTY off.
+            if job_list is not None and not k.UpdateProcThreadAttribute(
+                attrs, 0, _PROC_THREAD_ATTRIBUTE_JOB_LIST, job_list,
+                ctypes.sizeof(job_list), None, None,
+            ):
+                raise OSError(
+                    f"UpdateProcThreadAttribute(JOB_LIST) failed ({ctypes.get_last_error()})"
                 )
             si = api.STARTUPINFOEXW()
             si.StartupInfo.cb = ctypes.sizeof(api.STARTUPINFOEXW)
@@ -1021,6 +1095,10 @@ class ConPtyBackend:
             cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(argv)))
             block = _env_block(api, env) if env is not None else None
             flags = _EXTENDED_STARTUPINFO_PRESENT | _CREATE_UNICODE_ENVIRONMENT
+            if self.below_normal:
+                from ..core.procs import priority_flags
+
+                flags |= priority_flags(background=True)
             if not k.CreateProcessW(
                 None, cmdline, None, None, False, flags, block, cwd or None,
                 ctypes.byref(si), ctypes.byref(pi),
@@ -1144,6 +1222,12 @@ class ConPtyBackend:
         kills a closed pane and ``kill_all`` kills it again at shutdown."""
         if not self._started:
             return
+        if self._job is not None and not self._own_host and self.is_alive():
+            # The pane's own console, read while the shell can still name it:
+            # the close-time sweep must not mistake it for a window (review).
+            from . import pane_jobs
+
+            self._own_host = pane_jobs.console_host_pid(self.pid or 0)
         with self._lock:
             handle = self._hproc
             alive = handle is not None and not self._exited.is_set()
@@ -1151,6 +1235,46 @@ class ConPtyBackend:
                 _conpty_api().k32.TerminateProcess(handle, 1)
         if not alive:
             self._close_pty()
+        self.stop_background()
+
+    #: How long a close waits for the shell to be gone before it sweeps the
+    #: job (TerminateProcess is asynchronous; this is a bound, not a pace).
+    _KILL_SETTLE_S = 2.0
+
+    def stop_background(self) -> None:
+        """v1.333.0, the user's decision: closing a pane stops the HIDDEN
+        background processes it started (``Start-Process``, a detached dev
+        server) and never one with a visible window — see
+        terminals/pane_jobs.py. Once per pane: the second ``kill`` (the
+        manager's close, then ``kill_all`` at shutdown) finds no job. Also
+        called by the manager for a pane whose shell ended ON ITS OWN and is
+        dropped from the retained list without anyone closing it."""
+        from . import pane_jobs
+
+        with self._lock:
+            job, self._job = self._job, None
+        if job is None:
+            return
+        try:
+            self._exited.wait(self._KILL_SETTLE_S)
+            # Every process still ATTACHED to the console goes with it first.
+            self._close_pty()
+            pane_jobs.stop_hidden(job, own_host=self._own_host)
+        finally:
+            pane_jobs.close_job(job)
+
+    def background_members(self) -> list[list]:
+        """``[pid, start time]`` of what a daemon CRASH would leave running
+        from this pane: its job's members outside the pane's own console
+        (pane_jobs.background_members). Empty without a job."""
+        from . import pane_jobs
+
+        job = self._job
+        if job is None or not self.is_alive():
+            return []
+        if not self._own_host and self.pid:
+            self._own_host = pane_jobs.console_host_pid(self.pid)
+        return pane_jobs.background_members(job, own_host=self._own_host, shell_pid=self.pid)
 
     @property
     def exit_code(self) -> int | None:

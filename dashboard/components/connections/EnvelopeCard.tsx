@@ -204,8 +204,12 @@ function useEnvelope(provider: string, model: string) {
  * still counts for its provider — an extra refetch is harmless; a missed
  * one leaves stale numbers on screen.
  */
+// v1.333.0: only probe completions reach these windows (a frame of any other
+// type used to re-render the card for nothing).
+const PROBE_EVENTS = { types: ["envelope.probe_completed"] };
+
 function useProbeCompleted(provider: string, model: string, onCompleted: () => void) {
-  const { events } = useEvents(60);
+  const { events } = useEvents(60, PROBE_EVENTS);
   const seenRef = useRef<string | null>(null);
   const latest = events.find(
     (e) =>
@@ -336,7 +340,7 @@ export function MeasuredEndpoints({ entries }: { entries: MeasuredEntry[] }) {
 
   // ANY probe completion refetches the lot — one extra GET per entry is
   // cheap, and a missed one leaves a stale (or missing) card on screen.
-  const { events } = useEvents(60);
+  const { events } = useEvents(60, PROBE_EVENTS);
   const latest = events.find((e) => e.type === "envelope.probe_completed");
   const seenRef = useRef<string | null>(null);
   useEffect(() => {

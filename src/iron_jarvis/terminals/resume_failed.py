@@ -52,7 +52,7 @@ from typing import Any, Mapping
 from ..providers.cli_auth import is_sign_in_refusal
 from .limit_state import _LINE_CAP
 
-__all__ = ["Failure", "check_file", "classify_record"]
+__all__ = ["Failure", "FileWatch", "check_file", "classify_record"]
 
 #: How much of the carried file's END is read on each check.
 TAIL_BYTES = 256 * 1024
@@ -195,3 +195,90 @@ def check_file(path: Path | str, after: str, *, max_bytes: int = TAIL_BYTES) -> 
         kind = classify_record(rec)
         found = Failure(kind, _clip(_text_of(rec)), str(rec.get("timestamp"))) if kind else None
     return found
+
+
+def _apply(found: Failure | None, rec: Any, floor: float) -> Failure | None:
+    """``check_file``'s rule for ONE record, in file order: a newer qualifying
+    assistant record replaces the verdict (an answer clears an error)."""
+    if not isinstance(rec, dict):
+        return found
+    if rec.get("type") != "assistant" or rec.get("isSidechain") is True:
+        return found
+    when = _time(rec.get("timestamp"))
+    if when is None or when <= floor:
+        return found
+    kind = classify_record(rec)
+    return Failure(kind, _clip(_text_of(rec)), str(rec.get("timestamp"))) if kind else None
+
+
+class FileWatch:
+    """:func:`check_file`, read INCREMENTALLY (v1.333.0).
+
+    The activity route asks every 2.5 s, and while the carried conversation
+    is being written (Claude answering) the file changes on nearly every ask
+    — each ask re-read and JSON-parsed the last 256 KB. This keeps the byte
+    offset after the last whole record and the verdict so far, and reads
+    only what was appended since. A file that SHRANK or was REPLACED (a new
+    file id) is read again from its tail, exactly as ``check_file`` reads it.
+    A record still being written (no newline yet) is judged now and read
+    again once complete — judging a record twice in order changes nothing.
+    BLOCKING; never raises."""
+
+    def __init__(self, path: Path | str, after: str, *, max_bytes: int = TAIL_BYTES) -> None:
+        self.path = str(path)
+        self.after = str(after or "")
+        self.max_bytes = max_bytes
+        self._offset: int | None = None
+        self._ident: Any = None
+        self._found: Failure | None = None
+        #: Bytes read by the last :meth:`check` (what this class exists to cut).
+        self.last_read = 0
+
+    def check(self) -> Failure | None:
+        floor = _time(self.after)
+        self.last_read = 0
+        if floor is None:
+            return None
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            self._offset, self._found = None, None
+            return None
+        ident = (st.st_dev, st.st_ino)
+        start = self._offset
+        if start is None or ident != self._ident or st.st_size < start:
+            start, self._found = None, None  # first read, or a different file
+        if start is None or st.st_size - start > self.max_bytes:
+            start = max(0, st.st_size - self.max_bytes)
+            self._found = None
+            mid_record = start > 0
+        else:
+            mid_record = False
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(start)
+                data = fh.read(st.st_size - start)
+        except OSError:
+            return self._found
+        self.last_read = len(data)
+        self._ident = ident
+        if mid_record:
+            nl = data.find(b"\n")
+            skip = nl + 1 if nl >= 0 else len(data)
+            data, start = data[skip:], start + skip
+        cut = data.rfind(b"\n")
+        whole, rest = (data[: cut + 1], data[cut + 1:]) if cut >= 0 else (b"", data)
+        for raw in whole.splitlines():
+            if raw.strip():
+                try:
+                    self._found = _apply(self._found, json.loads(raw), floor)
+                except ValueError:
+                    continue
+        self._offset = start + len(whole)
+        found = self._found
+        if rest.strip():
+            try:
+                found = _apply(found, json.loads(rest), floor)
+            except ValueError:
+                pass  # a torn last write: read again once it is whole
+        return found

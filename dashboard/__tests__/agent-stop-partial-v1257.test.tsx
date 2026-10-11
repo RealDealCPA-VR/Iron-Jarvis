@@ -183,7 +183,7 @@ function storeWaitingThread() {
       { role: "assistant", content: "", escalated: "needs the agent", awaitingSession: "s1" },
     ],
   };
-  H.api.getResponses["/sessions/s1"] = { session: { id: "s1", status: "running" } };
+  H.api.getResponses["/sessions/s1?transcript=0"] = { session: { id: "s1", status: "running" } };
   window.history.replaceState({}, "", "/chat?thread=t7");
 }
 

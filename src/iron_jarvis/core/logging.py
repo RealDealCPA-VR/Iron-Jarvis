@@ -204,6 +204,9 @@ QUIET_PATHS = frozenset(
         # poll another 13,183 lines — together days of history instead of weeks.
         "/fs/files",
         "/sessions/interrupted",
+        # v1.333.0 (D12): the home line's ~20 s poll was 337 of ~550 log lines
+        # since boot on the user's install.
+        "/ui/status-line",
     }
 )
 

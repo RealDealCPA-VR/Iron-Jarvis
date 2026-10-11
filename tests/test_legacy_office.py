@@ -369,7 +369,8 @@ def test_a_timeout_is_reported_as_a_timeout(tmp_path, monkeypatch):
             return (b"", b"")
 
     monkeypatch.setattr(legacy.subprocess, "Popen", lambda *a, **k: HangingProc())
-    monkeypatch.setattr(legacy, "_kill_tree", lambda pid: killed.append(pid))
+    # v1.333.0: the tree kill is `core.procs.kill_tree(proc)` (job-aware).
+    monkeypatch.setattr(legacy.procs, "kill_tree", lambda proc: killed.append(proc.pid))
 
     with pytest.raises(LegacyReadError) as err:
         legacy.convert_doc_to_docx(DOC, tmp_path / "x.docx", timeout=1)

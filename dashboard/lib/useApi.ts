@@ -93,6 +93,15 @@ function jsonOf(value: unknown): string | null {
   }
 }
 
+/* ---- Poll pile-up guard (v1.333.0) ------------------------------------------ */
+
+/** A poll tick skips while this hook's previous request is younger than this
+ *  many intervals (see `revalidate`). */
+export const POLL_STALL_TICKS = 3;
+/** A poll tick sends nothing while this many of one hook's requests for its
+ *  path are on the wire. */
+export const MAX_OUTSTANDING_POLLS = 2;
+
 /* ---- The hook -------------------------------------------------------------- */
 
 /**
@@ -197,6 +206,13 @@ function useApiCore<T>(
   const seqRef = useRef(0);
   const appliedSeqRef = useRef(0);
   const pendingRef = useRef<{ promise: Promise<unknown>; release: () => void } | null>(null);
+  // v1.333.0 (poll pile-up): when `pending` was issued, and how many of this
+  // hook's requests are still on the wire PER PATH (a superseded one stays on
+  // the wire until it settles — `release` only stops us waiting for it).
+  // Counted per path so requests hung on a path this hook has LEFT never hold
+  // back the polls of the path it shows now.
+  const pendingSinceRef = useRef(0);
+  const outstandingRef = useRef(new Map<string, number>());
   // The path this hook last fetched: a later fetch of the SAME path from the
   // effect is a reload or a deps change (fresh request); a first fetch of a
   // path (a mount, a path switch) may join one already in flight.
@@ -223,6 +239,9 @@ function useApiCore<T>(
       // it still lands first, is applied; a late one is dropped by `seq`).
       if (prev) prev.release();
       pendingRef.current = req;
+      pendingSinceRef.current = Date.now();
+      const onWire = outstandingRef.current;
+      onWire.set(p, (onWire.get(p) ?? 0) + 1);
       const live = () => gen === genRef.current && seq > appliedSeqRef.current;
       const finish = () => {
         if (pendingRef.current === req) {
@@ -267,6 +286,9 @@ function useApiCore<T>(
           putError(e instanceof ApiError ? e : new ApiError(String(e), 0));
         })
         .finally(() => {
+          const left = (onWire.get(p) ?? 1) - 1;
+          if (left > 0) onWire.set(p, left);
+          else onWire.delete(p);
           finish();
           if (gen === genRef.current) putLoading(false);
         });
@@ -298,11 +320,30 @@ function useApiCore<T>(
   }, [path, nonce, ...deps]);
 
   // The background revalidation a poll tick runs: same request, no `loading`.
+  //
+  // v1.333.0 (poll pile-up): against a daemon that accepts connections but
+  // does not answer (a stalled event loop), every tick used to send a fresh
+  // GET past the one still waiting, and `get` has no timeout, so the hung
+  // requests piled up (~44 a minute on /terminals). A tick now waits for the
+  // request this hook already has on the wire while it is younger than
+  // POLL_STALL_TICKS intervals (a healthy answer lands long before the next
+  // tick, so a responsive daemon sees exactly the old cadence); past that it
+  // sends a fresh one — the old recovery from one lost request is kept — but
+  // never past MAX_OUTSTANDING_POLLS of this hook's requests for that path.
+  // Foreground fetches (mount, path change, reload, epoch retry) are never held.
   const pathRef = useRef(path);
   pathRef.current = path;
+  const intervalRef = useRef(intervalMs);
+  intervalRef.current = intervalMs;
   const revalidate = useCallback(() => {
     const p = pathRef.current;
-    if (p !== null) fetchOnce(p, true);
+    if (p === null) return;
+    if (pendingRef.current) {
+      const span = (intervalRef.current ?? 0) * POLL_STALL_TICKS;
+      if (Date.now() - pendingSinceRef.current < span) return;
+    }
+    if ((outstandingRef.current.get(p) ?? 0) >= MAX_OUTSTANDING_POLLS) return;
+    fetchOnce(p, true);
   }, [fetchOnce]);
 
   // Polling (usePolledApi) — while the document is VISIBLE.

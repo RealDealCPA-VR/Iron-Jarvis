@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
+from ...core import procs
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError
 from ..budget import run_budget
 from ..cli_auth import cli_failure_message, note_cli_failure
@@ -94,27 +95,26 @@ _STEP_SCHEMA = {
 def _spawn(argv: list[str], env: dict[str, str] | None = None) -> "subprocess.Popen[str]":
     """Start the CLI with its own pipes — the caller owns the handle.
 
-    POSIX: its own session, so ``_kill_tree``'s ``killpg`` reaches the CLI's
-    helpers and nothing else. Windows: ``taskkill /T`` walks the PID tree.
-    ``env`` (v1.301.0) is passed ONLY for an Iron-Proxy account; None keeps
-    the inherited environment exactly as before.
+    Through ``core.procs.spawn`` (v1.333.0): its own kill-on-close Job on
+    Windows (nothing the CLI started outlives the daemon, even after a
+    crash), below-normal priority in the background lane, no console
+    window. POSIX: its own session, so the tree kill's ``killpg`` reaches the
+    CLI's helpers and nothing else. ``env`` (v1.301.0) is passed ONLY for an
+    Iron-Proxy account; None keeps the inherited environment exactly as
+    before.
     """
     popen_kw: dict[str, Any] = {}
-    if os.name != "nt":
-        popen_kw["start_new_session"] = True
     if env is not None:
         popen_kw["env"] = env
-    return subprocess.Popen(  # noqa: S603 — argv list, no shell
+    return procs.spawn(  # argv list, no shell
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", **popen_kw,
     )
 
 
 def _kill(proc: "subprocess.Popen[str]") -> None:
-    """Kill the CLI AND its descendants — the ONE tree-kill (sandbox/native)."""
-    from ...sandbox.native import _kill_tree
-
-    _kill_tree(proc)
+    """Kill the CLI AND its descendants — the ONE tree-kill (core/procs)."""
+    procs.kill_tree(proc)
 
 
 def _drain(
@@ -130,15 +130,20 @@ def _drain(
     TimeoutExpired propagates exactly as before (→ transient ProviderError).
     """
     try:
-        out, err = proc.communicate(stdin, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill(proc)
         try:
-            proc.communicate(timeout=5)
-        except Exception:  # noqa: BLE001 — a wedged drain must still return
-            pass
-        raise
-    return proc.returncode, out or "", err or ""
+            out, err = proc.communicate(stdin, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+            try:
+                proc.communicate(timeout=5)
+            except Exception:  # noqa: BLE001 — a wedged drain must still return
+                pass
+            raise
+        return proc.returncode, out or "", err or ""
+    finally:
+        # The call is over: its job closes, and with it any helper the CLI
+        # left running (v1.333.0).
+        procs.release(proc)
 
 
 def _run(
@@ -176,6 +181,7 @@ async def run_cli(
                 proc.communicate(timeout=5)
             except Exception:  # noqa: BLE001 — reaping is best-effort
                 pass
+            procs.release(proc)
             return -1, "", ""
         return _drain(proc, stdin, timeout)
 

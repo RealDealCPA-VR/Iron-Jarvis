@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlmodel import select
 
+from ..core import procs
 from ..core.db import session_scope
 from ..core.models import DynamicToolRecord
 from ..sandbox.native import _as_text, child_env, host_os_line
@@ -236,8 +237,13 @@ class CommandTool(Tool):
             # the daemon's single event loop and blocks for up to self._timeout
             # (capped at MAX_TIMEOUT_SECONDS), so inline it would freeze every
             # request and every other session while a custom tool runs.
-            def _run() -> "tuple[int, str, str]":
-                proc = subprocess.run(
+            # v1.333.0: `procs.run_async` spawns in a worker thread, kills the
+            # whole tree on a timeout AND on a cancelled await, and keeps a
+            # window the program opened for the user (`keep_windows`); what a
+            # FINISHED call left running hidden lives until this session's
+            # run ends (`owned_by` / `procs.end_session`).
+            with procs.owned_by(ctx.session_id):
+                res = await procs.run_async(
                     argv,
                     shell=False,  # argv form: a parameter value can't inject shell words
                     cwd=ctx.workspace,
@@ -245,16 +251,17 @@ class CommandTool(Tool):
                     # same two fixes as NativeSandbox.run (v1.288.0,
                     # agents-01/-09). `text=True` could empty the output on
                     # one undecodable byte; an inherited stdin parked a prompt.
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
                     env=child_env(None),
                     timeout=self._timeout,
+                    no_window=False,
+                    keep_windows=True,
                 )
-                # Decoded HERE, in the worker thread: scoring a large
-                # non-UTF-8 output is not work for the event loop.
-                return proc.returncode, _as_text(proc.stdout), _as_text(proc.stderr)
-
-            returncode, stdout, stderr = await asyncio.to_thread(_run)
+            res.check_timeout()
+            # Decoded in a worker thread: scoring a large non-UTF-8 output is
+            # not work for the event loop.
+            returncode, stdout, stderr = await asyncio.to_thread(
+                lambda: (res.returncode, _as_text(res.stdout), _as_text(res.stderr))
+            )
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, error="command timed out")
         except FileNotFoundError:

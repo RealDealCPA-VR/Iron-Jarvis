@@ -200,6 +200,14 @@ async def transcribe_clip(
     )
 
 
+def _recognizer(model: Any) -> Any:
+    """A fresh 16 kHz Vosk recognizer for *model*. BLOCKING (the first call
+    imports the native library): run it in a worker thread."""
+    import vosk
+
+    return vosk.KaldiRecognizer(model, 16000)
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/voice/status")
@@ -230,15 +238,17 @@ def register(app: FastAPI, d) -> None:
         if not _ws_token_ok(ws):
             await ws.close(code=1008)
             return
-        model = d._vosk_model()
+        # v1.333.0 (D10): the model load (~1 s, a disk read and a native
+        # decoder) and each recognizer build run OFF the loop, as the browser
+        # panel's dictation does — on the loop they froze every request,
+        # terminal and chat stream for that second.
+        model = await asyncio.to_thread(d._vosk_model)
         if model is None:
             await ws.accept()
             await ws.send_json({"error": "offline speech model not available"})
             await ws.close()
             return
-        import vosk
-
-        rec = vosk.KaldiRecognizer(model, 16000)
+        rec = await asyncio.to_thread(_recognizer, model)
         await ws.accept()
         try:
             while True:
@@ -267,7 +277,7 @@ def register(app: FastAPI, d) -> None:
                     if isinstance(obj, dict) and obj.get("eof"):
                         final = json.loads(rec.FinalResult()).get("text", "")
                         await ws.send_json({"text": final, "final": True})
-                        rec = vosk.KaldiRecognizer(model, 16000)  # ready for next
+                        rec = await asyncio.to_thread(_recognizer, model)  # ready for next
         except WebSocketDisconnect:
             pass
         except Exception:  # noqa: BLE001 — a bad frame must never crash the daemon

@@ -970,13 +970,22 @@ def register(app: FastAPI, d) -> None:
         return {"parents": parents}
 
     @app.get("/sessions/{session_id}")
-    def get_session(session_id: str) -> dict[str, Any]:
+    def get_session(session_id: str, transcript: bool = True) -> dict[str, Any]:
+        """``{session, transcript}`` — NESTED, always.
+
+        v1.333.0: ``?transcript=0`` is the slim read for a STATUS poll (the
+        project task strip every 2 s, the desktop quick task every 4 s). The
+        shape stays nested and ``transcript`` is ``None``, so no reader has a
+        second shape to learn; the whole transcript (~130 KB on a heavy
+        session) is no longer built and sent for a caller that reads only the
+        session row.
+        """
         session = d.orchestrator.get_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
         return {
             "session": _session_row(d, session),
-            "transcript": d.orchestrator.transcript(session_id),
+            "transcript": d.orchestrator.transcript(session_id) if transcript else None,
         }
 
     @app.get("/sessions/{session_id}/result")

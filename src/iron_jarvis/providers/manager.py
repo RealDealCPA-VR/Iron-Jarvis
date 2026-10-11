@@ -53,13 +53,15 @@ OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # installs or removes a CLI, so it is remembered — with two bounds, both read
 # at CALL time so a test (or a future setting) can move them:
 #
-# * a FOUND binary is trusted for CLI_PRESENCE_TTL_S (30 s, the verifier's
-#   ceiling): an uninstall reads as installed for about that long (see the
+# * a FOUND binary is trusted for CLI_PRESENCE_TTL_S (10 min since v1.333.0;
+#   was 30 s): an uninstall reads as installed for about that long (see the
 #   stale-while-revalidate note below — the call that notices the expiry
 #   still gets the old answer, the calls after the refresh the new one);
-# * a MISSING binary only for CLI_ABSENT_TTL_S (5 s): "I just installed
-#   claude" must not read as missing for a minute — a cache that hides a fresh
-#   install is worse than no cache.
+# * a MISSING binary for CLI_ABSENT_TTL_S (60 s since v1.333.0; was 5 s).
+#   v1.333.0: at 30 s / 5 s nearly every /health poll found an entry expired
+#   and started a presence thread + PATH scan. A CLI is installed or removed
+#   a few times a year; Re-detect on Connections (`POST /providers/rescan`)
+#   calls `invalidate_cli_presence()` and sees a fresh install at once.
 #
 # `invalidate_cli_presence()` drops it at once (a rescan route can call it). The memo is process-wide because the answer is a fact
 # about this PC, not about one manager instance.
@@ -76,8 +78,8 @@ OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 # on the caller's thread — and `warm_cli_logins` fills those off the loop at
 # boot. The two TTLs therefore bound how STALE an answer may be before a
 # refresh is started, not how long a caller waits.
-CLI_PRESENCE_TTL_S = 30.0
-CLI_ABSENT_TTL_S = 5.0
+CLI_PRESENCE_TTL_S = 600.0
+CLI_ABSENT_TTL_S = 60.0
 _CLI_PRESENCE: dict[str, tuple[bool, float]] = {}
 _CLI_PRESENCE_LOCK = threading.Lock()
 #: Binaries with a background refresh in flight (single-flight guard).
@@ -993,6 +995,21 @@ class ProviderManager:
         return None
 
     def health(self) -> list[dict]:
+        """Every provider's status row. A STATUS VIEW (v1.333.0): a signed-in
+        CLI's verdict is read from the cache and no ``claude auth status`` /
+        ``codex login status`` is started for it from here
+        (``cli_auth.cached_verdicts``); a CLI that is signed out or not checked
+        yet is re-checked every ``cli_auth.UNSIGNED_RECHECK_S``, so a sign-in
+        door still turns green by itself. /health, /diagnostics, the doctor
+        and the checklist all read this; the router's own ``available()``
+        calls keep refreshing a stale verdict, because routing is where a
+        wrong answer costs something."""
+        from .cli_auth import cached_verdicts
+
+        with cached_verdicts():
+            return self._health_rows()
+
+    def _health_rows(self) -> list[dict]:
         rows = [
             {
                 "provider": name,

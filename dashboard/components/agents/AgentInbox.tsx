@@ -474,6 +474,8 @@ function AssignComposer({
   );
 }
 
+const ASSIGNMENT_EVENTS = { types: ["assignment.*"] };
+
 /**
  * `<AgentInbox name="builder" />` / `<AgentInbox name="custom:analyst" />` —
  * `name` is the ROSTER name, exactly as the daemon keys the queue.
@@ -485,7 +487,8 @@ export function AgentInbox({ name, projectId }: { name: string; projectId?: stri
 
   // Refetch on the first unseen assignment.* event that concerns this
   // assignee (a requeue after a restart names no assignee, so it counts too).
-  const { events } = useEvents(60);
+  // v1.333.0: only assignment.* frames reach this window.
+  const { events } = useEvents(60, ASSIGNMENT_EVENTS);
   const seenRef = useRef<string | null>(null);
   useEffect(() => {
     const hit = events.find((e) => {

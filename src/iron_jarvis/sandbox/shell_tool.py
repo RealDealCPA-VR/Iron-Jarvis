@@ -13,6 +13,7 @@ import os
 from collections import OrderedDict
 from typing import Any
 
+from ..core import procs
 from ..core.trust import LOW_TRUST_SHELL_REFUSAL
 from ..tools.base import Tool, ToolContext, ToolResult
 from .base import Sandbox, SandboxResult
@@ -188,7 +189,11 @@ class SandboxedShellTool(Tool):
                 args["command"], cwd=ctx.workspace, timeout=policy.timeout_s
             )
 
-        sandbox, result = await asyncio.to_thread(_select_and_run)
+        # v1.333.0: what a FINISHED command left running hidden (a dev server
+        # the agent started on purpose) belongs to this session until its run
+        # ends (`procs.end_session`); the context reaches the worker thread.
+        with procs.owned_by(ctx.session_id):
+            sandbox, result = await asyncio.to_thread(_select_and_run)
         if result is None:
             logger.warning("shell refused under low trust: %s", LOW_TRUST_SHELL_REFUSAL)
             return ToolResult(

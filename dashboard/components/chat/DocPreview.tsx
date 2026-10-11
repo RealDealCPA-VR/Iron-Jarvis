@@ -145,8 +145,28 @@ export function snapshotLines(d: PreviewData): string[] | null {
 }
 
 /** Last-viewed payloads, keyed by path (+ sheet name for workbooks — switching
- *  tabs is not a "change"). Module scope on purpose; see the block comment. */
+ *  tabs is not a "change"). Module scope on purpose; see the block comment.
+ *  v1.333.0: BOUNDED — the newest VIEWED_LINES_MAX previews are kept (the
+ *  least recently previewed goes first). It used to hold every file ever
+ *  previewed, whole, for the life of the window. */
 const lastViewedLines = new Map<string, string[]>();
+export const VIEWED_LINES_MAX = 30;
+
+/** The lines last shown for `key`, if this window still holds them. */
+export function recallViewedLines(key: string): string[] | undefined {
+  return lastViewedLines.get(key);
+}
+
+/** Hold `lines` as the last view of `key` (now the most recent one). */
+export function rememberViewedLines(key: string, lines: string[]): void {
+  lastViewedLines.delete(key); // re-inserted below: a Map iterates oldest first
+  lastViewedLines.set(key, lines);
+  while (lastViewedLines.size > VIEWED_LINES_MAX) {
+    const oldest = lastViewedLines.keys().next().value;
+    if (oldest === undefined) break;
+    lastViewedLines.delete(oldest);
+  }
+}
 
 function snapshotKey(path: string, d: PreviewData): string {
   // NUL separator — legal in neither a file path nor a sheet name, so
@@ -516,7 +536,7 @@ export function DocPreview({
         const lines = snapshotLines(d);
         if (lines) {
           const key = snapshotKey(path, d);
-          const prior = lastViewedLines.get(key);
+          const prior = recallViewedLines(key);
           setChangedFrom(
             prior &&
               (prior.length !== lines.length ||
@@ -524,7 +544,7 @@ export function DocPreview({
               ? prior
               : null,
           );
-          lastViewedLines.set(key, lines);
+          rememberViewedLines(key, lines);
         } else {
           setChangedFrom(null);
         }

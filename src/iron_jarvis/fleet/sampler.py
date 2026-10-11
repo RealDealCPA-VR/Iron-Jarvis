@@ -88,9 +88,16 @@ _BACKOFF_STEPS = (30.0, 120.0, 600.0)
 #: outlive it.
 _NODE_TIMEOUT = 10.0
 
-#: Granularity of the loop's cadence sleep. Small enough that a touch() during
-#: a 30s idle sleep switches to the 2s cadence promptly.
-_SLEEP_SLICE = 0.25
+#: v1.333.0 (D6): the cadence sleep used to wake every 0.25 s to re-read the
+#: interval (~345,000 wakeups a day while nobody watched the fleet). It now
+#: sleeps the whole interval on two events: ``stop`` and a ``touch()`` that
+#: starts a watch (``_wake``), which re-reads the interval at once.
+
+#: What is left of an interval below this counts as elapsed. Windows' monotonic
+#: clock ticks every 15.6 ms and asyncio fires a timer up to one tick EARLY, so
+#: a wait for the last few ms of an interval returned before the clock moved and
+#: the sleep spun on it until the next tick.
+_CLOCK_SLACK_S = 0.02
 
 #: v1.329.0: the reason a configured node that no probe has looked at yet
 #: carries in place of metrics. Plain words; the page shows it as written.
@@ -245,11 +252,27 @@ class FleetSampler:
         self._touched_at: float | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        #: Set by a touch() that starts a watch, so an idle sleep re-reads the
+        #: interval at once (v1.333.0). Set on the loop that runs ``_loop``.
+        self._wake = asyncio.Event()
+        self._loop_ref: asyncio.AbstractEventLoop | None = None
 
     # -- cadence / lease ---------------------------------------------------
     def touch(self) -> None:
-        """Mark the fleet as being watched — leases the active (2s) cadence."""
+        """Mark the fleet as being watched — leases the active (2s) cadence.
+
+        Called from FastAPI's threadpool (``GET /fleet``), so the sleeping loop
+        is woken on its own loop, and only when this touch STARTS a watch: a
+        touch during an active lease changes nothing the sleep is waiting on."""
+        was_active = self._active()
         self._touched_at = self._clock()
+        if not was_active:
+            loop = self._loop_ref
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(self._wake.set)
+                except RuntimeError:  # the loop has closed; nothing is sleeping
+                    pass
 
     def _active(self) -> bool:
         if self._touched_at is None:
@@ -578,6 +601,8 @@ class FleetSampler:
         if self._task is not None and not self._task.done():
             return
         self._stop = asyncio.Event()
+        self._wake = asyncio.Event()
+        self._loop_ref = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._loop(), name="fleet-sampler")
 
     async def stop(self) -> None:
@@ -619,13 +644,28 @@ class FleetSampler:
 
     async def _sleep_cadence(self) -> None:
         """Sleep the current interval, re-reading it so a touch() mid-idle-sleep
-        switches to the active cadence without waiting out the full 30s."""
+        switches to the active cadence without waiting out the full 30s.
+
+        One wait per interval (v1.333.0): the sleep ends early only on stop or
+        on a touch() that started a watch, never on a polling slice."""
         started = time.monotonic()
         while not self._stop.is_set():
-            if (time.monotonic() - started) >= self._current_interval():
+            remaining = self._current_interval() - (time.monotonic() - started)
+            if remaining <= _CLOCK_SLACK_S:
+                # Every cycle still yields the loop once: a cycle with nothing
+                # to probe awaits nothing, and an interval under the slack
+                # would otherwise spin without ever letting the loop run.
+                await asyncio.sleep(0)
                 return
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=_SLEEP_SLICE)
-                return  # stop requested
-            except (asyncio.TimeoutError, TimeoutError):
-                continue
+            self._wake.clear()
+            await self._wait_for_wake(remaining)
+
+    async def _wait_for_wake(self, timeout: float) -> None:
+        """Wait up to *timeout* s for stop or a watch-starting touch()."""
+        stop = asyncio.ensure_future(self._stop.wait())
+        wake = asyncio.ensure_future(self._wake.wait())
+        try:
+            await asyncio.wait({stop, wake}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop.cancel()
+            wake.cancel()

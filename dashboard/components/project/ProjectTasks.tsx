@@ -6,7 +6,7 @@
 // status strip polling the session (NESTED shape) → on completion the summary
 // (chat) or "Saved: <path>" plus any produced media/files inline.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Bot,
@@ -22,6 +22,7 @@ import {
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { composerChipClass } from "@/lib/composerChips";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import type { AgentsResponse, Assignment, SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import {
@@ -363,13 +364,25 @@ export function ProjectTasks({
   }, [taskDone]);
 
   // Watch the started session every 2s until terminal.
+  // v1.333.0: the repeat runs through useVisibleInterval (a hidden window
+  // watches nothing and catches up once on return), a tick never starts while
+  // the previous one is still on its way, and the read is the SLIM one
+  // (`?transcript=0`): the strip reads only the session row, and the whole
+  // transcript used to come along every 2 s.
+  const watchTickRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!taskRun || taskDone) return;
     let alive = true;
+    let busy = false;
     const tick = async () => {
+      if (busy) return;
+      busy = true;
       try {
-        // NB: GET /sessions/{id} returns {session, transcript} — NESTED.
-        const d = await get<SessionDetail>(`/sessions/${encodeURIComponent(taskRun.id)}`);
+        // NB: GET /sessions/{id} returns {session, transcript} — NESTED
+        // (transcript is null on the slim read).
+        const d = await get<SessionDetail>(
+          `/sessions/${encodeURIComponent(taskRun.id)}?transcript=0`,
+        );
         if (!alive) return;
         setTaskSession(d.session);
         setTaskPollError(null);
@@ -392,15 +405,18 @@ export function ProjectTasks({
           return;
         }
         setTaskPollError(errText(err));
+      } finally {
+        busy = false;
       }
     };
     void tick();
-    const timer = setInterval(() => void tick(), 2000);
+    watchTickRef.current = () => void tick();
     return () => {
       alive = false;
-      clearInterval(timer);
+      watchTickRef.current = () => {};
     };
   }, [taskRun, taskDone, runKey]);
+  useVisibleInterval(() => watchTickRef.current(), 2000, Boolean(taskRun) && !taskDone);
 
   // On completion, VERIFY the file deliverable actually exists — the strip used
   // to assert "Saved: <path>" from the intended path even if the agent never

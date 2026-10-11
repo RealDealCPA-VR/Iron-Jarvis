@@ -6,6 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -20,12 +21,39 @@ from ...core.fs_policy import fs_read_ok, is_protected_path
 #: the dashboard's re-render, but the server would still WALK every 4 s tick of
 #: every pane looking at that folder; a short memo is what cuts the CPU. Short
 #: on purpose: a file a CLI just wrote shows up within this plus one tick.
+#:
+#: v1.333.0: an entry is also dropped early the moment the folder's own
+#: modification time moves, so a file created, deleted or renamed at the top
+#: level shows on the very next request. That check can only make an answer
+#: FRESHER: the 2 s bound is unchanged (a longer memo would make a change in a
+#: subfolder show up later in the Files panel, a visible change).
 FILES_MEMO_S = 2.0
 _FILES_MEMO_MAX = 32
-_files_memo: dict[tuple, tuple[float, dict[str, Any]]] = {}
+#: key -> (stamped at, the answer, the folder's st_mtime_ns when walked)
+_files_memo: dict[tuple, tuple[float, dict[str, Any], int | None]] = {}
 _files_memo_lock = threading.Lock()
 #: One walk at a time per key: two panes on one folder share it (single-flight).
 _files_key_locks: dict[tuple, threading.Lock] = {}
+
+
+def _folder_mtime(path: str) -> int | None:
+    """The folder's own ``st_mtime_ns`` (one stat), or None when it cannot be
+    read — a None stamp never matches, so the walk runs and reports why."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _memo_fresh(hit, stamp: int | None) -> bool:
+    """A memo entry still answers: younger than :data:`FILES_MEMO_S` AND
+    walked at the folder's current modification time (v1.333.0)."""
+    return (
+        hit is not None
+        and stamp is not None
+        and hit[2] == stamp
+        and time.monotonic() - hit[0] < FILES_MEMO_S
+    )
 
 
 def _files_listing(path: str, depth: int, limit: int, show_hidden: bool) -> dict[str, Any]:
@@ -35,15 +63,17 @@ def _files_listing(path: str, depth: int, limit: int, show_hidden: bool) -> dict
     from ...fsbrowser import list_files_recursive
 
     key = (path, int(depth), int(limit), bool(show_hidden))
+    stamp = _folder_mtime(path)
     with _files_memo_lock:
         hit = _files_memo.get(key)
-        if hit is not None and time.monotonic() - hit[0] < FILES_MEMO_S:
+        if _memo_fresh(hit, stamp):
             return hit[1]
         key_lock = _files_key_locks.setdefault(key, threading.Lock())
     with key_lock:
+        stamp = _folder_mtime(path)
         with _files_memo_lock:
             hit = _files_memo.get(key)
-            if hit is not None and time.monotonic() - hit[0] < FILES_MEMO_S:
+            if _memo_fresh(hit, stamp):
                 return hit[1]
         try:
             out = list_files_recursive(path, depth=depth, limit=limit, show_hidden=show_hidden)
@@ -56,7 +86,7 @@ def _files_listing(path: str, depth: int, limit: int, show_hidden: bool) -> dict
                     _files_key_locks.pop(key, None)
             raise
         with _files_memo_lock:
-            _files_memo[key] = (time.monotonic(), out)
+            _files_memo[key] = (time.monotonic(), out, stamp)
             if len(_files_memo) > _FILES_MEMO_MAX:  # drop the oldest answers
                 for old in sorted(_files_memo, key=lambda k: _files_memo[k][0])[
                     : len(_files_memo) - _FILES_MEMO_MAX

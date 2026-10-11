@@ -56,6 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
+from ....core import procs
 from ...cli_auth import (
     DEFAULT_PROBE,
     SIGN_IN_FIX,
@@ -405,20 +406,20 @@ class _Resources:
         return env
 
     def spawn(self, env: dict[str, str]) -> subprocess.Popen:
-        popen_kw: dict[str, Any] = {}
-        if os.name != "nt":
-            popen_kw["start_new_session"] = True  # killpg reaches the whole tree
         with self.lock:
             if self.cancelled:
                 raise asyncio.CancelledError()
-        proc = subprocess.Popen(  # noqa: S603 — argv list, no shell
+        # `procs.spawn` (v1.333.0): its own kill-on-close Job on Windows (the
+        # CLI and its inert MCP server die with the daemon, even after a
+        # crash), below-normal priority in the background lane, no console
+        # window; POSIX: its own session, so killpg reaches the whole tree.
+        proc = procs.spawn(  # argv list, no shell
             self.argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=stable_workdir(),
             env=env,
-            **popen_kw,
         )
         with self.lock:
             self.proc = proc
@@ -448,6 +449,10 @@ class _Resources:
                 proc.wait(timeout=5)
             except Exception:  # noqa: BLE001 — a wedged reap must not hang teardown
                 pass
+            # The call is over: closing its job ends anything the CLI left
+            # (v1.333.0) -- BEFORE the readers are joined, so a leftover that
+            # holds a pipe is gone instead of costing each join its timeout.
+            procs.release(proc)
         for t in self.threads:
             t.join(timeout=5)
         if proc is not None:
@@ -477,10 +482,8 @@ class _Resources:
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    """The ONE tree-kill (sandbox/native, v1.287.0)."""
-    from ....sandbox.native import _kill_tree as kill_tree
-
-    kill_tree(proc)
+    """The ONE tree-kill (v1.287.0; ``core.procs`` since v1.333.0)."""
+    procs.kill_tree(proc)
 
 
 # --------------------------------------------------------------------------- #

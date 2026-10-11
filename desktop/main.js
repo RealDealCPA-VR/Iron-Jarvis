@@ -2163,10 +2163,37 @@ function createSpotlightWindow() {
   spotlightWin.on("blur", () => {
     if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
   });
+  // v1.333.0: a hidden overlay kept its whole renderer process alive for the
+  // life of the app, used once a day or never again. After
+  // SPOTLIGHT_IDLE_DESTROY_MS hidden it is destroyed; the next hotkey builds
+  // it again exactly as the first one of the day does.
+  const win = spotlightWin;
+  win.on("hide", () => scheduleSpotlightDestroy(win));
+  win.on("show", () => cancelSpotlightDestroy());
   spotlightWin.on("closed", () => {
+    cancelSpotlightDestroy();
     spotlightWin = null;
   });
   return spotlightWin;
+}
+
+const SPOTLIGHT_IDLE_DESTROY_MS = 10 * 60 * 1000;
+let _spotlightDestroyTimer = null;
+
+function cancelSpotlightDestroy() {
+  if (_spotlightDestroyTimer) clearTimeout(_spotlightDestroyTimer);
+  _spotlightDestroyTimer = null;
+}
+
+function scheduleSpotlightDestroy(win) {
+  cancelSpotlightDestroy();
+  _spotlightDestroyTimer = setTimeout(() => {
+    _spotlightDestroyTimer = null;
+    // Only the window that went hidden, and only while it is STILL hidden.
+    if (!win || win.isDestroyed() || win.isVisible()) return;
+    win.destroy();
+  }, SPOTLIGHT_IDLE_DESTROY_MS);
+  if (typeof _spotlightDestroyTimer.unref === "function") _spotlightDestroyTimer.unref();
 }
 
 function toggleSpotlight() {
@@ -2190,47 +2217,74 @@ async function runSpotlightTask(task) {
   });
   const id = created && created.id;
   if (!id) throw new Error("could not start the task");
-  // Poll for completion (up to ~15 min) then notify. Best-effort — a failure to
-  // poll/notify never surfaces to the user beyond the "started" they already saw.
+  watchSpotlightTask(id, task);
+  return { ok: true, id };
+}
+
+const SPOTLIGHT_POLL_MS = 4000;
+const SPOTLIGHT_WATCH_CAP_MS = 15 * 60 * 1000;
+
+// What the watcher says for one status read, or null to keep watching
+// (v1.333.0). `cancelled` is an end too: it used to be watched for the whole
+// 15 minutes and then announced as "Task done". At the cap the task is
+// usually STILL RUNNING, so the toast says so instead of claiming it is done.
+function spotlightOutcome(status, elapsed, task) {
+  const label = String(task).slice(0, 60);
+  if (status === "completed") return { title: `Task done: ${label}`, final: true };
+  if (status === "failed") return { title: "Task failed", final: true };
+  if (status === "cancelled") return { title: "Task cancelled", final: true };
+  if (elapsed > SPOTLIGHT_WATCH_CAP_MS) return { title: `Still running: ${label}`, final: false };
+  return null;
+}
+
+// Poll a spotlight task for completion (up to ~15 min) then notify.
+// Best-effort — a failure to poll/notify never surfaces to the user beyond
+// the "started" they already saw. v1.333.0: the read is the SLIM one
+// (`?transcript=0`, still nested: the toast reads only the session row), and a
+// tick never starts while the previous read is still on its way.
+function watchSpotlightTask(id, task) {
   let elapsed = 0;
+  let busy = false;
   const timer = setInterval(async () => {
-    elapsed += 4000;
+    elapsed += SPOTLIGHT_POLL_MS;
+    if (busy) return;
+    busy = true;
     let s = null;
     try {
-      s = await daemonRequest("GET", `/sessions/${id}`, null);
+      s = await daemonRequest("GET", `/sessions/${id}?transcript=0`, null);
     } catch {
       /* transient */
+    } finally {
+      busy = false;
     }
     // GET /sessions/{id} returns { session, transcript } — read the NESTED
     // session (a top-level s.status was always undefined, so the "done"
     // notification never fired until the 15-min cap).
     const sess = (s && s.session) || s || {};
-    const status = sess.status;
-    if (status === "completed" || status === "failed" || elapsed > 15 * 60 * 1000) {
-      clearInterval(timer);
-      try {
-        const note = new Notification({
-          title:
-            status === "failed"
-              ? "Task failed"
-              : `Task done: ${String(task).slice(0, 60)}`,
-          body: sess.summary
+    const outcome = spotlightOutcome(sess.status, elapsed, task);
+    if (!outcome) return;
+    clearInterval(timer);
+    try {
+      const note = new Notification({
+        title: outcome.title,
+        body: !outcome.final
+          ? "It has been working for 15 minutes. Click to open it."
+          : sess.summary
             ? String(sess.summary).slice(0, 140)
             : "Click to open the result.",
-        });
-        note.on("click", () => {
-          showMainWindow();
-          if (mainWin && !mainWin.isDestroyed()) {
-            mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
-          }
-        });
-        note.show();
-      } catch {
-        /* notifications unavailable */
-      }
+      });
+      note.on("click", () => {
+        showMainWindow();
+        if (mainWin && !mainWin.isDestroyed()) {
+          mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
+        }
+      });
+      note.show();
+    } catch {
+      /* notifications unavailable */
     }
-  }, 4000);
-  return { ok: true, id };
+  }, SPOTLIGHT_POLL_MS);
+  return timer;
 }
 
 function installSpotlightIpc() {
@@ -4385,6 +4439,8 @@ function openPopout(rawPath) {
         reloadPending = false;
       });
   });
+  // A crashed renderer reloads in place, like the main window's (v1.333.0).
+  installPopoutCrashReload(win, route);
   // Remember the rectangle per route as the user moves/resizes it.
   let saveTimer = null;
   const scheduleSave = () => {
@@ -4409,6 +4465,37 @@ function openPopout(rawPath) {
 
 function popoutUrl(route) {
   return `${DASHBOARD_URL}${route}${route.includes("?") ? "&" : "?"}popout=1`;
+}
+
+// A pop-out's renderer death (a crash, an OOM kill) reloads it in place, the
+// main window's recovery (installRendererWatchdog) applied per window
+// (v1.333.0): a dead pop-out used to sit on a blank page until the user
+// closed it. Same rules: an intentional teardown does nothing, and every
+// reload passes the SAME breaker, so a crash loop across windows still stops
+// and levels with the user. The watchdog never kills a pop-out itself, so
+// `killed` here is an outside kill and is counted like any other death.
+function installPopoutCrashReload(win, route) {
+  win.webContents.on("render-process-gone", (_event, details) => {
+    const why = `${details.reason} (exit ${details.exitCode})`;
+    if (details.reason === "clean-exit" || shuttingDown || isQuitting) {
+      rendererLog(`[watchdog] pop-out ${route} renderer gone: ${why} — intentional, no action`);
+      return;
+    }
+    reportIncident("renderer-gone", `pop-out ${route}: ${why}`);
+    if (!recoveryAllowed()) {
+      recoveryExhausted();
+      return;
+    }
+    _wdRecoveries.push(Date.now());
+    notifyRecovered(details.reason);
+    setTimeout(() => {
+      try {
+        if (!win.isDestroyed()) win.webContents.reload();
+      } catch (err) {
+        rendererLog(`[watchdog] pop-out reload after crash failed: ${err && err.message}`);
+      }
+    }, 250);
+  });
 }
 
 function protocolUrlIn(argv) {

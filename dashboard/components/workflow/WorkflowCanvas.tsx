@@ -52,6 +52,7 @@ import {
   Info,
 } from "lucide-react";
 import { get, post, patch, del, ApiError } from "@/lib/api";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
   WORKFLOW_RUN_TERMINAL,
   type WorkflowRun,
@@ -829,18 +830,44 @@ function Canvas() {
     [],
   );
 
-  /* Live run: the polled record + a Cancel-in-flight flag + the poll handle. */
+  /* Live run: the polled record + a Cancel-in-flight flag + the run being
+   * polled. v1.333.0: the 2 s poll runs through useVisibleInterval (it used to
+   * be a bare setInterval that kept reading a run parked on an ask, for days,
+   * in a minimised window): no ticks while hidden, ONE read on return, and a
+   * tick never starts while the previous read is still on its way. */
   const [activeRun, setActiveRun] = useState<WorkflowRun | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pollRunId, setPollRunId] = useState<string | null>(null);
+  const pollRunRef = useRef<string | null>(null);
+  const pollBusyRef = useRef(false);
   const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    pollRunRef.current = null;
+    setPollRunId(null);
   }, []);
-  // Stop the poll loop if the editor unmounts mid-run.
-  useEffect(() => stopPolling, [stopPolling]);
+  const pollRun = useCallback(async () => {
+    const runId = pollRunRef.current;
+    if (!runId || pollBusyRef.current) return;
+    pollBusyRef.current = true;
+    try {
+      const fresh = await get<WorkflowRun>(
+        `/workflows/runs/${encodeURIComponent(runId)}`,
+      );
+      // A newer run (or a stop) since this read left: its answer is stale.
+      if (pollRunRef.current !== runId) return;
+      setActiveRun(fresh);
+      if (WORKFLOW_RUN_TERMINAL.has(String(fresh.status ?? ""))) {
+        stopPolling();
+        setBusy(false);
+        setCancelling(false);
+      }
+    } catch {
+      // Transient fetch error (daemon busy/restarting) — keep polling.
+    } finally {
+      pollBusyRef.current = false;
+    }
+  }, [stopPolling]);
+  // Unmounting mid-run tears the interval down with the component.
+  useVisibleInterval(() => void pollRun(), 2000, pollRunId !== null);
 
   /* Saved/agent-authored workflow defs for the Load ▾ dropdown. */
   const [defs, setDefs] = useState<WorkflowDef[]>([]);
@@ -1235,21 +1262,8 @@ function Canvas() {
       }
       // The poll continues through `waiting` (parked on an ask) and
       // `resuming` — WORKFLOW_RUN_TERMINAL excludes both by design.
-      pollRef.current = setInterval(async () => {
-        try {
-          const fresh = await get<WorkflowRun>(
-            `/workflows/runs/${encodeURIComponent(runId)}`,
-          );
-          setActiveRun(fresh);
-          if (WORKFLOW_RUN_TERMINAL.has(String(fresh.status ?? ""))) {
-            stopPolling();
-            setBusy(false);
-            setCancelling(false);
-          }
-        } catch {
-          // Transient fetch error (daemon busy/restarting) — keep polling.
-        }
-      }, 2000);
+      pollRunRef.current = runId;
+      setPollRunId(runId);
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setResult({ offline: true });
       else setError(err instanceof ApiError ? err.message : String(err));

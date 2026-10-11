@@ -6818,8 +6818,11 @@ export default function ChatPage() {
       // wrapper, tolerating both shapes, so completion is actually detected
       // (reading a top-level `status` here always returned undefined => the
       // chat spun forever even though the session had finished).
+      // v1.333.0: the SLIM read (`?transcript=0`, still nested, transcript
+      // null) — this poll runs every 1.5 s and reads only the session row, so
+      // the whole transcript no longer comes along on every tick.
       const res = await get<{ session?: SessionView } & Partial<SessionView>>(
-        `/sessions/${id}`,
+        `/sessions/${id}?transcript=0`,
       );
       // The turn may have been torn down (Stop / New chat / thread switch)
       // while the fetch was airborne — never append into another conversation.

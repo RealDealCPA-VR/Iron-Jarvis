@@ -208,13 +208,13 @@ async function typeAndSend(text: string) {
 async function escalateIntoS1() {
   H.stream.result = { reply: "", escalate: true, escalateReason: "needs the agent" };
   H.api.postResponses["/sessions"] = { id: "s1", status: "running" };
-  H.api.getResponses["/sessions/s1"] = { session: { id: "s1", status: "running" } };
+  H.api.getResponses["/sessions/s1?transcript=0"] = { session: { id: "s1", status: "running" } };
   render(<ChatPage />);
   await typeAndSend("rename the files in this folder");
   await waitFor(() => expect(H.api.posts.some((p) => p.path === "/sessions")).toBe(true));
   // The page polls /sessions/s1 every 1.5 s while awaiting — proof it is waiting.
   await waitFor(
-    () => expect(H.api.gets.filter((g) => g === "/sessions/s1").length).toBeGreaterThan(0),
+    () => expect(H.api.gets.filter((g) => g === "/sessions/s1?transcript=0").length).toBeGreaterThan(0),
     { timeout: 4000 },
   );
 }

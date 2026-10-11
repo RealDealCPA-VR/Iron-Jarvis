@@ -48,6 +48,14 @@ export type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 /** WebSocket.OPEN, spelled out so a test's fake socket needs no real class. */
 const WS_OPEN = 1;
 
+/** The daemon's close for an attach that fell too far behind (8 MB queued):
+ *  "try again later" (routes/terminals.py ATTACH_OVERFLOW). */
+export const ATTACH_OVERFLOW = 1013;
+
+function pageHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden === true;
+}
+
 /** A daemon too old to send the end-of-replay frame must not keep xterm's
  *  answers muted forever — a LIVE query would go unanswered. */
 export const REPLAY_FALLBACK_MS = 5000;
@@ -333,6 +341,9 @@ export class PaneHost {
   private exited = false;
   private disposed = false;
   private parkedAt: { viewportY: number; atBottom: boolean } | null = null;
+  /** Removes the visibility listener of a reconnect deferred by a 1013
+   *  while hidden (v1.333.0); null when none is waiting. */
+  private deferred: (() => void) | null = null;
 
   constructor(
     id: string,
@@ -518,6 +529,7 @@ export class PaneHost {
    *  replay lands on it) — the overlay's Reconnect, and the heal on adopt. */
   reconnectNow(): void {
     if (this.disposed || this.exited) return;
+    this.clearDeferred();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -552,6 +564,7 @@ export class PaneHost {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.clearDeferred();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.replayFallback) clearTimeout(this.replayFallback);
     this.reconnectTimer = null;
@@ -633,6 +646,16 @@ export class PaneHost {
         this.setConn("closed", false);
         return;
       }
+      // v1.333.0: 1013 = this attach fell 8 MB behind. While the page is
+      // HIDDEN (a minimized window, a background browser tab; closing to the
+      // tray destroys the page outright) xterm parses on throttled timers, so a
+      // busy pane paused its stream, the daemon queued 8 MB, cut the link,
+      // and the reconnect replayed 256 KB into a terminal that fell behind
+      // again — all night. Reconnect when the window is SEEN instead.
+      if (ev.code === ATTACH_OVERFLOW && pageHidden()) {
+        this.deferReconnectUntilVisible();
+        return;
+      }
       // v1.226.0: quick retries, then keep going with capped backoff while the
       // daemon is offline (a restart rehydrates this same terminal id); see
       // terminalReconnectDelayMs for the schedule.
@@ -655,6 +678,34 @@ export class PaneHost {
         /* noop */
       }
     };
+  }
+
+  /** A 1013 while hidden (v1.333.0): no timer, no replay — one listener
+   *  that reconnects the moment the window is visible again. The output the
+   *  pane missed is UNSEEN: the view hears one empty-line frame, so a pane
+   *  showing its chat layer badges its terminal exactly as it would have. */
+  private deferReconnectUntilVisible(): void {
+    this.setConn("reconnecting", false);
+    this.view?.onOutput("\n", false);
+    if (this.deferred || typeof document === "undefined") return;
+    const onVisible = () => {
+      if (pageHidden()) return;
+      this.clearDeferred();
+      if (!this.disposed && !this.exited && !this.ws) this.reconnectNow();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    this.deferred = () => document.removeEventListener("visibilitychange", onVisible);
+  }
+
+  private clearDeferred(): void {
+    const undo = this.deferred;
+    this.deferred = null;
+    undo?.();
+  }
+
+  /** A reconnect is waiting for the window to be visible (v1.333.0). */
+  get isReconnectDeferred(): boolean {
+    return this.deferred !== null;
   }
 
   /** Hand xterm a frame and count it until the parser is done with it — the

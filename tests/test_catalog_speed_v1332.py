@@ -11,7 +11,6 @@ import asyncio
 import json
 import os
 import threading
-import types
 
 import httpx
 import pytest
@@ -167,11 +166,12 @@ def grok_without_cache(monkeypatch, tmp_path):
 
     def fake_run(argv, **kw):
         runs.append(list(argv))
-        return types.SimpleNamespace(stdout="grok-build\ngrok-fast\n", returncode=0)
+        return procs.Result(0, b"grok-build\ngrok-fast\n", b"")
 
-    import subprocess
+    # v1.333.0: the fallback spawns through `core.procs.run` (bytes out).
+    from iron_jarvis.core import procs
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(procs, "run", fake_run)
     return home, runs
 
 

@@ -158,6 +158,8 @@ function ProposalCard({
 
 /* ----------------------------------------------------------------- panel --- */
 
+const COACH_EVENTS = { types: ["coach.proposal"] };
+
 /** `<AgentCoach name="analyst" />` — the BARE slug of a custom agent. */
 export function AgentCoach({ name }: { name: string }) {
   const path = `/agents/${encodeURIComponent(name)}/coach`;
@@ -168,7 +170,8 @@ export function AgentCoach({ name }: { name: string }) {
 
   // Refetch on the first unseen coach.proposal event for this agent (the
   // payload names the bare slug; a roster-shaped "custom:<slug>" counts too).
-  const { events } = useEvents(60);
+  // v1.333.0: only coach.proposal frames reach this window.
+  const { events } = useEvents(60, COACH_EVENTS);
   const seenRef = useRef<string | null>(null);
   useEffect(() => {
     const hit = events.find((e) => {

@@ -21,10 +21,11 @@ code is actually loaded.
 from __future__ import annotations
 
 import shutil
-import subprocess
 from collections import namedtuple
 from pathlib import Path
 from typing import Callable
+
+from . import procs
 
 #: The minimal result contract a ``runner`` must return. Any object exposing
 #: ``returncode``/``stdout``/``stderr`` works (e.g. ``subprocess.CompletedProcess``);
@@ -38,10 +39,10 @@ Runner = Callable[[list[str], Path], RunResult]
 def _subprocess_runner(cmd: list[str], cwd: Path) -> RunResult:
     """Default runner: shell out, capturing stdout/stderr as text (never raises)."""
     try:
-        proc = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=900
-        )
-        return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
+        # `procs.run` (v1.333.0): a timeout kills the whole tree (pnpm and uv
+        # start children) and the drain after it is bounded.
+        res = procs.run(cmd, cwd=cwd, timeout=900).check_timeout()
+        return RunResult(res.returncode, procs.text(res.stdout), procs.text(res.stderr))
     except FileNotFoundError as exc:  # e.g. git / uv / pnpm not on PATH
         return RunResult(127, "", str(exc))
     except Exception as exc:  # noqa: BLE001 - surface as a failed step, don't crash

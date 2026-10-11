@@ -104,6 +104,12 @@ export function toolArgsPreview(args?: Record<string, unknown> | null): string {
  *    already answered must not be resurrected by a stale poll/event replaying
  *    the SAME text (a later, different ask still shows).
  */
+/** The frames `useWorkflowRun` folds (v1.333.0): a card subscribing for
+ *  itself takes only these, so another type's frame re-renders no card. */
+export const WORKFLOW_RUN_EVENTS = {
+  types: ["workflow.step_started", "workflow.step_completed", "workflow.waiting", "workflow.completed"],
+};
+
 export function useWorkflowRun(runId: string | null, events: IJEvent[]) {
   const [steps, setSteps] = useState<Record<string, LiveStep>>({});
   const [runStatus, setRunStatus] = useState<string | null>(null);
@@ -383,7 +389,7 @@ export function WorkflowRunChip({
    *  subscriber per chip, and a memoized row that no longer redraws. */
   events?: IJEvent[];
 }) {
-  const own = useEvents(120);
+  const own = useEvents(120, WORKFLOW_RUN_EVENTS);
   const run = useWorkflowRun(runId, events ?? own.events);
   const status = run.runStatus;
   const terminal = Boolean(status && WORKFLOW_RUN_TERMINAL.has(status));
@@ -466,7 +472,7 @@ export function WorkflowDraftCard({
   events?: IJEvent[];
 }) {
   const router = useRouter();
-  const own = useEvents(120);
+  const own = useEvents(120, WORKFLOW_RUN_EVENTS);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   // The name actually saved under — suffixed when the model-chosen name would

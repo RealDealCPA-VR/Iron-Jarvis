@@ -20,8 +20,8 @@
 // Dots: running and waiting come from the daemon's list rows, unread from
 // this browser's last-viewed stamps (lib/threadStatus) — the same rule the
 // chat page uses. While a row is running or waiting the list is re-read every
-// THREAD_POLL_MS (lib/threadListPoll), and a `chat.thread_updated` event
-// re-reads it at once.
+// THREAD_POLL_MS (lib/threadListPoll), and every `chat.thread_updated` event
+// re-reads it at once (keyed on the newest frame's id since v1.333.0).
 //
 // Kept out of lib/api.ts on purpose (tests mock that module wholesale).
 
@@ -210,9 +210,13 @@ export function useChatList(): ChatList {
   }, []);
   // A thread changed somewhere (a reply landed, a phone message, a rename):
   // read the list again. The first render has no events; skip it.
+  // v1.333.0: keyed on the NEWEST frame's id, never on the window's length —
+  // useEvents keeps at most 20 frames here, so from the 21st update on the
+  // length stayed 20 and the sidebar list was never re-read again.
+  const newestId = events[0]?.id ?? null;
   useEffect(() => {
-    if (events.length > 0) void refreshChatList();
-  }, [events.length]);
+    if (newestId !== null) void refreshChatList();
+  }, [newestId]);
 
   const refresh = useCallback(() => void refreshChatList(THREAD_POLL_MS - 500), []);
   useThreadListPoll(snap.threads ?? [], refresh);

@@ -48,6 +48,7 @@ import inspect
 import logging
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -314,7 +315,12 @@ def scan_context(text: Any, *, source: str, cap: int | None = CONTEXT_CAP) -> Sc
 # publishing — once per (session, source) per process
 # --------------------------------------------------------------------------- #
 
-_PUBLISHED: set[tuple[str, str]] = set()
+#: Keys already published (v1.333.0, D9: bounded — it was a set that grew by
+#: one key per session for the daemon's life; the oldest keys past
+#: ``PUBLISHED_MAX`` are forgotten, so at worst a long-gone session could be
+#: announced once more).
+PUBLISHED_MAX = 4096
+_PUBLISHED: "OrderedDict[tuple[str, str], None]" = OrderedDict()
 _PUBLISH_LOCK = threading.Lock()
 _TASKS: set[Any] = set()
 
@@ -348,7 +354,9 @@ def publish_blocked(event_bus: Any, session_id: str | None, result: ScanResult) 
         with _PUBLISH_LOCK:
             if key in _PUBLISHED:
                 return False
-            _PUBLISHED.add(key)
+            _PUBLISHED[key] = None
+            while len(_PUBLISHED) > PUBLISHED_MAX:
+                _PUBLISHED.popitem(last=False)
         payload = {
             "session_id": key[0],
             "source": key[1],

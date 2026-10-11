@@ -375,7 +375,7 @@ describe("CL5 — a reopened thread that ends on an unanswered question", () => 
 describe("A10 — a reload resuming a paused run shows the pending ask without a live event", () => {
   it("polls /chat/approvals/pending for the awaited session and renders one card per ask; a cleared ask drops on the next poll", async () => {
     storeThread([{ role: "user", content: "rename the files", awaitingSession: "s9" }]);
-    H.api.getResponses["/sessions/s9"] = { session: { id: "s9", status: "active" } };
+    H.api.getResponses["/sessions/s9?transcript=0"] = { session: { id: "s9", status: "active" } };
     H.api.getResponses["/chat/approvals/pending"] = {
       approvals: [
         { id: "apr_9", tool: "rename_file", session_id: "s9", requested_at: "2026-09-04T00:00:00" },
@@ -384,7 +384,7 @@ describe("A10 — a reload resuming a paused run shows the pending ask without a
     };
     render(<ChatPage />);
     await waitFor(
-      () => expect(H.api.gets.filter((g) => g === "/sessions/s9").length).toBeGreaterThan(0),
+      () => expect(H.api.gets.filter((g) => g === "/sessions/s9?transcript=0").length).toBeGreaterThan(0),
       { timeout: 4000 },
     );
     await waitFor(() => expect(H.api.gets.includes("/chat/approvals/pending")).toBe(true), {

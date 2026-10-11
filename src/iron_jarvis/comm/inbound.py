@@ -762,6 +762,11 @@ class InboundPoller:
         # Loop protection: never act on a bot's message (incl. our own echoes).
         if msg.is_bot:
             return {"channel": name, "status": "ignored_bot"}
+        # v1.333.0 (D9): a sender the allowlist refuses never mints a lock —
+        # one lock per (channel, sender) is kept for the daemon's life, and a
+        # spammed bot used to add one per stranger. `_dispatch` refuses it.
+        if not ch.is_authorized(msg.sender_id):
+            return await self._dispatch(name, ch, msg)
         async with self._identity_lock(name, msg.sender_id):
             return await self._dispatch(name, ch, msg)
 

@@ -609,6 +609,8 @@ function runTimestamp(r: WorkflowRun): string | null {
   return raw ?? null;
 }
 
+const FINISH_EVENTS = { types: ["workflow.completed", "workflow.waiting"] };
+
 function RunHistory() {
   // Newest-first, capped server-side.
   const { data, error, loading, reload } = useApi<{ runs: WorkflowRun[] }>(
@@ -667,7 +669,8 @@ function RunHistory() {
   }
 
   // Refetch the moment a workflow finishes (the engine emits workflow.completed).
-  const { events } = useEvents(50);
+  // v1.333.0: only these two types reach this window.
+  const { events } = useEvents(50, FINISH_EVENTS);
   const lastCompleted = events.find(
     (e) => e.type === "workflow.completed" || e.type === "workflow.waiting",
   );

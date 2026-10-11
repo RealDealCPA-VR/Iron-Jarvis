@@ -24,7 +24,7 @@ import hashlib
 import re
 from typing import Any, Protocol, runtime_checkable
 
-import numpy as np
+from ..core._numpy import np  # one-thread BLAS (v1.333.0)
 
 # Importing the cache module registers EmbeddingRecord on SQLModel.metadata BEFORE
 # init_db runs (the platform imports this module early). Keep this import here so

@@ -28,7 +28,9 @@ finishes the assignment to match.
 Every DB call hops off the loop (``asyncio.to_thread``); the loop survives
 any exception (logged + reported through ``_tick``) and keeps ticking; a
 ``stop`` event ends it; :meth:`wake` cuts the interval short so a job queued
-by a route or the tool starts without waiting the full interval.
+by a route or the tool starts without waiting the full interval. Since
+v1.333.0 a pass that found nothing queued and nothing live waits
+``IDLE_INTERVAL_S`` (60 s) instead of 5 s — the wakes carry the latency.
 """
 
 from __future__ import annotations
@@ -45,6 +47,12 @@ log = logging.getLogger("iron_jarvis.assignments.dispatcher")
 
 #: Seconds between passes when nothing wakes the loop.
 DEFAULT_INTERVAL_S = 5.0
+#: Seconds between passes when the last pass found NOTHING to do — no queued
+#: row and no claimed/running one (v1.333.0). An empty queue cost two SELECTs
+#: every 5 s all day; everything that can give this loop work wakes it
+#: (a route or the tool queuing a job, an assignment's session ending), so the
+#: long wait is only the backstop for a row that appeared some other way.
+IDLE_INTERVAL_S = 60.0
 #: A row stuck in ``claimed`` (no session row ever appeared) longer than this
 #: is handed back to ``queued`` — the create→start window is milliseconds.
 STALE_CLAIM_S = 300
@@ -70,9 +78,19 @@ class AssignmentDispatcher:
         interval_s: float = DEFAULT_INTERVAL_S,
         *,
         tick: TickHook | None = None,
+        idle_interval_s: float = IDLE_INTERVAL_S,
     ) -> None:
         self.p = platform
         self.interval_s = max(0.05, float(interval_s))
+        self.idle_interval_s = max(self.interval_s, float(idle_interval_s))
+        #: Whether the last pass found nothing queued and nothing live
+        #: (v1.333.0) — the loop then waits ``idle_interval_s``. False until
+        #: a pass proves it, so a failing pass keeps the short interval.
+        self._idle = False
+        #: Whether the last sweep saw a claimed/running row (or could not tell).
+        self._saw_live = True
+        #: The loop ``run_forever`` runs on (a foreign-thread ``wake`` hops to it).
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._tick_hook: TickHook = tick or _noop_tick
         self._wake = asyncio.Event()
         #: One pass at a time (reviewer, v1.296.0): two overlapping passes
@@ -94,10 +112,21 @@ class AssignmentDispatcher:
         return getattr(self.p, "orchestrator", None)
 
     def wake(self) -> None:
-        """Dispatch now instead of at the next interval. Thread-safe enough
-        for its callers (routes and tools run on the loop)."""
+        """Dispatch now instead of at the next interval. Thread-safe (v1.333.0):
+        the ``assign`` tool can run inside a schedule-fired run, whose loop is
+        on APScheduler's thread — an ``asyncio.Event`` set from there would
+        not wake this loop until its (now idle-length) wait ran out, so a
+        foreign caller hands the set to the dispatcher's own loop."""
         try:
-            self._wake.set()
+            loop = self._loop
+            try:
+                here = asyncio.get_running_loop()
+            except RuntimeError:
+                here = None
+            if loop is not None and loop is not here and loop.is_running():
+                loop.call_soon_threadsafe(self._wake.set)
+            else:
+                self._wake.set()
         except Exception:  # noqa: BLE001
             pass
 
@@ -110,10 +139,15 @@ class AssignmentDispatcher:
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         store = self.store
+        self._loop = asyncio.get_running_loop()
         if store is not None:
-            store.bind_loop(asyncio.get_running_loop())
+            store.bind_loop(self._loop)
         try:
             while not stop.is_set():
+                # Cleared BEFORE the pass (v1.333.0): a job queued while the
+                # pass runs keeps its wake, so the next wait returns at once
+                # instead of sleeping out an idle minute on a stale "empty".
+                self._wake.clear()
                 try:
                     await self.tick()
                     self._tick_hook("dispatcher", True, None)
@@ -122,22 +156,28 @@ class AssignmentDispatcher:
                 except Exception as exc:  # noqa: BLE001 — a pass must never kill the loop
                     log.exception("assignment dispatch pass failed")
                     self._tick_hook("dispatcher", False, exc)
-                self._wake.clear()
-                waiters = [
-                    asyncio.create_task(self._wake.wait()),
-                    asyncio.create_task(stop.wait()),
-                ]
-                try:
-                    await asyncio.wait(
-                        waiters, timeout=self.interval_s, return_when=asyncio.FIRST_COMPLETED
-                    )
-                finally:
-                    for w in waiters:
-                        if not w.done():
-                            w.cancel()
+                    self._idle = False
+                await self._sleep(
+                    stop, self.idle_interval_s if self._idle else self.interval_s
+                )
         finally:
+            self._loop = None
             if store is not None:
                 store.bind_loop(None)
+
+    async def _sleep(self, stop: asyncio.Event, timeout: float) -> None:
+        """Wait up to ``timeout`` for a wake or the stop (a seam: tests drive
+        the loop on a counted fake clock)."""
+        waiters = [
+            asyncio.create_task(self._wake.wait()),
+            asyncio.create_task(stop.wait()),
+        ]
+        try:
+            await asyncio.wait(waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                if not w.done():
+                    w.cancel()
 
     async def requeue_lost_at_boot(self, live_session_ids: set[str] | None = None) -> list[dict]:
         """Boot: every claimed/running row without a live session goes back
@@ -165,6 +205,7 @@ class AssignmentDispatcher:
 
     async def _tick_once(self) -> dict[str, Any]:
         result: dict[str, Any] = {"started": [], "held": 0, "swept": 0}
+        self._idle = False
         store = self.store
         if store is None:
             return result
@@ -172,6 +213,9 @@ class AssignmentDispatcher:
         orch = self.orchestrator
         queued = await asyncio.to_thread(store.queued)
         if not queued:
+            # Nothing waiting; and with nothing claimed/running either, no
+            # session end is due to free anything — the long wait is safe.
+            self._idle = not self._saw_live
             return result
         if orch is None:
             for row in queued:
@@ -203,11 +247,13 @@ class AssignmentDispatcher:
         if store is None:
             return 0
         swept = 0
+        self._saw_live = True  # unknown until the read answers
         try:
             live = await asyncio.to_thread(store.list, None, None, (CLAIMED, RUNNING), 200)
         except Exception:  # noqa: BLE001
             log.debug("sweep read failed", exc_info=True)
             return 0
+        self._saw_live = bool(live)
         if not live:
             return 0
         from ..core.models import SessionStatus

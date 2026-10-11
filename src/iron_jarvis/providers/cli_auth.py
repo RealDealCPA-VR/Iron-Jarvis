@@ -32,13 +32,15 @@ a CLI that SAID it is signed out turns the row amber.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterator
 
 #: Provider id -> the CLI binary it runs through.
 CLI_BINARIES: dict[str, str] = {"claude-cli": "claude", "codex-cli": "codex"}
@@ -142,15 +144,13 @@ class CliAuthStatus:
 
 
 def _run_probe(argv: list[str]) -> tuple[int, str, str]:
-    proc = subprocess.run(  # noqa: S603 — argv list, no shell
-        argv,
-        capture_output=True,
-        text=True,
-        timeout=PROBE_TIMEOUT_S,
-        encoding="utf-8",
-        errors="replace",
-    )
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    # `core.procs.run` (v1.333.0): a timeout kills the probe's whole tree (an
+    # npm .cmd shim's node held the pipe past `subprocess.run`'s kill) and
+    # still raises TimeoutExpired for the caller below.
+    from ..core import procs
+
+    res = procs.run(argv, timeout=PROBE_TIMEOUT_S).check_timeout()  # argv list, no shell
+    return res.returncode, procs.text(res.stdout, "utf-8"), procs.text(res.stderr, "utf-8")
 
 
 def _which(binary: str) -> str | None:
@@ -202,6 +202,40 @@ _PROBES: dict[str, tuple[list[str], Callable[[int, str, str], tuple[bool | None,
 }
 
 
+#: How long a sign-in verdict is trusted before the ROUTING path refreshes
+#: it (v1.333.0: was 120 s). Each refresh launches the vendor's Node CLI; a
+#: sign-in changes rarely, a refused request flips the verdict at once
+#: (``mark_signed_out``) and Re-detect refreshes on demand.
+VERDICT_TTL_S = 900.0
+
+#: How long a STATUS view trusts a verdict that is NOT "signed in" (signed
+#: out, or unknown) before it re-checks (v1.333.0 review). The sign-in doors
+#: promise "this turns green by itself once you're signed in" while the user
+#: finishes a `/login` in a Build pane, and nothing else re-asks then (the
+#: router never asks about a CLI the user has not picked). The old 120 s.
+UNSIGNED_RECHECK_S = 120.0
+
+#: Set while a STATUS view (``ProviderManager.health()``: /health,
+#: /diagnostics, the doctor, the checklist) reads verdicts (v1.333.0). A
+#: status view never refreshes a SIGNED-IN verdict: the desktop watchdog and
+#: the dashboard poll /health every few seconds, and with a refresh behind
+#: every stale read that was ~1,100-1,400 Node CLI launches a day. A verdict
+#: that is not "signed in" is still re-checked every ``UNSIGNED_RECHECK_S``.
+_CACHED_ONLY: ContextVar[bool] = ContextVar("ij_cli_auth_cached_only", default=False)
+
+
+@contextlib.contextmanager
+def cached_verdicts() -> Iterator[None]:
+    """Inside this block :meth:`CliAuthProbe.verdict` serves a signed-in
+    verdict from the cache without ever probing; signed out or unknown is
+    re-checked at most every ``UNSIGNED_RECHECK_S`` (``None`` = unknown)."""
+    token = _CACHED_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CACHED_ONLY.reset(token)
+
+
 class CliAuthProbe:
     """Cached, off-loop sign-in verdicts for the subscription CLIs.
 
@@ -218,7 +252,7 @@ class CliAuthProbe:
         *,
         runner: Callable[[list[str]], tuple[int, str, str]] | None = None,
         which: Callable[[str], str | None] | None = None,
-        ttl_s: float = 120.0,
+        ttl_s: float = VERDICT_TTL_S,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._runner = runner or _run_probe
@@ -265,10 +299,17 @@ class CliAuthProbe:
 
     def verdict(self, binary: str) -> bool | None:
         """``True``/``False``/``None`` (unknown), and a background refresh
-        when nothing is cached or the cache is older than ``ttl_s``."""
+        when nothing is cached or the cache is older than ``ttl_s`` — except
+        inside :func:`cached_verdicts`, where a status view never refreshes a
+        signed-in verdict and re-checks any other after ``UNSIGNED_RECHECK_S``."""
         with self._lock:
             st = self._cache.get(binary)
-            stale = st is None or (self._clock() - st.checked_at) > self.ttl_s
+            ttl = self.ttl_s
+            if _CACHED_ONLY.get():
+                if st is not None and st.signed_in is True:
+                    return True
+                ttl = min(ttl, UNSIGNED_RECHECK_S)
+            stale = st is None or (self._clock() - st.checked_at) > ttl
             should_start = stale and binary not in self._inflight
             if should_start:
                 self._inflight.add(binary)

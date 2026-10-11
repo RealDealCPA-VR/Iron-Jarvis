@@ -18,7 +18,31 @@ if TYPE_CHECKING:  # pragma: no cover
 
 from ..core.ids import new_id, utcnow
 from .backend import PtyBackend, default_backend
+from .modes import (
+    MODE_RESET,
+    ModeTracker,
+    has_mouse_report,
+    is_native_shell,
+    strip_mouse_reports,
+)
 from .shells import resolve_shell
+
+#: How long "does the shell have a program running in it?" is trusted before
+#: the process table is read again (v1.333.0). Only a mouse report asks.
+CHILD_CHECK_TTL_S = 1.0
+
+#: After a dropped mouse report pushes MODE_RESET, reports already in flight
+#: from the pane do not push it again for this long.
+MOUSE_RESET_GAP_S = 2.0
+
+#: The mouse watcher's grace after the program that turned mouse tracking on
+#: exits: its own last output (a clean exit turns the modes off) arrives
+#: through ConPTY a moment after the process is gone.
+MOUSE_WATCH_GRACE_S = 0.5
+
+#: How long the mouse watcher blocks on one child before it checks whether
+#: the pane was closed under it. A wait, not a poll: no CPU while it blocks.
+MOUSE_WATCH_WAIT_S = 30.0
 
 #: How much recent output a session retains — doubles as the scrollback replayed
 #: to a RE-ATTACHING pane (tab switch / navigation) so it shows its history
@@ -246,6 +270,7 @@ class TerminalSession:
         cols: int = 80,
         rows: int = 24,
         backend: PtyBackend | None = None,
+        below_normal: bool = False,
     ) -> None:
         if argv is None:
             shell, argv = resolve_shell(shell)
@@ -303,6 +328,18 @@ class TerminalSession:
         # that window still saw alive=True). A session we killed is dead to
         # every caller the moment we killed it.
         self._killed = False
+        #: v1.333.0: the pane was opened by an AGENT (``pane_spawn``), so its
+        #: shell — and everything the shell starts, which inherits it — runs
+        #: below normal priority. Panes the user opens stay Normal.
+        self.below_normal = below_normal
+        # --- modes a dead program can leave on (v1.333.0, terminals/modes) ---
+        self._modes = ModeTracker()
+        self._mouse_watch_due = False
+        self._mouse_watch: threading.Thread | None = None
+        self._watch_lock = threading.Lock()
+        self._last_mouse_reset = 0.0
+        self._child_check: tuple[float, bool] | None = None
+        self._own_console = 0
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent).
@@ -313,6 +350,13 @@ class TerminalSession:
         if not self._started:
             if self.pushes_output:
                 self.backend.set_output_handler(self._ingest, self._on_output_eof)
+            if self.below_normal:
+                # Read by the backends that can start a process below normal
+                # (ConPTY, the pipe shell); the others ignore it.
+                try:
+                    self.backend.below_normal = True
+                except Exception:  # noqa: BLE001 — a backend without the slot
+                    pass
             self.backend.start(self.argv, self.cwd, env, self.cols, self.rows)
             self._started = True
         return self
@@ -320,6 +364,145 @@ class TerminalSession:
     def write(self, data: str | bytes) -> None:
         with self._write_lock:  # one writer at a time — keystrokes never interleave
             self.backend.write(data)
+
+    def write_input(self, data: str | bytes) -> None:
+        """What a PANE types (the WebSocket input path), v1.333.0.
+
+        Exactly :meth:`write`, except that a mouse report sent to a Windows
+        shell with NO program running in it is dropped: no shell reads mouse
+        reports, so one arriving there means a program turned mouse tracking
+        on and died without turning it off — the pane's xterm kept reporting
+        every cell the pointer crossed and PowerShell printed them as text
+        (the user's overnight bug). The first dropped report also tells the
+        pane to stop (:data:`MODE_RESET`). BLOCKING (a process-table read, at
+        most once a second, and only when a mouse report arrives): the route
+        calls it off the event loop."""
+        if has_mouse_report(data) and self._shell_is_idle():
+            data = strip_mouse_reports(data)
+            self._reset_mouse_modes(min_gap=MOUSE_RESET_GAP_S)
+            if not data:
+                return
+        self.write(data)
+
+    @property
+    def shell_pid(self) -> int | None:
+        """The shell's process id, when the backend knows it."""
+        pid = getattr(self.backend, "pid", None)
+        return pid if isinstance(pid, int) and pid > 0 else None
+
+    def _shell_is_idle(self) -> bool:
+        """True when this pane runs a Windows shell (:data:`modes.NATIVE_SHELLS`)
+        with no child process — nothing in it could have asked for mouse
+        reports. Anything unknown answers False (never drop input on a guess).
+        Cached for :data:`CHILD_CHECK_TTL_S`."""
+        if not is_native_shell(self.argv) or not self.alive:
+            return False
+        pid = self.shell_pid
+        if pid is None:
+            return False
+        now = time.monotonic()
+        cached = self._child_check
+        if cached is not None and now - cached[0] < CHILD_CHECK_TTL_S:
+            return cached[1]
+        try:
+            import psutil
+
+            idle = not self._console_children(psutil.Process(pid))
+        except Exception:  # noqa: BLE001 — no psutil, a vanished shell: unknown
+            idle = False
+        self._child_check = (now, idle)
+        return idle
+
+    def _console_children(self, shell) -> list:
+        """The shell's child processes that share the PANE'S console — the
+        only ones that can read what the pane types (review, v1.333.0). A
+        child that LEFT the console (``Start-Process``, a hidden dev server)
+        is still the shell's child for hours; counting it switched the input
+        filter off and kept the watcher waiting, so a dead program's mouse
+        reports reached the shell again. Every child when the console cannot
+        be read (not Windows, or the query failed): never drop on a guess."""
+        kids = shell.children()
+        if not kids:
+            return kids
+        from .pane_jobs import console_host_pid
+
+        own = self._own_console or console_host_pid(shell.pid)
+        if not own:
+            return kids
+        self._own_console = own
+        return [k for k in kids if console_host_pid(k.pid) == own]
+
+    def _reset_mouse_modes(self, *, min_gap: float = 0.0) -> None:
+        """Push :data:`MODE_RESET` through the one output path: into the
+        scrollback (a later replay ends with mouse tracking OFF) and to every
+        attached pane, whose xterm then stops reporting."""
+        now = time.monotonic()
+        with self._read_lock:
+            if min_gap and now - self._last_mouse_reset < min_gap:
+                return
+            self._last_mouse_reset = now
+            self._record_locked(MODE_RESET)
+
+    def _start_mouse_watch(self) -> None:
+        """Mouse tracking just went ON. When the program that asked for it is
+        a child of a Windows shell, wait (blocking on the processes, no poll)
+        for every child to exit; if tracking is still on then, the program
+        died without turning it off, and the pane is told to stop."""
+        self._mouse_watch_due = False
+        if self._killed:
+            return
+        if not is_native_shell(self.argv) or self.shell_pid is None:
+            return
+        # At most ONE watcher per pane, however often a program toggles the
+        # mode: a running watcher already covers every later switch.
+        with self._watch_lock:
+            if self._mouse_watch is not None:
+                return
+            thread = threading.Thread(
+                target=self._mouse_watch_loop, name=f"mouse-watch-{self.id}", daemon=True
+            )
+            self._mouse_watch = thread
+        thread.start()
+
+    def _mouse_watch_loop(self) -> None:
+        finished = False
+        try:
+            import psutil
+
+            shell = psutil.Process(self.shell_pid)
+            while not self._killed:
+                kids = self._console_children(shell)
+                if kids:
+                    for kid in kids:
+                        while not self._killed:
+                            try:
+                                kid.wait(timeout=MOUSE_WATCH_WAIT_S)
+                                break
+                            except psutil.TimeoutExpired:
+                                continue
+                            except psutil.Error:
+                                break
+                    continue
+                if self._drain_stop.wait(MOUSE_WATCH_GRACE_S):
+                    return  # the pane was closed
+                # A program started during the grace (a relaunch) is the one
+                # that owns the mode now: watch IT, never reset it (review).
+                if self._console_children(shell):
+                    continue
+                if not self._killed and self._modes.mouse_on:
+                    self._reset_mouse_modes()
+                break
+            finished = True
+        except Exception:  # noqa: BLE001 — no psutil, the shell is gone: nothing to do
+            return
+        finally:
+            with self._watch_lock:
+                self._mouse_watch = None
+            # A switch ON printed while this watcher was finishing found it
+            # still registered and started none: start one for it now. Only
+            # after a normal finish — a failing watcher must not respawn.
+            if finished and not self._killed and self._modes.mouse_on:
+                self._start_mouse_watch()
 
     @property
     def pushes_output(self) -> bool:
@@ -358,6 +541,8 @@ class TerminalSession:
                 answer_da1 = self._record_locked(data)
         if answer_da1:
             self._answer_da1()
+        if self._mouse_watch_due:
+            self._start_mouse_watch()
         return data
 
     def _ingest(self, data: bytes) -> None:
@@ -371,6 +556,8 @@ class TerminalSession:
             answer_da1 = self._record_locked(data)
         if answer_da1:
             self._answer_da1()
+        if self._mouse_watch_due:
+            self._start_mouse_watch()
 
     def _record_locked(self, data: bytes) -> bool:
         """THE one place terminal output is processed. The caller holds
@@ -382,6 +569,13 @@ class TerminalSession:
             self._tail_truncated = True
         self.last_output_at = time.monotonic()
         self.output_seq += 1
+        # v1.333.0: follow the mouse/paste switches as they are printed; the
+        # moment tracking goes ON, the caller starts the watcher that turns it
+        # off again if the program dies without doing so (outside this lock).
+        was_on = self._modes.mouse_on
+        self._modes.feed(data)
+        if self._modes.mouse_on and not was_on:
+            self._mouse_watch_due = True
         for sub in self._subscribers:
             sub._push(data)
         # Nobody attached means nobody to answer the terminal's questions —
@@ -660,6 +854,7 @@ class TerminalSession:
     #: error (review) — and the screen only CLEARS it (``_resume_problem``).
     _resume_file: Any = None
     _resume_file_key: Any = None
+    _resume_watch: Any = None
 
     def watching_resume(self) -> bool:
         """True while this pane runs the conversation it was handed: opened by
@@ -675,10 +870,11 @@ class TerminalSession:
         """Read the carried conversation's newest records (a bounded tail)
         when the file changed since the last read. BLOCKING: the sync
         activity route calls it on the threadpool; ``info()`` never does."""
-        from .resume_failed import check_file
+        from .resume_failed import FileWatch
 
         if not self.watching_resume():
             self._resume_file, self._resume_file_key = None, None
+            self._resume_watch = None
             return
         cf = self.continued_from or {}
         path = str(cf.get("carried_path"))
@@ -690,7 +886,14 @@ class TerminalSession:
             return
         if key == self._resume_file_key:
             return
-        found = check_file(path, str(cf.get("at") or ""))
+        # v1.333.0: only what was APPENDED since the last read is read and
+        # parsed (resume_failed.FileWatch) — the file grows on nearly every
+        # 2.5 s poll while Claude answers, and each poll re-read 256 KB.
+        after = str(cf.get("at") or "")
+        watch = self._resume_watch
+        if watch is None or watch.path != path or watch.after != after:
+            watch = self._resume_watch = FileWatch(path, after)
+        found = watch.check()
         self._resume_file = (found, found.when) if found is not None else None
         self._resume_file_key = key
 

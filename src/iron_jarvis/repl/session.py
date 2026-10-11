@@ -218,6 +218,11 @@ class ReplSession:
     def idle_for(self, now: float | None = None) -> float:
         return (time.monotonic() if now is None else now) - self.last_used
 
+    @property
+    def busy(self) -> bool:
+        """A cell is running right now (the execute lock is held)."""
+        return self._lock.locked()
+
     # -------------------------------------------------------------- payload
 
     def _payload(
@@ -608,6 +613,24 @@ class ReplRegistry:
         self.idle_ttl_s = float(idle_ttl_s)
         self._sessions: dict[str, ReplSession] = {}
         self._lock = asyncio.Lock()
+        #: Session ids with an agent run in progress (v1.333.0 review), with
+        #: a count. The timed idle sweep leaves their namespaces alone: a run
+        #: parked on an ask the user has not answered (attended asks have no
+        #: clock) or on a long model call is idle, not finished, and its next
+        #: step expects its variables. The run's end disposes them instead.
+        self._held: dict[str, int] = {}
+
+    def hold(self, session_id: str) -> None:
+        """A run of *session_id* has started: :meth:`sweep` spares it."""
+        self._held[session_id] = self._held.get(session_id, 0) + 1
+
+    def release(self, session_id: str) -> None:
+        """That run has ended (pairs with :meth:`hold`)."""
+        left = self._held.get(session_id, 0) - 1
+        if left > 0:
+            self._held[session_id] = left
+        else:
+            self._held.pop(session_id, None)
 
     def __len__(self) -> int:
         return len(self._sessions)
@@ -692,12 +715,20 @@ class ReplRegistry:
             }
         return await session.execute(code, timeout)
 
-    async def _sweep_locked(self) -> list[str]:
+    async def _sweep_locked(self, *, spare_held: bool = False) -> list[str]:
         now = time.monotonic()
+        # A namespace in the middle of a cell is not idle, however long the
+        # cell has run (``last_used`` is stamped when it STARTS): v1.333.0
+        # sweeps on a timer, so the check is no longer only reached at the
+        # 17th namespace. The timer also spares a run still in progress
+        # (``spare_held``); the cap's last-resort reclaim in ``_acquire`` does
+        # not, exactly as before.
         stale = [
             key
             for key, s in self._sessions.items()
             if s.idle_for(now) > self.idle_ttl_s
+            and not s.busy
+            and not (spare_held and s.session_id in self._held)
         ]
         # Reported as SESSION IDS, never as the internal composite key: every
         # other method on this class speaks session ids, and a caller that
@@ -712,9 +743,11 @@ class ReplRegistry:
         return list(dict.fromkeys(disposed))
 
     async def sweep(self) -> list[str]:
-        """Dispose sessions idle beyond the TTL. Returns the ids disposed."""
+        """Dispose sessions idle beyond the TTL. Returns the ids disposed.
+
+        A session with a run in progress (:meth:`hold`) is never swept here."""
         async with self._lock:
-            return await self._sweep_locked()
+            return await self._sweep_locked(spare_held=True)
 
     async def dispose(self, session_id: str) -> bool:
         """Kill EVERY namespace this session owns. Returns whether any existed.
