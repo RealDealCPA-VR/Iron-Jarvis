@@ -3116,6 +3116,16 @@ does not need a bump, stop and bump it.
   `*_v1333.py` in tests/ and `*-v1333.test.ts(x)` in dashboard/__tests__.
   RELEASE CHECK (frozen build): a REPL cell `import numpy` under confinement,
   and the `mcp-stdio` initialize line, both through the new fast paths.
+  v1.333.1 (test-only): v1.333.0's Tests + Release went red on the two
+  "a foreground child stays Normal" pins — the CI runner starts pytest BELOW
+  NORMAL and a child inherits that class. A full local suite under a watcher
+  plugin showed no test changes a worker's class. Both pins take the
+  `normal_priority` fixture (tests/conftest.py: the worker raises ITSELF to
+  Normal for the test, restores after); a worker trapped in a below-normal
+  Job cannot raise itself, so the pin still fails for the real bug. Checked
+  three ways: old shape started below normal = CI's exact error; new shape =
+  green; new shape inside a `background_lane` job = red. A priority pin
+  compares a child against Normal only from a Normal parent.
 
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry

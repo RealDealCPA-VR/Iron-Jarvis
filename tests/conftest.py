@@ -287,3 +287,33 @@ def _join_detection_scans():
         wait_for_scans(timeout=15.0)
     except Exception:  # noqa: BLE001 — cleanup must never fail a test
         pass
+
+
+@pytest.fixture
+def normal_priority():
+    """Run the test from a Normal-priority process (v1.333.1).
+
+    A child inherits a below-normal parent's class, and the CI runner starts
+    pytest below normal, so "a foreground child stays Normal" cannot be read
+    off a child of the worker as it was started. The worker raises ITSELF to
+    Normal for the test and goes back after. A worker trapped in a
+    below-normal Job (the bug those tests guard) cannot raise itself, so the
+    assertion still fails there."""
+    if os.name != "nt":
+        yield
+        return
+    import psutil
+
+    me = psutil.Process()
+    was = me.nice()
+    try:
+        me.nice(psutil.NORMAL_PRIORITY_CLASS)
+    except Exception:  # noqa: BLE001 — the test's own assertion reports it
+        pass
+    try:
+        yield
+    finally:
+        try:
+            me.nice(was)
+        except Exception:  # noqa: BLE001
+            pass

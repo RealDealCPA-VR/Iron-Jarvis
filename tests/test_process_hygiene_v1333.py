@@ -183,7 +183,7 @@ def test_creationflags_carry_below_normal_inside_the_background_lane_and_not_out
 
 
 @pytest.mark.skipif(not WINDOWS, reason="Windows priority classes and Job objects")
-def test_a_background_child_and_its_own_children_run_below_normal():
+def test_a_background_child_and_its_own_children_run_below_normal(normal_priority):
     """The child, its own child, and a grandchild that tries to raise ITSELF
     back to normal all stay below normal: the job holds the class."""
     raise_self = (

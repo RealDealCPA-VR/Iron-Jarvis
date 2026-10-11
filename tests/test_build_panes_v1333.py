@@ -574,7 +574,9 @@ def test_below_normal_survives_a_restart_and_a_user_pane_entry_does_not_carry_it
 
 
 @real_conpty
-def test_real_conpty_an_agent_panes_shell_runs_below_normal_and_a_users_normal(tmp_path):
+def test_real_conpty_an_agent_panes_shell_runs_below_normal_and_a_users_normal(
+    tmp_path, normal_priority
+):
     psutil = pytest.importorskip("psutil")
     low = TerminalSession(
         argv=["cmd.exe"], cwd=str(tmp_path), backend=B.ConPtyBackend(), below_normal=True
