@@ -61,7 +61,9 @@ const CASES: [string, string, readonly string[]][] = [
   ["the desktop bridge", "components/DesktopNotifyBridge.tsx", DESKTOP_NOTIFY_EVENT_TYPES],
   ["GoalsStrip", "components/GoalsStrip.tsx", GOALS_EVENT_TYPES],
   ["the downgrade banner", "components/ProviderDowngradeBanner.tsx", PROVIDER_DOWNGRADE_EVENT_TYPES],
-  ["the Overview", "components/overview/StatusOverview.tsx", OVERVIEW_EVENT_TYPES],
+  // v1.334.0: the Status view reads no event's TYPE any more — any frame in
+  // its list re-reads the system map once (pinned below), so it has no
+  // comparisons for this scan to find.
 ];
 
 describe("each filtered subscriber lists every event type it reads", () => {
@@ -100,10 +102,10 @@ describe("each filtered subscriber lists every event type it reads", () => {
     }
   });
 
-  it("the Overview passes its list to useEvents, and its live rows use the shared constant", () => {
+  it("the Overview passes its list to useEvents, and a run starting or ending is in it (v1.334.0: it re-reads the map)", () => {
     const page = src("components/overview/StatusOverview.tsx");
     expect(page).toMatch(/useEvents\(40,\s*\{\s*types:\s*OVERVIEW_EVENT_TYPES\s*\}\)/);
-    expect(page).toContain("new Set(OVERVIEW_LIVE_TYPES)");
+    expect(page).toMatch(/setTimeout\(reloadMap/);
     for (const t of OVERVIEW_LIVE_TYPES) expect(OVERVIEW_EVENT_TYPES).toContain(t);
   });
 

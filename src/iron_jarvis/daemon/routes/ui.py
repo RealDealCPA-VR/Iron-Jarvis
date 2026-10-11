@@ -94,6 +94,15 @@ def register(app: FastAPI, d) -> None:
         """The home's one conditional line, in one read (redesign S8)."""
         return status_line(d)
 
+    @app.get("/ui/system-map")
+    def ui_system_map() -> dict[str, Any]:
+        """Everything › Status in one read (v1.334.0): every part of the app
+        as set up / used this week / in use now, the status line's counts,
+        the day's heartbeat and four vitals. See ``system_map.py``."""
+        from .system_map import system_map
+
+        return system_map(d)
+
     @app.post("/ui/visit")
     async def ui_visit(body: UiVisitBody) -> dict[str, Any]:
         route = normalize_route(body.route)

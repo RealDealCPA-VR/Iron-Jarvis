@@ -668,6 +668,89 @@ table {
    `uv run python scripts/gen_light_tones.py` after adding a pale hue utility;
    `ux-wave1-design-v1313.test.tsx` fails until you do.
 --------------------------------------------------------------------------- */
+/* SYSTEM MAP (v1.334.0, components/overview/SystemMap.tsx). Every motion is
+   transform / opacity / stroke-dashoffset, so the compositor runs it, and all
+   of it stops under prefers-reduced-motion. */
+:root {
+  /* The five constellations' colours. Work follows the palette's accent; the
+     other four are fixed hues, redefined darker for light palettes. */
+  --sm-automations: 167 139 250;
+  --sm-system: 52 211 153;
+  --sm-knowledge: 244 114 182;
+  --sm-setup: 96 165 250;
+}
+:root[data-scheme="light"] {
+  --sm-automations: 109 40 217;
+  --sm-system: 4 120 87;
+  --sm-knowledge: 190 24 93;
+  --sm-setup: 29 78 216;
+}
+.sm-map .sm-node {
+  cursor: pointer;
+  outline: none;
+  transition: opacity 180ms ease;
+}
+.sm-map .sm-node[data-dim="1"],
+.sm-map .sm-link[data-dim="1"] {
+  opacity: 0.35;
+}
+.sm-map .sm-link {
+  transition: opacity 180ms ease;
+}
+.sm-map .sm-node:focus-visible .sm-label {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.sm-map .sm-label,
+.sm-map .sm-area-label {
+  paint-order: stroke;
+  stroke: rgb(var(--ink-950) / 0.85);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.sm-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sm-breathe 5.5s ease-in-out infinite;
+  animation-delay: var(--sm-delay, 0s);
+}
+.sm-ripple {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sm-ripple 2.4s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+.sm-ripple-2 {
+  animation-delay: 1.2s;
+}
+.sm-flow {
+  animation: sm-flow 1.6s linear infinite;
+}
+.sm-spin {
+  animation: sm-rotate 14s linear infinite;
+}
+@keyframes sm-rotate {
+  to { transform: rotate(360deg); }
+}
+@keyframes sm-breathe {
+  0%, 100% { opacity: 0.75; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes sm-ripple {
+  0% { opacity: 0.9; transform: scale(1); }
+  100% { opacity: 0; transform: scale(2.6); }
+}
+@keyframes sm-flow {
+  to { stroke-dashoffset: -17; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sm-halo,
+  .sm-ripple,
+  .sm-flow,
+  .sm-spin {
+    animation: none;
+  }
+}
+
 /* light-tone-overrides:start */
 :root[data-scheme="light"] .bg-cyan-500\/\[0\.06\] { background-color: rgb(6 182 212 / 0.12); }
 :root[data-scheme="light"] .bg-emerald-400\/\[0\.05\] { background-color: rgb(16 185 129 / 0.11); }

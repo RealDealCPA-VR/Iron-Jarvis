@@ -161,7 +161,7 @@ describe("the palette covers every surface and every setting", () => {
 });
 
 describe("Everything › Status (redesign S8: where the Overview's content lives)", () => {
-  it("#status opens the Status tab; the old Overview renders there without its own title", async () => {
+  it("#status opens the Status tab; the system map renders there without its own title", async () => {
     window.history.replaceState({}, "", "/everything#status");
     try {
       render(<EverythingPage />);
@@ -169,8 +169,10 @@ describe("Everything › Status (redesign S8: where the Overview's content lives
       const panel = await screen.findByTestId("everything-status");
       expect(panel.id).toBe("status");
       expect(screen.queryByTestId("everything-grid")).toBeNull();
-      // The Overview's own content has loaded (its module desk renders)…
-      expect(await within(panel).findByTestId("app-desk", undefined, { timeout: 4000 })).toBeTruthy();
+      // The Status view's own content has loaded (v1.334.0: the map, not a
+      // second copy of the Directory's doors)…
+      expect(await within(panel).findByTestId("status-map-card", undefined, { timeout: 4000 })).toBeTruthy();
+      expect(within(panel).queryByTestId("app-desk")).toBeNull();
       // …and the page still has ONE title: Everything's.
       expect(document.querySelectorAll("h1")).toHaveLength(1);
       expect(document.querySelector("h1")?.textContent).toMatch(/Everything/);

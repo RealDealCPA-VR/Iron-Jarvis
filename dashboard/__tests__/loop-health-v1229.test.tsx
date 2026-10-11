@@ -19,10 +19,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const { getMock, notifyMock, diagRef } = vi.hoisted(() => ({
+const { getMock, notifyMock, diagRef, mapRef } = vi.hoisted(() => ({
   getMock: vi.fn(),
   notifyMock: vi.fn(),
   diagRef: { current: {} as Record<string, unknown> },
+  // v1.334.0: the Status view reads the failing loops off /ui/system-map
+  // (the daemon names them there; the `error` alias is pinned in
+  // tests/test_system_map_v1334.py). The bell still reads /diagnostics.
+  mapRef: { current: {} as Record<string, unknown> },
 }));
 
 vi.mock("@/lib/api", () => {
@@ -35,6 +39,7 @@ vi.mock("@/lib/api", () => {
     }
   }
   getMock.mockImplementation(async (path: string) => {
+    if (path === "/ui/system-map") return mapRef.current;
     if (path.startsWith("/diagnostics")) return diagRef.current;
     if (path.startsWith("/sessions")) return { sessions: [] };
     if (path === "/health")
@@ -103,55 +108,44 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-describe("Overview names a failing background loop (v1.229.0)", () => {
-  it("Simple mode: the hero does not say nominal and an amber note names the loop + error", async () => {
-    diagRef.current = {
-      background_loops: {
-        scheduler: { ok: true, last_success_at: minutesAgo(1) },
-        fleet: { ok: false, last_error: FLEET_ERR, at: minutesAgo(12) },
-      },
-    };
+describe("Overview names a failing background loop (v1.229.0; read off the system map since v1.334.0)", () => {
+  it("the status line does not say all good and an amber note names the loop + error", async () => {
+    mapRef.current = { areas: [], status: { failing_loops: [{ name: "fleet", error: FLEET_ERR }] } };
     render(<OverviewPage />);
     const note = await screen.findByTestId("loop-failing-note");
     expect(note.textContent).toContain("fleet");
     expect(note.textContent).toContain(FLEET_ERR);
     expect(screen.getByText("1 background task failing")).toBeTruthy();
-    expect(screen.queryByText(/All systems nominal/)).toBeNull();
+    expect(screen.queryByText(/All good/)).toBeNull();
   });
 
-  // v1.313.0: the healthy hero no longer says "nominal". This file renders
-  // without a DaemonProvider, so /health is unknown to the hero and it shows
-  // the plain healthy line (the demo-default line is pinned in
-  // ux-wave1-firstrun-v1313).
-  it("no failing loop: no note, hero shows the plain healthy line", async () => {
-    diagRef.current = { background_loops: { scheduler: { ok: true } } };
+  // This file renders without a DaemonProvider, so /health is unknown to the
+  // status line and it shows the plain healthy line (the demo-default line is
+  // pinned in ux-wave1-firstrun-v1313).
+  it("no failing loop: no note, the plain healthy line", async () => {
+    mapRef.current = { areas: [], status: { failing_loops: [] } };
     render(<OverviewPage />);
-    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/diagnostics"));
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/ui/system-map"));
     await screen.findByText("All good — ready when you are");
     expect(screen.queryByText(/nominal/)).toBeNull();
     expect(screen.queryByTestId("loop-failing-note")).toBeNull();
   });
 
-  it("Advanced: the health tile lists the failing names and the list carries each last_error (error alias honoured)", async () => {
-    localStorage.setItem("ij_nav_advanced", "1");
-    localStorage.setItem("ij_ov_admin", "1");
-    diagRef.current = {
-      db_integrity: "ok",
-      background_loops: {
-        fleet: { ok: false, last_error: FLEET_ERR, at: minutesAgo(12) },
-        // pre-v1.229.0 shape: `error` only — still rendered with its reason
-        rehydrate_goals: { ok: false, error: "RuntimeError: goals exploded" },
-        scheduler: { ok: true },
+  it("two failing loops: both named, each with its own reason, and the line counts them", async () => {
+    mapRef.current = {
+      areas: [],
+      status: {
+        failing_loops: [
+          { name: "fleet", error: FLEET_ERR },
+          { name: "rehydrate_goals", error: "RuntimeError: goals exploded" },
+        ],
       },
     };
     render(<OverviewPage />);
-    const list = await screen.findByTestId("failing-loops");
-    expect(list.textContent).toContain("fleet");
-    expect(list.textContent).toContain(FLEET_ERR);
-    expect(list.textContent).toContain("rehydrate_goals");
-    expect(list.textContent).toContain("RuntimeError: goals exploded");
-    // the tile itself names the loops, not just a count
-    expect(screen.getByText("2 failed: fleet, rehydrate_goals")).toBeTruthy();
+    const note = await screen.findByTestId("loop-failing-note");
+    expect(note.textContent).toContain(`fleet — ${FLEET_ERR}`);
+    expect(note.textContent).toContain("rehydrate_goals — RuntimeError: goals exploded");
+    expect(screen.getByText("2 background tasks failing")).toBeTruthy();
   });
 });
 

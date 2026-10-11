@@ -3127,6 +3127,54 @@ does not need a bump, stop and bump it.
   green; new shape inside a `background_lane` job = red. A priority pin
   compares a child against Normal only from a Normal parent.
 
+- **Everything › Status is the system map** (v1.334.0; the user: "If the
+  directory has everything the user will need to access, then the status
+  should simply be a beautiful visual allowing the user to understand
+  everything that is set up, used, in use"). The Directory tab is the list of
+  doors; Status no longer repeats them — the module grid (AppGrid), the
+  HealthCard, PowerTips, GoalsStrip and the whole "Systems & admin" drawer
+  (Try it now, Ambient operator, While you were away, Saved tasks,
+  Connections, Recent sessions, System health) are gone from it (the
+  components stay for their other pins/surfaces; GoalsStrip still lives on
+  /autonomy). What stays: the status line (same urgency order, same demo /
+  "Checking in…" rules), the first-run strip leading while setup is open,
+  InterruptedJobsNote, the named loop/pack notes, OnboardingWelcome, and the
+  vitals (Model, Running, Runs this week, Disk space free, Problems today).
+  ONE READ: `GET /ui/system-map` (daemon/routes/system_map.py, registered in
+  ui.py) returns five areas (work, automations, system, knowledge, setup —
+  the Directory's groups) of stars `{key,label,href,setup,used,live,unit,
+  detail,attention}`, the status line's counts (`status.running`,
+  `failing_loops` [last_error or the old `error` alias], `failing_packs`,
+  `provider_failures_24h`), a 24-hour `heartbeat` (events per hour, oldest
+  first, one grouped count on the created_at index) and `vitals` (runs_7d,
+  runs_ok_7d, runs_done_7d — the ok share is of FINISHED runs — disk, rss).
+  Every star is its own try; a fallback star has an EMPTY detail, and the
+  fresh-install pin asserts none fell back. COST RULES: in-memory reads and
+  indexed aggregates only — never /memory/overview (globs vaults),
+  /artifacts listing (walks the store), /usage (reads OpenCode/Pi stores) or
+  a fleet probe; a pin asserts the read starts no process. SQLite hands back
+  NAIVE datetimes: compare in SQL, or `.replace(tzinfo=utc)` before a Python
+  compare (the You star fell back on a real DB until that). The page polls it
+  every 15 s (MAP_POLL_MS) and re-reads once, debounced, on any
+  OVERVIEW_EVENT_TYPES frame; it no longer polls /sessions, /metrics,
+  /diagnostics(/reliability), /reflex/rules, /templates or /vault. A non-0
+  error shows "The map could not be read: <message>" (role=alert), never an
+  empty sky. THE PICTURE (components/overview/SystemMap.tsx): pure
+  `layoutMap(areas, w, h)` puts the constellations clockwise from the top in
+  AREA_ORDER, proportional to size with gaps; where the ring runs
+  horizontally every other star steps in (k 0.84 / 0.76 phone) — pinned: at
+  1280/900/390 every star is on the canvas, outside the core, and no two
+  touch. States off / setup / used / live (+ attention, amber) with radius on
+  a capped log scale; hover/focus shows the StarCard, a plain click
+  router-pushes the star's href (ctrl/cmd-click left to the browser); an
+  sr-only list says the same in words. Colours are `--sm-*` tokens in
+  globals.css (work = the palette accent; light palettes redefine the four
+  fixed hues). Motion is CSS only (sm-halo / sm-ripple / sm-flow / sm-spin on
+  transform, opacity and dash offset) and stops under reduced motion. Pins:
+  `tests/test_system_map_v1334.py`, `dashboard/__tests__/system-map-v1334.test.tsx`
+  (+ the re-pointed loop-health, mcp-last-error, overview-500, overview-wave2,
+  links-wave1, polling, ux-wave1, goals-surfaces, hooks-wave3-typesets pins).
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

@@ -562,31 +562,31 @@ function hrefsFor(text: string): string[] {
 }
 
 describe("Overview opens a mission on its mission screen", () => {
-  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
-  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
-  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
-  it("Recent sessions: a mission row -> /agents?mission=m1&project=p1; a plain row -> /sessions/<id>", async () => {
+  // v1.334.0: Everything › Status no longer repeats a "Recent sessions" list
+  // (the Sessions page and the Directory are the doors). Its Agents star is
+  // the way from the picture to the missions: one press, /agents.
+  it("the Status view lists no sessions; its Agents star opens /agents", async () => {
+    W1.push.mockClear();
     W1.responses = {
       "/sessions?limit=50": { sessions: [MISSION_ROW, PLAIN_ROW] },
       "/health": { status: "ok", version: "1.309.0", providers: [], default_provider: "mock" },
-      "/metrics": { sessions_evaluated: 0, avg_completion: 0, avg_tool_success_rate: 0, avg_latency_s: 0, total_tool_invocations: 0, event_count: 0 },
-      "/vault": { providers: [] },
-      "/templates": { templates: [] },
-      "/reflex/rules": { rules: [] },
+      "/ui/system-map": {
+        areas: [
+          {
+            key: "work",
+            label: "Work",
+            nodes: [{ key: "agents", label: "Agents", href: "/agents", setup: 9, used: 2, live: 1, detail: "Your team." }],
+          },
+        ],
+        status: { running: 1, failing_loops: [], failing_packs: [] },
+      },
     };
-    // Recent sessions sits inside "Systems & admin", collapsed by default.
-    window.localStorage.setItem("ij_ov_admin", "1");
     render(<OverviewPage />);
-    await screen.findAllByText(MISSION_ROW.task, undefined, { timeout: 4000 });
-    const mission = hrefsFor(MISSION_ROW.task);
-    expect(mission.length).toBeGreaterThan(0);
-    for (const h of mission) {
-      expect(route(h)).toEqual({ path: "/agents", q: { mission: "m1", project: "p1" } });
-    }
-    // Anti-vacuity: the same list still sends an ordinary run to its page.
-    const plain = hrefsFor(PLAIN_ROW.task);
-    expect(plain.length).toBeGreaterThan(0);
-    for (const h of plain) expect(h).toBe("/sessions/s-plain");
+    const star = await screen.findByTestId("system-map-node-agents", undefined, { timeout: 4000 });
+    expect(W1.gets).not.toContain("/sessions?limit=50");
+    expect(screen.queryByText(MISSION_ROW.task)).toBeNull();
+    fireEvent.click(star, { button: 0 });
+    expect(W1.push).toHaveBeenCalledWith("/agents");
   });
 });
 

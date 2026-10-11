@@ -124,60 +124,27 @@ def test_the_editor_explains_the_matching_order():
     assert "provider::model" in src
 
 
-def test_the_overview_has_one_admin_section_not_seven():
-    """v1.156.0's other half: everything below the tiles now rests behind a
-    single title instead of seven independently-collapsing cards."""
+def test_the_status_view_is_the_picture_not_a_second_directory():
+    """v1.334.0 retires v1.156.0's "Systems & admin" fold with everything else
+    the Status view repeated from the Directory (the user: the status "should
+    simply be a beautiful visual"). What is left is in this order: the
+    first-run strip while setup is open, the notes, the map, then the vitals
+    and the heartbeat.
+
+    The v1.156.1 lesson still applies to what remains: a Reveal only animates
+    when nothing between it and PageShell sets its own initial/animate, so the
+    map's Reveal sits directly in the page shell."""
     src = (
         Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
     ).read_text(encoding="utf-8")
-    assert src.count("<CollapsibleCard") == 1, (
-        f"expected exactly one collapsible on the overview, found "
-        f"{src.count('<CollapsibleCard')}"
-    )
-    assert 'title="Systems & admin"' in src
-    assert "<PanelSection" in src, "the former cards should now be plain sections"
-
-
-def test_the_hero_and_tiles_stay_above_it():
-    """The user asked for the top of the page to be left ALONE. Order matters:
-    hero band, then tiles, then the stats card, and only then the admin fold."""
-    src = (
-        Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
-    ).read_text(encoding="utf-8")
-    grid = src.index("<AppGrid />")
-    health = src.index("<HealthCard")
-    admin = src.index('title="Systems & admin"')
-    assert grid < health < admin, "the admin fold must sit below tiles and stats"
-
-
-def test_the_admin_fold_contains_no_reveal_wrappers():
-    """v1.156.1: the fold shipped BLANK and neither the build nor 406 unit
-    tests caught it.
-
-    `Reveal` is driven by VARIANT LABEL — PageShell sets initial="hidden"
-    animate="show" and framer-motion propagates those names down the tree. The
-    collapsible's body sets its OWN object-based initial/animate, which stops
-    label propagation, so every nested Reveal stayed on `hidden`: present in the
-    DOM at opacity 0. The dropdown opened onto nothing.
-
-    Proven in a real browser both ways — with a Reveal restored the section
-    computes to opacity 0, without it 1 — because a passing build proves only
-    that the JSX compiles, not that anything is visible.
-    """
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1] / "dashboard" / "components" / "overview" / "StatusOverview.tsx"
-    ).read_text(encoding="utf-8")
-    start = src.index('<div className="space-y-5">')
-    end = src.index("</CollapsibleCard>", start)
-    fold = src[start:end]
-    assert "<Reveal>" not in fold, (
-        "a Reveal inside the collapsible body renders its children invisible"
-    )
-    assert fold.count("<PanelSection") == 7, (
-        f"expected all seven sections in the fold, found {fold.count('<PanelSection')}"
-    )
+    for gone in ("<CollapsibleCard", 'title="Systems & admin"', "<PanelSection", "<AppGrid", "<HealthCard", "<PowerTips"):
+        assert gone not in src, f"{gone} is back on the Status view"
+    # JSX tags, not the `usePolledApi<SystemMapResponse>` generic.
+    strip = src.index("<FirstRunStrip onboarding=")
+    the_map = src.index("<SystemMap data=")
+    beat = src.index("<Heartbeat hours=")
+    assert strip < the_map < beat
+    assert "initial=" not in src and "animate=" not in src, "nothing here may stop Reveal's label propagation"
 
 
 def test_the_roster_is_a_picker_not_a_list():

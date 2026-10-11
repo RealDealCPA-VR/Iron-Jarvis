@@ -31,6 +31,8 @@ const api = vi.hoisted(() => {
     posts: [] as string[],
     servers: [] as Record<string, unknown>[],
     diag: {} as Record<string, unknown>,
+    // v1.334.0: the Status view reads failing packs off /ui/system-map.
+    map: {} as Record<string, unknown>,
     reload: { ok: false, tools_loaded: 0, last_error: null as string | null },
   };
 });
@@ -48,6 +50,7 @@ vi.mock("@/lib/api", () => ({
     if (path === "/mcp/servers") return { servers: api.servers };
     if (path === "/mcp/catalog") return { catalog: [] };
     if (path === "/tools/custom") return { tools: [] };
+    if (path === "/ui/system-map") return api.map;
     if (path.startsWith("/diagnostics")) return api.diag;
     if (path.startsWith("/sessions")) return { sessions: [] };
     if (path === "/health")
@@ -180,20 +183,14 @@ describe("Tools page names the pack that did not start (v1.229.0)", () => {
 
 describe("Overview hero degrades over a failed pack (v1.229.0)", () => {
   it("says '1 thing needs attention' and names the pack with a way to Retry", async () => {
-    api.diag = {
-      background_loops: { scheduler: { ok: true } },
-      mcp_servers: [
-        { name: "brave_search", tools_loaded: 0, last_error: ERR },
-        { name: "filesystem", tools_loaded: 3, last_error: null },
-      ],
-    };
+    api.map = { areas: [], status: { failing_loops: [], failing_packs: [{ name: "brave_search", error: ERR }] } };
     render(<OverviewPage />);
     const note = await screen.findByTestId("pack-failing-note");
     expect(note.textContent).toContain("brave_search");
     expect(note.textContent).toContain(ERR);
     expect(note.querySelector('a[href="/tools"]')).not.toBeNull();
     expect(screen.getByText("1 thing needs attention")).toBeTruthy();
-    expect(screen.queryByText(/All systems nominal/)).toBeNull();
+    expect(screen.queryByText(/All good/)).toBeNull();
   });
 
   // v1.313.0: the healthy hero no longer says "nominal". This file renders
@@ -201,10 +198,7 @@ describe("Overview hero degrades over a failed pack (v1.229.0)", () => {
   // the plain healthy line (the demo-default line is pinned in
   // ux-wave1-firstrun-v1313).
   it("no failed pack: hero shows the plain healthy line and there is no note", async () => {
-    api.diag = {
-      background_loops: { scheduler: { ok: true } },
-      mcp_servers: [{ name: "filesystem", tools_loaded: 3, last_error: null }],
-    };
+    api.map = { areas: [], status: { failing_loops: [], failing_packs: [] } };
     render(<OverviewPage />);
     await screen.findByText("All good — ready when you are");
     expect(screen.queryByText(/nominal/)).toBeNull();

@@ -538,7 +538,7 @@ describe("Overview hero: never 'nominal' while the demo answers", () => {
   it("control: a failing background loop still ranks AHEAD of the demo line", async () => {
     overviewResponses(
       { ...onePress(), next_step: null },
-      { "/diagnostics": { background_loops: { fleet: { ok: false, last_error: "boom" } }, mcp_servers: [] } },
+      { "/ui/system-map": { areas: [], status: { failing_loops: [{ name: "fleet", error: "boom" }], failing_packs: [] } } },
     );
     renderOverview();
     await screen.findByText("1 background task failing", undefined, { timeout: 4000 });

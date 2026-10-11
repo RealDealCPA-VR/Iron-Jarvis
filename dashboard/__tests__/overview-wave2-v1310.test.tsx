@@ -45,6 +45,7 @@ const W = vi.hoisted(() => ({
   responses: {} as Record<string, unknown>,
   postResponses: {} as Record<string, unknown>,
   posts: [] as { path: string; body: unknown }[],
+  gets: [] as string[],
   push: vi.fn(),
   replace: vi.fn(),
 }));
@@ -54,6 +55,7 @@ vi.mock("@/lib/api", async (orig) => ({
   API_BASE: "",
   ijToken: () => "",
   get: async (path: string) => {
+    W.gets.push(path);
     const r = W.responses[path];
     // Unknown reads answer an empty object: the Overview carries many
     // optional panels, and this file pins the first-run surface.
@@ -250,6 +252,7 @@ beforeEach(() => {
   W.responses = {};
   W.postResponses = {};
   W.posts.length = 0;
+  W.gets.length = 0;
   W.push.mockReset();
   W.replace.mockReset();
   window.localStorage.clear();
@@ -263,7 +266,7 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
   // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
   // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
   beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
-  it("sits under the header, ABOVE the reactor hero and the module grid, holding the welcome card", async () => {
+  it("sits under the header, ABOVE the status line and the system map, holding the welcome card", async () => {
     overviewResponses(onboarding());
     render(<OverviewPage />);
     const strip = await screen.findByTestId("first-run-strip", undefined, { timeout: 4000 });
@@ -274,11 +277,11 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
 
     // v1.313.0: the healthy hero line (a real default here) is plain words.
     const hero = screen.getByText("All good — ready when you are");
-    const grid = screen.getByTestId("app-desk");
+    const map = screen.getByTestId("status-map-card");
     const title = screen.getByRole("heading", { name: "Overview" });
     expect(before(title, strip)).toBe(true);
     expect(before(strip, hero)).toBe(true);
-    expect(before(strip, grid)).toBe(true);
+    expect(before(strip, map)).toBe(true);
   });
 
   it("the press that finishes setup keeps its confirmation on the page (the strip is latched, review v1.310.0)", async () => {
@@ -346,10 +349,8 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
     expect(sessionPosts()).toEqual([]);
   });
 
-  it("'Try it now' moved into the strip: a card opens /chat?ask=<task>, posts no session, and is not also in Systems & admin", async () => {
+  it("'Try it now' lives in the strip: a card opens /chat?ask=<task>, posts no session, and appears once", async () => {
     overviewResponses(onboarding());
-    // Open "Systems & admin" so a copy left behind in it would render.
-    window.localStorage.setItem("ij_ov_admin", "1");
     render(<OverviewPage />);
     const strip = await screen.findByTestId("first-run-strip", undefined, { timeout: 4000 });
     const card = within(strip).getByText(FIRST_WIN.title);
@@ -373,41 +374,26 @@ describe("Overview: a first-run strip leads while setup is unfinished", () => {
     expect(within(strip).getByRole("textbox", { name: /ask jarvis anything/i })).toBeInTheDocument();
   });
 
-  it("control: next_step null -> no strip, no ask box; 'Try it now' is back in Systems & admin and still starts a run", async () => {
+  // v1.334.0: once setup is done the Status view is the picture alone. The
+  // starters, saved tasks and module grid it used to repeat are doors in the
+  // Directory (and the chat home); the page no longer even reads them.
+  it("control: next_step null -> no strip, no ask box; the map leads and nothing from the old admin drawer is back", async () => {
     overviewResponses(onboarding({ next_step: null, checklist: CHECKLIST.map((s) => ({ ...s, done: true })) }));
-    W.postResponses["/sessions"] = { id: "s-new" };
-    window.localStorage.setItem("ij_ov_admin", "1");
     render(<OverviewPage />);
-    const card = await screen.findByText(FIRST_WIN.title, undefined, { timeout: 4000 });
+    const map = await screen.findByTestId("status-map-card", undefined, { timeout: 4000 });
+    await screen.findByText("All good — ready when you are");
 
     expect(screen.queryByTestId("first-run-strip")).toBeNull();
     expect(screen.queryByRole("textbox", { name: /ask jarvis anything/i })).toBeNull();
-    // The page is as before: hero, then grid; the card still runs a session.
-    expect(before(screen.getByText("All good — ready when you are"), screen.getByTestId("app-desk"))).toBe(true);
-    fireEvent.click(card.closest("button")!);
-    await waitFor(() => expect(W.push).toHaveBeenCalledWith("/sessions/s-new"));
-    expect(W.posts.find((p) => p.path === "/sessions")?.body).toMatchObject({ task: FIRST_WIN.task });
-  });
-
-  it("control: a saved task that pins a provider/model keeps the session path and carries the pin", async () => {
-    overviewResponses(onboarding(), {
-      "/templates": {
-        templates: [
-          { id: "t1", name: "Weekly recap", agent_type: "builder", task: "Recap my week", provider: "ollama", model: "llama3.2", created_at: "2026-10-01T00:00:00" },
-        ],
-      },
-    });
-    W.postResponses["/sessions"] = { id: "s-pinned" };
-    window.localStorage.setItem("ij_ov_admin", "1");
-    render(<OverviewPage />);
-    const tpl = await screen.findByText("Weekly recap", undefined, { timeout: 4000 });
-    fireEvent.click(tpl.closest("button")!);
-    await waitFor(() => expect(W.push).toHaveBeenCalledWith("/sessions/s-pinned"));
-    expect(W.posts.find((p) => p.path === "/sessions")?.body).toMatchObject({
-      task: "Recap my week",
-      provider: "ollama",
-      model: "llama3.2",
-    });
+    expect(screen.queryByText(FIRST_WIN.title)).toBeNull();
+    expect(screen.queryByTestId("app-desk")).toBeNull();
+    expect(screen.queryByText("Systems & admin")).toBeNull();
+    expect(map).toBeInTheDocument();
+    for (const path of ["/templates", "/sessions?limit=50", "/metrics", "/vault", "/reflex/rules"]) {
+      expect(W.gets, path).not.toContain(path);
+    }
+    // Anti-vacuity: the tracker does see the page's reads.
+    expect(W.gets).toContain("/ui/system-map");
   });
 });
 

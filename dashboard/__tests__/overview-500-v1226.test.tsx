@@ -5,6 +5,10 @@
  * anywhere (the global banner was cleared by the concurrent /metrics 200).
  * Now the sessions panels render the DataError note carrying the daemon's
  * message; the OfflineHint stays reserved for status 0.
+ *
+ * v1.334.0: the Status view reads ONE endpoint, /ui/system-map. The same
+ * rule holds for it: a 500 shows the daemon's message where the map would
+ * be, never an empty sky that reads as "nothing is set up".
  */
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -21,7 +25,7 @@ vi.mock("@/lib/api", () => {
     }
   }
   getMock.mockImplementation(async (path: string) => {
-    if (path.startsWith("/sessions"))
+    if (path === "/ui/system-map")
       throw new MockApiError("internal error: OperationalError: no such column: sessions.origin", 500);
     if (path === "/health")
       return { status: "ok", version: "1.226.0", providers: [], default_provider: "mock" };
@@ -70,20 +74,14 @@ import OverviewPage from "@/components/overview/StatusOverview";
 
 afterEach(() => cleanup());
 
-describe("Overview on a 500 from /sessions (v1.226.0)", () => {
-  // v1.318.0: the full Overview (hero, module grid, Systems & admin) is the
-  // ADVANCED layout; Simple mode shows the calm home (home-simple-v1318).
-  beforeEach(() => localStorage.setItem("ij_nav_advanced", "1"));
-  it("shows the daemon's error instead of the 'No sessions yet' empty copy", async () => {
-    localStorage.setItem("ij_ov_admin", "1"); // expand "Systems & admin" (collapsed by default)
+describe("Overview on a 500 from /ui/system-map (v1.226.0 rule, v1.334.0 endpoint)", () => {
+  it("shows the daemon's error instead of an empty map", async () => {
     render(<OverviewPage />);
-    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/sessions?limit=50"));
-    await waitFor(() => {
-      expect(screen.getAllByText(/OperationalError/).length).toBeGreaterThan(0);
-    });
-    const txt = document.body.textContent || "";
-    expect(/No sessions yet|Nothing yet/i.test(txt)).toBe(false);
-    expect(/Could not load sessions/.test(txt)).toBe(true);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/ui/system-map"));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/could not be read/);
+    expect(alert.textContent).toMatch(/OperationalError/);
+    expect(screen.queryByTestId("system-map")).toBeNull();
     // The daemon-offline hint is NOT shown either (status 500 !== 0).
     expect(screen.queryByText(/Daemon offline/i)).toBeNull();
   });

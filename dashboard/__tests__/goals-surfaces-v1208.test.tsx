@@ -1024,15 +1024,15 @@ describe("scheduleWords — cron becomes words, never a lie", () => {
 
 /* --------------------------------------------------- Overview mount shape */
 
-describe("Overview — the strip is mounted below PowerTips, unwrapped", () => {
-  it("app/page.tsx mounts <GoalsStrip /> after <PowerTips /> and outside <Reveal>", () => {
+describe("Overview — goals are a star on the system map (v1.334.0)", () => {
+  // The strip was the Status view's way to keep a live goal from being
+  // forgotten. The map now carries it: the Autonomy star lights while a goal
+  // runs and turns amber when a goal's breaker stops it (pinned on the daemon
+  // side in tests/test_system_map_v1334.py). The strip component itself is
+  // still pinned above for any surface that mounts it.
+  it("the Status view no longer mounts <GoalsStrip /> beside the map", () => {
     const src = readFileSync(join(__dirname, "..", "components", "overview", "StatusOverview.tsx"), "utf8");
-    const tips = src.indexOf("<PowerTips />");
-    const strip = src.indexOf("<GoalsStrip />");
-    expect(tips).toBeGreaterThan(-1);
-    expect(strip).toBeGreaterThan(tips);
-    // Null must stay null: a <Reveal> wrapper around the strip would render
-    // an empty motion div (a husk) when there are no goals.
-    expect(src).not.toMatch(/<Reveal>\s*<GoalsStrip \/>/);
+    expect(src).toContain("<SystemMap data=");
+    expect(src).not.toContain("<GoalsStrip />");
   });
 });

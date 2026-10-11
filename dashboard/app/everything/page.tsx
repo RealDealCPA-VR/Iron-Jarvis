@@ -31,8 +31,9 @@ import {
   type Surface,
 } from "@/lib/surfaces";
 
-// Everything › Status (redesign S8): the old Overview's operational content,
-// loaded only when the tab is opened.
+// Everything › Status (redesign S8; the system map since v1.334.0): the
+// picture of what is set up, used and in use — the Directory is the list of
+// doors, so Status no longer repeats them. Loaded only when the tab is opened.
 const StatusOverview = dynamic(() => import("@/components/overview/StatusOverview"), { ssr: false });
 
 type Tab = "directory" | "status";

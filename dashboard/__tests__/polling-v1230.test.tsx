@@ -206,15 +206,16 @@ describe("one /health poll per window", () => {
     // (it renders null until /health is known) and the Overview's version chip.
     expect(screen.getByRole("button", { name: /switch the active model/i })).toBeTruthy();
     expect(screen.getAllByText(/v1\.230\.0/).length).toBeGreaterThan(0);
-    // FP3: the Overview's sessions poll asks for 50 rows, not the default 200.
-    expect(calls.some((c) => c.url.endsWith("/sessions?limit=50"))).toBe(true);
-    expect(calls.some((c) => /\/sessions(\?|$)/.test(c.url) && !c.url.includes("limit=50"))).toBe(
-      false,
-    );
+    // v1.334.0: the Status view's one read is the system map; it no longer
+    // polls the session list at all.
+    expect(calls.some((c) => c.url.endsWith("/ui/system-map"))).toBe(true);
+    expect(calls.some((c) => /\/sessions(\?|$)/.test(c.url))).toBe(false);
 
     for (let i = 0; i < 12; i++) await advance(5_000);
     // Used to be 39 (three 5 s pollers). One poll: 1 + 12 ticks.
     expect(count("/health")).toBe(13);
+    // The map polls every 15 s: the first read + 4 ticks in 60 s.
+    expect(count("/ui/system-map")).toBe(5);
     // HEADROOM FOR A CONTENDED RUNNER, NOT A PERFORMANCE CLAIM (v1.254.1).
     // This is the only test in the file that RENDERS a page — the whole
     // Overview, with every card and poller it owns — and it then drives 13
