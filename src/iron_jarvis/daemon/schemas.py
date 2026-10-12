@@ -256,6 +256,13 @@ class PageContext(BaseModel):
         return v[:keep] + PAGE_CONTEXT_CUT_MARKER
 
 
+class ThreadQueueBody(BaseModel):
+    """``PUT /chat/threads/{id}/queue`` (v1.336.0): the messages waiting for
+    the chat's running reply, as the page holds them (at most 3)."""
+
+    items: list[dict[str, Any]] = []
+
+
 class TurnSteerBody(BaseModel):
     """``POST /chat/turns/{turn_id}/steer`` (v1.278.0): one note for a running turn."""
 

@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from ..schemas import (
+    ThreadQueueBody,
     TurnSteerBody,
     ChatArchiveBody,
     ChatBody,
@@ -61,6 +62,7 @@ from ...core.trust import (
 # The module itself, for the knobs read at CALL time (tests shrink
 # ``_FINAL_ANSWER_TIMEOUT_S``; a copied constant would not follow).
 from .. import chat_turn as _chat_turn
+from .. import durable_turns as _durable
 from ...settings.tools import ALWAYS_CARD_TOOLS
 from ..chat_turn import (
     preference_block,
@@ -340,6 +342,39 @@ class ChatReplyStreamingResponse(HeartbeatStreamingResponse):
             await super().stream_response(send)
         finally:
             CHAT_INFLIGHT.exit()
+
+
+#: v1.336.0: the most messages a chat keeps waiting (the page's MAX_QUEUED).
+MAX_THREAD_QUEUE = 3
+MAX_THREAD_QUEUE_CHARS = 200_000
+
+
+def _queued_of(row) -> list:
+    try:
+        items = json.loads(getattr(row, "queued_json", "") or "[]")
+    except ValueError:
+        return []
+    return [i for i in items if isinstance(i, dict)][:MAX_THREAD_QUEUE] if isinstance(items, list) else []
+
+
+def _turn_logs(d) -> "_durable.TurnLogs":
+    """This platform's daemon-owned chat turns (v1.336.0), made on first use."""
+    logs = getattr(d.platform, "turn_logs", None)
+    if logs is None:
+        logs = _durable.TurnLogs(d.platform.engine)
+        d.platform.turn_logs = logs
+    return logs
+
+
+def _follow_response(frames) -> "HeartbeatStreamingResponse":
+    """A window following a daemon-owned turn (v1.336.0). The heartbeat keeps
+    the page's stall watchdog fed; the reply is counted by the turn's own
+    task, not by this response, so it is a plain heartbeat response."""
+    return HeartbeatStreamingResponse(
+        frames,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 async def _router_frames(router, *, refit=None, **kwargs):
@@ -1210,7 +1245,35 @@ def register(app: FastAPI, d) -> None:
             # v1.328.0: an archived chat still opens; the page can offer
             # to bring it back.
             "archived": getattr(r, "archived_at", None) is not None,
+            # v1.336.0: what is waiting for this chat's reply (the page's
+            # queue, kept across a reload).
+            "queued": _queued_of(r),
         }
+
+    @app.put("/chat/threads/{thread_id}/queue")
+    def chat_thread_queue(thread_id: str, body: ThreadQueueBody) -> dict[str, Any]:
+        """Keep the messages waiting for this chat's running reply (v1.336.0).
+
+        The page used to hold its queue only in memory, so a reload lost it.
+        Written as its own field and WITHOUT touching ``updated_at``: the
+        page's message saves carry that stamp (``if_updated_at``), and a
+        queue change must never turn the next one into a 409. An empty list
+        clears it. At most ``MAX_THREAD_QUEUE`` items and
+        ``MAX_THREAD_QUEUE_CHARS`` of JSON."""
+        from ...core.models import ChatThreadRecord
+
+        items = [i for i in (body.items or []) if isinstance(i, dict)][:MAX_THREAD_QUEUE]
+        text = json.dumps(items) if items else ""
+        if len(text) > MAX_THREAD_QUEUE_CHARS:
+            raise HTTPException(status_code=413, detail="the waiting messages are too large to keep")
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+            if r is None:
+                raise HTTPException(status_code=404, detail="no such thread")
+            r.queued_json = text
+            db.add(r)
+            db.commit()
+        return {"ok": True, "queued": len(items)}
 
     @app.get("/chat/threads/{thread_id}/compaction")
     def chat_thread_compaction(thread_id: str) -> dict[str, Any]:
@@ -2191,17 +2254,41 @@ def register(app: FastAPI, d) -> None:
         can run it. This route's behaviour is UNCHANGED — it injects
         ``request.is_disconnected`` as the stop predicate, which is the exact
         call the loop used to make by hand.
+
+        A NAMED turn (``body.turn_id``) is DAEMON-OWNED since v1.336.0
+        (``daemon/durable_turns``): it runs as its own task, this response
+        only follows it, and a reload, a closed window or leaving the chat no
+        longer ends it — Stop does. A turn id that is already running (or
+        just finished) is FOLLOWED, never started twice. Unnamed turns keep
+        the connection-bound behaviour above.
         """
+        # v1.305.0: the dashboard's route asks for the suggestion; the
+        # sidebar (browser/panel.py) and other callers never do, and neither
+        # does a Build pane's turn (no line renders there — see POST /chat).
+        suggest = not (body.pane_id or "").strip()
+        turn_id = str(getattr(body, "turn_id", "") or "").strip()
+        if turn_id:
+            logs = _turn_logs(d)
+            existing = logs.get(turn_id)
+            if existing is not None:
+                return _follow_response(existing.follow())
+            holder: dict[str, Any] = {}
+            gen = await stream_chat_turn(
+                d.platform,
+                d._PERSONAS,
+                body,
+                should_stop=_durable.stop_predicate(lambda: holder.get("log")),
+                suggest_preferences=suggest,
+            )
+            lg = logs.start(turn_id, str(getattr(body, "thread_id", "") or "").strip()[:80], gen)
+            holder["log"] = lg
+            return _follow_response(lg.follow())
         gen = await stream_chat_turn(
             d.platform,
             d._PERSONAS,
             body,
             should_stop=request.is_disconnected,
-            # v1.305.0: the dashboard's route asks for the suggestion; the
-            # sidebar (browser/panel.py) and other callers never do, and
-            # neither does a Build pane's turn (no line renders there — see
-            # POST /chat above).
-            suggest_preferences=not (body.pane_id or "").strip(),
+            suggest_preferences=suggest,
         )
         # v1.246.0: never quiet for long — see HeartbeatStreamingResponse.
         # v1.249.0: and counted while it streams — see ChatReplyStreamingResponse.
@@ -2268,6 +2355,77 @@ def register(app: FastAPI, d) -> None:
                 status_code=404, detail=f"no such running turn: {turn_id}"
             )
         return {"ok": True, "stopped": True}
+
+    @app.get("/chat/turns/{turn_id}/stream")
+    async def follow_chat_turn(turn_id: str):
+        """REJOIN a daemon-owned turn (v1.336.0): everything it has sent so
+        far as one snapshot, then each new frame, then the end — the same
+        frames ``POST /chat/stream`` sends, so the page reads both with one
+        parser. A turn this process no longer holds is replayed from its
+        record (a restart left it ``interrupted``, ending in an error frame
+        that says so). 404 for a turn never recorded."""
+        lg = _turn_logs(d).get(turn_id)
+        if lg is not None:
+            return _follow_response(lg.follow())
+        found = await asyncio.to_thread(_durable.replay_record, d.platform.engine, turn_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"no such chat turn: {turn_id}")
+        text, _status = found
+
+        async def _once():
+            if text:
+                yield text
+
+        return _follow_response(_once())
+
+    @app.post("/chat/turns/{turn_id}/thread")
+    async def link_chat_turn(turn_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Name the saved chat a turn belongs to, after the fact (v1.336.0).
+
+        A NEW chat's first question is sent before its first save has given
+        it an id, so that turn starts with no ``thread_id`` and a reopened
+        chat could not find it. The page links it here once the save lands.
+        Works before the turn has started (the link waits for it), while it
+        runs, and after it ended (the record is updated)."""
+        tid = str((body or {}).get("thread_id") or "").strip()[:80]
+        if not tid:
+            raise HTTPException(status_code=400, detail="thread_id is required")
+        logs = _turn_logs(d)
+        lg = logs.get(turn_id)
+        if lg is not None:
+            lg.thread_id = lg.thread_id or tid
+            lg._dirty = True
+            lg.maybe_persist(d.platform.engine)
+            return {"ok": True, "linked": "running" if lg.status == "running" else "kept"}
+        logs.link_later(turn_id, tid)
+        await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
+        return {"ok": True, "linked": "later"}
+
+    @app.get("/chat/turns")
+    def list_chat_turns(thread_id: str, limit: int = 3) -> dict[str, Any]:
+        """The newest daemon-owned turns of one saved chat (v1.336.0), newest
+        first — how a reopened window learns that a turn is still running,
+        or finished while nobody was watching. ``running`` is the LIVE answer
+        from this process; a record says "running" only until the next boot
+        reconciles it."""
+        tid = (thread_id or "").strip()[:80]
+        rows = _durable.list_for_thread(d.platform.engine, tid, limit)
+        logs = _turn_logs(d)
+        # A turn that started a moment ago may not be on disk yet.
+        on_disk = {r["turn_id"] for r in rows}
+        fresh = [
+            {"turn_id": lg.turn_id, "status": lg.status,
+             "started_at": _durable._iso_utc(lg.started_at), "updated_at": None}
+            for lg in logs.running()
+            if lg.thread_id == tid and lg.turn_id not in on_disk
+        ]
+        rows = (fresh + rows)[: max(1, min(limit, 20))]
+        for r in rows:
+            lg = logs.get(r["turn_id"])
+            r["running"] = lg is not None and lg.status == "running"
+            if lg is not None:
+                r["status"] = lg.status
+        return {"turns": rows}
 
     @app.post("/chat/turns/{turn_id}/steer")
     async def steer_chat_turn(turn_id: str, body: TurnSteerBody) -> dict[str, Any]:

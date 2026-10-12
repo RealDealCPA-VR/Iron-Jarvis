@@ -330,7 +330,13 @@ def test_both_lanes_call_the_same_helper_lock_step():
         assert "await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None" in src
         assert '"suggestion": suggestion,' in src
     # only the dashboard's two routes ask for it — and not for a Build pane
-    assert stream.count('suggest_preferences=not (body.pane_id or "").strip()') == 2
+    # (v1.336.0: the stream route computes it ONCE as `suggest`, used by both
+    # its daemon-owned and its connection-bound path.)
+    assert (
+        stream.count('suggest_preferences=not (body.pane_id or "").strip()')
+        + stream.count('suggest = not (body.pane_id or "").strip()')
+    ) == 2
+    assert stream.count("suggest_preferences=suggest,") == 2
     assert "suggest_preferences=True" not in stream
 
 

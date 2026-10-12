@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.335.0 (2026-10-04).*
+holds itself to. Current as of v1.336.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,27 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Chat answers survive a reload (v1.336.0)
+
+Nothing looks different. A chat reply no longer depends on the window that
+asked for it.
+
+- **Reload, close the window or switch chats: the answer keeps coming.** Iron
+  Jarvis now writes the answer itself, as it goes, instead of the window doing
+  it. Come back to the chat (or reload the page) and the reply carries on where
+  it is, or is simply there if it finished while you were away. Only **Stop**
+  stops an answer now. (An answer nobody has looked at for an hour stops by
+  itself, so a question it is waiting on cannot hold it forever.)
+- **A restart keeps what was written.** If Iron Jarvis stops in the middle of
+  an answer (an update or a crash), the chat shows what it had written so far,
+  says it was cut off, and offers Retry.
+- **A message sent twice is answered once.** If the same message reaches Iron
+  Jarvis twice (a retried connection, two windows), the second one follows the
+  answer already being written instead of starting another.
+- **Waiting messages are kept.** Messages you queued with Ctrl+Enter while a
+  reply was being written are kept with the chat; after a reload they are still
+  waiting and go out when the reply finishes, as before.
 
 ## Nothing done is forgotten (v1.335.0)
 

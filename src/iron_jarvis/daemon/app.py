@@ -909,6 +909,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.info("recorded %d tool call(s) a restart or crash cut off", n)
 
         _rehydrate_step("reconcile_tool_calls", _reconcile_tool_calls)
+
+        # v1.336.0: a daemon-owned chat turn still "running" on disk was cut
+        # off with the process; its log now ends saying so, so a reopened
+        # window shows what it had written and offers Retry.
+        def _reconcile_chat_turns() -> None:
+            from .durable_turns import reconcile_interrupted_turns
+
+            n = reconcile_interrupted_turns(platform.engine)
+            if n:
+                log.info("kept %d chat answer(s) a restart or crash cut off", n)
+
+        _rehydrate_step("reconcile_chat_turns", _reconcile_chat_turns)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # Assignments (v1.296.0): AFTER the session reconcile by contract —
         # every claimed/running row's session was just settled FAILED on a
@@ -1751,6 +1763,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 orchestrator.shutdown_queue()
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
+            # v1.336.0: daemon-owned chat turns are cut off HERE, with what
+            # they wrote saved and an "interrupted" end on their log — not
+            # destroyed with the loop, which saved nothing.
+            _turn_logs = getattr(platform, "turn_logs", None)
+            if _turn_logs is not None:
+                try:
+                    await asyncio.wait_for(_turn_logs.shutdown(), timeout=5.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             try:
                 await fleet_sampler.stop()  # cancel cleanly, no pending-task warnings
             except Exception:  # noqa: BLE001 — shutdown never raises

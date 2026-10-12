@@ -230,6 +230,10 @@ describe("the chat surfaces wire the status in (source pins)", () => {
 
   it("the hook hands its watch to streamSSE", () => {
     const src = readSrc("lib/useChatStream.ts");
-    expect(src).toMatch(/streamSSE\(\s*"\/chat\/stream",\s*body,\s*controller\.signal,\s*watch,?\s*\)/);
+    // v1.336.0: the path is "/chat/stream" or a rejoin's GET; both get the
+    // same signal and the same watch (the stall watchdog).
+    expect(src).toMatch(
+      /streamSSE\(\s*runOpts\.rejoin[\s\S]{0,200}?"\/chat\/stream",\s*runOpts\.rejoin \? undefined : body,\s*controller\.signal,\s*watch,?\s*\)/,
+    );
   });
 });

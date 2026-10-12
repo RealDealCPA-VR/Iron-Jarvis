@@ -767,14 +767,15 @@ export async function* streamSSE(
   try {
     let res: Response;
     try {
+      // v1.336.0: no body = a GET (rejoining a turn the daemon is running).
       res = await fetch(`${API_BASE}${path}`, {
-        method: "POST",
+        method: body === undefined ? "GET" : "POST",
         headers: {
-          "Content-Type": "application/json",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           Accept: "text/event-stream",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(body),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         cache: "no-store",
         signal: inner.signal,
       });
@@ -1086,6 +1087,11 @@ export interface UseChatStream {
      *  tokens after it replace it (`full` restarts from them). A consumer
      *  that tracks an offset into the text (the TTS feed) rewinds here. */
     onReset?: () => void,
+    /** v1.336.0: REJOIN the daemon-owned turn with this id instead of
+     *  starting one (`GET /chat/turns/{id}/stream`): what it has sent so far,
+     *  then the rest, read exactly like a new turn's frames. `body` is then
+     *  unused. */
+    opts?: { rejoin?: string },
   ) => Promise<ChatStreamResult>;
   /** Abort the in-flight turn (resolves `run` with whatever streamed so far). */
   abort: () => void;
@@ -1195,6 +1201,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       body: unknown,
       onToken?: (delta: string, full: string) => void,
       onReset?: () => void,
+      runOpts: { rejoin?: string } = {},
     ): Promise<ChatStreamResult> => {
       abortRef.current?.abort(); // tear down any prior turn
       const controller = new AbortController();
@@ -1251,8 +1258,10 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
 
       try {
         for await (const ev of streamSSE(
-          "/chat/stream",
-          body,
+          runOpts.rejoin
+            ? `/chat/turns/${encodeURIComponent(runOpts.rejoin)}/stream`
+            : "/chat/stream",
+          runOpts.rejoin ? undefined : body,
           controller.signal,
           watch,
         )) {

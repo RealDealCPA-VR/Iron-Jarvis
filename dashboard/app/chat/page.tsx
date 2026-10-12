@@ -667,6 +667,10 @@ interface QueuedMessage {
 }
 /** v1.325.0: at most this many messages wait for the running reply. */
 const MAX_QUEUED = 3;
+/** v1.336.0: how much earlier than the question a turn may say it started
+ *  (the page's clock and the daemon's are the same machine's, but a turn is
+ *  stamped when it starts, a hair before the question's own stamp lands). */
+const REJOIN_SKEW_MS = 10_000;
 
 /** v1.323.0: how much of a reply's reasoning is kept on the message (the
  *  daemon caps the POST lane's at the same size). */
@@ -1194,6 +1198,30 @@ interface ThreadDetail {
   /** Version stamp (CL3, v1.232.0): handed back as `if_updated_at` so a save
    *  from a stale window is refused (409) instead of clobbering. */
   updated_at?: string | null;
+  /** v1.336.0: the messages waiting for this chat's reply (kept by the
+   *  daemon across a reload). Decoded with `decodeQueued` before use. */
+  queued?: unknown;
+}
+
+/** v1.336.0: the waiting messages as the daemon kept them — anything that
+ *  is not the shape the page wrote is dropped, never guessed at. */
+function decodeQueued(raw: unknown): QueuedMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: QueuedMessage[] = [];
+  for (const x of raw.slice(0, MAX_QUEUED)) {
+    if (!x || typeof x !== "object") continue;
+    const q = x as Record<string, unknown>;
+    if (typeof q.id !== "string" || typeof q.text !== "string") continue;
+    out.push({
+      id: q.id,
+      text: q.text,
+      files: Array.isArray(q.files) ? (q.files as UploadedFile[]) : [],
+      appRes: Array.isArray(q.appRes) ? (q.appRes as PackResource[]) : [],
+      page: q.page && typeof q.page === "object" ? (q.page as PageContext) : null,
+      refs: Array.isArray(q.refs) ? (q.refs as ChatRefPick[]) : [],
+    });
+  }
+  return out;
 }
 
 /** PUT /chat/threads/{id} body + response. */
@@ -5641,6 +5669,37 @@ export default function ChatPage() {
    *  `restore` (v1.311.0): this is the window reopening the conversation it
    *  had open — a thread that has since gone is forgotten quietly, because a
    *  vanished thread is not an error the user made. */
+  /** v1.336.0: the chat ends on a question with no reply. If the daemon ran
+   *  (or is running) the turn that answers it, follow that turn — its frames
+   *  build the reply exactly as a live turn's do. Otherwise it is the failed
+   *  turn it always was, with Retry. Only the newest turn, and only one that
+   *  started after the question was asked, can answer it. */
+  async function rejoinOrRetry(id: string, msgs: ChatMessage[], openGen: number) {
+    const last = msgs[msgs.length - 1];
+    const retry = () => setFailedTurn({ history: msgs, atts: attachmentsOf(last) });
+    let turn: { turn_id: string; status: string; running?: boolean; started_at?: string | null } | undefined;
+    try {
+      const res = await get<{ turns?: typeof turn[] }>(
+        `/chat/turns?thread_id=${encodeURIComponent(id)}&limit=1`,
+      );
+      turn = Array.isArray(res?.turns) ? res.turns[0] : undefined;
+    } catch {
+      turn = undefined; // an older daemon, or none: the Retry it always offered
+    }
+    if (chatGenRef.current !== openGen) return;
+    const askedAt = last?.at ? Date.parse(last.at) : NaN;
+    const startedAt = turn?.started_at ? Date.parse(turn.started_at) : NaN;
+    const answersIt =
+      !!turn?.turn_id &&
+      (Number.isNaN(askedAt) || Number.isNaN(startedAt) || startedAt >= askedAt - REJOIN_SKEW_MS);
+    if (!answersIt || busy || sendingRef.current) {
+      retry();
+      return;
+    }
+    sendingRef.current = true;
+    void completeChat(msgs, attachmentsOf(last), { rejoin: turn!.turn_id });
+  }
+
   async function openThread(id: string, opts: { restore?: boolean } = {}) {
     if (id === threadId) {
       closeChatSlot(); // the phone drawer, when it holds the list
@@ -5798,6 +5857,14 @@ export default function ChatPage() {
       setThreadId(t.id);
       setOpenedTitle({ id: t.id, title: t.title ?? "" });
       setAddressee(addresseeOf(msgs)); // still talking to whoever answered last
+      // v1.336.0: messages that were waiting for this chat's reply when the
+      // page went away wait again (they go out after a clean finish, or by
+      // a press, exactly as before the reload).
+      const waiting = decodeQueued(t.queued);
+      if (waiting.length) {
+        queuedRef.current = waiting;
+        setQueued(waiting);
+      }
       // A remote may have messaged back while this was closed (v1.285.0).
       const room = roomOf(msgs);
       if (room) void mirrorRoomInbound(room, msgs);
@@ -5847,8 +5914,11 @@ export default function ChatPage() {
         // daemon-owned and no-ops, so its reply would reach neither disk
         // nor the phone). Those threads reconcile via chat.thread_updated.
         const last = msgs[msgs.length - 1];
+        // v1.336.0: ...unless the DAEMON is still answering it, or answered
+        // it while nobody was watching (a reload, a closed window, leaving
+        // the chat) — then the answer is followed and saved like any other.
         if (!isDaemon && last && last.role === "user")
-          setFailedTurn({ history: msgs, atts: attachmentsOf(last) });
+          void rejoinOrRetry(t.id, msgs, openGen);
       }
       // Context follows the conversation: a project-tagged thread scopes the
       // chat to its project; an untagged one unscopes it. armDefaults stays
@@ -7745,7 +7815,10 @@ export default function ChatPage() {
     atts: UploadedFile[],
     // v1.332.0: `cloudOnce` = the provider the user let THIS turn reach from
     // a "local only" chat ("Send once"); sent as allow_cloud_once, never kept.
-    opts: { choice?: string; cloudOnce?: string } = {},
+    // v1.336.0: `rejoin` = the id of a turn the DAEMON is (or was) running
+    // for this chat — follow it instead of asking again (a reload, a closed
+    // window, leaving the chat or a restart no longer loses the answer).
+    opts: { choice?: string; cloudOnce?: string; rejoin?: string } = {},
   ) {
     const gen = chatGenRef.current;
     // v1.325.0: "Try again with…" — this turn only; read by buildChatBody and
@@ -7761,7 +7834,9 @@ export default function ChatPage() {
     // v1.325.0: a Try again keeps the reply it replaces on disk until the
     // new one lands (the question is already saved).
     const tryFork = pendingForkRef.current;
-    queueSave(tryFork && tryFork.index === history.length ? [...history, ...tryFork.oldTail] : history);
+    // (A rejoin's question is already on disk — nothing to save yet.)
+    if (!opts.rejoin)
+      queueSave(tryFork && tryFork.index === history.length ? [...history, ...tryFork.oldTail] : history);
     pinnedRef.current = true; // a fresh turn always scrolls into view
     setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
@@ -7798,9 +7873,23 @@ export default function ChatPage() {
     const turnRefs = chatRefIds(asked?.role === "user" ? asked.chatRefs : undefined);
     if (turnRefs.length) body.thread_refs = turnRefs;
     // v1.278.0: the turn is NAMED so a steer note can reach it while it runs.
-    const turnId = mintTurnId();
+    // v1.336.0: and so the daemon runs it as its own — see `rejoin` above.
+    const turnId = opts.rejoin ?? mintTurnId();
     body.turn_id = turnId;
     turnIdRef.current = turnId;
+    // v1.336.0: a NEW chat's first question goes out before its first save
+    // has named the chat, so the turn is linked to it once the save lands
+    // (in the background — the send never waits for it).
+    const saveBox = saveTargetRef.current;
+    if (!opts.rejoin && !saveBox.id && !saveBox.daemon) {
+      void saveChainRef.current
+        .then(() =>
+          saveBox.id
+            ? post(`/chat/turns/${encodeURIComponent(turnId)}/thread`, { thread_id: saveBox.id })
+            : undefined,
+        )
+        .catch(() => {});
+    }
     setPendingSteers([]);
     setSteerBack(false);
     try {
@@ -7810,6 +7899,7 @@ export default function ChatPage() {
           body,
           (_delta, full) => feedTTS(full, false),
           resetTTSFeed,
+          opts.rejoin ? { rejoin: opts.rejoin } : undefined,
         );
         turnIdRef.current = "";
         // The notes the turn READ join the conversation as the user's own
@@ -8009,7 +8099,9 @@ export default function ChatPage() {
         const se = e instanceof StreamError ? e : null;
         const committed = se?.committed ?? false;
         const status = se?.status ?? (e instanceof ApiError ? e.status : 0);
-        const endpointMissing = status === 404 || status === 405;
+        // v1.336.0: a REJOIN never falls back to asking again — a turn the
+        // daemon no longer knows (404) is a failed turn, offered as Retry.
+        const endpointMissing = !opts.rejoin && (status === 404 || status === 405);
         if (committed || !endpointMissing) {
           // Preserve what the user already watched stream in — dropping it reads
           // like a crash. Keep it as an interrupted bubble (Retry re-runs from the
@@ -8386,6 +8478,7 @@ export default function ChatPage() {
     const rest = queuedRef.current.slice(1);
     queuedRef.current = rest;
     setQueued(rest);
+    persistQueue(rest);
     sendQueued(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
@@ -8447,6 +8540,17 @@ export default function ChatPage() {
     queueSave(next);
   }
 
+  /** v1.336.0: keep the waiting messages with the chat on the daemon, so a
+   *  reload does not lose them. Best-effort and silent; a chat not saved yet
+   *  (or a messaging thread) has nowhere to keep them. */
+  function persistQueue(items: QueuedMessage[], target: SaveTarget = saveTargetRef.current) {
+    const id = target.id;
+    if (!id || target.daemon) return;
+    void Promise.resolve()
+      .then(() => put(`/chat/threads/${encodeURIComponent(id)}/queue`, { items }))
+      .catch(() => {});
+  }
+
   /** v1.325.0: Ctrl+Enter mid-turn — hold the box (words, files, the app and
    *  page chips) and send it after this reply finishes cleanly. */
   function queueFollowup(text: string) {
@@ -8471,6 +8575,7 @@ export default function ChatPage() {
     const next = [...queuedRef.current, item];
     queuedRef.current = next;
     setQueued(next);
+    persistQueue(next);
     setAttachments([]);
     setAppResources([]);
     setPageCtx(null);
@@ -8486,6 +8591,7 @@ export default function ChatPage() {
     const next = queuedRef.current.filter((x) => x.id !== id);
     queuedRef.current = next;
     setQueued(next);
+    persistQueue(next);
     if (toBox) putBackInBox([item]);
   }
 
@@ -8536,6 +8642,7 @@ export default function ChatPage() {
       const next = [item, ...queuedRef.current];
       queuedRef.current = next;
       setQueued(next);
+      persistQueue(next);
       return;
     }
     sendingRef.current = true;
@@ -9257,6 +9364,8 @@ export default function ChatPage() {
       if (words.length) composer.setText([...words, ...(cur ? [cur] : [])].join("\n\n"));
       queuedRef.current = [];
       setQueued([]);
+      // v1.336.0: they are in the box (and its draft) now, not waiting.
+      persistQueue([]);
     }
     pendingForkRef.current = null;
     setPageCtx(null);

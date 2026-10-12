@@ -3217,6 +3217,48 @@ does not need a bump, stop and bump it.
   passes no refit. Pins: `tests/test_{tool_intents,home_lock,chat_usage,context_overflow}_v1335.py`,
   `dashboard/__tests__/chat-usage-v1335.test.tsx`.
 
+- **A NAMED chat turn is the DAEMON's, not the connection's** (v1.336.0,
+  part 2 of the pi-durable borrow). `POST /chat/stream` with `turn_id` (the
+  page always mints one) runs the lane as its own task in
+  `daemon/durable_turns.TurnLogs` (`platform.turn_logs`, made on first use by
+  `routes.chat._turn_logs`); the response is only a FOLLOWER
+  (`TurnLog.follow`: snapshot + live, taken in one step) through
+  `_follow_response` (a plain heartbeat response — CHAT_INFLIGHT is counted by
+  the driver task now, not the response). `should_stop` for these turns is
+  `stop_predicate` (the orphan guard, `ORPHAN_STOP_S` = 1 h unwatched) — NEVER
+  `request.is_disconnected`: leaving, reloading or closing no longer stops a
+  turn; Stop (`/chat/turns/{id}/stop`, which the page's Stop already posts)
+  does. Unnamed turns keep the connection-bound path. A turn id already held
+  (running or finished < `FINISHED_KEEP_S`) is FOLLOWED, never run twice.
+  Frames (token/thinking merged, comments dropped, `MAX_STORED_CHARS`) are
+  written to `ChatTurnRecord` at most every `PERSIST_EVERY_S` and at the end;
+  the lifespan cuts running turns off FIRST thing after the queue governor
+  (`TurnLogs.shutdown` → status `interrupted` + error frame, saved), and boot
+  step `reconcile_chat_turns` does the same for rows a crash left `running`
+  (and prunes rows older than 7 days). Routes: `GET /chat/turns/{id}/stream`
+  (rejoin; a turn not in memory replays its record; 404 unknown),
+  `GET /chat/turns?thread_id=` (newest first, in-memory running turns merged
+  in, `running` is the live answer, times end in `Z`),
+  `POST /chat/turns/{id}/thread` (a NEW chat's first turn is linked after its
+  first save names the chat — before start via `link_later`, after via
+  `link_record`), `PUT /chat/threads/{id}/queue` (≤ 3 items, own column
+  `queued_json`, NEVER touches `updated_at` — the page's `if_updated_at` saves
+  must not 409); GET thread carries `queued`. PAGE: `useChatStream.run(body,
+  onToken, onReset, {rejoin})` reads `GET /chat/turns/{id}/stream`
+  (`streamSSE` with `body === undefined` is a GET); `completeChat(history,
+  atts, {rejoin})` skips the at-send save and never falls back to POST /chat
+  (a 404 is a failed turn); `openThread`'s CL5 branch calls `rejoinOrRetry`
+  (newest turn, started ≥ question `at` − `REJOIN_SKEW_MS`, else the old
+  Retry); `persistQueue` at every queue mutation (leave clears it — the words
+  went to the box); `decodeQueued` on open restores waiting messages, which go
+  out after the rejoined turn finishes cleanly. KNOWN LIMITS: a rejoined
+  reply's step timings are the replay's (the client stamps them on arrival); a
+  rejoin of a `stopped` record saves its partial as a plain reply; the Build
+  pane's chat and the browser sidebar do not rejoin (their turns still run to
+  the end). Pins: `tests/test_durable_chat_turns_v1336.py`,
+  `dashboard/__tests__/chat-durable-v1336.test.tsx`,
+  `dashboard/__tests__/chat-stream-rejoin-v1336.test.ts` (13 mutations, all red).
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

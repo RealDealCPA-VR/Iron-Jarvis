@@ -1,0 +1,399 @@
+"""Chat turns the daemon owns (v1.336.0).
+
+Borrowed from pi-durable (ideas only, MIT): "conversations, model turns and
+tool calls are committed to storage before anything is shown; if the process
+dies mid-turn, reopening picks the work up where it stopped", and "cancelling
+a wait only cancels that wait, never the work".
+
+BEFORE: ``POST /chat/stream`` ran the turn INSIDE the HTTP response, with
+``request.is_disconnected`` as its stop predicate. A reload, a closed window
+or leaving the chat ended the turn; the partial answer was lost (only the
+question had been saved, at send); a reopened window had nothing to rejoin.
+
+NOW, for a NAMED turn (``body.turn_id`` — the chat page always mints one):
+
+* the turn runs as its own task (:func:`start`), and its stop predicate no
+  longer looks at any connection — only the turn's own Stop
+  (``POST /chat/turns/{id}/stop``) ends it, plus one guard: a turn nobody
+  has watched for ``ORPHAN_STOP_S`` stops (it would otherwise hold an
+  unanswered question forever);
+* every frame goes into a :class:`TurnLog` — consecutive token and thinking
+  frames merged — which is written to ``ChatTurnRecord`` about once a second
+  (``PERSIST_EVERY_S``) and when the turn ends;
+* any number of windows FOLLOW it (:meth:`TurnLog.follow`): the frames so far
+  as one snapshot, then every new frame as it comes, then the end. The
+  response that started the turn is just the first follower;
+* a repeated ``POST /chat/stream`` with a turn id already running (or
+  finished in the last ``FINISHED_KEEP_S``) follows that turn instead of
+  starting a second one — the request id pi-durable keys submissions on;
+* ``GET /chat/turns/{id}/stream`` rejoins from anywhere; a turn this process
+  no longer holds is replayed from its record;
+* the boot reconcile marks a turn still "running" on disk as ``interrupted``
+  and ends its log with an error frame that says so, so a reopened window
+  shows what was written and offers Retry.
+
+Unnamed turns (API callers, the browser sidebar's own lane) are untouched.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import time
+from typing import Any, AsyncIterator
+
+from ..core.db import session_scope
+from ..core.ids import utcnow
+from ..core.models import ChatTurnRecord
+
+log = logging.getLogger("iron_jarvis.daemon.durable_turns")
+
+#: How often a running turn's log is written to disk (at most).
+PERSIST_EVERY_S = 1.0
+#: How long a finished turn's log stays in memory for a late rejoin.
+FINISHED_KEEP_S = 600.0
+#: A turn nobody has followed for this long is stopped (see the module doc).
+ORPHAN_STOP_S = 3600.0
+#: Stored frames are capped; past it, later TOKEN detail is not stored (the
+#: final ``done`` frame still carries the whole reply).
+MAX_STORED_CHARS = 8_000_000
+#: Finished records older than this are removed at boot.
+KEEP_RECORDS_DAYS = 7
+#: The error a turn cut off by a restart ends with.
+INTERRUPTED_DETAIL = (
+    "Iron Jarvis stopped while answering (a restart or a crash). What it had"
+    " written so far is kept; press Retry to ask again."
+)
+
+_MERGEABLE = ("token", "thinking")
+_END = object()
+
+
+def sse(event: str, data: Any) -> str:
+    """The wire format of ``routes.chat._sse`` (kept identical)."""
+    payload = data if isinstance(data, str) else json.dumps(data)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def parse_chunk(chunk: str) -> list[tuple[str, str]]:
+    """``[(event, data_json)]`` for every frame in ``chunk``; comments (the
+    ``: keepalive`` lines) are not frames."""
+    out: list[tuple[str, str]] = []
+    for block in chunk.split("\n\n"):
+        if not block.strip() or block.lstrip().startswith(":"):
+            continue
+        event, data = "message", []
+        for line in block.split("\n"):
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].lstrip(" "))
+        out.append((event, "\n".join(data)))
+    return out
+
+
+class TurnLog:
+    """The frames of one daemon-owned turn, and the windows following it."""
+
+    def __init__(self, turn_id: str, thread_id: str = "") -> None:
+        self.turn_id = turn_id
+        self.thread_id = thread_id
+        self.frames: list[list[str]] = []  # [event, data_json], merged
+        self.status = "running"
+        self.started_at = utcnow()
+        self._chars = 0
+        self._followers: set[asyncio.Queue] = set()
+        self._last_seen = time.monotonic()
+        self._dirty = False
+        self._last_persist = 0.0
+        self._persisting: "asyncio.Task | None" = None
+        self.task: "asyncio.Task | None" = None
+        self.finished_at: float | None = None
+
+    # -- writing --------------------------------------------------------------
+    def add(self, chunk: str) -> None:
+        for q in list(self._followers):
+            q.put_nowait(chunk)
+        for event, data in parse_chunk(chunk):
+            self._store(event, data)
+
+    def _store(self, event: str, data: str) -> None:
+        if event in _MERGEABLE and self.frames and self.frames[-1][0] == event:
+            try:
+                prev = json.loads(self.frames[-1][1])
+                more = json.loads(data)
+                if self._chars + len(more.get("text", "")) > MAX_STORED_CHARS:
+                    return
+                prev["text"] = (prev.get("text") or "") + (more.get("text") or "")
+                self.frames[-1][1] = json.dumps(prev)
+                self._chars += len(more.get("text") or "")
+                self._dirty = True
+                return
+            except (ValueError, AttributeError, TypeError):
+                pass
+        if self._chars + len(data) > MAX_STORED_CHARS and event in _MERGEABLE:
+            return
+        self.frames.append([event, data])
+        self._chars += len(data)
+        self._dirty = True
+
+    def last_event(self) -> str:
+        return self.frames[-1][0] if self.frames else ""
+
+    # -- following ------------------------------------------------------------
+    def watched(self) -> bool:
+        return bool(self._followers)
+
+    def unwatched_for(self) -> float:
+        if self._followers:
+            return 0.0
+        return time.monotonic() - self._last_seen
+
+    def snapshot(self) -> str:
+        return "".join(sse(e, d) for e, d in self.frames)
+
+    async def follow(self) -> AsyncIterator[str]:
+        """The turn so far as ONE chunk, then each new chunk, until it ends.
+        Snapshot and subscription happen in one step (no await between), so
+        nothing is missed or sent twice."""
+        q: asyncio.Queue = asyncio.Queue()
+        head = self.snapshot()
+        running = self.status == "running"
+        if running:
+            self._followers.add(q)
+        try:
+            if head:
+                yield head
+            if not running:
+                return
+            while True:
+                item = await q.get()
+                if item is _END:
+                    return
+                yield item
+        finally:
+            self._followers.discard(q)
+            self._last_seen = time.monotonic()
+
+    def _end_followers(self) -> None:
+        for q in list(self._followers):
+            q.put_nowait(_END)
+
+    # -- the record -----------------------------------------------------------
+    def _row_values(self) -> dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "status": self.status,
+            "frames_json": json.dumps(self.frames),
+            "updated_at": utcnow(),
+        }
+
+    def maybe_persist(self, engine: Any) -> None:
+        now = time.monotonic()
+        if not self._dirty or now - self._last_persist < PERSIST_EVERY_S:
+            return
+        if self._persisting is not None and not self._persisting.done():
+            return
+        self._last_persist = now
+        self._dirty = False
+        values = self._row_values()
+        self._persisting = asyncio.ensure_future(
+            asyncio.to_thread(_write_record, engine, self.turn_id, self.started_at, values)
+        )
+
+    async def persist_now(self, engine: Any) -> None:
+        if self._persisting is not None:
+            with contextlib.suppress(Exception):
+                await self._persisting
+        self._dirty = False
+        await asyncio.to_thread(
+            _write_record, engine, self.turn_id, self.started_at, self._row_values()
+        )
+
+
+def _write_record(engine: Any, turn_id: str, started_at: Any, values: dict[str, Any]) -> None:
+    try:
+        with session_scope(engine) as db:
+            row = db.get(ChatTurnRecord, turn_id)
+            if row is None:
+                row = ChatTurnRecord(id=turn_id, started_at=started_at)
+            for k, v in values.items():
+                setattr(row, k, v)
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — the live turn never fails on its record
+        log.warning("could not save chat turn %s", turn_id, exc_info=True)
+
+
+class TurnLogs:
+    """Every daemon-owned turn this process holds (one per platform)."""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        self._logs: dict[str, TurnLog] = {}
+        #: chat ids linked before their turn started (bounded).
+        self._links: dict[str, str] = {}
+
+    def link_later(self, turn_id: str, thread_id: str) -> None:
+        if len(self._links) > 200:
+            self._links.pop(next(iter(self._links)))
+        self._links[turn_id] = thread_id
+
+    def get(self, turn_id: str) -> TurnLog | None:
+        self._evict()
+        return self._logs.get(turn_id)
+
+    def running(self) -> list[TurnLog]:
+        return [lg for lg in self._logs.values() if lg.status == "running"]
+
+    def _evict(self) -> None:
+        now = time.monotonic()
+        for tid, lg in list(self._logs.items()):
+            if lg.finished_at is not None and now - lg.finished_at > FINISHED_KEEP_S:
+                self._logs.pop(tid, None)
+
+    def start(self, turn_id: str, thread_id: str, frames: AsyncIterator[str]) -> TurnLog:
+        """Run ``frames`` (the lane's SSE iterator) as its own task."""
+        lg = TurnLog(turn_id, thread_id or self._links.pop(turn_id, ""))
+        self._logs[turn_id] = lg
+        lg.task = asyncio.ensure_future(self._drive(lg, frames))
+        return lg
+
+    async def _drive(self, lg: TurnLog, frames: AsyncIterator[str]) -> None:
+        from ..core.turns import CHAT_INFLIGHT
+
+        status = "stopped"
+        CHAT_INFLIGHT.enter()
+        try:
+            async with contextlib.aclosing(frames):  # type: ignore[arg-type]
+                async for chunk in frames:
+                    lg.add(chunk)
+                    lg.maybe_persist(self.engine)
+            last = lg.last_event()
+            status = "done" if last == "done" else "error" if last == "error" else "stopped"
+        except asyncio.CancelledError:
+            # The daemon is shutting down: what was written is kept, and the
+            # log says the turn was cut off.
+            lg.add(sse("error", {"detail": INTERRUPTED_DETAIL}))
+            status = "interrupted"
+            raise
+        except Exception as exc:  # noqa: BLE001 — the lane yields its own errors
+            log.warning("chat turn %s failed outside its stream", lg.turn_id, exc_info=True)
+            lg.add(sse("error", {"detail": f"{type(exc).__name__}: {exc}"}))
+            status = "error"
+        finally:
+            CHAT_INFLIGHT.exit()
+            lg.status = status
+            lg.finished_at = time.monotonic()
+            lg._end_followers()
+            try:
+                await asyncio.shield(lg.persist_now(self.engine))
+            except BaseException:  # noqa: BLE001 — shutdown: the boot reconcile covers it
+                pass
+
+    async def shutdown(self) -> None:
+        """Lifespan exit: cut every running turn off and keep what it wrote."""
+        tasks = [lg.task for lg in self.running() if lg.task is not None]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def stop_predicate(get_log: Any) -> Any:
+    """The lane's ``should_stop`` for a daemon-owned turn: never a
+    connection — only the orphan guard (Stop itself goes through the turn
+    registry's handle, which the lane checks first)."""
+
+    def _stop() -> bool:
+        lg = get_log()
+        return lg is not None and lg.unwatched_for() > ORPHAN_STOP_S
+
+    return _stop
+
+
+def replay_record(engine: Any, turn_id: str) -> "tuple[str, str] | None":
+    """``(sse_text, status)`` of a turn this process does not hold, from its
+    record; None when there is none."""
+    with session_scope(engine) as db:
+        row = db.get(ChatTurnRecord, turn_id)
+        if row is None:
+            return None
+        try:
+            frames = json.loads(row.frames_json or "[]")
+        except ValueError:
+            frames = []
+        return "".join(sse(e, d) for e, d in frames), row.status
+
+
+def link_record(engine: Any, turn_id: str, thread_id: str) -> None:
+    """Stamp a FINISHED turn's record with the chat it belongs to, when it
+    has none yet (see ``POST /chat/turns/{id}/thread``)."""
+    with session_scope(engine) as db:
+        row = db.get(ChatTurnRecord, turn_id)
+        if row is not None and not row.thread_id:
+            row.thread_id = thread_id
+            db.add(row)
+            db.commit()
+
+
+def list_for_thread(engine: Any, thread_id: str, limit: int = 3) -> list[dict[str, Any]]:
+    from sqlmodel import select
+
+    with session_scope(engine) as db:
+        rows = list(
+            db.exec(
+                select(ChatTurnRecord)
+                .where(ChatTurnRecord.thread_id == thread_id)
+                .order_by(ChatTurnRecord.started_at.desc())  # type: ignore[union-attr]
+                .limit(max(1, min(limit, 20)))
+            ).all()
+        )
+        return [
+            {
+                "turn_id": r.id,
+                "status": r.status,
+                "started_at": _iso_utc(r.started_at),
+                "updated_at": _iso_utc(r.updated_at),
+            }
+            for r in rows
+        ]
+
+
+def _iso_utc(when: Any) -> "str | None":
+    """``2026-10-12T17:02:41.123456Z`` — stored UTC (SQLite hands it back
+    naive), said so, so a browser parses it as UTC and not as local time."""
+    if when is None:
+        return None
+    return when.replace(tzinfo=None).isoformat() + "Z"
+
+
+def reconcile_interrupted_turns(engine: Any) -> int:
+    """Boot step: a turn still "running" on disk was cut off by the stop of
+    the process that ran it. Its log ends with an error frame that says so.
+    Finished records older than ``KEEP_RECORDS_DAYS`` are removed."""
+    from datetime import timedelta
+
+    from sqlmodel import select
+
+    marked = 0
+    cutoff = utcnow() - timedelta(days=KEEP_RECORDS_DAYS)
+    with session_scope(engine) as db:
+        for row in db.exec(select(ChatTurnRecord)).all():
+            if row.status == "running":
+                try:
+                    frames = json.loads(row.frames_json or "[]")
+                except ValueError:
+                    frames = []
+                frames.append(["error", json.dumps({"detail": INTERRUPTED_DETAIL})])
+                row.frames_json = json.dumps(frames)
+                row.status = "interrupted"
+                row.updated_at = utcnow()
+                db.add(row)
+                marked += 1
+            elif row.updated_at is not None and row.updated_at.replace(tzinfo=None) < cutoff.replace(tzinfo=None):
+                db.delete(row)
+        db.commit()
+    return marked

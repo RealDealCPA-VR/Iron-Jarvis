@@ -318,6 +318,28 @@ class ToolIntent(SQLModel, table=True):
     started_at: datetime = Field(default_factory=utcnow)
 
 
+class ChatTurnRecord(SQLModel, table=True):
+    """One chat turn the DAEMON ran (v1.336.0, from pi-durable: "everything
+    is committed to storage before anything is shown").
+
+    The chat page used to own its turn through the HTTP response: a reload,
+    a closed window or a crash ended the turn and lost what it had written.
+    ``daemon/durable_turns`` now runs a named turn as its own task and keeps
+    every frame it sends; this row is that log on disk (written about once a
+    second while the turn runs, and when it ends), so a reopened window can
+    replay a finished turn the page never saved, and a restart can show what
+    a turn had written before it was cut off. ``frames_json`` is a JSON list
+    of ``[event, data_json]`` pairs with consecutive token/thinking frames
+    merged. ``status``: running | done | error | stopped | interrupted."""
+
+    id: str = Field(primary_key=True)  # the page's turn_id
+    thread_id: str = Field(default="", index=True)
+    status: str = "running"
+    frames_json: str = "[]"
+    started_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class UndoJournal(SQLModel, table=True):
     """The captured INVERSE of a reversible tool call (TX-01 time-travel).
 
@@ -426,6 +448,12 @@ class ChatThreadRecord(SQLModel, table=True):
     #: archived. Additive column (auto-reconciled): pre-existing rows read
     #: NULL, which is "not archived", the zero-behavior-change default.
     archived_at: datetime | None = None
+    #: The messages WAITING for this chat's running reply (v1.336.0, from
+    #: pi-durable's per-conversation inbox) — the page's queue, kept here so
+    #: a reload does not lose it. JSON list, written ONLY by
+    #: ``PUT /chat/threads/{id}/queue`` (which leaves ``updated_at`` alone, so
+    #: it can never make a message save 409). "" = nothing waiting.
+    queued_json: str = ""
 
 
 class SavedPromptRecord(SQLModel, table=True):
