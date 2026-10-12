@@ -132,6 +132,9 @@ _HOT_INDEXES = (
     # scanned every session row each time; with it, the range and the ORDER BY
     # read straight off the index (routes/sessions.interrupted_rows).
     ("ix_session_interrupted_at", "session", "interrupted_at"),
+    # v1.335.0: a chat's own usage (GET /chat/threads/{id}/usage) sums the
+    # session_id="chat" run rows stamped with that thread.
+    ("ix_agentrun_thread_id", "agentrun", "thread_id"),
 )
 
 

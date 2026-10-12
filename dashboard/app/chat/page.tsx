@@ -201,6 +201,7 @@ import {
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { HomeLine } from "@/components/chat/HomeLine";
 import { ChatMoreMenu } from "@/components/chat/ChatMoreMenu";
+import { ChatUsageLine } from "@/components/chat/ChatUsageLine";
 import { ProjectDrawer } from "@/components/chat/ProjectDrawer";
 import {
   PANEL_GHOST,
@@ -9976,6 +9977,9 @@ export default function ChatPage() {
                       {deleteArmedId === threadId ? "Delete for good? Press again" : "Delete chat"}
                     </span>
                   </button>
+                  {/* v1.335.0: what this chat has used (read when the
+                      panel opens; nothing when there is nothing to say). */}
+                  <ChatUsageLine threadId={threadId} />
                 </>
               )}
             </>

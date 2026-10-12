@@ -3175,6 +3175,48 @@ does not need a bump, stop and bump it.
   (+ the re-pointed loop-health, mcp-last-error, overview-500, overview-wave2,
   links-wave1, polling, ux-wave1, goals-surfaces, hooks-wave3-typesets pins).
 
+- **A tool call is recorded BEFORE it runs; one daemon per home; a chat
+  totals its own use; a too-long refusal is shrunk and tried once**
+  (v1.335.0, part 1 of the pi-durable borrow — ideas only, MIT). INTENTS:
+  `core/models.ToolIntent` (id == the ToolInvocation id it becomes, redacted
+  args, `replay_safe`) is written by `registry._write_intent` just before
+  `tool.execute` — on its OWN two-worker pool (`_intent_pool`), bounded by
+  `INTENT_WAIT_S` (2 s): on the shared default executor it queued behind every
+  offloaded job and a pinned test that holds the one worker deadlocked. A
+  write failure/timeout logs and the tool still runs. `_record(inv_id=)` takes
+  the intent's id and deletes the intent in the SAME commit (both
+  `_ledger_executed` and the cancel path `_ledger_interrupted`). Boot step
+  `reconcile_tool_calls` (before `reconcile_sessions`) turns every leftover
+  intent into a failed row with the same id + a `tool.executed` EventRecord
+  (`interrupted`, `restart`; Activity reads events), worded by
+  `interrupted_note(safe)`; an intent whose row already exists is only
+  removed (a late intent write can land after a cancel's row). Replay:
+  `tools.base.replay_safe(tool)` — explicit `Tool.replay` bool, else READONLY
+  only. HOME LOCK: `core/home_lock.acquire` (msvcrt byte lock / flock on
+  `<home>/daemon.lock`, owner in `daemon-owner.json`, waits `DEFAULT_WAIT_S`
+  for a dying holder) — ONLY `serve` takes it (one-shot CLI commands read a
+  live home on purpose); the refusal is ASCII and says "database is locked"
+  because main.js `classifyStartupFailure` keys on it. USAGE: `AgentRun.thread_id`
+  (additive, `ix_agentrun_thread_id`) stamped by `_persist_chat_usage(thread_id=)`
+  from both lanes and the follow-ups; `GET /chat/threads/{id}/usage` (metered
+  money in `cost_usd`, subscriptions in `list_price_equivalent_usd`, failed
+  turns counted); `components/chat/ChatUsageLine.tsx` is the last line of the
+  ⋯ panel (nothing on 404/0 turns; `get` is called through a resolved promise
+  so a bare mock never crashes the page). OVERFLOW: `chat_turn.is_context_overflow`
+  / `overflow_limit` read the refusal (and its causes); both lanes pass
+  `refit=_overflow_refit(...)` — POST through `_complete_refitting`, stream
+  through `routes.chat._router_frames(refit=)` (which now wraps
+  `_router_frames_once`) — and retry ONCE, only before an answer frame
+  (text/thinking/final) was shown; the window the refusal names (else 3/4 of
+  what was sent) is LEARNED (`_LEARNED_WINDOWS`, process memory) and is the
+  top rung of `_context_window_source` ("learned") whenever smaller;
+  `_shrink_to_window` drops the oldest history (kept history starts on a
+  user message; the question and the current round never go), adds
+  `OVERFLOW_NOTE` to the system prompt and re-runs `_fit_turn_transcript`; a
+  request still over the window is not retried. `_bounded_frames` (nudges)
+  passes no refit. Pins: `tests/test_{tool_intents,home_lock,chat_usage,context_overflow}_v1335.py`,
+  `dashboard/__tests__/chat-usage-v1335.test.tsx`.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

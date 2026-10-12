@@ -225,7 +225,7 @@ def _who(provider: str) -> str:
 def register(app: FastAPI, d) -> None:
     """Attach ``POST /chat/followups``; ``d`` is the create_app deps object."""
 
-    def _bill(route: Any) -> None:
+    def _bill(route: Any, thread_id: str = "") -> None:
         usage = getattr(getattr(route, "response", None), "usage", None) or {}
         try:
             from ...core.models import AgentState
@@ -245,6 +245,7 @@ def register(app: FastAPI, d) -> None:
                 usage_in=tally.input_tokens,
                 usage_out=tally.output_tokens,
                 cost_usd=tally.cost_usd,
+                thread_id=thread_id,
             )
         except Exception:  # noqa: BLE001 — accounting must never fail the answer
             log.debug("follow-up usage not recorded", exc_info=True)
@@ -331,7 +332,7 @@ def register(app: FastAPI, d) -> None:
                 "reason": f"{_who(provider)} did not answer, so there are no suggestions this time.",
             }
 
-        await asyncio.to_thread(_bill, route)
+        await asyncio.to_thread(_bill, route, body.thread_id)
         if _is_mock(route):
             return {"suggestions": [], "reason": MOCK_REASON}
 

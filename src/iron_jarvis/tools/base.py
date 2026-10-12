@@ -163,6 +163,12 @@ class Tool(ABC):
     #: resolver wrapper (never LOWERS a verdict — it can only turn an automatic
     #: yes back into a question) and advertised in ``spec()`` only when set.
     quarantined: bool = False
+    #: SAFE TO RUN AGAIN (v1.335.0). Whether a call that a crash or restart cut
+    #: off may simply be run again. ``None`` (the default) derives it: only a
+    #: READONLY tool is safe — anything else may already have changed the world
+    #: before the process died, so it is reported as "may have landed" and is
+    #: never rerun by itself. Read through :func:`replay_safe`, never directly.
+    replay: bool | None = None
 
     def perm_key(self) -> str:
         return self.permission_key or self.name
@@ -213,6 +219,21 @@ class Tool(ABC):
     @abstractmethod
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         ...
+
+
+def replay_safe(tool: Any) -> bool:
+    """Whether a cut-off call of ``tool`` may be run again (v1.335.0).
+
+    An explicit ``Tool.replay`` bool wins; otherwise only a READONLY tool is
+    safe. ``None`` or an unknown tool is NOT safe — the fail-safe direction,
+    for the same reason ``reversibility`` defaults to IRREVERSIBLE."""
+    if tool is None:
+        return False
+    explicit = getattr(tool, "replay", None)
+    if isinstance(explicit, bool):
+        return explicit
+    rev = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
+    return rev == Reversibility.READONLY or rev == Reversibility.READONLY.value
 
 
 def safe_path(workspace: Path, rel: str) -> Path:

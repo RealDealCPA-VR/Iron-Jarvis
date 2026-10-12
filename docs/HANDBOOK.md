@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.334.0 (2026-10-04).*
+holds itself to. Current as of v1.335.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,50 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Nothing done is forgotten (v1.335.0)
+
+Nothing looks different. Iron Jarvis now keeps a better record of work that a
+crash or restart cuts off, and recovers from a few failures by itself. (Ideas
+borrowed from the open-source pi-durable agent harness; no code was taken.)
+
+- **A tool that was running when the app stopped is on the record.** Every
+  tool call is written down as "started" before it runs. If Iron Jarvis stops
+  in the middle (a crash or a forced restart), the next start records that
+  call as stopped while running, with the job's other steps and on the
+  Activity page. A call that only reads says it is safe to run again; anything
+  else says its effect may have landed, so you know to check before running it
+  again. Before this, such a call left no trace at all.
+- **Each chat totals what it has used.** The chat's ⋯ menu ends with one quiet
+  line: the tokens this chat has used and, when it cost money, how much. Work a
+  Claude or ChatGPT subscription covers is shown as a list-price equivalent,
+  never as money spent. Chats are counted from this version on.
+- **"Too long for this model" fixes itself once.** When a model refuses a
+  message because the conversation no longer fits its window (often a proxy or
+  endpoint whose real limit is smaller than it says), Iron Jarvis leaves the
+  oldest messages out, tells the model it did, and tries once more. Your
+  question and the work of the current step are never left out. It also
+  remembers the limit the model reported, so the next messages fit from the
+  start. If even the shortened request does not fit, the refusal is shown as
+  before.
+- **One copy of Iron Jarvis per data folder.** A second copy started on the
+  same data (for example a development copy beside the installed app) now
+  refuses to start and names the copy that is running, instead of both writing
+  the same database at once.
+
+## Status is a picture (v1.334.0)
+
+Everything › Status no longer repeats the Directory's list of modules. It is
+one picture of the whole app: every part of Iron Jarvis is a star around the
+reactor, grouped like the Directory (Work, Automations, System, Knowledge,
+Setup). A dim dashed star is not set up yet; a ringed star is set up; a bigger,
+brighter star was used this week; rings ripple out from a star that is in use
+right now; an amber star needs you (a schedule that failed, a goal its safety
+breaker stopped). Point at a star for what it is and its numbers; press it to
+open that part. Under the map: the last 24 hours of activity and five plain
+readings (the model, what is running, runs this week, free disk space and
+problems today). The setup checklist, the offer to continue work a restart
+cut off and the notes about a failing background task stay at the top.
 
 ## Lighter on your PC, steadier over days (v1.333.0)
 

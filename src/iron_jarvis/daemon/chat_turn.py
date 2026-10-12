@@ -521,6 +521,183 @@ def _fit_turn_transcript(d, msgs, system: str, provider: str, model: str, *, hea
         return msgs, system
 
 
+# --------------------------------------------------------------------------- #
+# CONTEXT OVERFLOW: shrink and try once more (v1.335.0, from pi-durable's
+# "when a provider rejects a request because the context is too long,
+# generation compacts and retries once").
+# --------------------------------------------------------------------------- #
+#: A refusal that says the request did not fit the model's window. Matched
+#: on the error's text (and its causes'): every provider words it its own way.
+_OVERFLOW_RE = _re.compile(
+    r"context[_ ]length[_ ]exceeded|maximum context length|prompt is too long"
+    r"|input is too long|too many (?:input )?tokens|reduce the length of the"
+    r"|exceeds? (?:the )?(?:model'?s? )?(?:maximum )?context(?: window| length| size)?"
+    r"|context (?:window|length|size)[^.\n]{0,40}exceed"
+    r"|request exceeds the available context size|context limit reached",
+    _re.IGNORECASE,
+)
+#: The window the refusal names, when it names one ("maximum context length
+#: is 32768 tokens", "215000 tokens > 200000 maximum", "n_ctx: 4096").
+_OVERFLOW_LIMIT_RES = (
+    _re.compile(r"maximum context length is\s*([\d,]+)", _re.IGNORECASE),
+    _re.compile(r">\s*([\d,]+)\s*maximum", _re.IGNORECASE),
+    _re.compile(r"context (?:length|window|size)(?: of| is|:)?\s*([\d,]{4,})", _re.IGNORECASE),
+    _re.compile(r"n_ctx\W{0,4}([\d,]{3,})", _re.IGNORECASE),
+)
+#: Windows the providers taught us this process, keyed "provider::model".
+_LEARNED_WINDOWS: dict[str, int] = {}
+#: Below this a refit is not worth trying — nothing useful fits.
+_MIN_REFIT_WINDOW = 1024
+#: The note the model sees when older messages were left out to fit.
+OVERFLOW_NOTE = (
+    "Some earlier messages in this conversation were left out because they "
+    "did not fit this model's context window."
+)
+
+
+def _error_text_chain(exc: BaseException) -> str:
+    parts: list[str] = []
+    seen: set[int] = set()
+    cur: "BaseException | None" = exc
+    while cur is not None and id(cur) not in seen and len(parts) < 5:
+        seen.add(id(cur))
+        parts.append(str(cur) or "")
+        detail = getattr(cur, "detail", None) or getattr(cur, "body", None)
+        if detail:
+            parts.append(str(detail))
+        cur = cur.__cause__ or cur.__context__
+    return "\n".join(parts)
+
+
+def is_context_overflow(exc: BaseException) -> bool:
+    """True when ``exc`` is a provider refusing a request as too long for
+    the model's window. Never raises."""
+    try:
+        return bool(_OVERFLOW_RE.search(_error_text_chain(exc)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def overflow_limit(exc: BaseException) -> "int | None":
+    """The window the refusal names, when it names a plausible one."""
+    try:
+        text = _error_text_chain(exc)
+        for rx in _OVERFLOW_LIMIT_RES:
+            m = rx.search(text)
+            if m:
+                n = int(m.group(1).replace(",", ""))
+                if 512 <= n <= 20_000_000:
+                    return n
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _window_key(d, provider: str, model: str) -> str:
+    cfg = getattr(getattr(d, "platform", None), "config", None)
+    provider = (provider or "").strip() or str(getattr(cfg, "default_provider", "") or "")
+    model = (model or "").strip() or str(getattr(cfg, "default_model", "") or "")
+    return f"{provider}::{model}"
+
+
+def learned_window(d, provider: str, model: str) -> "int | None":
+    try:
+        return _LEARNED_WINDOWS.get(_window_key(d, provider, model))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def learn_window(d, provider: str, model: str, window: int) -> None:
+    key = _window_key(d, provider, model)
+    old = _LEARNED_WINDOWS.get(key)
+    _LEARNED_WINDOWS[key] = min(old, window) if old else window
+
+
+def _tokens_of(msgs, system: str, d, provider: str, model: str) -> int:
+    from ..context.budget import estimate_tokens
+
+    ratio = _history_ratio(d, provider, model)
+    total = estimate_tokens(system or "", ratio)
+    for m in msgs or []:
+        total += estimate_tokens(getattr(m, "content", "") or "", ratio) + 4
+    return total
+
+
+def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: int, window: int):
+    """``(messages, system)`` that fit ``window``, or None when even the
+    question and the current tool round cannot. Drops the OLDEST history
+    first (never the question, never the newest round), starting the kept
+    history on a user message, then lets :func:`_fit_turn_transcript` trim
+    older tool rounds against the (now learned) window."""
+    from ..context.budget import output_reserve
+
+    q = min(head, len(msgs)) - 1
+    while q >= 0 and getattr(msgs[q], "role", "") != "user":
+        q -= 1
+    if q < 0:
+        return None
+    budget = int(window * 0.9) - output_reserve(window)
+    system2 = system + "\n\n" + OVERFLOW_NOTE
+    keep_from = 0
+    while keep_from < q and _tokens_of(msgs[keep_from:], system2, d, provider, model) > budget:
+        keep_from += 1
+        while keep_from < q and getattr(msgs[keep_from], "role", "") != "user":
+            keep_from += 1
+    kept = list(msgs[keep_from:])
+    new_head = head - keep_from
+    sent, sent_system = _fit_turn_transcript(d, kept, system2, provider, model, head=new_head)
+    # Still too big — including when nothing could be taken out, since an
+    # unchanged request is over the learned window by construction: a retry
+    # would be the same refusal again.
+    if _tokens_of(sent, sent_system, d, provider, model) > int(window * 0.98):
+        return None
+    return sent, sent_system
+
+
+def _overflow_refit(d, msgs, system: str, provider: str, model: str, *, head: int):
+    """The ``refit`` both lanes hand their model call (lock-step): on a
+    too-long refusal, learn the window (the one the refusal names, else 3/4
+    of what was sent) and return the shrunk request, or None to give up.
+    Called at most once per completion."""
+
+    def refit(exc: BaseException, sent, sent_system: str):
+        try:
+            window = overflow_limit(exc) or int(
+                _tokens_of(sent, sent_system, d, provider, model) * 0.75
+            )
+            if window < _MIN_REFIT_WINDOW:
+                return None
+            learn_window(d, provider, model, window)
+            fitted = _shrink_to_window(
+                d, msgs, system, provider, model, head=head, window=window
+            )
+            if fitted is not None:
+                log.info(
+                    "chat: %s refused the request as too long; retrying once in %d tokens",
+                    provider or "the default model", window,
+                )
+            return fitted
+        except Exception:  # noqa: BLE001 — the original refusal stands
+            log.warning("overflow refit failed", exc_info=True)
+            return None
+
+    return refit
+
+
+async def _complete_refitting(router, *, refit=None, **kwargs):
+    """``router.complete`` with ONE shrink-and-retry on a too-long refusal
+    (the POST lane's twin of ``routes.chat._router_frames(refit=)``)."""
+    try:
+        return await router.complete(**kwargs)
+    except Exception as exc:
+        if refit is None or not is_context_overflow(exc):
+            raise
+        fitted = refit(exc, kwargs.get("messages"), kwargs.get("system") or "")
+        if fitted is None:
+            raise
+        return await router.complete(**{**kwargs, "messages": fitted[0], "system": fitted[1]})
+
+
 #: Tells the model how to mark a draft the USER will send (v1.161.0).
 #:
 #: The dashboard renders a ```email fence as a card with one-press copy that
@@ -3780,6 +3957,19 @@ def _context_window(d, provider: str, model: str) -> "int | None":
 
 
 def _context_window_source(d, provider: str, model: str) -> "tuple[int | None, str]":
+    """``(window, source)`` — the ladder below, then ONE more rung (v1.335.0):
+    a window the provider ITSELF reported when it refused a request as too
+    long (``"learned"``, see :func:`_overflow_refit`) wins whenever it is
+    smaller than what the ladder believes, or the ladder knows nothing. The
+    provider's own refusal is better evidence than any pin or probe."""
+    n, src = _ladder_window_source(d, provider, model)
+    learned = learned_window(d, provider, model)
+    if learned and (not n or learned < n):
+        return learned, "learned"
+    return n, src
+
+
+def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, str]":
     """``(window, source)`` — the SAME ladder as :func:`_context_window`
     (which delegates here; every existing caller keeps the plain-int shape),
     plus WHERE the number came from:
@@ -4418,7 +4608,7 @@ def _usage_frame(tally: UsageTally, usage_in: int, usage_out: int) -> dict[str, 
 def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
-    started_at=None, cost_usd: float = 0.0,
+    started_at=None, cost_usd: float = 0.0, thread_id: str = "",
 ) -> None:
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
@@ -4433,7 +4623,10 @@ def _persist_chat_usage(
 
     ``cost_usd`` (v1.300.0): the turn's summed ``step_cost`` (the lane's
     ``UsageTally``) — the provider's own figure when it reported one, so a
-    Claude-subscription turn is no longer $0 on the Usage page."""
+    Claude-subscription turn is no longer $0 on the Usage page.
+
+    ``thread_id`` (v1.335.0): the saved chat this turn billed for, so the
+    chat can total its own use (``GET /chat/threads/{id}/usage``)."""
     try:
         from ..core.ids import utcnow as _now
         from ..core.models import AgentRun
@@ -4450,6 +4643,7 @@ def _persist_chat_usage(
                 output_tokens=usage_out,
                 cost_usd=max(0.0, float(cost_usd or 0.0)),
                 finished_at=_now(),
+                thread_id=(str(thread_id or "").strip()[:80] or None),
                 **({"created_at": started_at} if started_at is not None else {}),
             )
             run_id = run.id
@@ -5691,7 +5885,13 @@ async def run_chat_turn(
             _send, _send_system = _fit_turn_transcript(
                 d, msgs, system, provider_choice, model_choice, head=_head
             )
-            route = await d.platform.router.complete(
+            # v1.335.0: a "too long for this model" refusal is shrunk and
+            # tried ONCE more (lock-step: the stream lane's _router_frames).
+            route = await _complete_refitting(
+                d.platform.router,
+                refit=_overflow_refit(
+                    d, msgs, system, provider_choice, model_choice, head=_head
+                ),
                 provider=provider_choice or None,
                 model=model_choice or None,
                 system=_send_system,
@@ -5975,6 +6175,7 @@ async def run_chat_turn(
                 state=AgentState.FAILED, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started, cost_usd=_tally.cost_usd,
+                thread_id=getattr(body, "thread_id", ""),
             )
         # LOCAL ONLY (v1.332.0): a refusal leaves as itself, so the app's
         # handler answers the 409 {detail, code, provider, model} shape the
@@ -6049,6 +6250,7 @@ async def run_chat_turn(
         state=AgentState.COMPLETED, completions=completions,
         usage_in=usage_in, usage_out=usage_out,
         started_at=turn_started, cost_usd=_tally.cost_usd,
+        thread_id=getattr(body, "thread_id", ""),
     )
     # Reply honesty: if the model returned no final text but tools DID run
     # with output, synthesize a short summary from the last result rather

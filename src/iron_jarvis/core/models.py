@@ -252,6 +252,12 @@ class AgentRun(SQLModel, table=True):
     cost_usd: float = 0.0
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
+    #: The saved chat a ``session_id="chat"`` row billed for (v1.335.0) — the
+    #: turn's ``body.thread_id``; None for an unsaved chat, an agent run, or a
+    #: row older than the column. Lets a chat show what IT has used instead of
+    #: every chat's spend in one bucket. Additive (auto-reconciled); indexed
+    #: through ``core.db._HOT_INDEXES``.
+    thread_id: str | None = None
 
 
 class ToolInvocation(SQLModel, table=True):
@@ -286,6 +292,30 @@ class ToolInvocation(SQLModel, table=True):
     #: ``verdict`` stays ALLOW; this names WHY. Additive.
     grant_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class ToolIntent(SQLModel, table=True):
+    """A tool call that has STARTED and has no ``ToolInvocation`` row yet
+    (v1.335.0, borrowed from pi-durable's "intent is committed before
+    execute"). ``registry.invoke`` writes one just before ``tool.execute`` and
+    the finished row deletes it in the same transaction, so this table is
+    empty whenever nothing is running. A row that is still here at boot is a
+    call the process died during: the boot reconcile turns it into a failed
+    ``ToolInvocation`` with the SAME id that says so, and whether the call is
+    safe to run again (``tools.base.replay_safe``). Before this, a crash
+    mid-call left no trace at all — the effect could land with nothing in the
+    ledger."""
+
+    id: str = Field(primary_key=True)  # == the ToolInvocation id it becomes
+    session_id: str = Field(index=True)
+    agent_run_id: str = ""
+    tool: str = ""
+    args_json: str = "{}"  # REDACTED, exactly as the finished row would be
+    verdict: PermissionMode = PermissionMode.ALLOW
+    reversibility: str | None = None
+    replay_safe: bool = False
+    grant_id: str = ""
+    started_at: datetime = Field(default_factory=utcnow)
 
 
 class UndoJournal(SQLModel, table=True):

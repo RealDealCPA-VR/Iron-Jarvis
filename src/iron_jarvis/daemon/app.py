@@ -897,6 +897,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
         from ..core.ids import utcnow as _utcnow
 
         _boot_started_at = _utcnow()
+
+        # v1.335.0: a tool call the last process died during has an intent row
+        # and no ledger row. Recorded first, so the session reconcile (and a
+        # resumed run) reads a ledger that already says what was cut off.
+        def _reconcile_tool_calls() -> None:
+            from ..tools.registry import reconcile_interrupted_tool_calls
+
+            n = reconcile_interrupted_tool_calls(platform.engine)
+            if n:
+                log.info("recorded %d tool call(s) a restart or crash cut off", n)
+
+        _rehydrate_step("reconcile_tool_calls", _reconcile_tool_calls)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # Assignments (v1.296.0): AFTER the session reconcile by contract —
         # every claimed/running row's session was just settled FAILED on a

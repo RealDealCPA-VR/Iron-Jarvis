@@ -11,7 +11,9 @@ import asyncio
 import copy
 import dataclasses
 import json
+import logging
 import os
+import threading
 from collections import OrderedDict
 from contextvars import ContextVar
 from pathlib import Path
@@ -22,11 +24,21 @@ from ..core.events import EventType
 from ..core.ids import new_id
 from ..core.fs_policy import fs_read_ok
 from ..core.jsonish import json_type_ok
-from ..core.models import PermissionMode, ToolInvocation, UndoJournal
-from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult, safe_path
+from ..core.models import PermissionMode, ToolIntent, ToolInvocation, UndoJournal
+from .base import (
+    Reversibility,
+    RiskClass,
+    Tool,
+    ToolContext,
+    ToolResult,
+    replay_safe,
+    safe_path,
+)
 from .permissions import PermissionDecision, PermissionEngine
 from .undo import make_file_descriptor
 from .undo import finalize_post_hash
+
+_log = logging.getLogger("iron_jarvis.tools.registry")
 
 
 #: The per-call deadline scope of the tool call now executing (v1.288.0) —
@@ -140,6 +152,101 @@ def compose_failure_text(
         keep = room - len(_FAILURE_DROPPED)
         out = _FAILURE_DROPPED + out[len(out) - keep :]
     return header + _FAILURE_JOIN + out
+
+
+#: What a call the process died during says on its ledger row (v1.335.0).
+#: Two sentences, chosen by the intent's ``replay_safe``: a read can simply be
+#: asked again; anything else may have changed something before the stop.
+INTERRUPTED_SAFE = (
+    "Iron Jarvis stopped while this was running (a restart or a crash), so it"
+    " never finished. It only reads, so it is safe to run again."
+)
+INTERRUPTED_MAY_HAVE_LANDED = (
+    "Iron Jarvis stopped while this was running (a restart or a crash), so its"
+    " result was never recorded — its effect may have landed. Check before"
+    " running it again."
+)
+
+
+#: The longest a tool waits for its intent to be written (v1.335.0).
+INTENT_WAIT_S = 2.0
+_INTENT_POOL: "Any | None" = None
+_INTENT_POOL_LOCK = threading.Lock()
+
+
+def _intent_pool() -> Any:
+    """Two workers that only write intents — never queued behind the shared
+    default executor's DB writes, grounding and notifier jobs."""
+    global _INTENT_POOL
+    if _INTENT_POOL is None:
+        with _INTENT_POOL_LOCK:
+            if _INTENT_POOL is None:
+                import concurrent.futures
+
+                _INTENT_POOL = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="ij-tool-intent"
+                )
+    return _INTENT_POOL
+
+
+def interrupted_note(safe: bool) -> str:
+    return INTERRUPTED_SAFE if safe else INTERRUPTED_MAY_HAVE_LANDED
+
+
+def reconcile_interrupted_tool_calls(engine: Any) -> int:
+    """Boot step (v1.335.0): every ``ToolIntent`` left by a process that died
+    mid-call becomes a failed ``ToolInvocation`` with the SAME id saying so.
+
+    An intent whose id already has a row is only removed — a cancel can write
+    its row before a late intent write lands. Returns how many calls were
+    recorded as interrupted. Sync; the lifespan runs it off the loop."""
+    from sqlmodel import select
+
+    from ..core.ids import new_uid
+    from ..core.models import EventRecord
+
+    recorded = 0
+    with session_scope(engine) as db:
+        intents = list(db.exec(select(ToolIntent)).all())
+        for it in intents:
+            if db.get(ToolInvocation, it.id) is None:
+                # The same `tool.executed` a cancelled call publishes, written
+                # straight to the event log (nothing is subscribed yet at
+                # boot): the Activity page reads events, not this table.
+                db.add(
+                    EventRecord(
+                        id=new_uid("evt"),
+                        type=EventType.TOOL_EXECUTED,
+                        session_id=it.session_id,
+                        payload_json=json.dumps({
+                            "tool": it.tool, "ok": False,
+                            "mode": getattr(it.verdict, "value", str(it.verdict)),
+                            "invocation_id": it.id,
+                            "reversibility": it.reversibility,
+                            "risk_class": None, "interrupted": True,
+                            "restart": True,
+                        }),
+                    )
+                )
+                db.add(
+                    ToolInvocation(
+                        id=it.id,
+                        session_id=it.session_id,
+                        agent_run_id=it.agent_run_id,
+                        tool=it.tool,
+                        args_json=it.args_json,
+                        verdict=it.verdict,
+                        ok=False,
+                        output=interrupted_note(bool(it.replay_safe)),
+                        reversibility=it.reversibility,
+                        grant_id=it.grant_id,
+                        created_at=it.started_at,
+                    )
+                )
+                recorded += 1
+            db.delete(it)
+        db.commit()
+    return recorded
 
 
 def risk_value(tool: "Tool | None") -> str | None:
@@ -619,7 +726,19 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001 — capture never blocks the tool
                 undo_desc = None
 
+        # THE INTENT (v1.335.0). Written BEFORE execute and deleted by the
+        # finished row's own transaction, so a process that dies mid-call
+        # leaves a row the next boot turns into "stopped while running"
+        # (`reconcile_interrupted_tool_calls`). The finished row takes the
+        # intent's id. Inside the try below: a cancel that lands while the
+        # intent is being written is ledgered like any other cancel, under
+        # the same id, so the two never disagree.
+        inv_id = new_id("tool")
         try:
+            await self._write_intent(
+                ctx, inv_id, name, args, decision.mode, rev_value, tool, grant_id
+            )
+
             # THE DEADLINE (v1.228.0, RT6). A wedged subprocess/MCP/HTTP tool
             # used to park the run until Cancel; `deadline_s` (the runtime
             # passes `config.tool_call_timeout_s`) turns that into an ordinary
@@ -695,6 +814,7 @@ class ToolRegistry:
                     f"{who} while the tool was running"
                     " — its effect may have landed",
                     risk=risk,
+                    inv_id=inv_id,
                 )
             )
             self._interrupt_jobs.add(job)
@@ -771,6 +891,7 @@ class ToolRegistry:
                 created_paths=result.created_paths if result.ok else None,
                 risk=risk,
                 grant_id=grant_id,
+                inv_id=inv_id,
             )
         )
         self._interrupt_jobs.add(job)
@@ -799,6 +920,61 @@ class ToolRegistry:
             result = await self._store_result(store_as, result, ctx)
         return result
 
+    async def _write_intent(
+        self,
+        ctx: ToolContext,
+        inv_id: str,
+        name: str,
+        args: dict[str, Any],
+        mode: PermissionMode,
+        rev_value: str,
+        tool: Tool,
+        grant_id: str,
+    ) -> None:
+        """Commit the "this call has started" row (v1.335.0) off the loop.
+
+        Best-effort: a failed write logs and the call still runs, exactly as
+        every call ran before intents existed. A CANCEL is not swallowed — the
+        caller's cancel branch ledgers it under the same id."""
+
+        def _write() -> None:
+            try:
+                safe_args = tool.redact_args(args)
+            except Exception:  # noqa: BLE001 — an unredactable call records no args
+                safe_args = {}
+            row = ToolIntent(
+                id=inv_id,
+                session_id=ctx.session_id,
+                agent_run_id=ctx.agent_run_id,
+                tool=name,
+                args_json=dumps(safe_args),
+                verdict=mode,
+                reversibility=rev_value,
+                replay_safe=replay_safe(tool),
+                grant_id=str(grant_id or ""),
+            )
+            with session_scope(ctx.engine) as db:
+                db.add(row)
+                db.commit()
+
+        # ITS OWN WORKERS, and a BOUND. On the shared default executor the
+        # write queued behind every other offloaded job, so under load a tool
+        # waited for a free worker before it could even start (a pinned test
+        # that holds the one worker deadlocked outright). A write still stuck
+        # after `INTENT_WAIT_S` (SQLite busy behind a long writer) is left to
+        # land on its own and the tool runs: a late intent is either deleted
+        # by the finished row or, if it lands after it, by the next boot's
+        # reconcile, which sees the row already exists.
+        try:
+            fut = asyncio.get_running_loop().run_in_executor(_intent_pool(), _write)
+            await asyncio.wait_for(asyncio.shield(fut), INTENT_WAIT_S)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            _log.warning("recording that %s started is slow; running it anyway", name)
+        except Exception:  # noqa: BLE001 — the intent must never block the tool
+            _log.warning("could not record that %s started", name, exc_info=True)
+
     def _finish_ledger_job(self, job) -> None:
         """Drop a finished ledger task and RETRIEVE its exception.
 
@@ -826,6 +1002,7 @@ class ToolRegistry:
         created_paths: Any,
         risk: str | None,
         grant_id: str = "",
+        inv_id: str | None = None,
     ) -> None:
         """The terminal row + ``tool.executed`` for a call that FINISHED.
 
@@ -847,6 +1024,7 @@ class ToolRegistry:
             undo=undo,
             created_paths=created_paths,
             grant_id=grant_id,
+            inv_id=inv_id,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
@@ -869,6 +1047,7 @@ class ToolRegistry:
         note: str,
         *,
         risk: str | None = None,
+        inv_id: str | None = None,
     ) -> None:
         """The failed row + ``tool.executed`` for a call that was CANCELLED
         mid-execute (v1.228.0, CL1). Runs as its own task — see ``invoke``.
@@ -885,7 +1064,7 @@ class ToolRegistry:
             inv_id = await asyncio.to_thread(
                 self._record,
                 ctx, name, args, mode, ok=False,
-                output=note, reversibility=rev_value,
+                output=note, reversibility=rev_value, inv_id=inv_id,
             )
             await ctx.event_bus.publish(
                 EventType.TOOL_EXECUTED,
@@ -1287,6 +1466,7 @@ class ToolRegistry:
         created_paths: "list[str] | None" = None,
         confinement: str | None = None,
         grant_id: str = "",
+        inv_id: str | None = None,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
@@ -1299,7 +1479,10 @@ class ToolRegistry:
         # a plaintext credential here would defeat the encrypted vault.
         tool = self._tools.get(name)
         safe_args = tool.redact_args(args) if tool is not None else args
-        inv_id = new_id("tool")
+        # v1.335.0: a call that wrote an intent passes its id, so the finished
+        # row IS that intent's record and the intent goes in the same commit.
+        clears_intent = inv_id is not None
+        inv_id = inv_id or new_id("tool")
 
         def _stamp_workspace(desc: "dict[str, Any]") -> "dict[str, Any]":
             """Record WHICH workspace the envelope's relative path is against
@@ -1336,6 +1519,10 @@ class ToolRegistry:
         )
         with session_scope(ctx.engine) as db:
             db.add(record)
+            if clears_intent:
+                intent = db.get(ToolIntent, inv_id)
+                if intent is not None:
+                    db.delete(intent)
             if undo:
                 # The inverse descriptor (from Tool.capture_undo) is a small,
                 # redaction-safe dict; the big pre-image itself is already a blob

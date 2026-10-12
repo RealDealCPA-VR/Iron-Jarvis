@@ -342,8 +342,15 @@ class ChatReplyStreamingResponse(HeartbeatStreamingResponse):
             CHAT_INFLIGHT.exit()
 
 
-async def _router_frames(router, **kwargs):
+async def _router_frames(router, *, refit=None, **kwargs):
     """Yield streaming frames for one completion (FX-01).
+
+    ``refit`` (v1.335.0): when the provider refuses the request as too long
+    for the model's window BEFORE any answer frame, ``refit(exc, messages,
+    system)`` may return a shrunk ``(messages, system)`` and the completion
+    is tried ONCE more with it (``chat_turn._overflow_refit``; the POST lane's
+    twin is ``chat_turn._complete_refitting``). Once a word has been shown, a
+    failure is never retried here.
 
     Prefers the router's native token stream (``ModelRouter.stream`` — added by
     the coordinator, same kwargs as ``complete``: provider/model/system/messages/
@@ -354,6 +361,29 @@ async def _router_frames(router, **kwargs):
     the aggregate — never fabricated output (a real-provider failure raises here,
     exactly as ``complete`` does, and the caller turns it into an ``error`` frame).
     """
+    from ..chat_turn import is_context_overflow
+
+    attempt = kwargs
+    for retry in (False, True):
+        shown = False
+        try:
+            async with contextlib.aclosing(_router_frames_once(router, **attempt)) as frames:
+                async for frame in frames:
+                    if frame.get("type") in ("text", "thinking", "final"):
+                        shown = True
+                    yield frame
+            return
+        except Exception as exc:
+            if retry or shown or refit is None or not is_context_overflow(exc):
+                raise
+            fitted = refit(exc, attempt.get("messages"), attempt.get("system") or "")
+            if fitted is None:
+                raise
+            attempt = {**kwargs, "messages": fitted[0], "system": fitted[1]}
+
+
+async def _router_frames_once(router, **kwargs):
+    """One attempt of :func:`_router_frames` (the v1.335.0 retry wraps it)."""
     stream = getattr(router, "stream", None)
     if stream is not None:
         async for frame in stream(**kwargs):
@@ -1231,6 +1261,76 @@ def register(app: FastAPI, d) -> None:
             "model": rec.model,
             "created_at": rec.created_at.isoformat(),
         }
+
+    @app.get("/chat/threads/{thread_id}/usage")
+    def chat_thread_usage(thread_id: str) -> dict[str, Any]:
+        """What THIS chat has used (v1.335.0, from pi-durable's per-
+        conversation ``pi.usage``). Sums the ``session_id="chat"`` run rows
+        each turn writes, stamped with the chat since v1.335.0 — turns that
+        failed partway included, because their finished rounds were billed.
+        Turns from before the stamp existed are not attributable and are
+        not counted (``since`` says from when this chat is counted).
+
+        Money follows the Usage page's rule: a flat-subscription figure is a
+        list-price equivalent (``list_price_equivalent_usd``), never
+        ``cost_usd``. Sync def (threadpool): one indexed read."""
+        from sqlmodel import select
+
+        from ...core.models import AgentRun, AgentState
+        from ...eval.pricing import is_list_price_equivalent, recorded_cost
+
+        tid = (thread_id or "").strip()[:80]
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    select(AgentRun).where(
+                        AgentRun.thread_id == tid, AgentRun.session_id == "chat"
+                    )
+                ).all()
+            )
+        by_model: dict[tuple[str, str], dict[str, Any]] = {}
+        out: dict[str, Any] = {
+            "thread_id": tid,
+            "turns": 0,
+            "failed_turns": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "list_price_equivalent_usd": 0.0,
+            "since": None,
+            "models": [],
+        }
+        for r in rows:
+            money = recorded_cost(
+                r.provider, r.model, r.input_tokens, r.output_tokens, r.cost_usd
+            )
+            listed = is_list_price_equivalent(r.provider, r.model)
+            out["turns"] += 1
+            if r.state == AgentState.FAILED:
+                out["failed_turns"] += 1
+            out["input_tokens"] += int(r.input_tokens or 0)
+            out["output_tokens"] += int(r.output_tokens or 0)
+            out["list_price_equivalent_usd" if listed else "cost_usd"] += money
+            stamp = r.created_at.isoformat() if r.created_at else None
+            if stamp and (out["since"] is None or stamp < out["since"]):
+                out["since"] = stamp
+            m = by_model.setdefault(
+                (r.provider, r.model),
+                {"provider": r.provider, "model": r.model, "turns": 0,
+                 "input_tokens": 0, "output_tokens": 0, "usd": 0.0,
+                 "list_price_equivalent": listed},
+            )
+            m["turns"] += 1
+            m["input_tokens"] += int(r.input_tokens or 0)
+            m["output_tokens"] += int(r.output_tokens or 0)
+            m["usd"] += money
+        out["cost_usd"] = round(out["cost_usd"], 6)
+        out["list_price_equivalent_usd"] = round(out["list_price_equivalent_usd"], 6)
+        out["models"] = sorted(
+            ({**m, "usd": round(m["usd"], 6)} for m in by_model.values()),
+            key=lambda m: -(m["input_tokens"] + m["output_tokens"]),
+        )
+        return out
 
     @app.put("/chat/threads/{thread_id}")
     def save_chat_thread(thread_id: str, body: dict) -> dict[str, Any]:
@@ -3481,6 +3581,7 @@ async def chat_stream(
                 state=state, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
                 started_at=turn_started, cost_usd=_tally.cost_usd,
+                thread_id=getattr(body, "thread_id", ""),
             )
 
         # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
@@ -3530,6 +3631,12 @@ async def chat_stream(
                 # the lane leaves this loop, whichever way it leaves.
                 async with contextlib.aclosing(_frames_until_stop(_router_frames(
                     d.platform.router,
+                    # v1.335.0: a "too long for this model" refusal before the
+                    # first word is shrunk and tried ONCE more (lock-step:
+                    # chat_turn's _complete_refitting).
+                    refit=_chat_turn._overflow_refit(
+                        d, msgs, system, provider_choice, model_choice, head=_head
+                    ),
                     provider=provider_choice or None,
                     model=model_choice or None,
                     system=_send_system,

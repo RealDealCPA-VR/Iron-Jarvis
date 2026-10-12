@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -371,6 +372,16 @@ def serve(
     home = _home_for(resolved_root)
     fresh = not home.exists() or not any(home.iterdir())
     console.print(f"[cyan]State home[/cyan] {home}" + ("  [dim](new/empty)[/dim]" if fresh else ""))
+    # v1.335.0: ONE daemon per home. The port probe above only catches a
+    # second copy on the SAME port. Plain print, not rich: a wrapped line
+    # would split the words the desktop's startup classifier looks for.
+    from ..core.home_lock import HomeLockHeld, acquire as _acquire_home
+
+    try:
+        _acquire_home(home, port=port)
+    except HomeLockHeld as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        raise typer.Exit(code=1)
     if git_native:
         os.environ["IRONJARVIS_GIT_NATIVE"] = "1"
     from .app import create_app
