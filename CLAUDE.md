@@ -3259,6 +3259,27 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/chat-durable-v1336.test.tsx`,
   `dashboard/__tests__/chat-stream-rejoin-v1336.test.ts` (13 mutations, all red).
 
+- **An agent run KEEPS its conversation; Continue after a restart RESUMES
+  it** (v1.337.0, part 3 of the pi-durable borrow). `core/models.RunTranscript`
+  (run_id, session_id, messages_json) is written by `agents/transcript.save`
+  from `perceive_act(transcript=True)` — ONLY the flat lane passes it (a
+  decomposed run's mini-loops each hold a partial list) — right after the
+  assistant turn that asks for tools is appended AND after their results are
+  in, so the stored list ends on complete rounds or on ONE assistant turn
+  whose calls were running (images become a marker; native `raw_blocks` are
+  not kept; > `MAX_TRANSCRIPT_CHARS` is not written). Continue with
+  `ContinueBody.resume` (the restart Continue already sends it) →
+  `continue_session(resume=True)` → `_resumable_run` (newest top-level run
+  with a transcript) → `options.resume_run`; every continuation first DROPS
+  an inherited `resume_run`. The runtime, right after reading the run
+  options, replaces `messages` with `transcript.load_for_resume(...)` plus ONE
+  user message (`RESUME_NOTE` + the continuation's task) and turns the plan
+  gate off for that run. `load_for_resume` answers every call with no result:
+  the reconcile's `INTERRUPTED_*` note on a `ToolInvocation` of that run and
+  tool when there is one, else `interrupted_note(replay_safe(tool))` — never
+  an orphaned `tool_use`. Pins: `tests/test_agent_resume_v1337.py` (8
+  mutations, all red).
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

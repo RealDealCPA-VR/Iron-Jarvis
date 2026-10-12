@@ -318,6 +318,27 @@ class ToolIntent(SQLModel, table=True):
     started_at: datetime = Field(default_factory=utcnow)
 
 
+class RunTranscript(SQLModel, table=True):
+    """An agent run's own conversation with its model (v1.337.0, from
+    pi-durable: "if the process dies mid-turn, reopening picks the work up
+    where it stopped").
+
+    The ledger kept a run's tool rows and its result, never what the model
+    was actually told and said, so Continue after a restart could only start
+    a NEW run from a one-paragraph recap. The flat perceive→act loop now
+    writes its message list here when the model asks for tools and again
+    when their results are in (``agents/transcript.py``); a resumed run
+    (``options.resume_run``) starts from it, and a tool call the stop cut off
+    is answered with what the boot reconcile recorded for it. JSON list of
+    ``{role, content, tool_call_id?, name?, tool_calls?}`` (images and native
+    blocks are not kept)."""
+
+    run_id: str = Field(primary_key=True)
+    session_id: str = Field(default="", index=True)
+    messages_json: str = "[]"
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class ChatTurnRecord(SQLModel, table=True):
     """One chat turn the DAEMON ran (v1.336.0, from pi-durable: "everything
     is committed to storage before anything is shown").

@@ -675,6 +675,9 @@ def register(app: FastAPI, d) -> None:
                 # unioned with the stored grant / inherited when blank.
                 allow_tools=body.allow_tools or None,
                 approval_mode=body.approval_mode or None,
+                # v1.337.0: Continue after a restart resumes the run's own
+                # conversation when it kept one.
+                resume=bool(body.resume),
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")

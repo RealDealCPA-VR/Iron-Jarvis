@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.336.0 (2026-10-04).*
+holds itself to. Current as of v1.337.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,22 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Continue picks up the real conversation (v1.337.0)
+
+Nothing looks different. When a restart or a crash cuts off an agent job and
+you press **Continue** (on Everything › Status, in the bell, or on the job),
+the job now carries on from its own conversation: the task, every file it
+read, every result it saw and every step it took, exactly as they were.
+Before, Continue started over from a one-paragraph summary, so the job had to
+find its way back (and sometimes redid work).
+
+A step that was running when Iron Jarvis stopped is shown to the job for what
+it is: a step that only reads is safe to do again; anything else may already
+have happened, and the job is told to check before doing it again.
+
+This covers ordinary jobs. A job that split itself into planned steps still
+continues from a summary, as before.
 
 ## Chat answers survive a reload (v1.336.0)
 

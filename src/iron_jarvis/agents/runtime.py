@@ -45,6 +45,7 @@ from ..sandbox.native import host_os_line
 from ..tools.base import ToolContext
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
 from . import decompose as _decompose
+from . import transcript as _transcript
 from .types import AgentDefinition
 
 #: Published (string event type, the ``envelope.probe_started`` convention from
@@ -1755,6 +1756,28 @@ class AgentRuntime:
 
         _run_options = _session_options(session)
         skip_memory = _run_options.get("skip_memory") is True
+        # RESUME (v1.337.0): Continue on a job a restart cut off names the
+        # run it continues (`options.resume_run`). When that run kept its
+        # conversation (`agents/transcript`), this run starts FROM it — the
+        # original task first, every step it took, a result for every call
+        # the stop cut off — and the continuation's own words last, after
+        # the one resume note. No transcript (an older run, a decomposed run)
+        # keeps the recap-only start below.
+        _resumed = False
+        _resume_run = _run_options.get("resume_run")
+        if isinstance(_resume_run, str) and _resume_run:
+            _carried = await asyncio.to_thread(
+                _transcript.load_for_resume, self.p.engine, _resume_run, self.p.registry
+            )
+            if _carried:
+                messages[:] = [
+                    *_carried,
+                    LLMMessage(
+                        role="user",
+                        content=_transcript.RESUME_NOTE + chr(10) * 2 + session.task,
+                    ),
+                ]
+                _resumed = True
         # Auto-inject any configured default skills (§23) into the prompt.
         default_skills = getattr(self.p.config, "default_skills", None)
         if default_skills:
@@ -2025,6 +2048,10 @@ class AgentRuntime:
         engage_decomposed, envelope_caused = should_decompose_enveloped(
             self.p, session, env_profile
         )
+        # v1.337.0: a resumed run carries on in the loop it was in — a fresh
+        # plan would throw the conversation it resumed from away.
+        if _resumed:
+            engage_decomposed = False
         if engage_decomposed:
             # WAVE C3 (v1.203.0): a measured-weak envelope that demands
             # per-step verification gates EVERY step — criteria-less ones on
@@ -2103,6 +2130,7 @@ class AgentRuntime:
                 session_allow=session_allow,
                 sink=sink,
                 max_steps=resolve_max_steps(session, self.p.config),
+                transcript=True,
             )
             if not finished:
                 # A not-finished step may carry its OWN reason (v1.228.0: the
@@ -2507,6 +2535,7 @@ class AgentRuntime:
         sink,
         max_steps: int,
         breaker_state: "dict[str, Any] | None" = None,
+        transcript: bool = False,
     ) -> tuple[bool, str]:
         """The per-round route → tool-execute body of the perceive→act loop —
         extracted (v1.132.0) as THE reusable seam so the decomposition
@@ -2753,6 +2782,13 @@ class AgentRuntime:
                     role="assistant", content=resp.text, tool_calls=resp.tool_calls
                 )
             )
+            # v1.337.0: the conversation is kept as the tools START (and again
+            # when their results are in, below), so a resume after a crash
+            # sees the calls it made and what became of each
+            # (`agents/transcript`). The flat loop only: a decomposed run's
+            # mini-loops each hold a partial list.
+            if transcript:
+                await _transcript.save(self.p.engine, run.id, session.id, messages)
             ctx = ToolContext(
                 workspace=workspace,
                 session_id=session.id,
@@ -3024,6 +3060,8 @@ class AgentRuntime:
                     )
                 )
             await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
+            if transcript:
+                await _transcript.save(self.p.engine, run.id, session.id, messages)
             if sink:
                 sink.step_end(run.steps)
         # Round budget spent before the model finalized — the CALLER owns what

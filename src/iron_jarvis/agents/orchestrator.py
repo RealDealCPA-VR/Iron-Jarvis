@@ -2028,9 +2028,15 @@ class Orchestrator:
         message: str,
         allow_tools: list[str] | None = None,
         approval_mode: str | None = None,
+        resume: bool = False,
     ) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and
         a compact recap of the prior task/result, enabling multi-turn work.
+
+        ``resume`` (v1.337.0): this is Continue on a job a RESTART cut off.
+        When the cut-off run kept its conversation (``agents/transcript``),
+        its id rides the new row as ``options.resume_run`` and the runtime
+        starts from that conversation instead of the recap alone.
 
         A continuation is the SAME piece of work, so it inherits the same inputs
         a rerun does — including the user's up-front tool GRANT and the ORIGIN
@@ -2058,6 +2064,13 @@ class Orchestrator:
             f"The earlier workspace files are available in your workspace.]"
         )
         options = _stored_options(prev)
+        # v1.337.0: a resume carries the conversation of the run it resumes;
+        # any other continuation never does (an inherited one is dropped).
+        options.pop("resume_run", None)
+        if resume:
+            _from = self._resumable_run(prev.id)
+            if _from:
+                options["resume_run"] = _from
         if getattr(prev, "origin", None) == MISSION_ORIGIN:
             # A MISSION'S FOLLOW-UP KEEPS THE USER'S OWN WORDS (v1.309.0). The
             # recap above is MODEL-facing (it must carry the earlier task and
@@ -2154,6 +2167,24 @@ class Orchestrator:
             session_id=session.id,
         )
         return session
+
+    def _resumable_run(self, session_id: str) -> str:
+        """The newest top-level run of ``session_id`` that kept its
+        conversation (v1.337.0), or "". One indexed read."""
+        from .transcript import has_transcript
+
+        with session_scope(self.p.engine) as db:
+            runs = list(
+                db.exec(
+                    select(AgentRun)
+                    .where(AgentRun.session_id == session_id, AgentRun.parent_id.is_(None))  # type: ignore[union-attr]
+                    .order_by(AgentRun.created_at.desc())  # type: ignore[union-attr]
+                ).all()
+            )
+        for r in runs:
+            if has_transcript(self.p.engine, r.id):
+                return r.id
+        return ""
 
     def delete_session(self, session_id: str) -> None:
         """Remove a session and its runs/tool rows; GC any worktree. Refuses a
