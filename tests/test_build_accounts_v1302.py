@@ -749,20 +749,25 @@ def test_rehydrate_time_does_not_grow_with_recorded_homes(tmp_path):
     rec = {"anthropic": {"id": "prof_1", "title": "Work Max", "source": "iron-proxy",
                          "home": str(tmp_path / "home1"), "unset": ["ANTHROPIC_API_KEY"]}}
 
-    def boot(name: str, accounts: dict | None) -> tuple[float, TerminalManager]:
+    def boot(name: str, accounts: dict | None) -> tuple[bool, TerminalManager]:
         sp = tmp_path / f"{name}.json"
         _snapshot(sp, [_entry(i, accounts) for i in range(3)])
         m = TerminalManager(state_path=sp)
         m.account_resolver = slow_resolver
         m.account_verifier = slow_verifier
-        t0 = time.perf_counter()
         assert m.rehydrate(backend=FakeBackend()) == 3
-        return time.perf_counter() - t0, m
+        # Read the instant rehydrate returns: a check that ran INLINE has
+        # already finished its 3 s; one off the boot path has not.
+        return verified.is_set(), m
 
-    plain, _ = boot("plain", None)
-    with_homes, m = boot("homes", rec)
+    boot("plain", None)
+    checked_inline, m = boot("homes", rec)
     assert resolver_calls == []
-    assert with_homes < plain * 3 + 1.0, (with_homes, plain)
+    # v1.336.0: this used to compare wall clocks (`with_homes < plain*3 + 1`)
+    # and went red on a loaded CI runner (2.14 s vs 0.28 s) with nothing
+    # wrong — the pathology it guards adds >= 3 s. Whether the check already
+    # FINISHED when rehydrate returned is the same proof with no clock.
+    assert not checked_inline, "the post-boot check ran on the boot path"
     assert m.get("term_0000").accounts["anthropic"]["home"] == str(tmp_path / "home1")
     assert verified.wait(10), "the post-boot check never ran"
 
