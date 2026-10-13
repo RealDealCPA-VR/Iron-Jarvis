@@ -3279,6 +3279,14 @@ does not need a bump, stop and bump it.
   tool when there is one, else `interrupted_note(replay_safe(tool))` — never
   an orphaned `tool_use`. Pins: `tests/test_agent_resume_v1337.py` (8
   mutations, all red).
+  v1.337.1 (USER BUG, both PCs): from v1.335.0 every auto-backup failed with a
+  bare "PermissionError: [Errno 13]" — `create_backup` walks the WHOLE home and
+  `daemon.lock` is a Windows BYTE lock, which refuses every other read (same
+  process included). The lock + `daemon-owner.json` are excluded now, and a
+  `tar.add` OSError is re-raised NAMING the file. Rule: anything new written
+  into the home that is held open/locked must be checked against the backup
+  walk. Pin: `tests/test_backup_home_lock_v13371.py` (lock held in-process,
+  as the daemon holds it; both halves mutation-checked).
 
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry

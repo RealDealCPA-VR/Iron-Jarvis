@@ -88,6 +88,13 @@ def create_backup(
     # library waiting under trash/ — archiving it would put the 700 MB the press
     # was meant to free into every nightly snapshot and its mirror instead.
     trash_dir = (home / TRASH_DIRNAME).resolve()
+    # The running daemon's one-per-home lock (v1.335.0) is a Windows BYTE lock:
+    # any other read of that byte fails with Errno 13, so archiving it failed
+    # every backup on every install. Neither file means anything in a restore
+    # (the lock belongs to a live process, the owner note names one).
+    from .core.home_lock import LOCK_NAME, OWNER_NAME
+
+    lock_files = ((home / LOCK_NAME).resolve(), (home / OWNER_NAME).resolve())
     db_path = (home / _DB_NAME).resolve()
     snapshot = _consistent_db_snapshot(engine, home) if (engine is not None and db_path.exists()) else None
 
@@ -111,11 +118,19 @@ def create_backup(
                     rp == db_path or p.name in (f"{_DB_NAME}-wal", f"{_DB_NAME}-shm")
                 ):
                     continue  # skip live DB + sidecars; the snapshot stands in
+                if rp in lock_files:
+                    continue  # a live process's lock; unreadable by design
                 if not include_keys and (
                     p.name.startswith(".secrets.key") or p.name.startswith(".vault.key")
                 ):
                     continue
-                tar.add(p, arcname=str(p.relative_to(home.parent)))
+                arcname = str(p.relative_to(home.parent))
+                try:
+                    tar.add(p, arcname=arcname)
+                except OSError as exc:
+                    # A bare "[Errno 13] Permission denied" names no file, and
+                    # that is all the Overview could show. Say which one.
+                    raise type(exc)(exc.errno, exc.strerror or str(exc), arcname) from exc
                 n += 1
             if snapshot is not None:  # add the consistent snapshot AS ironjarvis.db
                 tar.add(snapshot, arcname=str((home / _DB_NAME).relative_to(home.parent)))

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.337.0 (2026-10-04).*
+holds itself to. Current as of v1.337.1 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,25 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Automatic backups work again (v1.337.1)
+
+From v1.335.0 to v1.337.0 every automatic backup failed with "Background task
+failing: auto_backup — PermissionError: [Errno 13] Permission denied". The
+backup copies the files in the data folder, and v1.335.0 added one there that
+the running app keeps locked so a second copy cannot open the same data
+(`daemon.lock`). Windows refuses any other read of a locked file, so the
+backup stopped at it. That file and its note (`daemon-owner.json`) belong to
+the running app and are left out of backups now. Nothing was lost: backups
+taken before the update are still in the backups folder, and because the
+newest one is now more than a day old, a fresh backup is taken about a minute
+after the updated app starts. If a backup ever fails on a file again, the
+message names the file.
+
+To keep a second copy on another drive (D:, a USB disk or a network share),
+set **Backup copy folder** in Settings. Do not type it into `config.toml` by
+hand: a Windows path in plain quotes (`"D:\Backups"`) is not valid there, and
+Iron Jarvis then ignores the whole file and starts with default settings.
 
 ## Continue picks up the real conversation (v1.337.0)
 
