@@ -450,6 +450,15 @@ def _pid_gone(pid: int) -> bool:
         return True
 
 
+#: How long the command's tree would live if nothing killed it. v1.337.2: the
+#: tree used to sleep 8 s and the return was barred at `limit + 2.5` s — an
+#: absolute wall-clock bar that a loaded release runner missed at 4.2 s with
+#: nothing wrong. The tree now lives FAR longer than any runner's overhead, and
+#: the bar is a fraction of its life: the regressions this pins return when the
+#: tree ends (40 s) or after the 15 s pipe drain (~16 s), both past the bar.
+TREE_LIFE_S = 40
+
+
 def test_native_timeout_kills_child_and_grandchild_and_returns_on_time(tmp_path):
     child_pid = tmp_path / "child.pid"
     grand_pid = tmp_path / "grand.pid"
@@ -458,7 +467,7 @@ def test_native_timeout_kills_child_and_grandchild_and_returns_on_time(tmp_path)
     grand.write_text(
         "import os, time, pathlib\n"
         f"pathlib.Path({str(grand_pid)!r}).write_text(str(os.getpid()))\n"
-        "time.sleep(8)\n",
+        f"time.sleep({TREE_LIFE_S})\n",
         encoding="utf-8",
     )
     prog = tmp_path / "sleeper.py"
@@ -466,7 +475,7 @@ def test_native_timeout_kills_child_and_grandchild_and_returns_on_time(tmp_path)
         "import os, subprocess, sys, time, pathlib\n"
         f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid()))\n"
         f"subprocess.Popen([sys.executable, {str(grand)!r}])\n"
-        "time.sleep(8)\n"
+        f"time.sleep({TREE_LIFE_S})\n"
         f"pathlib.Path({str(marker)!r}).write_text('alive')\n",
         encoding="utf-8",
     )
@@ -477,12 +486,9 @@ def test_native_timeout_kills_child_and_grandchild_and_returns_on_time(tmp_path)
     elapsed = time.monotonic() - t0
     assert res.timed_out is True
     assert res.returncode == -1
-    # The tool returns at ~timeout, not when the command feels like exiting
-    # (measured before the fix: 4-6 s for a 1 s timeout).
-    # v1.258.2: was `limit + 1.5`, which a loaded -n auto worker missed at 2.53 s
-    # (idle: ~1.1 s). The regression this pins is 4-6 s for a 1 s limit, so
-    # `limit + 2.5` stays strictly below that floor and stops measuring the runner.
-    assert elapsed < limit + 2.5, elapsed
+    # The tool returns at ~timeout, not when the command feels like exiting.
+    # Idle here ~1.1 s; a loaded release runner 4.2 s (v1.337.2's red gate).
+    assert elapsed < TREE_LIFE_S * 0.3, elapsed
     assert child_pid.exists() and grand_pid.exists(), "the tree had started before the deadline"
     pids = [int(child_pid.read_text()), int(grand_pid.read_text())]
     deadline = time.monotonic() + 3.0

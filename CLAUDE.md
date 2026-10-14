@@ -3302,7 +3302,11 @@ does not need a bump, stop and bump it.
   (`ij.build.folder`, written by a pick and by the pane in front) — the pick
   lived only in page state. Pins: `tests/test_build_restore_typing_v13372.py`
   (incl. a real-ConPTY restore), `dashboard/__tests__/build-folder-v1337-2.test.tsx`
-  (all mutations red).
+  (all mutations red). v1.337.3 (test-only): v1.337.2's Release gate went red
+  on `test_native_timeout_kills_child_and_grandchild_and_returns_on_time`
+  (4.2 s vs an absolute `limit + 2.5` bar; Tests passed). The tree now lives
+  `TREE_LIFE_S` = 40 s and the bar is 30% of that; a shell-only kill (the
+  regression) returns after the 15 s drain and fails at 16.0 s (checked).
 
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
