@@ -1027,8 +1027,15 @@ class TerminalManager:
             # (terminals/modes.py).
             # Once: a tail that already ends with it (a pane restored and
             # closed again before its new shell printed) gets no second copy.
-            reset = restore_reset(old)
-            session._tail = bytearray(old if old.endswith(reset) else old + reset)
+            reset = restore_reset(old, rows)
+            prior = old if old.endswith(reset) else old + reset
+            # v1.337.2: PREPEND, under the lock the output path records with.
+            # The new shell was spawned above and a pushing backend has been
+            # recording its first bytes (ConPTY's start-up and the prompt)
+            # since; ASSIGNING the tail threw them away, so the pane never saw
+            # the prompt and the first key typed landed at column 1.
+            with session._read_lock:
+                session._tail[:0] = prior
             # A snapshot that FILLED its cap was sliced at a raw byte
             # offset — serve its replay from a safe boundary, not the cut.
             session._tail_truncated = len(old) >= _SNAPSHOT_SCROLLBACK

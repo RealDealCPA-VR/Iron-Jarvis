@@ -99,7 +99,7 @@ describe("Empty — a press can mirror the page's busy state", () => {
 
   it("Build's empty stage passes the page's busy flag", () => {
     expect(read("app/terminals/page.tsx")).toContain(
-      'action={{ label: "New terminal", onClick: () => void addTerminal(selectedPath), disabled: busy }}',
+      'action={{ label: "New terminal", onClick: () => void addTerminal(newFolder), disabled: busy }}',
     );
   });
 });

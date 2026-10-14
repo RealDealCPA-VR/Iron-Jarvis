@@ -3287,6 +3287,22 @@ does not need a bump, stop and bump it.
   into the home that is held open/locked must be checked against the backup
   walk. Pin: `tests/test_backup_home_lock_v13371.py` (lock held in-process,
   as the daemon holds it; both halves mutation-checked).
+  v1.337.2 (USER BUG): typing into a RESTORED Build pane was "choppy, only a
+  few characters". Reproduced on a scratch daemon and rendered in a real
+  xterm.js 6.0 (`@xterm/headless`, scratch install). Two causes: (1)
+  `TerminalManager.restore` ASSIGNED the saved tail after `_spawn`, wiping the
+  bytes a pushing ConPTY had already recorded (its start-up + the prompt) — it
+  now PREPENDS under `_read_lock`; (2) a NEW pseudoconsole draws as if on a
+  blank screen with the cursor home (absolute `ESC[1;49H` after its prompt)
+  while xterm still shows the dead program's screen — `restore_reset(tail,
+  rows)` now ends with `modes.fresh_page(rows)` (DECSTR, CUP bottom, `rows`
+  LFs into the scrollback, ED2, home). Any new byte appended after a replay
+  must keep the terminal and ConPTY agreeing on the cursor. Build page: "New
+  terminal" uses `newFolder = selectedPath ?? activeCwd ?? lastFolder`
+  (`ij.build.folder`, written by a pick and by the pane in front) — the pick
+  lived only in page state. Pins: `tests/test_build_restore_typing_v13372.py`
+  (incl. a real-ConPTY restore), `dashboard/__tests__/build-folder-v1337-2.test.tsx`
+  (all mutations red).
 
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry

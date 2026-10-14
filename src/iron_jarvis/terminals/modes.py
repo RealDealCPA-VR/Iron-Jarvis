@@ -130,16 +130,45 @@ class ModeTracker:
         self.paste = False
 
 
-def restore_reset(tail: bytes) -> bytes:
+#: The page break between a restored pane's old screen and its new shell
+#: (v1.337.2), after the screen size: a soft reset (DECSTR: scroll region,
+#: origin and insert mode, attributes, cursor keys) and default colours.
+FRESH_PAGE_RESET = b"\x1b[!p\x1b[0m\x1b[r"
+
+
+def fresh_page(rows: int) -> bytes:
+    """Scroll the old screen up into the scrollback, then clear what is left
+    and put the cursor home.
+
+    A restored pane's NEW shell runs in a NEW pseudoconsole, and ConPTY draws
+    as if it started on a blank screen with the cursor at the top: after its
+    first prompt it moves the cursor to absolute rows (``ESC[1;49H``). The
+    pane's terminal, though, is still showing the dead program's last screen,
+    so every key the user typed was drawn over old lines near the top, or off
+    the part of the pane they were looking at — "typing is choppy, I can only
+    see a few characters". After this the terminal and ConPTY agree again,
+    and the old screen stays readable in the scrollback above."""
+    rows = max(1, min(int(rows or 24), 500))
+    return (
+        FRESH_PAGE_RESET
+        + b"\x1b[%d;1H" % rows
+        + b"\n" * rows
+        + b"\x1b[2J\x1b[H"
+    )
+
+
+def restore_reset(tail: bytes, rows: int = 24) -> bytes:
     """What to append after a RESTORED pane's replayed scrollback: every mouse
-    mode and bracketed paste off, the cursor shown again, and the main screen
-    back if the dead program left the terminal on the alternate one."""
+    mode and bracketed paste off, the cursor shown again, the main screen
+    back if the dead program left the terminal on the alternate one, and a
+    fresh page for the new shell (:func:`fresh_page`). ``rows`` is the
+    pane's saved height."""
     tracker = ModeTracker()
     tracker.feed(bytes(tail))
     out = MODE_RESET + b"\x1b[?25h"
     if tracker.alt:
         out += b"\x1b[?1049l"
-    return out
+    return out + fresh_page(rows)
 
 
 def has_mouse_report(data: str | bytes) -> bool:

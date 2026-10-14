@@ -97,6 +97,12 @@ const paneViewKey = (id: string) => `${PANE_VIEW_PREFIX}${id}`;
 /** Rail or canvas. Its own key — "ij_term_layout" is the RECT map. */
 const SHAPE_KEY = "ij.build.shape";
 
+/** The folder this window last worked in (v1.337.2): the last folder picked
+ *  or the pane in front's (a new terminal is put in front). "New terminal" opens
+ *  there when nothing is picked, so a restart or an update does not send the
+ *  user back through the folder tree to the project they were just in. */
+const BUILD_FOLDER_KEY = "ij.build.folder";
+
 // Cascading default (fallback only) so freshly opened panes stagger.
 function cascadeRect(i: number): Rect {
   return { x: 24 + (i % 5) * 34, y: 24 + (i % 5) * 34, width: 620, height: 380 };
@@ -188,6 +194,32 @@ export default function TerminalsPage() {
   const [shell, setShell] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // v1.337.2: the folder this window last worked in (BUILD_FOLDER_KEY).
+  const [lastFolder, setLastFolder] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(BUILD_FOLDER_KEY);
+      if (saved) setLastFolder(saved);
+    } catch {
+      /* private mode / blocked storage — no remembered folder */
+    }
+  }, []);
+  const rememberFolder = useCallback((path: string | null | undefined) => {
+    if (!path) return;
+    setLastFolder(path);
+    try {
+      window.localStorage.setItem(BUILD_FOLDER_KEY, path);
+    } catch {
+      /* still remembered for this session */
+    }
+  }, []);
+  const pickFolder = useCallback(
+    (path: string) => {
+      setSelectedPath(path);
+      rememberFolder(path);
+    },
+    [rememberFolder],
+  );
   // A terminal whose close was requested (from the pane's X) and is awaiting a
   // confirm — killing a live shell is irreversible, so we gate it.
   const [pendingClose, setPendingClose] = useState<string | null>(null);
@@ -633,6 +665,16 @@ export default function TerminalsPage() {
     return live[0]?.id ?? null;
   }, [terminals, focusedId]);
 
+  // v1.337.2: where "New terminal" opens — the folder picked in the tree,
+  // else the pane in front's folder, else the folder this window last worked
+  // in. The pane in front is remembered too, so closing it (a restored pane
+  // that misbehaves, say) still leaves its project as the next pane's folder.
+  const activeCwd = terminals.find((t) => t.id === activeId)?.cwd ?? null;
+  useEffect(() => {
+    rememberFolder(activeCwd);
+  }, [activeCwd, rememberFolder]);
+  const newFolder = selectedPath ?? activeCwd ?? lastFolder;
+
   /** Rename a pane from the rail (v1.219.0).
    *
    *  The same two steps the pane header already does, in the same order and for
@@ -931,7 +973,7 @@ export default function TerminalsPage() {
               <button
                 type="button"
                 data-testid="header-new-terminal"
-                onClick={() => addTerminal(selectedPath)}
+                onClick={() => addTerminal(newFolder)}
                 disabled={busy}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -998,7 +1040,7 @@ export default function TerminalsPage() {
                 onFocus={bringToFront}
                 onClose={(id) => setPendingClose(id)}
                 onRename={renamePane}
-                onNew={() => addTerminal(selectedPath)}
+                onNew={() => addTerminal(newFolder)}
                 busy={busy}
                 footer={
                   <button
@@ -1041,16 +1083,16 @@ export default function TerminalsPage() {
                   // v1.314.0 (UX wave 2): the biggest thing on a fresh Build
                   // page was this stage holding one grey line and no button.
                   // It now teaches and offers the SAME door as the header —
-                  // addTerminal(selectedPath), the one code path. The phrase
+                  // addTerminal(newFolder), the one code path. The phrase
                   // "No terminals yet" is kept (a review test matches it).
                   <div className="grid h-full place-items-center px-4">
                     <Empty
                       icon={<SquareTerminal size={26} />}
                       title="No terminals yet"
-                      action={{ label: "New terminal", onClick: () => void addTerminal(selectedPath), disabled: busy }}
+                      action={{ label: "New terminal", onClick: () => void addTerminal(newFolder), disabled: busy }}
                     >
-                      {selectedPath
-                        ? `A terminal is a command line on this PC. A new one opens in ${selectedPath}.`
+                      {newFolder
+                        ? `A terminal is a command line on this PC. A new one opens in ${newFolder}.`
                         : "A terminal is a command line on this PC. Open one here, or pick a project folder first to start in it."}
                     </Empty>
                   </div>
@@ -1506,7 +1548,7 @@ export default function TerminalsPage() {
                     it says "New terminal" too — one name for one thing. */}
                 {shape === "canvas" && (
                 <button
-                  onClick={() => addTerminal(selectedPath)}
+                  onClick={() => addTerminal(newFolder)}
                   disabled={busy}
                   title="Open a new terminal"
                   data-testid="canvas-new-terminal"
@@ -1616,7 +1658,7 @@ export default function TerminalsPage() {
                       <DirectoryTree
                         variant="calm"
                         selectedPath={selectedPath}
-                        onSelect={setSelectedPath}
+                        onSelect={pickFolder}
                         onOpenTerminal={(p) => addTerminal(p)}
                         onCollapse={() => changeTreeCollapsed(true)}
                         // v1.315.0: the tab bar above already has THE collapse

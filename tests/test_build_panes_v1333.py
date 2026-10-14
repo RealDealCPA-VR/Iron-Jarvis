@@ -143,12 +143,14 @@ def test_the_tracker_reads_several_modes_in_one_switch_and_a_full_reset():
 
 
 def test_restore_reset_leaves_the_alternate_screen_only_when_the_tail_ended_on_it():
+    # v1.337.2: every reset now ends on a fresh page for the new shell.
+    page = M.fresh_page(24)
     plain = M.restore_reset(b"$ ls\r\n" + ON)
-    assert plain == M.MODE_RESET + b"\x1b[?25h"
+    assert plain == M.MODE_RESET + b"\x1b[?25h" + page
     alt = M.restore_reset(b"\x1b[?1049h full screen app")
-    assert alt.endswith(b"\x1b[?1049l")
+    assert alt.endswith(b"\x1b[?1049l" + page)
     left = M.restore_reset(b"\x1b[?1049h app \x1b[?1049l$ ")
-    assert not left.endswith(b"\x1b[?1049l")
+    assert b"\x1b[?1049l" not in left
 
 
 def test_a_restored_pane_replays_the_dead_programs_tail_then_switches_its_modes_off(tmp_path):
@@ -165,7 +167,7 @@ def test_a_restored_pane_replays_the_dead_programs_tail_then_switches_its_modes_
     assert replay.startswith(old)
     # The switches come AFTER the old program's last byte: replayed into a
     # fresh xterm, they leave it with mouse tracking and bracketed paste off.
-    assert replay[len(old):] == M.MODE_RESET + b"\x1b[?25h"
+    assert replay[len(old):] == M.MODE_RESET + b"\x1b[?25h" + M.fresh_page(24)  # v1.337.2
     after = M.ModeTracker()
     after.feed(replay)
     assert not after.mouse_on and after.paste is False

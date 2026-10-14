@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.337.1 (2026-10-04).*
+holds itself to. Current as of v1.337.2 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,26 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Build terminals after an update (v1.337.2)
+
+**Typing into a terminal that came back.** After an update or a restart,
+Build brings your terminals back with their old screen and a fresh shell in
+the same folder. Typing into one used to be choppy: only a few characters
+showed, or nothing did, and closing it and opening a new one was the only fix.
+Two things were wrong. The new shell's prompt was lost while the terminal was
+being restored, and the new shell drew what you typed as if the screen were
+blank while the old screen was still showing, so your keys landed on top of
+old lines. Now the old screen moves up into the scrollback (scroll up to read
+it), the new shell starts on a clean page with its prompt, and typing works
+right away. A program that was running there (Claude Code, say) is not
+running any more; the Resume strip on the terminal starts it again.
+
+**New terminal opens where you were working.** Build remembers the folder
+you last worked in: the folder you picked in the Folders tab, or the folder
+of the terminal in front. **New terminal** opens there, after a restart too,
+even if you closed the terminal that came back. A folder you pick in the
+Folders tab still wins.
 
 ## Automatic backups work again (v1.337.1)
 
