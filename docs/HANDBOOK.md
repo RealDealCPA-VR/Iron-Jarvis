@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.338.0 (2026-10-04).*
+holds itself to. Current as of v1.339.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,26 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Answers survive a reload everywhere (v1.339.0)
+
+v1.336.0 made the main chat's answers survive a reload; three places still
+lost work. Now:
+
+- **The chat beside a Build terminal.** Reloading, leaving Build or
+  restarting the window no longer stops an answer that is being written: the
+  question is saved as you send it, and when you come back the pane picks the
+  answer up (or shows it, if it finished while you were away). Closing the
+  terminal still stops it, as before.
+- **The browser sidebar.** Its answers already kept going when the panel was
+  closed; reopening the panel mid-answer now shows the question and the
+  answer so far, and the rest keeps arriving under it (it used to start
+  mid-sentence, under no question).
+- **Jobs that split themselves into planned steps.** Continue after a restart
+  now carries on from the step that was cut off: finished steps are not done
+  again (their results are carried forward), and the interrupted step is told
+  to check what already happened before redoing anything. Before, the job
+  planned again from a short summary and repeated work.
 
 ## Every release rehearses an update (v1.338.0)
 

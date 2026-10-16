@@ -288,6 +288,7 @@ import {
   type UseChatStream,
   type PrepStep,
 } from "@/lib/useChatStream";
+import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
 import {
@@ -667,10 +668,8 @@ interface QueuedMessage {
 }
 /** v1.325.0: at most this many messages wait for the running reply. */
 const MAX_QUEUED = 3;
-/** v1.336.0: how much earlier than the question a turn may say it started
- *  (the page's clock and the daemon's are the same machine's, but a turn is
- *  stamped when it starts, a hair before the question's own stamp lands). */
-const REJOIN_SKEW_MS = 10_000;
+// v1.336.0's rejoin rule and the turn's name live in lib/turnRejoin.ts since
+// v1.339.0, so the Build pane's chat follows its turns the same way.
 
 /** v1.323.0: how much of a reply's reasoning is kept on the message (the
  *  daemon caps the POST lane's at the same size). */
@@ -1525,15 +1524,6 @@ const REASONING_LEVELS = ["low", "medium", "high"];
 /** v1.277.0: how many rows a typed model filter lists. */
 const MODEL_FILTER_MAX = 12;
 
-/** v1.278.0: a name for the turn about to run, so it can be steered (or stopped)
- *  by name. Chosen here — the daemon mints none (v1.241.0). */
-function mintTurnId(): string {
-  const rnd =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2);
-  return `chat-${Date.now().toString(36)}-${rnd}`;
-}
 
 function splitChoice(choice: string): { provider?: string; model?: string } {
   const i = choice.indexOf("::");
@@ -5677,27 +5667,15 @@ export default function ChatPage() {
   async function rejoinOrRetry(id: string, msgs: ChatMessage[], openGen: number) {
     const last = msgs[msgs.length - 1];
     const retry = () => setFailedTurn({ history: msgs, atts: attachmentsOf(last) });
-    let turn: { turn_id: string; status: string; running?: boolean; started_at?: string | null } | undefined;
-    try {
-      const res = await get<{ turns?: typeof turn[] }>(
-        `/chat/turns?thread_id=${encodeURIComponent(id)}&limit=1`,
-      );
-      turn = Array.isArray(res?.turns) ? res.turns[0] : undefined;
-    } catch {
-      turn = undefined; // an older daemon, or none: the Retry it always offered
-    }
+    // An older daemon, or no turn that answers it: the Retry it always offered.
+    const turn = await answeringTurn(get, id, last?.at);
     if (chatGenRef.current !== openGen) return;
-    const askedAt = last?.at ? Date.parse(last.at) : NaN;
-    const startedAt = turn?.started_at ? Date.parse(turn.started_at) : NaN;
-    const answersIt =
-      !!turn?.turn_id &&
-      (Number.isNaN(askedAt) || Number.isNaN(startedAt) || startedAt >= askedAt - REJOIN_SKEW_MS);
-    if (!answersIt || busy || sendingRef.current) {
+    if (!turn || busy || sendingRef.current) {
       retry();
       return;
     }
     sendingRef.current = true;
-    void completeChat(msgs, attachmentsOf(last), { rejoin: turn!.turn_id });
+    void completeChat(msgs, attachmentsOf(last), { rejoin: turn.turn_id });
   }
 
   async function openThread(id: string, opts: { restore?: boolean } = {}) {

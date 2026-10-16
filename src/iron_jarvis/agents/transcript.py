@@ -151,6 +151,77 @@ def _cut_off_note(engine: Any, run_id: str, call: Any, registry: Any) -> str:
     return interrupted_note(replay_safe(tool))
 
 
+# --- a decomposed run's plan (v1.339.0) -----------------------------------
+
+#: The note the step a stop cut off gets in front of its prompt on resume.
+STEP_RESUME_NOTE = (
+    "[Iron Jarvis stopped while this step was running (a restart or a crash)"
+    " and has resumed. Some of this step may already be done: check what is"
+    " already there before doing anything again.]"
+)
+
+
+def _write_plan(engine: Any, run_id: str, session_id: str, plan: str | None, results: str) -> None:
+    from ..core.models import RunPlan
+
+    try:
+        with session_scope(engine) as db:
+            row = db.get(RunPlan, run_id) or RunPlan(run_id=run_id)
+            row.session_id = session_id
+            if plan is not None:
+                row.plan_json = plan
+            row.results_json = results
+            row.updated_at = utcnow()
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — a plan record never fails a run
+        log.warning("could not save the plan of run %s", run_id, exc_info=True)
+
+
+async def save_plan(
+    engine: Any, run_id: str, session_id: str, plan: list[Any] | None, results: list[Any]
+) -> None:
+    """Keep run ``run_id``'s plan (when given) and its finished steps (off the
+    loop, best-effort). ``plan``/``results`` are ``PlanStep``/``StepResult``s."""
+    import asyncio
+    from dataclasses import asdict
+
+    try:
+        plan_text = None if plan is None else json.dumps([asdict(s) for s in plan])
+        results_text = json.dumps([asdict(r) for r in results])
+    except Exception:  # noqa: BLE001
+        return
+    await asyncio.to_thread(_write_plan, engine, run_id, session_id, plan_text, results_text)
+
+
+def has_plan(engine: Any, run_id: str) -> bool:
+    from ..core.models import RunPlan
+
+    with session_scope(engine) as db:
+        row = db.get(RunPlan, run_id)
+        return row is not None and (row.plan_json or "[]") != "[]"
+
+
+def load_plan(engine: Any, run_id: str) -> tuple[list[Any], list[Any]] | None:
+    """``(plan, finished results)`` run ``run_id`` kept, or None."""
+    from ..core.models import RunPlan
+    from .decompose import PlanStep, StepResult
+
+    with session_scope(engine) as db:
+        row = db.get(RunPlan, run_id)
+        if row is None:
+            return None
+        plan_text, results_text = row.plan_json or "[]", row.results_json or "[]"
+    try:
+        plan = [PlanStep(**s) for s in json.loads(plan_text)]
+        results = [StepResult(**r) for r in json.loads(results_text)]
+    except (ValueError, TypeError):
+        return None
+    if not plan or len(results) > len(plan):
+        return None
+    return plan, results
+
+
 def load_for_resume(engine: Any, run_id: str, registry: Any = None) -> list[Any] | None:
     """The messages a resumed run starts from, or None when run ``run_id``
     kept none. Every tool call without a result gets one (see the module

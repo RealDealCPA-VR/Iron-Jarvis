@@ -59,6 +59,8 @@ const H = vi.hoisted(() => {
       undoRows: [] as Record<string, unknown>[],
       /** When set, POST /undo/{id} fails with this (the guard's refusal). */
       undoFail: null as { detail: string; status: number } | null,
+      /** v1.339.0: `GET /chat/turns?thread_id=` rows, by thread. */
+      turns: {} as Record<string, Record<string, unknown>[]>,
     },
   };
 });
@@ -71,6 +73,8 @@ vi.mock("@/lib/api", () => ({
     H.api.gets.push(path);
     if (path === "/projects") return { projects: H.api.projects };
     if (path === "/undo?session_id=chat") return { actions: H.api.undoRows };
+    const turnsFor = /^\/chat\/turns\?thread_id=([^&]+)/.exec(path);
+    if (turnsFor) return { turns: H.api.turns[decodeURIComponent(turnsFor[1])] ?? [] };
     const m = /^\/chat\/threads\/(.+)$/.exec(path);
     if (m) {
       const id = decodeURIComponent(m[1]);
@@ -126,6 +130,8 @@ const S = vi.hoisted(() => {
     FakeStreamError,
     stream: {
       bodies: [] as Record<string, unknown>[],
+      /** v1.339.0: each run's options (`rejoin`). */
+      opts: [] as { rejoin?: string }[],
       result: { reply: "ok" } as Record<string, unknown>,
       reject: null as Error | null,
       streaming: false,
@@ -146,8 +152,14 @@ vi.mock("@/lib/useChatStream", () => ({
     text: S.stream.text,
     tools: S.stream.tools,
     approval: S.stream.approval,
-    run: async (body: Record<string, unknown>) => {
+    run: async (
+      body: Record<string, unknown>,
+      _onToken?: unknown,
+      _onReset?: unknown,
+      opts?: { rejoin?: string },
+    ) => {
       S.stream.bodies.push(body);
+      S.stream.opts.push(opts ?? {});
       if (S.stream.reject) throw S.stream.reject;
       return S.stream.result;
     },
@@ -214,6 +226,8 @@ beforeEach(() => {
   H.api.undoRows = [];
   H.api.undoFail = null;
   S.stream.bodies = [];
+  S.stream.opts = [];
+  H.api.turns = {};
   S.stream.result = { reply: "ok" };
   S.stream.reject = null;
   S.stream.streaming = false;
@@ -331,8 +345,8 @@ describe("engine picker", () => {
     expect(S.stream.bodies[0].provider).toBe("claude-cli");
     // A fresh pick carries no model pin — never a stale or empty one.
     expect("model" in S.stream.bodies[0]).toBe(false);
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    const setup = H.api.puts[0].body.setup as Record<string, unknown>;
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    const setup = H.api.puts[1].body.setup as Record<string, unknown>;
     expect(setup.provider).toBe("claude-cli");
     expect(setup.model).toBe(""); // no stored model for a fresh pick
     expect(setup.workspace_dir).toBe(CWD);
@@ -354,8 +368,8 @@ describe("project grounding (context spine)", () => {
     await waitFor(() => expect(S.stream.bodies.length).toBe(1));
     expect(S.stream.bodies[0].project_id).toBe("pr1");
     // ...and the thread save tags into the same project.
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    expect(H.api.puts[0].body.project_id).toBe("pr1");
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    expect(H.api.puts[1].body.project_id).toBe("pr1");
   });
 
   it("a cwd OUTSIDE every root sends no project_id (plain folder grounding)", async () => {
@@ -386,9 +400,11 @@ describe("one thread per pane", () => {
   it("first save PUTs 'new' with the Build title; the real id lands in localStorage; the SECOND save reuses it", async () => {
     render(<PaneChat paneId="p1" cwd={CWD} />);
     await typeAndSend("turn one");
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
     expect(H.api.puts[0].path).toBe("/chat/threads/new");
     expect(H.api.puts[0].body.title).toBe("Build: demo");
+    // The turn's own reply save already writes the REAL id.
+    expect(H.api.puts[1].path).toBe("/chat/threads/th_1");
     // The id persists per paneId — the pane finds its room again.
     await waitFor(() =>
       expect(window.localStorage.getItem("ij.pane.thread.p1")).toBe("th_1"),
@@ -396,9 +412,9 @@ describe("one thread per pane", () => {
     expect(paneThreadKey("p1")).toBe("ij.pane.thread.p1");
     // Second turn: the serialized chain writes the REAL id, never "new" again.
     await typeAndSend("turn two");
-    await waitFor(() => expect(H.api.puts.length).toBe(2));
-    expect(H.api.puts[1].path).toBe("/chat/threads/th_1");
-    expect("title" in H.api.puts[1].body).toBe(false); // rename-safe
+    await waitFor(() => expect(H.api.puts.length).toBe(4));
+    expect(H.api.puts[2].path).toBe("/chat/threads/th_1");
+    expect("title" in H.api.puts[2].body).toBe(false); // rename-safe
   });
 
   it("a stored thread reloads: transcript + engine restore; setup keys the pane does not manage ride forward verbatim", async () => {
@@ -436,9 +452,9 @@ describe("one thread per pane", () => {
     expect(S.stream.bodies[0].approval_mode).toBe("yolo");
     // The whole history rides the wire (stateless backend).
     expect((S.stream.bodies[0].messages as unknown[]).length).toBe(3);
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    expect(H.api.puts[0].path).toBe("/chat/threads/th_9");
-    const setup = H.api.puts[0].body.setup as Record<string, unknown>;
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    expect(H.api.puts[1].path).toBe("/chat/threads/th_9");
+    const setup = H.api.puts[1].body.setup as Record<string, unknown>;
     // THE GUARD: unmanaged keys never clobbered by the pane's autosave.
     expect(setup.tools).toEqual(["shell"]);
     expect(setup.skill).toBe("deploy");
@@ -483,8 +499,8 @@ describe("receipt + doors: the done frame's server truth renders", () => {
     const door = screen.getByRole("link", { name: /Workflows/i });
     expect(door).toHaveAttribute("href", "/workflows");
     // ...and the saved bubble carries the same server truth verbatim.
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    const saved = H.api.puts[0].body.messages as Record<string, unknown>[];
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    const saved = H.api.puts[1].body.messages as Record<string, unknown>[];
     expect(saved[1].route).toEqual({
       requested: "",
       provider: "mock",
@@ -517,8 +533,8 @@ describe("honest failure states", () => {
     expect(screen.getByText("try this")).toBeInTheDocument();
     // FAILED turns save too (the chat page's own rule) — nothing is lost to a
     // pane close.
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    const saved = H.api.puts[0].body.messages as Record<string, unknown>[];
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    const saved = H.api.puts[1].body.messages as Record<string, unknown>[];
     expect(saved.length).toBe(2);
     expect(saved[1].interrupted).toBe(true);
   });
@@ -611,8 +627,8 @@ describe("mid-turn approval (BC1 D1)", () => {
     // The grant rides the next turn — "stops asking here" made true.
     expect(S.stream.bodies[0].tools).toEqual(["shell"]);
     // ...and the turn's save persists it into the thread setup.
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    const setup = H.api.puts[0].body.setup as Record<string, unknown>;
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    const setup = H.api.puts[1].body.setup as Record<string, unknown>;
     expect(setup.tools).toEqual(["shell"]);
   });
 });
@@ -702,8 +718,8 @@ describe("save-time setup refresh (BC1 D3)", () => {
       model: "qwen-14b",
     };
     await typeAndSend("go");
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
-    const setup = H.api.puts[0].body.setup as Record<string, unknown>;
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    const setup = H.api.puts[1].body.setup as Record<string, unknown>;
     // The FOREIGN change survives — mount-time state is not resurrected over
     // it ("shell" is gone because /chat disarmed it; the pane made no grant).
     expect(setup.tools).toEqual(["web_search"]);
@@ -714,6 +730,78 @@ describe("save-time setup refresh (BC1 D3)", () => {
     expect(setup.model).toBe("qwen-14b");
     // The pane still overwrites the one key it owns.
     expect(setup.workspace_dir).toBe(CWD);
+  });
+});
+
+describe("v1.339.0: a pane's chat turn outlives a reload", () => {
+  it("the question is saved as it is sent, and the turn is NAMED and tied to the conversation", async () => {
+    window.localStorage.setItem("ij.pane.thread.p1", "th_9");
+    H.api.threads["th_9"] = {
+      id: "th_9",
+      messages: [
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: "before" },
+      ],
+      setup: {},
+    };
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    await screen.findByText("before");
+    await typeAndSend("build it");
+    await waitFor(() => expect(H.api.puts.length).toBe(2)); // v1.339.0: the question, then the reply
+    // The FIRST save carries the question alone — a reload mid-turn keeps it.
+    const first = H.api.puts[0].body.messages as Record<string, unknown>[];
+    expect(first[first.length - 1]).toMatchObject({ role: "user", content: "build it" });
+    expect(String(S.stream.bodies[0].turn_id)).toMatch(/^chat-/);
+    expect(S.stream.bodies[0].thread_id).toBe("th_9");
+    expect(S.stream.opts[0]).toEqual({});
+  });
+
+  it("a NEW conversation's turn is linked to it once its first save names it", async () => {
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    await typeAndSend("first words");
+    await waitFor(() => {
+      const link = H.api.posts.find((p) => /^\/chat\/turns\/.+\/thread$/.test(p.path));
+      expect(link?.body).toEqual({ thread_id: "th_1" });
+      expect(link?.path).toBe(
+        `/chat/turns/${encodeURIComponent(String(S.stream.bodies[0].turn_id))}/thread`,
+      );
+    });
+  });
+
+  it("reopened on an unanswered question, the pane FOLLOWS the turn that answers it", async () => {
+    window.localStorage.setItem("ij.pane.thread.p1", "th_9");
+    const asked = new Date(Date.now() - 5_000).toISOString();
+    H.api.threads["th_9"] = {
+      id: "th_9",
+      messages: [{ role: "user", content: "still working?", at: asked }],
+      setup: {},
+    };
+    H.api.turns["th_9"] = [
+      { turn_id: "chat-live-1", status: "running", running: true, started_at: asked },
+    ];
+    S.stream.result = { reply: "Done while you were away." };
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    await screen.findByText("Done while you were away.");
+    expect(S.stream.opts[0]).toEqual({ rejoin: "chat-live-1" });
+    await waitFor(() => expect(H.api.puts.length).toBe(1));
+    const saved = H.api.puts[0].body.messages as Record<string, unknown>[];
+    expect(saved.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("a turn that started BEFORE the question does not answer it (nothing is followed)", async () => {
+    window.localStorage.setItem("ij.pane.thread.p1", "th_9");
+    H.api.threads["th_9"] = {
+      id: "th_9",
+      messages: [{ role: "user", content: "new question", at: new Date().toISOString() }],
+      setup: {},
+    };
+    H.api.turns["th_9"] = [
+      { turn_id: "chat-old", status: "done", started_at: new Date(Date.now() - 3_600_000).toISOString() },
+    ];
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    await screen.findByText("new question");
+    await waitFor(() => expect(H.api.gets.some((g) => g.startsWith("/chat/turns?"))).toBe(true));
+    expect(S.stream.bodies.length).toBe(0);
   });
 });
 

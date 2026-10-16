@@ -48,6 +48,7 @@ import {
 import { get, post, put, ApiError } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
+import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 // v1.329.0: the ONE markdown renderer (CLAUDE.md, v1.230.0) — remote images
@@ -94,6 +95,7 @@ import {
 import {
   buildTurnBody,
   engineLabel,
+  notePaneTurn,
   engineOptions,
   mergeSetup,
   paneBasename,
@@ -342,8 +344,18 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     get<PaneThreadDetail>(`/chat/threads/${encodeURIComponent(stored)}`)
       .then((t) => {
         if (cancelled) return;
-        setMessages(Array.isArray(t.messages) ? t.messages : []);
+        const loaded = Array.isArray(t.messages) ? t.messages : [];
+        setMessages(loaded);
         setThreadId(t.id);
+        // v1.339.0: the pane was reloaded (or left) while a turn ran. The
+        // daemon kept running it; follow it, so its answer lands here.
+        if (loaded.length && loaded[loaded.length - 1]?.role === "user") {
+          void answeringTurn(get, t.id, loaded[loaded.length - 1]?.at).then((turn) => {
+            if (cancelled || !turn) return;
+            setSending(true);
+            void completeTurn(loaded, [], turn.turn_id);
+          });
+        }
         baseSetupRef.current = t.setup ?? null;
         const p = t.setup?.provider;
         if (typeof p === "string" && p) {
@@ -836,6 +848,33 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     setInput("");
     setAttachments([]);
     setSending(true);
+    // v1.339.0: the question is saved as it is sent, so a reload mid-turn
+    // still has it — and can follow the turn that answers it.
+    queueSave(history);
+    await completeTurn(history, atts);
+  }
+
+  /** Run (or, with `rejoin`, follow) the turn that answers `history`'s last
+   *  question, then save the conversation with its reply. */
+  async function completeTurn(
+    history: PaneMessage[],
+    atts: typeof attachmentsRef.current,
+    rejoin?: string,
+  ) {
+    const turnId = rejoin ?? mintTurnId();
+    const saveBox = saveTargetRef.current;
+    if (!rejoin && !saveBox.id) {
+      // A NEW conversation: its first save (queued above) names it; link the
+      // turn to it once that lands, in the background.
+      void saveChainRef.current
+        .then(() =>
+          saveBox.id
+            ? post(`/chat/turns/${encodeURIComponent(turnId)}/thread`, { thread_id: saveBox.id })
+            : undefined,
+        )
+        .catch(() => {});
+    }
+    notePaneTurn(paneId, turnId);
     try {
       const res = await stream.run(
         buildTurnBody({
@@ -858,7 +897,12 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           // v1.329.0: the permission chip's level (the stored posture until
           // the user picks one here).
           approvalMode: approvalRef.current,
+          turnId,
+          threadId: saveBox.id,
         }),
+        undefined,
+        undefined,
+        rejoin ? { rejoin } : undefined,
       );
       const reply: PaneMessage = {
         role: "assistant",
@@ -899,6 +943,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
       queueSave(full);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      notePaneTurn(paneId, null);
       setSending(false);
     }
   }

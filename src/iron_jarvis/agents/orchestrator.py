@@ -2170,8 +2170,9 @@ class Orchestrator:
 
     def _resumable_run(self, session_id: str) -> str:
         """The newest top-level run of ``session_id`` that kept its
-        conversation (v1.337.0), or "". One indexed read."""
-        from .transcript import has_transcript
+        conversation (v1.337.0) — or, for a planned-steps run, its plan
+        (v1.339.0) — or "". One indexed read."""
+        from .transcript import has_plan, has_transcript
 
         with session_scope(self.p.engine) as db:
             runs = list(
@@ -2182,7 +2183,7 @@ class Orchestrator:
                 ).all()
             )
         for r in runs:
-            if has_transcript(self.p.engine, r.id):
+            if has_transcript(self.p.engine, r.id) or has_plan(self.p.engine, r.id):
                 return r.id
         return ""
 

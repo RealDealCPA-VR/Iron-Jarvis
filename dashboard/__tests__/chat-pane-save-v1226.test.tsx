@@ -139,17 +139,16 @@ describe("PaneChat autosave — a 404 resets the target", () => {
     await screen.findByText("sure");
     H.api.putQueue.push(new H.FakeApiError("thread not found", 404));
     await typeAndSend("first");
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
+    // v1.339.0: the question's own save meets the 404; the reply's save —
+    // the NEXT one — re-creates the conversation.
+    await waitFor(() => expect(H.api.puts.length).toBe(2));
     expect(H.api.puts[0].path).toBe("/chat/threads/th_9");
+    expect(H.api.puts[1].path).toBe("/chat/threads/new");
     await waitFor(() =>
-      expect(window.localStorage.getItem(paneThreadKey("p1"))).toBeNull(),
+      expect(window.localStorage.getItem(paneThreadKey("p1"))).toBe("th_new"),
     );
     // A 404 is handled by the reset, not by a chip.
     expect(screen.queryByText(/Couldn't save this conversation/)).toBeNull();
-    await typeAndSend("second");
-    await waitFor(() => expect(H.api.puts.length).toBe(2));
-    expect(H.api.puts[1].path).toBe("/chat/threads/new");
-    expect(window.localStorage.getItem(paneThreadKey("p1"))).toBe("th_new");
   });
 });
 
@@ -157,17 +156,19 @@ describe("PaneChat autosave — other failures raise the chip", () => {
   it("a 500 renders the chip; Retry re-issues the PUT and success retires it", async () => {
     render(<PaneChat paneId="p1" cwd={CWD} />);
     await screen.findByText("sure");
+    // v1.339.0: a turn saves twice (the question, then the reply) — both fail.
+    H.api.putQueue.push(new H.FakeApiError("db locked", 500));
     H.api.putQueue.push(new H.FakeApiError("db locked", 500));
     await typeAndSend("first");
     expect(
       await screen.findByText(/Couldn't save this conversation: db locked/),
     ).toBeInTheDocument();
-    expect(H.api.puts.length).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(H.api.puts.length).toBe(2));
-    expect(H.api.puts[1].path).toBe("/chat/threads/th_9");
-    // The exact array whose save failed is what Retry re-sends.
-    expect(H.api.puts[1].body.messages).toEqual(H.api.puts[0].body.messages);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(H.api.puts.length).toBe(3));
+    expect(H.api.puts[2].path).toBe("/chat/threads/th_9");
+    // The exact array whose save failed LAST is what Retry re-sends.
+    expect(H.api.puts[2].body.messages).toEqual(H.api.puts[1].body.messages);
     await waitFor(() =>
       expect(screen.queryByText(/Couldn't save this conversation/)).toBeNull(),
     );
@@ -178,7 +179,7 @@ describe("PaneChat autosave — other failures raise the chip", () => {
     await screen.findByText("sure");
     H.api.putQueue.push(new H.FakeApiError("Failed to fetch", 0));
     await typeAndSend("first");
-    await waitFor(() => expect(H.api.puts.length).toBe(1));
+    await waitFor(() => expect(H.api.puts.length).toBe(2));
     expect(screen.queryByText(/Couldn't save this conversation/)).toBeNull();
   });
 });

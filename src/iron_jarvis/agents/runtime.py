@@ -1764,6 +1764,7 @@ class AgentRuntime:
         # the one resume note. No transcript (an older run, a decomposed run)
         # keeps the recap-only start below.
         _resumed = False
+        _resume_plan = None
         _resume_run = _run_options.get("resume_run")
         if isinstance(_resume_run, str) and _resume_run:
             _carried = await asyncio.to_thread(
@@ -1778,6 +1779,12 @@ class AgentRuntime:
                     ),
                 ]
                 _resumed = True
+            else:
+                # v1.339.0: a DECOMPOSED run kept its plan and finished steps
+                # instead of one conversation; it resumes in that lane.
+                _resume_plan = await asyncio.to_thread(
+                    _transcript.load_plan, self.p.engine, _resume_run
+                )
         # Auto-inject any configured default skills (§23) into the prompt.
         default_skills = getattr(self.p.config, "default_skills", None)
         if default_skills:
@@ -2052,6 +2059,9 @@ class AgentRuntime:
         # plan would throw the conversation it resumed from away.
         if _resumed:
             engage_decomposed = False
+        # v1.339.0: ...and a resumed DECOMPOSED run carries on in its plan.
+        if _resume_plan is not None:
+            engage_decomposed = True
         if engage_decomposed:
             # WAVE C3 (v1.203.0): a measured-weak envelope that demands
             # per-step verification gates EVERY step — criteria-less ones on
@@ -2076,6 +2086,7 @@ class AgentRuntime:
                 record_outcome=step_outcome_recorder(
                     self.p, env_provider, env_model
                 ),
+                **({"resume": _resume_plan} if _resume_plan is not None else {}),
             )
         # B4 (v1.202.0): the loop actually BENT under a measured envelope — say
         # so, ONCE per run. Published HERE, after the decompose decision has

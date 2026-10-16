@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
+import { paneTurn } from "@/components/terminal/paneChatCore";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
@@ -895,6 +896,10 @@ export default function TerminalsPage() {
   );
 
   const closeTerminal = useCallback((id: string) => {
+    // v1.339.0: closing a terminal ends its chat's running turn too — the
+    // daemon keeps a NAMED turn running when its pane merely goes away.
+    const turn = paneTurn(id);
+    if (turn) post(`/chat/turns/${encodeURIComponent(turn)}/stop`).catch(() => {});
     // Optimistically remove the pane, then kill server-side. Its terminal
     // and socket OUTLIVE an unmount (v1.243.0 — that is how a return to
     // Build is instant), so closing is the one place they are ended for good.

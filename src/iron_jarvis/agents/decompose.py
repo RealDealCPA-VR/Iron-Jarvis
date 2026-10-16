@@ -939,6 +939,16 @@ def _run_steps(run) -> int:
         return 0
 
 
+def _prior_line(r: "StepResult") -> str:
+    """One finished step as later steps read it (the running context)."""
+    if not r.attempted:
+        return f"Step {r.index + 1} (NOT ATTEMPTED): {r.goal}"
+    return (
+        f"Step {r.index + 1} ({'done' if r.ok else 'FAILED'}): {r.goal} -> "
+        + " ".join((r.output or "(no output)").split())[:400]
+    )
+
+
 def _step_prompt(
     task_line: str, prior: list[str], index: int, total: int, step: PlanStep, retry_reason: str
 ) -> str:
@@ -974,6 +984,8 @@ async def execute_plan(
     judge_llm: "RoleResolution | None" = None,
     verify_all: bool = False,
     record_outcome=None,
+    done: list[StepResult] | None = None,
+    on_step=None,
 ) -> list[StepResult]:
     """Execute each step in a FRESH bounded mini-loop through the runtime's
     ``perceive_act`` seam (same routing/streaming/tool machinery, same run
@@ -1008,7 +1020,13 @@ async def execute_plan(
     granted at most what the run has left, and when nothing is left the
     remaining steps are recorded as NOT ATTEMPTED instead of quietly running the
     plan past the number the user typed. A session with no explicit budget is
-    unchanged from v1.132.0 — per-stage rounds, no aggregate ceiling."""
+    unchanged from v1.132.0 — per-stage rounds, no aggregate ceiling.
+
+    ``done`` (v1.339.0, resume): the results a run a restart cut off had
+    already finished, in order — those steps are not run again, their results
+    are carried forward, and the first step after them (the one the stop cut
+    off) is told so. ``on_step(results)`` is awaited after every step's result
+    is recorded (the plan record, ``agents/transcript.save_plan``)."""
     p = runtime.p
     workspace = Path(session.workspace_path)
     task_line = " ".join((session.task or "").split())[:MAX_TASK_ONELINER_CHARS]
@@ -1052,9 +1070,12 @@ async def execute_plan(
     # that legitimately succeeds still clears its own signature's streak, so
     # this only ever remembers calls that keep failing.
     breaker_state: dict[str, Any] = {}
-    results: list[StepResult] = []
-    prior: list[str] = []
+    results: list[StepResult] = list(done or [])
+    prior: list[str] = [_prior_line(r) for r in results]
+    resume_at = len(results) if done is not None else -1
     for index, step in enumerate(plan):
+        if index < resume_at:
+            continue  # finished before the restart; its result is carried
         step_left = _left()
         if step_left is not None and step_left <= 0:
             # Honest degradation: say what did not happen, in the same shape the
@@ -1076,6 +1097,8 @@ async def execute_plan(
                 )
             )
             prior.append(f"Step {index + 1} (NOT ATTEMPTED): {step.goal}")
+            if on_step is not None:
+                await on_step(results)
             await p.event_bus.publish(
                 EventType.PLAN_STEP_COMPLETED,
                 # ADDITIVE key: an attempted step's payload is byte-identical
@@ -1121,14 +1144,12 @@ async def execute_plan(
             # Set only once the retry actually RUNS: a step that was denied its
             # retry for want of budget did not retry.
             retried = retried or attempt == 1
-            messages = [
-                LLMMessage(
-                    role="user",
-                    content=_step_prompt(
-                        task_line, prior, index, len(plan), step, retry_reason
-                    ),
-                )
-            ]
+            prompt = _step_prompt(task_line, prior, index, len(plan), step, retry_reason)
+            if index == resume_at:
+                from .transcript import STEP_RESUME_NOTE
+
+                prompt = STEP_RESUME_NOTE + "\n\n" + prompt
+            messages = [LLMMessage(role="user", content=prompt)]
             finished, text = await runtime.perceive_act(
                 run,
                 session,
@@ -1182,10 +1203,9 @@ async def execute_plan(
                 await asyncio.to_thread(record_outcome, bool(ok))
             except Exception:  # noqa: BLE001
                 pass
-        prior.append(
-            f"Step {index + 1} ({'done' if ok else 'FAILED'}): {step.goal} -> "
-            + " ".join((output or "(no output)").split())[:400]
-        )
+        prior.append(_prior_line(results[-1]))
+        if on_step is not None:
+            await on_step(results)
         payload: dict[str, Any] = {"run_id": run.id, "index": index, "ok": ok}
         # HONEST RETRY DISCLOSURE (v1.203.0, Wave C3): an ADDITIVE key, never a
         # second event (stepLabel.ts renders one line per event — a duplicate
@@ -1305,6 +1325,7 @@ async def run_decomposed(
     verify_all: bool = False,
     adaptations: list[str] | None = None,
     record_outcome=None,
+    resume: "tuple[list[PlanStep], list[StepResult]] | None" = None,
 ) -> str | None:
     """The decomposed path: plan, then execute + verify each step, then
     assemble. Returns the final answer text, or ``None`` when the planner
@@ -1348,11 +1369,27 @@ async def run_decomposed(
     # thinking showed the same spinner as a run that was stuck. The plan.* EVENTS
     # below are unchanged (the Activity feed consumes them); these frames go to
     # the ONE browser watching this session.
-    if sink is not None:
-        sink.phase("planning", "working out the steps")
-    plan = await plan_task(runtime, run, session, agent_def, llm=plan_llm)
-    if plan is None:
-        return None
+    # RESUME (v1.339.0): a run a restart cut off kept its plan and the steps
+    # it finished (`agents/transcript.save_plan`); Continue picks up there
+    # instead of re-planning.
+    done: list[StepResult] | None = None
+    if resume is not None:
+        plan, done = list(resume[0]), list(resume[1])
+    else:
+        if sink is not None:
+            sink.phase("planning", "working out the steps")
+        plan = await plan_task(runtime, run, session, agent_def, llm=plan_llm)
+        if plan is None:
+            return None
+    engine = getattr(p, "engine", None)
+    on_step = None
+    if engine is not None:
+        from . import transcript as _transcript
+
+        await _transcript.save_plan(engine, run.id, session.id, plan, done or [])
+
+        async def on_step(results: list[StepResult]) -> None:
+            await _transcript.save_plan(engine, run.id, session.id, None, results)
     await runtime.p.event_bus.publish(
         EventType.PLAN_CREATED,
         {"run_id": run.id, "steps": [s.goal for s in plan]},
@@ -1376,6 +1413,8 @@ async def run_decomposed(
         judge_llm=judge_llm,
         verify_all=verify_all,
         record_outcome=record_outcome,
+        done=done,
+        on_step=on_step,
     )
     # C3: a goal-gated retry exists ONLY because the envelope closed the
     # criteria-less silent skip — that is a realized bend, said once.

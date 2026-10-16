@@ -507,6 +507,35 @@ if (absent.length) {
       expect(said).toEqual(["you:remember 41", "jarvis:Noted: 41."]);
     });
 
+    it("v1.339.0: reopened mid-answer, the question and the answer so far come back and keep growing", async () => {
+      const h = await panelReady(READY);
+      h.emit("state", { running: true });
+      h.emit("history", {
+        turns: [
+          { role: "user", text: "remember 41" },
+          { role: "assistant", text: "Noted: 41." },
+        ],
+        live: { question: "what was the number?", answer: "It was " },
+      });
+      h.emit("delta", { text: "41." });
+      const said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      // ONE answer bubble, under its question — not a bare "41." with no question.
+      expect(said).toEqual([
+        "you:remember 41",
+        "jarvis:Noted: 41.",
+        "you:what was the number?",
+        "jarvis:It was 41.",
+      ]);
+    });
+
+    it("v1.339.0: reopened before the first word, the question shows and the answer starts fresh", async () => {
+      const h = await panelReady(READY);
+      h.emit("history", { turns: [], live: { question: "summarise this page", answer: "" } });
+      h.emit("delta", { text: "This page is about tax forms." });
+      const said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      expect(said).toEqual(["you:summarise this page", "jarvis:This page is about tax forms."]);
+    });
+
     it("the new-conversation button empties the transcript and posts reset", async () => {
       const h = await panelReady(READY);
       h.emit("history", { turns: [{ role: "user", text: "old" }, { role: "assistant", text: "older" }] });

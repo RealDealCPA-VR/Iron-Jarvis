@@ -3344,6 +3344,40 @@ does not need a bump, stop and bump it.
   endpoint probes 2.5 s vs a 3 s answer, the claude catalog 1 s, the MCP idle
   loop 2 s) now sit far from both the fast path and the regression.
 
+- **The pi-durable borrow, finished: every surface rejoins, and a planned run
+  resumes its steps** (v1.339.0; supersedes the v1.336.0/v1.337.0 "known
+  limits"). BUILD PANE CHAT: `PaneChat` names every turn
+  (`lib/turnRejoin.mintTurnId`, shared with the chat page now, with
+  `REJOIN_SKEW_MS` and `answeringTurn`/`turnAnswers` — the chat page's
+  `rejoinOrRetry` calls them), sends `turn_id` + `thread_id`
+  (`buildTurnBody` `turnId`/`threadId`), SAVES THE QUESTION AT SEND (a turn
+  now makes two PUTs — question, then reply; the pane tests were moved to
+  `puts[1]`), links a new conversation's turn after its first save
+  (`POST /chat/turns/{id}/thread`), and on load follows the newest turn that
+  answers a trailing user message (`completeTurn(..., rejoin)`). A named turn
+  survives its connection, so CLOSING A TERMINAL stops it by name:
+  `paneChatCore.notePaneTurn/paneTurn` (module map) read by the page's
+  `closeTerminal` → `POST /chat/turns/{id}/stop`; leaving Build does not.
+  SIDEBAR: `PanelTurns.history_view` carries `live: {question, answer}` while a
+  turn runs and its exchange is not yet remembered; `sidepanel.ts`
+  `paintHistory` paints them and sets `streaming` to the answer bubble so the
+  next deltas extend it. DECOMPOSED RESUME: `core/models.RunPlan` (plan_json,
+  results_json) written by `run_decomposed` when the plan is made and after
+  EVERY step result (`execute_plan(on_step=)`, both branches incl. not
+  attempted) via `agents/transcript.save_plan`; `load_plan`/`has_plan`;
+  `Orchestrator._resumable_run` accepts a run with a transcript OR a plan; the
+  runtime, when the resumed run has no transcript, loads the plan and FORCES
+  the decomposed lane (`run_decomposed(resume=(plan, done))`, passed only when
+  set — the test doubles take no kwarg) — a native tool-caller whose fresh run
+  would never plan still continues its plan. `execute_plan(done=)` skips the
+  finished steps, seeds `prior` from them (`_prior_line`, the one formatter),
+  and prepends `STEP_RESUME_NOTE` to the cut-off step's prompt. Pins:
+  `tests/test_decomposed_resume_v1339.py`, `tests/test_browser_sidebar_rejoin_v1339.py`,
+  `dashboard/__tests__/{pane-chat-v1206,build-pane-turn-stop-v1339,sidepanel-runtime-v1242}.test.*`
+  (every part mutation-checked). A MUTATION OF `sidepanel.ts` MUST BUILD: the
+  runtime test runs `extensions/chrome/dist`, and a failed esbuild/tsc keeps the
+  previous bundle — an `if (false)` mutant "survived" that way.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

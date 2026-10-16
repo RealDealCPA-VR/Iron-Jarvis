@@ -330,12 +330,22 @@ function clearTranscript(): void {
  */
 function paintHistory(payload: Record<string, unknown>): void {
   const turns = Array.isArray(payload["turns"]) ? (payload["turns"] as Array<Record<string, unknown>>) : [];
-  if (turns.length === 0) return;
+  // v1.339.0: the turn still running when this panel was reopened — its
+  // question and the answer so far. The deltas that follow extend that answer.
+  const live = (payload["live"] ?? null) as { question?: unknown; answer?: unknown } | null;
+  const question = live && typeof live.question === "string" ? live.question : "";
+  if (turns.length === 0 && !question) return;
   if (el.transcript?.querySelector(".turn, .work")) return;
   for (const turn of turns) {
     const text = typeof turn["text"] === "string" ? (turn["text"] as string) : "";
     if (!text) continue;
     say(turn["role"] === "user" ? "you" : "jarvis", text);
+  }
+  if (question) {
+    say("you", question);
+    const answer = live && typeof live.answer === "string" ? live.answer : "";
+    streaming = answer ? say("jarvis", answer) : null;
+    setTurn(true);
   }
 }
 

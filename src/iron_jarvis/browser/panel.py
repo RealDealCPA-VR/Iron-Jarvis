@@ -961,12 +961,21 @@ class PanelTurns:
     # --- the conversation and the switch (v1.270.0) -----------------------------
 
     def history_view(self) -> dict[str, Any]:
-        """The ``history`` payload: the conversation as the panel paints it."""
-        return {
+        """The ``history`` payload: the conversation as the panel paints it.
+
+        v1.339.0: while a turn RUNS, ``live`` carries its question and the
+        answer streamed so far. The turn keeps running when the side panel is
+        closed (it lives here, not in the panel), but a reopened panel was
+        replayed only the finished exchanges — the deltas that followed landed
+        under no question, starting mid-sentence."""
+        view: dict[str, Any] = {
             "turns": [
                 {"role": row["role"], "text": row["content"]} for row in self._history
             ]
         }
+        if self.running and not self._remembered and self._turn_text:
+            view["live"] = {"question": self._turn_text, "answer": "".join(self._answer)}
+        return view
 
     def _remember(self, role: str, text: str) -> None:
         """Append one message and keep the bound. Empty text is not a message."""

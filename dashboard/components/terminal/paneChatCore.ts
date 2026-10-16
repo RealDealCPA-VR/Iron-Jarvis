@@ -171,6 +171,12 @@ export type PaneTurnBody = {
    *  Browser capability gate; omitted, the turn is a pane-less surface and the
    *  global gate alone applies. */
   pane_id?: string;
+  /** v1.339.0: the turn's name — the daemon runs a NAMED turn as its own, so
+   *  it outlives a reload, and the pane can follow it again by name. */
+  turn_id?: string;
+  /** v1.339.0: the saved conversation this turn belongs to, so the daemon can
+   *  list it under that conversation (`GET /chat/turns?thread_id=`). */
+  thread_id?: string;
 };
 
 /** The /chat contract's tool cap (the server truncates at six). */
@@ -201,6 +207,25 @@ export interface PaneTurnArgs {
    *  keys the thread on. Optional so a caller that has no pane identity (a
    *  test, a future non-pane embedder) keeps today's body exactly. */
   paneId?: string;
+  /** v1.339.0: see {@link PaneTurnBody.turn_id}. */
+  turnId?: string;
+  /** v1.339.0: see {@link PaneTurnBody.thread_id}. */
+  threadId?: string | null;
+}
+
+/** v1.339.0: the turn each pane's chat is running, by pane id. Closing a
+ *  terminal stops its chat's turn (the page reads this); leaving Build or
+ *  reloading does not — the daemon keeps the turn and the pane follows it
+ *  again when it is opened. */
+const runningPaneTurns = new Map<string, string>();
+
+export function notePaneTurn(paneId: string, turnId: string | null): void {
+  if (turnId) runningPaneTurns.set(paneId, turnId);
+  else runningPaneTurns.delete(paneId);
+}
+
+export function paneTurn(paneId: string): string | undefined {
+  return runningPaneTurns.get(paneId);
 }
 
 export function buildTurnBody(a: PaneTurnArgs): PaneTurnBody {
@@ -230,6 +255,8 @@ export function buildTurnBody(a: PaneTurnArgs): PaneTurnBody {
     ...(a.approvalMode && a.approvalMode !== "approve_for_me"
       ? { approval_mode: a.approvalMode }
       : {}),
+    ...(a.turnId ? { turn_id: a.turnId } : {}),
+    ...(a.threadId ? { thread_id: a.threadId } : {}),
   };
 }
 

@@ -339,6 +339,26 @@ class RunTranscript(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class RunPlan(SQLModel, table=True):
+    """A DECOMPOSED run's plan and the steps it has finished (v1.339.0).
+
+    The planned-steps lane (``agents/decompose.py``) runs each step in a
+    fresh mini-loop, so it has no single conversation for ``RunTranscript``
+    to keep — Continue after a restart started it over from a recap and
+    re-planned. The lane now writes the plan when it is made and each step's
+    result as it finishes; a resumed run (``options.resume_run``) skips the
+    finished steps, carries their results forward, and re-runs the step the
+    stop cut off with a note to check what already happened.
+    ``plan_json``: ``[{goal, success_criteria, tools}]``; ``results_json``:
+    the finished steps' ``StepResult`` fields, in order."""
+
+    run_id: str = Field(primary_key=True)
+    session_id: str = Field(default="", index=True)
+    plan_json: str = "[]"
+    results_json: str = "[]"
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class ChatTurnRecord(SQLModel, table=True):
     """One chat turn the DAEMON ran (v1.336.0, from pi-durable: "everything
     is committed to storage before anything is shown").
