@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -26,6 +27,8 @@ from .modes import (
     strip_mouse_reports,
 )
 from .shells import resolve_shell
+
+log = logging.getLogger("iron_jarvis.terminals.session")
 
 #: How long "does the shell have a program running in it?" is trusted before
 #: the process table is read again (v1.333.0). Only a mouse report asks.
@@ -340,6 +343,11 @@ class TerminalSession:
         self._last_mouse_reset = 0.0
         self._child_check: tuple[float, bool] | None = None
         self._own_console = 0
+        # --- a restored shell started at the wrong size (v1.338.0) ----------
+        # Set by ``TerminalManager.restore`` (with the env it spawned the
+        # shell with); cleared by the first input. See `restart_at_size`.
+        self._respawn_env: dict | None = None
+        self._untouched = False
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent).
@@ -363,7 +371,71 @@ class TerminalSession:
 
     def write(self, data: str | bytes) -> None:
         with self._write_lock:  # one writer at a time — keystrokes never interleave
+            self._untouched = False  # someone typed: never restart this shell
             self.backend.write(data)
+
+    def restart_at_size(self, cols: int, rows: int) -> bool:
+        """Start a RESTORED pane's fresh shell again at the size the first
+        pane to attach really has (v1.338.0). True when it did.
+
+        A restored shell is spawned at the SAVED size, and that can be stale:
+        the size is snapshotted every 30 s, so a crash right after a resize
+        brings the pane back at the old one, and a window resized while the
+        app was closed attaches at another. The new pseudoconsole has already
+        drawn its prompt at the old width — wrapped where the pane's terminal
+        does not wrap it — and after the attach's resize the two disagree
+        about where the cursor is: every key landed over the prompt (found
+        by the update rehearsal, ``tests/test_update_rehearsal_v1338.py``).
+
+        Only while nothing has been typed into it since the restore — the
+        shell has printed its prompt and nothing else, so starting it again
+        loses nothing — and once per pane. The old shell's output is detached
+        first, a fresh page is drawn, and only then does the new shell start,
+        so the pane sees: old screen, fresh page, the new prompt. BLOCKING (a
+        process spawn): call it off the event loop."""
+        from .modes import fresh_page
+
+        if (cols, rows) == (self.cols, self.rows) or cols < 2 or rows < 2:
+            return False
+        if not self._untouched or self._killed or self._respawn_env is None:
+            return False
+        try:
+            new = type(self.backend)()
+        except Exception:  # noqa: BLE001 — keep the shell we have
+            return False
+        old = self.backend
+        pushing = self.pushes_output
+        with self._write_lock:
+            if not self._untouched:
+                return False
+            self._untouched = False  # once per pane, whatever happens next
+            if pushing:
+                old.set_output_handler(None, None)  # its last bytes go nowhere
+                new.set_output_handler(self._ingest, self._on_output_eof)
+            if self.below_normal:
+                try:
+                    new.below_normal = True
+                except Exception:  # noqa: BLE001
+                    pass
+            with self._read_lock:
+                self._record_locked(fresh_page(rows))
+                self._modes = ModeTracker()
+            try:
+                new.start(self.argv, self.cwd, self._respawn_env, cols, rows)
+            except Exception:  # noqa: BLE001 — the old shell is still there
+                log.warning("could not restart a restored pane at its size", exc_info=True)
+                if pushing:
+                    old.set_output_handler(self._ingest, self._on_output_eof)
+                return False
+            self.backend = new
+            self.cols, self.rows = cols, rows
+            self._child_check = None
+            self._own_console = 0
+        try:
+            old.kill()
+        except Exception:  # noqa: BLE001 — it is detached either way
+            pass
+        return True
 
     def write_input(self, data: str | bytes) -> None:
         """What a PANE types (the WebSocket input path), v1.333.0.
@@ -583,8 +655,11 @@ class TerminalSession:
         return not self._subscribers and _asks_device_attributes(data)
 
     def _answer_da1(self) -> None:
+        # Straight to the backend: the SESSION answering its own console is
+        # not input, so it must not count as typing (`_untouched`).
         try:
-            self.write(_DA1_REPLY)
+            with self._write_lock:
+                self.backend.write(_DA1_REPLY)
         except Exception:  # noqa: BLE001 — a dying PTY needs no answer
             pass
 

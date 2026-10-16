@@ -329,7 +329,9 @@ async def test_a_wait_gives_up_when_the_scope_loop_is_not_running():
             box = await _serve_off_loop("p", {"id": 1, "method": "elicitation/create",
                                               "params": _FORM})
         assert box["reply"]["result"] == {"action": "decline"}
-        assert box["elapsed"] < 2.0, box["elapsed"]
+        # v1.338.0: half the guard, not a 2 s speed bar; a wait that never
+        # gives up is caught here AND by the guard itself.
+        assert box["elapsed"] < _GUARD_S / 2, box["elapsed"]
     finally:
         idle.close()
 

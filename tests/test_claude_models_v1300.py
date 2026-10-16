@@ -293,7 +293,10 @@ def test_catalog_never_blocks_and_refreshes_once_behind_it(fake):
     t0 = time.monotonic()
     first = cm.catalog(refresh=True)
     second = cm.catalog(refresh=True)
-    assert time.monotonic() - t0 < 1.0
+    # The handshake is held until the test releases it, so a blocking catalog
+    # would wait for ever; the bar only has to be far from that (v1.338.0:
+    # was 1.0 s, a speed bar on a loaded runner).
+    assert time.monotonic() - t0 < 10.0
     assert first["error"] and "not discovered yet" in first["error"]
     assert second["error"]
     fake.gate.set()

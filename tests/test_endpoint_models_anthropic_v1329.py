@@ -275,14 +275,16 @@ def test_no_key_on_a_guarded_server_asks_for_one(client, server):
 
 def test_the_probe_is_bounded(client, server, monkeypatch):
     monkeypatch.setattr(conn_routes, "_ENDPOINT_PROBE_TIMEOUT_S", 0.6)
-    server.pages[""] = (200, _page(["late"]), 3.0)
+    # v1.338.0: the server answers after 8 s, not 3 — the bar sat 0.5 s under
+    # the regression and 1.9 s over the fast path; now 3 s under, 4.4 s over.
+    server.pages[""] = (200, _page(["late"]), 8.0)
     t0 = time.monotonic()
     data = _probe(client, base_url=server.base).json()
     took = time.monotonic() - t0
     assert data["reason"] == "timeout"
     assert data["models"] == []
     assert "did not answer within 1 second." in data["error"]
-    assert took < 2.5, f"the probe waited {took:.2f}s on a 0.6s bound"
+    assert took < 5.0, f"the probe waited {took:.2f}s on a 0.6s bound"
 
 
 def test_a_page_that_is_not_json_is_not_a_model_server(client, server):

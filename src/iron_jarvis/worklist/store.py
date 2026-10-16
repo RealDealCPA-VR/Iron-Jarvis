@@ -50,8 +50,10 @@ of hundreds of rows is real work, and the daemon is one event loop.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -163,6 +165,30 @@ def _chunks(values: Sequence[str], size: int = 400) -> Iterable[Sequence[str]]:
     """SQLite caps the number of bound parameters; ``IN`` lists are chunked."""
     for start in range(0, len(values), size):
         yield values[start : start + size]
+
+
+#: What may follow a REAL key in a reworded one (v1.338.0). The live ledger:
+#: 24 of 160 ``worklist_done`` calls were refused because the model copied the
+#: listing's whole ``key — label`` line as the key. Whitespace THEN a
+#: separator, so ``file 3`` or ``file-2`` (another item) never matches ``file``.
+_KEY_TAIL_RE = re.compile(r"^(?:\s+(?:[\u2014\u2013|]|-{1,2}\s)|\s*:\s)")
+
+
+def _reworded_match(db: Any, board_id: str, norm: str) -> "WorklistItem | None":
+    """The ONE item a reworded key names: a stored key the given text starts
+    with, followed by a separator. The longest such key wins; a tie (or none)
+    is no match — a wrong match would record another item's outcome."""
+    hits = []
+    for row in db.exec(select(WorklistItem).where(WorklistItem.board_id == board_id)):
+        k = row.key_norm or ""
+        if k and len(k) < len(norm) and norm.startswith(k) and _KEY_TAIL_RE.match(norm[len(k):]):
+            hits.append(row)
+    if not hits:
+        return None
+    hits.sort(key=lambda r: len(r.key_norm), reverse=True)
+    if len(hits) > 1 and len(hits[0].key_norm) == len(hits[1].key_norm):
+        return None
+    return hits[0]
 
 
 class WorklistStore:
@@ -697,6 +723,8 @@ class WorklistStore:
                 )
             ).first()
             if row is None:
+                row = _reworded_match(db, board_id, norm)
+            if row is None:
                 return None
             row.status = status
             if note:
@@ -765,6 +793,18 @@ class WorklistStore:
             for row in rows:
                 db.expunge(row)
         return rows
+
+    def similar_keys(self, board_id: str, key: str, n: int = 3) -> list[str]:
+        """Up to ``n`` keys on this board that look like ``key`` (v1.338.0),
+        so a refused ``worklist_done`` can say which one the model meant."""
+        norm = normalize_key(key)
+        if not norm:
+            return []
+        with session_scope(self.engine) as db:
+            keys = [r.key for r in db.exec(select(WorklistItem).where(WorklistItem.board_id == board_id))]
+        by_norm = {normalize_key(k): k for k in keys}
+        close = difflib.get_close_matches(norm, list(by_norm), n=n, cutoff=0.6)
+        return [by_norm[c] for c in close]
 
     def get(self, board_id: str, key: str) -> WorklistItem | None:
         norm = normalize_key(key)

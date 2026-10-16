@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.337.3 (2026-10-04).*
+holds itself to. Current as of v1.338.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,32 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Every release rehearses an update (v1.338.0)
+
+Two bugs in one week (backups after v1.335.0, Build terminals after an update)
+happened only when Iron Jarvis started again on a new version, a path no test
+went down. Now every release is checked by an **update rehearsal** before its
+installer is built: a real copy of the app, on a throwaway data folder, is set
+up with a Build terminal running a program, a backup copy folder, and the
+half-finished work a crash leaves behind (a step that was running, a chat
+answer being written, an agent job mid-way). It is stopped the way an update
+stops it, and again by a hard crash, then started on the same folder. The
+release is refused unless a backup is written, the terminal comes back and
+types like a new one (drawn by the same terminal Build uses), the cut-off step
+is on the record, the chat answer is kept, and Continue resumes the job.
+
+The first rehearsal found a bug: after a **crash**, a terminal could come back
+at the size it had up to 30 seconds earlier, and typing into it landed on its
+prompt. A terminal that comes back is now started again at the size of your
+window the first time you look at it, as long as nothing has been typed into
+it yet.
+
+**Lists of work.** When a job works through a list, the agent reports each
+item done by its name. Agents often copied the item's name together with its
+description, and the app refused it, so finished items stayed open (24 of 160
+on one install). The name is now recognised when it is clearly one item; when
+it is not, the app names the closest items so the agent can correct itself.
 
 ## Build terminals after an update (v1.337.2)
 

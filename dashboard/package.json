@@ -41,6 +41,7 @@
     "@types/react-dom": "^19.0.0",
     "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^6.0.3",
+    "@xterm/headless": "6.0.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.5",
     "eslint-config-next": "15.5.19",

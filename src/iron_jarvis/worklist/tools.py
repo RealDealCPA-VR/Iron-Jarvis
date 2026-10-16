@@ -425,14 +425,17 @@ class WorklistDoneTool(_WorklistTool):
         )
         summary = await asyncio.to_thread(self.store.summary, board_id)
         if row is None:
+            near = await asyncio.to_thread(self.store.similar_keys, board_id, key)
+            hint = (" Did you mean: " + ", ".join(f"'{k}'" for k in near) + "?") if near else ""
             return ToolResult(
                 ok=False,
                 error=(
                     f"'{key}' is not on this team's worklist — nothing was "
-                    "recorded. Use the key exactly as `worklist_next` gave it, "
-                    "or `worklist_add` it first."
+                    "recorded. Use the key exactly as `worklist_next` gave it "
+                    "(the part before the ' — '), or `worklist_add` it first."
+                    + hint
                 ),
-                data={"summary": summary},
+                data={"summary": summary, "did_you_mean": near},
             )
         lines = [f"{row.key}: {_DONE_STATUSES[status]}."]
         if result_path and status == DONE:

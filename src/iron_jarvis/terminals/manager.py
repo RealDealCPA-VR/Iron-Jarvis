@@ -981,6 +981,7 @@ class TerminalManager:
             # in this pane is that same CLI, resumed.
             pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
         accounts = self._restore_accounts(entry.get("accounts"))
+        spawn_env = _with_pane_env(env, pane_env, accounts)
         session = self._spawn(
             cwd,
             name or "shell",
@@ -988,7 +989,7 @@ class TerminalManager:
             cols,
             rows,
             backend,
-            _with_pane_env(env, pane_env, accounts),
+            spawn_env,
             **({"below_normal": True} if entry.get("below_normal") is True else {}),
         )
         session.accounts = _account_records(accounts)
@@ -1039,6 +1040,11 @@ class TerminalManager:
             # A snapshot that FILLED its cap was sliced at a raw byte
             # offset — serve its replay from a safe boundary, not the cut.
             session._tail_truncated = len(old) >= _SNAPSHOT_SCROLLBACK
+        # v1.338.0: the saved size can be stale; the first pane to attach may
+        # start this untouched shell again at its real size
+        # (`TerminalSession.restart_at_size`).
+        session._respawn_env = spawn_env
+        session._untouched = True
         if register:
             with self._lock:
                 self._sessions[rid] = session

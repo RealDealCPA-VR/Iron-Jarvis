@@ -888,6 +888,13 @@ def register(app: FastAPI, d) -> None:
                             obj = None
                         if isinstance(obj, dict) and obj.get("type") == "resize":
                             cols, rows = int(obj["cols"]), int(obj["rows"])
+                            if repaint_pending:
+                                # v1.338.0: a restored shell spawned at a stale
+                                # saved size starts again at this pane's size
+                                # while nothing has been typed into it — else
+                                # its wrapped prompt and the pane disagree on
+                                # the cursor and keys land over the prompt.
+                                await asyncio.to_thread(session.restart_at_size, cols, rows)
                             # Scrollback replay can't reconstruct a FULL-SCREEN
                             # app's frame: a TUI (grok/claude/codex) paints only
                             # CHANGED cells, and its screen-setup sequences have

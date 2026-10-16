@@ -207,14 +207,16 @@ def test_a_server_error_is_said(client, server):
 
 def test_the_probe_is_bounded(client, server, monkeypatch):
     monkeypatch.setattr(conn_routes, "_ENDPOINT_PROBE_TIMEOUT_S", 0.6)
-    server.routes["/v1/models"] = (200, {"data": [{"id": "late"}]}, 3.0, {})
+    # v1.338.0: the server answers after 8 s, not 3 — the bar sat 0.5 s under
+    # the regression and 1.9 s over the fast path; now 3 s under, 4.4 s over.
+    server.routes["/v1/models"] = (200, {"data": [{"id": "late"}]}, 8.0, {})
     t0 = time.monotonic()
     data = _probe(client, base_url=server.base).json()
     took = time.monotonic() - t0
     assert data["reason"] == "timeout"
     assert data["models"] == []
     assert "did not answer within 1 second." in data["error"]
-    assert took < 2.5, f"the probe waited {took:.2f}s on a 0.6s bound"
+    assert took < 5.0, f"the probe waited {took:.2f}s on a 0.6s bound"
 
 
 def test_a_redirect_is_not_followed_so_the_key_stays_put(client, server):

@@ -233,12 +233,14 @@ def test_the_card_read_never_waits_and_a_slow_check_lands_later(client, fake):
     pid = _signed_out_account(c, fake)
     c.post(f"/iron-proxy/accounts/{pid}/signin")
     fake.login_ok[pid] = True
-    fake.refresh_delay = 0.8
+    # v1.338.0: the check takes 5 s and the bar is half of it. It was 0.8 s
+    # against a 0.7 s bar — 0.1 s from measuring the runner, not the view.
+    fake.refresh_delay = 5.0
     started = time.monotonic()
     assert _card(c, pid)["state"]["status"] == "unauthenticated"
-    assert time.monotonic() - started < 0.7  # did not wait for the slow check
+    assert time.monotonic() - started < 2.5  # did not wait for the slow check
     svc = c.app.state.platform.iron_proxy
-    assert _until(lambda: svc.cached_accounts()[1][pid]["status"] == "ready")
+    assert _until(lambda: svc.cached_accounts()[1][pid]["status"] == "ready", timeout=20)
     assert _card(c, pid)["state"]["status"] == "ready"
     assert _refreshes(fake) == [{"id": pid}]
 

@@ -3308,6 +3308,42 @@ does not need a bump, stop and bump it.
   `TREE_LIFE_S` = 40 s and the bar is 30% of that; a shell-only kill (the
   regression) returns after the 15 s drain and fails at 16.0 s (checked).
 
+- **The UPDATE REHEARSAL runs a real daemon through a restart, every release**
+  (v1.338.0). `tests/test_update_rehearsal_v1338.py` spawns `serve` as a
+  subprocess (free port, throwaway root, no token), stops it with
+  `POST /shutdown` (the desktop's update stop) and with a hard kill, plants the
+  rows a crash leaves (a `ToolIntent`, an ACTIVE session + RUNNING AgentRun +
+  `RunTranscript`, a `running` ChatTurnRecord) while it is down, restarts on
+  the same root and checks: backup (no `daemon.lock`), the backup copy folder
+  set before the restart, the restored pane TYPES (bytes drawn by
+  `dashboard/scripts/render-terminal.cjs` = `@xterm/headless` 6.0.0, a dashboard
+  devDependency pinned to the pane's xterm version — needs Node + dashboard
+  node_modules, which the RELEASE gate installs before the Python suite; the
+  Tests workflow's Python job has no Node and checks bytes only), the tool-call
+  reconcile, the chat-turn reconcile, `/sessions/interrupted`, and Continue
+  `resume` → `options.resume_run`. Mutation-checked against all four real
+  restart bugs (v1.337.1 backup lock, v1.337.2 tail assignment + fresh page,
+  v1.338.0 size) and all four reconcile steps. ITS FIRST RUN FOUND A BUG: a
+  crash inside the 30 s snapshot window restores a pane at its OLD size; ConPTY
+  wraps the new prompt at that width, the pane does not, and keys landed on the
+  prompt. `TerminalSession.restart_at_size` (called once per attach on the
+  first resize, off the loop) starts an UNTOUCHED restored shell again at the
+  pane's size — `_untouched` is set by `restore` and cleared by any `write`
+  (the session's own DA1 answer bypasses it), `_respawn_env` is the env
+  `restore` spawned with; old output detached, `fresh_page` recorded, then the
+  new backend starts. Pins: `tests/test_restored_pane_size_v1338.py`. A new
+  restart-path feature adds its check to the rehearsal.
+  SAME RELEASE: `worklist_done` refused 24/160 live calls because the model
+  copied `worklist_next`'s `key — label` line; `store._reworded_match` accepts
+  the ONE stored key the text starts with followed by whitespace + a separator
+  (`_KEY_TAIL_RE`: — – | - -- :), longest wins, exact match first; a refusal
+  carries `did_you_mean` (`similar_keys`). Pins:
+  `tests/test_worklist_reworded_key_v1338.py`. And the timing sweep: every
+  test that failed a CI gate in the last 40 red runs was already fixed; the
+  tightest remaining bars (iron-proxy signin 0.7 s vs a 0.8 s check, the
+  endpoint probes 2.5 s vs a 3 s answer, the claude catalog 1 s, the MCP idle
+  loop 2 s) now sit far from both the fast path and the regression.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a
