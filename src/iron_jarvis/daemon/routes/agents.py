@@ -2458,7 +2458,14 @@ def register(app: FastAPI, d) -> None:
                     # v1.311.0: "starting" while the daemon's background load
                     # has not answered yet (packs load after boot now) — a row
                     # must not read as "0 tools, broken" in that window.
+                    # v1.342.0: "ok" / "failed" / "failing" (loaded, but its
+                    # calls fail) — the row says it in words.
                     "state": status.get("state") if status else None,
+                    # v1.342.0: call-time failures since the last success or
+                    # Retry, and the child's last output (masked, bounded) —
+                    # the one clue a crashed pack leaves behind.
+                    "failures": int(status.get("failures") or 0) if status else 0,
+                    "stderr_tail": str(status.get("stderr_tail") or "") if status else "",
                 }
             )
         # The Tools page checkbox binds to EFFECTIVE (what the boot-time
@@ -2535,16 +2542,45 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such server")
         from ...mcp.tools import mcp_tools as _mcp_tools
 
+        # v1.342.0: the loader hands a probe's failure back through `errors`,
+        # so the answer is the REAL load error with its reason, fix and the
+        # child's last output — "advertised no tools" is said only when the
+        # pack really connected and listed none.
+        errors: dict[str, dict[str, Any]] = {}
         try:
-            tools = _mcp_tools([cfg], secret_resolver=d.platform.secrets.get, record=False)
+            tools = _mcp_tools(
+                [cfg], secret_resolver=d.platform.secrets.get, record=False, errors=errors
+            )
         except Exception as exc:  # noqa: BLE001 — report, never crash
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
+            return {
+                "ok": False,
+                "count": 0,
+                "tools": [],
+                "error": f"{type(exc).__name__}: {exc}",
+                "reason": "",
+                "fix": "",
+                "stderr_tail": "",
+            }
+        failure = errors.get(name)
+        if failure is not None:
+            return {
+                "ok": False,
+                "count": 0,
+                "tools": [],
+                "error": failure.get("error") or "the pack did not start",
+                "reason": failure.get("reason") or "",
+                "fix": failure.get("fix") or "",
+                "stderr_tail": failure.get("stderr_tail") or "",
+            }
         names = [t.name.split("__", 2)[-1] for t in tools]
         return {
             "ok": bool(tools),
             "count": len(tools),
             "tools": names,
             "error": None if tools else "connected but the server advertised no tools",
+            "reason": "",
+            "fix": "",
+            "stderr_tail": "",
         }
 
     @app.post("/mcp/servers/{name}/reload")
@@ -2645,13 +2681,19 @@ def register(app: FastAPI, d) -> None:
         # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
         # and they survive the next restart (boot re-registers the same way).
         loaded = 0
+        # v1.342.0: the loader says WHY a pack did not start (`errors`), so
+        # the note names the reason instead of "restart the daemon".
+        errors: dict[str, dict[str, Any]] = {}
         try:
             from ...mcp.tools import mcp_tools as _mcp_tools
 
             # `home` (v1.299.0): this FIRST load writes the pack's manifest —
             # everything it advertises now is what the user is connecting.
             for tool in _mcp_tools(
-                [cfg], secret_resolver=d.platform.secrets.get, home=d.platform.config.home
+                [cfg],
+                secret_resolver=d.platform.secrets.get,
+                home=d.platform.config.home,
+                errors=errors,
             ):
                 d.platform.registry.register(tool, mcp=True)
                 loaded += 1
@@ -2662,7 +2704,12 @@ def register(app: FastAPI, d) -> None:
         # the next restart — be honest about that.
         note = None
         if not loaded:
-            note = "saved — restart the daemon to load its tools"
+            failure = errors.get(name)
+            if failure is not None:
+                reason = failure.get("reason") or failure.get("error") or "it did not start"
+                note = f"saved, but it did not start: {reason} — see its row for the fix"
+            else:
+                note = "saved — it connected but advertised no tools; see its row"
         elif body.auto_approve:
             note = "loaded — restart the daemon so autonomous agents may use it without asking"
         return {

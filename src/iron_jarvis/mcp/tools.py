@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import re
 import threading
 from contextvars import ContextVar
 from pathlib import Path
@@ -269,8 +270,21 @@ class MCPRemoteTool(Tool):
         try:
             result = await self.client.call_tool(self.remote_name, args)
         except Exception as exc:  # a remote failure must never crash the runtime
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            # v1.342.0: the pack's load record learns of the failure (state
+            # "failing", a count, the masked reason) and the FIRST failure of
+            # an episode is announced as `mcp.pack_failed` on the bus the
+            # call was made under — a pack that dies mid-session must reach
+            # the bell and the Tools row, not only the model.
+            text = _mask_text(f"{type(exc).__name__}: {exc}")
+            payload = note_call_failure(self.server_name, text, publish=False)
+            if payload is not None:
+                await _announce_pack_failed(payload, getattr(ctx, "event_bus", None))
+            return ToolResult(ok=False, error=text)
 
+        # The pack ANSWERED: the episode (if any) is over. A tool-level
+        # `isError` is the remote tool saying no to these arguments, not the
+        # pack failing — it counts as an answer.
+        note_call_success(self.server_name)
         result = result if isinstance(result, dict) else {}
         text = _content_to_text(result.get("content"), result.get("structuredContent"))
         if result.get("isError"):
@@ -448,10 +462,60 @@ def _mcp_connect_timeout() -> float:
         return 15.0
 
 
+#: The most characters of a child's stderr a load record or a failure note
+#: carries (the transport's own bound; re-applied here so a double never
+#: hands the Tools page an unbounded blob).
+STDERR_TAIL_MAX_CHARS = 2000
+
+
+def _mask_text(text: str, limit: int = STDERR_TAIL_MAX_CHARS) -> str:
+    """``text`` with secret VALUES masked (``detections.redact.mask``) and cut
+    to its last ``limit`` characters. Never raises; a non-string reads ""."""
+    if not isinstance(text, str) or not text:
+        return ""
+    try:
+        from ..detections.redact import mask
+
+        text = mask(text)
+    except Exception:  # noqa: BLE001 — the masker never breaks a diagnostic
+        pass
+    return text[-limit:] if len(text) > limit else text
+
+
+def _transport_tail(transport: Any) -> str:
+    """The masked stderr tail of ``transport`` (a stdio child's last lines),
+    ``""`` for a transport that keeps none (HTTP, a fake) or on any fault.
+    The stdio ring outlives ``close()``, so a dead child still says why."""
+    getter = getattr(transport, "stderr_tail", None)
+    if not callable(getter):
+        return ""
+    try:
+        tail = getter()
+    except Exception:  # noqa: BLE001 — a diagnostic never breaks a load
+        return ""
+    return _mask_text(tail) if isinstance(tail, str) else ""
+
+
+class PackLoadFailed(Exception):
+    """One pack's connect/list failed (v1.342.0). Carries the ORIGINAL
+    exception (``cause``) and the child's masked ``stderr_tail`` captured
+    before the transport is forgotten — the words on the Tools row.
+    ``str()`` is ``"<CauseType>: <message>"``, the shape every load record
+    and route has shown since v1.229.0."""
+
+    def __init__(self, cause: BaseException, stderr_tail: str = "") -> None:
+        self.cause = cause
+        self.stderr_tail = stderr_tail or ""
+        super().__init__(f"{type(cause).__name__}: {cause}")
+
+
 def _connect_with_timeout(cfg, name, secret_resolver, timeout):
     """Connect + list_tools for one server on a daemon thread, bounded by
     ``timeout``. On timeout, close the transport (killing a hung stdio child to
-    unblock its pipe read) and raise TimeoutError so the caller skips the server."""
+    unblock its pipe read). Every failure is raised as :class:`PackLoadFailed`
+    carrying the cause and the child's stderr tail (v1.342.0): a child that
+    died at start wrote its reason to stderr, and that text is captured HERE,
+    while the transport is still in hand."""
     import threading
 
     box: dict[str, Any] = {}
@@ -476,9 +540,11 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
                 transport.close()  # terminate the hung child; unblocks readline
             except Exception:  # noqa: BLE001
                 pass
-        raise TimeoutError(f"did not respond within {timeout:g}s")
+        raise PackLoadFailed(
+            TimeoutError(f"did not respond within {timeout:g}s"), _transport_tail(transport)
+        )
     if "error" in box:
-        raise box["error"]
+        raise PackLoadFailed(box["error"], _transport_tail(box.get("transport")))
     return box["client"], box["specs"]
 
 
@@ -489,6 +555,74 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
 #: Kept here rather than on the config row: ``config.mcp_servers`` is persisted
 #: verbatim to config.toml, and an exception text is not configuration.
 _LOAD_STATUS: dict[str, dict[str, Any]] = {}
+
+#: Guards the per-pack counters (`failures`, the episode) — a call-time note
+#: lands from the event loop while a Retry's load record lands from a thread.
+_STATUS_LOCK = threading.Lock()
+
+#: The config each recorded pack was loaded with, by name — what the
+#: classifier needs (the launcher) when a CALL fails long after the load.
+_LOAD_CFGS: dict[str, dict[str, Any]] = {}
+
+#: The packs whose current failure EPISODE has been announced (v1.342.0): a
+#: failed load, or the first call-time failure after a success/reload,
+#: publishes ``mcp.pack_failed`` once; a later success or a Retry (which
+#: rewrites the load record) ends the episode so the next failure speaks.
+_ANNOUNCED: set[str] = set()
+
+#: The event published once per failure episode: {name, error, reason, fix}.
+EVENT_PACK_FAILED = "mcp.pack_failed"
+
+#: The load-record states (v1.342.0 contract): "starting" while the
+#: background load is pending, "ok" once it answered, "failed" when the load
+#: failed, "failing" when it loaded but its calls fail.
+STATE_OK = "ok"
+STATE_FAILED = "failed"
+STATE_FAILING = "failing"
+
+#: The bus `mcp.pack_failed` goes out on when a failure happens OFF a tool
+#: call (a failed load at boot or on Retry). The platform wires it once with
+#: :func:`set_event_bus`; unset, a failed load records everything and
+#: announces nothing (a CLI caller with no bus).
+_EVENT_BUS: Any = None
+
+
+def set_event_bus(bus: Any) -> None:
+    """Register the platform's event bus for load-time ``mcp.pack_failed``
+    announcements (a tool call announces on the bus of its own context)."""
+    global _EVENT_BUS
+    _EVENT_BUS = bus
+
+
+_CRASH_MARKERS = (
+    "closed the connection",
+    "exit code",
+    "serverstopped",
+    "was stopped",
+    "server stopped",
+    "server exited",
+    "process exited",
+)
+
+_EXIT_CODE_RX = re.compile(r"exit code (-?\d+)")
+
+
+def _is_crash_text(low: str) -> bool:
+    """True when a lower-cased error text has the shape of a server that ran
+    and then EXITED (the stdio transport's EOF / broken-pipe wording, or a
+    plain "exit code N")."""
+    return any(marker in low for marker in _CRASH_MARKERS)
+
+
+def _exit_code_in(raw: str) -> int | None:
+    """The ``exit code N`` an error text names, or ``None``."""
+    m = _EXIT_CODE_RX.search(raw)
+    if m is None:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
 
 
 def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict[str, str]:
@@ -517,6 +651,19 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     command = str((cfg or {}).get("command") or "").strip()
     launcher = command.split()[0] if command else ""
     low = raw.lower()
+
+    # A CRASH (v1.342.0): the pack's server started and then exited — at the
+    # handshake or mid-call. Checked FIRST: the raw text carries the child's
+    # last output since lane A, and that tail can say "no such file", "401"
+    # or "connect" about the pack's OWN problem; and the "connect" branch
+    # below used to read "closed the connection" as an unreachable server.
+    if _is_crash_text(low):
+        exit_code = _exit_code_in(raw)
+        return {
+            "reason": "the pack's server exited"
+            + (f" (exit code {exit_code})" if exit_code is not None else ""),
+            "fix": "read its last output below; a missing key or setting is the usual cause",
+        }
 
     # The launcher itself is missing. This is the common one and the one whose
     # exception text is furthest from the cause.
@@ -591,26 +738,165 @@ def _record_load(
     tools_loaded: int,
     cfg: dict[str, Any] | None = None,
     quarantined: "list[str] | None" = None,
+    stderr_tail: str = "",
 ) -> None:
     from datetime import datetime, timezone
 
     # v1.256.0 (R-02): the record carries the plain-words reason and the fix
     # beside the raw exception, so every surface that reads this record shows
     # the same sentence instead of each one classifying for itself.
+    # v1.342.0: the error text is MASKED (a crash text carries the child's
+    # last output) and the record keeps that output (`stderr_tail`, masked,
+    # bounded) plus the call-time failure count. A fresh record ENDS the
+    # pack's failure episode: a Retry that fails again is a new episode and
+    # is announced again.
+    error = _mask_text(error) if error else error
     verdict = classify_load_failure(cfg, error)
-    _LOAD_STATUS[name] = {
-        # v1.311.0: "ready" / "failed" once a load ran ("starting" is written
-        # by `mark_starting` while the daemon's background load is pending).
-        "state": "failed" if error else "ready",
-        "last_error": error,
-        "reason": verdict["reason"],
-        "fix": verdict["fix"],
-        "tools_loaded": tools_loaded,
-        "at": datetime.now(timezone.utc).isoformat(),
-        # v1.299.0: the write-like tools that appeared or changed since the
-        # user last looked, held back until trusted (additive; [] = none).
-        "quarantined": sorted(quarantined or []),
-    }
+    with _STATUS_LOCK:
+        _LOAD_STATUS[name] = {
+            # "ok" / "failed" once a load ran ("starting" is written by
+            # `mark_starting` while the daemon's background load is pending;
+            # "failing" by `note_call_failure` when a loaded pack's calls fail).
+            "state": STATE_FAILED if error else STATE_OK,
+            "last_error": error,
+            "reason": verdict["reason"],
+            "fix": verdict["fix"],
+            "tools_loaded": tools_loaded,
+            "at": datetime.now(timezone.utc).isoformat(),
+            # v1.299.0: the write-like tools that appeared or changed since the
+            # user last looked, held back until trusted (additive; [] = none).
+            "quarantined": sorted(quarantined or []),
+            "stderr_tail": _mask_text(stderr_tail) if stderr_tail else "",
+            "failures": 0,
+        }
+        if cfg is not None:
+            _LOAD_CFGS[name] = dict(cfg)
+        _ANNOUNCED.discard(name)
+        announce = None
+        if error:
+            _ANNOUNCED.add(name)
+            announce = {
+                "name": name,
+                "error": error,
+                "reason": verdict["reason"],
+                "fix": verdict["fix"],
+            }
+    if announce is not None:
+        _publish_pack_failed(announce, None)
+
+
+def _publish_pack_failed(payload: dict[str, Any], event_bus: Any) -> None:
+    """Publish ``mcp.pack_failed`` from SYNCHRONOUS code (a load on a worker
+    thread, a route): on a running loop as a task, off one through
+    ``asyncio.run`` (the detections bell's shape). Never raises."""
+    bus = event_bus if event_bus is not None else _EVENT_BUS
+    if bus is None:
+        return
+    try:
+        coro = bus.publish(EVENT_PACK_FAILED, dict(payload))
+    except Exception:  # noqa: BLE001 — a bus double without publish
+        log.debug("mcp.pack_failed not published for %r", payload.get("name"), exc_info=True)
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        loop.create_task(_swallow(coro))
+        return
+    try:
+        asyncio.run(coro)
+    except Exception:  # noqa: BLE001 — announcing is best-effort
+        log.debug("mcp.pack_failed not published for %r", payload.get("name"), exc_info=True)
+
+
+async def _swallow(coro: Any) -> None:
+    try:
+        await coro
+    except Exception:  # noqa: BLE001 — a failed announcement never surfaces
+        log.debug("mcp.pack_failed publish failed", exc_info=True)
+
+
+async def _announce_pack_failed(payload: dict[str, Any], event_bus: Any) -> None:
+    """Publish ``mcp.pack_failed`` from async code (a tool call), awaited so
+    the event is on the bus before the failed result reaches the lane."""
+    bus = event_bus if event_bus is not None else _EVENT_BUS
+    if bus is None:
+        return
+    try:
+        await bus.publish(EVENT_PACK_FAILED, dict(payload))
+    except Exception:  # noqa: BLE001 — a failed announcement never surfaces
+        log.debug("mcp.pack_failed publish failed for %r", payload.get("name"), exc_info=True)
+
+
+def note_call_failure(
+    name: str, error: str, *, event_bus: Any = None, publish: bool = True
+) -> dict[str, Any] | None:
+    """A loaded pack's call FAILED (v1.342.0): bump its ``failures``, set the
+    record to ``"failing"`` with the masked error, reason and fix, refresh its
+    stderr tail from the live client, and on the FIRST failure of an episode
+    announce ``mcp.pack_failed`` ``{name, error, reason, fix}``.
+
+    Returns the announcement payload when this failure OPENED the episode
+    (published unless ``publish=False`` — an async caller awaits
+    :func:`_announce_pack_failed` itself), else ``None``.
+    """
+    masked = _mask_text(error) or "the pack's call failed"
+    cfg = _LOAD_CFGS.get(name)
+    verdict = classify_load_failure(cfg, masked)
+    client = live_client(name)
+    tail = client.stderr_tail() if client is not None else ""
+    with _STATUS_LOCK:
+        rec = _LOAD_STATUS.get(name)
+        if rec is None:
+            from datetime import datetime, timezone
+
+            rec = {
+                "state": STATE_OK,
+                "last_error": None,
+                "reason": "",
+                "fix": "",
+                "tools_loaded": 0,
+                "at": datetime.now(timezone.utc).isoformat(),
+                "quarantined": [],
+                "stderr_tail": "",
+                "failures": 0,
+            }
+            _LOAD_STATUS[name] = rec
+        rec["failures"] = int(rec.get("failures") or 0) + 1
+        rec["state"] = STATE_FAILING
+        rec["last_error"] = masked
+        rec["reason"] = verdict["reason"]
+        rec["fix"] = verdict["fix"]
+        if tail:
+            rec["stderr_tail"] = _mask_text(tail)
+        first = name not in _ANNOUNCED
+        if first:
+            _ANNOUNCED.add(name)
+    if not first:
+        return None
+    payload = {"name": name, "error": masked, "reason": verdict["reason"], "fix": verdict["fix"]}
+    if publish:
+        _publish_pack_failed(payload, event_bus)
+    return payload
+
+
+def note_call_success(name: str) -> None:
+    """A loaded pack's call ANSWERED (v1.342.0): a ``"failing"`` record goes
+    back to ``"ok"`` with ``failures`` 0 and no error, and the failure episode
+    ends — the next failure is announced again. A record that is not failing
+    is left exactly as it is (a starting pack stays starting)."""
+    with _STATUS_LOCK:
+        rec = _LOAD_STATUS.get(name)
+        if rec is None:
+            return
+        if rec.get("state") == STATE_FAILING or int(rec.get("failures") or 0) > 0:
+            rec["failures"] = 0
+            rec["state"] = STATE_OK
+            rec["last_error"] = None
+            rec["reason"] = ""
+            rec["fix"] = ""
+        _ANNOUNCED.discard(name)
 
 
 #: The load-record state while a pack's handshake has not finished (v1.311.0).
@@ -647,6 +933,8 @@ def mark_starting(server_configs: "list[dict[str, Any]] | None") -> list[str]:
             "tools_loaded": 0,
             "at": datetime.now(timezone.utc).isoformat(),
             "quarantined": [],
+            "stderr_tail": "",
+            "failures": 0,
         }
         names.append(name)
     return names
@@ -858,6 +1146,7 @@ def _load_one_server(
     timeout: float,
     record: bool,
     home: "str | Path | None" = None,
+    errors: "dict[str, dict[str, Any]] | None" = None,
 ) -> list[Tool]:
     """Connect ONE pack, list its tools, and wrap them.
 
@@ -866,17 +1155,34 @@ def _load_one_server(
     never stops the others. This is the body the serial loop in ``mcp_tools``
     used to inline; it was lifted out in v1.257.0 (S-01) so several packs can
     connect at once, and its behaviour is otherwise unchanged.
+
+    ``errors`` (v1.342.0): a dict the caller owns; on failure
+    ``errors[name] = {error, reason, fix, stderr_tail}`` is written WHETHER OR
+    NOT the load records — a probe (``record=False``) used to swallow the
+    failure and its caller could only say "advertised no tools".
     """
     name = cfg.get("name") or "mcp"
     try:
         client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
     except Exception as exc:  # skip the bad/hung server; keep booting
-        log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
+        if isinstance(exc, PackLoadFailed):
+            error_text, tail = _mask_text(str(exc)), exc.stderr_tail
+        else:  # a double that raised something else: same words, no tail
+            error_text, tail = _mask_text(f"{type(exc).__name__}: {exc}"), ""
+        log.warning("skipping MCP server %r: %s", name, error_text)
+        if errors is not None:
+            verdict = classify_load_failure(cfg, error_text)
+            errors[name] = {
+                "error": error_text,
+                "reason": verdict["reason"],
+                "fix": verdict["fix"],
+                "stderr_tail": tail,
+            }
         if record:
             # `cfg` names the launcher, which is what makes the reason
             # actionable (v1.256.0, R-02) — without it the classifier can
             # only echo the exception.
-            _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0, cfg=cfg)
+            _record_load(name, error=error_text, tools_loaded=0, cfg=cfg, stderr_tail=tail)
             # The pack is not loaded: no prompts or resources either.
             forget_live_client(name)
         return []
@@ -899,7 +1205,16 @@ def _load_one_server(
                 held = apply_quarantine(name, tools, home)
             except Exception as exc:  # noqa: BLE001 — never fail a load over bookkeeping
                 log.warning("pack manifest for %r not applied: %s", name, exc)
-        _record_load(name, error=None, tools_loaded=len(tools), cfg=cfg, quarantined=held)
+        # A healthy pack's stderr (warnings at start) is kept too: it is the
+        # first clue when its calls start failing later.
+        _record_load(
+            name,
+            error=None,
+            tools_loaded=len(tools),
+            cfg=cfg,
+            quarantined=held,
+            stderr_tail=client.stderr_tail() if hasattr(client, "stderr_tail") else "",
+        )
     return tools
 
 
@@ -909,6 +1224,7 @@ def mcp_tools(
     *,
     record: bool = True,
     home: "str | Path | None" = None,
+    errors: "dict[str, dict[str, Any]] | None" = None,
 ) -> list[Tool]:
     """Build the wrapped MCP tools for every configured server.
 
@@ -930,6 +1246,10 @@ def mcp_tools(
       CHANGED since is returned ``quarantined=True`` (see ``apply_quarantine``).
       ``None`` keeps the pre-v1.299.0 behaviour (the platform applies the
       quarantine after registration via ``quarantine_registered``).
+    * ``errors`` (v1.342.0) is a caller-owned dict that receives
+      ``name -> {error, reason, fix, stderr_tail}`` for every pack that failed,
+      recorded or not — the Test route and the Directory probe read it so a
+      failure is reported as itself, never as "advertised no tools".
     """
     if not server_configs:
         return []
@@ -946,7 +1266,7 @@ def mcp_tools(
     # sequence it always did — a pack finishing first does not jump the queue.
     if len(server_configs) == 1:
         # The common case. No pool, no extra thread, the identical path as before.
-        return _load_one_server(server_configs[0], secret_resolver, timeout, record, home)
+        return _load_one_server(server_configs[0], secret_resolver, timeout, record, home, errors)
 
     from concurrent.futures import ThreadPoolExecutor
 
@@ -957,7 +1277,7 @@ def mcp_tools(
     ) as pool:
         batches = list(
             pool.map(
-                lambda cfg: _load_one_server(cfg, secret_resolver, timeout, record, home),
+                lambda cfg: _load_one_server(cfg, secret_resolver, timeout, record, home, errors),
                 server_configs,
             )
         )
@@ -967,7 +1287,15 @@ def mcp_tools(
 __all__ = [
     "MCPRemoteTool",
     "SecretResolver",
+    "PackLoadFailed",
     "mcp_tools",
+    "note_call_failure",
+    "note_call_success",
+    "set_event_bus",
+    "EVENT_PACK_FAILED",
+    "STATE_OK",
+    "STATE_FAILED",
+    "STATE_FAILING",
     "live_client",
     "live_clients",
     "forget_live_client",

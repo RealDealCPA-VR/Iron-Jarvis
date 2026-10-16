@@ -295,6 +295,51 @@ def _memory_record(platform, connector_id: str):
         return None
 
 
+def _probe_mcp(platform, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Connect to ONE MCP server config right now and report (v1.342.0).
+
+    A probe: ``record=False`` registers nothing and leaves the load record
+    alone; ``errors`` carries the REAL failure back (its error, reason, fix
+    and the child's last output), so a pack that did not start is reported
+    as itself — "advertised no tools" only when it connected and listed none.
+    """
+    name = str(cfg.get("name") or "")
+    errors: dict[str, dict[str, Any]] = {}
+    try:
+        tools = mcp_tools([cfg], secret_resolver=platform.secrets.get, record=False, errors=errors)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "count": 0,
+            "tools": [],
+            "error": f"{type(exc).__name__}: {exc}",
+            "reason": "",
+            "fix": "",
+            "stderr_tail": "",
+        }
+    failure = errors.get(name) if name else next(iter(errors.values()), None)
+    if failure is not None:
+        return {
+            "ok": False,
+            "count": 0,
+            "tools": [],
+            "error": failure.get("error") or "the pack did not start",
+            "reason": failure.get("reason") or "",
+            "fix": failure.get("fix") or "",
+            "stderr_tail": failure.get("stderr_tail") or "",
+        }
+    names = [t.name.split("__", 2)[-1] for t in tools]
+    return {
+        "ok": bool(tools),
+        "count": len(tools),
+        "tools": names,
+        "error": None if tools else "connected but advertised no tools",
+        "reason": "",
+        "fix": "",
+        "stderr_tail": "",
+    }
+
+
 def test(platform, connector_id: str) -> dict[str, Any]:
     """Prove a connector's config RIGHT NOW. A probe: it registers nothing,
     so it passes ``record=False`` and leaves the MCP load record to the loads
@@ -305,17 +350,7 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         # catalog MCP connector; a memory source runs a tiny live search.
         cfg = _server_cfg(platform, connector_id)
         if cfg is not None:
-            try:
-                tools = mcp_tools([cfg], secret_resolver=platform.secrets.get, record=False)
-            except Exception as exc:  # noqa: BLE001
-                return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
-            names = [t.name.split("__", 2)[-1] for t in tools]
-            return {
-                "ok": bool(tools),
-                "count": len(tools),
-                "tools": names,
-                "error": None if tools else "connected but advertised no tools",
-            }
+            return _probe_mcp(platform, cfg)
         if _memory_record(platform, connector_id) is not None:
             conn = platform.ltm.get(connector_id)
             if conn is None:
@@ -330,17 +365,7 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         cfg = _server_cfg(platform, connector.id)
         if cfg is None:
             return {"ok": False, "error": "not connected yet"}
-        try:
-            tools = mcp_tools([cfg], secret_resolver=platform.secrets.get, record=False)
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
-        names = [t.name.split("__", 2)[-1] for t in tools]
-        return {
-            "ok": bool(tools),
-            "count": len(tools),
-            "tools": names,
-            "error": None if tools else "connected but advertised no tools",
-        }
+        return _probe_mcp(platform, cfg)
     return platform.connections.test(connector.provider)
 
 
