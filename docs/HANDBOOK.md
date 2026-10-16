@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.339.0 (2026-10-04).*
+holds itself to. Current as of v1.340.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,19 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Reading a web page brings its links (v1.340.0)
+
+When Jarvis reads a web page for you, it now also gets the page's links as
+full addresses, listed after the text ("Links on this page"). Before, it saw
+only the words of each link, so when you asked it to dig into a site it
+guessed the addresses of the other pages, and the guesses usually did not
+exist (a run of "HTTP 404" steps). Now it opens the pages the site actually
+links to. Links to stylesheets, scripts, images and fonts, links back to the
+same page, and mail or script links are left out; long lists stop at 40 and
+say how many more there were. The list sits inside the same "untrusted
+content" fence as the page text and is checked for planted instructions the
+same way.
 
 ## Answers survive a reload everywhere (v1.339.0)
 

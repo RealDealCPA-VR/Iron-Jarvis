@@ -3378,6 +3378,23 @@ does not need a bump, stop and bump it.
   runtime test runs `extensions/chrome/dist`, and a failed esbuild/tsc keeps the
   previous bundle — an `if (false)` mutant "survived" that way.
 
+- **A fetched page brings its LINKS; a model must never have to guess a URL**
+  (v1.340.0, a USER BUG: one chat turn made seven `web_fetch` calls that all
+  404'd — its reasoning said "the fetched page didn't include hrefs … quick
+  guess" — because `_PageTextParser` kept link labels and dropped every
+  href). `tools/webfetch._extract_page(html, final_url)` returns the page's
+  `<a href>` targets made absolute against `<base href>` else the LOGICAL
+  final URL (after redirects, never the pinned IP), http/https only,
+  fragment dropped, the page itself and `_ASSET_EXTS` (css/js/images/fonts/
+  feeds) left out, de-duplicated in page order (a later label fills an empty
+  one), labels ≤ `_MAX_LINK_LABEL` with a space at every block break inside
+  the anchor, ≤ `_MAX_LINKS` (40) + "[N more links not shown]". The block
+  rides INSIDE the untrusted fence AFTER the text and OUTSIDE `max_chars` (a
+  cut page keeps its links), and `detect_injection` scans it with the text
+  (a URL is new model input). `data` carries `links` + `links_total`.
+  `_extract_page_text` keeps its 2-tuple shape. Pins:
+  `tests/test_webfetch_links_v1340.py` (13 mutations, all red).
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a
