@@ -1140,6 +1140,49 @@ def live_clients() -> dict[str, MCPClient]:
         return out
 
 
+def close_tools_clients(tools: "list[Any] | None") -> None:
+    """Close each distinct client behind ``tools`` (never raises) — an
+    unowned stdio child must not outlive the decision to unload it.
+
+    v1.342.0 (lane D): lifted here from ``platform._close_mcp_tools`` so the
+    Retry/DELETE routes AND the services (connectors reconnect/disconnect,
+    the chat ``app_*`` records) share ONE closer. A service must not import a
+    route module, and ``platform`` imports this module, so this is the one
+    place that can hold it."""
+    seen: set[int] = set()
+    for tool in tools or []:
+        client = getattr(tool, "client", None)
+        if client is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def unload_pack_tools(registry: Any, name: str) -> int:
+    """Unregister every registered tool of pack ``name`` AND close their
+    clients (v1.342.0, lane D). Returns how many tools were unregistered.
+
+    This is the v1.328.1 lesson made the only door: unregistering alone
+    leaves the pack's stdio child running until the app restarts, with no
+    surface left that could stop it. Every place that unloads a pack's tools
+    — a reconnect, a disconnect, a chat-driven app change — goes through
+    here; the Retry route keeps its own loop only because it must hold the
+    replaced tools until its fresh load has won."""
+    removed: list[Any] = []
+    count = 0
+    for tool_name in list(registry.mcp_names(name)):
+        live = registry.get(tool_name)
+        if registry.unregister(tool_name):
+            count += 1
+            if live is not None:
+                removed.append(live)
+    close_tools_clients(removed)
+    return count
+
+
 def _load_one_server(
     cfg: dict[str, Any],
     secret_resolver: SecretResolver | None,

@@ -364,11 +364,12 @@ def snap_app(platform: Any, connector_id: str) -> dict[str, Any] | None:
 
 def load_app(platform: Any, cfg: dict[str, Any]) -> int:
     """(Re)load one MCP pack's tools live. Returns how many registered."""
-    from ..mcp.tools import mcp_tools
+    from ..mcp.tools import mcp_tools, unload_pack_tools
 
     name = cfg.get("name") or ""
-    for t in platform.registry.mcp_names(name):
-        platform.registry.unregister(t)
+    # v1.342.0 (lane D): unregister AND close the old client — a bare
+    # unregister left the pack's stdio child running until restart.
+    unload_pack_tools(platform.registry, name)
     loaded = 0
     try:
         for tool in mcp_tools([cfg], secret_resolver=platform.secrets.get, home=platform.config.home):
@@ -390,8 +391,10 @@ def apply_app(platform: Any, connector_id: str, cfg: dict[str, Any] | None, *, l
     platform.config.mcp_servers = servers
     persist_config_values(platform.config.home, {"mcp_servers": servers})
     if cfg is None:
-        for t in platform.registry.mcp_names(connector_id):
-            platform.registry.unregister(t)
+        from ..mcp.tools import unload_pack_tools
+
+        # v1.342.0 (lane D): a removed app's client is closed with its tools.
+        unload_pack_tools(platform.registry, connector_id)
         return 0
     return load_app(platform, cfg) if load else 0
 

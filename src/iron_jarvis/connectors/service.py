@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..core.config import persist_config_values
-from ..mcp.tools import mcp_tools
+from ..mcp.tools import mcp_tools, unload_pack_tools
 from .catalog import CATALOG, connector_dict, get_connector
 
 
@@ -252,6 +252,11 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
     platform.config.mcp_servers = servers
     persist_config_values(platform.config.home, {"mcp_servers": servers})
 
+    # v1.342.0 (lane D): a RECONNECT replaces the pack's live tools. Registering
+    # the fresh ones over the old names used to orphan the old client — its
+    # stdio child ran on until restart (the v1.328.1 leak, by another door).
+    # Unload what is there, closing its client, before the fresh load.
+    unload_pack_tools(platform.registry, connector.id)
     loaded = 0
     try:
         # `home=` (v1.299.0): a reconnect diffs the pack against its manifest, so
@@ -377,8 +382,9 @@ def _disconnect_mcp_server(platform, server_id: str) -> dict[str, Any]:
     kept = [s for s in servers if s.get("name") != server_id]
     platform.config.mcp_servers = kept
     persist_config_values(platform.config.home, {"mcp_servers": kept})
-    for name in platform.registry.mcp_names(server_id):
-        platform.registry.unregister(name)
+    # v1.342.0 (lane D): unregister AND close — like DELETE /mcp/servers/{name}
+    # since v1.328.1; a bare unregister left the stdio child running.
+    unload_pack_tools(platform.registry, server_id)
     if removed:  # drop the vault secrets we minted for it
         for sname in (removed.get("env_secrets") or {}).values():
             try:

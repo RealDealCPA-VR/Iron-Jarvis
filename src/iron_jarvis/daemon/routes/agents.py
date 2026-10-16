@@ -2617,9 +2617,9 @@ def register(app: FastAPI, d) -> None:
         # stdio child); unregistering them alone orphaned it — and with packs
         # now loading after boot, a Retry pressed in that window replaces the
         # boot load's tools. Close what is replaced, never what is kept.
-        from ...platform import _close_mcp_tools
+        from ...mcp.tools import close_tools_clients
 
-        _close_mcp_tools(replaced)
+        close_tools_clients(replaced)
         loaded = 0
         try:
             # `home` (v1.299.0): the reload RE-DIFFS the pack against its
@@ -2831,9 +2831,9 @@ def register(app: FastAPI, d) -> None:
         # v1.328.1: and CLOSE their client, like a Retry closes what it
         # replaces. Unregistering alone left the pack's stdio child running
         # until the app restarted, with no surface left that could stop it.
-        from ...platform import _close_mcp_tools
+        from ...mcp.tools import close_tools_clients
 
-        _close_mcp_tools(removed)
+        close_tools_clients(removed)
         # v1.324.0: its prompts and resources go with it ("/" and "@").
         from ...mcp.tools import forget_live_client
 
