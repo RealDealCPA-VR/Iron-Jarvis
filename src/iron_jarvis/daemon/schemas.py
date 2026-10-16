@@ -10,7 +10,7 @@ import re
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..core.models import SESSION_MAX_STEPS_MAX, SESSION_MAX_STEPS_MIN
 
@@ -1442,11 +1442,30 @@ class ReflexToggleBody(BaseModel):
     project_id: str | None = None
 
 
+class McpAuthBody(BaseModel):
+    """An HTTP pack's bearer-style auth (v1.343.0): the header to send, the
+    format the value is wrapped in (must contain ``{value}``) and the VALUE —
+    which the route moves to the vault (``mcp.<name>.auth.value``) and never
+    stores or echoes."""
+
+    header: str = "Authorization"
+    format: str = "Bearer {value}"
+    value: str = ""
+
+
 class McpServerBody(BaseModel):
-    """An external MCP server to register (prebuilt from the catalog, or custom)."""
+    """An external MCP server to register (prebuilt from the catalog, or custom).
+
+    v1.343.0 (additive, every new field optional): ``transport`` picks the
+    shape — ``stdio`` (the default; ``command`` required, the stored row is
+    byte-identical to before) or ``http`` / ``sse`` (``url`` required, plus
+    optional ``headers`` and ``auth``). A header whose NAME matches
+    ``mcp.secrets.SECRET_KEY_RX`` and the auth value go to the vault; the
+    stored row keeps names only.
+    """
 
     name: str
-    command: str
+    command: str = ""
     args: list[str] = []
     env: dict[str, str] = {}
     cwd: str | None = None
@@ -1455,6 +1474,35 @@ class McpServerBody(BaseModel):
     #: approves-by-arming). Coarse — enabling it trusts every connected MCP
     #: tool — and applied at the next daemon restart. Default off (fail-closed).
     auto_approve: bool = False
+    transport: str = "stdio"
+    url: str | None = None
+    headers: dict[str, str] = {}
+    auth: McpAuthBody | None = None
+
+    @model_validator(mode="after")
+    def _shape_matches_transport(self) -> "McpServerBody":
+        kind = (self.transport or "stdio").strip().lower()
+        if kind in ("streamable-http", "streamable_http"):
+            kind = "http"
+        if kind not in ("stdio", "http", "sse"):
+            raise ValueError("transport must be stdio, http or sse")
+        self.transport = kind
+        if kind == "stdio":
+            if not (self.command or "").strip():
+                raise ValueError("a stdio pack needs a command")
+        else:
+            url = (self.url or "").strip()
+            if not url:
+                raise ValueError(f"an {kind} pack needs a url")
+            if not url.lower().startswith(("http://", "https://")):
+                raise ValueError("the url must start with http:// or https://")
+            self.url = url
+        if self.auth is not None:
+            if "{value}" not in (self.auth.format or ""):
+                raise ValueError("the auth format must contain {value}")
+            if not (self.auth.header or "").strip():
+                raise ValueError("the auth header needs a name")
+        return self
 
 
 class McpServerPatch(BaseModel):

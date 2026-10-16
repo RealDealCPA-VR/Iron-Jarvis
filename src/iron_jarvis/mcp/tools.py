@@ -333,6 +333,19 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
 
     if kind in ("http", "streamable-http", "streamable_http", "sse"):
         headers = dict(cfg.get("headers") or {})
+        # v1.343.0: `header_secrets` (HEADER -> vault name) is the header
+        # twin of `env_secrets` below — a header whose NAME looks like a
+        # secret (`X-API-Key`, `Authorization`) is kept in the vault by the
+        # POST door and resolved here, at launch, never stored as a value.
+        header_secrets = cfg.get("header_secrets")
+        if isinstance(header_secrets, dict) and secret_resolver is not None:
+            for header_name, secret_name in header_secrets.items():
+                try:
+                    value = secret_resolver(str(secret_name))
+                except Exception:  # noqa: BLE001 — a vault miss just omits the header
+                    value = None
+                if value:
+                    headers[str(header_name)] = value
         auth = cfg.get("auth")
         if isinstance(auth, dict):
             value = None

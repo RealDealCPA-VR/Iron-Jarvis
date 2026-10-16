@@ -311,6 +311,175 @@ def _generate_avatar_bytes(key: str, prompt: str, *, timeout_seconds: int = 180)
         time.sleep(5.0)
 
 
+def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
+    """Register an external MCP server (persisted; loaded live best-effort,
+    guaranteed on the next restart).
+
+    The ONE add path (v1.343.0): ``POST /mcp/servers`` delegates here, and
+    the import/apply door adds each chosen pack through the same function
+    so the secret split, the live load and the add note cannot drift.
+    Raises ``HTTPException`` exactly as the route answers.
+    """
+    import re as _re
+
+    name = (body.name or "").strip()
+    if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
+        raise HTTPException(status_code=400, detail="invalid server name")
+    is_http = body.transport in ("http", "sse")
+    if not is_http and not (body.command or "").strip():
+        raise HTTPException(status_code=400, detail="command is required")
+    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+    if any(s.get("name") == name for s in servers):
+        raise HTTPException(status_code=400, detail=f"server '{name}' already exists")
+    # v1.342.0 (lane C): an env KEY that names a secret (SECRET_KEY_RX)
+    # goes to the vault as `mcp.<name>.<KEY>`; the stored row keeps only
+    # the plain entries in `env` and the vault NAMES in `env_secrets`
+    # (resolved at spawn by `_build_transport`). The catalog, npm and
+    # suggest doors all POST here, so this is the one split. A vault that
+    # refuses the write refuses the add — a secret never lands in
+    # config.toml as a fallback.
+    # v1.343.0 (lane H): an http/sse pack splits the same way — a HEADER
+    # whose name matches SECRET_KEY_RX goes to the vault as
+    # `mcp.<name>.header.<H>` (the row keeps `header_secrets[H]`, resolved
+    # at launch beside `env_secrets`), and the auth VALUE goes to
+    # `mcp.<name>.auth.value` (the row keeps `auth.secret`, the shape
+    # `_build_transport` has resolved since the first HTTP pack). A stdio
+    # body is stored exactly as before, byte for byte.
+    from ...mcp.secrets import is_secret_key as _is_secret_key
+    from ...mcp.secrets import split_env as _split_env
+    from ...mcp.secrets import store_env_secrets as _store_env_secrets
+    from ...mcp.secrets import vault_name as _vault_name
+
+    plain_env, secret_values = _split_env(name, body.env or {})
+    plain_headers: dict[str, str] = {}
+    header_secret_values: dict[str, str] = {}
+    if is_http:
+        for header_name, value in dict(body.headers or {}).items():
+            h = str(header_name).strip()
+            v = "" if value is None else str(value)
+            if not h:
+                continue
+            if _is_secret_key(h):
+                if v:
+                    header_secret_values[h] = v
+            else:
+                plain_headers[h] = v
+    auth_value = (body.auth.value if (is_http and body.auth is not None) else "") or ""
+    # Every vault write happens BEFORE the row is built: a refusal
+    # refuses the add, naming the KEYS only.
+    try:
+        env_secrets = _store_env_secrets(d.platform.secrets, name, secret_values)
+        header_secrets: dict[str, str] = {}
+        for h, v in header_secret_values.items():
+            sname = _vault_name(name, f"header.{h}")
+            d.platform.secrets.set(
+                sname, v, kind="api_key", description=f"MCP pack {name}: header {h}"
+            )
+            header_secrets[h] = sname
+        auth_secret = ""
+        if auth_value:
+            auth_secret = _vault_name(name, "auth.value")
+            d.platform.secrets.set(
+                auth_secret,
+                auth_value,
+                kind="api_key",
+                description=f"MCP pack {name}: {body.auth.header} value",
+            )
+    except Exception as exc:  # noqa: BLE001 — names only, never the value
+        refused = sorted(secret_values) + sorted(
+            f"header {h}" for h in header_secret_values
+        ) + (["the auth value"] if auth_value else [])
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"the vault could not store {', '.join(refused)} "
+                f"({type(exc).__name__}); the pack was not added"
+            ),
+        )
+    if is_http:
+        cfg = {
+            "name": name,
+            "transport": body.transport,
+            "url": body.url,
+            **({"headers": plain_headers} if plain_headers else {}),
+            **({"header_secrets": header_secrets} if header_secrets else {}),
+            **(
+                {
+                    "auth": {
+                        "header": body.auth.header.strip(),
+                        "format": body.auth.format,
+                        "secret": auth_secret,
+                    }
+                }
+                if auth_secret
+                else {}
+            ),
+            **({"auto_approve": True} if body.auto_approve else {}),
+        }
+    else:
+        cfg = {
+            "name": name,
+            "command": body.command.strip(),
+            "args": [str(a) for a in body.args],
+            "env": plain_env,
+            **({"env_secrets": env_secrets} if env_secrets else {}),
+            **({"cwd": body.cwd} if body.cwd else {}),
+            **({"auto_approve": True} if body.auto_approve else {}),
+        }
+    servers.append(cfg)
+    d.platform.config.mcp_servers = servers
+    d._persist_config(["mcp_servers"])
+    # Best-effort LIVE load so its tools appear without a restart. Registered
+    # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
+    # and they survive the next restart (boot re-registers the same way).
+    loaded = 0
+    # v1.342.0: the loader says WHY a pack did not start (`errors`), so
+    # the note names the reason instead of "restart the daemon".
+    errors: dict[str, dict[str, Any]] = {}
+    try:
+        from ...mcp.tools import mcp_tools as _mcp_tools
+
+        # `home` (v1.299.0): this FIRST load writes the pack's manifest —
+        # everything it advertises now is what the user is connecting.
+        for tool in _mcp_tools(
+            [cfg],
+            secret_resolver=d.platform.secrets.get,
+            home=d.platform.config.home,
+            errors=errors,
+        ):
+            d.platform.registry.register(tool, mcp=True)
+            loaded += 1
+    except Exception:  # noqa: BLE001 — persisted config still loads on restart
+        loaded = 0
+    # auto_approve is applied when the resolver is built at boot, so a server
+    # added live with auto_approve won't be trusted by headless agents until
+    # the next restart — be honest about that.
+    note = None
+    if not loaded:
+        failure = errors.get(name)
+        if failure is not None:
+            reason = failure.get("reason") or failure.get("error") or "it did not start"
+            note = f"saved, but it did not start: {reason} — see its row for the fix"
+        else:
+            note = "saved — it connected but advertised no tools; see its row"
+    elif body.auto_approve:
+        note = "loaded — restart the daemon so autonomous agents may use it without asking"
+    return {
+        "name": name,
+        "added": True,
+        "tools_loaded": loaded,
+        "auto_approve": bool(body.auto_approve),
+        "note": note,
+        # v1.342.0: what was kept where — key NAMES only.
+        "env_keys": sorted(plain_env),
+        "secret_keys": sorted(env_secrets),
+        # v1.343.0: the http shape, names only.
+        "transport": body.transport,
+        "header_names": sorted(list(plain_headers) + list(header_secrets)),
+        "auth_set": bool(auth_secret),
+    }
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/tools")
@@ -2440,14 +2609,27 @@ def register(app: FastAPI, d) -> None:
             # same way — the key is listed, the value never leaves.
             _plain_env = dict(s.get("env") or {})
             _env_secrets = dict(s.get("env_secrets") or {})
-            _row = {k: v for k, v in s.items() if k not in ("env", "env_secrets")}
+            # v1.343.0 (lane H): an http pack's `headers` are VALUES and its
+            # `header_secrets` are vault names — neither rides the row; the
+            # row lists header NAMES and says whether an auth value is set.
+            _plain_headers = dict(s.get("headers") or {})
+            _header_secrets = dict(s.get("header_secrets") or {})
+            _row = {
+                k: v
+                for k, v in s.items()
+                if k not in ("env", "env_secrets", "headers", "header_secrets")
+            }
             # v1.342.0 (integration): an HTTP pack's header token (`auth.value`,
             # the non-env secret shape _build_transport reads) is a VALUE too.
             # The row keeps the auth shape and says a value is set, never what.
-            if isinstance(_row.get("auth"), dict) and _row["auth"].get("value"):
-                _row["auth"] = {k: v for k, v in _row["auth"].items() if k != "value"} | {
-                    "value_set": True
-                }
+            # v1.343.0: the same for `auth.secret` (the vault name the POST
+            # door stores) — the row says `value_set`, not where.
+            _auth_set = False
+            if isinstance(_row.get("auth"), dict):
+                _auth_set = bool(_row["auth"].get("value") or _row["auth"].get("secret"))
+                _row["auth"] = {
+                    k: v for k, v in _row["auth"].items() if k not in ("value", "secret")
+                } | {"value_set": _auth_set}
             servers.append(
                 {
                     **_row,
@@ -2457,6 +2639,17 @@ def register(app: FastAPI, d) -> None:
                     "args": list(s.get("args") or []),
                     "env_keys": sorted(str(k) for k in _plain_env),
                     "secret_keys": sorted(str(k) for k in _env_secrets),
+                    # v1.343.0: the http shape — transport ("stdio" when the
+                    # row predates it), header NAMES, whether auth is set.
+                    "transport": (
+                        s["transport"]
+                        if isinstance(s.get("transport"), str) and s.get("transport")
+                        else "stdio"
+                    ),
+                    "header_names": sorted(
+                        {str(k) for k in _plain_headers} | {str(k) for k in _header_secrets}
+                    ),
+                    "auth_set": _auth_set,
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
                     # v1.299.0 (additive): write-like tools that APPEARED or
@@ -2670,96 +2863,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/mcp/servers")
     def add_mcp_server(body: McpServerBody) -> dict[str, Any]:
-        """Register an external MCP server (persisted; loaded live best-effort,
-        guaranteed on the next restart)."""
-        import re as _re
-
-        name = (body.name or "").strip()
-        if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
-            raise HTTPException(status_code=400, detail="invalid server name")
-        if not (body.command or "").strip():
-            raise HTTPException(status_code=400, detail="command is required")
-        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
-        if any(s.get("name") == name for s in servers):
-            raise HTTPException(status_code=400, detail=f"server '{name}' already exists")
-        # v1.342.0 (lane C): an env KEY that names a secret (SECRET_KEY_RX)
-        # goes to the vault as `mcp.<name>.<KEY>`; the stored row keeps only
-        # the plain entries in `env` and the vault NAMES in `env_secrets`
-        # (resolved at spawn by `_build_transport`). The catalog, npm and
-        # suggest doors all POST here, so this is the one split. A vault that
-        # refuses the write refuses the add — a secret never lands in
-        # config.toml as a fallback.
-        from ...mcp.secrets import split_env as _split_env
-        from ...mcp.secrets import store_env_secrets as _store_env_secrets
-
-        plain_env, secret_values = _split_env(name, body.env or {})
-        try:
-            env_secrets = _store_env_secrets(d.platform.secrets, name, secret_values)
-        except Exception as exc:  # noqa: BLE001 — names only, never the value
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"the vault could not store {', '.join(sorted(secret_values))} "
-                    f"({type(exc).__name__}); the pack was not added"
-                ),
-            )
-        cfg = {
-            "name": name,
-            "command": body.command.strip(),
-            "args": [str(a) for a in body.args],
-            "env": plain_env,
-            **({"env_secrets": env_secrets} if env_secrets else {}),
-            **({"cwd": body.cwd} if body.cwd else {}),
-            **({"auto_approve": True} if body.auto_approve else {}),
-        }
-        servers.append(cfg)
-        d.platform.config.mcp_servers = servers
-        d._persist_config(["mcp_servers"])
-        # Best-effort LIVE load so its tools appear without a restart. Registered
-        # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
-        # and they survive the next restart (boot re-registers the same way).
-        loaded = 0
-        # v1.342.0: the loader says WHY a pack did not start (`errors`), so
-        # the note names the reason instead of "restart the daemon".
-        errors: dict[str, dict[str, Any]] = {}
-        try:
-            from ...mcp.tools import mcp_tools as _mcp_tools
-
-            # `home` (v1.299.0): this FIRST load writes the pack's manifest —
-            # everything it advertises now is what the user is connecting.
-            for tool in _mcp_tools(
-                [cfg],
-                secret_resolver=d.platform.secrets.get,
-                home=d.platform.config.home,
-                errors=errors,
-            ):
-                d.platform.registry.register(tool, mcp=True)
-                loaded += 1
-        except Exception:  # noqa: BLE001 — persisted config still loads on restart
-            loaded = 0
-        # auto_approve is applied when the resolver is built at boot, so a server
-        # added live with auto_approve won't be trusted by headless agents until
-        # the next restart — be honest about that.
-        note = None
-        if not loaded:
-            failure = errors.get(name)
-            if failure is not None:
-                reason = failure.get("reason") or failure.get("error") or "it did not start"
-                note = f"saved, but it did not start: {reason} — see its row for the fix"
-            else:
-                note = "saved — it connected but advertised no tools; see its row"
-        elif body.auto_approve:
-            note = "loaded — restart the daemon so autonomous agents may use it without asking"
-        return {
-            "name": name,
-            "added": True,
-            "tools_loaded": loaded,
-            "auto_approve": bool(body.auto_approve),
-            "note": note,
-            # v1.342.0: what was kept where — key NAMES only.
-            "env_keys": sorted(plain_env),
-            "secret_keys": sorted(env_secrets),
-        }
+        """Register an external MCP server — see :func:`add_mcp_pack`."""
+        return add_mcp_pack(d, body)
 
     @app.patch("/mcp/servers/{name}")
     def patch_mcp_server(name: str, body: McpServerPatch) -> dict[str, Any]:
