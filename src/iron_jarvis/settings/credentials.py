@@ -210,7 +210,7 @@ class ConfigSecretTool(Tool):
         "config_list. It shows the user a secure card to paste it into. NEVER ask the user to "
         "type a secret into the chat, and never repeat one."
     )
-    parameters = {
+    input_schema = {  # v1.341.0: was `parameters` (never read by Tool.spec()) — see settings/tools.py
         "type": "object",
         "properties": {
             "name": {

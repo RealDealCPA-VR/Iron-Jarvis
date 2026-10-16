@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.340.0 (2026-10-04).*
+holds itself to. Current as of v1.341.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,23 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The Local only chip glows when it is on (v1.341.0)
+
+In the chat composer, **Local only** now has a soft glow around it while it
+is on, on every theme. Before, the only sign was the label turning green,
+which is hard to tell from grey for many people with colour-blindness. The
+glow is a change in brightness, not colour, so it reads either way; the label
+is also a little heavier. Nothing moves, so there is nothing to switch off
+under reduced motion.
+
+Also in this release: the five settings tools a chat can use (`config_list`,
+`config_set`, `config_change`, `config_change_protected`, `config_secret`)
+now tell the model what arguments they take. Since v1.321.0 they had been
+shown with no argument list at all, so "change my default model to X" worked
+only when the model guessed `key` and `value` from the description; smaller
+models often could not. A check now refuses any tool that is registered
+without an argument list.
 
 ## Reading a web page brings its links (v1.340.0)
 

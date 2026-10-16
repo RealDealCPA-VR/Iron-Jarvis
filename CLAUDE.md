@@ -3395,6 +3395,30 @@ does not need a bump, stop and bump it.
   `_extract_page_text` keeps its 2-tuple shape. Pins:
   `tests/test_webfetch_links_v1340.py` (13 mutations, all red).
 
+- **A state that matters is never told by hue alone** (v1.341.0, user
+  request: the Local only chip should "slightly glow no matter the theme so
+  those with color blindness issues can tell"). `lib/composerChips.
+  CHIP_ON_SUCCESS` adds a 1px ring + 12px halo as a `shadow-[…]` drawn from
+  `rgb(var(--tone-success)/α)` — the TOKEN, never a literal hue, so every
+  Mark (`:root` + the light re-inks in globals.css) and every ThemeMaker
+  palette (`lib/themePalette.ts` sets `tone-success`) carries it — plus
+  `font-medium`. Only the success chip glows; accent chips stay flat. Static:
+  no keyframes, nothing for reduced-motion to cut. When a new chip or badge
+  says "on" by colour, give it a second cue (ring, weight, icon, words).
+  Pin: `dashboard/__tests__/local-only-glow-v1341.test.tsx` (removing the
+  shadow class: red).
+  SAME RELEASE, a real bug since v1.321.0: the five settings tools
+  (`settings/tools.py` ConfigListTool + `_ConfigChangeBase`,
+  `settings/credentials.py` ConfigSecretTool) declared their arguments as
+  `parameters = {…}` — a name `Tool.spec()` never reads (`tools/base.py`
+  reads `input_schema` only) — so every model saw `input_schema: {}` for
+  them and the v1.228.0 required-argument check was blind. Renamed.
+  `tests/test_tool_schemas_v1341.py` builds the REAL platform and refuses any
+  registered tool whose schema is not a JSON-schema object (143 tools
+  checked; a mis-named attribute goes red there, not in a user's chat) and
+  pins the five by class. A new Tool declares `input_schema`, never
+  `parameters`/`schema`/`args_schema`.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

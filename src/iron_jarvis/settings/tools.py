@@ -126,7 +126,11 @@ class ConfigListTool(Tool):
         "changes each one. Call this first when the user asks to change a setting and you "
         "are not sure of its key. Read-only."
     )
-    parameters = {
+    # v1.341.0: this was `parameters =` since v1.321.0 — a name `Tool.spec()`
+    # never reads — so every model was shown `input_schema: {}` and had to
+    # guess the arguments. The registry-wide pin in
+    # tests/test_tool_schemas_v1341.py catches the next one.
+    input_schema = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Words to look for (label, key or alias)."},
@@ -198,7 +202,7 @@ class ConfigListTool(Tool):
 
 class _ConfigChangeBase(Tool):
     TIER = "allow"
-    parameters = {
+    input_schema = {  # v1.341.0: was `parameters` (never read) — see ConfigListTool
         "type": "object",
         "properties": {
             "key": {"type": "string", "description": "The setting key from config_list (e.g. default_model)."},
