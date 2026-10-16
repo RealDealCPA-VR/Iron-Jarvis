@@ -26,6 +26,7 @@ import queue
 import subprocess
 import threading
 import time
+from collections import deque
 from types import EllipsisType
 from typing import Any, Callable
 
@@ -70,6 +71,32 @@ _KILL_GRACE_S = 2.0
 #: call in flight reads its answer as it arrives, so what ages out is idle
 #: chatter (or the answer to a call that already gave up).
 STDOUT_QUEUE_MAX = 4096
+
+#: The child's stderr is KEPT, not thrown away (v1.342.0, "the pack says
+#: why"). A pack that dies at start prints its reason there — a missing key, a
+#: module it cannot import, a port in use — and ``stderr=DEVNULL`` made every
+#: such death read as "closed the connection (exit code 1)". A daemon reader
+#: thread drains the pipe into a bounded ring: the last ``STDERR_RING_LINES``
+#: lines, at most ``STDERR_RING_BYTES`` of UTF-8, each line cut at
+#: ``STDERR_LINE_MAX`` characters. What leaves the transport is MASKED
+#: (``detections.redact.mask``) and cut to ``STDERR_TAIL_MAX`` characters; the
+#: clause inside an :class:`MCPServerStopped` is cut to ``STDERR_ERROR_MAX``.
+STDERR_RING_LINES = 40
+STDERR_RING_BYTES = 8 * 1024
+STDERR_LINE_MAX = 1000
+STDERR_TAIL_MAX = 2000
+STDERR_ERROR_MAX = 600
+
+#: How long an error path waits for the stderr reader to drain a dead child's
+#: last lines before it reads the ring — bounded, because a grandchild that
+#: inherited the pipe can keep it open after the launcher died.
+_STDERR_SETTLE_S = 0.5
+
+#: The fixed sentence every "the server died" error ends with (v1.342.0): the
+#: model relays it, and the user learns where the fix lives.
+SETTINGS_FIX_SENTENCE = (
+    "If it needs a key or setting, the user can fix it in Settings → Tools."
+)
 
 #: How many ``tools/list`` pages :meth:`MCPClient.list_tools` follows before it
 #: stops (v1.322.0). A server whose ``nextCursor`` never runs out would
@@ -430,6 +457,19 @@ class MCPClient:
             params["_meta"] = {"progressToken": str(scope.call_id)}
         return await self._request("tools/call", params)
 
+    def stderr_tail(self) -> str:
+        """The pack's last stderr lines, masked (v1.342.0) — what the load
+        record and the Tools page show as the reason a pack failed. ``""`` for
+        a transport with no stderr (HTTP, a fake) and on any fault."""
+        getter = getattr(self.transport, "stderr_tail", None)
+        if not callable(getter):
+            return ""
+        try:
+            tail = getter()
+        except Exception:  # noqa: BLE001 — a diagnostic never breaks a call
+            return ""
+        return tail if isinstance(tail, str) else ""
+
     def close(self) -> None:
         self.closed = True
         closer = getattr(self.transport, "close", None)
@@ -487,6 +527,59 @@ class FakeTransport:
         return canned
 
 
+class _StderrRing:
+    """The last lines a stdio server wrote to stderr (v1.342.0).
+
+    Bounded three ways so a chatty or hostile child can never grow the
+    daemon: at most :data:`STDERR_RING_LINES` lines, at most
+    :data:`STDERR_RING_BYTES` of UTF-8 across them (the OLDEST line goes
+    first), and a single line is cut at :data:`STDERR_LINE_MAX` characters.
+    Thread-safe: the reader thread appends, any thread reads.
+    """
+
+    __slots__ = ("_lines", "_bytes", "_lock")
+
+    def __init__(self) -> None:
+        self._lines: deque[str] = deque()
+        self._bytes = 0
+        self._lock = threading.Lock()
+
+    def append(self, line: str) -> None:
+        line = line.rstrip("\r\n")
+        if len(line) > STDERR_LINE_MAX:
+            line = line[:STDERR_LINE_MAX]
+        size = len(line.encode("utf-8", errors="replace"))
+        with self._lock:
+            self._lines.append(line)
+            self._bytes += size
+            while self._lines and (
+                len(self._lines) > STDERR_RING_LINES or self._bytes > STDERR_RING_BYTES
+            ):
+                gone = self._lines.popleft()
+                self._bytes -= len(gone.encode("utf-8", errors="replace"))
+
+    def lines(self) -> list[str]:
+        with self._lock:
+            return list(self._lines)
+
+    def byte_size(self) -> int:
+        with self._lock:
+            return self._bytes
+
+    def text(self) -> str:
+        """The kept lines joined, MASKED, cut to the last
+        :data:`STDERR_TAIL_MAX` characters; ``""`` when nothing was kept."""
+        lines = [ln for ln in self.lines() if ln.strip()]
+        if not lines:
+            return ""
+        from ..detections.redact import mask  # lazy: the package loads rule files
+
+        joined = str(mask("\n".join(lines)))
+        if len(joined) > STDERR_TAIL_MAX:
+            joined = joined[-STDERR_TAIL_MAX:]
+        return joined
+
+
 # --------------------------------------------------------------------------- #
 # StdioTransport — real subprocess, line-delimited JSON-RPC. Lazy spawn.
 # --------------------------------------------------------------------------- #
@@ -521,6 +614,14 @@ class StdioTransport:
       launcher alone leaves the server holding the pipe. Windows: a
       kill-on-close Job (``terminals/backend``'s helper), ``taskkill /T /F``
       as the fallback; POSIX: its own session, so ``killpg`` reaches it all.
+    * **stderr is kept** (v1.342.0). A second daemon reader thread drains the
+      child's stderr into a bounded :class:`_StderrRing`; :meth:`stderr_tail`
+      hands it out masked, and the EOF / broken-pipe errors carry its last
+      lines so the model (and the Tools page, through ``mcp/tools``) can say
+      WHY a pack died instead of only that it did. The reader never raises,
+      ends when the pipe closes, and never blocks ``close``: a reader still
+      parked on a grandchild's pipe is left to end on its own, and the
+      stream is closed only once it has let go.
     """
 
     def __init__(
@@ -546,6 +647,12 @@ class StdioTransport:
         self._proc: subprocess.Popen | None = None
         self._out: "queue.Queue[str | None] | None" = None
         self._reader: threading.Thread | None = None
+        #: The CURRENT (or most recent) server's stderr ring (v1.342.0). Kept
+        #: across ``close`` on purpose: a pack whose load failed is closed
+        #: before anyone asks why, and the ring is the why.
+        self._stderr: _StderrRing | None = None
+        #: The daemon thread draining that server's stderr into the ring.
+        self._err_reader: threading.Thread | None = None
         #: Windows Job handle owning the server and everything it launched.
         self._job: int | None = None
         self._id = 0
@@ -607,7 +714,7 @@ class StdioTransport:
             [self.command, *self.args],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -617,6 +724,18 @@ class StdioTransport:
             **popen_kw,
         )
         self.spawn_count += 1
+        # The child's stderr is drained on its OWN daemon thread (never the
+        # event loop, never the stdout reader — a pack that prints a page of
+        # warnings before it answers must not stall the handshake). A fresh
+        # ring per spawn: the tail always belongs to THIS server.
+        stderr_ring = _StderrRing()
+        err_reader = threading.Thread(
+            target=self._pump_stderr,
+            args=(proc.stderr, stderr_ring),
+            name=f"mcp-stderr-{proc.pid}",
+            daemon=True,
+        )
+        err_reader.start()
         job: int | None = None
         if os.name == "nt":
             handle = getattr(proc, "_handle", None)
@@ -634,6 +753,7 @@ class StdioTransport:
         reader.start()
         with self._state_lock:  # one atomic tuple, never half of one to a closer
             self._proc, self._out, self._job, self._reader = proc, out, job, reader
+            self._stderr, self._err_reader = stderr_ring, err_reader
             cancelled = cancel is not None and cancel.is_set()
         if cancelled:
             # The caller gave up during the spawn (abort() found nothing to
@@ -668,6 +788,40 @@ class StdioTransport:
             pass
         finally:
             out.put(None)  # EOF sentinel: the server is gone
+
+    @staticmethod
+    def _pump_stderr(stream: Any, ring: _StderrRing) -> None:
+        """Drain the server's stderr into ``ring`` on its own daemon thread
+        (v1.342.0). Ends when the pipe closes; never raises into anything —
+        a torn-down pipe, a decode fault or a ring fault all end the thread
+        quietly, because this thread exists only to remember, never to act."""
+        try:
+            if stream is not None:
+                for line in stream:
+                    try:
+                        ring.append(line)
+                    except Exception:  # pragma: no cover - the ring never raises
+                        pass
+        except Exception:  # pragma: no cover - pipe torn down mid-read
+            pass
+
+    @staticmethod
+    def _close_stderr(proc: subprocess.Popen, err_reader: threading.Thread | None) -> None:
+        """Close the dead server's stderr once its reader has let go.
+
+        Same rule as stdout in :meth:`_kill`: ``close`` on a buffered pipe
+        contends for the lock a parked ``readline`` holds, so a reader still
+        parked on a pipe a grandchild kept open is NOT joined to the end and
+        the stream is left to the reader (a daemon thread; it ends with the
+        pipe). The join is bounded, so ``close`` is never blocked by it."""
+        if err_reader is not None:
+            err_reader.join(timeout=_STDERR_SETTLE_S)
+        if err_reader is None or not err_reader.is_alive():
+            try:
+                if proc.stderr is not None:
+                    proc.stderr.close()
+            except Exception:  # pragma: no cover - already closed
+                pass
 
     @staticmethod
     def _kill(
@@ -745,9 +899,55 @@ class StdioTransport:
         with self._state_lock:
             proc, out, job, reader = self._proc, self._out, self._job, self._reader
             self._proc, self._out, self._job, self._reader = None, None, None, None
+            err_reader, self._err_reader = self._err_reader, None
+            # ``_stderr`` is deliberately kept: the ring outlives the server
+            # so ``stderr_tail`` can still say why it died.
         if proc is None:
             return
         self._kill(proc, out, job, reader)
+        self._close_stderr(proc, err_reader)
+
+    # -- stderr (v1.342.0) --------------------------------------------------
+    def stderr_tail(self) -> str:
+        """The server's last stderr lines — the current server's, or the most
+        recent one's after it died — joined, MASKED (``detections.redact.
+        mask``) and cut to the last :data:`STDERR_TAIL_MAX` characters.
+        ``""`` when no server ever ran or it wrote nothing. Never raises."""
+        ring = self._stderr
+        if ring is None:
+            return ""
+        try:
+            return ring.text()
+        except Exception:  # noqa: BLE001 — a diagnostic never breaks a call
+            return ""
+
+    def _tail_for_error(self) -> str:
+        """The tail an :class:`MCPServerStopped` carries: lets the stderr
+        reader drain a dead child's last lines (bounded by
+        :data:`_STDERR_SETTLE_S`), then the masked tail cut to the last
+        :data:`STDERR_ERROR_MAX` characters, newlines folded to ``" | "`` so
+        the error stays one readable line."""
+        err_reader = self._err_reader
+        if err_reader is not None and err_reader.is_alive():
+            err_reader.join(timeout=_STDERR_SETTLE_S)
+        tail = self.stderr_tail()
+        if not tail:
+            return ""
+        if len(tail) > STDERR_ERROR_MAX:
+            tail = tail[-STDERR_ERROR_MAX:]
+        return " | ".join(part for part in tail.splitlines() if part.strip())
+
+    @staticmethod
+    def _stopped_text(before: str, tail: str) -> str:
+        """``before`` (the words that stood here before v1.342.0, kept byte
+        for byte) + the tail clause when there is one + the restart promise +
+        the fixed Settings sentence."""
+        return (
+            before
+            + (f"; its last output: {tail}" if tail else "")
+            + "; it will be restarted on the next call. "
+            + SETTINGS_FIX_SENTENCE
+        )
 
     def abort(self, cancel: threading.Event) -> None:
         """The caller of an in-flight request gave up (deadline / Cancel).
@@ -769,10 +969,14 @@ class StdioTransport:
             proc.stdin.write(json.dumps(message) + "\n")
             proc.stdin.flush()
         except (OSError, ValueError) as exc:  # BrokenPipe, EINVAL, closed file
+            # The tail is read BEFORE close(): close forgets the reader, and
+            # the child's last words are the one clue to why the pipe broke.
+            tail = self._tail_for_error()
             self.close()
             raise MCPServerStopped(
-                f"the MCP server stopped ({type(exc).__name__}: {exc}); "
-                "it will be restarted on the next call"
+                self._stopped_text(
+                    f"the MCP server stopped ({type(exc).__name__}: {exc})", tail
+                )
             ) from exc
 
     def _read(self, expected_id: int) -> dict[str, Any]:
@@ -808,11 +1012,14 @@ class StdioTransport:
                 except Exception:  # noqa: BLE001 — a launcher still winding down
                     pass
                 code = proc.returncode if proc.poll() is not None else None
+                tail = self._tail_for_error()
                 self.close()
                 raise MCPServerStopped(
-                    "the MCP server closed the connection"
-                    + (f" (exit code {code})" if code is not None else "")
-                    + "; it will be restarted on the next call"
+                    self._stopped_text(
+                        "the MCP server closed the connection"
+                        + (f" (exit code {code})" if code is not None else ""),
+                        tail,
+                    )
                 )
             line = item.strip()
             if not line:
