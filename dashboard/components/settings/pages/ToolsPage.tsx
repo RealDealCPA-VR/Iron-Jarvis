@@ -241,6 +241,57 @@ interface McpServer {
   quarantined?: string[];
   /** v1.299.0: the per-tool view (name, write_like, quarantined). */
   tools?: McpToolRow[];
+  /** v1.342.0: the child's last stderr lines, secrets masked by the daemon,
+   *  at most 2000 chars; "" (or absent on an older daemon) when none. */
+  stderr_tail?: string | null;
+  /** v1.342.0: call-time failures since the last success or reload. */
+  failures?: number | null;
+  /** v1.342.0: the env KEY names the pack launches with. Values never ride
+   *  GET /mcp/servers any more; `env` stays only for an older daemon. */
+  env_keys?: string[];
+  /** v1.342.0: the env KEY names whose values live in the vault. */
+  secret_keys?: string[];
+}
+
+/** v1.342.0: the four states of a pack's load record. An older daemon sends
+ *  no `state`: a row with an error reads as failed, every other as ok, so the
+ *  v1.229.0 rows render as they always did. */
+type PackState = "starting" | "ok" | "failed" | "failing";
+
+function packState(s: McpServer): PackState {
+  const st = s.state;
+  if (st === "starting" || st === "ok" || st === "failed" || st === "failing") return st;
+  return s.last_error ? "failed" : "ok";
+}
+
+/** The env key names of a pack: the daemon's `env_keys` when it sends them,
+ *  else the keys of the (older) `env` map. Never a value. */
+function envKeysOf(s: McpServer): string[] {
+  if (Array.isArray(s.env_keys)) return s.env_keys.filter((k) => typeof k === "string");
+  return Object.keys(s.env ?? {});
+}
+
+function secretKeysOf(s: McpServer): string[] {
+  return Array.isArray(s.secret_keys) ? s.secret_keys.filter((k) => typeof k === "string") : [];
+}
+
+/** v1.342.0: a pack's last output, folded. Monospace, wrapped, twelve lines
+ *  visible (192px at this size) with its own scroll, so a long tail never
+ *  pushes the row off the screen. Nothing when the tail is empty. */
+function LastOutput({ tail, testId }: { tail: string | null | undefined; testId: string }) {
+  const text = (tail ?? "").trim();
+  if (!text) return null;
+  return (
+    <details data-testid={testId} className="group w-full">
+      <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={12} className="transition-transform duration-200 group-open:rotate-90" />
+        Last output
+      </summary>
+      <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg border border-white/[0.06] bg-ink-900/60 px-2 py-1 font-mono text-[11px] leading-4 text-zinc-400">
+        {text}
+      </pre>
+    </details>
+  );
 }
 
 /** The quarantined tool names of a pack — from `quarantined` when the daemon
@@ -255,6 +306,10 @@ interface McpReloadResult {
   ok: boolean;
   tools_loaded: number;
   last_error: string | null;
+  /** v1.342.0: the plain cause, the next step and the child's last output. */
+  reason?: string | null;
+  fix?: string | null;
+  stderr_tail?: string | null;
 }
 
 /** Response of POST /mcp/servers. `note` is set when live-load failed. */
@@ -272,6 +327,11 @@ interface McpTestResult {
   count: number;
   tools: string[];
   error: string | null;
+  /** v1.342.0: when ok is false, the REAL load error in plain words, the
+   *  next step and the child's last output (masked by the daemon). */
+  reason?: string | null;
+  fix?: string | null;
+  stderr_tail?: string | null;
 }
 
 /** Response payload of POST /mcp/suggest. `args`/`env` are model-derived and
@@ -285,6 +345,13 @@ interface McpSuggestion {
 }
 
 const MCP_PLACEHOLDER_RE = /<[^>]+>/g;
+
+/** v1.342.0: what happens to an env value the user types. The daemon splits
+ *  secrets by KEY name (token, key, secret, password, auth, credential) into
+ *  the encrypted vault; the config file keeps only the vault name. One
+ *  sentence, said beside every box that takes a KEY=value. */
+const SECRET_ENV_HINT =
+  "Passed to the extension as an environment variable. A key that looks like a token, key, secret or password is kept in the encrypted vault, not in the config file.";
 
 /** Distinct "<placeholder>" tokens appearing in a catalog entry's args. */
 function placeholdersOf(args: string[]): string[] {
@@ -716,6 +783,7 @@ export default function ToolsPage() {
   }>("/mcp/servers", 10000);
   const servers = mcpData?.servers ?? [];
   const serverNames = new Set(servers.map((s) => s.name));
+  const serverByName = new Map(servers.map((s) => [s.name, s] as const));
 
   const { data: catData, error: catError } = useApi<{ catalog: McpCatalogEntry[] }>(
     "/mcp/catalog",
@@ -804,7 +872,15 @@ export default function ToolsPage() {
       );
       setMcpTests((t) => ({
         ...t,
-        [serverName]: { ok: res.ok, count: res.tools_loaded, tools: [], error: res.last_error },
+        [serverName]: {
+          ok: res.ok,
+          count: res.tools_loaded,
+          tools: [],
+          error: res.last_error,
+          reason: res.reason ?? null,
+          fix: res.fix ?? null,
+          stderr_tail: res.stderr_tail ?? null,
+        },
       }));
     } catch (err) {
       setMcpTests((t) => ({
@@ -927,9 +1003,9 @@ export default function ToolsPage() {
     setMcpOk(null);
     try {
       await del(`/mcp/servers/${encodeURIComponent(serverName)}`);
-      setMcpOk(
-        `Extension "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
-      );
+      // v1.342.0: the route closes the pack's tools itself, so there is no
+      // restart to ask for.
+      setMcpOk(`Removed "${serverName}". Its tools are closed.`);
       reloadServers();
     } catch (err) {
       setMcpError(err instanceof ApiError ? err.message : String(err));
@@ -992,12 +1068,18 @@ export default function ToolsPage() {
     const caps = packCaps(entry.id);
     const official = isOfficial(entry.category);
     const isBusy = mcpBusy === entry.id;
+    // v1.342.0: a pack that is saved but did not start (or whose calls fail)
+    // must not wear the green "Enabled" chip here while the row below says
+    // it is broken. The card reads the same load record as the row.
+    const row = connected ? serverByName.get(entry.id) : undefined;
+    const rowState = row ? packState(row) : null;
+    const broken = rowState === "failed" || rowState === "failing";
     return (
       <div
         key={entry.id}
         data-pack={entry.id}
         className={`flex flex-col rounded-xl border p-4 transition-colors ${
-          connected
+          connected && !broken
             ? "border-emerald-500/20 bg-emerald-500/[0.03] hover:border-emerald-500/30"
             : "border-white/[0.06] bg-white/[0.015] hover:border-white/10 hover:bg-white/[0.03]"
         }`}
@@ -1010,18 +1092,29 @@ export default function ToolsPage() {
           </span>
           {/* 2. STATUS — including the runtime, promoted from a grey pill to
               a real state the user can act on. */}
-          <StatusChip
-            status={
-              connected
-                ? "added"
-                : entry.runtime_ready === true && entry.needs
-                  ? "ready"
-                  : entry.needs
-                    ? "blocked"
-                    : "available"
-            }
-            needs={entry.needs}
-          />
+          {broken ? (
+            <Badge
+              value={rowState === "failing" ? "Failing" : "Didn’t start"}
+              tone="amber"
+              variant="calm"
+              keepCase
+              data-testid="status-failed"
+              title={row?.reason || row?.last_error || undefined}
+            />
+          ) : (
+            <StatusChip
+              status={
+                connected
+                  ? "added"
+                  : entry.runtime_ready === true && entry.needs
+                    ? "ready"
+                    : entry.needs
+                      ? "blocked"
+                      : "available"
+              }
+              needs={entry.needs}
+            />
+          )}
         </div>
 
         <p className="mt-2 text-[13px] leading-relaxed text-zinc-400">
@@ -1279,7 +1372,7 @@ export default function ToolsPage() {
             key: `env:${k}`,
             label: k,
             kind: "text" as const,
-            hint: "Stored with the extension and passed to it as an environment variable.",
+            hint: SECRET_ENV_HINT,
           })),
         ],
       },
@@ -1837,6 +1930,12 @@ export default function ToolsPage() {
                   placeholder="KEY=value — one per line, e.g. API_TOKEN=..."
                   className="field resize-y font-mono text-xs"
                 />
+                <span
+                  data-testid="mcp-env-vault-hint"
+                  className="mt-1 block text-[11px] leading-relaxed text-zinc-500"
+                >
+                  {SECRET_ENV_HINT}
+                </span>
               </label>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <button
@@ -1921,6 +2020,9 @@ export default function ToolsPage() {
                       />
                     </label>
                   ))}
+                  <span className="block text-[11px] leading-relaxed text-zinc-500">
+                    {SECRET_ENV_HINT}
+                  </span>
                 </div>
               )}
               <div className="mt-3.5 flex flex-wrap items-center gap-3">
@@ -1971,6 +2073,41 @@ export default function ToolsPage() {
                 const names = s.tool_names ?? [];
                 const testing = mcpTestBusy === s.name;
                 const test = mcpTests[s.name];
+                // v1.342.0: the row reads the pack's load record. The state
+                // is said in words; the amber line carries the plain cause,
+                // the fix and the folded last output; Retry shows for every
+                // failed or failing pack AND for a pack holding zero tools
+                // (today's rule needed an error text, so a pack that loaded
+                // nothing without one had no way back).
+                const state = packState(s);
+                const failures = typeof s.failures === "number" && s.failures > 0 ? s.failures : 0;
+                const broken = state === "failed" || state === "failing";
+                const problem = broken || !!s.last_error;
+                const showRetry = broken || loaded === 0;
+                const stateWords =
+                  state === "starting"
+                    ? "Starting"
+                    : state === "failed"
+                      ? "Didn’t start"
+                      : state === "failing"
+                        ? `Failing: ${failures} call${failures === 1 ? "" : "s"}`
+                        : `${loaded} tool${loaded === 1 ? "" : "s"}`;
+                const stateTone =
+                  state === "ok" ? (loaded > 0 ? "green" : "slate") : broken ? "amber" : "slate";
+                const cause = s.reason || s.last_error || "";
+                const envKeys = envKeysOf(s);
+                const secretKeys = secretKeysOf(s);
+                const retryButton = (
+                  <button
+                    type="button"
+                    data-testid={`mcp-retry-${s.name}`}
+                    onClick={() => void retryServer(s.name)}
+                    disabled={testing}
+                    className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-400/[0.14] disabled:opacity-50"
+                  >
+                    <RefreshCw size={11} /> Retry
+                  </button>
+                );
                 return (
                   <div
                     key={s.name}
@@ -1984,12 +2121,18 @@ export default function ToolsPage() {
                             {s.name}
                           </span>
                           <Badge
-                            value={
-                              s.state === "starting" && loaded === 0
-                                ? "starting…"
-                                : `${loaded} tool${loaded === 1 ? "" : "s"} loaded`
+                            value={stateWords}
+                            tone={stateTone}
+                            variant="calm"
+                            keepCase
+                            data-testid={`mcp-state-${s.name}`}
+                            title={
+                              state === "failing"
+                                ? "Loaded, but its calls fail. It is restarted on the next call."
+                                : state === "starting"
+                                  ? "The daemon is still starting this pack."
+                                  : undefined
                             }
-                            tone={loaded > 0 ? "green" : "slate"}
                           />
                           {/* A TOGGLE, not a badge (v1.103.0). auto-approve
                               could only be set at connect time, so changing
@@ -2018,10 +2161,23 @@ export default function ToolsPage() {
                                 ? "auto-approve on"
                                 : "auto-approve off"}
                           </button>
-                          {Object.keys(s.env ?? {}).length > 0 && (
+                          {/* v1.342.0: KEY names only; the GET carries no
+                              values, and the vault's keys are named apart. */}
+                          {envKeys.length > 0 && (
                             <Badge
-                              value={`${Object.keys(s.env ?? {}).length} env`}
+                              value={`${envKeys.length} env`}
                               tone="violet"
+                              data-testid={`mcp-env-keys-${s.name}`}
+                              title={envKeys.join(", ")}
+                            />
+                          )}
+                          {secretKeys.length > 0 && (
+                            <Badge
+                              value={`${secretKeys.length} in vault`}
+                              tone="violet"
+                              keepCase
+                              data-testid={`mcp-secret-keys-${s.name}`}
+                              title={`Kept in the encrypted vault: ${secretKeys.join(", ")}`}
                             />
                           )}
                         </div>
@@ -2033,7 +2189,7 @@ export default function ToolsPage() {
                         {/* v1.229.0 (audit U4): the REASON a pack holds no tools.
                             "0 tools loaded" alone read as a fact of life; the
                             daemon had the exception text all along. */}
-                        {s.last_error && (
+                        {problem && (
                           <div
                             data-testid={`mcp-last-error-${s.name}`}
                             className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-amber-200"
@@ -2044,16 +2200,11 @@ export default function ToolsPage() {
                                 and names nothing anyone can act on; the raw text stays
                                 below it, because a bug report still needs it. */}
                             <span className="min-w-0 break-all">
-                              Didn’t start: {s.reason || s.last_error}
+                              {state === "failing"
+                                ? `Failing: ${cause || "its calls fail"}`
+                                : `Didn’t start: ${cause || "it gave no reason"}`}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => void retryServer(s.name)}
-                              disabled={testing}
-                              className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-400/[0.14] disabled:opacity-50"
-                            >
-                              <RefreshCw size={11} /> Retry
-                            </button>
+                            {retryButton}
                             {s.fix && (
                               <span
                                 data-testid={`mcp-fix-${s.name}`}
@@ -2062,11 +2213,21 @@ export default function ToolsPage() {
                                 {s.fix}
                               </span>
                             )}
-                            {s.reason && s.reason !== s.last_error && (
-                              <code className="w-full whitespace-pre-wrap break-all font-mono text-[10.5px] text-zinc-500">
+                            {s.reason && s.last_error && s.reason !== s.last_error && (
+                              <code className="w-full whitespace-pre-wrap break-all font-mono text-[11px] text-zinc-500">
                                 {s.last_error}
                               </code>
                             )}
+                            <LastOutput tail={s.stderr_tail} testId={`mcp-stderr-${s.name}`} />
+                          </div>
+                        )}
+                        {!problem && showRetry && state !== "starting" && (
+                          <div
+                            data-testid={`mcp-no-tools-${s.name}`}
+                            className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400"
+                          >
+                            <span>No tools loaded.</span>
+                            {retryButton}
                           </div>
                         )}
                       </div>
@@ -2142,7 +2303,28 @@ export default function ToolsPage() {
                             )}
                           </div>
                         ) : (
-                          <ErrorNote>{test.error ?? "Test failed."}</ErrorNote>
+                          // v1.342.0: a failed Test says the REAL load error,
+                          // the plain cause, the next step and the pack's last
+                          // output, so the user does not read "advertised no
+                          // tools" for a pack that died on a missing key.
+                          <div data-testid={`mcp-test-fail-${s.name}`} className="space-y-1.5">
+                            <ErrorNote>{test.error || test.reason || "Test failed."}</ErrorNote>
+                            {test.reason && test.reason !== test.error && (
+                              <p className="text-[12px] text-amber-200">{test.reason}</p>
+                            )}
+                            {test.fix && (
+                              <p
+                                data-testid={`mcp-test-fix-${s.name}`}
+                                className="text-[11px] text-amber-100/80"
+                              >
+                                {test.fix}
+                              </p>
+                            )}
+                            <LastOutput
+                              tail={test.stderr_tail}
+                              testId={`mcp-test-stderr-${s.name}`}
+                            />
+                          </div>
                         )}
                       </div>
                     )}

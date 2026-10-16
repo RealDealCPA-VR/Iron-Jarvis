@@ -68,6 +68,13 @@ interface Connector {
   tools_loaded: number;
   tool_names?: string[];
   account?: string;
+  /** The backend's words for a `no_tools` / `failed` status (the pack's
+   *  plain cause); "" when there is nothing to say. */
+  detail?: string | null;
+  /** v1.342.0: the pack's load record, when the backend carries it. */
+  reason?: string | null;
+  fix?: string | null;
+  stderr_tail?: string | null;
 }
 
 interface ConnectorsResponse {
@@ -94,6 +101,38 @@ interface McpTestResult {
   count: number;
   tools: string[];
   error: string | null;
+  /** v1.342.0: the real load error's plain cause, next step and last output. */
+  reason?: string | null;
+  fix?: string | null;
+  stderr_tail?: string | null;
+}
+
+/** Response of POST /mcp/servers/{name}/reload: the Retry for an MCP
+ *  connector that did not start (a connector id IS its mcp_servers name). */
+interface McpReloadResult {
+  ok: boolean;
+  tools_loaded: number;
+  last_error: string | null;
+  reason?: string | null;
+  fix?: string | null;
+  stderr_tail?: string | null;
+}
+
+/** v1.342.0: an MCP pack's last output, folded; monospace, wrapped, twelve
+ *  lines (192px) visible with its own scroll. Nothing when empty. */
+function LastOutput({ tail, testId }: { tail: string | null | undefined; testId: string }) {
+  const text = (tail ?? "").trim();
+  if (!text) return null;
+  return (
+    <details data-testid={testId} className="w-full">
+      <summary className="cursor-pointer select-none text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300">
+        Last output
+      </summary>
+      <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-all rounded-lg border border-white/[0.06] bg-ink-900/60 px-2 py-1 font-mono text-[11px] leading-4 text-zinc-400">
+        {text}
+      </pre>
+    </details>
+  );
 }
 interface ConnTestResult {
   ok: boolean;
@@ -252,6 +291,45 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
     }
   }
 
+  /** v1.342.0: Retry an MCP connector whose pack did not start. The connector
+   *  id is the pack's mcp_servers name, so this is the Tools page's own
+   *  reload; the card re-reads the gallery afterwards so the status line
+   *  tells the new truth (the words come from the daemon, never guessed). */
+  const [retryBusy, setRetryBusy] = useState(false);
+  async function retry() {
+    if (retryBusy) return;
+    setRetryBusy(true);
+    setError(null);
+    setSuccess(null);
+    setNote(null);
+    setTestResult(null);
+    try {
+      const res = await post<McpReloadResult>(
+        `/mcp/servers/${encodeURIComponent(c.id)}/reload`,
+      );
+      if (res.ok && res.tools_loaded > 0) {
+        setSuccess(
+          `Connected, ${res.tools_loaded} tool${res.tools_loaded === 1 ? "" : "s"} ready to use.`,
+        );
+      } else {
+        setTestResult({
+          ok: false,
+          count: res.tools_loaded ?? 0,
+          tools: [],
+          error: res.last_error ?? res.reason ?? "It did not start.",
+          reason: res.reason ?? null,
+          fix: res.fix ?? null,
+          stderr_tail: res.stderr_tail ?? null,
+        });
+      }
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRetryBusy(false);
+    }
+  }
+
   async function disconnect() {
     setError(null);
     setTestResult(null);
@@ -327,15 +405,49 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* Connected detail (tools loaded / account) + loaded tool chips */}
       {c.connected && (
         <div className="space-y-2">
-          <p className="text-[11px] text-zinc-500">
-            {c.connect_via === "mcp"
-              ? `${c.tools_loaded} tool${c.tools_loaded === 1 ? "" : "s"} loaded`
-              : c.connect_via === "memory"
-                ? "Grounds chat & agents — toggle it on in the chat + menu"
-                : c.account
-                  ? `Signed in as ${c.account}`
-                  : "Ready to use"}
-          </p>
+          {/* v1.342.0: an MCP connector says the backend's status in words.
+              "0 tools loaded" was a count where the user needed a cause: the
+              daemon knows whether the pack failed or loaded nothing, says
+              why, and names the fix. Retry reloads the pack in place. */}
+          {c.connect_via === "mcp" && (c.status === "no_tools" || c.status === "failed") ? (
+            <div
+              data-testid={`connector-status-${c.id}`}
+              className="flex flex-wrap items-center gap-2 text-[12px] text-amber-200"
+            >
+              <span className="min-w-0 break-all">
+                {c.status === "failed" ? "Didn’t start" : "No tools loaded"}
+                {c.reason || c.detail ? `: ${c.reason || c.detail}` : ""}
+              </span>
+              <button
+                type="button"
+                data-testid={`connector-retry-${c.id}`}
+                onClick={() => void retry()}
+                disabled={retryBusy || testBusy}
+                className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-400/[0.14] disabled:opacity-50"
+              >
+                {retryBusy ? "Retrying…" : "Retry"}
+              </button>
+              {c.fix && (
+                <span
+                  data-testid={`connector-fix-${c.id}`}
+                  className="w-full text-[11px] text-amber-100/80"
+                >
+                  {c.fix}
+                </span>
+              )}
+              <LastOutput tail={c.stderr_tail} testId={`connector-stderr-${c.id}`} />
+            </div>
+          ) : (
+            <p className="text-[11px] text-zinc-500">
+              {c.connect_via === "mcp"
+                ? `${c.tools_loaded} tool${c.tools_loaded === 1 ? "" : "s"} loaded`
+                : c.connect_via === "memory"
+                  ? "Grounds chat & agents — toggle it on in the chat + menu"
+                  : c.account
+                    ? `Signed in as ${c.account}`
+                    : "Ready to use"}
+            </p>
+          )}
           {c.connect_via === "mcp" && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
               {c.tool_names!.map((n) => (
@@ -562,7 +674,21 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               )}
             </div>
           ) : (
-            <ErrorNote>{testResult.error ?? "Test failed."}</ErrorNote>
+            // v1.342.0: a failed Test says the real load error, the plain
+            // cause, the next step and the pack's last output.
+            <div data-testid={`connector-test-fail-${c.id}`} className="space-y-1.5">
+              <ErrorNote>{testResult.error || testResult.reason || "Test failed."}</ErrorNote>
+              {testResult.reason && testResult.reason !== testResult.error && (
+                <p className="text-[12px] text-amber-200">{testResult.reason}</p>
+              )}
+              {testResult.fix && (
+                <p className="text-[11px] text-amber-100/80">{testResult.fix}</p>
+              )}
+              <LastOutput
+                tail={testResult.stderr_tail}
+                testId={`connector-test-stderr-${c.id}`}
+              />
+            </div>
           )
         ) : testResult.ok ? (
           <SuccessNote>Memory source is live and searchable.</SuccessNote>
