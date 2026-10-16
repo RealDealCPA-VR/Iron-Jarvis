@@ -3432,6 +3432,64 @@ does not need a bump, stop and bump it.
   Rule: a `dispose()` is not a guarantee that a file is free; a step that
   must own a file retries a brief hold and names a long one.
 
+- **A pack SAYS WHY it failed, where the model and the user each read**
+  (v1.342.0, "the pack says why", the first wave of the reliability/self-
+  repair arc the user approved 2026-10-16; six doer/reviewer lanes + an
+  integrator, every lane approved round 1 against the real diff with
+  mutations). STDERR (`mcp/client.py`): a stdio pack is spawned with
+  `stderr=PIPE` drained on its own daemon thread into a bounded ring
+  (`STDERR_RING_LINES` 40 / 8 KB / 1000-char lines) that OUTLIVES `close()`;
+  `StdioTransport.stderr_tail()` / `MCPClient.stderr_tail()` answer the ring
+  masked (`detections.redact.mask`, BEFORE the cuts) and cut to
+  `STDERR_TAIL_MAX` (2000), "" for HTTP/fake/faulting transports; the EOF and
+  broken-pipe `MCPServerStopped` texts keep their old words byte-identical
+  then add "; its last output: <≤ 600 chars, newlines → ' | '>" and
+  `SETTINGS_FIX_SENTENCE` ("If it needs a key or setting, the user can fix
+  it in Settings → Tools."); close() joins the reader ≤ 0.5 s, never blocks.
+  STATUS (`mcp/tools.py`): `_connect_with_timeout` raises `PackLoadFailed
+  (cause, stderr_tail)`; `_load_one_server`/`mcp_tools(errors=)` hand the
+  failure back EVEN WHEN `record=False` (`errors[name] = {error, reason,
+  fix, stderr_tail}`) — the Test route, the Directory test and the add route
+  read it, so a probe reports the REAL error ("advertised no tools" only
+  when it really connected and listed none); `classify_load_failure` checks
+  the CRASH shape ("closed the connection"/"exit code"/"stopped") BEFORE the
+  "connect" branch that misread it as unreachable; the load record carries
+  `state` ok|failed|failing|starting (was "ready" — `system_map.py` reads
+  "ok"), `failures`, `stderr_tail`; `note_call_failure(name, error)` /
+  `note_call_success(name)` are called from `MCPRemoteTool.execute` and
+  publish ONE `mcp.pack_failed {name, error, reason, fix}` per episode
+  (first failure after a success/reload/load; `set_event_bus` is wired in
+  `build_platform` right after `EventBus()`). SECRETS (`mcp/secrets.py`):
+  `SECRET_KEY_RX = (?i)(token|key|secret|passw|auth|credential)` on the env
+  KEY; `split_env` → plain env + vault values under `vault_name(server,
+  key)` = `mcp.<server>.<KEY>`, the stored record keeps `env_secrets[KEY]`
+  (the existing spawn-time resolver); POST /mcp/servers refuses the add when
+  the vault refuses; GET rows carry `env_keys` + `secret_keys` and NEVER a
+  value (an HTTP pack's `auth.value` → `value_set: true`); DELETE removes
+  the vault rows AND `<home>/mcp/manifests/<name>.json` (a re-add is a
+  first load again); `migrate_mcp_env_secrets(config=, secrets=)` runs in
+  `build_platform` BEFORE `_mcp_configs` — idempotent, NAMES logged, a
+  refused vault write leaves that entry untouched. CLOSES: `mcp.tools.
+  close_tools_clients(tools)` + `unload_pack_tools(registry, name)` are the
+  ONE closer (lifted from platform.py, which now delegates); connectors
+  disconnect/reconnect and settings `load_app`/`apply_app` close what they
+  unregister (the v1.328.1 leak at three more doors). CHAT (lock-step): a
+  FAILED `mcp__*` call's `result.error` goes through `_fence_tool_output`
+  (fence + injection scan + taint) in BOTH lanes; non-MCP failures keep the
+  registry's own words; `ran` stays False. DASHBOARD: ToolsPage `packState()`
+  words (Starting / N tools / Didn't start / Failing: N calls), the folded
+  "Last output", Retry for failed/failing/zero-tool packs, no green Enabled
+  for a broken pack, env by key name, Delete says "Removed."; DirectoryPage
+  renders `status: failed` + reason/fix/stderr_tail (`connectors/service.
+  _mcp_status` reads the load record for a zero-tool pack); the bell maps
+  `mcp.pack_failed` → `/tools` (`BELL_EVENT_TYPES` + `toActivity`). Pins:
+  `tests/test_{mcp_stderr_tail,mcp_honest_test,mcp_secrets_vault,
+  mcp_close_on_disconnect,chat_mcp_error_fence,integration_pins}_v1342.py`,
+  `dashboard/__tests__/{tools-pack-rows,bell-pack-failed}-v1342.test.tsx`.
+  Known: the Directory `no_tools` detail still says "restart" (pinned by
+  `test_wiki_access_v1172` line 92 — change both together); the error's
+  tail folds newlines to ' | ' while `stderr_tail()` keeps them.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

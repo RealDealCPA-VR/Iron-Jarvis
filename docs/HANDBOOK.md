@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.341.1 (2026-10-04).*
+holds itself to. Current as of v1.342.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,37 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A tool pack says why it failed (v1.342.0)
+
+Tool packs (the MCP servers under Settings → Tools) used to fail quietly.
+A pack that crashed at start because it was missing a key showed "closed the
+connection", its Test button said it had "connected but advertised no
+tools", and the message the pack wrote on its way out was thrown away. Now:
+
+- **Its last words are kept.** The last lines a pack prints before it dies
+  are kept (passwords and tokens in them are masked) and shown on its row
+  under "Last output", in the Test result, and in the error Jarvis reads in
+  chat ("pack 'github' exited (exit code 1); its last output: Missing
+  GITHUB_TOKEN … If it needs a key or setting, the user can fix it in
+  Settings → Tools"). A missing key is now a one-line fix, not a mystery.
+- **Test tells the truth.** Test reports the real reason a pack would not
+  start, and a crash is called a crash, not "couldn't be reached".
+- **The row shows its state.** Starting, "N tools", "Didn't start" or
+  "Failing: N calls" (a pack that loads but fails every call used to stay
+  green). Retry shows whenever a pack is failed, failing or has no tools. The
+  bell tells you the first time a pack starts failing and links to the row.
+- **Keys go in the vault.** A key or token typed on the Tools page (any
+  setting whose name says token, key, secret, password, auth or credential)
+  is stored encrypted in the vault, never in plain text in the settings file,
+  and is never shown back; older installs are moved over once at the next
+  start. The row lists the key names only.
+- **Tidier behind the scenes.** Removing or reconnecting a pack now stops
+  the program it started (it used to keep running until the next restart);
+  removing a pack also forgets what it had been trusted to do, so adding it
+  again starts clean. A failing pack's error text is treated as untrusted
+  content in chat, like a web page, so a planted instruction in it is never
+  followed.
 
 ## Restoring a backup waits out a busy moment (v1.341.1)
 
