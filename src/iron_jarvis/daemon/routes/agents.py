@@ -25,6 +25,8 @@ from ..schemas import (
     AgentCreate,
     AgentPatch,
     CustomToolCreate,
+    McpImportApplyBody,
+    McpImportPreviewBody,
     McpServerBody,
     McpServerPatch,
     McpSettingsPatch,
@@ -478,6 +480,345 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
         "header_names": sorted(list(plain_headers) + list(header_secrets)),
         "auth_set": bool(auth_secret),
     }
+
+
+def remove_mcp_pack(d, name: str) -> dict[str, Any]:
+    """Remove a configured pack: its config row, its vault rows
+    (``mcp.<name>.*``), its manifest, its live tools and their client.
+
+    The ONE remove path (v1.343.0): ``DELETE /mcp/servers/{name}`` delegates
+    here (its answer is unchanged), and the import/apply door's
+    ``replace: true`` removes the old pack through the same function before
+    re-adding. Raises ``HTTPException(404)`` for an unknown name.
+    """
+    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+    kept = [s for s in servers if s.get("name") != name]
+    if len(kept) == len(servers):
+        raise HTTPException(status_code=404, detail="no such server")
+    removed_cfg = next((s for s in servers if s.get("name") == name), None)
+    d.platform.config.mcp_servers = kept
+    d._persist_config(["mcp_servers"])
+    # v1.342.0 (lane C): the pack's vault rows (`mcp.<name>.*`) and its
+    # manifest (`<home>/mcp/manifests/<name>.json`) go with it, so a
+    # re-add is a FIRST load again (every tool trusted, no quarantine
+    # diff against a pack the user removed) and no orphaned secret
+    # outlives the row that named it.
+    from ...mcp.manifest import PackManifest as _PackManifest
+    from ...mcp.secrets import delete_pack_secrets as _delete_pack_secrets
+
+    secrets_removed = _delete_pack_secrets(
+        getattr(d.platform, "secrets", None), name, removed_cfg
+    )
+    manifest_removed = False
+    try:
+        _manifest_path = _PackManifest(d.platform.config.home).path(name)
+        if _manifest_path.is_file():
+            _manifest_path.unlink()
+            manifest_removed = True
+    except OSError as exc:
+        log.warning("MCP pack %r: manifest could not be removed: %s", name, type(exc).__name__)
+    # Unregister its live tools NOW so they disappear from every agent's
+    # loadout immediately (they won't come back on restart either — the
+    # config no longer lists the server).
+    unloaded = 0
+    removed = []
+    for tool_name in d.platform.registry.mcp_names(name):
+        live = d.platform.registry.get(tool_name)
+        if d.platform.registry.unregister(tool_name):
+            unloaded += 1
+            if live is not None:
+                removed.append(live)
+    # v1.328.1: and CLOSE their client, like a Retry closes what it
+    # replaces. Unregistering alone left the pack's stdio child running
+    # until the app restarted, with no surface left that could stop it.
+    from ...mcp.tools import close_tools_clients
+
+    close_tools_clients(removed)
+    # v1.324.0: its prompts and resources go with it ("/" and "@").
+    from ...mcp.tools import forget_live_client
+
+    forget_live_client(name)
+    return {
+        "removed": name,
+        "tools_unloaded": unloaded,
+        "secrets_removed": len(secrets_removed),
+        "manifest_removed": manifest_removed,
+    }
+
+
+def launcher_ready(command: str) -> bool:
+    """Would the launcher find this stdio command right now? The catalog's
+    ``runtime_ready`` (v1.316.0) and the import preview's (v1.343.0) share
+    this ONE answer: the launcher's OWN resolution (``resolve_launcher``:
+    real PATH, then the per-user bin dirs a GUI-launched daemon misses) —
+    a which-only check would disagree with what actually starts. Any
+    fault is False, never a raise."""
+    from ...mcp.tools import resolve_launcher
+
+    try:
+        resolve_launcher(command)
+        return True
+    except Exception:  # noqa: BLE001 — not found / unreadable dir = not ready
+        return False
+
+
+#: What a missing launcher is called on a preview row (plain words).
+_LAUNCHER_WORDS: dict[str, str] = {
+    "npx": "npx (Node.js)",
+    "node": "node (Node.js)",
+    "npm": "npm (Node.js)",
+    "bunx": "bunx (Bun)",
+    "uvx": "uvx (uv)",
+    "uv": "uv",
+    "pipx": "pipx",
+    "python": "python",
+    "python3": "python3",
+    "docker": "docker (Docker Desktop)",
+}
+
+
+def launcher_note(command: str, ready: bool) -> str:
+    """``""`` when the launcher resolves; else "needs npx (Node.js)"."""
+    if ready:
+        return ""
+    cmd = str(command or "").strip()
+    if not cmd:
+        return "needs a command"
+    base = cmd.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    for ext in (".cmd", ".exe"):
+        base = base.removesuffix(ext)
+    return f"needs {_LAUNCHER_WORDS.get(base, cmd)}"
+
+
+def preview_rows(d, specs: list[Any]) -> list[dict[str, Any]]:
+    """The import preview's rows (v1.343.0): each spec's ``preview_row``
+    (names only — ``mcp/import_config.PackSpec.preview_row`` never carries
+    a value) plus ``exists`` (the name is already in ``config.mcp_servers``),
+    ``runtime_ready`` (:func:`launcher_ready`, cached per command; always
+    True for an http/sse pack — nothing to launch) and ``launcher_note``."""
+    existing = {
+        str(s.get("name") or "")
+        for s in (getattr(d.platform.config, "mcp_servers", None) or [])
+        if isinstance(s, dict)
+    }
+    cache: dict[str, bool] = {}
+    rows: list[dict[str, Any]] = []
+    for spec in specs:
+        row = spec.preview_row()
+        if spec.transport == "stdio":
+            cmd = spec.command
+            if cmd not in cache:
+                cache[cmd] = launcher_ready(cmd)
+            ready = cache[cmd]
+            note = launcher_note(cmd, ready)
+        else:
+            ready, note = True, ""
+        row["exists"] = bool(spec.name) and spec.name in existing
+        row["runtime_ready"] = ready
+        row["launcher_note"] = note
+        rows.append(row)
+    return rows
+
+
+def _body_from_spec(spec: Any, overrides: dict[str, str], auto_approve: bool) -> McpServerBody:
+    """A ``McpServerBody`` for the one add door from a spec plus the values
+    the user typed (``overrides``: env keys for a stdio pack, header names
+    — or ``auth`` — for an http one). Raises ``ValueError`` when the shape
+    does not validate (the caller reports it as a skip)."""
+    from ..schemas import McpAuthBody
+
+    env = dict(spec.env)
+    headers = dict(spec.headers)
+    auth = dict(spec.auth) if spec.auth else None
+    for key, value in dict(overrides or {}).items():
+        k = str(key)
+        v = "" if value is None else str(value)
+        if spec.transport == "stdio":
+            env[k] = v
+        elif k.lower() in ("auth", "auth.value", "token"):
+            auth = {**(auth or {"header": "Authorization", "format": "Bearer {value}"}), "value": v}
+        else:
+            headers[k] = v
+    kwargs: dict[str, Any] = {
+        "name": spec.name,
+        "transport": spec.transport,
+        "auto_approve": bool(auto_approve),
+    }
+    if spec.transport == "stdio":
+        kwargs.update(command=spec.command, args=list(spec.args), env=env)
+        if spec.cwd:
+            kwargs["cwd"] = spec.cwd
+    else:
+        kwargs.update(url=spec.url, headers=headers)
+        if auth and auth.get("value"):
+            kwargs["auth"] = McpAuthBody(
+                header=str(auth.get("header") or "Authorization"),
+                format=str(auth.get("format") or "Bearer {value}"),
+                value=str(auth.get("value") or ""),
+            )
+    return McpServerBody(**kwargs)
+
+
+def _apply_specs(
+    d,
+    specs: list[Any],
+    names: list[str],
+    overrides: dict[str, dict[str, str]],
+    auto_approve: bool,
+    replace: bool,
+) -> dict[str, Any]:
+    """Add the chosen specs through :func:`add_mcp_pack` — the SAME door
+    ``POST /mcp/servers`` uses, so the secret split, the live load and the
+    add note cannot drift — and answer ``{added, skipped}``.
+
+    A name not in ``names`` is left alone; a name in ``names`` that no spec
+    carries is skipped ("not in the paste"); an existing pack is skipped
+    ("already added") unless ``replace`` removes it first
+    (:func:`remove_mcp_pack`); a spec with no usable name is skipped; a
+    refusal from the add door (an invalid shape, the vault refusing) is
+    the skip's ``why`` — key names only, never a value.
+
+    ORDER MATTERS for ``replace``: the body is BUILT (and so validated —
+    a parsed entry can carry a url the add door refuses) before anything
+    is removed, so a skip for a bad shape leaves the original pack and its
+    vault rows untouched. The one refusal that cannot be checked ahead is
+    the vault refusing the NEW values (503) after the old pack is gone: in
+    that case :func:`_put_back_pack` restores the old config row and
+    re-stores its vault values best-effort, and the skip says what could
+    not be put back (key names only).
+    """
+    wanted = [str(n) for n in (names or [])]
+    by_name: dict[str, Any] = {}
+    for spec in specs:
+        if spec.name and spec.name not in by_name:
+            by_name[spec.name] = spec
+    nameless = [s for s in specs if not s.name]
+    added: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for name in wanted:
+        if not name:
+            if nameless and not any(s["name"] == "" for s in skipped):
+                skipped.append({"name": "", "why": "no usable name"})
+            continue
+        spec = by_name.get(name)
+        if spec is None:
+            skipped.append({"name": name, "why": "not in the paste"})
+            continue
+        # The body first: a shape the add door refuses must skip BEFORE
+        # any removal, or a replace would destroy the pack it could not
+        # replace.
+        try:
+            body = _body_from_spec(spec, dict((overrides or {}).get(name) or {}), auto_approve)
+        except (ValueError, TypeError) as exc:
+            skipped.append({"name": name, "why": _plain_validation_words(exc)})
+            continue
+        old_row = _pack_row(d, name)
+        old_values: dict[str, str] = {}
+        if old_row is not None:
+            if not replace:
+                skipped.append({"name": name, "why": "already added"})
+                continue
+            old_values = _pack_vault_values(d, name, old_row)
+            try:
+                remove_mcp_pack(d, name)
+            except HTTPException as exc:
+                skipped.append({"name": name, "why": f"could not replace: {exc.detail}"})
+                continue
+        try:
+            result = add_mcp_pack(d, body)
+        except HTTPException as exc:
+            why = str(exc.detail)
+            if old_row is not None:
+                why = _put_back_pack(d, old_row, old_values, why)
+            skipped.append({"name": name, "why": why})
+            continue
+        from ...mcp.tools import load_status as _mcp_load_status
+
+        status = _mcp_load_status(name) or {}
+        tools_loaded = int(result.get("tools_loaded") or 0)
+        added.append(
+            {
+                "name": name,
+                "tools_loaded": tools_loaded,
+                "note": result.get("note"),
+                "state": status.get("state") or ("ok" if tools_loaded else "failed"),
+            }
+        )
+    return {"added": added, "skipped": skipped}
+
+
+def _pack_row(d, name: str) -> dict[str, Any] | None:
+    """A COPY of the stored config row named *name*, or None."""
+    for s in getattr(d.platform.config, "mcp_servers", None) or []:
+        if isinstance(s, dict) and str(s.get("name") or "") == name:
+            return json.loads(json.dumps(s))
+    return None
+
+
+def _pack_vault_values(d, name: str, row: dict[str, Any]) -> dict[str, str]:
+    """The pack's vault rows (``mcp.<name>.*``) read into memory so a failed
+    replace can put them back. Values stay in this process: nothing here is
+    logged or returned. A row that cannot be read is left out."""
+    from ...mcp.secrets import pack_vault_names as _pack_vault_names
+
+    secrets = getattr(d.platform, "secrets", None)
+    out: dict[str, str] = {}
+    if secrets is None:
+        return out
+    try:
+        names = _pack_vault_names(secrets, name, row)
+    except Exception:  # noqa: BLE001 — best effort
+        return out
+    for vault_name in names:
+        try:
+            value = secrets.get(vault_name)
+        except Exception:  # noqa: BLE001
+            value = None
+        if value:
+            out[vault_name] = str(value)
+    return out
+
+
+def _put_back_pack(d, row: dict[str, Any], values: dict[str, str], why: str) -> str:
+    """After ``replace`` removed a pack and the add door then refused the
+    new one (the vault refusing its values), restore the OLD config row
+    and re-store its vault values best-effort. Returns the skip's ``why``
+    extended with what happened — vault names cut to their KEY, never a
+    value. The old pack's tools come back on the next load (Retry or a
+    restart); the row is what must not be lost."""
+    name = str(row.get("name") or "")
+    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+    if name and not any(isinstance(s, dict) and s.get("name") == name for s in servers):
+        servers.append(row)
+        d.platform.config.mcp_servers = servers
+        try:
+            d._persist_config(["mcp_servers"])
+        except Exception as exc:  # noqa: BLE001 — the in-memory row still stands
+            log.warning("MCP pack %r: put-back could not be persisted: %s", name, type(exc).__name__)
+    lost: list[str] = []
+    secrets = getattr(d.platform, "secrets", None)
+    for vault_name, value in values.items():
+        key = vault_name[len(f"mcp.{name}."):] if vault_name.startswith(f"mcp.{name}.") else vault_name
+        try:
+            if secrets is None:
+                raise RuntimeError("no vault")
+            secrets.set(vault_name, value, kind="api_key", description=f"MCP pack {name}: {key}")
+        except Exception:  # noqa: BLE001 — names only
+            lost.append(key)
+    note = f"{why}; the earlier pack was put back"
+    if lost:
+        note += f", but its stored {', '.join(sorted(lost))} could not be; enter it again in Settings"
+    return note
+
+
+def _plain_validation_words(exc: BaseException) -> str:
+    """Pydantic's ``ValidationError`` text, cut to its one sentence."""
+    text = str(exc)
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Value error, "):
+            return line[len("Value error, "):].split(" [type=", 1)[0]
+    return text.splitlines()[0][:200] if text else "the pack could not be read"
 
 
 def register(app: FastAPI, d) -> None:
@@ -2551,16 +2892,9 @@ def register(app: FastAPI, d) -> None:
         what actually starts. Computed per request (a user who installs uv
         sees it on reload), on COPIES (never written into the shared list),
         off the loop (PATH probes touch the disk), and any fault is False,
-        never a 500.
+        never a 500. v1.343.0: the resolution is :func:`launcher_ready`,
+        shared with the import preview.
         """
-        from ...mcp.tools import resolve_launcher
-
-        def _ready(command: str) -> bool:
-            try:
-                resolve_launcher(command)
-                return True
-            except Exception:  # noqa: BLE001 — not found / unreadable dir = not ready
-                return False
 
         def _rows() -> list[dict[str, Any]]:
             cache: dict[str, bool] = {}
@@ -2568,11 +2902,65 @@ def register(app: FastAPI, d) -> None:
             for row in d._MCP_CATALOG:
                 cmd = str(row.get("command") or "")
                 if cmd not in cache:
-                    cache[cmd] = _ready(cmd)
+                    cache[cmd] = launcher_ready(cmd)
                 out.append({**row, "runtime_ready": cache[cmd]})
             return out
 
         return {"catalog": await asyncio.to_thread(_rows)}
+
+    @app.post("/mcp/import/preview")
+    def mcp_import_preview(body: McpImportPreviewBody) -> dict[str, Any]:
+        """What a paste would add (v1.343.0, "add a pack in one paste").
+
+        ``mcp/import_config.parse_any`` reads a Claude Desktop / Claude Code
+        / VS Code / Cursor JSON block, a Codex TOML, a single server object,
+        a command line, a URL or an ``npx mcp-remote`` line into specs; the
+        rows carry NAMES ONLY (env keys, secret keys, header names) plus
+        ``exists`` / ``runtime_ready`` / ``launcher_note``. A value the
+        paste carried never comes back — the apply route re-parses the
+        text server-side. ``unrecognised`` is True when the text said
+        something and none of it was a pack.
+        """
+        from ...mcp.import_config import parse_any
+
+        text = body.text or ""
+        specs = parse_any(text)
+        return {
+            "servers": preview_rows(d, specs),
+            "unrecognised": bool(text.strip()) and not specs,
+        }
+
+    @app.post("/mcp/import/apply")
+    def mcp_import_apply(body: McpImportApplyBody) -> dict[str, Any]:
+        """Add the chosen packs out of a paste (v1.343.0).
+
+        The TEXT is parsed again here (values never round-trip through the
+        browser; ``overrides`` are the values the user typed for keys the
+        paste did not carry) and every chosen pack goes through the one add
+        door (:func:`add_mcp_pack`) — secrets split into the vault, the live
+        load run, the note saying why a pack did not start. Answers
+        ``{added: [{name, tools_loaded, note, state}], skipped: [{name,
+        why}]}``; an existing name is skipped unless ``replace`` is true.
+        ``source`` (one of the scanned config files) is the sources door's
+        branch of this same route.
+        """
+        from ...mcp.import_config import parse_any
+
+        text = body.text or ""
+        if text.strip():
+            specs = parse_any(text)
+        elif (body.source or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="importing from another app's config file is not available on this daemon",
+            )
+        else:
+            raise HTTPException(status_code=400, detail="paste a config block, a command line or a URL")
+        if not body.names:
+            raise HTTPException(status_code=400, detail="choose at least one pack to add")
+        return _apply_specs(
+            d, specs, list(body.names), dict(body.overrides or {}), bool(body.auto_approve), bool(body.replace)
+        )
 
     @app.get("/mcp/servers")
     def mcp_servers() -> dict[str, Any]:
@@ -2903,59 +3291,9 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/mcp/servers/{name}")
     def delete_mcp_server(name: str) -> dict[str, Any]:
-        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
-        kept = [s for s in servers if s.get("name") != name]
-        if len(kept) == len(servers):
-            raise HTTPException(status_code=404, detail="no such server")
-        removed_cfg = next((s for s in servers if s.get("name") == name), None)
-        d.platform.config.mcp_servers = kept
-        d._persist_config(["mcp_servers"])
-        # v1.342.0 (lane C): the pack's vault rows (`mcp.<name>.*`) and its
-        # manifest (`<home>/mcp/manifests/<name>.json`) go with it, so a
-        # re-add is a FIRST load again (every tool trusted, no quarantine
-        # diff against a pack the user removed) and no orphaned secret
-        # outlives the row that named it.
-        from ...mcp.manifest import PackManifest as _PackManifest
-        from ...mcp.secrets import delete_pack_secrets as _delete_pack_secrets
-
-        secrets_removed = _delete_pack_secrets(
-            getattr(d.platform, "secrets", None), name, removed_cfg
-        )
-        manifest_removed = False
-        try:
-            _manifest_path = _PackManifest(d.platform.config.home).path(name)
-            if _manifest_path.is_file():
-                _manifest_path.unlink()
-                manifest_removed = True
-        except OSError as exc:
-            log.warning("MCP pack %r: manifest could not be removed: %s", name, type(exc).__name__)
-        # Unregister its live tools NOW so they disappear from every agent's
-        # loadout immediately (they won't come back on restart either — the
-        # config no longer lists the server).
-        unloaded = 0
-        removed = []
-        for tool_name in d.platform.registry.mcp_names(name):
-            live = d.platform.registry.get(tool_name)
-            if d.platform.registry.unregister(tool_name):
-                unloaded += 1
-                if live is not None:
-                    removed.append(live)
-        # v1.328.1: and CLOSE their client, like a Retry closes what it
-        # replaces. Unregistering alone left the pack's stdio child running
-        # until the app restarted, with no surface left that could stop it.
-        from ...mcp.tools import close_tools_clients
-
-        close_tools_clients(removed)
-        # v1.324.0: its prompts and resources go with it ("/" and "@").
-        from ...mcp.tools import forget_live_client
-
-        forget_live_client(name)
-        return {
-            "removed": name,
-            "tools_unloaded": unloaded,
-            "secrets_removed": len(secrets_removed),
-            "manifest_removed": manifest_removed,
-        }
+        """Remove a pack — see :func:`remove_mcp_pack` (the one remove path;
+        the import door's ``replace`` uses it too)."""
+        return remove_mcp_pack(d, name)
 
     @app.post("/mcp/suggest")
     async def suggest_mcp_server(body: McpSuggestBody) -> dict[str, Any]:

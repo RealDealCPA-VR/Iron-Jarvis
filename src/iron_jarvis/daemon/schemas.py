@@ -1525,6 +1525,29 @@ class McpSuggestBody(BaseModel):
     model: str = ""
 
 
+class McpImportPreviewBody(BaseModel):
+    """``POST /mcp/import/preview`` (v1.343.0): pasted text — a config block,
+    a command line, a URL. The answer lists names only, never a value."""
+
+    text: str = ""
+
+
+class McpImportApplyBody(BaseModel):
+    """``POST /mcp/import/apply`` (v1.343.0): add the chosen packs out of a
+    paste (``text``) or one of the scanned config files (``source``) — the
+    daemon re-parses server-side, so values never round-trip through the
+    browser except ``overrides`` (``{name: {KEY: value}}``), the values the
+    user typed for keys the paste did not carry. ``replace`` lets an
+    existing name be removed and re-added; otherwise it is skipped."""
+
+    text: str = ""
+    source: str = ""
+    names: list[str] = []
+    overrides: dict[str, dict[str, str]] = {}
+    auto_approve: bool = False
+    replace: bool = False
+
+
 class SkillProposalApproveBody(BaseModel):
     """Approve a learned-skill proposal (v1.135.0). ``body_md`` carries an
     edited SKILL.md that wins over the stored draft; ``None`` approves the
