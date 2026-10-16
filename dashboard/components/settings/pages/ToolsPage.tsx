@@ -28,6 +28,7 @@ import {
   ChevronRight,
   ShieldAlert,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import { post, patch, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -62,6 +63,15 @@ import {
 } from "@/components/tools/FilterBar";
 import { EnableDialog, type EnablePlan } from "@/components/tools/EnableDialog";
 import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
+import { AddPack } from "@/components/tools/AddPack";
+import { EditPack, type EditSaved } from "@/components/tools/EditPack";
+import {
+  LAUNCHER_CHOICES,
+  buildLaunch,
+  guessLauncher,
+  safeName,
+  type Launcher,
+} from "@/lib/mcpImport";
 import type { McpToolRow } from "@/lib/types";
 import {
   RICHER_PACK,
@@ -170,14 +180,26 @@ const DIRECTORY_TWINS: ReadonlySet<string> = new Set([
  * Turn a pasted npm package or GitHub repo into a ready MCP launch command
  * — DETERMINISTIC, no code runs here. The exact command is shown to the user,
  * who reviews (and can edit) it before Connect actually starts the server.
- *   - "@scope/pkg" or "pkg"            -> npx -y <pkg>
+ *   - "@scope/pkg" or "pkg"            -> npx -y <pkg>   (or uvx <pkg>)
  *   - "github.com/owner/repo" / URL    -> npx -y github:owner/repo
  *   - "owner/repo"                     -> npx -y github:owner/repo
+ *   - launcher "command"               -> the text as a command line
  * Returns null when the input does not look like either.
+ * v1.343.0: the launcher is a choice (npx / uvx / a typed command); the name
+ * follows the daemon's own rule (`safeName`: dots become "-").
  */
 function buildFromSource(
   raw: string,
+  launcher: Launcher = "npx",
 ): { name: string; command: string; args: string[]; github: boolean } | null {
+  if (launcher === "command") {
+    const line = raw.trim();
+    if (!line) return null;
+    const built = buildLaunch(line, "command");
+    if (!built.command) return null;
+    const last = built.args[built.args.length - 1] ?? built.command;
+    return { name: safeName(last.replace(/^@[^/]+\//, "")) || safeName(built.command), ...built, github: false };
+  }
   const s = raw.trim().replace(/\s+/g, "");
   if (!s) return null;
   // A GitHub URL or bare owner/repo (but NOT an npm scope like @scope/pkg).
@@ -189,18 +211,20 @@ function buildFromSource(
     const repo = (gh[2] ?? gh[4]).replace(/\.git$/, "");
     if (owner && repo) {
       return {
-        name: repo,
+        name: safeName(repo),
         command: "npx",
         args: ["-y", `github:${owner}/${repo}`],
         github: true,
       };
     }
   }
-  // An npm package spec: "@scope/name", "@scope/name@1.2.3", or "name".
-  if (/^@?[\w.-]+(?:\/[\w.-]+)?(?:@[\w.-]+)?$/.test(s)) {
-    const bare = s.replace(/^@[^/]+\//, "").replace(/@[\w.-]+$/, "");
-    const name = (bare || s).replace(/[^\w.-]/g, "-");
-    return { name, command: "npx", args: ["-y", s], github: false };
+  // An npm or PyPI package spec: "@scope/name", "@scope/name@1.2.3", "name",
+  // "pip:name".
+  const spec = s.replace(/^(pip|pypi|npm):/i, "");
+  if (/^@?[\w.-]+(?:\/[\w.-]+)?(?:@[\w.-]+)?$/.test(spec)) {
+    const bare = spec.replace(/^@[^/]+\//, "").replace(/@[\w.-]+$/, "");
+    const name = safeName(bare || spec);
+    return { name, ...buildLaunch(spec, launcher), github: false };
   }
   return null;
 }
@@ -251,6 +275,16 @@ interface McpServer {
   env_keys?: string[];
   /** v1.342.0: the env KEY names whose values live in the vault. */
   secret_keys?: string[];
+  /** v1.343.0: an HTTP pack. "stdio" (or absent) is a program this PC runs. */
+  transport?: string | null;
+  url?: string | null;
+  /** v1.343.0: header NAMES only (an older daemon may send a map; only its
+   *  keys are read, never a value). */
+  header_names?: string[];
+  headers?: Record<string, unknown> | null;
+  /** v1.343.0: the auth shape with `value_set`, never the value. */
+  auth?: Record<string, unknown> | null;
+  cwd?: string | null;
 }
 
 /** v1.342.0: the four states of a pack's load record. An older daemon sends
@@ -920,6 +954,7 @@ export default function ToolsPage() {
     args: string[],
     env: Record<string, string>,
     busyKey: string,
+    launcher?: Launcher,
   ): Promise<boolean> {
     setMcpBusy(busyKey);
     setMcpError(null);
@@ -928,11 +963,14 @@ export default function ToolsPage() {
       // No auto_approve here: trust is governed by the persisted global switch
       // (the checkbox above the catalog), not stamped per-connect — a per-row
       // stamp would silently survive the user later unchecking the box.
+      // v1.343.0: the npm door names its launcher; a catalog add sends none
+      // and its body stays byte for byte what it was.
       const res = await post<McpAddResult>("/mcp/servers", {
         name: serverName,
         command: cmd,
         args,
         env,
+        ...(launcher ? { launcher } : {}),
       });
       const approveNote = res.auto_approve
         ? " Autonomous agents may run MCP tools without asking after the next restart."
@@ -1022,7 +1060,32 @@ export default function ToolsPage() {
   const [srcInput, setSrcInput] = useState("");
   const [srcName, setSrcName] = useState("");
   const [srcEnvText, setSrcEnvText] = useState("");
-  const srcBuilt = buildFromSource(srcInput);
+  // v1.343.0: the launcher is a choice. Until the user picks one it follows
+  // the daemon's guess (a "pip:" prefix or a PyPI-looking name reads as uvx).
+  const [srcLauncherPick, setSrcLauncherPick] = useState<Launcher | null>(null);
+  const srcPick: Launcher = srcLauncherPick ?? guessLauncher(srcInput);
+  const srcBuilt = buildFromSource(srcInput, srcPick);
+  // A GitHub ref always launches through npx (buildFromSource builds
+  // `npx -y github:owner/repo` whatever the select held), so the launcher
+  // the select shows and the POST body carries is the one the built command
+  // really uses. A pick of uvx followed by a GitHub paste used to send
+  // `command: "npx"` beside `launcher: "uvx"`.
+  const srcLauncher: Launcher = srcBuilt?.github ? "npx" : srcPick;
+  // v1.343.0: Edit on a pack row opens the inline editor for that name.
+  const [editing, setEditing] = useState<string | null>(null);
+
+  function onPackEdited(serverName: string, res: EditSaved) {
+    setEditing(null);
+    setMcpError(null);
+    setMcpOk(
+      res.note
+        ? `"${serverName}" saved. ${res.note}`
+        : res.reloaded === false
+          ? `"${serverName}" saved.`
+          : `"${serverName}" saved and reloaded.`,
+    );
+    reloadServers();
+  }
 
   /** Parse "KEY=value" lines into an env dict (blank/comment lines ignored). */
   function parseEnv(text: string): Record<string, string> {
@@ -1039,18 +1102,23 @@ export default function ToolsPage() {
 
   async function addFromSource() {
     if (!srcBuilt) return;
-    const name = (srcName.trim() || srcBuilt.name).replace(/[^\w.-]/g, "-");
+    // v1.343.0: the daemon's own name rule (dots become "-"), applied here so
+    // the name the user reads is the name the row will carry.
+    const name = safeName(srcName.trim() || srcBuilt.name);
+    if (!name) return;
     const okAdd = await addMcpServer(
       name,
       srcBuilt.command,
       srcBuilt.args,
       parseEnv(srcEnvText),
       `src:${name}`,
+      srcLauncher,
     );
     if (okAdd) {
       setSrcInput("");
       setSrcName("");
       setSrcEnvText("");
+      setSrcLauncherPick(null);
     }
   }
 
@@ -1859,8 +1927,15 @@ export default function ToolsPage() {
             })()
           )}
 
+          {/* v1.343.0: ADD A PACK, three doors into one preview list (paste a
+              config, import from your other apps, an HTTP server). */}
           <div className="mb-2.5 mt-6">
-            <SectionLabel>Add from npm or GitHub</SectionLabel>
+            <SectionLabel>Add a pack</SectionLabel>
+          </div>
+          <AddPack onAdded={() => void reloadServers()} />
+
+          <div className="mb-2.5 mt-6">
+            <SectionLabel>Add from npm, PyPI or GitHub</SectionLabel>
           </div>
           <p className="mb-2 text-[13px] text-zinc-500">
             Paste an npm package (e.g.{" "}
@@ -1874,12 +1949,30 @@ export default function ToolsPage() {
             ). Iron Jarvis builds the launch command for you — nothing runs until you
             review it and hit Connect.
           </p>
-          <input
-            value={srcInput}
-            onChange={(e) => setSrcInput(e.target.value)}
-            placeholder="@scope/package · owner/repo · https://github.com/owner/repo"
-            className="field font-mono"
-          />
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              value={srcInput}
+              onChange={(e) => setSrcInput(e.target.value)}
+              placeholder="@scope/package · owner/repo · https://github.com/owner/repo"
+              className="field font-mono"
+              data-testid="npm-door-input"
+            />
+            <select
+              value={srcLauncher}
+              onChange={(e) => setSrcLauncherPick(e.target.value as Launcher)}
+              aria-label="Launcher"
+              data-testid="npm-door-launcher"
+              className="field sm:w-56"
+              disabled={Boolean(srcBuilt?.github)}
+              title={srcBuilt?.github ? "A GitHub repo is fetched and run by npx." : undefined}
+            >
+              {LAUNCHER_CHOICES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
           {srcInput.trim() && !srcBuilt && (
             <p className="mt-2 text-[12px] text-amber-300/80">
               That doesn&apos;t look like an npm package or a GitHub repo. Try{" "}
@@ -1891,21 +1984,21 @@ export default function ToolsPage() {
             <div className="mt-3 rounded-xl border border-accent/20 bg-accent/[0.04] p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <Server size={14} className="text-accent-soft" />
-                <span className="font-mono text-sm font-semibold text-zinc-100">
-                  {srcName.trim() || srcBuilt.name}
+                <span className="font-mono text-sm font-semibold text-zinc-100" data-testid="npm-door-name">
+                  {safeName(srcName.trim() || srcBuilt.name)}
                 </span>
                 {srcBuilt.github && <Badge value="from GitHub" tone="violet" />}
               </div>
               <p className="mt-2 text-[12px] text-zinc-500">
                 This is the command it will run when you Connect:
               </p>
-              <div className="mt-1">
+              <div className="mt-1" data-testid="npm-door-argv">
                 <ArgvChips argv={[srcBuilt.command, ...srcBuilt.args]} />
               </div>
               {srcBuilt.github && (
                 <p className="mt-2 text-[11px] text-zinc-600">
                   GitHub repos launch via npx. If it&apos;s a Python server instead, add
-                  it above by its package name (which uses uvx).
+                  it above by its package name and pick uvx.
                 </p>
               )}
               <label className="mt-3 block">
@@ -1916,6 +2009,7 @@ export default function ToolsPage() {
                   value={srcName}
                   onChange={(e) => setSrcName(e.target.value)}
                   placeholder={srcBuilt.name}
+                  data-testid="npm-door-custom-name"
                   className="field px-2 py-1.5 font-mono text-xs"
                 />
               </label>
@@ -2182,8 +2276,15 @@ export default function ToolsPage() {
                           )}
                         </div>
                         <div className="mt-1 overflow-x-auto">
-                          <code className="whitespace-pre font-mono text-[11px] text-zinc-500">
-                            {[s.command, ...(s.args ?? [])].join(" ")}
+                          {/* v1.343.0: an http/sse pack has no command line; its
+                              row says the transport and the URL instead. */}
+                          <code
+                            className="whitespace-pre font-mono text-[11px] text-zinc-500"
+                            data-testid={`mcp-launch-${s.name}`}
+                          >
+                            {s.transport === "http" || s.transport === "sse"
+                              ? `${s.transport.toUpperCase()} ${s.url ?? ""}`
+                              : [s.command, ...(s.args ?? [])].join(" ")}
                           </code>
                         </div>
                         {/* v1.229.0 (audit U4): the REASON a pack holds no tools.
@@ -2232,6 +2333,18 @@ export default function ToolsPage() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
+                        {/* v1.343.0: Edit opens the inline editor below the
+                            row; it is prefilled from THIS row (names only). */}
+                        <button
+                          type="button"
+                          data-testid={`mcp-edit-${s.name}`}
+                          onClick={() => setEditing((e) => (e === s.name ? null : s.name))}
+                          aria-pressed={editing === s.name}
+                          title={`Edit "${s.name}"`}
+                          className="btn-soft btn-sm"
+                        >
+                          <Pencil size={12} /> Edit
+                        </button>
                         <button
                           type="button"
                           onClick={() => void testServer(s.name)}
@@ -2254,6 +2367,15 @@ export default function ToolsPage() {
                         />
                       </div>
                     </div>
+
+                    {editing === s.name && (
+                      <EditPack
+                        key={s.name}
+                        row={s as unknown as Record<string, unknown>}
+                        onSaved={(res) => onPackEdited(s.name, res)}
+                        onCancel={() => setEditing(null)}
+                      />
+                    )}
 
                     {/* loaded tool names, as chips */}
                     {names.length > 0 && (
