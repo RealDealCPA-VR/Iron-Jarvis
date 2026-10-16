@@ -30,21 +30,26 @@ def _server_cfg(platform, connector_id: str) -> "dict | None":
     return next((s for s in _mcp_servers(platform) if s.get("name") == connector_id), None)
 
 
-def _mcp_status(configured: bool, tools_loaded: int) -> dict[str, Any]:
-    """The honest three states of an MCP connector (v1.172.0).
+def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str, Any]:
+    """The honest states of an MCP connector (v1.172.0; ``failed`` v1.342.0).
 
     ``disconnected``  — no config entry; the user never added it.
-    ``no_tools``      — the connection EXISTS but zero tools are loaded, so the
-                        model can call NOTHING through it. This is the state a
-                        flat "connected" badge used to hide: MCP tools load
-                        ONCE at daemon boot, so a server added since startup —
-                        or one whose command failed to resolve (npx/uvx cold,
-                        PATH missing in the frozen daemon, a 15s timeout) —
-                        stays dark with a confident green light.
+    ``failed``        — configured, zero tools, and the pack's LOAD RECORD
+                        says why (it did not start, or its calls fail): the
+                        row carries ``reason``, ``fix`` and the child's masked
+                        last output (``stderr_tail``), ``detail`` = the raw
+                        error. Read off ``mcp.tools.load_status`` when a
+                        ``name`` is given — one record, one opinion.
+    ``no_tools``      — the connection EXISTS but zero tools are loaded and no
+                        record says why, so the model can call NOTHING through
+                        it. This is the state a flat "connected" badge used to
+                        hide: a server whose command failed to resolve
+                        (npx/uvx cold, PATH missing in the frozen daemon, a
+                        timeout) stayed dark with a confident green light.
     ``connected``     — configured AND at least one tool is callable.
 
-    ``connected`` deliberately stays TRUE for ``no_tools``: the user's
-    connection really does exist and survives restarts (that is what
+    ``connected`` deliberately stays TRUE for ``no_tools`` and ``failed``: the
+    user's connection really does exist and survives restarts (that is what
     ``/connectors/{id}/connect`` persisted), and flipping it would tell them
     their connect FAILED — a different lie. The truth lives in ``status`` +
     ``tools_loaded``, which the Connections page renders as its own state.
@@ -52,15 +57,36 @@ def _mcp_status(configured: bool, tools_loaded: int) -> dict[str, Any]:
     if not configured:
         return {"connected": False, "status": "disconnected", "detail": ""}
     if tools_loaded <= 0:
+        record: dict[str, Any] = {}
+        if name:
+            try:
+                from ..mcp.tools import load_status
+
+                record = dict(load_status(name) or {})
+            except Exception:  # noqa: BLE001 — a status read never raises
+                record = {}
+        last_error = str(record.get("last_error") or "")
+        if last_error or record.get("state") in ("failed", "failing"):
+            return {
+                "connected": True,
+                "status": "failed",
+                "detail": last_error or "the pack did not start",
+                "reason": str(record.get("reason") or ""),
+                "fix": str(record.get("fix") or ""),
+                "stderr_tail": str(record.get("stderr_tail") or ""),
+            }
         return {
             "connected": True,
             "status": "no_tools",
             "detail": (
-                "connected, but 0 tools are loaded — MCP tools load when the "
-                "daemon starts, so restart to pick this server up. If you have "
-                "already restarted, its command failed to launch (check the "
-                "command and that npx/uvx resolve)."
+                "connected, but 0 tools are loaded — open its row on Settings → "
+                "Tools and press Retry there. If it still loads nothing after a "
+                "restart, its command failed to launch (check the command and "
+                "that npx/uvx resolve)."
             ),
+            "reason": "",
+            "fix": "",
+            "stderr_tail": "",
         }
     return {"connected": True, "status": "connected", "detail": ""}
 
@@ -76,7 +102,7 @@ def _status_for(platform, connector, conn_status: dict) -> dict[str, Any]:
             # confident green while the model could not call a single tool.
             # The one surface that could have revealed a dark wiki was the
             # surface insisting it was fine. Tools loaded IS the connection.
-            **_mcp_status(configured, len(loaded)),
+            **_mcp_status(configured, len(loaded), connector.id),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
@@ -123,7 +149,7 @@ def _user_mcp_connectors(platform) -> list[dict[str, Any]]:
             ),
             # Was hardcoded connected:true — a user-added server that loaded no
             # tools claimed a working connection (v1.172.0).
-            **_mcp_status(True, len(loaded)),
+            **_mcp_status(True, len(loaded), name),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",

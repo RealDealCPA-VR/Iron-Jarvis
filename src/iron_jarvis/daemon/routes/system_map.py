@@ -563,7 +563,8 @@ def _setup(d, db, since, failing_packs: list[dict[str, str]]) -> list[dict[str, 
         ready = 0
         for s in packs:
             st = load_status(str(s.get("name") or "")) or {}
-            if st.get("state") == "ready":
+            # v1.342.0: the load record writes "ok" (was "ready").
+            if st.get("state") == "ok":
                 ready += 1
         custom = 0
         try:

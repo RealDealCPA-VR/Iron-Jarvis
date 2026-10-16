@@ -2441,6 +2441,13 @@ def register(app: FastAPI, d) -> None:
             _plain_env = dict(s.get("env") or {})
             _env_secrets = dict(s.get("env_secrets") or {})
             _row = {k: v for k, v in s.items() if k not in ("env", "env_secrets")}
+            # v1.342.0 (integration): an HTTP pack's header token (`auth.value`,
+            # the non-env secret shape _build_transport reads) is a VALUE too.
+            # The row keeps the auth shape and says a value is set, never what.
+            if isinstance(_row.get("auth"), dict) and _row["auth"].get("value"):
+                _row["auth"] = {k: v for k, v in _row["auth"].items() if k != "value"} | {
+                    "value_set": True
+                }
             servers.append(
                 {
                     **_row,

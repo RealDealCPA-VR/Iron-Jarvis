@@ -3,7 +3,9 @@
 Rows saved by the MARKETPLACE connect flow omit ``env``/``args`` when empty
 (only the hand-add POST always writes them), and the Tools page crashed with
 "Cannot convert undefined or null to object" on a real install (an env-less
-brave_search row). The route must guarantee both keys on every row.
+brave_search row). The route must guarantee ``args`` on every row, and since
+v1.342.0 (lane C) the env is reported as ``env_keys`` + ``secret_keys``
+(KEY names only) — a VALUE never leaves the daemon on this route.
 """
 
 from __future__ import annotations
@@ -20,13 +22,15 @@ def test_mcp_servers_rows_always_carry_env_and_args(tmp_path):
         # Marketplace-style row: NO env, NO args key at all.
         {"name": "brave_search", "command": "npx"},
         # Hand-added style row: everything present (must pass through intact).
-        {"name": "full", "command": "uvx", "args": ["-x"], "env": {"K": "v"}},
+        {"name": "full", "command": "uvx", "args": ["-x"], "env": {"K": "plain-env-value-7q"}},
     ]
     rows = client.get("/mcp/servers").json()["servers"]
     by_name = {r["name"]: r for r in rows}
-    assert by_name["brave_search"]["env"] == {}
+    assert by_name["brave_search"]["env_keys"] == []
     assert by_name["brave_search"]["args"] == []
-    assert by_name["full"]["env"] == {"K": "v"}
+    assert by_name["full"]["env_keys"] == ["K"]
+    assert "plain-env-value-7q" not in str(rows)
     assert by_name["full"]["args"] == ["-x"]
     for r in rows:  # every row is shape-complete for the dashboard
         assert "tools_loaded" in r and "tool_names" in r
+        assert "env_keys" in r and "secret_keys" in r

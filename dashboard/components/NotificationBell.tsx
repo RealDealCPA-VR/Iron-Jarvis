@@ -135,6 +135,8 @@ export const BELL_EVENT_TYPES: readonly string[] = [
   "grant.revoked",
   "coach.proposal",
   "computeruse.run_finished",
+  // v1.342.0: a pack that failed to load or whose calls fail (once per episode)
+  "mcp.pack_failed",
   // the busy-runs ask (v1.333.0)
   "runs.busy",
 ];
@@ -427,6 +429,27 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: RotateCcw,
       title: `${picked} assignment${picked === 1 ? "" : "s"} picked back up after a restart`,
       body: "",
+    };
+  }
+  if (e.type === "mcp.pack_failed") {
+    // v1.342.0: a tool pack failed to load, or its calls started failing.
+    // Payload: {name, error, reason, fix}, published ONCE per pack per
+    // episode. The TITLE is the plain reason (the error can carry a masked
+    // tail); the fix is the body; the row opens the Tools page.
+    const name = typeof p.name === "string" && p.name ? p.name : "a pack";
+    const reason =
+      typeof p.reason === "string" && p.reason.trim()
+        ? p.reason.trim()
+        : typeof p.error === "string" && p.error.trim()
+          ? p.error.trim()
+          : "it did not start";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: "/tools",
+      icon: AlertTriangle,
+      title: `Pack ${name} is failing: ${reason}`,
+      body: typeof p.fix === "string" ? p.fix.trim() : "",
     };
   }
   if (e.type === "computeruse.run_finished") {

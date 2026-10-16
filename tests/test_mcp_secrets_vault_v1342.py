@@ -270,15 +270,6 @@ def test_migration_is_a_no_op_on_an_empty_config(client):
     ) or tomllib.loads(_toml_text(platform)).get("mcp_servers", []) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "lane C needs: build_platform must call "
-        "migrate_mcp_env_secrets(config=config, secrets=secrets) right before "
-        "`_mcp_configs = [...]` (platform.py, before mark_starting / the sync "
-        "mcp_tools load). Remove this marker once the integrator places it."
-    ),
-)
 def test_boot_migrates_a_planted_plain_token_before_packs_load(tmp_path):
     first = TestClient(create_app(str(tmp_path)))
     platform = first.app.state.platform

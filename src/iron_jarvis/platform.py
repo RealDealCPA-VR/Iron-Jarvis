@@ -593,18 +593,11 @@ def _forget_load(name: str) -> None:
 
 
 def _close_mcp_tools(tools: "list[Any]") -> None:
-    """Close each distinct client behind ``tools`` (never raises) — an
-    unowned stdio child must not outlive the decision not to register it."""
-    seen: set[int] = set()
-    for tool in tools or []:
-        client = getattr(tool, "client", None)
-        if client is None or id(client) in seen:
-            continue
-        seen.add(id(client))
-        try:
-            client.close()
-        except Exception:  # noqa: BLE001
-            pass
+    """Close each distinct client behind ``tools`` (never raises). The one
+    closer is ``mcp.tools.close_tools_clients`` (v1.342.0, lane D)."""
+    from .mcp.tools import close_tools_clients
+
+    close_tools_clients(tools)
 
 
 def _close_discarded_mcp(fut: "concurrent.futures.Future") -> None:
@@ -646,6 +639,12 @@ def build_platform(
     config.ensure_dirs()
 
     event_bus = EventBus()
+    # v1.342.0 (lane B): a pack that FAILS TO LOAD (boot, deferred boot,
+    # Retry) announces one mcp.pack_failed on this bus; a call-time failure
+    # announces on its own tool context's bus regardless.
+    from .mcp.tools import set_event_bus as _mcp_set_event_bus
+
+    _mcp_set_event_bus(event_bus)
     streams = StreamHub()  # FX-01: ephemeral token/tool stream side-channel
     # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
     # boots instead of wedging on a malformed file.
@@ -1371,6 +1370,11 @@ def build_platform(
     # lifespan — keeps the synchronous contract: the pack's tools are in the
     # registry when this function returns (CLAUDE.md: "before deferring a boot
     # step into the daemon lifespan, ask who builds a platform WITHOUT one").
+    # v1.342.0 (lane C): plain-text env secrets in config.mcp_servers move to the
+    # vault ONCE before any pack is launched (names logged, never values).
+    from .mcp.secrets import migrate_mcp_env_secrets as _migrate_mcp_env_secrets
+
+    _migrate_mcp_env_secrets(config=config, secrets=secrets)
     _mcp_configs = [s for s in (getattr(config, "mcp_servers", None) or []) if isinstance(s, dict)]
     _mcp_deferred: list[dict] = []
     if defer_mcp and _mcp_configs:
