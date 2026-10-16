@@ -2433,14 +2433,23 @@ def register(app: FastAPI, d) -> None:
             # that used to live only in a daemon.log warning; `null` means it
             # loaded (or was never attempted in this process).
             status = _mcp_load_status(name) if name else None
+            # v1.342.0 (lane C): a row carries env KEY NAMES, never a value.
+            # `env` (plain entries) and `env_secrets` (vault names) stay out
+            # of the answer; `env_keys` + `secret_keys` say what is set. A
+            # pre-migration row that still holds a plain token is masked the
+            # same way — the key is listed, the value never leaves.
+            _plain_env = dict(s.get("env") or {})
+            _env_secrets = dict(s.get("env_secrets") or {})
+            _row = {k: v for k, v in s.items() if k not in ("env", "env_secrets")}
             servers.append(
                 {
-                    **s,
+                    **_row,
                     # Rows saved by the marketplace connect flow OMIT env/args
                     # when empty — normalize so clients can rely on the keys
                     # (a missing env crashed the Tools page on real installs).
                     "args": list(s.get("args") or []),
-                    "env": dict(s.get("env") or {}),
+                    "env_keys": sorted(str(k) for k in _plain_env),
+                    "secret_keys": sorted(str(k) for k in _env_secrets),
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
                     # v1.299.0 (additive): write-like tools that APPEARED or
@@ -2666,11 +2675,33 @@ def register(app: FastAPI, d) -> None:
         servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
         if any(s.get("name") == name for s in servers):
             raise HTTPException(status_code=400, detail=f"server '{name}' already exists")
+        # v1.342.0 (lane C): an env KEY that names a secret (SECRET_KEY_RX)
+        # goes to the vault as `mcp.<name>.<KEY>`; the stored row keeps only
+        # the plain entries in `env` and the vault NAMES in `env_secrets`
+        # (resolved at spawn by `_build_transport`). The catalog, npm and
+        # suggest doors all POST here, so this is the one split. A vault that
+        # refuses the write refuses the add — a secret never lands in
+        # config.toml as a fallback.
+        from ...mcp.secrets import split_env as _split_env
+        from ...mcp.secrets import store_env_secrets as _store_env_secrets
+
+        plain_env, secret_values = _split_env(name, body.env or {})
+        try:
+            env_secrets = _store_env_secrets(d.platform.secrets, name, secret_values)
+        except Exception as exc:  # noqa: BLE001 — names only, never the value
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"the vault could not store {', '.join(sorted(secret_values))} "
+                    f"({type(exc).__name__}); the pack was not added"
+                ),
+            )
         cfg = {
             "name": name,
             "command": body.command.strip(),
             "args": [str(a) for a in body.args],
-            "env": dict(body.env or {}),
+            "env": plain_env,
+            **({"env_secrets": env_secrets} if env_secrets else {}),
             **({"cwd": body.cwd} if body.cwd else {}),
             **({"auto_approve": True} if body.auto_approve else {}),
         }
@@ -2718,6 +2749,9 @@ def register(app: FastAPI, d) -> None:
             "tools_loaded": loaded,
             "auto_approve": bool(body.auto_approve),
             "note": note,
+            # v1.342.0: what was kept where — key NAMES only.
+            "env_keys": sorted(plain_env),
+            "secret_keys": sorted(env_secrets),
         }
 
     @app.patch("/mcp/servers/{name}")
@@ -2761,8 +2795,28 @@ def register(app: FastAPI, d) -> None:
         kept = [s for s in servers if s.get("name") != name]
         if len(kept) == len(servers):
             raise HTTPException(status_code=404, detail="no such server")
+        removed_cfg = next((s for s in servers if s.get("name") == name), None)
         d.platform.config.mcp_servers = kept
         d._persist_config(["mcp_servers"])
+        # v1.342.0 (lane C): the pack's vault rows (`mcp.<name>.*`) and its
+        # manifest (`<home>/mcp/manifests/<name>.json`) go with it, so a
+        # re-add is a FIRST load again (every tool trusted, no quarantine
+        # diff against a pack the user removed) and no orphaned secret
+        # outlives the row that named it.
+        from ...mcp.manifest import PackManifest as _PackManifest
+        from ...mcp.secrets import delete_pack_secrets as _delete_pack_secrets
+
+        secrets_removed = _delete_pack_secrets(
+            getattr(d.platform, "secrets", None), name, removed_cfg
+        )
+        manifest_removed = False
+        try:
+            _manifest_path = _PackManifest(d.platform.config.home).path(name)
+            if _manifest_path.is_file():
+                _manifest_path.unlink()
+                manifest_removed = True
+        except OSError as exc:
+            log.warning("MCP pack %r: manifest could not be removed: %s", name, type(exc).__name__)
         # Unregister its live tools NOW so they disappear from every agent's
         # loadout immediately (they won't come back on restart either — the
         # config no longer lists the server).
@@ -2784,7 +2838,12 @@ def register(app: FastAPI, d) -> None:
         from ...mcp.tools import forget_live_client
 
         forget_live_client(name)
-        return {"removed": name, "tools_unloaded": unloaded}
+        return {
+            "removed": name,
+            "tools_unloaded": unloaded,
+            "secrets_removed": len(secrets_removed),
+            "manifest_removed": manifest_removed,
+        }
 
     @app.post("/mcp/suggest")
     async def suggest_mcp_server(body: McpSuggestBody) -> dict[str, Any]:
