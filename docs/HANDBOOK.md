@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.341.0 (2026-10-04).*
+holds itself to. Current as of v1.341.1 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,14 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Restoring a backup waits out a busy moment (v1.341.1)
+
+Restore from backup (Settings → Maintenance) used to refuse at once if a
+background task happened to be touching the database in that instant, with
+"the database is still held open". It now waits up to about two seconds for
+that moment to pass and tries again; only a database that is really in use
+(a running job) still refuses, with the same plain sentence.
 
 ## The Local only chip glows when it is on (v1.341.0)
 
