@@ -3418,6 +3418,19 @@ does not need a bump, stop and bump it.
   checked; a mis-named attribute goes red there, not in a user's chat) and
   pins the five by class. A new Tool declares `input_schema`, never
   `parameters`/`schema`/`args_schema`.
+  v1.341.1 (a REAL race, surfaced by a 46-minute Release runner): `POST
+  /maintenance/restore` disposed the engine and then deleted the `-wal`, but
+  `Engine.dispose()` closes only the connections checked IN — a background
+  loop (sampler, scheduler, pane snapshot) holding one for a few
+  milliseconds keeps the WAL open, and `restore_backup_live` answered
+  "[WinError 32] … ironjarvis.db-wal". Because that failure happens BEFORE
+  anything moves (the WAL unlink / DB replace is the restore's first step),
+  the route now disposes + retries up to `_RESTORE_ATTEMPTS` (20) with
+  `_RESTORE_RETRY_S` (0.1) between — ~2 s of patience, then the honest 409.
+  Pin: `tests/test_restore_retry_v13411.py` (a `restore_backup_live` that
+  refuses N times; `_RESTORE_ATTEMPTS = 1` reproduces the gate's exact 409).
+  Rule: a `dispose()` is not a guarantee that a file is free; a step that
+  must own a file retries a brief hold and names a long one.
 
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry

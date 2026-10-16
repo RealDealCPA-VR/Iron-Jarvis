@@ -21,6 +21,17 @@ from ...core.logging import get_logger
 
 log = get_logger("daemon.maintenance")
 
+#: v1.341.1: how a restore waits out a BRIEFLY held database. `Engine.dispose()`
+#: closes only the connections checked IN; a background loop (the sampler, the
+#: scheduler, the pane snapshot) holding one for a few milliseconds keeps the
+#: `-wal` open, and on a slow CI runner that window failed the gate with
+#: "[WinError 32] … ironjarvis.db-wal". The restore aborts BEFORE anything
+#: moves on that error (the WAL unlink / DB replace is its first step), so a
+#: retry is safe: dispose again — the connection is back in the pool by then —
+#: and try once more, ~2 s in all. Still held after that = truly in use, 409.
+_RESTORE_ATTEMPTS = 20
+_RESTORE_RETRY_S = 0.1
+
 
 class UseModelBody(BaseModel):
     """``POST /onboarding/use-model`` (v1.310.0, W2-1)."""
@@ -563,19 +574,31 @@ def register(app: FastAPI, d) -> None:
                     "them to finish or cancel them, then retry"
                 ),
             )
-        try:
-            d.platform.engine.dispose()
-        except Exception:  # noqa: BLE001 — a pool that will not close still gets the replace attempt
-            pass
-        try:
-            moved = restore_backup_live(home, archive)
-        except PermissionError as exc:
+        import time as _time
+
+        held: PermissionError | None = None
+        for attempt in range(_RESTORE_ATTEMPTS):
+            # Before EVERY attempt: a connection a background tick had checked
+            # out during the last try is back in the pool now and closes here.
+            try:
+                d.platform.engine.dispose()
+            except Exception:  # noqa: BLE001 — a pool that will not close still gets the replace attempt
+                pass
+            try:
+                moved = restore_backup_live(home, archive)
+                break
+            except PermissionError as exc:
+                # Nothing moved (see _RESTORE_ATTEMPTS): wait a beat and retry.
+                held = exc
+                if attempt + 1 < _RESTORE_ATTEMPTS:
+                    _time.sleep(_RESTORE_RETRY_S)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=400, detail=f"restore failed: {exc}") from exc
+        else:
             raise HTTPException(
                 status_code=409,
-                detail=f"restore aborted, nothing changed: the database is still held open ({exc})",
-            ) from exc
-        except (ValueError, OSError) as exc:
-            raise HTTPException(status_code=400, detail=f"restore failed: {exc}") from exc
+                detail=f"restore aborted, nothing changed: the database is still held open ({held})",
+            ) from held
         log.warning("restored %d file(s) from backup %s; restarting", moved, name)
         _threading.Timer(0.5, _app._graceful_stop).start()
         return {"ok": True, "restored_from": name, "files": moved, "restart": "scheduled"}
