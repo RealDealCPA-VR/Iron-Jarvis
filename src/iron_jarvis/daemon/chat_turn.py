@@ -6054,7 +6054,18 @@ async def run_chat_turn(
                     ran = True
                 else:
                     content = result.error or "error"
-                if ran:
+                # A FAILED PACK CALL IS STILL REMOTE TEXT (v1.342.0, E1): a
+                # tools/call ``isError`` body, or the pack's stderr tail,
+                # rides ``result.error`` verbatim — so a pack tool's failure
+                # is fenced + scanned exactly like its success. A repeated-
+                # call refusal is this lane's own sentence and stays bare;
+                # every non-pack failure is the registry's own words. ``ran``
+                # stays False: a failed call is not "ran". MIRROR NOTE
+                # (lock-step): routes/chat.py's ``_settle`` does the same.
+                _pack_failure = (
+                    not ran and not _refused[i] and tc.name.startswith("mcp__")
+                )
+                if ran or _pack_failure:
                     # FENCE + TAINT (v1.298.0) — the shared helper; for a
                     # batched reader this lands before any writer runs.
                     content = await _fence_tool_output(
