@@ -401,6 +401,9 @@ def register(app: FastAPI, d) -> None:
                 # frame's prior_tool_results) rides into the row's options so
                 # the run does not redo those reads.
                 prior_tool_results=body.prior_tool_results,
+                # v1.345.0: the chat this work was asked in — the daemon
+                # appends the run's final line to it (agents/chat_delivery).
+                chat_thread_id=body.chat_thread_id,
             )
         except LocalOnlyRefused:
             raise  # v1.332.0: the app's 409 local-only shape, not a 400
@@ -685,6 +688,9 @@ def register(app: FastAPI, d) -> None:
                 # v1.344.0: an escalation that continues an earlier run
                 # carries what the chat already ran this turn.
                 prior_tool_results=body.prior_tool_results,
+                # v1.345.0: the chat THIS follow-up was asked in (its own,
+                # never the parent's) — the daemon appends its line there.
+                chat_thread_id=body.chat_thread_id,
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")

@@ -3857,6 +3857,9 @@ def register(app: FastAPI, d) -> None:
             # v1.344.0: what the chat already ran this turn rides the
             # custom-agent escalation too (SpawnBody.prior_tool_results).
             prior_tool_results=getattr(body, "prior_tool_results", None),
+            # v1.345.0: the chat the custom-agent escalation was asked in —
+            # the daemon appends the run's final line to it.
+            chat_thread_id=getattr(body, "chat_thread_id", ""),
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and
