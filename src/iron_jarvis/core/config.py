@@ -170,6 +170,11 @@ def default_permissions() -> dict[str, str]:
         "run_doctor": "allow",
         "pack_restart": "ask",
         "provider_rescan": "ask",
+        # MEDIA IN CHAT (v1.346.0): a generation can cost money, so the base
+        # verdict is ASK. The tool's own ``spend_check`` lets a quote the
+        # service calls FREE run without a card (unless ``media_ask_when_free``);
+        # a paid or unknown price always cards, with the price on the card.
+        "generate_media": "ask",
         # THE DURABLE WORKLIST (v1.177.0, permissioned v1.178.0). These four had
         # NO entry, so they fail-closed to "ask" and a headless agent run —
         # every agent run — was DENIED all four. The whole checkpointing

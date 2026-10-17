@@ -97,6 +97,16 @@ SETS_OUTSIDE_ADDRESS_TOOLS: frozenset[str] = frozenset({
     "webhook_add", "webhook_update",
 })
 
+#: Tools that send a PROMPT to a hosted media service and spend there
+#: (v1.346.0, media in chat). NOT in :data:`INTERNET_TOOLS` on purpose: the
+#: user asked for media from the chat, so a local-only turn keeps the tool
+#: armed and CARDS every call ("Allow once") instead of silently dropping it
+#: — the one-message OK on the card is the user's consent for that prompt to
+#: leave this PC. The POST lane, which can ask nobody, does not arm it.
+GENERATES_MEDIA_TOOLS: frozenset[str] = frozenset({
+    "generate_media",
+})
+
 #: The words a person knows each cloud provider by. Anything not here reads as
 #: its id (a fleet node reads as the label the user gave it).
 _FRIENDLY: dict[str, str] = {
@@ -441,7 +451,11 @@ def reaches_outside(tool: Any, registry: Any = None) -> bool:
         return False
     try:
         name = str(getattr(tool, "name", "") or "")
-        if name in RUNS_COMMANDS_TOOLS or name in SETS_OUTSIDE_ADDRESS_TOOLS:
+        if (
+            name in RUNS_COMMANDS_TOOLS
+            or name in SETS_OUTSIDE_ADDRESS_TOOLS
+            or name in GENERATES_MEDIA_TOOLS
+        ):
             return True
         if _browser_reaches_out(tool):
             return True
@@ -642,6 +656,7 @@ __all__ = [
     "PRIVATE_SUFFIXES",
     "RUNS_COMMANDS_TOOLS",
     "SETS_OUTSIDE_ADDRESS_TOOLS",
+    "GENERATES_MEDIA_TOOLS",
     "ask_first_tools",
     "asks_first",
     "check_egress",

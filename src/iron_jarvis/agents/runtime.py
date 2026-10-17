@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,8 +43,9 @@ from ..core.trust import (
 from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
-from ..tools.base import ToolContext
+from ..tools.base import SpendCheck, ToolContext, spend_checks_for
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
+from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
 from . import transcript as _transcript
 from .types import AgentDefinition
@@ -2286,6 +2288,7 @@ class AgentRuntime:
         tc,
         agent_def: AgentDefinition,
         session_allow: set[str],
+        spend: "SpendCheck | None" = None,
     ) -> str:
         """The permission key an ask for ``tc`` would pause on, or "" when
         no pause is needed (v1.247.0).
@@ -2293,7 +2296,13 @@ class AgentRuntime:
         The gate ``_pause_for_approval`` has always applied, lifted out
         verbatim so a step can GROUP its asks (one approval per permission)
         before any of them is filed. ONE definition: the pause itself calls
-        this first, so the grouping and the pause can never disagree."""
+        this first, so the grouping and the pause can never disagree.
+
+        ``spend`` (v1.346.0): the tool's own spend check for THIS call. A
+        priced call (``ask`` True) pauses whatever the grants say — the
+        user's "ask before every spend"; a free one never pauses (and the
+        pause door grants that one call). Read after the deny check only: a
+        deny is never lifted, in any posture."""
         origin = getattr(session, "origin", None) or ""
         # "goal" joined v1.209.0: without it a goal iteration's ask-tier tool
         # took the instant headless denial and minted NO approval receipts —
@@ -2328,6 +2337,10 @@ class AgentRuntime:
         # tool resolves to deny here, so it never cards — ``invoke`` refuses
         # it with the low-trust sentence instead.
         mode = self.p.permissions.mode_for(perm, self._trust_overrides(session, agent_def))
+        if spend is not None and mode is not PermissionMode.DENY:
+            # v1.346.0: the spend check decides — a priced call pauses in
+            # every posture and past every grant; a free one never does.
+            return perm if spend.ask else ""
         if mode is not PermissionMode.ASK:
             # allow runs; a hard deny is refused by ``invoke`` — a session
             # grant never lifts it, in any posture.
@@ -2364,6 +2377,7 @@ class AgentRuntime:
         session_allow: set[str],
         run: "AgentRun | None" = None,
         batch: "list | None" = None,
+        spend: "SpendCheck | None" = None,
     ) -> tuple[str, set[str]]:
         """PAUSE this run on an ask-tier call and let the USER answer
         (v1.189.0) — the session half of chat's v1.187.0 mid-turn ask.
@@ -2412,8 +2426,24 @@ class AgentRuntime:
         approvals = getattr(self.p, "approvals", None)
         if approvals is None:  # bare-platform tests: no registry, no pause
             return "", set()
-        perm = self._pause_needed(session, tc, agent_def, session_allow)
+        perm = self._pause_needed(session, tc, agent_def, session_allow, spend=spend)
         if not perm:
+            if spend is not None and not spend.ask:
+                # FREE BY THE SERVICE'S OWN VERDICT (v1.346.0): no pause, but
+                # an ASK-tier call still needs its grant to pass the
+                # registry's gate (the v1.270.1 rule) — THIS call only, and
+                # the ledger line says why.
+                _t = self.p.registry.get(tc.name)
+                _pk = _t.perm_key() if _t is not None else tc.name
+                _mode = self.p.permissions.mode_for(
+                    _pk, self._trust_overrides(session, agent_def)
+                )
+                if _mode is PermissionMode.ASK:
+                    logging.getLogger("iron_jarvis.agents.runtime").info(
+                        "run %s: %s runs without a pause — the service says it is free (%s)",
+                        session.id, tc.name, spend.cost_note,
+                    )
+                    return "", {tc.name, _pk}
             return "", set()
         tool = self.p.registry.get(tc.name)
         safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments
@@ -2464,8 +2494,15 @@ class AgentRuntime:
                 getattr(self.p, "grants", None) is not None
                 and _pick_scope(_grant_scopes) is not None
                 and not getattr(tool, "quarantined", False)
+                # v1.346.0: never on a priced ask — the next quote is a
+                # different spend.
+                and spend is None
             ),
         }
+        if spend is not None:
+            # v1.346.0: what this call would spend, in the service's words —
+            # the card's one quiet line (lock-step with the chat lane's frame).
+            requested["cost_note"] = spend.words
         if count > 1:
             requested["count"] = count
             requested["examples"] = examples
@@ -2912,6 +2949,10 @@ class AgentRuntime:
                 config=self.p.config,
                 event_bus=self.p.event_bus,
                 engine=self.p.engine,
+                # v1.346.0: the chat this run was asked in (v1.345.0's
+                # ``options.chat_thread_id``), so a generation an agent starts
+                # comes home to that chat; "" for a run no chat waits on.
+                thread_id=_chat_delivery.chat_thread_of(session),
             )
 
             # Run the turn's tool calls as a TEAM: gather them concurrently so
@@ -2945,6 +2986,19 @@ class AgentRuntime:
             # or more ONE shared pause. Single asks take the old path unchanged.
             batch_of: dict[int, tuple[str, list]] = {}
             batch_tasks: dict[str, "asyncio.Future[tuple[str, set[str]]]"] = {}
+            # THE SPEND CHECK (v1.346.0, media in chat): once per armed call
+            # of this step, BEFORE the pause gate — a tool with an opinion
+            # about money (`generate_media` quotes its service) says whether
+            # a human must be asked. `_pause_needed` reads it: a FREE quote
+            # needs no pause (and `_pause_for_approval` grants that one
+            # call), a priced one pauses whatever the grants say, with the
+            # words on the ask. MIRROR NOTE: the stream chat lane's
+            # `_would_card` / per-call branch read the same map.
+            spend_by_call: dict[int, SpendCheck] = (
+                await spend_checks_for(self.p.registry, resp.tool_calls, ctx, armed_names)
+                if getattr(self.p, "approvals", None) is not None
+                else {}
+            )
             if (
                 len(resp.tool_calls) > 1
                 and getattr(self.p, "approvals", None) is not None
@@ -2955,7 +3009,10 @@ class AgentRuntime:
                         continue
                     if broken_calls.get(call_signature(_c.name, _c.arguments), ""):
                         continue
-                    _perm = self._pause_needed(session, _c, agent_def, session_allow)
+                    _perm = self._pause_needed(
+                        session, _c, agent_def, session_allow,
+                        spend=spend_by_call.get(id(_c)),
+                    )
                     if _perm:
                         groups.setdefault(_perm, []).append(_c)
                 for _perm, _group in groups.items():
@@ -3015,13 +3072,15 @@ class AgentRuntime:
                                 self._pause_for_approval(
                                     session, _group[0], agent_def, session_allow,
                                     run=run, batch=_group,
+                                    spend=spend_by_call.get(id(_group[0])),
                                 )
                             )
                             batch_tasks[_perm] = shared
                         deny_reason, grant_extra = await asyncio.shield(shared)
                     else:
                         deny_reason, grant_extra = await self._pause_for_approval(
-                            session, tc, agent_def, session_allow, run=run
+                            session, tc, agent_def, session_allow, run=run,
+                            spend=spend_by_call.get(id(tc)),
                         )
                     if deny_reason:
                         # An unanswered pause is NOT a permission denial

@@ -42,6 +42,31 @@ class ToolContext:
     #: settings (theme, approval default…) changed from chat land on THIS
     #: device. "" when the caller sent none (headless, an older client).
     device_id: str = ""
+    #: The SAVED chat this call was asked in (v1.346.0, media in chat): both
+    #: chat lanes set it from ``body.thread_id``, the agent runtime from the
+    #: run's ``options["chat_thread_id"]`` (v1.345.0). A generation that
+    #: finishes in the background comes home to THIS chat; "" = no chat is
+    #: waiting (an unsaved chat, a schedule), so nothing is appended anywhere.
+    thread_id: str = ""
+
+
+@dataclass
+class SpendCheck:
+    """A tool's own answer to "will this call cost money, and should a human
+    be asked first?" (v1.346.0, media in chat).
+
+    ``ask`` True = show the approval card whatever the posture (a paid or
+    unknown price asks before EVERY spend — the user's rule); False = this
+    call is free by the provider's own verdict (Pixio's Maker allowance, a
+    plan-covered model) and runs without a card. ``words`` is the sentence the
+    card shows (``Generate 1 image on Pixio for 12 credits (your price)``);
+    ``cost_note`` the short form the tool output, the ledger row and the bell
+    carry (``free (Maker: 4 left today)``). Never carries a key.
+    """
+
+    ask: bool
+    words: str = ""
+    cost_note: str = ""
 
 
 @dataclass
@@ -193,6 +218,22 @@ class Tool(ABC):
         honestly report that this tool cannot be undone."""
         return ToolResult(ok=False, error=f"{self.name}: this action cannot be undone")
 
+    async def spend_check(
+        self, args: dict[str, Any], ctx: "ToolContext"
+    ) -> "SpendCheck | None":
+        """What this call would SPEND, decided by the tool itself (v1.346.0).
+
+        Consulted by the stream chat lane and the agent runtime BEFORE their
+        approval gate, once per call: ``None`` = no opinion (the ordinary
+        permission verdict decides, as for every tool today); a
+        :class:`SpendCheck` with ``ask`` False lets an ASK-tier call run
+        without a card for THIS call only (the lane carries the grant into
+        the registry — the v1.270.1 rule); ``ask`` True shows the card with
+        ``words`` on it. The default is no opinion, so every existing tool is
+        untouched. A check must never raise for a plain refusal — return
+        ``None`` and let ``execute`` say the words."""
+        return None
+
     def spec(self) -> dict[str, Any]:
         """Schema advertised to the model (§19 inputSchema)."""
         spec = {
@@ -219,6 +260,39 @@ class Tool(ABC):
     @abstractmethod
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         ...
+
+
+async def spend_checks_for(
+    registry: Any, calls: Any, ctx: "ToolContext", names: "set[str] | None" = None
+) -> "dict[int, SpendCheck]":
+    """ONE spend check per call of a round (v1.346.0), keyed by ``id(call)``
+    — the call OBJECT, because an adapter may send "" for every call id.
+
+    Only tools that carry an opinion land in the map; a tool whose check
+    raises is "no opinion" (the ordinary verdict decides, never a crashed
+    turn). ``names`` narrows to the armed set — an unarmed call is refused by
+    the registry and must not be quoted. The ONE helper both chat lanes and
+    the agent runtime call, so the three gates cannot drift."""
+    out: dict[int, SpendCheck] = {}
+    for tc in calls or []:
+        name = str(getattr(tc, "name", "") or "")
+        if names is not None and name not in names:
+            continue
+        try:
+            tool = registry.get(name)
+        except Exception:  # noqa: BLE001 — a double without get
+            tool = None
+        fn = getattr(tool, "spend_check", None) if tool is not None else None
+        if fn is None:
+            continue
+        args = getattr(tc, "arguments", None)
+        try:
+            verdict = await fn(args if isinstance(args, dict) else {}, ctx)
+        except Exception:  # noqa: BLE001 — no opinion, never a stopped turn
+            verdict = None
+        if verdict is not None:
+            out[id(tc)] = verdict
+    return out
 
 
 def replay_safe(tool: Any) -> bool:

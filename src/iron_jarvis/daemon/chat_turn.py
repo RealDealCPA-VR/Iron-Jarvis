@@ -3718,6 +3718,70 @@ PREFERENCE_BLOCK = (
 )
 
 
+def media_from_result(name: str, result: Any) -> list[tuple[str, str]]:
+    """``[(kind, abs_path), …]`` for a SUCCESSFUL tool call whose ``data``
+    carries ``media`` (v1.346.0: ``generate_media``'s inline answer; any tool
+    may say so). ABSOLUTE paths only — the same rule as ``created_paths``: a
+    relative name is an unverifiable claim. Order kept, duplicates dropped.
+    MIRROR NOTE (lock-step): both chat lanes collect through this helper."""
+    if result is None or not getattr(result, "ok", False):
+        return []
+    data = getattr(result, "data", None)
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("media")
+    if not isinstance(raw, list):
+        return []
+    kind = str(data.get("kind") or "media").strip() or "media"
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        path = str(item or "").strip()
+        if not path or path in seen:
+            continue
+        try:
+            if not Path(path).is_absolute():
+                continue
+        except (OSError, ValueError):
+            continue
+        seen.add(path)
+        out.append((kind, path))
+    return out
+
+
+def _reply_shows_path(reply: str, path: str) -> bool:
+    """Whether the reply already references this file — as typed, with
+    forward slashes, or by its file name inside an image/link target."""
+    if not path:
+        return True
+    posix = path.replace("\\", "/")
+    if path in reply or posix in reply:
+        return True
+    name = posix.rsplit("/", 1)[-1]
+    return bool(name) and (f"{name})" in reply or f"{name}>" in reply)
+
+
+def append_inline_media(reply: str, media: list[tuple[str, str]]) -> str:
+    """The reply with every made file NOT already shown appended as a blank
+    line then the markdown image syntax (v1.346.0, contract 4c) — so the
+    media appears in the chat whatever the model wrote about it. Video and
+    audio use the same syntax: the dashboard's MarkdownMedia renders a local
+    .mp4/.mp3 as a video/audio element. One line per file, order kept.
+    MIRROR NOTE (lock-step): both chat lanes call this on the SETTLED reply
+    — the POST lane before its response, the stream lane before ``done``."""
+    if not media:
+        return reply
+    from ..media.jobs import media_markdown
+
+    out = reply or ""
+    for kind, path in media:
+        if _reply_shows_path(out, path):
+            continue
+        line = media_markdown(kind, path)
+        out = f"{out.rstrip()}\n\n{line}" if out.strip() else line
+    return out
+
+
 #: v1.282.0: the tool whose successful result is said on the receipt.
 _REMEMBER_TOOL = "remember_preference"
 _REMEMBERED_PREFIX = "remembered preference: "
@@ -5825,6 +5889,7 @@ async def run_chat_turn(
     tools_used: list[str] = []          # ONLY tools that actually executed
     remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
     config_cards: list[dict[str, Any]] = []  # redesign S3/S4: settings changed / credentials asked
+    media_made: list[tuple[str, str]] = []   # v1.346.0: (kind, abs path) made inline this turn (lock-step)
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
     denied_tools: list[str] = []
     # v1.344.0 (M3): every labelled refusal this turn — (tool, label) in call
@@ -5883,6 +5948,9 @@ async def run_chat_turn(
             turn_id=str(getattr(body, "turn_id", "") or ""),
             # Redesign S3 — lock-step: per-device settings land on this device.
             device_id=str(getattr(body, "device_id", "") or ""),
+            # v1.346.0 — lock-step: the SAVED chat this turn belongs to, so a
+            # background generation comes home to it ("" = unsaved chat).
+            thread_id=str(getattr(body, "thread_id", "") or ""),
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
             # v1.200.0: only a RESOLVED project tags artifacts — a bogus id in
@@ -6323,6 +6391,13 @@ async def run_chat_turn(
                         # SETTINGS CARDS (redesign S3/S4) — same gate. MIRROR
                         # NOTE (lock-step): routes/chat.py carries the same.
                         config_cards.extend(config_cards_from_result(tc.name, result))
+                        # MEDIA MADE INLINE (v1.346.0): a successful call whose
+                        # data carries `media` paths — appended to the settled
+                        # reply below so the picture shows whatever the model
+                        # wrote. MIRROR NOTE (lock-step): routes/chat.py.
+                        for _mk in media_from_result(tc.name, result):
+                            if _mk not in media_made:
+                                media_made.append(_mk)
                         # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                         # SUCCESSFUL workflow_run's {run_id, workflow} rides
                         # the response as `workflow_run` so the client can
@@ -6522,6 +6597,13 @@ async def run_chat_turn(
             )
         if text_only_pick and (body.tools or []):
             reply += text_only_note(d.platform, provider_choice)
+    # INLINE MEDIA (v1.346.0, contract 4c): every file a tool MADE this turn
+    # that the settled reply does not already show is appended as the markdown
+    # image syntax, so the picture/video appears in the chat whatever the
+    # model wrote (its path already feeds `documents` through created_paths).
+    # On the SETTLED reply, after every note above. MIRROR NOTE (lock-step):
+    # routes/chat.py appends the same helper before its done frame.
+    reply = append_inline_media(reply, media_made)
     # SUGGESTION (v1.305.0; idea from agent-personalizer, MIT): when this
     # message corrects HOW the assistant answers and the user made the same
     # correction in another turn, ONE proposed preference is minted and asked

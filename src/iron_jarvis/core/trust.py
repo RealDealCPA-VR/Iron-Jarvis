@@ -103,6 +103,10 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # The readers (app_health, pack_status, run_doctor) stay allowed.
         "pack_restart",
         "provider_rescan",
+        # v1.346.0 (media in chat): a generation SPENDS the user's credits on
+        # a hosted service and sends the prompt there — flagged content must
+        # never buy anything or ship its words out.
+        "generate_media",
     }
 )
 

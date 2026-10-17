@@ -68,6 +68,8 @@ from ..chat_turn import (
     preference_block,
     remembered_from_result,
     config_cards_from_result,
+    media_from_result,
+    append_inline_media,
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
@@ -3466,7 +3468,7 @@ async def chat_stream(
     _grant_scopes = chat_grant_scopes(pid if resolved_proj is not None else None)
     ctx = None
     if armed or ask_armed:
-        from ...tools.base import ToolContext
+        from ...tools.base import ToolContext, spend_checks_for
 
         # OFF THE EVENT LOOP (v1.195.0, finding 7) — MIRROR NOTE
         # (lock-step): same call in chat_turn.run_chat_turn, edit both or
@@ -3494,6 +3496,9 @@ async def chat_stream(
             turn_id=str(getattr(body, "turn_id", "") or ""),
             # Redesign S3 — lock-step: per-device settings land on this device.
             device_id=str(getattr(body, "device_id", "") or ""),
+            # v1.346.0 — lock-step: the SAVED chat this turn belongs to, so a
+            # background generation comes home to it ("" = unsaved chat).
+            thread_id=str(getattr(body, "thread_id", "") or ""),
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
             # v1.200.0: resolved-project tag for artifact sinks. MIRROR
@@ -3705,6 +3710,9 @@ async def chat_stream(
         # escalates (`prior_tool_results`); lock-step with chat_turn.
         _prior_results: list[dict[str, Any]] = []
         _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
+        # v1.346.0: (kind, abs path) made INLINE this turn — appended to the
+        # settled reply before `done`; lock-step with chat_turn.
+        media_made: list[tuple[str, str]] = []
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
         # tool just changed. Appended only inside the `if ran:` block —
         # the same gate as tools_used, so a failed/denied call can never
@@ -4013,6 +4021,27 @@ async def chat_stream(
                     # for every id, and two calls must never share a card.
                     return f"{_cp}\x1f{id(_c)}"
 
+                # THE SPEND CHECK (v1.346.0, media in chat): ONCE per call of
+                # the round, BEFORE any card is decided, each armed tool
+                # that has an opinion about money is asked
+                # (`Tool.spend_check` — today only `generate_media`, which
+                # quotes the service). `ask` False = the provider says this
+                # call is FREE (a Maker allowance): no card, and the call is
+                # granted for THIS call only through `_grant_extra` like a
+                # covered call (the v1.270.1 rule — the grant must reach the
+                # registry). `ask` True = a paid or unknown price: the card,
+                # in EVERY posture (yolo included — "ask before every
+                # spend"), with the quote's words on it (`cost_note`), and
+                # no grant of any width skips it. A local-only turn keeps
+                # its own "Allow once" card (`_ask_first`) and still shows
+                # the words. The quote is cached by the tool, so the start
+                # after Allow pays no second estimate. MIRROR NOTE:
+                # `_would_card` and the per-call branch read `_spend` the
+                # same way; the agent runtime's `_pause_needed` mirrors it.
+                _spend = await spend_checks_for(
+                    d.platform.registry, calls, ctx, {*armed, *ask_armed}
+                )
+
                 def _would_card(_c) -> str:
                     # A PROTECTED setting is carded even in Auto-approve
                     # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
@@ -4025,11 +4054,13 @@ async def chat_stream(
                         if d.platform.permissions.mode_for(_cp, overrides) is PermissionMode.DENY:
                             return ""
                         return _ask_first_key(_c, _cp)
-                    if approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS:
-                        return ""
                     _ct = d.platform.registry.get(_c.name)
                     _cp = _ct.perm_key() if _ct is not None else _c.name
                     _cm = d.platform.permissions.mode_for(_cp, overrides)
+                    _sc = _spend.get(id(_c))
+                    if approval_mode == "yolo" and _c.name not in ALWAYS_CARD_TOOLS:
+                        # v1.346.0: a priced call cards even here.
+                        return _cp if (_sc is not None and _sc.ask and _cm is not PermissionMode.DENY) else ""
                     _asks = (
                         _cm is PermissionMode.ASK
                         and _cp not in armed_grant
@@ -4042,9 +4073,13 @@ async def chat_stream(
                             and _cm is not PermissionMode.DENY
                         )
                     if _asks and _tab_covered(_c):
-                        return ""
+                        _asks = False
                     if _asks and _grant_covers(d.platform, _grant_scopes, _c.name, _c.arguments):
-                        return ""  # v1.299.0: a standing grant covers it
+                        _asks = False  # v1.299.0: a standing grant covers it
+                    if _sc is not None and _cm is not PermissionMode.DENY:
+                        # v1.346.0: the spend check decides — free runs,
+                        # priced asks, whatever a grant said.
+                        _asks = bool(_sc.ask)
                     return _cp if _asks else ""
 
                 _round_asks: dict[str, list] = {}
@@ -4190,6 +4225,25 @@ async def chat_stream(
                         # ledger row, which a name in `session_allow` could
                         # not. The predicate and the gate read one store.
                         _needs_card = False
+                    # THE SPEND CHECK (v1.346.0) — see `_spend` above. Read
+                    # LAST so no grant (tab, standing, conversation, yolo)
+                    # skips a PRICED call, and a FREE one runs with no card
+                    # carrying its grant into the registry. A local-only
+                    # card keeps its own key and "Allow once" shape.
+                    _sc = _spend.get(id(tc))
+                    _spend_card = False
+                    if _sc is not None and not _unarmed and _mode is not PermissionMode.DENY:
+                        if _sc.ask:
+                            _needs_card = True
+                            _spend_card = True
+                        elif not _local_ask:
+                            _needs_card = False
+                            if _engine_asks:
+                                _grant_extra = {tc.name, _perm_name}
+                                log.info(
+                                    "chat: %s runs without a card — the service says it is free (%s)",
+                                    tc.name, _sc.cost_note,
+                                )
                     _plan["carded"] = _needs_card
                     if _needs_card:
                         if _card_key in _round_answers:
@@ -4214,9 +4268,11 @@ async def chat_stream(
                                 # it is new in its pack.
                                 "quarantined": _quarantined(d.platform, tc.name),
                                 # v1.332.0 (L3): never on a local-only card.
+                                # v1.346.0: never on a priced card either —
+                                # the next quote is a different spend.
                                 "can_always": _can_always(
                                     d.platform, _grant_scopes, _trust_state, tc.name
-                                ) and not _local_ask,
+                                ) and not _local_ask and not _spend_card,
                                 # 0 = no expiry (v1.247.0): the turn waits
                                 # for the person it asked.
                                 "timeout_s": (
@@ -4224,6 +4280,11 @@ async def chat_stream(
                                     if CHAT_ASK_TIMEOUT_S else 0
                                 ),
                             }
+                            if _sc is not None:
+                                # v1.346.0: what this call would spend, in
+                                # the service's words — the card's one quiet
+                                # line (ApprovalCard `approval-cost`).
+                                _frame["cost_note"] = _sc.words
                             if _local_ask:
                                 # v1.332.0 (L3): this card offers "Allow
                                 # once" and "Deny" only; any wider answer is
@@ -4304,6 +4365,10 @@ async def chat_stream(
                                 # v1.332.0 (L3): a local-only card is "Allow
                                 # once": no tab grant, no conversation grant,
                                 # no standing grant is recorded from it.
+                                _decision = "once"
+                            if _spend_card and _decision in ("tab", "conversation", "always"):
+                                # v1.346.0: a PRICED call is approved one
+                                # spend at a time — no grant outlives it.
                                 _decision = "once"
                             if _decision == "tab":
                                 # Recorded BEFORE the resolved frame goes
@@ -4556,6 +4621,12 @@ async def chat_stream(
                             # SETTINGS CARDS (redesign S3/S4). MIRROR NOTE
                             # (lock-step): chat_turn.py carries the same.
                             config_cards.extend(config_cards_from_result(tc.name, result))
+                            # MEDIA MADE INLINE (v1.346.0): appended to the
+                            # settled reply before `done`. MIRROR NOTE
+                            # (lock-step): chat_turn.py carries the same.
+                            for _mk in media_from_result(tc.name, result):
+                                if _mk not in media_made:
+                                    media_made.append(_mk)
                             # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                             # SUCCESSFUL workflow_run's {run_id, workflow}
                             # rides the done frame as `workflow_run` so the
@@ -4880,6 +4951,11 @@ async def chat_stream(
             # v1.330.0: plain words, the endpoint's own name. MIRROR NOTE
             # (lock-step): chat_turn.run_chat_turn appends the same helper.
             reply += _chat_turn.text_only_note(d.platform, provider_choice)
+        # INLINE MEDIA (v1.346.0, contract 4c): every file a tool MADE this
+        # turn that the settled reply does not already show is appended as
+        # the markdown image syntax — before the done frame, whose `reply`
+        # is what the page saves. MIRROR NOTE (lock-step): chat_turn.py.
+        reply = append_inline_media(reply, media_made)
         # UNREAD STEER NOTES (v1.287.0). A note posted while the model wrote
         # its final answer never met a round boundary — every plain question
         # ends after round 0 — yet the steer route had answered "queued".

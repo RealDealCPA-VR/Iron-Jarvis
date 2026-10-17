@@ -1427,6 +1427,14 @@ def build_platform(
 
     for tool in selfcare_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # MEDIA IN CHAT (v1.346.0): ``generate_media`` makes an image/video/audio/
+    # music on the service the user chose. It reads ``platform.media`` (the
+    # registry, attached below) and ``platform.media_jobs`` lazily — both are
+    # built after the tool registry — and quotes the price before any spend.
+    from .tools.media_tool import media_tools
+
+    for tool in media_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

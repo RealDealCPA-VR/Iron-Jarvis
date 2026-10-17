@@ -2796,6 +2796,11 @@ ASK_TIER_TOOLS: frozenset[str] = frozenset(
         # live in `AUTO_SAFE_TOOLS`, never here.
         "pack_restart",
         "provider_rescan",
+        # MEDIA IN CHAT (v1.346.0). `generate_media` sends a prompt to a hosted
+        # service and can SPEND there, so it is ASK tier and visible-but-
+        # ungranted; its own `spend_check` lets a free quote (a Maker
+        # allowance) run without the card and prices the card otherwise.
+        "generate_media",
     }
 )
 
@@ -2956,6 +2961,49 @@ _ASK_RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"provider_rescan": 8},
+    ),
+    # --- MEDIA IN CHAT (v1.346.0): a media-MAKING imperative — "make a logo",
+    # "generate an image of a sunset", "draw me a picture", "create a 10 second
+    # video", "compose a jingle", "produce a voiceover", "animate this logo".
+    # FRONTED WITH `_imperative()` like the write-document rule: the verbs are
+    # ordinary English and a REPORT of a request is not a request ("the memo
+    # says to make a logo", "why did the video fail") — the gate refuses
+    # those. A LOOK at media is not a making either: "show me a picture of",
+    # "find an image of", "what does X look like" name no making verb and so
+    # arm nothing; nor does editing what exists ("make a copy of this image",
+    # "make the picture bigger", "resize the photo" — the two lookaheads).
+    # The tool is ASK tier: visible to the model, carded unless its own
+    # spend check says the generation is free.
+    (
+        re.compile(
+            _imperative()
+            + r"(?:make|generate|create|draw|render|design|compose|produce|"
+            r"animate|paint|sketch|illustrate)\b"
+            r"(?:(?!\b(?:copy|copies|backup|list|folder|resize|resized|smaller|"
+            r"bigger|larger|convert|version|caption|description|summary|"
+            r"mockup\s+of\s+the\s+existing)\b)[^.!?\n]){0,40}?"
+            r"\b(?:images?|pictures?|photos?|photographs?|illustrations?|logos?|"
+            r"posters?|thumbnails?|artwork|icons?|banners?|wallpapers?|videos?|"
+            r"clips?|animations?|songs?|music|tracks?|jingles?|soundtracks?|"
+            r"voices?|narrations?|voice-?overs?|sound\s+effects?|sfx)\b"
+            r"(?!\s+(?:bigger|smaller|larger|brighter|darker|sharper|lighter|"
+            r"wider|transparent|square|round|look|black\s+and\s+white|"
+            r"into|to\s+a|as\s+a|folder|file))",
+            re.IGNORECASE,
+        ),
+        {"generate_media": 9},
+    ),
+    (
+        # A song is WRITTEN ("write me a song about spring", "record a jingle")
+        # — the music nouns only, so "write a caption for the photo" and
+        # "write a blog post with images" stay with the document tools.
+        re.compile(
+            _imperative()
+            + r"(?:write|record|sing)\b[^.!?\n]{0,40}?"
+            r"\b(?:songs?|jingles?|soundtracks?|theme\s+(?:song|tune)|music)\b",
+            re.IGNORECASE,
+        ),
+        {"generate_media": 8},
     ),
 ]
 
