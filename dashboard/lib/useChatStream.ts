@@ -194,6 +194,11 @@ export type SSEEvent =
       /** v1.326.0 (wired v1.327.0): the saved chats this message pointed to
        *  with "@", read or left out — lib/turnReads. */
       thread_refs?: ThreadRefReceipt[];
+      /** v1.344.0: on an ESCALATING turn, what the chat lane already ran
+       *  this turn, so the agent does not redo those reads. Whitelisted per
+       *  row (`decodePriorToolResults`); absent when the daemon sent none or
+       *  every row was junk. */
+      prior_tool_results?: PriorToolResult[];
     }
   | {
       type: "error";
@@ -262,6 +267,32 @@ export interface TurnTiming {
   firstTokenAt: number | null;
   endedAt: number;
 }
+
+/** v1.344.0: one tool call the chat lane already made in the turn that
+ *  escalates — the daemon's own display shapes (redacted args, a masked
+ *  output head), never the raw call. The page hands the list to POST
+ *  /sessions as `prior_tool_results` so the agent starts where the chat
+ *  stopped. The caps are the contract's and are applied here too, because
+ *  the frame is untrusted input where the user is standing. */
+export interface PriorToolResult {
+  tool: string;
+  /** The call's arguments as the daemon displays them (redacted). */
+  args_summary: string;
+  ok: boolean;
+  /** The first part of the tool's output (masked); "" for a failed call. */
+  output_head: string;
+}
+
+/** At most this many rows ride an escalation (the newest are kept). */
+export const PRIOR_TOOL_RESULTS_MAX = 12;
+/** At most this many characters across every row (the newest are kept). */
+export const PRIOR_TOOL_RESULTS_CHARS = 12_000;
+/** A row's `args_summary` is cut here. */
+export const PRIOR_ARGS_SUMMARY_MAX = 200;
+/** A row's `output_head` is cut here. */
+export const PRIOR_OUTPUT_HEAD_MAX = 1_500;
+/** A tool name longer than this is not a tool name. */
+const PRIOR_TOOL_NAME_MAX = 120;
 
 /** The steps of a turn from its tool cards, in order (v1.323.0). */
 export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
@@ -354,6 +385,11 @@ export interface ChatStreamResult {
   /** v1.327.0: the saved chats this message pointed to (the done frame's
    *  `thread_refs`); absent when there were none. */
   threadRefs?: ThreadRefReceipt[];
+  /** v1.344.0: what the chat lane already ran in a turn that ESCALATES (the
+   *  done frame's `prior_tool_results`); absent when there were none. The
+   *  page passes it to the session the turn re-runs as, so the agent does
+   *  not redo the reads the chat already made. */
+  priorToolResults?: PriorToolResult[];
   /** v1.323.0: the turn's reasoning text ("" when the model sent none). */
   thinking: string;
   /** v1.323.0: how long the model thought, in ms — first thinking frame to
@@ -425,6 +461,41 @@ function isPrepStep(v: unknown): v is PrepStep {
 
 function str(v: unknown): string {
   return v === undefined || v === null ? "" : String(v);
+}
+
+/** The `prior_tool_results` field's normal form (v1.344.0): rows with a
+ *  tool name, `ok` only when it is a real `true`, the two strings cut to the
+ *  contract's caps, unknown keys dropped; at most PRIOR_TOOL_RESULTS_MAX
+ *  rows and PRIOR_TOOL_RESULTS_CHARS characters, the NEWEST kept (the daemon
+ *  sends oldest first). Anything that is not a list reads as none. */
+export function decodePriorToolResults(raw: unknown): PriorToolResult[] {
+  if (!Array.isArray(raw)) return [];
+  const rows: PriorToolResult[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object" || Array.isArray(r)) continue;
+    const x = r as Record<string, unknown>;
+    const tool = typeof x.tool === "string" ? x.tool.trim() : "";
+    if (!tool || tool.length > PRIOR_TOOL_NAME_MAX) continue;
+    const args = typeof x.args_summary === "string" ? x.args_summary : "";
+    const head = typeof x.output_head === "string" ? x.output_head : "";
+    rows.push({
+      tool,
+      args_summary: args.slice(0, PRIOR_ARGS_SUMMARY_MAX),
+      ok: x.ok === true,
+      output_head: head.slice(0, PRIOR_OUTPUT_HEAD_MAX),
+    });
+  }
+  // Newest kept: walk from the end until a cap is hit.
+  const out: PriorToolResult[] = [];
+  let chars = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    const size = row.tool.length + row.args_summary.length + row.output_head.length;
+    if (out.length >= PRIOR_TOOL_RESULTS_MAX || chars + size > PRIOR_TOOL_RESULTS_CHARS) break;
+    out.unshift(row);
+    chars += size;
+  }
+  return out;
 }
 
 /**
@@ -611,6 +682,13 @@ export function sseEventFrom(
         if (rules.length) ev.folder_rules = rules;
         const refs = decodeThreadRefs(data.thread_refs);
         if (refs.length) ev.thread_refs = refs;
+      }
+      // v1.344.0: what the chat already ran, for the session it escalates
+      // into — whitelisted per row like every field here; an empty list
+      // leaves the key absent.
+      {
+        const prior = decodePriorToolResults(data.prior_tool_results);
+        if (prior.length) ev.prior_tool_results = prior;
       }
       return ev;
     }
@@ -1419,6 +1497,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.resources ? { resources: ev.resources } : {}),
                 ...(ev.folder_rules?.length ? { folderRules: ev.folder_rules } : {}),
                 ...(ev.thread_refs?.length ? { threadRefs: ev.thread_refs } : {}),
+                ...(ev.prior_tool_results?.length
+                  ? { priorToolResults: ev.prior_tool_results }
+                  : {}),
               };
               break;
             case "error":

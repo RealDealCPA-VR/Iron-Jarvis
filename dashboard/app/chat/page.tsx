@@ -287,6 +287,7 @@ import {
   useLiveText,
   type UseChatStream,
   type PrepStep,
+  type PriorToolResult,
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
 import { settledSplit } from "@/lib/streamSplit";
@@ -7905,6 +7906,7 @@ export default function ChatPage() {
           escalate,
           escalateReason,
           escalateAgent,
+          priorToolResults,
           workflowDraft,
           context: ctxUsage,
         } = streamRes;
@@ -8053,6 +8055,8 @@ export default function ChatPage() {
             // The turn's own validated roster pick (v1.139.0); null/absent
             // keeps the builder default.
             ...(escalateAgent ? { agentType: escalateAgent } : {}),
+            // v1.344.0: what this turn already ran rides into the session.
+            ...(priorToolResults?.length ? { priorToolResults } : {}),
           });
           return;
         }
@@ -8746,6 +8750,11 @@ export default function ChatPage() {
        *  (no session-shaped run exists for remotes). Absent → "builder",
        *  exactly today's behavior. */
       agentType?: string;
+      /** v1.344.0: what the escalating chat turn already ran (the done
+       *  frame's `prior_tool_results`, decoded by the hook). Rides every
+       *  session body this hand-off posts, so the agent does not redo the
+       *  reads the chat already made. Absent = the body is exactly today's. */
+      priorToolResults?: PriorToolResult[];
     } = {},
   ) {
     // ESCALATION (v1.108.0): chat already appended the user's bubble and
@@ -8753,6 +8762,11 @@ export default function ChatPage() {
     // message twice and drop the files. The turn is being RE-RUN, not restarted.
     const esc = opts.escalatedFrom;
     const atts = esc ? esc.atts : attachments;
+    // THE CHAT'S WORK RIDES THE ESCALATION (v1.344.0): only when there is
+    // some — a turn that ran nothing sends the key not at all.
+    const carried = opts.priorToolResults?.length
+      ? { prior_tool_results: opts.priorToolResults }
+      : {};
     if (!esc) setAttachments([]); // chips are consumed by this message
     // A recap of the chat so far — prepended ONLY when opening a fresh session
     // below (switching to Agent mode drops all context otherwise). Captured
@@ -8879,6 +8893,7 @@ export default function ChatPage() {
             ? { allow_tools: armedNow.slice(0, MAX_TOOLS).concat(extraGrants) }
             : {}),
           ...posture,
+          ...carried,
         });
       } else {
         // First message opens a session — carry the chat recap into the task so
@@ -8909,6 +8924,7 @@ export default function ChatPage() {
                 ...(localOnlyRef.current ? { local_only: true } : {}),
                 // Presence asserted — see the POST /sessions branch below.
                 origin: "chat",
+                ...carried,
               },
             )
           : await post<SessionView>("/sessions", {
@@ -8955,6 +8971,7 @@ export default function ChatPage() {
               // because "somebody is watching" is a fact only the watching
               // surface can state.
               origin: "chat",
+              ...carried,
             });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
