@@ -204,6 +204,16 @@ _OFF_ROSTER_BY_DESIGN = {
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py
     "app_health", "pack_status", "run_doctor", "pack_restart", "provider_rescan",
+    # MEDIA IN CHAT (v1.346.0): `generate_media` SPENDS the user's credits on
+    # a hosted service, so every paid call needs a card and a card needs
+    # somebody in front of it — the same reasoning as the acting browser
+    # tools. A background agent run at 3am has nobody to ask, which is why no
+    # builtin roster carries it. Chat ASK-arms it from a media-making sentence
+    # (autoselect.ASK_TIER_TOOLS + the v1.346.0 rule; pinned by
+    # tests/test_media_vocab_v1346.py) and a run escalated FROM a chat
+    # inherits the chat's armed tools, with the chat's thread id so the
+    # media comes home (tests/test_generate_media_tool_v1346.py).
+    "generate_media",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

@@ -77,6 +77,24 @@ class MockLLMAdapter(LLMAdapter):
         tool_names = {t["name"] for t in tools}
 
         if not has_tool_result:
+            # MEDIA IN CHAT (v1.346.0): with ``generate_media`` armed (a
+            # media-making sentence ask-armed it), the demo model MAKES the
+            # media — the one action the sentence asked for — so the whole
+            # lane (quote → card or free → inline picture / background job →
+            # the line in the chat) can be driven with zero network through
+            # the offline fake service. Checked FIRST: "make a logo" inside a
+            # project with file tools armed is a picture, not a RESULT.md.
+            if "generate_media" in tool_names:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="generate_media",
+                            arguments={"kind": _media_kind(task), "prompt": task},
+                        )
+                    ],
+                    finish_reason="tool_use",
+                )
             if "write_file" in tool_names:
                 content = (
                     "# Iron Jarvis result\n\n"
@@ -107,6 +125,10 @@ class MockLLMAdapter(LLMAdapter):
                     finish_reason="tool_use",
                 )
 
+        if "generate_media" in tool_names:
+            # The media call ran (it is made first above): the chat lanes put
+            # the picture / the "it will appear here" words in the reply.
+            return LLMResponse(text="Done.", finish_reason="stop")
         if "delegate" in tool_names:
             return LLMResponse(
                 text="Delegated the task to a subagent; all subtasks complete.",
@@ -116,3 +138,16 @@ class MockLLMAdapter(LLMAdapter):
             text="Done. Wrote RESULT.md summarizing the task.",
             finish_reason="stop",
         )
+
+
+def _media_kind(task: str) -> str:
+    """The media kind a demo sentence asks for, by its nouns — image unless
+    the words say video / song / sound."""
+    words = task.lower()
+    if any(w in words for w in ("video", "clip", "animation", "animate")):
+        return "video"
+    if any(w in words for w in ("song", "music", "jingle", "soundtrack", "track")):
+        return "music"
+    if any(w in words for w in ("voice", "narration", "sound effect", "sfx", "audio")):
+        return "audio"
+    return "image"
