@@ -106,6 +106,14 @@ describe("lib/stepDetail — the one reader of a detail", () => {
     // A secret straddling the cut is masked first, so no half of it survives.
     const edge = cleanStepDetail({ input: `${"a ".repeat(140)}${KEY}`, output: "" })!;
     expect(edge.input).not.toContain(KEY.slice(0, 16));
+    // (review) An AWS key id cut after 8 of its 20 characters no longer
+    // matches its rule, so a cut made BEFORE the mask would keep "AKIAFAKE";
+    // masked first, the shape survives as "AKIA***" and none of the id does.
+    const AWS = "AKIAFAKEFAKEFAKE1234";
+    const aws = cleanStepDetail({ input: `${"a ".repeat(146)}${AWS}`, output: `${"b ".repeat(746)}${AWS}` })!;
+    expect(aws.input.endsWith("AKIA***")).toBe(true);
+    expect(aws.output.endsWith("AKIA***")).toBe(true);
+    expect(`${aws.input}\n${aws.output}`).not.toContain("AKIAFAKE");
     // The daemon's masked text passes unchanged (every rule leaves *** alone).
     const masked = 'Authorization: Bearer ***\napi_key=***\nsk-ant-***\nghp_***\nAKIA***';
     expect(maskDetailText(masked)).toBe(masked);
