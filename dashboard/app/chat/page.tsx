@@ -336,6 +336,16 @@ import {
 } from "@/lib/reasoningChip";
 import { answeredModelName as answeredModelNameFor } from "@/lib/answeredModel";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
+// v1.349.0 (lane B2): the helper-agent row (live + settled) and its facts.
+import { AgentRunLive, AgentRunSettled, HandOffLine } from "@/components/chat/AgentRunRow";
+import {
+  agentRunName,
+  handOffFor,
+  handOffSentence,
+  readAgentRun,
+  settleHandOff,
+  stampMs,
+} from "@/lib/agentRun";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
 import { REPLY_ACTION_BTN, REPLY_ACTION_SQUARE } from "@/components/chat/replyActions";
@@ -3039,23 +3049,33 @@ const MessageRow = memo(function MessageRow({
         />
       </div>
     );
-  if (m.escalated)
+  if (m.escalated) {
+    // v1.349.0 (lane B2): the hand-off and its run are ONE row
+    // (components/chat/AgentRunRow). Once finalize has stamped how the run
+    // went (`agentRun`, lib/agentRun), the line settles into "The researcher
+    // worked for 2 min 5 s · 6 steps · Open run". While the run is live on
+    // this page, the live row at the foot of the transcript stands in for
+    // the line (HandOffLine steps aside). A message from before v1.349.0, or
+    // a run another window is watching, keeps the line exactly as it was.
+    const said = handOffSentence(m.escalated, m.escalatedTo);
+    const run = readAgentRun(m);
+    if (run)
+      return (
+        <div className="group/msg">
+          <AgentRunSettled name={agentRunName(m.escalatedTo)} run={run} why={said} />
+        </div>
+      );
     return (
       <div className="group/msg">
-        <div className="flex items-start gap-2 text-[13px] text-zinc-400">
-          <Zap size={13} className="mt-[3px] shrink-0 text-accent-soft" />
-          <span>
-            {m.escalatedTo ? (
-              <>
-                Handing this to {m.escalatedTo}: {m.escalated}.
-              </>
-            ) : (
-              <>Taking this on properly: {m.escalated}.</>
-            )}
-          </span>
-        </div>
+        <HandOffLine session={m.awaitingSession}>
+          <div className="flex items-start gap-2 text-[13px] text-zinc-400">
+            <Zap size={13} className="mt-[3px] shrink-0 text-accent-soft" />
+            <span>{said}</span>
+          </div>
+        </HandOffLine>
       </div>
     );
+  }
   const suggestion = decodeSuggestion(m.suggestion);
   const configCards = decodeConfigCards(m.configCards);
   // Calm chat W1-5 (v1.326.0): the receipt lives in the action row below, and
@@ -6997,6 +7017,29 @@ export default function ChatPage() {
   // The composer's auto-grow moved into ComposerInput with the text it keys
   // off (v1.250.0, S-05).
 
+  // v1.349.0 (lane B2): when the run being waited on STARTED, by the session's
+  // own clock (its `created_at`, read by finalize's poll below), so the
+  // helper-agent row's clock counts the whole run, a resumed one included.
+  // Written once per run (the setter hands back the same object on every
+  // later poll, so no re-render), never per second: the row's clock ticks
+  // itself. Keyed by the session, so a value never applies to another run.
+  const [runSince, setRunSince] = useState<{ id: string; at: number } | null>(null);
+  function noteRunStart(id: string, createdAt: unknown) {
+    const at = stampMs(createdAt);
+    if (at === null) return;
+    setRunSince((prev) => (prev && prev.id === id && prev.at === at ? prev : { id, at }));
+  }
+  // v1.349.0 (lane B2): when the run ends, finalize SETTLES its hand-off
+  // line into the helper-agent row (lib/agentRun settleHandOff): the
+  // session's own start and end, and the ledger's step count (the run card's
+  // own number), stamped on the hand-off message and saved with the thread.
+  // On the daemon's path (its line already appended) the adopted array is
+  // saved when a hand-off settled: that is not the race finalize avoids
+  // there, because the daemon's line is already IN the array (nothing is
+  // composed) and the save goes out under the stamp just adopted, so a later
+  // write is refused and merged (CL3), never overwritten. A turn with no
+  // hand-off message comes back as it was, and nothing extra is saved.
+
   // Fetch the finished session and turn it into the assistant's reply. Only acts
   // once the session has actually reached a terminal status (the `agent.completed`
   // event can land a beat before the session row flips), so a not-yet-done fetch
@@ -7023,6 +7066,7 @@ export default function ChatPage() {
       setOffline(false); // the daemon answered — clear any transient-blip banner
       const status = (session.status || "").toLowerCase();
       if (status !== "completed" && status !== "failed" && status !== "cancelled") {
+        noteRunStart(id, session.created_at); // v1.349.0: the live row's clock
         return; // still running — leave the working bubble up; retry later
       }
       // THE DAEMON MAY HAVE APPENDED THE REPLY ALREADY (v1.345.0): every
@@ -7049,7 +7093,11 @@ export default function ChatPage() {
         if (t && line) {
           // The wait is over: the mark on the question goes (as the compose
           // path strips it), and the server's array is what this window holds.
-          adoptThread(t, box, { force: true, messages: stripAwaiting(server) });
+          // v1.349.0: its hand-off settles, saved (see above finalize).
+          const settled = settleHandOff(server, id, session, line.runResult?.steps);
+          const adopted = stripAwaiting(settled);
+          adoptThread(t, box, { force: true, messages: adopted });
+          if (settled !== server) queueSave(adopted, box);
           awaitingWhoRef.current = null;
           if (line.documents?.length) showDocPreview(line.documents);
           tts.speak(line.content); // no-op unless voice replies are on
@@ -7080,8 +7128,10 @@ export default function ChatPage() {
       // chip a panel reply wears, so "who said this" reads the same either way.
       const who = awaitingWhoRef.current;
       awaitingWhoRef.current = null;
+      // v1.349.0: the hand-off settles into its row (see above finalize).
+      const settled = settleHandOff(messagesRef.current, id, session, runResult?.steps);
       const full: ChatMessage[] = [
-        ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
+        ...stripAwaiting(settled), // the wait is over (v1.226.0)
         {
           role: "assistant",
           content,
@@ -11618,33 +11668,34 @@ export default function ChatPage() {
                     {/* AGENT MODE: the live working bubble. Narrates the current
                         step, streams the agent's tokens + tool calls as they
                         arrive, and keeps the step feed underneath. */}
-                    {awaiting && (
+                    {awaiting && awaitingId !== null && (
                       <Bubble role="assistant">
                         <div className="flex flex-col gap-1.5" aria-live="polite" aria-busy="true">
-                          {/* Calm chat W1-5 (v1.326.0): the run's work as grey
-                              one-line rows above its words, oldest first: the
-                              last few steps it finished, its tool calls, then
-                              the step it is on now (spinning, softly pulsing). */}
-                          <div data-testid="live-work" className="grid gap-1">
-                            {progress.slice(1, 4).reverse().map((s, i) => (
-                              <WorkRow key={`${i}-${s}`} icon={Check} title={s.replace(/…$/, "")} />
-                            ))}
-                            <LiveToolRows cards={runStream.tools} />
-                            {/* v1.149.0: the run's OWN phase, straight from the
-                                daemon, in place of a generic "Thinking…". A run
-                                that is planning now says so — it used to be
-                                indistinguishable from one that was stuck. */}
-                            <WorkRow
-                              icon={Loader2}
-                              running
-                              title={
-                                runStream.phase
-                                  ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
-                                  : (progress[0] ?? "Thinking…")
-                              }
-                              detail={runStream.phase?.detail || null}
-                            />
-                          </div>
+                          {/* v1.349.0 (lane B2): ONE helper-agent row
+                              (components/chat/AgentRunRow): "The researcher is
+                              working · Step 2 of 4: … · 1:24" with a chevron,
+                              standing in for the saved "Handing this to" line
+                              while the run lasts. Open (as it starts), it
+                              holds the step rows that sat here before (calm
+                              chat W1-5: the last few finished steps, the tool
+                              calls, then the step it is on now). The run's
+                              OWN phase comes straight from the daemon
+                              (v1.149.0), so a planning run says so. The row
+                              reads the run's tools and phase only; its words
+                              stay in AgentLiveText below (S-02). */}
+                          <AgentRunLive
+                            session={awaitingId}
+                            handOff={handOffFor(messages, awaitingId)}
+                            since={runSince && runSince.id === awaitingId ? runSince.at : null}
+                            progress={progress}
+                            tools={runStream.tools}
+                            phaseTitle={
+                              runStream.phase
+                                ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
+                                : null
+                            }
+                            phaseDetail={runStream.phase?.detail || null}
+                          />
                           <AgentLiveText stream={runStream} onGrow={scrollLiveIntoView} />
                           {/* MID-RUN APPROVAL (v1.189.0): the run's asks are
                               answered in the dock, in the composer's place
