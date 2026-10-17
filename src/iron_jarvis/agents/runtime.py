@@ -43,7 +43,7 @@ from ..core.trust import (
 from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
-from ..tools.base import SpendCheck, ToolContext, spend_checks_for
+from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
 from ..tools.permissions import SAFE_HEADLESS_TOOLS
 from . import chat_delivery as _chat_delivery
 from . import decompose as _decompose
@@ -3068,11 +3068,28 @@ class AgentRuntime:
                         _perm, _group = grouped
                         shared = batch_tasks.get(_perm)
                         if shared is None:
+                            # v1.346.0 (X-review): ONE ask covers the whole
+                            # batch, so its words name EVERY distinct quote
+                            # of the group (an image and a video), not the
+                            # first call's alone. MIRROR NOTE (lock-step):
+                            # the stream lane's card joins the same way.
+                            _spend_first = spend_by_call.get(id(_group[0]))
+                            _spend_batch = (
+                                SpendCheck(
+                                    ask=_spend_first.ask,
+                                    words=spend_words_for(
+                                        spend_by_call.get(id(_c)) for _c in _group
+                                    ),
+                                    cost_note=_spend_first.cost_note,
+                                )
+                                if _spend_first is not None
+                                else None
+                            )
                             shared = asyncio.ensure_future(
                                 self._pause_for_approval(
                                     session, _group[0], agent_def, session_allow,
                                     run=run, batch=_group,
-                                    spend=spend_by_call.get(id(_group[0])),
+                                    spend=_spend_batch,
                                 )
                             )
                             batch_tasks[_perm] = shared

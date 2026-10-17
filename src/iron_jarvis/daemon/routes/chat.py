@@ -3468,7 +3468,7 @@ async def chat_stream(
     _grant_scopes = chat_grant_scopes(pid if resolved_proj is not None else None)
     ctx = None
     if armed or ask_armed:
-        from ...tools.base import ToolContext, spend_checks_for
+        from ...tools.base import ToolContext, spend_checks_for, spend_words_for
 
         # OFF THE EVENT LOOP (v1.195.0, finding 7) — MIRROR NOTE
         # (lock-step): same call in chat_turn.run_chat_turn, edit both or
@@ -4283,8 +4283,17 @@ async def chat_stream(
                             if _sc is not None:
                                 # v1.346.0: what this call would spend, in
                                 # the service's words — the card's one quiet
-                                # line (ApprovalCard `approval-cost`).
-                                _frame["cost_note"] = _sc.words
+                                # line (ApprovalCard `approval-cost`). ONE
+                                # card covers the whole same-permission
+                                # batch (above), so the line names EVERY
+                                # distinct quote of the group, in call order
+                                # (X-review: a batch of an image and a video
+                                # used to show the image's price alone).
+                                # MIRROR NOTE (lock-step): the runtime's
+                                # batch pause joins the same way.
+                                _frame["cost_note"] = spend_words_for(
+                                    _spend.get(id(_c)) for _c in _group
+                                )
                             if _local_ask:
                                 # v1.332.0 (L3): this card offers "Allow
                                 # once" and "Deny" only; any wider answer is

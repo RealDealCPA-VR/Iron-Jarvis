@@ -379,6 +379,29 @@ def test_a_paid_quote_cards_even_in_yolo_and_a_denied_card_never_runs(app, monke
     assert len(provider.starts) == 1
 
 
+def test_two_priced_calls_in_one_yolo_round_share_one_card_that_names_both_quotes(app):
+    """X-review pin: the round grouper (`_would_card`) and the per-call
+    branch must AGREE on a priced call in yolo — the mutant that let
+    `_would_card` answer "" there left the batch card with no count while the
+    second call still ran on the first card's answer. And ONE card covering a
+    batch names EVERY distinct quote (an image AND a video), not the first
+    call's alone."""
+    platform = app.state.platform
+    provider, _, _ = _wire(platform, delay_s=120.0)
+    _script(app, [_call("a paid cat", cid="c1"), _call("a paid wave", kind="video", cid="c2")])
+    frames = _stream(app, _body(MAKE, mode="yolo"))
+    (card,) = _cards(frames)
+    assert card["count"] == 2 and len(card["examples"]) == 2
+    assert card["cost_note"] == (
+        "Generate 1 image on Fake media for 7 credits (fake price); "
+        "Generate 1 video on Fake media for 7 credits (fake price)"
+    )
+    assert card["can_always"] is False
+    assert [d["decision"] for ev, d in frames if ev == "approval_resolved"] == ["once"]
+    assert [f["ok"] for f in _finished(frames)] == [True, True]
+    assert sorted(s[1] for s in provider.starts) == ["image", "video"]
+
+
 def test_always_on_a_priced_card_is_read_as_once_and_mints_no_grant(app, monkeypatch):
     platform = app.state.platform
     provider, _, _ = _wire(platform)
@@ -730,3 +753,37 @@ async def test_the_runtime_pauses_a_priced_call_with_cost_note_and_runs_after_al
     assert asked[0]["cost_note"] == "Generate 1 video on Fake media for 7 credits (fake price)"
     assert asked[0]["can_always"] is False
     assert len(provider.starts) == 1, "the allowed call never reached the service"
+
+
+async def test_the_runtime_batches_two_priced_calls_into_one_ask_naming_both_quotes(tmp_path, monkeypatch):
+    """X-review pin, the runtime's twin of the stream-lane batch card: a step
+    with two priced generations pauses ONCE (v1.247.0's shared pause) and
+    the ask's words name both quotes; one Allow runs both."""
+    two = LLMResponse(
+        tool_calls=[
+            ToolCall(id="c1", name=TOOL, arguments={"kind": "image", "prompt": "a paid cat"}),
+            ToolCall(id="c2", name=TOOL, arguments={"kind": "video", "prompt": "a paid wave"}),
+        ],
+        finish_reason="tool_use",
+    )
+    p, orch = _agent_platform(tmp_path, [two, LLMResponse(text="Started.", finish_reason="stop")])
+    provider, _, _ = _wire(p, delay_s=120.0)
+    monkeypatch.setattr(p.media_jobs, "start_background", lambda spec, **kw: "mj_spy")
+    asked: list = []
+
+    def _answer(e):
+        if e.type == EventType.APPROVAL_REQUESTED:
+            asked.append(dict(e.payload))
+            p.approvals.resolve(e.payload["approval_id"], "once")
+
+    p.event_bus.add_handler(_answer)
+    s = await orch.create_session("make a picture and a video", AgentType.BUILDER, chat_thread_id="chat_run", origin="chat")
+    done = await asyncio.wait_for(orch.run_session(s.id, DEFN), timeout=60)
+    assert done.status is SessionStatus.COMPLETED
+    assert len(asked) == 1, asked
+    assert asked[0]["count"] == 2
+    assert asked[0]["cost_note"] == (
+        "Generate 1 image on Fake media for 7 credits (fake price); "
+        "Generate 1 video on Fake media for 7 credits (fake price)"
+    )
+    assert sorted(st[1] for st in provider.starts) == ["image", "video"]

@@ -295,6 +295,21 @@ async def spend_checks_for(
     return out
 
 
+def spend_words_for(checks: Any) -> str:
+    """The card sentence for ONE card that covers SEVERAL calls (v1.346.0,
+    X-review): a round's same-permission asks share one card (v1.247.0), so
+    a batch of two generations — an image and a video — must show BOTH
+    quotes, not the first call's alone. Each distinct sentence once, in call
+    order, "; "-joined; a single-call batch reads exactly its own words. The
+    ONE helper the stream lane's card and the runtime's ask both call."""
+    out: list[str] = []
+    for check in checks:
+        words = str(getattr(check, "words", "") or "").strip() if check is not None else ""
+        if words and words not in out:
+            out.append(words)
+    return "; ".join(out)
+
+
 def replay_safe(tool: Any) -> bool:
     """Whether a cut-off call of ``tool`` may be run again (v1.335.0).
 
