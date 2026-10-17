@@ -266,7 +266,20 @@ describe("useChatStream — thinking, truncated, timing, steps", () => {
     await send("tool_call", { id: "c1", name: "read_file", status: "started" }, 1_600);
     await send("tool_call", { id: "c1", name: "read_file", status: "finished", ok: true }, 1_900);
     await send("tool_call", { id: "c2", name: "shell", status: "started" }, 1_950);
-    await send("tool_call", { id: "c2", name: "shell", status: "finished", ok: false }, 2_450);
+    // v1.349.0 (updated on purpose): a finished frame's masked `detail` rides
+    // the step (last); its raw `output` never does.
+    await send(
+      "tool_call",
+      {
+        id: "c2",
+        name: "shell",
+        status: "finished",
+        ok: false,
+        output: "raw: sk-ant-api03-FAKEfakeFAKEfake1234567890abcd",
+        detail: { input: '{"command": "make"}', output: "make: *** No rule. sk-ant-***" },
+      },
+      2_450,
+    );
     await send("token", { text: " there" }, 2_500);
     await send("done", { reply: "Hi there", truncated: true }, 2_600);
     await finish(2_700);
@@ -278,8 +291,15 @@ describe("useChatStream — thinking, truncated, timing, steps", () => {
     expect(res.timing).toEqual({ startedAt: 1_000, firstTokenAt: 1_500, endedAt: 2_700 });
     expect(res.steps).toEqual([
       { name: "read_file", ok: true, ms: 300 },
-      { name: "shell", ok: false, ms: 500 },
+      {
+        name: "shell",
+        ok: false,
+        ms: 500,
+        detail: { input: '{"command": "make"}', output: "make: *** No rule. sk-ant-***" },
+      },
     ]);
+    expect(JSON.stringify(res.steps)).not.toContain("raw:");
+    expect(JSON.stringify(res.steps)).not.toContain("FAKEfake");
   });
 
   it("no done frame: truncated is false, timing and steps still come back", async () => {

@@ -20,12 +20,18 @@
  *
  * Types only from '@/lib/useChatStream': tests mock that module with a fixed
  * export list, and a type import is erased.
+ *
+ * v1.349.0: a step keeps what it did (the daemon's masked `detail`, lib/
+ * stepDetail) here exactly as on /chat, so a pane reply's rows open to their
+ * input and output after the pane is reopened. The same per-message budget
+ * holds (capStepDetails); a step past it keeps its row.
  */
 
 import type { TurnStep, TurnTiming } from "@/lib/useChatStream";
 import type { WorkInput } from "@/components/chat/WorkLine";
 import type { TurnChangesArgs } from "@/components/chat/ChangedFiles";
 import { turnWindow } from "@/lib/turnChanges";
+import { capStepDetails } from "@/lib/stepDetail";
 import type { PaneMsg } from "@/components/terminal/paneChatCore";
 
 /** What the pane now keeps on a message, beside PaneMsg's own fields. All
@@ -34,7 +40,8 @@ import type { PaneMsg } from "@/components/terminal/paneChatCore";
 export interface PaneWorkFields {
   /** When the message was sent (user) or settled (reply), ISO. */
   at?: string;
-  /** The turn's tool steps, in order, with durations and a safe target. */
+  /** The turn's tool steps, in order, with durations, a safe target and
+   *  (v1.349.0) the daemon's masked detail. */
   steps?: TurnStep[];
   /** Client-clock timing of the turn. */
   timing?: TurnTiming;
@@ -58,7 +65,10 @@ export interface PaneStreamWork {
  *  when present (the chat page's rule: a field with nothing in it is not
  *  written). `at` is the settle time. Spread LAST on the reply object. */
 export function paneReplyWork(res: PaneStreamWork | null | undefined, at: string): PaneWorkFields {
-  const steps: TurnStep[] = res && Array.isArray(res.steps) ? res.steps : [];
+  // v1.349.0: each step's detail is read through the one reader again
+  // (masked, cut, the message's budget) before it is saved; a step without
+  // one is kept exactly as the stream handed it over.
+  const steps: TurnStep[] = res && Array.isArray(res.steps) ? capStepDetails(res.steps) : [];
   const thinking = typeof res?.thinking === "string" ? res.thinking.trim() : "";
   const ms = res?.thinkingMs;
   return {

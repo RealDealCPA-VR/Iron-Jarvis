@@ -258,12 +258,27 @@ describe("the stream hook keeps the target on each step, last", () => {
       { id: "a", name: "read_file", status: "done", ok: true, args: { path: "C:\\work\\harbor.xlsx" }, startedAt: 1, endedAt: 301 },
       { id: "b", name: "excel_query", status: "done", ok: true, args: { path: "C:\\work\\harbor.xlsx" } },
       { id: "c", name: "web_search", status: "done", ok: true, args: { query: `look up ${KEY}` } },
+      // v1.349.0 (updated on purpose): a card carrying the daemon's masked
+      // `detail` saves THAT after the target — never the card's raw output.
+      {
+        id: "d",
+        name: "read_file",
+        status: "done",
+        ok: true,
+        args: { path: "C:\\work\\pier.xlsx" },
+        output: `raw text ${KEY}`,
+        detail: { input: '{"path": "pier.xlsx"}', output: "masked text sk-ant-***" },
+      },
     ]);
     expect(steps[0]).toEqual({ name: "read_file", ok: true, ms: 300, target: "harbor.xlsx" });
     expect(Object.keys(steps[0])).toEqual(["name", "ok", "ms", "target"]);
     expect(Object.keys(steps[1])).toEqual(["name", "ok", "ms"]);
     expect(Object.keys(steps[2])).toEqual(["name", "ok", "ms"]);
+    expect(Object.keys(steps[3])).toEqual(["name", "ok", "ms", "target", "detail"]);
+    expect(steps[3].detail).toEqual({ input: '{"path": "pier.xlsx"}', output: "masked text sk-ant-***" });
     expect(JSON.stringify(steps)).not.toContain("work\\\\harbor");
+    expect(JSON.stringify(steps)).not.toContain("work\\\\pier");
+    expect(JSON.stringify(steps)).not.toContain("raw text");
     expect(JSON.stringify(steps)).not.toContain(KEY);
   });
 });
@@ -381,14 +396,54 @@ describe("live rows use the same words", () => {
     ]);
     expect(steps).toEqual([{ name: "shell", ok: true, ms: null, target: "git" }]);
   });
+
+  it("v1.349.0 (updated on purpose): with the daemon's detail, the step saves THAT, never the hover or the raw call", async () => {
+    // The step may now say what ran, but only in the daemon's masked words:
+    // not the screen's hover ("… (shell)"), not the card's args or output.
+    const steps = await realStepsFromTools([
+      {
+        id: "a",
+        name: "shell",
+        status: "done",
+        ok: true,
+        args: { command: `git push https://me:${GH}@github.com/me/repo main` },
+        output: `raw output ${KEY}`,
+        detail: { input: '{"command": "git push https://me:***@github.com/me/repo main"}', output: "Everything up-to-date" },
+      },
+    ]);
+    expect(steps).toEqual([
+      {
+        name: "shell",
+        ok: true,
+        ms: null,
+        target: "git",
+        detail: { input: '{"command": "git push https://me:***@github.com/me/repo main"}', output: "Everything up-to-date" },
+      },
+    ]);
+    const saved = JSON.stringify(steps);
+    for (const raw of [GH, KEY, "(shell)", "raw output"]) expect(saved).not.toContain(raw);
+  });
 });
 
 /* -------------------------------------------------------------- the page */
 
 describe("on the chat page, the target is saved with the step and read back", () => {
   it("a turn saves each step's target LAST and the folded rows name it", async () => {
+    // v1.349.0 (updated on purpose): step "a" also carries the daemon's
+    // masked detail (appended after the target); its card's raw output holds
+    // the credential, which must still never reach the PUT wire.
     const cards: ToolCard[] = [
-      { id: "a", name: "read_file", status: "done", ok: true, args: { path: "C:\\Users\\me\\sales-harbor-st.xlsx" }, startedAt: 1, endedAt: 401 },
+      {
+        id: "a",
+        name: "read_file",
+        status: "done",
+        ok: true,
+        args: { path: "C:\\Users\\me\\sales-harbor-st.xlsx" },
+        output: `Region,Revenue\nPier 9,${KEY}`,
+        detail: { input: '{"path": "sales-harbor-st.xlsx"}', output: "Region,Revenue\nPier 9,sk-ant-***" },
+        startedAt: 1,
+        endedAt: 401,
+      },
       { id: "b", name: "web_search", status: "done", ok: true, args: { query: `pier 9 hours ${KEY}` }, startedAt: 1, endedAt: 201 },
       { id: "c", name: "excel_query", status: "done", ok: true, args: { column: "Revenue" }, startedAt: 1, endedAt: 101 },
     ];
@@ -406,11 +461,19 @@ describe("on the chat page, the target is saved with the step and read back", ()
     const body = H.api.puts.at(-1)!.body as { messages: { role: string; steps?: TurnStep[] }[] };
     const steps = body.messages.find((m) => m.role === "assistant")!.steps!;
     expect(steps).toEqual([
-      { name: "read_file", ok: true, ms: 400, target: "sales-harbor-st.xlsx" },
+      {
+        name: "read_file",
+        ok: true,
+        ms: 400,
+        target: "sales-harbor-st.xlsx",
+        detail: { input: '{"path": "sales-harbor-st.xlsx"}', output: "Region,Revenue\nPier 9,sk-ant-***" },
+      },
       { name: "web_search", ok: true, ms: 200 },
       { name: "excel_query", ok: true, ms: 100 },
     ]);
-    expect(Object.keys(steps[0]).at(-1)).toBe("target");
+    // The target stays after name/ok/ms; the v1.349.0 detail comes after it.
+    expect(Object.keys(steps[0])).toEqual(["name", "ok", "ms", "target", "detail"]);
+    expect(Object.keys(steps[1]).at(-1)).toBe("ms");
     const wire = JSON.stringify(H.api.puts.map((p) => p.body));
     expect(wire).not.toContain(KEY);
     expect(wire).not.toContain("Users\\\\me");
@@ -424,6 +487,10 @@ describe("on the chat page, the target is saved with the step and read back", ()
       "Searched the webweb_search0.2 s",
       "Ran excel_query0.1 s",
     ]);
+    // v1.349.0: the step with a detail opens to it; the others stay plain rows.
+    expect(rows.map((r) => r.tagName)).toEqual(["BUTTON", "DIV", "DIV"]);
+    fireEvent.click(rows[0]);
+    expect(within(work).getByTestId("step-detail-output").textContent).toBe("Region,Revenue\nPier 9,sk-ant-***");
     expect(visibleAndHover(reply)).not.toContain(KEY);
   });
 });

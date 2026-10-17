@@ -207,7 +207,15 @@ describe("the pane folds a reply's work into the chat page's line", () => {
         steps: [
           { name: "read_file", ok: true, ms: 420, target: "harbor.xlsx" },
           { name: "read_file", ok: true, ms: 380, target: "pier.xlsx" },
-          { name: "edit_file", ok: true, ms: 210, target: "summary.md" },
+          // v1.349.0 (updated on purpose): a saved step with the daemon's
+          // masked detail opens to it after the pane is reopened.
+          {
+            name: "edit_file",
+            ok: true,
+            ms: 210,
+            target: "summary.md",
+            detail: { input: '{"new": "Total: 12", "old": "Total: 10", "path": "summary.md"}', output: "Edited summary.md" },
+          },
         ],
         timing: { startedAt: T0, firstTokenAt: null, endedAt: T0 + 12_000 },
       },
@@ -224,6 +232,13 @@ describe("the pane folds a reply's work into the chat page's line", () => {
     const rows = within(line).getByTestId("work-rows");
     expect(rows.textContent).toContain("Read harbor.xlsx");
     expect(rows.textContent).toContain("Changed summary.md");
+    // v1.349.0: only the step with a detail is a button; it opens beneath.
+    const stepRows = within(rows).getAllByTestId("work-row");
+    expect(stepRows.map((r) => r.tagName)).toEqual(["DIV", "DIV", "BUTTON"]);
+    fireEvent.click(stepRows[2]);
+    const detail = within(rows).getByTestId("step-detail");
+    expect(detail.textContent).toContain("old: Total: 10");
+    expect(within(detail).getByTestId("step-detail-output").textContent).toBe("Edited summary.md");
     // The line sits ABOVE the reply, like the chat page's.
     const reply = screen.getByTestId("pane-reply");
     expect(line.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -289,7 +304,17 @@ describe("a finished pane turn keeps what the lines read, last on the reply", ()
       reply: "Done.",
       tools_used: ["read_file"],
       documents: [DOC],
-      steps: [{ name: "read_file", ok: true, ms: 300, target: "harbor.xlsx" }],
+      // v1.349.0 (updated on purpose): the step carries the daemon's detail;
+      // a secret it still held is masked before the pane saves it.
+      steps: [
+        {
+          name: "read_file",
+          ok: true,
+          ms: 300,
+          target: "harbor.xlsx",
+          detail: { input: '{"path": "harbor.xlsx"}', output: "key sk-ant-api03-FAKEfakeFAKEfake1234567890abcd" },
+        },
+      ],
       timing: { startedAt: T0, firstTokenAt: T0 + 1000, endedAt: T0 + 3000 },
       thinking: "Look at the sheet first.",
       thinkingMs: 2400,
@@ -297,11 +322,23 @@ describe("a finished pane turn keeps what the lines read, last on the reply", ()
     };
     render(<PaneChat paneId="p1" cwd={CWD} />);
     await send("sum it");
-    await waitFor(() => expect(H.api.puts.length).toBeGreaterThan(0));
+    // Wait for the save that carries the REPLY's steps (not for any save).
+    await waitFor(() =>
+      expect((H.api.puts.at(-1)?.body.messages as PaneMessage[] | undefined)?.[1]?.steps).toBeTruthy(),
+    );
     const saved = H.api.puts[H.api.puts.length - 1].body.messages as PaneMessage[];
     const [user, reply] = saved;
     expect(typeof user.at).toBe("string");
-    expect(reply.steps).toEqual([{ name: "read_file", ok: true, ms: 300, target: "harbor.xlsx" }]);
+    expect(reply.steps).toEqual([
+      {
+        name: "read_file",
+        ok: true,
+        ms: 300,
+        target: "harbor.xlsx",
+        detail: { input: '{"path": "harbor.xlsx"}', output: "key sk-ant-***" },
+      },
+    ]);
+    expect(JSON.stringify(H.api.puts.map((p) => p.body))).not.toContain("FAKEfake");
     expect(reply.timing).toEqual({ startedAt: T0, firstTokenAt: T0 + 1000, endedAt: T0 + 3000 });
     expect(reply.thinking).toBe("Look at the sheet first.");
     expect(reply.thinkingSeconds).toBe(2);

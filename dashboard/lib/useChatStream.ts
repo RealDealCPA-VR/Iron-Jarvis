@@ -4,7 +4,8 @@
 // streaming chat endpoint emits Server-Sent Events on the wire schema:
 //
 //   token     {"text":"…"}
-//   tool_call {"id","name","status":"started"|"finished","ok"?,"args"?,"output"?}
+//   tool_call {"id","name","status":"started"|"finished","ok"?,"args"?,"output"?,
+//              "detail"?: {"input","output"}}  (detail: finished frames, v1.349.0)
 //   approval  {"id","call_id","tool","args"?,"timeout_s"?}   (v1.187.0)
 //   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
@@ -53,6 +54,7 @@ import {
 } from "./mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./turnReads";
 import { stepTarget } from "./workTarget";
+import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 
 // v1.324.0: type-only re-exports (they erase — a mock of this module with a
 // fixed export list is unaffected). The runtime helpers live in mcpInteract.
@@ -79,6 +81,11 @@ export type SSEEvent =
       ok?: boolean;
       args?: Record<string, unknown>;
       output?: string;
+      /** v1.349.0: what a FINISHED call did, as the daemon saves it — its
+       *  redacted input and its output, masked and cut (lib/stepDetail).
+       *  Whitelisted to exactly those two strings; absent on started frames
+       *  and from an older daemon. */
+      detail?: StepDetail;
     }
   | {
       /** The turn is PAUSED on a tool that needs the user's approval
@@ -249,6 +256,10 @@ export interface ToolCard {
   /** v1.324.0: the app's latest progress report for this call (an
    *  `mcp_progress` frame with this call id). Absent when none came. */
   progress?: McpProgress;
+  /** v1.349.0: the finished frame's masked detail (its input and output),
+   *  the ONLY part of a call a step saves. `args` and `output` above stay
+   *  on this screen. */
+  detail?: StepDetail;
 }
 
 /** One tool step of a finished turn, in call order (v1.323.0): the receipt
@@ -262,6 +273,11 @@ export interface TurnStep {
    *  "pier 9 hours", "example.com") — lib/workTarget. Absent when there is
    *  nothing safe to say, and on every step saved before v1.329.0. */
   target?: string;
+  /** v1.349.0: what the step did, its masked input and output (the daemon's
+   *  `detail`, lib/stepDetail), appended LAST; the work row opens to show
+   *  it. Absent when the daemon sent none, past the message's budget
+   *  (STEP_DETAILS_MAX / STEP_DETAILS_CHARS), and on older steps. */
+  detail?: StepDetail;
 }
 
 /** When a turn started, said its first word, and ended — CLIENT clock (ms
@@ -300,10 +316,13 @@ const PRIOR_TOOL_NAME_MAX = 120;
 
 /** The steps of a turn from its tool cards, in order (v1.323.0). */
 export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
-  return cards.map((c) => {
+  const steps = cards.map((c): TurnStep => {
     // v1.329.0: the step's safe target, taken from the call's arguments here
     // on the stream lane (the only place they exist) — appended LAST.
     const target = stepTarget(c.name, c.args);
+    // v1.349.0: what the call did — the daemon's MASKED detail only, never
+    // the card's raw `output` or `args` (those stay on this screen).
+    const detail = cleanStepDetail(c.detail);
     return {
       name: c.name,
       ok: typeof c.ok === "boolean" ? c.ok : null,
@@ -312,8 +331,12 @@ export function stepsFromTools(cards: ToolCard[]): TurnStep[] {
           ? Math.max(0, c.endedAt - c.startedAt)
           : null,
       ...(target ? { target } : {}),
+      ...(detail ? { detail } : {}),
     };
   });
+  // The message's budget: details on the first STEP_DETAILS_MAX steps and
+  // within STEP_DETAILS_CHARS; a step past it keeps its row.
+  return capStepDetails(steps);
 }
 
 /** What one chat turn resolves to. `reply` is authoritative (from the `done`
@@ -532,6 +555,13 @@ export function sseEventFrom(
       if (data.args !== undefined && data.args !== null)
         ev.args = data.args as Record<string, unknown>;
       if (data.output !== undefined) ev.output = str(data.output);
+      // v1.349.0: a FINISHED call's detail, whitelisted to its two strings,
+      // masked again and cut again (lib/stepDetail) — it is saved with the
+      // chat, so the frame is read as untrusted input.
+      if (ev.status === "finished") {
+        const detail = cleanStepDetail(data.detail);
+        if (detail) ev.detail = detail;
+      }
       return ev;
     }
     case "approval": {
@@ -1006,6 +1036,7 @@ export function upsertTool(
   if (ev.ok !== undefined) patch.ok = ev.ok;
   if (ev.args !== undefined) patch.args = ev.args;
   if (ev.output !== undefined) patch.output = ev.output;
+  if (ev.detail !== undefined) patch.detail = ev.detail;
   if (finished) patch.endedAt = now;
   else patch.startedAt = now;
   const idx = prev.findIndex((t) => t.id === patch.id);

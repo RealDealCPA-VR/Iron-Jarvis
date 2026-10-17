@@ -343,10 +343,12 @@ describe("Continue makes a cut-off reply whole (v1.323.0)", () => {
 describe("the reply's reasoning, steps and timing are kept (v1.323.0)", () => {
   it("the reasoning folds above the settled reply; the message keeps steps and timing", async () => {
     render(<ChatPage />);
+    // v1.349.0 (updated on purpose): a step may carry the daemon's masked
+    // detail; the page saves the step as the hook handed it over.
     H.stream.extra.push({
       thinking: "First I check the due dates.",
       thinkingMs: 2400,
-      steps: [{ name: "read_file", ok: true, ms: 300 }],
+      steps: [{ name: "read_file", ok: true, ms: 300, detail: { input: '{"path": "k1.pdf"}', output: "Due April 15." } }],
       timing: { startedAt: 1000, firstTokenAt: 2200, endedAt: 4200 },
     });
     await send("when is it due?", "April 15.");
@@ -362,7 +364,9 @@ describe("the reply's reasoning, steps and timing are kept (v1.323.0)", () => {
     expect(fold.textContent).not.toMatch(/due dates/); // folded by default
     await waitFor(() => expect(savedMessages().at(-1)?.thinking).toBe("First I check the due dates."));
     const reply = savedMessages().at(-1)!;
-    expect(reply.steps).toEqual([{ name: "read_file", ok: true, ms: 300 }]);
+    expect(reply.steps).toEqual([
+      { name: "read_file", ok: true, ms: 300, detail: { input: '{"path": "k1.pdf"}', output: "Due April 15." } },
+    ]);
     expect(reply.timing).toEqual({ startedAt: 1000, firstTokenAt: 2200, endedAt: 4200 });
   });
 
@@ -372,6 +376,18 @@ describe("the reply's reasoning, steps and timing are kept (v1.323.0)", () => {
     await send("one", "first answer");
     await send("two", "second answer");
     expect(JSON.stringify(H.stream.bodies.at(-1))).not.toContain("private chain of thought");
+  });
+
+  it("v1.349.0: a step's saved detail is never sent back to a model either", async () => {
+    render(<ChatPage />);
+    H.stream.extra.push({
+      steps: [{ name: "shell", ok: true, ms: 5, detail: { input: '{"command": "ls"}', output: "step-output-marker" } }],
+    });
+    await send("one", "first answer");
+    await waitFor(() => expect(JSON.stringify(savedMessages())).toContain("step-output-marker"));
+    await send("two", "second answer");
+    expect(H.stream.bodies).toHaveLength(2);
+    expect(JSON.stringify(H.stream.bodies.at(-1))).not.toContain("step-output-marker");
   });
 });
 

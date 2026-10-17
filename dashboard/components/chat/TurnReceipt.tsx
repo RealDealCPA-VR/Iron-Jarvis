@@ -75,6 +75,7 @@ import { friendlyModelName } from "@/lib/friendlyModelName";
 import { answeredModelName } from "@/lib/answeredModel";
 import { stepPhrase } from "@/lib/stepWords";
 import { cleanTarget } from "@/lib/workTarget";
+import type { StepDetail } from "@/lib/stepDetail";
 import { SENT_WITH_OK } from "@/lib/localOnly";
 import {
   folderRulesLine,
@@ -217,6 +218,11 @@ export interface ReceiptStep {
   /** v1.329.0: what the step was done to, in a few safe words (WorkLine's
    *  rows). Absent on steps saved before then. */
   target?: string;
+  /** v1.349.0: what the step did, its masked input and output (lib/
+   *  stepDetail), for WorkLine's rows to open. The expanded receipt below
+   *  does NOT read it: `stepRows` keeps name/ok/ms/target only, so the
+   *  receipt's step lines stay exactly as they were. */
+  detail?: StepDetail;
 }
 
 /** Client-clock timing of the turn (v1.323.0) — `useChatStream`'s TurnTiming. */

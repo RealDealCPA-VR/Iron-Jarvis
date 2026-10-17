@@ -35,6 +35,17 @@
  * query, a host, a program name; never a full path, a whole argument or
  * anything credential-shaped), saved on the step so a reopened chat still
  * says it. A step saved before then keeps the older "Read · read_file".
+ *
+ * v1.349.0: click a step to see what it did (agent-elements' expandable tool
+ * rows; the idea, never its boxes). A step that carries the daemon's masked
+ * `detail` (lib/stepDetail) is a real disclosure button: the same quiet grey
+ * row plus a small chevron, opening beneath itself to the call's input (a
+ * command as one "$ command" line, anything else as short "key: value" lines
+ * through wave A's approval formatters) and its output in monospace, wrapped,
+ * the first STEP_OUTPUT_LINES lines with "Show all" for the rest. No box, no
+ * border, no tint. Both the folded "Worked for" rows (a reopened chat too:
+ * the detail is saved with the step) and the live rows open. A step with no
+ * detail (an older chat, a running call) is the same plain row as before.
  */
 
 import { memo, useId, useState, type ReactNode } from "react";
@@ -61,6 +72,16 @@ import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/
 import { elapsedWords, useNow } from "@/components/chat/TurnClock";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
 import { STEP_WORDS, rowSubject, stepCounts, stepPhrase } from "@/lib/stepWords";
+import {
+  STEP_OUTPUT_LINES,
+  capStepDetails,
+  cleanStepDetail,
+  outputLines,
+  stepInputView,
+  type StepDetail,
+  type StepInputView,
+} from "@/lib/stepDetail";
+import type { ArgEntry } from "@/lib/approvalPreview";
 
 /* ------------------------------------------------------------- vocabulary */
 
@@ -116,15 +137,19 @@ export function workSteps(input: WorkInput): ReceiptStep[] {
       // v1.329.0: a saved target is made safe AGAIN on the way out (the
       // thread file may be older, or hand-edited); junk reads as none.
       const target = cleanTarget((st as { target?: unknown }).target);
+      // v1.349.0: so is a saved detail (its two strings, masked and cut).
+      const detail = cleanStepDetail((st as { detail?: unknown }).detail);
       out.push({
         name: st.name,
         ok: typeof st.ok === "boolean" ? st.ok : null,
         ms: typeof st.ms === "number" && Number.isFinite(st.ms) && st.ms >= 0 ? st.ms : null,
         ...(target ? { target } : {}),
+        ...(detail ? { detail } : {}),
       });
     }
   }
-  if (out.length) return out;
+  // v1.349.0: and the message's budget holds on the way out too.
+  if (out.length) return capStepDetails(out);
   if (Array.isArray(input.toolsUsed)) {
     for (const t of input.toolsUsed) {
       if (typeof t === "string" && t.trim()) out.push({ name: t, ok: null, ms: null });
@@ -202,6 +227,11 @@ export interface WorkRowProps {
   subjectFile?: boolean;
   /** The subject's hover text (its tool id, a live file's full path). */
   subjectTitle?: string;
+  /** v1.349.0: the row OPENS (its step carries a detail): it is drawn as a
+   *  real disclosure button, the same quiet line plus a small chevron.
+   *  `controls` is the id of the panel drawn beneath it while open. Absent:
+   *  the plain row, exactly as before. */
+  expand?: { open: boolean; onToggle: () => void; controls: string } | null;
 }
 
 /** ONE grey line: icon, title, dot, summary. Never a box. */
@@ -218,6 +248,7 @@ export function WorkRow({
   subject,
   subjectFile,
   subjectTitle,
+  expand,
 }: WorkRowProps) {
   // v1.348.0: a running title SHIMMERS (a soft light sweep, `.ij-shimmer` in
   // app/globals.css, from the theme's own inks) instead of pulsing; the
@@ -227,13 +258,8 @@ export function WorkRow({
     : failed
       ? "text-tone-danger"
       : "text-zinc-400";
-  return (
-    <div
-      data-testid="work-row"
-      data-state={running ? "running" : failed ? "failed" : "done"}
-      title={hint}
-      className="flex min-w-0 items-center gap-2 text-[13px] leading-5 text-zinc-500"
-    >
+  const body = (
+    <>
       {running ? (
         <Loader2 size={14} aria-hidden="true" className="shrink-0 animate-spin text-zinc-400 motion-reduce:animate-none" />
       ) : failed ? (
@@ -273,6 +299,163 @@ export function WorkRow({
         </>
       ) : null}
       {meta}
+      {expand ? (
+        <ChevronRight
+          size={12}
+          aria-hidden="true"
+          data-testid="work-row-chevron"
+          className={`shrink-0 text-zinc-600 transition-transform motion-reduce:transition-none ${
+            expand.open ? "rotate-90" : ""
+          }`}
+        />
+      ) : null}
+    </>
+  );
+  const state = running ? "running" : failed ? "failed" : "done";
+  if (expand) {
+    // v1.349.0: a native button (Enter and Space open it), the same quiet
+    // line: no box, no border, no fill. Only keyboard focus draws a ring.
+    return (
+      <button
+        type="button"
+        data-testid="work-row"
+        data-state={state}
+        title={hint}
+        aria-expanded={expand.open}
+        aria-controls={expand.open ? expand.controls : undefined}
+        onClick={expand.onToggle}
+        className="flex w-full min-w-0 items-center gap-2 rounded-sm text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none"
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div
+      data-testid="work-row"
+      data-state={state}
+      title={hint}
+      className="flex min-w-0 items-center gap-2 text-[13px] leading-5 text-zinc-500"
+    >
+      {body}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------- a step's detail (v1.349.0) */
+
+/** One argument as a short `key: value` line (wave A's ArgEntry). */
+function DetailArg({ entry }: { entry: ArgEntry }) {
+  return (
+    <p className="min-w-0 whitespace-pre-wrap break-words">
+      <span className="text-zinc-500">{entry.key}:</span>{" "}
+      {entry.empty ? (
+        <span className="text-zinc-600">(empty)</span>
+      ) : (
+        <span className="text-zinc-400">{entry.short}</span>
+      )}
+    </p>
+  );
+}
+
+/** The call's input: "$ command", code, or `key: value` lines. */
+function DetailInput({ view }: { view: StepInputView }) {
+  const mono = "min-w-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-300";
+  switch (view.kind) {
+    case "command":
+      return (
+        <>
+          {/* The `$` is for the eye; a screen reader hears the command. */}
+          <pre data-testid="step-detail-command" className={mono}>
+            <span aria-hidden="true" className="select-none text-zinc-500">
+              ${" "}
+            </span>
+            {view.command}
+          </pre>
+          {view.rest.map((e) => (
+            <DetailArg key={e.key} entry={e} />
+          ))}
+        </>
+      );
+    case "code":
+      return (
+        <>
+          <pre data-testid="step-detail-code" className={mono}>
+            {view.code}
+          </pre>
+          {view.rest.map((e) => (
+            <DetailArg key={e.key} entry={e} />
+          ))}
+        </>
+      );
+    case "args":
+      return (
+        <>
+          {view.entries.map((e) => (
+            <DetailArg key={e.key} entry={e} />
+          ))}
+        </>
+      );
+    case "text":
+      return (
+        <pre data-testid="step-detail-input-text" className={mono}>
+          {view.text}
+        </pre>
+      );
+  }
+}
+
+/**
+ * What a step did, opened beneath its row: the input, then the output in
+ * monospace, wrapped, the first STEP_OUTPUT_LINES lines and a quiet "Show
+ * all N lines" for the rest. Indented to the row's words; no box, no border,
+ * no fill. Both parts are labelled groups for a screen reader.
+ */
+export function StepDetailPanel({ id, name, detail }: { id: string; name: string; detail: StepDetail }) {
+  const [all, setAll] = useState(false);
+  const outId = useId();
+  const input = stepInputView(name, detail.input);
+  const lines = outputLines(detail.output);
+  const capped = lines.length > STEP_OUTPUT_LINES;
+  const shown = all || !capped ? lines : lines.slice(0, STEP_OUTPUT_LINES);
+  return (
+    <div
+      id={id}
+      data-testid="step-detail"
+      className="grid min-w-0 gap-1 pb-1 pl-[22px] text-[12px] leading-5 text-zinc-500"
+    >
+      {input ? (
+        <div role="group" aria-label="Input" data-testid="step-detail-input" className="grid min-w-0 gap-0.5">
+          <DetailInput view={input} />
+        </div>
+      ) : null}
+      <div role="group" aria-label="Output" className="grid min-w-0 justify-items-start gap-0.5">
+        {lines.length ? (
+          <pre
+            id={outId}
+            data-testid="step-detail-output"
+            className="w-full min-w-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-400"
+          >
+            {shown.join("\n")}
+          </pre>
+        ) : (
+          <p data-testid="step-detail-no-output" className="text-zinc-600">
+            No output.
+          </p>
+        )}
+        {capped ? (
+          <button
+            type="button"
+            data-testid="step-detail-more"
+            aria-expanded={all}
+            aria-controls={outId}
+            onClick={() => setAll((v) => !v)}
+            className="rounded-sm text-[12px] text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-300 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none"
+          >
+            {all ? "Show fewer lines" : `Show all ${lines.length} lines`}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -343,8 +526,13 @@ function liveArgHover(card: ToolCard): string | null {
  *  (lib/workTarget). A known tool with nothing safe to name falls back to its
  *  words · its own id, never to a raw argument. */
 function ToolRow({ card }: { card: ToolCard }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
   const running = card.status !== "done";
   const failed = !running && card.ok === false;
+  // v1.349.0: a FINISHED call with the daemon's masked detail opens to show
+  // it (read through the one reader again: a card may come from anywhere).
+  const stepDetail = running ? null : cleanStepDetail(card.detail);
   const kind = toolKind(card.name);
   const w = STEP_WORDS[kind];
   const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
@@ -365,8 +553,10 @@ function ToolRow({ card }: { card: ToolCard }) {
         : undefined;
   const elapsed =
     !running && card.startedAt && card.endedAt ? secondsText(card.endedAt - card.startedAt) : null;
-  const preview = !running ? firstLine(card.output) : "";
-  return (
+  // v1.349.0: a row that opens previews (and no longer hovers) the MASKED,
+  // unfenced output it opens to, so the line and its detail agree.
+  const preview = !running ? firstLine(stepDetail ? stepDetail.output : card.output) : "";
+  const row = (
     <WorkRow
       icon={ICON[kind]}
       title={subject ? (running ? w.doingOn : w.doneOn) : running ? w.doing : w.done}
@@ -377,7 +567,8 @@ function ToolRow({ card }: { card: ToolCard }) {
       detailTitle={subject ? card.name : argHover ?? card.name}
       running={running}
       failed={failed}
-      hint={card.output || undefined}
+      hint={stepDetail ? undefined : card.output || undefined}
+      expand={stepDetail ? { open, onToggle: () => setOpen((v) => !v), controls: panelId } : null}
       meta={
         <>
           {/* v1.323.0: how long a finished step took. */}
@@ -413,6 +604,13 @@ function ToolRow({ card }: { card: ToolCard }) {
         </>
       }
     />
+  );
+  if (!stepDetail) return row;
+  return (
+    <>
+      {row}
+      {open ? <StepDetailPanel id={panelId} name={card.name} detail={stepDetail} /> : null}
+    </>
   );
 }
 
@@ -550,16 +748,21 @@ export const LiveToolRows = memo(function LiveToolRows({
   );
 });
 
-/** A finished step from the message's record. No arguments are stored, only
- *  the step's safe `target` (v1.329.0): "Read harbor.xlsx", "Ran
+/** A finished step from the message's record. No raw arguments are stored,
+ *  only the step's safe `target` (v1.329.0): "Read harbor.xlsx", "Ran
  *  excel_query". A step saved before targets existed keeps the older row,
- *  words · tool id ("Read · read_file"). */
+ *  words · tool id ("Read · read_file"). v1.349.0: a step saved with the
+ *  daemon's masked `detail` opens beneath itself to show it. */
 function StepRow({ step }: { step: ReceiptStep }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
   // v1.329.0 (G2): the same phrase the expanded receipt says (lib/stepWords).
   const p = stepPhrase(step.name, step.target ?? null);
   const failed = step.ok === false;
   const dur = secondsText(step.ms);
-  return (
+  // v1.349.0: the saved detail (workSteps already read it back safely).
+  const stepDetail = step.detail ?? null;
+  const row = (
     <WorkRow
       icon={ICON[p.kind]}
       title={p.words}
@@ -568,6 +771,7 @@ function StepRow({ step }: { step: ReceiptStep }) {
       subjectTitle={p.subject ? (p.kind === "tool" ? step.name : `${p.subject} (${step.name})`) : undefined}
       detail={p.hint}
       failed={failed}
+      expand={stepDetail ? { open, onToggle: () => setOpen((v) => !v), controls: panelId } : null}
       meta={
         <>
           {dur ? (
@@ -585,6 +789,13 @@ function StepRow({ step }: { step: ReceiptStep }) {
         </>
       }
     />
+  );
+  if (!stepDetail) return row;
+  return (
+    <>
+      {row}
+      {open ? <StepDetailPanel id={panelId} name={step.name} detail={stepDetail} /> : null}
+    </>
   );
 }
 
