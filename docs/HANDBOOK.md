@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.344.1 (2026-10-04).*
+holds itself to. Current as of v1.345.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## An @ reply comes home (v1.345.0)
+
+When you ask an agent something with `@` in chat ("@hermes-mac-mini do some
+tax research…"), its answer now always lands **in the chat you asked in**:
+
+- The chat is saved the moment you send the `@`, and the daemon writes the
+  reply into that chat itself when it arrives, even if you have moved to
+  another chat or closed the window. The chat lights up as unread in the
+  list; open it and the reply is there under your question.
+- A reply that arrives after you have moved on is **never** written into
+  whatever chat you are looking at. (Before this release that could happen
+  with a slow remote agent, and it overwrote the other chat's messages.)
+- A remote agent that reports back later, with files, lands the same way,
+  files included.
+- An agent job started from chat (local or remote, "@builder make me a
+  spreadsheet") delivers its reply **and the files it made** into that chat
+  when it finishes, whether or not you are still there.
+- While an agent works, the chat shows who is working and for how long
+  ("hermes-mac-mini is working · 2:13").
+
+One small visible change: a reply that came from an agent job now always
+carries the agent's name chip, even when you did not use `@`.
 
 ## Jarvis looks after itself (v1.344.0)
 

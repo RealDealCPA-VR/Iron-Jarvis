@@ -3547,6 +3547,63 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A line that arrives while nobody is looking is written by the DAEMON,
+  into the chat it belongs to** (v1.345.0, a USER BUG: "@hermes-mac-mini …"
+  in a new unsaved chat, a six-minute remote round, the user opened another
+  saved chat meanwhile; `sendPanel`'s continuation had no generation guard
+  (sendChat has one), so it `setMessages([@, reply])` + `queueSave` over the
+  chat OPEN AT THAT MOMENT — chat_a060b60221c5 "find me a place to eat in
+  orlando" lost its two messages on disk; the reply lived only in the agent
+  room). `daemon/chat_append.append_to_chat_thread(engine, thread_id, lines,
+  *, event_bus, who)`: under `CONVERSATION_WRITE_LOCK` (the SAME lock the PUT
+  route and the comm store take — a private lock would not serialize
+  against the page's whole-array PUT), re-reads the record, whitelists each
+  line to `LINE_KEYS` (the page's own ChatMessage keys), stamps `at` the PUT
+  route's way, idempotent by `sessionId`/`fromSession`, tail cap 200, bumps
+  `updated_at` with the PUT route's monotonic rule (so a stale page PUT then
+  409s — THAT is the page's re-read signal), un-archives, re-indexes,
+  publishes `CHAT_THREAD_UPDATED {thread_id, who, entries}` (loop or
+  worker), refuses a daemon-owned phone thread (the comm store is its one
+  writer), never raises. CALLERS: `POST /chat/panel` with `thread_id` binds
+  the room BEFORE the round (`for_chat(thread_id, adopt=)`), appends
+  `panel_reply_lines(round_out, room_id)` (== the page's `roundMessages`
+  shape, pinned incl. the note words; a 202 remote → `panelKind: progress`)
+  and answers `appended` + `updated_at`; the remote inbound route mirrors a
+  CHAT-bound room's line + inbox files into the chat (`homed`), the phone
+  path untouched; every terminal path of a session carrying
+  `options.chat_thread_id` (SessionCreate/SpawnBody/ContinueBody
+  `chat_thread_id`; a continuation never inherits) appends ONE line built by
+  `agents/chat_delivery.line_for_session` (== the page's `finalize` compose
+  under `adoptDaemonLines`; `panelWho` = the panel route's mode-session
+  `who`: `builtin:<type>` / `dynamic:<slug>`, NOT `agent:<type>`; the daemon
+  line always carries `panelWho`+`agentType`+`documents`, so a non-@
+  escalation's reply wears the agent chip after a re-read — accepted).
+  PAGE: `sendPanel` captures `convGenRef` + the save target at send, saves
+  a new chat FIRST (thread_id always rides), touches nothing once the user
+  left, re-reads on `res.appended` instead of `queueSave`; every agent door
+  sends `chat_thread_id`; `finalize` re-reads and adopts the daemon's line
+  (compose+PUT = the older-daemon fallback); `PanelWorking` bubble +
+  TurnClock; `chat.thread_updated` for the open chat re-reads/adopts;
+  `lib/chatReread.ts`. Rule: a continuation that can land after the user
+  left must check the generation it was born in, and a line the daemon
+  can write must be written by the daemon. THE RE-REVIEW of the page lane
+  (40c8d4cf; the lane ran out of rounds and was committed as-is) found two
+  more: (1) `setPanelLive` was armed AFTER the at-send `await` — a leave
+  during the save left the "working" bubble in the NEXT conversation, where
+  it replaced that chat's next streamed reply (armed before the await now);
+  (2) `putThread`'s success path wrote the PUT's OLDER stamp/length back
+  over ones `adoptThread` had moved while the PUT was airborne, so the next
+  save 409'd and the merge DOUBLED the appended line — the stamp/length/
+  cache update now runs only when `target.updatedAt === stampAtSend`. Both
+  "user left" guards in `finalize` were unpinned (removing either stayed
+  green) — three held-read tests pin them now. Known: Stop is a no-op during
+  an @-round (POST /chat/panel is not abortable); a brief question-bubble
+  blink when an adopt lands while the at-send PUT is airborne. Pins: `tests/test_{chat_append,
+  panel_reply_comes_home,session_reply_comes_home,integration_pins}_v1345.py`,
+  `dashboard/__tests__/panel-reply-comes-home-v1345.test.tsx`. Known: not
+  proven against a real six-minute remote; `/shutdown` exits rc 3 (the
+  rehearsal never asserts it).
+
 - **Jarvis reads its own health through TOOLS, repairs only with a card,
   and a failed call is answered by a rule** (v1.344.0, wave 3 of the
   reliability arc; the survey behind it: no chat tool could reach
