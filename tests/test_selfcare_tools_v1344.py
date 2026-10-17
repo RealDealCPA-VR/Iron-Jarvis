@@ -457,7 +457,9 @@ async def test_provider_rescan_calls_the_lifted_function_and_drops_paths(tmp_pat
                     "base_url": None,
                     "exec_path": private_path,
                     "context_window": None,
-                    "detail": "codex is installed but not signed in. Run codex login",
+                    # The probe's own words (a CLI's stderr) are PROVIDER text:
+                    # masked before they reach the answer.
+                    "detail": f"codex is installed but not signed in. Authorization: Bearer {PLANTED[3]}\nRun codex login",
                 }
             ]
         }
@@ -474,11 +476,13 @@ async def test_provider_rescan_calls_the_lifted_function_and_drops_paths(tmp_pat
             "model": "subscription",
             "available": False,
             "source": "cli",
-            "detail": "codex is installed but not signed in. Run codex login",
+            "detail": "codex is installed but not signed in. Authorization: Bearer *** | Run codex login",
         }
     ]
     assert private_path not in _flat(res) and "exec_path" not in _flat(res)
-    assert "codex-cli: codex is installed but not signed in. Run codex login" in res.output
+    for secret in PLANTED:
+        assert secret not in _flat(res), secret
+    assert "codex-cli: codex is installed but not signed in. Authorization: Bearer *** | Run codex login" in res.output
     assert res.output.startswith("Available now: ")
     assert "changed" in res.data and "available_now" in res.data
     assert isinstance(res.data["available_now"], list)
@@ -537,6 +541,68 @@ async def test_run_doctor_answers_the_runtime_check_rows(tmp_path, monkeypatch):
     for secret in PLANTED:
         assert secret not in _flat(res), secret
     assert seen and all(t != threading.get_ident() for t in seen)
+
+
+@pytest.mark.asyncio
+async def test_the_readers_never_probe_the_network_or_start_a_process(tmp_path, monkeypatch):
+    """REVIEW FINDING (v1.344.0 L-review). ``runtime_checks`` is the Settings
+    doctor: with a custom endpoint configured (the daily driver's shape) it
+    ``httpx.get``s the gateway's model list, and it reads the CLI sign-in
+    verdicts OUTSIDE ``cli_auth.cached_verdicts`` (a stale verdict starts a
+    ``claude auth status`` child). ``app_health`` and ``run_doctor`` are
+    allow-tier readers advertised as "nothing is probed" — the v1.334.0
+    system-map rule: no process start, no network. They read the doctor
+    with ``probe=False``; the Settings doctor itself is the CONTROL."""
+    import subprocess
+
+    import httpx
+
+    from iron_jarvis.providers import cli_auth
+
+    client, platform, d = _app(tmp_path)
+    platform.config.custom_base_url = "http://127.0.0.1:9/v1"
+    platform.config.custom_model = "brain"
+    gets: list[str] = []
+
+    def no_get(url, *a, **k):
+        gets.append(str(url))
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "get", no_get)
+    started: list[object] = []
+    real_init = subprocess.Popen.__init__
+
+    def spy(self, *a, **k):
+        started.append(a[0] if a else k.get("args"))
+        return real_init(self, *a, **k)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", spy)
+    cached_seen: list[bool] = []
+
+    def login_status(name):
+        cached_seen.append(cli_auth._CACHED_ONLY.get())
+        return {"installed": False, "signed_in": None, "detail": "not installed"}
+
+    monkeypatch.setattr(platform.providers, "cli_login_status", login_status)
+
+    for name in ("app_health", "run_doctor"):
+        res = await _run(platform, tmp_path, name)
+        assert res.ok is True, (name, res.error)
+        assert gets == [], f"{name} called the gateway: {gets}"
+        assert started == [], f"{name} started a process: {started}"
+    assert cached_seen and all(cached_seen), "the readers must read CLI verdicts in the cached view"
+    rows = {c["name"] for c in (await _run(platform, tmp_path, "run_doctor")).data["checks"]}
+    assert "custom_endpoint_model" not in rows
+    # CONTROL: the Settings doctor (probe=True, the default) DOES call the
+    # gateway, and its own CLI block reads the verdicts OUTSIDE the cached
+    # view (the reads inside ``providers.health()`` are cached either way).
+    cached_seen.clear()
+    runtime_checks(platform)
+    assert gets == ["http://127.0.0.1:9/v1/models"]
+    assert cached_seen and False in cached_seen
+    # CONTROL: the spy does see a process start.
+    subprocess.run(["cmd", "/c", "exit", "0"] if sys.platform == "win32" else ["true"], check=False)
+    assert len(started) == 1
 
 
 # --- tiers and trust ------------------------------------------------------------

@@ -133,9 +133,13 @@ def read_recent_errors(limit: int) -> list[dict[str, Any]]:
 
 
 def read_doctor_rows(platform: Any) -> list[dict[str, Any]]:
+    """The doctor's runtime rows WITHOUT a probe (v1.344.0 review): the
+    Settings doctor also ``httpx.get``s the custom gateway's model list and
+    reads CLI sign-ins outside the cached view — an allow-tier reader must
+    start no process and touch no network (the v1.334.0 system-map rule)."""
     from ..onboarding.doctor import runtime_checks
 
-    return list(runtime_checks(platform) or [])
+    return list(runtime_checks(platform, probe=False) or [])
 
 
 def read_interrupted_count(platform: Any) -> int:
@@ -280,7 +284,9 @@ class AppHealthTool(Tool):
         snap: dict[str, Any] = {}
         try:
             snap = read_diagnostics(d) or {}
-            data["db_liveness"] = snap.get("db_liveness")
+            # A failed SELECT 1 stringifies a driver exception (it can name
+            # the DB path): masked and folded in data too, not only in words.
+            data["db_liveness"] = one_line(snap.get("db_liveness")) or None
             data["secrets_key_valid"] = snap.get("secrets_key_valid")
             lines.append(
                 f"Database: {one_line(snap.get('db_liveness')) or 'unknown'}. "
@@ -689,7 +695,8 @@ class RunDoctorTool(Tool):
         "Run the app's runtime checks (a model is connected, CLIs are signed in, "
         "the secrets key decrypts, the database passes its integrity check, every "
         "tool pack started, backups and mirrors work) and list each row with its "
-        "fix. Read-only; the same rows as the Doctor on Settings."
+        "fix. Read-only; the Doctor on Settings' rows, except the custom gateway's "
+        "model check, which calls the network and runs only from Settings."
     )
     input_schema = {"type": "object", "properties": {}}
     reversibility = Reversibility.READONLY

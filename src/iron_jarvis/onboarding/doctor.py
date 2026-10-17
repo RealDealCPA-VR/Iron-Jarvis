@@ -664,12 +664,28 @@ CHECKS = [
 ]
 
 
-def runtime_checks(platform) -> list[dict]:
+def runtime_checks(platform, *, probe: bool = True) -> list[dict]:
     """Live health of a RUNNING install — the failure modes a daily driver hits
     (no model connected, lost secrets key, a corrupt DB) that the machine-prereq
     checks above can't see. Each is read-only and never raises. Only meaningful
     with a built platform, so the offline CLI ``doctor`` (no platform) skips these.
+
+    ``probe=False`` (v1.344.0, the self-care readers ``app_health`` /
+    ``run_doctor``): NO network call and NO process start — the custom
+    endpoint's gateway check (an ``httpx.get`` of the user's own gateway) is
+    skipped, and the CLI sign-in verdicts are read exactly as ``/health``
+    reads them (``cli_auth.cached_verdicts``: signed-in from the cache, never
+    a probe for it). The Settings doctor keeps ``probe=True`` byte for byte.
     """
+    if not probe:
+        from ..providers.cli_auth import cached_verdicts
+
+        with cached_verdicts():
+            return _runtime_checks(platform, probe=False)
+    return _runtime_checks(platform, probe=True)
+
+
+def _runtime_checks(platform, *, probe: bool) -> list[dict]:
     checks: list[dict] = []
 
     # A usable model is connected (else every session silently runs on mock).
@@ -877,11 +893,12 @@ def runtime_checks(platform) -> list[dict]:
     # The custom endpoint's configured model actually EXISTS on that gateway.
     # A renamed gateway alias otherwise 400s every request routed there with a
     # cryptic provider error (live-hit 2026-07-31: model 'brain' after the
-    # gateway's list became fleet/vision/frontier).
+    # gateway's list became fleet/vision/frontier). A NETWORK CALL: skipped
+    # under ``probe=False`` (the self-care readers, v1.344.0).
     try:
         base = (getattr(platform.config, "custom_base_url", "") or "").strip()
         model = (getattr(platform.config, "custom_model", "") or "").strip()
-        if base and model:
+        if base and model and probe:
             import httpx
 
             key = None
