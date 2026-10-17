@@ -409,7 +409,10 @@ describe("the chat page on a phone: one list, in the drawer", () => {
       const rail = await screen.findByTestId("chat-thread-rail");
       expect(slot.contains(rail)).toBe(true);
       expect(screen.queryByTestId("chat-open-chats")).toBeNull();
-      expect(within(rail).getByLabelText("Search chats")).toBeTruthy();
+      // v1.344.1: the rail mounts before its list answers; on the Release
+      // runner the search box was read before that answer landed — wait for
+      // the box itself (the v1.325.x lesson, same shape).
+      expect(await within(rail).findByLabelText("Search chats", {}, { timeout: 10_000 })).toBeTruthy();
       await within(rail).findByTitle("Thank-you email");
       expect(within(rail).getAllByRole("button", { name: /^Options for / }).length).toBe(3);
       fireEvent.click(within(rail).getByTitle("Thank-you email"));

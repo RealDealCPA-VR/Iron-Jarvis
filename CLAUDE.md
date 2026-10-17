@@ -3608,7 +3608,18 @@ does not need a bump, stop and bump it.
   sections only (`_view` in both v1343 test files) — Claude Code rewrites
   the rest of that file while a suite runs under a session. Known cost:
   `runtime_checks` runs `PRAGMA integrity_check` on every `app_health` /
-  `run_doctor` call (off the loop, but a whole-DB scan on a large DB). Pins: `tests/test_{selfcare_tools,
+  `run_doctor` call (off the loop, but a whole-DB scan on a large DB).
+  v1.344.1 (test-only): v1.344.0's Release gate went red on
+  `sidebar-chats-v1329` "in the drawer's slot the rail keeps search…" —
+  `getByLabelText("Search chats")` right after `findByTestId("chat-thread-
+  rail")`: the rail mounts before its list answers, and the small runner
+  read the box first. Now `findByLabelText(…, {timeout: 10_000})`. A 300 ms
+  delay on the mocked GET reproduced CI's exact error on the old shape and
+  passes on the new. Two OTHER tests in that file also fail under that
+  uniform delay — an ARTEFACT: the mock reads `H.responses[path]` after the
+  delay, so a test that swaps the response mid-read sees different data. A
+  mutation must delay the ONE hop the assertion depends on, not every read;
+  a "fix" for a failure the mutation fabricated is not a fix. Pins: `tests/test_{selfcare_tools,
   autoselect_failure_vocab,chat_recovery,escalation_carries_results,
   integration_pins}_v1344.py`, `dashboard/__tests__/chat-escalation-carry-
   v1344.test.tsx`. Known: `pack_status`'s sentence joins `last_error` and
