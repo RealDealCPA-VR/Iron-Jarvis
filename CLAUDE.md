@@ -3547,6 +3547,80 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Media is QUOTED before it is made, a spend is CARDED, free is free, a
+  long render comes home through the daemon** (v1.346.0, the user's
+  decisions 2026-10-17: any service — theirs is Pixio — with the door open;
+  ask before every spend but a free Maker generation needs no card; notify
+  on completion and show the result in the chat; keep the chat UI exactly
+  the same). `media/` is the package: `base.py` (Quote {expected_cost,
+  currency, free, free_label, provisional, note} + `Quote.words`, JobHandle,
+  JobState, `MediaProvider` — every call off the loop and bounded),
+  `pixio.py` (free iff `expectedDebit == 0` AND not provisional AND an
+  allowance applied / plan-covered; 402/422/429 in plain words carrying
+  shortfall/inputHint/Retry-After; Idempotency-Key on start; cheapest model
+  by `yourCredits`; models cached 10 min), `openai_images.py` (never free,
+  a static list-price table, synchronous b64), `fake.py` (ONLY under
+  `IRONJARVIS_MEDIA_FAKE=1`; the integrator's live drive and the tests),
+  `registry.py` (`choose` = explicit > `media_provider` setting > the ONLY
+  connected > a refusal naming what to connect — TWO connected + "auto"
+  REFUSES "pick one", it never guesses; `platform.media`), `pixio_http.py`
+  + `deliver.py` (lifted out of tools/pixio.py, which now calls them; CDN
+  downloads carry NO headers), `jobs.py` + `models.py` (MediaJobRecord, a
+  late model; one tracked task per started job, 2→15 s backoff on an
+  injected sleep, `media_job_max_s`; success → deliver → ONE chat line via
+  `chat_append` ("Your <kind> is ready." + the image syntax with the
+  absolute path in angle brackets, `documents`, `panelKind: media`,
+  `mediaJob`) + `media.completed`; failure → the plain-words line +
+  `media.failed`; no thread → publish only; boot reconcile re-polls
+  queued/running rows by `provider_job_id`, NEVER re-dispatches). Settings
+  rows: `media_provider`, `media_ask_when_free`, `media_inline_wait_s`
+  (45), `media_job_max_s` (1800), `media_default_models`. THE TOOL
+  (`tools/media_tool.generate_media`, ASK tier, IRREVERSIBLE,
+  `LOW_TRUST_DENY`, `egress.GENERATES_MEDIA_TOOLS` → a local-only turn
+  cards it): `Tool.spend_check(args, ctx) -> SpendCheck {ask, words,
+  cost_note} | None` is a NEW generic hook (`spend_checks_for` runs one
+  check per call of a round, keyed by the call object): free and not
+  `media_ask_when_free` → ask False → the call is GRANTED for this one call
+  through `_grant_extra` (the v1.270.1 rule) and the ledger row says
+  "free (…)"; paid/unknown → the card with `Quote.words`, `cost_note` on
+  the approval frame, in yolo too, past every tab/standing/conversation
+  grant, `can_always` False, wider answers read as once; the quote is
+  cached 60 s so execute pays no second estimate; execute polls inline up
+  to `media_inline_wait_s` else hands the job to MediaJobs with
+  `ctx.thread_id` (`ToolContext.thread_id`, set by BOTH chat lanes from
+  `body.thread_id` and by the runtime from `options.chat_thread_id`);
+  INLINE MEDIA: `media_from_result` + `append_inline_media` put the image
+  syntax for every `data.media` path the reply does not already show onto
+  the settled reply in BOTH lanes; the runtime's `_pause_needed` consults
+  the same hook (the ask carries `cost_note`). `autoselect` ASK-arms it
+  from a media-MAKING imperative only ("show me a picture of" / "find an
+  image" / "resize the photo" arm nothing). The MOCK adapter calls
+  `generate_media` first when it is armed (the live drive + an honest
+  first-run demo). DASHBOARD: one `approval-cost` line on ApprovalCard
+  (both `useChatStream` reducers whitelist `cost_note`), the bell maps
+  `media.completed`/`media.failed` → `/chat?thread=`; the media renders
+  through the EXISTING MarkdownMedia path (`/creative/file-by-path`); no
+  other UI change. LESSON, third time: the X lane's reviewer died mid-run
+  and left a MUTATION APPLIED (`if False:` in `spend_checks_for` — no
+  verdict reached any lane; 9 of its own pins red); the integrator caught
+  it; the independent re-review (30e2d13f) then found that a round with
+  TWO priced generations put up ONE batch card (the v1.247.0 same-
+  permission rule) priced for the FIRST call only, and one Allow ran both
+  — `tools/base.spend_words_for(checks)` now names each distinct quote
+  once ("; "-joined) on the stream frame AND the runtime's merged batch
+  pause, lock-step, pinned in both. The POST lane (no cards by design)
+  REFUSES a priced verdict ("this lane cannot ask for approval; use the
+  chat page") so a raw API caller cannot spend un-carded; a free verdict
+  runs. Known: an explicitly armed ask-tier tool is "allow" by overrides
+  in the stream lane, so a spend check with NO opinion shows no card —
+  `execute` refuses on the same `choose`, so nothing is spent un-carded; a
+  batch card still approves N spends with one Allow (honestly priced); a finished job's `cost_note` is the
+  charged note, not the quoted words; the agent-runtime ask's cost_note is
+  not shown on the polled AgentApprovalRow / mission screen; not proven
+  against real Pixio/OpenAI (a real key spends money). Pins: `tests/test_{
+  media_providers,media_jobs,generate_media_tool,media_vocab,
+  mock_media_call}_v1346.py`, `dashboard/__tests__/media-in-chat-v1346.test.tsx`.
+
 - **A line that arrives while nobody is looking is written by the DAEMON,
   into the chat it belongs to** (v1.345.0, a USER BUG: "@hermes-mac-mini …"
   in a new unsaved chat, a six-minute remote round, the user opened another

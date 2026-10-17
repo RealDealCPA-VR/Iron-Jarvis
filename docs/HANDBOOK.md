@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.345.0 (2026-10-04).*
+holds itself to. Current as of v1.346.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,38 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Make an image, a video or a song from chat (v1.346.0)
+
+Ask in plain words ("make me a picture of a lighthouse at dusk", "make a
+10-second video of waves", "compose a short jingle") and Jarvis makes it with
+the media service you have connected, and the result appears in the chat.
+
+- **Any service you choose.** Pixio is the first; OpenAI images is the
+  second; more can be added the same way. With one service connected it is
+  used; with more than one, pick the default under Settings → Connections →
+  Media (otherwise Jarvis asks you to pick rather than guess).
+- **You are asked before anything is spent.** Jarvis gets a price quote
+  first. A paid generation shows the approval card with the price in your
+  account's own credits ("Generate 1 video on Pixio for 120 credits");
+  nothing runs until you press Allow. A **free** generation (for example a
+  Pixio Maker daily allowance) runs without the card and the reply says so
+  ("free, 4 left today"). If you would rather be asked every time, turn on
+  "Ask even when free" in the same settings. A price that cannot be known
+  in advance is treated as paid.
+- **Long renders finish on their own.** An image usually comes back in the
+  same reply. A video or song is started and the reply says it will appear
+  in this chat; when it is done, the daemon puts it into that chat (even if
+  you have moved on) and the bell says "Your video is ready", linking there.
+  A render that was running when the app restarted is picked up again, not
+  started twice.
+- **The chat looks the same.** The picture, video or audio shows inline in
+  the reply and in the files rail, like any other file; the only new things
+  on screen are the price line on the approval card and the bell entry.
+- A render that fails says why in plain words (not enough credits and how
+  many short, a content-policy refusal, "the service is busy, try in N
+  seconds"). Keys never appear anywhere, and the download of a finished file
+  never carries your key.
 
 ## An @ reply comes home (v1.345.0)
 
