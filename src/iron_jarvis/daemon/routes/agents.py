@@ -44,6 +44,7 @@ from ..schemas import (
 
 # Importing this registers the RemoteAgentRecord table on the shared metadata.
 from ...agents.remote import RemoteAgentRegistry
+from ..chat_append import append_to_chat_thread
 
 # The employee ledger (v1.295.0): what a custom agent spent this month against
 # its allowance, and the one sentence a paused/exhausted agent answers with.
@@ -1199,6 +1200,48 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     }
 
 
+def panel_reply_lines(round_out: dict[str, Any], room_id: str) -> list[dict[str, Any]]:
+    """The round's replies as the EXACT chat lines the page's ``sendPanel``
+    composes (v1.345.0; read ``dashboard/app/chat/page.tsx`` sendPanel):
+    the user's own turn left out, ``content`` ``"(no reply)"`` when empty,
+    ``panelWho`` the participant key, ``panelThreadId`` the room, a failed
+    seat ``panelError: true``, the context-window drop as ``panelNote``
+    on the FIRST reply, a remote that took the task and will report back
+    (``pending``) as a quiet ``panelKind: "progress"`` line, and any
+    ``documents`` the entry carried (absolute paths)."""
+    replies = [
+        e
+        for e in (round_out.get("entries") or [])
+        if isinstance(e, dict) and e.get("who") and e.get("who") != "user"
+    ]
+    dropped = int((round_out.get("context") or {}).get("chat_dropped") or 0)
+    note = (
+        f"{dropped} earlier message{'' if dropped == 1 else 's'} did not fit "
+        "the agent's context window"
+        if dropped > 0
+        else ""
+    )
+    lines: list[dict[str, Any]] = []
+    for idx, e in enumerate(replies):
+        line: dict[str, Any] = {
+            "role": "assistant",
+            "content": str(e.get("content") or "") or "(no reply)",
+            "panelWho": str(e.get("who")),
+            "panelThreadId": room_id,
+        }
+        if e.get("error"):
+            line["panelError"] = True
+        if idx == 0 and note:
+            line["panelNote"] = note
+        if e.get("pending"):
+            line["panelKind"] = "progress"
+        docs = e.get("documents")
+        if isinstance(docs, list) and docs:
+            line["documents"] = [str(p) for p in docs]
+        lines.append(line)
+    return lines
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/tools")
@@ -1888,7 +1931,17 @@ def register(app: FastAPI, d) -> None:
                 }
 
         threads = AgentThreads(d.platform.engine)
-        rec = threads.for_chat(chat_thread_id, title=message[:60], adopt=panel_thread_id)
+        # THE REPLY COMES HOME (v1.345.0): ``thread_id`` is the SAVED chat the
+        # page asked from (the page saves a new chat first, so it is always
+        # sent). The room is bound to THAT chat — ``for_chat`` is the one
+        # binding door — and the round's replies are appended to it below
+        # BEFORE the answer, so a reply that lands while the user is in
+        # another chat is still in the chat it was asked in. No ``thread_id``
+        # = byte-identical to v1.344.0 (pinned).
+        saved_thread_id = str(body.get("thread_id") or "").strip()
+        rec = threads.for_chat(
+            saved_thread_id or chat_thread_id, title=message[:60], adopt=panel_thread_id
+        )
         try:
             threads.add_participants(rec.id, clean_participants(resolved))
         except ValueError as exc:
@@ -1917,12 +1970,24 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="panel thread vanished")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {
+        answer: dict[str, Any] = {
             "mode": "panel",
             "thread_id": rec.id,
             "unknown_mentions": unknown,
             **round_out,
         }
+        if saved_thread_id:
+            lines = panel_reply_lines(round_out, rec.id)
+            appended = await asyncio.to_thread(
+                append_to_chat_thread,
+                d.platform.engine,
+                saved_thread_id,
+                lines,
+                event_bus=d.platform.event_bus,
+            )
+            answer["appended"] = bool(appended.get("ok")) and int(appended.get("appended") or 0) > 0
+            answer["updated_at"] = appended.get("updated_at")
+        return answer
 
     # --- Remote agents (run elsewhere) ------------------------------------
     # Registered BEFORE the /agents/{name} routes below so the literal
@@ -2212,6 +2277,20 @@ def register(app: FastAPI, d) -> None:
         header = request.headers.get("authorization") or ""
         return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
+    def _last_inbound_at(threads, room_id: str, who: str) -> str:
+        """The ``at`` of the room's newest inbound entry by ``who`` — the key
+        the page's ``mirrorRoomInbound`` dedupes on (v1.345.0). "" when the
+        room cannot be read; never raises (a mirror must not fail the post)."""
+        try:
+            rec = threads.get(room_id)
+            msgs = json.loads(rec.messages_json or "[]") if rec is not None else []
+            for e in reversed(msgs if isinstance(msgs, list) else []):
+                if isinstance(e, dict) and e.get("inbound") and e.get("who") == who:
+                    return str(e.get("at") or "")
+        except Exception:  # noqa: BLE001
+            log.warning("remote inbound: could not read the room's last entry", exc_info=True)
+        return ""
+
     @app.post("/agents/remote/{name}/inbound/enable")
     def enable_remote_inbound(
         name: str, request: Request, body: RemoteInboundEnable | None = None
@@ -2417,11 +2496,43 @@ def register(app: FastAPI, d) -> None:
         chat_thread_id = str(getattr(room, "chat_thread_id", "") or "")
         store = getattr(d, "comm_thread_store", None)
         poller = getattr(d, "inbound_poller", None)
-        if (
+        # Which kind of chat the room belongs to — NEVER both paths (v1.345.0):
+        # a daemon-owned (phone) thread keeps the comm mirror below; any other
+        # ChatThreadRecord is a chat the user asked from, and the line lands
+        # there through the one chat writer (a remote that reports back later
+        # comes home to the chat it was asked in).
+        daemon_owned = bool(
             chat_thread_id
             and store is not None
             and await asyncio.to_thread(store.is_daemon_owned, chat_thread_id)
-        ):
+        )
+        homed = False
+        if chat_thread_id and not daemon_owned:
+            # The room entry's ``at`` rides as ``panelAt`` — the page's
+            # ``mirrorRoomInbound`` dedupes on it, so a line the daemon
+            # appended and the page's live mirror never show twice.
+            panel_at = await asyncio.to_thread(_last_inbound_at, threads, room.id, who)
+            line: dict[str, Any] = {
+                "role": "assistant",
+                "content": text,
+                "panelWho": who,
+                "panelThreadId": room.id,
+                "panelKind": kind,
+            }
+            if panel_at:
+                line["panelAt"] = panel_at
+            if documents:
+                line["documents"] = list(documents)
+            homed_out = await asyncio.to_thread(
+                append_to_chat_thread,
+                d.platform.engine,
+                chat_thread_id,
+                [line],
+                event_bus=d.platform.event_bus,
+                who=who,
+            )
+            homed = bool(homed_out.get("ok")) and int(homed_out.get("appended") or 0) > 0
+        if daemon_owned:
             try:
                 await asyncio.to_thread(
                     store.append,
@@ -2463,6 +2574,8 @@ def register(app: FastAPI, d) -> None:
             "skipped": notes,
             "phoned": phoned,
             "phone_rate_limited": phone_rate_limited,
+            # v1.345.0: the line also landed in the chat the room was asked from.
+            "homed": homed,
         }
 
     # --- The folder (v1.297.0) ----------------------------------------------
