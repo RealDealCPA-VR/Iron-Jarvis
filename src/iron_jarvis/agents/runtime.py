@@ -3252,7 +3252,14 @@ class AgentRuntime:
                         detail=step_detail(
                             tc.name,
                             redacted_args(self.p.registry, tc.name, tc.arguments),
-                            content,
+                            # The repeat note appended above is the loop's
+                            # words to the MODEL (v1.288.0), not what the tool
+                            # returned; the chat lanes' cards keep the bare
+                            # content too (v1.344.0 M2). Cut at the note's
+                            # literal head: linear, no regex over the output.
+                            content.rsplit("\n\n[repeat — this is failure ", 1)[0]
+                            if not call_ok
+                            else content,
                         ),
                     )
                 messages.append(

@@ -419,3 +419,44 @@ async def test_the_runtime_s_finished_frames_carry_the_same_masked_detail(tmp_pa
     for f in (c1, c2):
         assert TOKEN not in json.dumps(f["detail"]), f["id"]
         assert _FENCE_TOP not in f["detail"]["output"], f["id"]
+
+
+async def test_the_runtime_s_detail_drops_the_loop_s_repeat_note(tmp_path):
+    # Review of B1d: the runtime appends "[repeat — this is failure 2 …]" to a
+    # twice-failed call's tool message. That is the loop's instruction to the
+    # MODEL (v1.288.0: never shown), not what the tool returned — and the chat
+    # lanes keep it out of the user's card (v1.344.0 M2: the frame keeps the
+    # bare content). So the step's detail shows the bare, masked error, the
+    # same on both failures, exactly as the chat lane's detail does.
+    from iron_jarvis.agents.orchestrator import Orchestrator
+
+    bad = _FakeTool(FAILS, ok=False, text=BOOM)
+    platform = _app(tmp_path, bad)
+    adapter = _Scripted([_calls(_call("c1", FAILS)), _calls(_call("c2", FAILS)), "done"])
+    platform.providers.register(adapter.provider, lambda model=None: adapter)
+    session = await Orchestrator(platform).create_session(
+        "look it up", AgentType.BUILDER, provider=adapter.provider,
+    )
+    run = AgentRun(session_id=session.id, agent_type=AgentType.BUILDER,
+                   provider=session.provider, model=session.model, state=AgentState.RUNNING)
+    hub = StreamHub()
+    q = hub.subscribe(session.id)
+    await AgentRuntime(platform).perceive_act(
+        run, session, get_agent_definition(AgentType.BUILDER),
+        system_prompt="sys", messages=[LLMMessage(role="user", content="look it up")],
+        tool_specs=platform.registry.specs([FAILS]),
+        session_allow=set(), sink=hub.sink(session.id, run.id), max_steps=4,
+    )
+    assert len(bad.calls) == 2, "anti-vacuity: the same call failed twice in the runtime"
+    finished = {}
+    while not q.empty():
+        f = q.get_nowait()
+        if f["event"] == "tool_call" and f["data"]["status"] == "finished":
+            finished[f["data"]["id"]] = f["data"]
+    c1, c2 = finished["c1"], finished["c2"]
+    # anti-vacuity: the loop really noted the second failure (the old preview
+    # keeps what the model was sent, unchanged)
+    assert "[repeat — this is failure 2" in c2["output"]
+    bare = {"input": '{"q": "x"}', "output": "boom: upstream answered password=***"}
+    assert c1["detail"] == bare
+    assert c2["detail"] == bare, "the loop's repeat note is not the tool's output"
