@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.342.0 (2026-10-04).*
+holds itself to. Current as of v1.343.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,39 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Add a tool pack in one paste (v1.343.0)
+
+Settings → Tools has a new **Add a pack** area with three doors that all end
+in the same preview list:
+
+- **Paste a config.** Paste whatever a pack's README gives you: the
+  `{"mcpServers": …}` block Claude Desktop and Claude Code use, a Codex
+  `[mcp_servers.name]` TOML table, a VS Code `"mcp"` block, a single `npx …`
+  or `uvx …` line, or just a URL. Jarvis reads it and shows each pack it
+  found: its name, how it launches, whether the launcher is installed
+  ("Needs Node" / "Uses Node"), whether you already have it, and which keys
+  it needs. A key the paste did not include gets a box to type it in. Press
+  **Add selected** and they are added and started; a pack that did not start
+  says why, like any other.
+- **Import from your other apps.** One press lists the packs already set up
+  in Claude Code, Claude Desktop, Codex, Cursor and VS Code on this PC, read
+  from their own files (never changed), grouped by app, with the same
+  preview rows. Pick the ones you want; their keys move straight from that
+  file into Jarvis's encrypted vault without passing through the page.
+- **HTTP server.** A pack that runs as a web service: its address, optional
+  headers and an optional bearer token. Tokens and any header whose name
+  looks like a secret are kept in the vault.
+
+Every pack row also has **Edit** now: change the command, its arguments, its
+settings, folder, address or headers in place. Secrets show as "set" with
+Replace or Clear; a value you do not touch is kept. Saving restarts the pack.
+The "Add from npm or GitHub" door lets you pick the launcher (npx, uvx or a
+plain command) and names the pack the way the app does (dots become dashes),
+so a package name is never refused for its spelling.
+
+Nothing here ever shows a key or token back to you, and nothing is written
+to your other apps' files.
 
 ## A tool pack says why it failed (v1.342.0)
 

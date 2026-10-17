@@ -3490,6 +3490,63 @@ does not need a bump, stop and bump it.
   `test_wiki_access_v1172` line 92 — change both together); the error's
   tail folds newlines to ' | ' while `stderr_tail()` keeps them.
 
+- **A pack is added through ONE door, from any dialect, and a secret never
+  crosses the browser** (v1.343.0, "add a pack in one paste", wave 2 of the
+  reliability arc; five lanes + an integrator, K-ui took two review rounds).
+  `mcp/import_config.py`: `PackSpec` (dataclass; `to_config()` = the stored/
+  launched dict, a stdio spec byte-identical to the v1.342.0 shape;
+  `from_config` drops vault names; `preview_row()` never carries a value),
+  `safe_name(raw)` (lowercase, non-[a-zA-Z0-9_-] → "-", runs collapsed,
+  leading non-letters stripped, ≤ 40, no trailing "-"; the dashboard's
+  `lib/mcpImport.safeName` is its TS twin, cross-checked under node on a
+  12-name table), `guess_launcher(pkg)` (uvx for pip:/pypi:, underscore
+  names and mcp-server-*; npx otherwise), `parse_any(text)` (Claude
+  Desktop/Code `mcpServers` incl. per-project, VS Code `mcp.servers`, Codex
+  `[mcp_servers.<name>]` TOML, a single server object, a command line, a
+  URL (/sse → sse), an `npx mcp-remote <url> --header` line → http; Iron
+  Jarvis's own server entries dropped; never raises) and `parse_file`.
+  `mcp/import_sources.py`: `scan(platform)` reads ~/.claude.json
+  (CLAUDE_CONFIG_DIR), ~/.claude/settings.json, the active project's
+  .mcp.json, Claude Desktop, Codex (CODEX_HOME), Cursor, VS Code settings
+  (comments + trailing commas via jsonish) READ-ONLY, names only; keys
+  `claude-code`/`claude-code-settings`/`claude-code-project`/`claude-desktop`
+  /`codex`/`cursor`/`vscode`. ROUTES (`routes/agents.py`): the POST body is
+  lifted into module-level `add_mcp_pack(d, body)` and DELETE into
+  `remove_mcp_pack` — the ONE add/remove path that `POST /mcp/servers`,
+  `POST /mcp/import/apply {text | source, names, overrides, replace}` and
+  the npm door all end in; `POST /mcp/import/preview {text}` and
+  `GET /mcp/import/sources` answer rows with `env_keys/secret_keys/
+  header_names/auth_set/exists/runtime_ready` (the catalog's `launcher_ready`
+  resolver) and NEVER a value (a sweep plants 8 sentinels through every door
+  and asserts none reaches an answer, config.toml or the log); apply from a
+  source re-reads the FILE server-side by its scan key (a path is a 404).
+  `McpServerBody` gains transport/url/headers/auth/launcher (a stdio body
+  with no command is now a 422 sentence, not the route's old 400); an http
+  pack's auth value → vault `mcp.<name>.auth.value` (`auth.secret`), a
+  secret-NAMED header → `mcp.<name>.header.<H>` (`header_secrets`, resolved
+  in `_build_transport` beside `env_secrets`); GET rows carry `transport`,
+  `header_names`, `auth_set` on every row. `PATCH /mcp/servers/{name}` is
+  PARTIAL (command, args, env MERGE with secret-named values vaulted, cwd,
+  transport, url, headers, auth — `null` clears via `model_fields_set`,
+  omitted keeps —, clear_secrets, clear_headers; "" is a value; a rename is
+  422; validated like a POST; every vault write before the row persists;
+  then `unload_pack_tools` + reload; answer = GET row + `reloaded`/`note`;
+  a bare `{auto_approve}` keeps the v1.103.0 answer byte for byte).
+  DASHBOARD: `components/tools/AddPack.tsx` (paste / import / HTTP doors →
+  one preview list with StatusChip + "already added" + inputs for missing
+  secrets), `EditPack.tsx` (prefilled from names only; sends ONLY changed
+  fields), `lib/mcpImport.ts`. LIVE-DRIVEN by the integrator: a pasted
+  README block launched the real `@modelcontextprotocol/server-filesystem`
+  (14 tools) with the token vault-only. Pins: `tests/test_mcp_{http_door,
+  import_paste,import_sources,edit_pack}_v1343.py`, `tests/
+  test_integration_pins_v1343.py`, `dashboard/__tests__/tools-{add,edit}-
+  pack-v1343.test.tsx`. Known: an `mcp-remote` entry INSIDE a pasted block
+  stays the stdio pack it spells, so a `--header` secret in its args is
+  stored plain in config.toml and shown raw in the row's `args` (same as a
+  token typed into args today) — follow-up: vault it or warn; a PATCH that
+  sends `env` to an http pack (or `headers` to a stdio one) writes then
+  drops it silently rather than 422ing.
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

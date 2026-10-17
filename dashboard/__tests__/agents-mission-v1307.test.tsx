@@ -431,7 +431,9 @@ describe("the mission screen", () => {
     fireEvent.click(await screen.findByTestId("mission-rail-agents"));
     await waitFor(() => expect(window.location.search).toBe("?view=team"));
     expect(screen.queryByTestId("mission-screen")).toBeNull();
-    const panel = await screen.findByTestId("agents-panel");
+    // v1.343.0: TeamScreen is a lazy next/dynamic panel — on a loaded machine
+    // it lands after findBy's default 1 s (the v1.327.2 lesson, same page).
+    const panel = await screen.findByTestId("agents-panel", {}, { timeout: 10_000 });
     // every agent, managed here — but work is never handed out one by one
     expect(panel.getAttribute("data-roster")).toBe("researcher,supervisor");
     expect(panel.getAttribute("data-talk")).toBe("no");

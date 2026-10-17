@@ -197,8 +197,9 @@ describe("a remote's inbound lines reach the chat (v1.285.0)", () => {
     const rows = saved();
     expect(rows.at(-2)?.panelKind).toBe("progress");
     expect(rows.at(-1)?.documents).toEqual(["C:\\inbox\\ledger.xlsx"]);
-    // the file reached the conversation's rail
-    expect((await screen.findAllByText("ledger.xlsx")).length).toBeGreaterThan(0);
+    // the file reached the conversation's rail (v1.343.0: the rail draws after
+    // the save lands; a loaded machine took longer than findAll's default 1 s)
+    expect((await screen.findAllByText("ledger.xlsx", {}, { timeout: 10_000 })).length).toBeGreaterThan(0);
     // DEDUPE: the room read again with the SAME two lines plus one NEW line —
     // wait for the new line (a positive signal set at the END of the mirror,
     // the repo's waitFor rule), then the old ones must still be there once.
