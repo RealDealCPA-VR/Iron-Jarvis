@@ -49,40 +49,31 @@
 // Pixio for 12 credits (your price)"). The card shows it as ONE quiet line in
 // the local-only line's style, right under what will run, and nothing else
 // about the card changes: a card with no quote is byte-for-byte today's.
+//
+// SEE IT BEFORE YOU ALLOW IT (v1.348.0): what will run is drawn by
+// components/chat/ApprovalPreview (ideas from 21st.dev agent-elements' Bash
+// and Edit approval footers, MIT; no code taken) as a quiet block inside this
+// card, never a second card: a file edit is a compact diff, a file write its
+// first lines, a command one "$ <command>" line, verbatim and whole, and any
+// other argument a tidy `key: value` line (nested values summarised, long
+// text cut with "Show in full"; a path is never cut). It draws the REDACTED
+// arguments the approval frame carries and nothing more. The buttons, their
+// words, ids and the dock's keys are unchanged.
 
 import { useState } from "react";
+import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
+import { exampleValue } from "@/lib/approvalPreview";
 import { isBuiltinBrowserTool, toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
 
-/** One argument rendered for the decision. `command`/`code` are the payload
- *  for the tools this ships for (shell/repl) and render as a block — the rest
- *  ride a compact key: value line. */
-function ArgLine({ name, value }: { name: string; value: unknown }) {
-  const text = typeof value === "string" ? value : JSON.stringify(value);
-  if ((name === "command" || name === "code") && typeof value === "string") {
-    return (
-      <pre className="max-h-40 overflow-auto rounded-lg border border-white/[0.08] bg-ink-900/70 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-200">
-        {value}
-      </pre>
-    );
-  }
-  // v1.314.0: wrap, never truncate — a path cut off at the one moment the
-  // user is deciding is a decision made on half the facts.
-  return (
-    <p className="break-all text-[11px] text-zinc-400">
-      <span className="text-zinc-500">{name}:</span>{" "}
-      {text ? text : <span className="text-zinc-500">(empty)</span>}
-    </p>
-  );
-}
-
-/** One example call of a batch, on one compact line. */
+/** One example call of a batch, on one compact line. Strings are verbatim (a
+ *  path is the record); a nested value is summarised, never raw JSON. */
 function ExampleLine({ args }: { args: Record<string, unknown> }) {
   const text = Object.entries(args)
-    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .map(([k, v]) => `${k}: ${exampleValue(v)}`)
     .join(" · ");
   // v1.329.0 (G2): a call with no arguments says so in a word, never a bare
   // dash the user has to decode.
@@ -216,13 +207,7 @@ export function ApprovalCard({
               )}
             </div>
           )
-        : Object.keys(args).length > 0 && (
-            <div className="space-y-1.5">
-              {Object.entries(args).map(([k, v]) => (
-                <ArgLine key={k} name={k} value={v} />
-              ))}
-            </div>
-          )}
+        : Object.keys(args).length > 0 && <ApprovalPreview tool={approval.tool} args={args} />}
 
       {approval.costNote && (
         <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400">

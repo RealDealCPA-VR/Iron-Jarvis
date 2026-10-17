@@ -1,0 +1,317 @@
+/**
+ * See it before you allow it (v1.348.0, polish wave A).
+ *
+ * The idea is ported from 21st.dev agent-elements' Bash and Edit approval
+ * footers (MIT; the idea, not the code): an approval card shows WHAT WILL
+ * HAPPEN, not the raw arguments. This is the pure half (no React); the card
+ * draws it with components/chat/ApprovalPreview.tsx inside the existing
+ * ApprovalCard, never as a second card.
+ *
+ * WHAT EACH CALL LOOKS LIKE, read off the arguments the card already holds.
+ * Those are the REDACTED arguments the daemon put on the approval frame
+ * (`tool.redact_args`): this module draws them and never fetches or reveals
+ * anything more.
+ *   - A FILE EDIT (edit_file's `old`/`new`, the `old_string`/`new_string` and
+ *     `old_str`/`new_str` spellings other agents use, a MultiEdit-style
+ *     `edits` list, docx_edit's `replace` operations) is a compact line diff
+ *     through the shared lib/diff.ts `diffLines`.
+ *   - A FILE WRITE (write_file / write_document with a text `content`) shows
+ *     the new text's first lines.
+ *   - A COMMAND (any string `command`, and pane_send's `text`, which is a line
+ *     typed into a terminal) is ONE terminal-looking line, verbatim and in
+ *     full: approving a command you cannot read is not a decision.
+ *   - `code` (repl, run_code) is verbatim and in full for the same reason.
+ *   - EVERYTHING ELSE is a tidy `key: value` line: a nested value is
+ *     summarised ("3 items", "2 fields: a, b"), a long string is cut with an
+ *     ellipsis, and the card offers "Show in full". A path is never cut
+ *     (v1.314.0: a path cut off at the one moment the user is deciding is a
+ *     decision made on half the facts).
+ * The parts keep the arguments' own order, so the block sits where its
+ * argument sat (`path`, then the change).
+ */
+
+import { diffLines, textLines } from "@/lib/diff";
+
+/** Diff rows / written lines shown before "Show all N lines". */
+export const PREVIEW_LINES = 12;
+/** A long string value is cut here (paths and payloads never are). */
+export const VALUE_CHARS = 200;
+/** …and after this many lines. */
+export const VALUE_LINES = 4;
+
+/** One drawn line of a change: the shared diff vocabulary, plus a quiet
+ *  separator between two replacements (`gap`) and one line of plain words
+ *  for an operation that is not a text swap (`note`). */
+export interface PreviewRow {
+  kind: "same" | "added" | "removed" | "gap" | "note";
+  text: string;
+}
+
+/** One argument as a tidy line. */
+export interface ArgEntry {
+  key: string;
+  /** What the line shows at a glance: long text cut, nested values summarised. */
+  short: string;
+  /** Everything, for "Show in full" (a nested value as indented JSON). */
+  full: string;
+  /** True when `short` leaves something out. */
+  cut: boolean;
+  /** True when `full` is structured (drawn monospace). */
+  nested: boolean;
+  /** Nothing in it: the card says "(empty)". */
+  empty: boolean;
+}
+
+export type PreviewPart =
+  | { type: "arg"; entry: ArgEntry }
+  | { type: "diff"; rows: PreviewRow[]; added: number; removed: number }
+  | { type: "content"; lines: string[] }
+  | { type: "command"; command: string }
+  | { type: "code"; code: string };
+
+export type PreviewKind = "edit" | "write" | "command" | "code" | "args";
+
+export interface ApprovalPreviewModel {
+  kind: PreviewKind;
+  parts: PreviewPart[];
+}
+
+/** The before/after spellings of a text swap, most specific first. */
+const EDIT_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["old_string", "new_string"],
+  ["old_str", "new_str"],
+  ["old_text", "new_text"],
+  ["old", "new"],
+];
+
+/** Tools whose text `content` is a whole file's new text. */
+const WRITE_TOOLS = new Set(["write_file", "write_document", "write", "create_file"]);
+/** The keys a written file's text rides on. */
+const CONTENT_KEYS = ["content", "contents", "file_text"];
+/** The keys that name the file being written (a shape-only write needs one). */
+const FILE_KEYS = ["path", "file_path", "filepath", "filePath", "filename", "notebook_path", "file"];
+/** Keys whose value is a location: never cut, whatever its length. */
+const PATH_KEYS = new Set([
+  ...FILE_KEYS,
+  "source",
+  "src",
+  "dest",
+  "destination",
+  "target",
+  "output",
+  "folder",
+  "dir",
+  "directory",
+  "cwd",
+  "url",
+  "uri",
+  "href",
+]);
+
+/** A text as the lines a diff compares: "" is no lines at all (not one empty
+ *  line), and one trailing newline does not add an empty last line. */
+export function linesOf(text: string): string[] {
+  if (text === "") return [];
+  const lines = textLines(text);
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** Cut a text for one glance: at most `lines` lines and `chars` characters,
+ *  with an ellipsis where it was cut. */
+export function clipText(text: string, chars = VALUE_CHARS, lines = VALUE_LINES): string {
+  const all = text.split(/\r?\n/);
+  let out = all.slice(0, lines).join("\n");
+  let cut = all.length > lines;
+  if (out.length > chars) {
+    out = out.slice(0, chars).trimEnd();
+    cut = true;
+  }
+  return cut ? `${out}…` : text;
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function isPrimitive(v: unknown): v is string | number | boolean {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+}
+
+function pretty(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** One argument as a tidy `key: value` line. */
+export function argEntry(key: string, value: unknown): ArgEntry {
+  const line = (short: string, full: string, nested = false): ArgEntry => ({
+    key,
+    short,
+    full,
+    cut: short !== full,
+    nested,
+    empty: false,
+  });
+  // A summary always has more behind it, and that full form is structured.
+  const summary = (short: string): ArgEntry => ({
+    key,
+    short,
+    full: pretty(value),
+    cut: true,
+    nested: true,
+    empty: false,
+  });
+  const empty: ArgEntry = { key, short: "", full: "", cut: false, nested: false, empty: true };
+  if (value === null || value === undefined) return empty;
+  if (typeof value === "string") {
+    if (value === "") return empty;
+    return line(PATH_KEYS.has(key) ? value : clipText(value), value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return line(String(value), String(value));
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return empty;
+    if (value.every(isPrimitive)) {
+      const joined = value.map(String).join(", ");
+      const short = clipText(joined);
+      // Cut, the full form is the exact list (a comma inside an item would
+      // make the joined line ambiguous).
+      return short === joined ? line(joined, joined) : summary(short);
+    }
+    return summary(plural(value.length, "item", "items"));
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return empty;
+    if (entries.every(([, v]) => isPrimitive(v))) {
+      const joined = entries.map(([k, v]) => `${k}: ${String(v)}`).join(", ");
+      const short = clipText(joined);
+      return short === joined ? line(joined, joined) : summary(short);
+    }
+    const names = entries.slice(0, 4).map(([k]) => k).join(", ");
+    const more = entries.length > 4 ? ", …" : "";
+    return summary(`${plural(entries.length, "field", "fields")}: ${names}${more}`);
+  }
+  return line(String(value), String(value));
+}
+
+/** The one-line form a batch example uses: strings verbatim (a path is the
+ *  record), anything else summarised instead of raw JSON. */
+export function exampleValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  const e = argEntry("", value);
+  return e.empty ? "(empty)" : e.short;
+}
+
+type Segment = { before: string; after: string } | { note: string };
+
+/** The diff part for one or more text swaps (and plain-word notes). */
+function diffPart(segments: Segment[]): PreviewPart {
+  const rows: PreviewRow[] = [];
+  let added = 0;
+  let removed = 0;
+  segments.forEach((s, i) => {
+    if (i > 0) rows.push({ kind: "gap", text: "" });
+    if ("note" in s) {
+      rows.push({ kind: "note", text: s.note });
+      return;
+    }
+    for (const l of diffLines(linesOf(s.before), linesOf(s.after))) {
+      rows.push({ kind: l.kind, text: l.text });
+      if (l.kind === "added") added++;
+      else if (l.kind === "removed") removed++;
+    }
+  });
+  return { type: "diff", rows, added, removed };
+}
+
+/** A list of `{old_string, new_string}`-shaped edits (MultiEdit), or null. */
+function editList(value: unknown): Segment[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out: Segment[] = [];
+  for (const e of value) {
+    if (!e || typeof e !== "object") return null;
+    const rec = e as Record<string, unknown>;
+    const pair = EDIT_PAIRS.find(([o, n]) => typeof rec[o] === "string" && typeof rec[n] === "string");
+    if (!pair) return null;
+    out.push({ before: rec[pair[0]] as string, after: rec[pair[1]] as string });
+  }
+  return out;
+}
+
+/** docx_edit's operations: each `replace` is a text swap, every other
+ *  operation one line of plain words. Null when nothing in it is a swap. */
+function docxOperations(value: unknown): Segment[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out: Segment[] = [];
+  let swaps = 0;
+  for (const op of value) {
+    if (!op || typeof op !== "object") continue;
+    const rec = op as Record<string, unknown>;
+    if (rec.op === "replace" && typeof rec.find === "string" && typeof rec.replace === "string") {
+      out.push({ before: rec.find, after: rec.replace });
+      swaps++;
+    } else {
+      const { op: name, ...rest } = rec;
+      const words = argEntry("", rest);
+      out.push({ note: `${typeof name === "string" && name ? name : "operation"}${words.empty ? "" : `: ${words.short}`}` });
+    }
+  }
+  return swaps > 0 ? out : null;
+}
+
+/** What the approval card shows for this call, in the arguments' order. */
+export function approvalPreview(tool: string, args: Record<string, unknown>): ApprovalPreviewModel {
+  const name = (tool || "").toLowerCase();
+  const special = new Map<string, PreviewPart>();
+  const consumed = new Set<string>();
+  let kind: PreviewKind = "args";
+
+  const pair = EDIT_PAIRS.find(([o, n]) => typeof args[o] === "string" && typeof args[n] === "string");
+  const multi = pair ? null : editList(args.edits);
+  const docx = pair || multi ? null : docxOperations(args.operations);
+  if (pair) {
+    special.set(pair[0], diffPart([{ before: args[pair[0]] as string, after: args[pair[1]] as string }]));
+    consumed.add(pair[1]);
+    kind = "edit";
+  } else if (multi) {
+    special.set("edits", diffPart(multi));
+    kind = "edit";
+  } else if (docx) {
+    special.set("operations", diffPart(docx));
+    kind = "edit";
+  } else {
+    const contentKey = CONTENT_KEYS.find((k) => typeof args[k] === "string");
+    const writes = WRITE_TOOLS.has(name) || FILE_KEYS.some((k) => typeof args[k] === "string");
+    if (contentKey && writes) {
+      special.set(contentKey, { type: "content", lines: linesOf(args[contentKey] as string) });
+      kind = "write";
+    } else if (typeof args.command === "string") {
+      special.set("command", { type: "command", command: args.command });
+      kind = "command";
+    } else if (name === "pane_send" && typeof args.text === "string") {
+      // A line typed into a terminal pane and run: it IS a command.
+      special.set("text", { type: "command", command: args.text });
+      kind = "command";
+    } else if (typeof args.code === "string") {
+      special.set("code", { type: "code", code: args.code });
+      kind = "code";
+    }
+  }
+
+  const parts: PreviewPart[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    const part = special.get(key);
+    if (part) parts.push(part);
+    else if (!consumed.has(key)) parts.push({ type: "arg", entry: argEntry(key, value) });
+  }
+  return { kind, parts };
+}
+
+/** Rows that are lines of the change (the quiet separators are not). */
+export function countedRows(rows: readonly PreviewRow[]): number {
+  return rows.filter((r) => r.kind !== "gap").length;
+}

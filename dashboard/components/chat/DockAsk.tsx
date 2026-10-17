@@ -17,6 +17,14 @@
 // not allow a command the user has not seen yet. Keys press the card's OWN
 // buttons, so a key runs exactly what a click runs (checks included).
 //
+// LETTERS (v1.348.0): an app's question with one fixed set of choices draws
+// them as rows lettered A, B, C… (components/chat/ElicitationCard), and the
+// matching letter key picks one: only from INSIDE this card (never from the
+// page body), never from a field that takes typing, never in the first moment
+// after the question appears (the same arm delay as Enter). It clicks the row
+// itself (lib/letteredChoices.findChoice), so it does what a click does, and
+// it never sends: Enter (or Send) does that, through the card's checks.
+//
 // ORDER: several open questions show the first with "1 of N"; the one on
 // screen stays first while it is still open (lib/dockAsk.withHeadFirst).
 //
@@ -31,6 +39,7 @@ import { Button } from "@/components/ui";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import { dockKeyAction, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
+import { choiceKey, findChoice } from "@/lib/letteredChoices";
 import {
   CLOUD_ASK_KEEP,
   CLOUD_ASK_SEND,
@@ -196,6 +205,29 @@ export function DockAsk({
   // bubbling (so typing in their fields never reaches the page).
   function onKeyDownCapture(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // v1.348.0: a letter picks the matching lettered row (never sends).
+    const letter = choiceKey(
+      {
+        key: e.key,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey,
+        repeat: e.repeat,
+        isComposing: false,
+      },
+      e.target as Element,
+    );
+    if (letter) {
+      if (Date.now() - shownAtRef.current < armDelayMs) return;
+      const row = findChoice(wrapRef.current, e.target as Element, letter);
+      if (row) {
+        row.click();
+        row.focus({ preventScroll: true });
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     const action = dockKeyAction(
       {
         key: e.key,

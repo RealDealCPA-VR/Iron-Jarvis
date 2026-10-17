@@ -16,10 +16,22 @@
 //     keydown stops here.
 //   - It asks for nothing secret: the quiet line says never to type a password.
 //   - After an answer it says what happened in words and disables itself.
+//
+// LETTERED CHOICES (v1.348.0; the idea from 21st.dev agent-elements' question
+// card, MIT, no code taken): when the ask has exactly ONE choice field (with
+// at most lib/letteredChoices.MAX_LETTERED options) the choices are rows
+// lettered A, B, C… instead of a menu: a radio group (Tab enters at the
+// picked row, arrows move, Space picks) whose letter keys the dock reads
+// (components/chat/DockAsk, under its Enter/Esc rules). Enter is left to the
+// dock, so "B" then Enter picks and sends through the same checks as a
+// click. In that shape "Not now" is a quiet "Skip": the SAME cancel answer,
+// words and all ("Skipped for now"), no new call. A form with several choice
+// fields keeps its menus exactly as before.
 
 import { useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { MessageCircleQuestion } from "lucide-react";
 import { Button, LoaderInline } from "@/components/ui";
+import { choiceLetter, letteredField } from "@/lib/letteredChoices";
 import {
   checkElicitationAnswer,
   outcomeWords,
@@ -95,6 +107,128 @@ function stop(e: KeyboardEvent) {
   e.stopPropagation();
 }
 
+const ROW =
+  "flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] leading-snug outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/60 motion-reduce:transition-none";
+
+/** v1.348.0: the ask's one choice field as rows lettered A, B, C… (a radio
+ *  group). The letter keys are the dock's (lib/letteredChoices.findChoice
+ *  presses a row by its `data-choice-letter`); Enter is never taken here, so
+ *  the dock's Enter sends a picked answer through the card's own checks. */
+function LetteredChoices({
+  field,
+  id,
+  labelId,
+  value,
+  disabled,
+  invalid,
+  describedBy,
+  onPick,
+}: {
+  field: McpField;
+  id: string;
+  labelId: string;
+  value: string;
+  disabled: boolean;
+  invalid: boolean;
+  describedBy: string | undefined;
+  onPick: (index: number) => void;
+}) {
+  const options = field.enum ?? [];
+  const picked = value === "" ? -1 : Number(value);
+
+  function go(from: HTMLElement, to: (at: number, n: number) => number) {
+    const rows = Array.from(
+      from.closest('[role="radiogroup"]')?.querySelectorAll<HTMLElement>('[role="radio"]') ?? [],
+    );
+    if (rows.length === 0) return;
+    const next = to(rows.indexOf(from), rows.length);
+    onPick(next);
+    rows[next]?.focus();
+  }
+
+  function onKey(e: KeyboardEvent<HTMLDivElement>, i: number) {
+    if (disabled || e.altKey || e.ctrlKey || e.metaKey) return;
+    const row = e.currentTarget;
+    switch (e.key) {
+      case " ":
+        e.preventDefault();
+        onPick(i);
+        return;
+      case "ArrowDown":
+      case "ArrowRight":
+        e.preventDefault();
+        go(row, (at, n) => (at + 1) % n);
+        return;
+      case "ArrowUp":
+      case "ArrowLeft":
+        e.preventDefault();
+        go(row, (at, n) => (at - 1 + n) % n);
+        return;
+      case "Home":
+        e.preventDefault();
+        go(row, () => 0);
+        return;
+      case "End":
+        e.preventDefault();
+        go(row, (_at, n) => n - 1);
+        return;
+    }
+  }
+
+  return (
+    <div
+      role="radiogroup"
+      id={id}
+      aria-labelledby={labelId}
+      aria-required={field.required || undefined}
+      aria-invalid={invalid || undefined}
+      aria-describedby={describedBy}
+      data-choice-group=""
+      className="space-y-0.5"
+    >
+      {options.map((opt, i) => {
+        const letter = choiceLetter(i);
+        const checked = picked === i;
+        // One tab stop for the group: the picked row, else the first.
+        const tabbable = !disabled && (checked || (picked < 0 && i === 0));
+        return (
+          <div
+            key={i}
+            role="radio"
+            aria-checked={checked}
+            aria-disabled={disabled || undefined}
+            aria-keyshortcuts={letter}
+            tabIndex={tabbable ? 0 : -1}
+            data-choice-letter={letter}
+            data-testid={`mcp-choice-${field.name}-${letter}`}
+            onClick={() => {
+              if (!disabled) onPick(i);
+            }}
+            onKeyDown={(e) => onKey(e, i)}
+            className={`${ROW} ${
+              disabled
+                ? "cursor-default opacity-60"
+                : checked
+                  ? "cursor-pointer bg-accent/[0.08] text-zinc-100"
+                  : "cursor-pointer text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[11px] ${
+                checked ? "bg-accent/20 text-accent-soft" : "bg-white/[0.06] text-zinc-400"
+              }`}
+            >
+              {letter}
+            </span>
+            <span className="min-w-0 break-words">{field.enum_names?.[i] ?? String(opt)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ElicitationCard({
   ask,
   onAnswer,
@@ -116,6 +250,8 @@ export function ElicitationCard({
   const [busy, setBusy] = useState<Action | "">("");
   const [answered, setAnswered] = useState<McpOutcome | null>(null);
   const known = useMemo(() => new Set(ask.fields.map((f) => f.name)), [ask.fields]);
+  // v1.348.0: the one choice field drawn as lettered rows (null = menus).
+  const lettered = useMemo(() => letteredField(ask.fields), [ask.fields]);
 
   // The daemon's word (mcp_resolved, or the turn ending) wins over ours.
   const outcome: McpOutcome | null = ask.outcome ?? answered;
@@ -222,7 +358,26 @@ export function ElicitationCard({
             "aria-describedby": err ? errId : undefined,
           };
           let control;
-          if (f.type === "boolean") {
+          if (f.name === lettered) {
+            const labelId = `${id}-label`;
+            control = (
+              <>
+                <span id={labelId} className="block text-xs font-medium text-zinc-300">
+                  {label}
+                </span>
+                <LetteredChoices
+                  field={f}
+                  id={id}
+                  labelId={labelId}
+                  value={typeof values[f.name] === "string" ? (values[f.name] as string) : ""}
+                  disabled={closed || !!busy}
+                  invalid={!!err}
+                  describedBy={err ? errId : undefined}
+                  onPick={(i) => set(f.name, String(i))}
+                />
+              </>
+            );
+          } else if (f.type === "boolean") {
             control = (
               <label htmlFor={id} className="flex items-center gap-2 text-sm text-zinc-200">
                 <input
@@ -328,9 +483,23 @@ export function ElicitationCard({
           >
             {busy === "decline" ? <LoaderInline label="Declining…" /> : "Decline"}
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => void answer("cancel")} disabled={!!busy}>
-            {busy === "cancel" ? <LoaderInline label="Skipping…" /> : "Not now"}
-          </Button>
+          {lettered ? (
+            // v1.348.0: the question card's quiet Skip is the same cancel
+            // answer "Not now" gives a form (outcome "Skipped for now").
+            <button
+              type="button"
+              data-testid="mcp-elicitation-skip"
+              onClick={() => void answer("cancel")}
+              disabled={!!busy}
+              className="ml-auto rounded-md px-2 py-1 text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-40 motion-reduce:transition-none"
+            >
+              {busy === "cancel" ? <LoaderInline label="Skipping…" /> : "Skip"}
+            </button>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => void answer("cancel")} disabled={!!busy}>
+              {busy === "cancel" ? <LoaderInline label="Skipping…" /> : "Not now"}
+            </Button>
+          )}
         </div>
       )}
     </form>
