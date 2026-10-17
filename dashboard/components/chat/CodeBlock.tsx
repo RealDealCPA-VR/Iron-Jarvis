@@ -162,6 +162,8 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string | null }
   const [result, setResult] = useState<HighlightedCode | null>(null);
   const mounted = useRef(true);
   const lastPassAt = useRef(0);
+  /** The scheme + language the last pass was ISSUED for ("" before any). */
+  const lastPassFor = useRef("");
   const lastCost = useRef(0);
   const issued = useRef(0);
   const accepted = useRef(0);
@@ -184,11 +186,16 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string | null }
     if (!wanted || !seen || upToDate || remembered) return;
     // Throttle, don't debounce: a streaming block still gets a pass every
     // gap, and the last change always gets one. The first pass (or the
-    // first after a scheme switch) goes at once.
+    // first after a scheme switch) goes at once. The throttle keys on the
+    // pass ISSUED, not the pass landed (review): the very first pass also
+    // loads Shiki, and keying on a landed result let a streaming block start
+    // a fresh pass on every frame until that load finished.
+    const runKey = `${scheme}|${lang ?? ""}`;
     const gap = Math.max(MIN_PASS_GAP_MS, lastCost.current * 4);
-    const wait = current ? Math.max(0, gap - (performance.now() - lastPassAt.current)) : 0;
+    const wait = lastPassFor.current === runKey ? Math.max(0, gap - (performance.now() - lastPassAt.current)) : 0;
     const timer = window.setTimeout(() => {
       lastPassAt.current = performance.now();
+      lastPassFor.current = runKey;
       const ticket = ++issued.current;
       highlightCode(code, lang, scheme).then(
         (next) => {

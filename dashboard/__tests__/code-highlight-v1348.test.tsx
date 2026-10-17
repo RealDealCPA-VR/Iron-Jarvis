@@ -451,6 +451,37 @@ describe("CodeBlock: the same panel, now in colour", () => {
     expect(highlightSpy).toHaveBeenLastCalledWith(code, "ts", "dark");
   });
 
+  it("while the first pass is still loading, a streaming block does not start a pass per change (review)", async () => {
+    // The first pass also loads Shiki (hundreds of ms on a cold start). Hold
+    // every pass that long: a throttle keyed on a LANDED result let each
+    // token that arrived meanwhile start a fresh pass of its own.
+    const real = highlightSpy.getMockImplementation()!;
+    highlightSpy.mockImplementation(async (...args) => {
+      await new Promise((r) => setTimeout(r, 300));
+      return real(...args);
+    });
+    try {
+      let code = sample("first-load");
+      const started = performance.now();
+      const { rerender } = render(<CodeBlock code={code} lang="ts" />);
+      for (let i = 0; i < 10; i++) {
+        code += `\nconst f${i} = ${i};`;
+        rerender(<CodeBlock code={code} lang="ts" />);
+        await act(() => new Promise((r) => setTimeout(r, 20)));
+      }
+      const elapsed = performance.now() - started;
+      // At most one pass per 250 ms window from the first (measured, so a
+      // slow runner that stretches the burst is allowed proportionally more).
+      expect(highlightSpy.mock.calls.length).toBeLessThanOrEqual(Math.ceil(elapsed / 250) + 1);
+      expect(highlightSpy.mock.calls.length).toBeLessThan(10);
+      // ...and the last change still lands.
+      await waitFor(() => expect(spansWithText("const")).toHaveLength(11), LOAD);
+      expect(highlightSpy).toHaveBeenLastCalledWith(code, "ts", "dark");
+    } finally {
+      highlightSpy.mockImplementation(real);
+    }
+  });
+
   it("an older pass that finishes late never replaces a newer one", async () => {
     const real = highlightSpy.getMockImplementation()!;
     const first = sample("late-pass");
