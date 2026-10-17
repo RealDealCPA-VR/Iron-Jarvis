@@ -710,39 +710,71 @@ class StdioTransport:
         if os.name != "nt":
             # Its own session, so ``killpg`` in ``_kill`` reaches the whole tree.
             popen_kw["start_new_session"] = True
-        proc = subprocess.Popen(  # noqa: S603 — command comes from trusted config
-            [self.command, *self.args],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            env=self.env,
-            cwd=self.cwd,
-            **popen_kw,
-        )
-        self.spawn_count += 1
-        # The child's stderr is drained on its OWN daemon thread (never the
-        # event loop, never the stdout reader — a pack that prints a page of
-        # warnings before it answers must not stall the handshake). A fresh
-        # ring per spawn: the tail always belongs to THIS server.
-        stderr_ring = _StderrRing()
-        err_reader = threading.Thread(
-            target=self._pump_stderr,
-            args=(proc.stderr, stderr_ring),
-            name=f"mcp-stderr-{proc.pid}",
-            daemon=True,
-        )
-        err_reader.start()
+
+        def _spawn(suspended: bool) -> tuple[subprocess.Popen, _StderrRing, threading.Thread]:
+            kw = dict(popen_kw)
+            if suspended:
+                # v1.346.1: born SUSPENDED so the Job below is assigned BEFORE
+                # the launcher can run a single instruction. A child spawned
+                # before ``AssignProcessToJobObject`` is NOT in the Job, so an
+                # ``npx``-style launcher that forked its real server in that
+                # window left a wedged grandchild on the pipe that
+                # ``TerminateJobObject`` could not reach — the v1.291.0 kill
+                # test went red on a 48-minute CI runner exactly there. The
+                # same create→assign→resume shape ``core/procs.spawn`` uses.
+                from ..core.procs import CREATE_SUSPENDED
+
+                kw["creationflags"] = int(kw.get("creationflags", 0) or 0) | CREATE_SUSPENDED
+            child = subprocess.Popen(  # noqa: S603 — command comes from trusted config
+                [self.command, *self.args],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                env=self.env,
+                cwd=self.cwd,
+                **kw,
+            )
+            self.spawn_count += 1
+            # The child's stderr is drained on its OWN daemon thread (never the
+            # event loop, never the stdout reader — a pack that prints a page
+            # of warnings before it answers must not stall the handshake). A
+            # fresh ring per spawn: the tail always belongs to THIS server.
+            ring = _StderrRing()
+            pump = threading.Thread(
+                target=self._pump_stderr,
+                args=(child.stderr, ring),
+                name=f"mcp-stderr-{child.pid}",
+                daemon=True,
+            )
+            pump.start()
+            return child, ring, pump
+
+        proc, stderr_ring, err_reader = _spawn(suspended=os.name == "nt")
         job: int | None = None
         if os.name == "nt":
             handle = getattr(proc, "_handle", None)
             if handle is not None:
-                from ..terminals.backend import _win_job_for
+                from ..core.procs import _resume
+                from ..terminals.backend import _win_job_for, _win_terminate_job
 
                 job = _win_job_for(int(handle))
+                if not _resume(int(handle)):
+                    # It never ran an instruction, so stopping it is free;
+                    # start it plainly (no Job) rather than leave a suspended
+                    # child behind — the fallback ``core/procs.spawn`` takes.
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=5)
+                    except Exception:  # noqa: BLE001 — already gone
+                        pass
+                    if job is not None:
+                        _win_terminate_job(job)
+                        job = None
+                    proc, stderr_ring, err_reader = _spawn(suspended=False)
         out: "queue.Queue[str | None]" = queue.Queue()
         reader = threading.Thread(
             target=self._pump_stdout,

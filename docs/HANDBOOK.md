@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.346.0 (2026-10-04).*
+holds itself to. Current as of v1.346.1 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,15 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A tool pack's helper processes always stop with it (v1.346.1)
+
+Some tool packs start through a launcher (`npx`, `uvx`) whose real server is
+a second process. Stopping, retrying or removing such a pack could, in a
+narrow moment right after it started, leave that second process running on
+its own until the next restart. The pack's processes are now placed under
+the app's control before they run a single instruction, so stopping the
+pack always stops all of it.
 
 ## Make an image, a video or a song from chat (v1.346.0)
 

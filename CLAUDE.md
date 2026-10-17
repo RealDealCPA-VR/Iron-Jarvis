@@ -3620,6 +3620,21 @@ does not need a bump, stop and bump it.
   against real Pixio/OpenAI (a real key spends money). Pins: `tests/test_{
   media_providers,media_jobs,generate_media_tool,media_vocab,
   mock_media_call}_v1346.py`, `dashboard/__tests__/media-in-chat-v1346.test.tsx`.
+  v1.346.1 (a REAL race behind a "flaky" test): v1.346.0's Tests gate (48-min
+  runner) went red on `test_mcp_stdio_transport_v1291`'s kill test — "gave up
+  waiting for the wedged grandchild server to die" — and the same test failed
+  1 run in 5 locally on unchanged code. `StdioTransport._ensure_started`
+  spawned the launcher with a plain `Popen` and assigned the kill-on-close
+  Job AFTERWARDS; a grandchild the launcher forked in that window is NOT in
+  the Job (assignment never adopts existing children), so
+  `TerminateJobObject` killed the launcher and left the real server holding
+  the pipe. Now: born with `CREATE_SUSPENDED` → `_win_job_for` → `_resume`
+  (the v1.333.0 `core/procs.spawn` shape; a failed resume kills the never-ran
+  child and spawns plainly with no Job). Pin:
+  `tests/test_mcp_spawn_suspended_v1346.py` (flag + assign-before-resume
+  order through spies; the behavioural kill test keeps proving the tree
+  dies). Rule: a process you mean to own by Job is CREATED SUSPENDED, never
+  adopted after the fact.
 
 - **A line that arrives while nobody is looking is written by the DAEMON,
   into the chat it belongs to** (v1.345.0, a USER BUG: "@hermes-mac-mini …"
