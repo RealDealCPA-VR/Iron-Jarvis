@@ -1196,6 +1196,71 @@ def unload_pack_tools(registry: Any, name: str) -> int:
     return count
 
 
+#: The words a reload answers when the pack connected and listed nothing
+#: (the v1.229.0 Retry route's sentence, kept byte for byte).
+NO_TOOLS_ADVERTISED = "connected but the server advertised no tools"
+
+
+def reload_pack(platform: Any, name: str, *, home: "str | Path | None" = None) -> dict[str, Any]:
+    """Retry ONE configured pack: unload its live tools, connect again through
+    the same loader boot uses, register what it advertises (v1.344.0, lifted
+    from ``POST /mcp/servers/{name}/reload`` so the route and the
+    ``pack_restart`` tool share one reload).
+
+    Answers ``{ok, tools_loaded, last_error, reason, fix, stderr_tail}``; the
+    first three are the route's v1.229.0 answer byte for byte, the last three
+    come off the refreshed load record (masked, names only). Raises
+    :class:`KeyError` when no pack of that name is configured — the caller
+    decides the status code / the sentence. BLOCKING (a connect with a
+    timeout): call it on a worker thread.
+
+    ``home`` (v1.299.0): the reload RE-DIFFS the pack against its manifest, so
+    a tool that arrived in an update is held back here exactly as it would be
+    at the next boot."""
+    servers = list(getattr(platform.config, "mcp_servers", None) or [])
+    cfg = next((s for s in servers if isinstance(s, dict) and s.get("name") == name), None)
+    if cfg is None:
+        raise KeyError(name)
+    registry = platform.registry
+    replaced = []
+    for tool_name in registry.mcp_names(name):
+        live = registry.get(tool_name)
+        if live is not None:
+            replaced.append(live)
+        registry.unregister(tool_name)
+    # v1.311.0 review: the tools this Retry replaces had a live client (a
+    # stdio child); unregistering them alone orphaned it — and with packs
+    # now loading after boot, a Retry pressed in that window replaces the
+    # boot load's tools. Close what is replaced, never what is kept.
+    close_tools_clients(replaced)
+    loaded = 0
+    try:
+        for tool in mcp_tools([cfg], secret_resolver=platform.secrets.get, home=home):
+            registry.register(tool, mcp=True)
+            loaded += 1
+    except Exception as exc:  # noqa: BLE001 — report, never crash
+        return {
+            "ok": False,
+            "tools_loaded": 0,
+            "last_error": f"{type(exc).__name__}: {exc}",
+            "reason": "",
+            "fix": "",
+            "stderr_tail": "",
+        }
+    status = load_status(name) or {}
+    last_error = status.get("last_error")
+    if loaded == 0 and not last_error:
+        last_error = NO_TOOLS_ADVERTISED
+    return {
+        "ok": loaded > 0,
+        "tools_loaded": loaded,
+        "last_error": last_error,
+        "reason": str(status.get("reason") or ""),
+        "fix": str(status.get("fix") or ""),
+        "stderr_tail": _mask_text(str(status.get("stderr_tail") or "")),
+    }
+
+
 def _load_one_server(
     cfg: dict[str, Any],
     secret_resolver: SecretResolver | None,

@@ -3515,45 +3515,18 @@ def register(app: FastAPI, d) -> None:
         on the Tools page shows the NEW reason (or none) after a Retry — the
         read-only ``/test`` route proves a config but never changes what agents
         hold."""
-        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
-        cfg = next((s for s in servers if s.get("name") == name), None)
-        if cfg is None:
-            raise HTTPException(status_code=404, detail="no such server")
-        from ...mcp.tools import load_status as _mcp_load_status
-        from ...mcp.tools import mcp_tools as _mcp_tools
+        # v1.344.0: the reload itself is ``mcp.tools.reload_pack`` — the
+        # ``pack_restart`` tool calls the same function, so a Retry from the
+        # Tools page and one asked for in chat are one reload.
+        from ...mcp.tools import reload_pack
 
-        replaced = []
-        for tool_name in d.platform.registry.mcp_names(name):
-            live = d.platform.registry.get(tool_name)
-            if live is not None:
-                replaced.append(live)
-            d.platform.registry.unregister(tool_name)
-        # v1.311.0 review: the tools this Retry replaces had a live client (a
-        # stdio child); unregistering them alone orphaned it — and with packs
-        # now loading after boot, a Retry pressed in that window replaces the
-        # boot load's tools. Close what is replaced, never what is kept.
-        from ...mcp.tools import close_tools_clients
-
-        close_tools_clients(replaced)
-        loaded = 0
         try:
-            # `home` (v1.299.0): the reload RE-DIFFS the pack against its
-            # manifest, so a tool that arrived in an update is held back here
-            # exactly as it would be at the next boot.
-            for tool in _mcp_tools(
-                [cfg], secret_resolver=d.platform.secrets.get, home=d.platform.config.home
-            ):
-                d.platform.registry.register(tool, mcp=True)
-                loaded += 1
-        except Exception as exc:  # noqa: BLE001 — report, never crash
-            return {"ok": False, "tools_loaded": 0, "last_error": f"{type(exc).__name__}: {exc}"}
-        status = _mcp_load_status(name) or {}
-        last_error = status.get("last_error")
-        if loaded == 0 and not last_error:
-            last_error = "connected but the server advertised no tools"
+            r = reload_pack(d.platform, name, home=d.platform.config.home)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such server")
         # The response shape is pinned byte-for-byte by v1.229.0's tests; what
         # the reload held back is read off the row (`GET /mcp/servers`).
-        return {"ok": loaded > 0, "tools_loaded": loaded, "last_error": last_error}
+        return {"ok": r["ok"], "tools_loaded": r["tools_loaded"], "last_error": r["last_error"]}
 
     @app.post("/mcp/servers/{name}/tools/{tool}/trust")
     def trust_mcp_tool(name: str, tool: str) -> dict[str, Any]:

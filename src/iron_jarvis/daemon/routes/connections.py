@@ -923,6 +923,60 @@ def _probe_anthropic_models(base_url: str, key: str, *, timeout_s: float) -> dic
     return _done()
 
 
+def rescan_providers(d) -> dict[str, Any]:
+    """The body of ``POST /providers/rescan`` (v1.344.0, lifted so the route
+    and the ``provider_rescan`` tool share ONE rescan). ``d`` is the deps
+    object or anything with a ``.platform``. BLOCKING (PATH scans and the
+    sign-in probes): the route is a sync def on the threadpool, a tool calls
+    it through ``asyncio.to_thread``. Answers ``{"detected": rows}``.
+    """
+    from ...providers.cli_detect import detect_cli_providers, forget_detection_memos
+    from ...providers.manager import invalidate_cli_presence
+
+    # v1.311.0 review: the PATH lookup is memoised now (cli-binary-probe-
+    # uncached-on-loop), so a CLI installed a moment ago would read "not
+    # installed" until its entry expired. Re-detect means LOOK AGAIN: drop
+    # the memo first (a sync route on the threadpool, so the scan is fine).
+    # v1.332.0: and every other memo the catalog leans on: the Ollama
+    # "not answering" and Grok fallback memos, every live model list, and
+    # the catalog itself (again at the end, after the sign-in probes).
+    invalidate_cli_presence()
+    forget_detection_memos()
+    invalidate_model_catalog(discovery=True)
+    detected = detect_cli_providers(
+        configured={"ollama": getattr(d.platform.config, "ollama_base_url", None)}
+    )
+    rows = [dm.as_dict() for dm in detected]
+    # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
+    # (blocking is fine — this is a sync route on the threadpool), so
+    # "Re-detect" after `/login` turns the row green without a restart.
+    try:
+        from ...providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX, DEFAULT_PROBE
+
+        for prov, binary in CLI_BINARIES.items():
+            if not d.platform.providers._cli_binary_present(binary):  # noqa: SLF001
+                continue
+            st = DEFAULT_PROBE.refresh(binary)
+            usable = st.signed_in is not False
+            rows.append(
+                {
+                    "provider": prov,
+                    "model": "subscription",
+                    "name": "Claude Code CLI" if binary == "claude" else "Codex CLI",
+                    "available": usable,
+                    "source": "cli",
+                    "base_url": None,
+                    "exec_path": None,
+                    "context_window": None,
+                    "detail": "" if usable else f"{st.detail}. {SIGN_IN_FIX[binary]}",
+                }
+            )
+    except Exception:  # noqa: BLE001 — a probe fault never breaks the rescan
+        pass
+    invalidate_model_catalog()
+    return {"detected": rows}
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/providers")
@@ -1115,52 +1169,10 @@ def register(app: FastAPI, d) -> None:
         Idempotent and on-demand: a CLI a user installs mid-session shows up the
         next time any picker fetches ``/models``, but this lets the dashboard
         force an immediate refresh (and is what the periodic boot loop calls).
+        v1.344.0: the body is :func:`rescan_providers`, which the
+        ``provider_rescan`` tool calls too — one rescan.
         """
-        from ...providers.cli_detect import detect_cli_providers, forget_detection_memos
-        from ...providers.manager import invalidate_cli_presence
-
-        # v1.311.0 review: the PATH lookup is memoised now (cli-binary-probe-
-        # uncached-on-loop), so a CLI installed a moment ago would read "not
-        # installed" until its entry expired. Re-detect means LOOK AGAIN: drop
-        # the memo first (a sync route on the threadpool, so the scan is fine).
-        # v1.332.0: and every other memo the catalog leans on: the Ollama
-        # "not answering" and Grok fallback memos, every live model list, and
-        # the catalog itself (again at the end, after the sign-in probes).
-        invalidate_cli_presence()
-        forget_detection_memos()
-        invalidate_model_catalog(discovery=True)
-        detected = detect_cli_providers(
-            configured={"ollama": getattr(d.platform.config, "ollama_base_url", None)}
-        )
-        rows = [dm.as_dict() for dm in detected]
-        # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
-        # (blocking is fine — this is a sync route on the threadpool), so
-        # "Re-detect" after `/login` turns the row green without a restart.
-        try:
-            from ...providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX, DEFAULT_PROBE
-
-            for prov, binary in CLI_BINARIES.items():
-                if not d.platform.providers._cli_binary_present(binary):  # noqa: SLF001
-                    continue
-                st = DEFAULT_PROBE.refresh(binary)
-                usable = st.signed_in is not False
-                rows.append(
-                    {
-                        "provider": prov,
-                        "model": "subscription",
-                        "name": "Claude Code CLI" if binary == "claude" else "Codex CLI",
-                        "available": usable,
-                        "source": "cli",
-                        "base_url": None,
-                        "exec_path": None,
-                        "context_window": None,
-                        "detail": "" if usable else f"{st.detail}. {SIGN_IN_FIX[binary]}",
-                    }
-                )
-        except Exception:  # noqa: BLE001 — a probe fault never breaks the rescan
-            pass
-        invalidate_model_catalog()
-        return {"detected": rows}
+        return rescan_providers(d)
 
     @app.post("/providers/endpoint-models")
     def endpoint_models(body: EndpointModelsBody) -> dict[str, Any]:

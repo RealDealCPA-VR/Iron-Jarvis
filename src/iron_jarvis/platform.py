@@ -1408,6 +1408,15 @@ def build_platform(
 
     for tool in record_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # v1.344.0 ("Jarvis looks after itself"): the self-care tools — app_health,
+    # pack_status, run_doctor read the app's own health; pack_restart and
+    # provider_rescan are the Tools-page Retry and the Connections-page
+    # Re-detect (ask tier, denied under low trust). They read the daemon's
+    # deps through `platform.config_writer.d` once the daemon attaches it.
+    from .tools.selfcare import selfcare_tools
+
+    for tool in selfcare_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

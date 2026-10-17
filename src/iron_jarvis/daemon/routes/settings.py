@@ -156,6 +156,112 @@ def config_writer(d):
     return w
 
 
+def diagnostics_snapshot(d_or_platform) -> dict[str, Any]:
+    """The body of ``GET /diagnostics`` (never raises), lifted to module level
+    in v1.344.0 so the ``app_health`` tool (``tools/selfcare.py``) and the
+    route answer from ONE function.
+
+    ``d_or_platform`` is the daemon's deps object (``d``, the route's case) or
+    a bare platform: a platform has no ``loop_health`` / ``startup`` /
+    orchestrator counters of its own, so those read empty there — the same
+    keys, never a different shape.
+
+    ``db_liveness`` (v1.229.0, audit OBS5) is what this really measures: a
+    ``SELECT 1`` — the database file opens and answers. ``db_integrity``
+    carries the SAME value and is kept for compatibility only; it OVERSTATES,
+    because a real integrity check is ``PRAGMA integrity_check`` (a whole-DB
+    page scan), which is on-demand via ``POST /diagnostics/repair {"action":
+    "db_integrity"}`` and never runs on this polled route. Read ``db_liveness``.
+    """
+    from sqlalchemy import text
+
+    d = d_or_platform
+    platform = getattr(d, "platform", None)
+    if platform is None:
+        platform, d = d, None
+    orchestrator = getattr(d, "orchestrator", None) or getattr(platform, "orchestrator", None)
+    cfg = platform.config
+    out: dict[str, Any] = {}
+    try:
+        with platform.engine.connect() as conn:
+            # Cheap liveness probe only — a full PRAGMA integrity_check is a
+            # whole-DB page scan (hundreds of ms on a large DB) and this endpoint
+            # is polled ~every 15s app-wide (NotificationBell). Deep integrity is
+            # on-demand via POST /diagnostics/repair {db_integrity}.
+            conn.execute(text("SELECT 1")).scalar()
+        out["db_liveness"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        out["db_liveness"] = f"error: {exc}"
+    out["db_integrity"] = out["db_liveness"]  # compat alias; see docstring
+    try:
+        db_path = cfg.db_path
+        out["db_bytes"] = db_path.stat().st_size if db_path.exists() else 0
+        wal = Path(str(db_path) + "-wal")
+        out["wal_bytes"] = wal.stat().st_size if wal.exists() else 0
+    except Exception:  # noqa: BLE001
+        pass
+    out["secrets_key_present"] = (cfg.home / "secrets" / ".secrets.key").exists()
+    # Real decryptability check (not mere file existence): catches a lost /
+    # mismatched key (e.g. a key-less restore) that would silently break every
+    # stored credential while still reading as "present".
+    try:
+        out["secrets_key_valid"] = platform.secrets.key_valid()
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        out["secrets_key_valid"] = False
+    out["running_sessions"] = len(getattr(orchestrator, "_running", None) or ())
+    out["pending_reviews"] = len(getattr(orchestrator, "_reviews", None) or ())
+    # silent-failure visibility
+    out["background_loops"] = dict(getattr(d, "loop_health", None) or {})
+    # v1.250.0 (S-01): WHERE THE BOOT'S SECONDS WENT — total plus per-phase
+    # ms, so "the app takes 6-15 s to open" is a number on the install that
+    # shows it instead of a guess on one that does not. The daemon logs the
+    # same breakdown as ONE INFO line at startup; this is the copy nobody
+    # has to grep a log for. Names and numbers only — the phase names are
+    # code identifiers, never a path or a file name, because this blob gets
+    # pasted into bug reports.
+    try:
+        _boot = getattr(d, "startup", None) or {}
+        out["startup"] = {
+            "total_ms": _boot.get("total_ms"),
+            "at": _boot.get("at"),
+            "steps_ms": dict(_boot.get("steps_ms") or {}),
+        }
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        out["startup"] = {"total_ms": None, "at": None, "steps_ms": {}}
+    # v1.229.0 (audit U4): a configured MCP server that did not start, by
+    # name with its reason — the Overview hero reads this so "All systems
+    # nominal" cannot sit over a pack whose tools every agent is missing.
+    try:
+        from ...mcp.tools import load_status as _mcp_load_status
+
+        out["mcp_servers"] = [
+            {
+                "name": str(s.get("name") or ""),
+                # v1.311.0: "starting" while the daemon's background load
+                # has not heard from the pack yet (boot no longer waits on
+                # handshakes), then "ok" / "failed" / "failing" (v1.342.0;
+                # "ok" was "ready"); None = never tried.
+                "state": (_mcp_load_status(str(s.get("name") or "")) or {}).get("state"),
+                "tools_loaded": len(platform.registry.mcp_names(str(s.get("name") or ""))),
+                "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
+                # v1.256.0 (R-02): the plain-words cause and the next action,
+                # so the hero's "1 thing needs attention" can say WHAT to do.
+                "reason": (_mcp_load_status(str(s.get("name") or "")) or {}).get("reason"),
+                "fix": (_mcp_load_status(str(s.get("name") or "")) or {}).get("fix"),
+            }
+            for s in (getattr(cfg, "mcp_servers", None) or [])
+            if isinstance(s, dict) and s.get("name")
+        ]
+    except Exception:  # noqa: BLE001 — diagnostics must never raise
+        out["mcp_servers"] = []
+    out["tracked_worktrees"] = len(getattr(orchestrator, "_git_sessions", None) or ())
+    try:
+        out["providers"] = platform.providers.health()
+    except Exception:  # noqa: BLE001
+        out["providers"] = []
+    return out
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/config/secret")
@@ -402,88 +508,11 @@ def register(app: FastAPI, d) -> None:
         integrity_check`` (a whole-DB page scan), which is on-demand via
         ``POST /diagnostics/repair {"action": "db_integrity"}`` and never runs
         on this polled route. Read ``db_liveness``.
+
+        v1.344.0: the body is :func:`diagnostics_snapshot` — the ``app_health``
+        tool reads the same function, so the route and the tool are ONE truth.
         """
-        from sqlalchemy import text
-
-        cfg = d.platform.config
-        out: dict[str, Any] = {}
-        try:
-            with d.platform.engine.connect() as conn:
-                # Cheap liveness probe only — a full PRAGMA integrity_check is a
-                # whole-DB page scan (hundreds of ms on a large DB) and this endpoint
-                # is polled ~every 15s app-wide (NotificationBell). Deep integrity is
-                # on-demand via POST /diagnostics/repair {db_integrity}.
-                conn.execute(text("SELECT 1")).scalar()
-            out["db_liveness"] = "ok"
-        except Exception as exc:  # noqa: BLE001
-            out["db_liveness"] = f"error: {exc}"
-        out["db_integrity"] = out["db_liveness"]  # compat alias; see docstring
-        try:
-            db_path = cfg.db_path
-            out["db_bytes"] = db_path.stat().st_size if db_path.exists() else 0
-            wal = Path(str(db_path) + "-wal")
-            out["wal_bytes"] = wal.stat().st_size if wal.exists() else 0
-        except Exception:  # noqa: BLE001
-            pass
-        out["secrets_key_present"] = (cfg.home / "secrets" / ".secrets.key").exists()
-        # Real decryptability check (not mere file existence): catches a lost /
-        # mismatched key (e.g. a key-less restore) that would silently break every
-        # stored credential while still reading as "present".
-        try:
-            out["secrets_key_valid"] = d.platform.secrets.key_valid()
-        except Exception:  # noqa: BLE001 — diagnostics must never raise
-            out["secrets_key_valid"] = False
-        out["running_sessions"] = len(d.orchestrator._running)
-        out["pending_reviews"] = len(d.orchestrator._reviews)
-        out["background_loops"] = dict(d.loop_health)  # silent-failure visibility
-        # v1.250.0 (S-01): WHERE THE BOOT'S SECONDS WENT — total plus per-phase
-        # ms, so "the app takes 6-15 s to open" is a number on the install that
-        # shows it instead of a guess on one that does not. The daemon logs the
-        # same breakdown as ONE INFO line at startup; this is the copy nobody
-        # has to grep a log for. Names and numbers only — the phase names are
-        # code identifiers, never a path or a file name, because this blob gets
-        # pasted into bug reports.
-        try:
-            _boot = getattr(d, "startup", None) or {}
-            out["startup"] = {
-                "total_ms": _boot.get("total_ms"),
-                "at": _boot.get("at"),
-                "steps_ms": dict(_boot.get("steps_ms") or {}),
-            }
-        except Exception:  # noqa: BLE001 — diagnostics must never raise
-            out["startup"] = {"total_ms": None, "at": None, "steps_ms": {}}
-        # v1.229.0 (audit U4): a configured MCP server that did not start, by
-        # name with its reason — the Overview hero reads this so "All systems
-        # nominal" cannot sit over a pack whose tools every agent is missing.
-        try:
-            from ...mcp.tools import load_status as _mcp_load_status
-
-            out["mcp_servers"] = [
-                {
-                    "name": str(s.get("name") or ""),
-                    # v1.311.0: "starting" while the daemon's background load
-                    # has not heard from the pack yet (boot no longer waits on
-                    # handshakes), then "ok" / "failed" / "failing" (v1.342.0;
-                    # "ok" was "ready"); None = never tried.
-                    "state": (_mcp_load_status(str(s.get("name") or "")) or {}).get("state"),
-                    "tools_loaded": len(d.platform.registry.mcp_names(str(s.get("name") or ""))),
-                    "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
-                    # v1.256.0 (R-02): the plain-words cause and the next action,
-                    # so the hero's "1 thing needs attention" can say WHAT to do.
-                    "reason": (_mcp_load_status(str(s.get("name") or "")) or {}).get("reason"),
-                    "fix": (_mcp_load_status(str(s.get("name") or "")) or {}).get("fix"),
-                }
-                for s in (getattr(cfg, "mcp_servers", None) or [])
-                if isinstance(s, dict) and s.get("name")
-            ]
-        except Exception:  # noqa: BLE001 — diagnostics must never raise
-            out["mcp_servers"] = []
-        out["tracked_worktrees"] = len(d.orchestrator._git_sessions)
-        try:
-            out["providers"] = d.platform.providers.health()
-        except Exception:  # noqa: BLE001
-            out["providers"] = []
-        return out
+        return diagnostics_snapshot(d)
 
     @app.get("/diagnostics/errors")
     def diagnostics_errors(limit: int = 50) -> dict[str, Any]:

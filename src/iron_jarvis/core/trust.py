@@ -96,6 +96,13 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # A low-trust run must not hand what it read to ANOTHER MACHINE: the
         # remote has no fence, no scanner and no trust posture of its own.
         "delegate_remote",
+        # v1.344.0 ("Jarvis looks after itself"): the self-care REPAIRS. A
+        # pack restart respawns a child process with the pack's secrets and
+        # a provider rescan re-probes every CLI sign-in — both change what
+        # the NEXT turn can reach, so flagged content never asks for them.
+        # The readers (app_health, pack_status, run_doctor) stay allowed.
+        "pack_restart",
+        "provider_rescan",
     }
 )
 
