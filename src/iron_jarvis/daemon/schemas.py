@@ -78,6 +78,98 @@ def _clean_max_steps(value: Any) -> int | None:
     return steps
 
 
+#: PRIOR TOOL RESULTS RIDE THE ESCALATION (v1.344.0, lane P). When a chat turn
+#: escalates, its response / done frame carries what the turn already ran
+#: (``prior_tool_results``), the page hands that list to ``POST /sessions``,
+#: ``create_session`` stores it under ``options["prior_tool_results"]`` and
+#: the runtime shows it to the agent as DATA once, right after the task, so
+#: the agent does not redo reads the chat already made. The caps below are
+#: THE contract: the chat lanes build to them (``chat_turn``), this schema
+#: refuses past them (422), the orchestrator normalises to them again and
+#: the runtime renders no more than them. Newest entries are kept when a
+#: list is cut.
+PRIOR_RESULTS_MAX_ENTRIES = 12
+PRIOR_RESULTS_MAX_CHARS = 12_000
+PRIOR_RESULT_ARGS_CHARS = 200
+PRIOR_RESULT_OUTPUT_CHARS = 1_500
+PRIOR_RESULT_TOOL_CHARS = 120
+
+
+class PriorToolResult(BaseModel):
+    """One tool call a chat turn already made before it escalated. ``tool``
+    is the registry name, ``args_summary`` the REDACTED argument display the
+    chat frames already use, ``ok`` whether the call ran, ``output_head`` the
+    masked head of what it answered (a failure's error text). Never a secret
+    value: the lanes mask every text with ``detections.redact.mask`` before
+    it lands here, and the runtime fences each row as untrusted data."""
+
+    tool: str
+    args_summary: str = ""
+    ok: bool = False
+    output_head: str = ""
+
+    @field_validator("tool")
+    @classmethod
+    def _validate_tool(cls, v: str) -> str:
+        name = " ".join(str(v or "").split())
+        if not name:
+            raise ValueError("every prior tool result needs a tool name")
+        if len(name) > PRIOR_RESULT_TOOL_CHARS:
+            raise ValueError(
+                f"a prior tool result's tool name is longer than {PRIOR_RESULT_TOOL_CHARS} characters"
+            )
+        return name
+
+    @field_validator("args_summary")
+    @classmethod
+    def _validate_args_summary(cls, v: str) -> str:
+        text = str(v or "")
+        if len(text) > PRIOR_RESULT_ARGS_CHARS:
+            raise ValueError(
+                f"a prior tool result's args_summary is longer than {PRIOR_RESULT_ARGS_CHARS} characters"
+            )
+        return text
+
+    @field_validator("output_head")
+    @classmethod
+    def _validate_output_head(cls, v: str) -> str:
+        text = str(v or "")
+        if len(text) > PRIOR_RESULT_OUTPUT_CHARS:
+            raise ValueError(
+                f"a prior tool result's output_head is longer than {PRIOR_RESULT_OUTPUT_CHARS} characters"
+            )
+        return text
+
+
+def prior_results_chars(rows: list) -> int:
+    """How much of the ``PRIOR_RESULTS_MAX_CHARS`` budget *rows* use: the
+    tool name, the args summary and the output head of every row (dicts or
+    :class:`PriorToolResult` rows)."""
+    total = 0
+    for row in rows or []:
+        get = row.get if isinstance(row, dict) else lambda k, _r=row: getattr(_r, k, "")
+        total += len(str(get("tool") or "")) + len(str(get("args_summary") or ""))
+        total += len(str(get("output_head") or ""))
+    return total
+
+
+def _clean_prior_tool_results(rows: Any) -> list[PriorToolResult] | None:
+    """The list cap and the total-chars cap, in one plain sentence each
+    (the per-row caps live on :class:`PriorToolResult`). ``None`` and ``[]``
+    are the no-carry case and pass through."""
+    if rows is None:
+        return None
+    if len(rows) > PRIOR_RESULTS_MAX_ENTRIES:
+        raise ValueError(
+            f"prior_tool_results holds more than {PRIOR_RESULTS_MAX_ENTRIES} entries"
+        )
+    if prior_results_chars(rows) > PRIOR_RESULTS_MAX_CHARS:
+        raise ValueError(
+            f"prior_tool_results is longer than {PRIOR_RESULTS_MAX_CHARS} characters in all"
+        )
+    return list(rows)
+
+
 class SessionCreate(BaseModel):
     task: str
     agent_type: str = "builder"
@@ -123,6 +215,12 @@ class SessionCreate(BaseModel):
     # refused at creation (409) when the session's provider leaves this
     # network, and inherited by every child run like ``inherited_trust``.
     local_only: bool = False
+    # WHAT THE CHAT ALREADY DID (v1.344.0, lane P): the escalating turn's
+    # tool outcomes, as the done frame / POST /chat response carried them
+    # (``prior_tool_results``). None/[] = nothing to carry (today's body).
+    # Past the caps (``PRIOR_RESULTS_MAX_ENTRIES`` / ``_CHARS`` and the
+    # per-row ones) the body is a 422 with one plain sentence, never cut.
+    prior_tool_results: list[PriorToolResult] | None = None
 
     @field_validator("origin")
     @classmethod
@@ -133,6 +231,11 @@ class SessionCreate(BaseModel):
     @classmethod
     def _validate_max_steps(cls, v: Any) -> int | None:
         return _clean_max_steps(v)
+
+    @field_validator("prior_tool_results")
+    @classmethod
+    def _validate_prior_tool_results(cls, v: Any) -> list[PriorToolResult] | None:
+        return _clean_prior_tool_results(v)
 
 
 class MissionCreate(BaseModel):
@@ -569,6 +672,14 @@ class ContinueBody(BaseModel):
     # PARENT's display objective instead of listing that instruction as
     # what the user asked for. False = the user's own words (contract 3).
     resume: bool = False
+    # Same contract as SessionCreate.prior_tool_results (v1.344.0): the chat
+    # page sends the escalating turn's tool outcomes on a follow-up too.
+    prior_tool_results: list[PriorToolResult] | None = None
+
+    @field_validator("prior_tool_results")
+    @classmethod
+    def _validate_prior_tool_results(cls, v: Any) -> list[PriorToolResult] | None:
+        return _clean_prior_tool_results(v)
 
 
 class UploadBody(BaseModel):
@@ -1777,11 +1888,18 @@ class SpawnBody(BaseModel):
     origin: str | None = None
     # Same contract as SessionCreate.local_only (v1.332.0).
     local_only: bool = False
+    # Same contract as SessionCreate.prior_tool_results (v1.344.0).
+    prior_tool_results: list[PriorToolResult] | None = None
 
     @field_validator("origin")
     @classmethod
     def _validate_origin(cls, v: str | None) -> str | None:
         return _clean_origin(v)
+
+    @field_validator("prior_tool_results")
+    @classmethod
+    def _validate_prior_tool_results(cls, v: Any) -> list[PriorToolResult] | None:
+        return _clean_prior_tool_results(v)
 
 
 class UpdateBody(BaseModel):

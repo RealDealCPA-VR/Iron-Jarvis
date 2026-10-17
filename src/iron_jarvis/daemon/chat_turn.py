@@ -2098,6 +2098,81 @@ def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
     return out
 
 
+#: v1.344.0 (P1) — AN ESCALATION CARRIES THE TURN. When a turn escalates
+#: (``escalate_to_agent`` or out of rounds) the response / done frame
+#: carries ``prior_tool_results``: one row per call the turn made, in call
+#: order, ``{tool, args_summary, ok, output_head}`` — the REDACTED argument
+#: display the stream frames already send (``Tool.redact_args``), ``ok``
+#: only for a call that ran, and the masked head of what it answered (a
+#: failure's error text, a refusal's sentence). The page hands the list to
+#: ``POST /sessions`` and the runtime shows it to the agent as fenced data
+#: (``agents/runtime.prior_results_block``), so the agent does not redo the
+#: reads the chat already made. Both lanes, lock-step; the key is present
+#: ONLY on an escalation (like ``workflow_run``), so a plain turn's response
+#: keeps its pinned key set. The caps live in ``daemon/schemas``.
+_CHAT_FENCE_RE = None
+
+
+def redacted_args(registry, name: str, args: object) -> object:
+    """The redacted argument display for a call — ``Tool.redact_args`` when
+    the registry knows the tool (the same guard the stream frames and the
+    DB-persist path use), the raw args otherwise. Never raises."""
+    try:
+        tool = registry.get(name)
+        return tool.redact_args(args) if tool is not None else args
+    except Exception:  # noqa: BLE001 — a display must never fail the turn
+        return args
+
+
+def _unfenced(text: str) -> str:
+    """*text* with the chat lane's untrusted fence (``_fence_tool_output`` →
+    ``wrap_untrusted``) removed, so the runtime fences a carried output ONCE.
+    Text that is not fenced passes through."""
+    global _CHAT_FENCE_RE
+    if _CHAT_FENCE_RE is None:
+        import re as _re
+
+        from ..computeruse.safety import _FENCE_BOTTOM, _FENCE_TOP
+
+        _CHAT_FENCE_RE = _re.compile(
+            r"^" + _re.escape(_FENCE_TOP) + r"\n.*?\n---\n(.*)\n---\n"
+            + _re.escape(_FENCE_BOTTOM) + r"\s*$",
+            _re.S,
+        )
+    m = _CHAT_FENCE_RE.match(text)
+    return m.group(1) if m else text
+
+
+def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: object) -> dict[str, Any]:
+    """One ``prior_tool_results`` row for a call that settled: the tool, the
+    redacted args as one JSON line (masked, cut to the args cap), whether it
+    ran, and the masked head of its output (the fence stripped; masked BEFORE
+    the cut so a cut can never leave half a secret). Never raises."""
+    from ..detections.redact import mask
+    from .schemas import PRIOR_RESULT_ARGS_CHARS, PRIOR_RESULT_OUTPUT_CHARS
+
+    try:
+        args_text = _json.dumps(safe_args, default=str, ensure_ascii=False, sort_keys=True)
+    except Exception:  # noqa: BLE001
+        args_text = repr(safe_args)
+    return {
+        "tool": str(name),
+        "args_summary": str(mask(args_text))[:PRIOR_RESULT_ARGS_CHARS],
+        "ok": bool(ok),
+        "output_head": str(mask(_unfenced(str(content or ""))))[:PRIOR_RESULT_OUTPUT_CHARS],
+    }
+
+
+def cap_prior_tool_results(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The list an escalation carries: *entries* through the ONE normaliser
+    the runtime renders with (``agents/runtime.normalize_prior_tool_results``
+    — masked again, per-row caps, then the NEWEST rows that fit 12 entries /
+    12,000 chars, oldest first)."""
+    from ..agents.runtime import normalize_prior_tool_results
+
+    return normalize_prior_tool_results(entries)
+
+
 # --------------------------------------------------------------------------- #
 # A ROUND'S READERS RUN TOGETHER (v1.311.0, chat-tools-run-serially) — the
 # classifier and the round runner BOTH chat lanes call, lock-step.
@@ -5757,6 +5832,11 @@ async def run_chat_turn(
     # keeps carrying the permission-denied names on the response as before.
     # MIRROR NOTE (lock-step): routes/chat.py's stream loop keeps the same list.
     refused_tools: list[tuple[str, str]] = []
+    # v1.344.0 (P1): every settled call — {tool, args_summary, ok, output_head}
+    # in call order — carried on the response ONLY when the turn escalates
+    # (`prior_tool_results`). MIRROR NOTE (lock-step): routes/chat.py's stream
+    # loop keeps the same list and puts it on the done frame.
+    _prior_results: list[dict[str, Any]] = []
     _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn        # armed tools the engine refused this turn
     # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating tool just
     # changed. Appended only inside the `if ran:` block below — the same gate
@@ -6189,6 +6269,17 @@ async def run_chat_turn(
                     result = _slots[_i]["result"]
                     content = _slots[_i]["content"]
                     ran = _slots[_i]["ran"]
+                    # v1.344.0 (P1): what this call was and answered, for the
+                    # escalation's `prior_tool_results` — read BEFORE the
+                    # second-failure note joins `content` (the carried row is
+                    # the bare outcome, like the stream lane's frame); the
+                    # redacted args are computed here because this lane has no
+                    # frame; the output is masked by the helper. MIRROR NOTE
+                    # (lock-step): routes/chat.py's stream loop.
+                    _prior_results.append(prior_tool_result_entry(
+                        tc.name, redacted_args(d.platform.registry, tc.name, tc.arguments),
+                        ran, content,
+                    ))
                     if ran:
                         last_tool_output = str(result.output or "")
                     elif result is not None:
@@ -6586,6 +6677,12 @@ async def run_chat_turn(
     # key — edit both or neither.
     if workflow_run_info is not None:
         out["workflow_run"] = workflow_run_info
+    # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY escalation
+    # (possibly []), absent otherwise — the page hands it to POST /sessions.
+    # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py carries
+    # the same conditional key — edit both or neither.
+    if escalate:
+        out["prior_tool_results"] = cap_prior_tool_results(_prior_results)
     # UNREAD STEER NOTES (v1.287.0) — the stream done-frame's conditional
     # `unread_steers` key is ABSENT here by construction, not by omission:
     # this lane never registers a turn (TURNS), so no steer note can be

@@ -76,6 +76,9 @@ from ..chat_turn import (
     with_second_failure_note,
     refusal_label,
     refusal_footnotes,
+    # v1.344.0 — an escalation carries the turn (P1), lock-step with chat_turn.
+    prior_tool_result_entry,
+    cap_prior_tool_results,
     _low_trust_args,
     _low_trust_invoke_kwargs,
     chat_grant_scopes,
@@ -3697,6 +3700,10 @@ async def chat_stream(
         # v1.344.0 (M3): every labelled refusal — (tool, label) in call order
         # — for `refusal_footnotes`; lock-step with chat_turn.
         refused_tools: list[tuple[str, str]] = []
+        # v1.344.0 (P1): every settled call — {tool, args_summary, ok,
+        # output_head} in call order — on the done frame ONLY when the turn
+        # escalates (`prior_tool_results`); lock-step with chat_turn.
+        _prior_results: list[dict[str, Any]] = []
         _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
         # tool just changed. Appended only inside the `if ran:` block —
@@ -4510,6 +4517,11 @@ async def chat_stream(
                                 "id": tc.id, "name": tc.name, "status": "finished",
                                 "ok": False, "output": str(content)[:2000],
                             })
+                            # v1.344.0 (P1): a refused call is an outcome the
+                            # agent should know about too (lock-step).
+                            _prior_results.append(prior_tool_result_entry(
+                                tc.name, _plans[_i]["safe_args"], False, content,
+                            ))
                             msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                    name=tc.name, content=str(content)[:12000]))
                             continue
@@ -4613,6 +4625,13 @@ async def chat_stream(
                             _call_key = _plans[_i]["key"]
                             _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
                             _tool_content = with_second_failure_note(content, _failed_calls[_call_key])
+                        # v1.344.0 (P1): what this call was and answered, for
+                        # the escalation's `prior_tool_results` — the frame's
+                        # redacted args, the bare content (masked by the
+                        # helper). MIRROR NOTE (lock-step): chat_turn.py.
+                        _prior_results.append(prior_tool_result_entry(
+                            tc.name, _plans[_i]["safe_args"], ran, content,
+                        ))
                         yield _sse("tool_call", {
                             "id": tc.id, "name": tc.name, "status": "finished",
                             "ok": ran, "output": str(content)[:2000],
@@ -4997,6 +5016,12 @@ async def chat_stream(
         # neither.
         if workflow_run_info is not None:
             done_frame["workflow_run"] = workflow_run_info
+        # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY
+        # escalation (possibly []), absent otherwise — the page hands it to
+        # POST /sessions. MIRROR NOTE (lock-step): chat_turn.py's response
+        # carries the same conditional key — edit both or neither.
+        if escalate:
+            done_frame["prior_tool_results"] = cap_prior_tool_results(_prior_results)
         # v1.287.0: present ONLY when a note was left unread (see above).
         if unread_steers:
             done_frame["unread_steers"] = unread_steers

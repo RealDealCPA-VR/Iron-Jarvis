@@ -58,6 +58,7 @@ from .runtime import (
     AgentRuntime,
     inherited_approval_mode,
     is_direct_workspace,
+    normalize_prior_tool_results,
 )
 from .team import MISSION_ORIGIN
 from .decompose import is_bulk_task
@@ -879,8 +880,18 @@ class Orchestrator:
         trust: str | None = None,
         trust_reason: str = "",
         options: dict | None = None,
+        prior_tool_results: list | None = None,
     ) -> Session:
         """Create (never start) a session row.
+
+        ``prior_tool_results`` (v1.344.0, lane P): what the chat turn that
+        escalated into this session already ran (the done frame's rows,
+        ``{tool, args_summary, ok, output_head}``). Stored under
+        ``options["prior_tool_results"]`` after ``runtime.
+        normalize_prior_tool_results`` (masked, capped, newest kept) — a
+        door may also hand the rows in ``options`` directly; either way the
+        row holds the normalised list or no key at all, so a run with
+        nothing to carry is byte-identical to before.
 
         ``options`` (v1.299.0): the RUN OPTIONS a door states, stored as the
         row's ``options_json`` and read by the runtime through
@@ -941,6 +952,20 @@ class Orchestrator:
                 )
         else:
             options.pop("local_only", None)
+        # WHAT THE CHAT ALREADY DID (v1.344.0, lane P): the kwarg wins over a
+        # list a door put in ``options``; both go through the ONE normaliser
+        # the runtime renders with, so the row never holds a secret value or
+        # more than the caps — and never an empty key.
+        _prior_rows = (
+            prior_tool_results
+            if prior_tool_results is not None
+            else options.get("prior_tool_results")
+        )
+        _prior_clean = normalize_prior_tool_results(_prior_rows)
+        if _prior_clean:
+            options["prior_tool_results"] = _prior_clean
+        else:
+            options.pop("prior_tool_results", None)
 
         repo_for_worktree: Path | None = None
         # A project-folder task runs DIRECTLY in the user's folder (full
@@ -2029,9 +2054,15 @@ class Orchestrator:
         allow_tools: list[str] | None = None,
         approval_mode: str | None = None,
         resume: bool = False,
+        prior_tool_results: list | None = None,
     ) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and
         a compact recap of the prior task/result, enabling multi-turn work.
+
+        ``prior_tool_results`` (v1.344.0, lane P): the escalating chat turn's
+        tool outcomes for THIS follow-up (the same shape ``create_session``
+        takes). The parent's list is never inherited — it described the
+        parent's turn, and the runtime would show it again as this run's.
 
         ``resume`` (v1.337.0): this is Continue on a job a RESTART cut off.
         When the cut-off run kept its conversation (``agents/transcript``),
@@ -2071,6 +2102,12 @@ class Orchestrator:
             _from = self._resumable_run(prev.id)
             if _from:
                 options["resume_run"] = _from
+        # v1.344.0 (lane P): what the chat ran belongs to ONE turn; a
+        # follow-up carries its own list or none, never the parent's.
+        options.pop("prior_tool_results", None)
+        _prior_clean = normalize_prior_tool_results(prior_tool_results)
+        if _prior_clean:
+            options["prior_tool_results"] = _prior_clean
         if getattr(prev, "origin", None) == MISSION_ORIGIN:
             # A MISSION'S FOLLOW-UP KEEPS THE USER'S OWN WORDS (v1.309.0). The
             # recap above is MODEL-facing (it must carry the earlier task and
