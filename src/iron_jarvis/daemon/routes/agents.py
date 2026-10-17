@@ -28,7 +28,7 @@ from ..schemas import (
     McpImportApplyBody,
     McpImportPreviewBody,
     McpServerBody,
-    McpServerPatch,
+    McpServerPatchBody,
     McpSettingsPatch,
     McpSuggestBody,
     PauseBody,
@@ -325,6 +325,30 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
     import re as _re
 
     name = (body.name or "").strip()
+    # v1.343.0 (lane J): the npm/GitHub door (a body naming a `launcher` or
+    # a `package`) gets the contract's name rule applied HERE, not only in
+    # the browser: `safe_name` (dots and spaces become "-", lowercase, a
+    # letter first, 40 chars), falling back to the package's own tail when
+    # the typed name leaves nothing. A name that still fails the rule is a
+    # 422 that says the rule. Every other door keeps its 400 as before.
+    npm_door = bool(body.launcher or body.package)
+    if npm_door:
+        from ...mcp.import_config import NAME_RX as _NAME_RX
+        from ...mcp.import_config import bare_package as _bare_package
+        from ...mcp.import_config import safe_name as _safe_name
+
+        name = _safe_name(name)
+        if not name and body.package:
+            tail = _bare_package(body.package).rsplit("/", 1)[-1].split("@", 1)[0]
+            name = _safe_name(tail)
+        if not _NAME_RX.match(name):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "a pack name starts with a letter and uses letters, digits, "
+                    "- or _ (at most 40 characters)"
+                ),
+            )
     if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
         raise HTTPException(status_code=400, detail="invalid server name")
     is_http = body.transport in ("http", "sse")
@@ -479,6 +503,9 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
         "transport": body.transport,
         "header_names": sorted(list(plain_headers) + list(header_secrets)),
         "auth_set": bool(auth_secret),
+        # v1.343.0 (lane J): the npm door's effective launcher (the one named,
+        # else the guess); absent for every other door.
+        **({"launcher": body.launcher} if npm_door else {}),
     }
 
 
@@ -819,6 +846,357 @@ def _plain_validation_words(exc: BaseException) -> str:
         if line.startswith("Value error, "):
             return line[len("Value error, "):].split(" [type=", 1)[0]
     return text.splitlines()[0][:200] if text else "the pack could not be read"
+
+
+def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
+    """ONE configured pack as ``GET /mcp/servers`` lists it (v1.343.0, lane
+    J: lifted out of the route so the PATCH answer is the same row). Key and
+    header NAMES only, never a value; annotated with the live tool count and
+    the load record."""
+    from ...mcp.tools import load_status as _mcp_load_status
+
+    name = s.get("name") or ""
+    loaded = d.platform.registry.mcp_names(name) if name else []
+    # v1.299.0: the per-tool view, read off the LIVE Tool objects so the
+    # row and the resolver cannot disagree about what is held back.
+    tool_rows = []
+    for full in loaded:
+        live = d.platform.registry.get(full)
+        tool_rows.append(
+            {
+                "name": full.split("__", 2)[-1],
+                "write_like": bool(getattr(live, "write_like", True)),
+                "quarantined": bool(getattr(live, "quarantined", False)),
+            }
+        )
+    # v1.229.0 (audit U4): WHY a server holds 0 tools. The load record
+    # keeps the skip reason (e.g. "FileNotFoundError: npx not found")
+    # that used to live only in a daemon.log warning; `null` means it
+    # loaded (or was never attempted in this process).
+    status = _mcp_load_status(name) if name else None
+    # v1.342.0 (lane C): a row carries env KEY NAMES, never a value.
+    # `env` (plain entries) and `env_secrets` (vault names) stay out
+    # of the answer; `env_keys` + `secret_keys` say what is set. A
+    # pre-migration row that still holds a plain token is masked the
+    # same way — the key is listed, the value never leaves.
+    _plain_env = dict(s.get("env") or {})
+    _env_secrets = dict(s.get("env_secrets") or {})
+    # v1.343.0 (lane H): an http pack's `headers` are VALUES and its
+    # `header_secrets` are vault names — neither rides the row; the
+    # row lists header NAMES and says whether an auth value is set.
+    _plain_headers = dict(s.get("headers") or {})
+    _header_secrets = dict(s.get("header_secrets") or {})
+    _row = {
+        k: v
+        for k, v in s.items()
+        if k not in ("env", "env_secrets", "headers", "header_secrets")
+    }
+    # v1.342.0 (integration): an HTTP pack's header token (`auth.value`,
+    # the non-env secret shape _build_transport reads) is a VALUE too.
+    # The row keeps the auth shape and says a value is set, never what.
+    # v1.343.0: the same for `auth.secret` (the vault name the POST
+    # door stores) — the row says `value_set`, not where.
+    _auth_set = False
+    if isinstance(_row.get("auth"), dict):
+        _auth_set = bool(_row["auth"].get("value") or _row["auth"].get("secret"))
+        _row["auth"] = {
+            k: v for k, v in _row["auth"].items() if k not in ("value", "secret")
+        } | {"value_set": _auth_set}
+    return {
+        **_row,
+        # Rows saved by the marketplace connect flow OMIT env/args
+        # when empty — normalize so clients can rely on the keys
+        # (a missing env crashed the Tools page on real installs).
+        "args": list(s.get("args") or []),
+        "env_keys": sorted(str(k) for k in _plain_env),
+        "secret_keys": sorted(str(k) for k in _env_secrets),
+        # v1.343.0: the http shape — transport ("stdio" when the
+        # row predates it), header NAMES, whether auth is set.
+        "transport": (
+            s["transport"]
+            if isinstance(s.get("transport"), str) and s.get("transport")
+            else "stdio"
+        ),
+        "header_names": sorted(
+            {str(k) for k in _plain_headers} | {str(k) for k in _header_secrets}
+        ),
+        "auth_set": _auth_set,
+        "tools_loaded": len(loaded),
+        "tool_names": [n.split("__", 2)[-1] for n in loaded],
+        # v1.299.0 (additive): write-like tools that APPEARED or
+        # CHANGED since the pack was first trusted; they ask until
+        # `POST /mcp/servers/{name}/tools/{tool}/trust`.
+        "tools": tool_rows,
+        "quarantined": [t["name"] for t in tool_rows if t["quarantined"]],
+        "last_error": status.get("last_error") if status else None,
+        # v1.256.0 (R-02): the same raw text, plus what it MEANS and
+        # what to do. Classified once on the load record so this row
+        # and the Overview hero cannot form two opinions about it.
+        "reason": status.get("reason") if status else None,
+        "fix": status.get("fix") if status else None,
+        "last_attempt_at": status.get("at") if status else None,
+        # v1.311.0: "starting" while the daemon's background load
+        # has not answered yet (packs load after boot now) — a row
+        # must not read as "0 tools, broken" in that window.
+        # v1.342.0: "ok" / "failed" / "failing" (loaded, but its
+        # calls fail) — the row says it in words.
+        "state": status.get("state") if status else None,
+        # v1.342.0: call-time failures since the last success or
+        # Retry, and the child's last output (masked, bounded) —
+        # the one clue a crashed pack leaves behind.
+        "failures": int(status.get("failures") or 0) if status else 0,
+        "stderr_tail": str(status.get("stderr_tail") or "") if status else "",
+    }
+
+
+#: The keys that make up a pack row's SHAPE (stdio or http). Anything else a
+#: stored row carries (``auto_approve``, a Directory mark) is kept as is by
+#: an edit.
+_PACK_SHAPE_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "transport",
+        "command",
+        "args",
+        "env",
+        "env_secrets",
+        "cwd",
+        "url",
+        "headers",
+        "header_secrets",
+        "auth",
+    }
+)
+
+
+def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
+    """Edit a configured pack PARTIALLY and reload it (v1.343.0, lane J).
+
+    The row that exists is the base; every field the body carries replaces
+    or merges into it (``env`` / ``headers`` key by key, a secret-named
+    key's value into the vault under the same names the add door uses;
+    ``clear_secrets`` / ``clear_headers`` drop a key's vault row AND its row
+    entry; ``auth: null`` drops the token). Omitted = keep; ``""`` is a
+    value; ``cwd: ""`` stores no folder, as the add door does. The result
+    is validated like a POST (an http pack needs a url, a stdio pack a
+    command), every vault write lands BEFORE the row is persisted (a
+    refusal changes nothing and names the KEYS), then the pack's live tools
+    are unloaded (clients closed) and loaded again through the one loader,
+    manifest re-diffed. Answers the ``GET /mcp/servers`` row plus
+    ``{reloaded, note}``. A rename is a 422 (the name is the identity).
+    Raises ``HTTPException`` exactly as the route answers.
+    """
+    from ...mcp.secrets import is_secret_key as _is_secret_key
+    from ...mcp.secrets import split_env as _split_env
+    from ...mcp.secrets import vault_name as _vault_name
+
+    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+    idx = next(
+        (i for i, s in enumerate(servers) if isinstance(s, dict) and s.get("name") == name),
+        None,
+    )
+    if idx is None:
+        raise HTTPException(status_code=404, detail="no such server")
+    if body.name is not None and body.name.strip() != name:
+        raise HTTPException(
+            status_code=422,
+            detail="the name cannot change; remove the pack and add it again under the new name",
+        )
+    old = servers[idx]
+    row = json.loads(json.dumps(old))
+    old_transport = (
+        row["transport"] if isinstance(row.get("transport"), str) and row.get("transport") else "stdio"
+    )
+    transport = body.transport if body.transport is not None else old_transport
+    is_http = transport in ("http", "sse")
+
+    # Vault work is COLLECTED first and applied in order: writes before the
+    # row is persisted (a refusal leaves everything as it was), deletes
+    # after (an orphaned vault row is harmless; a lost one is not).
+    writes: list[tuple[str, str, str]] = []  # (vault name, value, the KEY for the words)
+    deletes: list[str] = []
+
+    # -- the stdio half ---------------------------------------------------- #
+    env: dict[str, str] = {str(k): ("" if v is None else str(v)) for k, v in dict(row.get("env") or {}).items()}
+    env_secrets: dict[str, str] = {str(k): str(v) for k, v in dict(row.get("env_secrets") or {}).items()}
+    if body.env is not None:
+        plain, secret_values = _split_env(name, body.env)
+        for key, value in plain.items():
+            env[key] = value
+        for key, value in secret_values.items():
+            sname = _vault_name(name, key)
+            writes.append((sname, value, key))
+            env_secrets[key] = sname
+            # A pre-migration plain value under that key is superseded.
+            env.pop(key, None)
+    for key in body.cleared_secrets():
+        sname = env_secrets.pop(key, None)
+        if sname:
+            deletes.append(sname)
+        env.pop(key, None)
+    command = body.command if body.command is not None else str(row.get("command") or "")
+    args = body.args if body.args is not None else list(row.get("args") or [])
+    cwd = body.cwd if body.cwd is not None else str(row.get("cwd") or "")
+
+    # -- the http half ----------------------------------------------------- #
+    url = body.url if body.url is not None else str(row.get("url") or "")
+    headers: dict[str, str] = {
+        str(k): ("" if v is None else str(v)) for k, v in dict(row.get("headers") or {}).items()
+    }
+    header_secrets: dict[str, str] = {
+        str(k): str(v) for k, v in dict(row.get("header_secrets") or {}).items()
+    }
+    if body.headers is not None:
+        for header_name, value in dict(body.headers).items():
+            h = str(header_name).strip()
+            v = "" if value is None else str(value)
+            if not h:
+                continue
+            if _is_secret_key(h):
+                if v:
+                    sname = _vault_name(name, f"header.{h}")
+                    writes.append((sname, v, f"header {h}"))
+                    header_secrets[h] = sname
+                    headers.pop(h, None)
+            else:
+                headers[h] = v
+    for h in body.cleared_headers():
+        sname = header_secrets.pop(h, None)
+        if sname:
+            deletes.append(sname)
+        headers.pop(h, None)
+    auth: dict[str, Any] | None = dict(row["auth"]) if isinstance(row.get("auth"), dict) else None
+    if body.clears_auth():
+        if auth and auth.get("secret"):
+            deletes.append(str(auth["secret"]))
+        auth = None
+    elif body.auth is not None:
+        new_auth: dict[str, Any] = {
+            "header": body.auth.header.strip(),
+            "format": body.auth.format,
+        }
+        if body.auth.value:
+            sname = _vault_name(name, "auth.value")
+            writes.append((sname, body.auth.value, "the auth value"))
+            new_auth["secret"] = sname
+        elif auth and auth.get("secret"):
+            new_auth["secret"] = auth["secret"]
+        elif auth and auth.get("value"):
+            # A pre-migration plain value: kept where it was, still masked
+            # by the row (`value_set`), until a new value replaces it.
+            new_auth["value"] = auth["value"]
+        else:
+            new_auth = {}
+        auth = new_auth or None
+
+    # -- validate the RESULT like the add door ----------------------------- #
+    if is_http:
+        url = (url or "").strip()
+        if not url:
+            raise HTTPException(status_code=422, detail=f"an {transport} pack needs a url")
+        if not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="the url must start with http:// or https://")
+    else:
+        if not (command or "").strip():
+            raise HTTPException(status_code=422, detail="a stdio pack needs a command")
+
+    # -- the new row: today's stored shapes, byte for byte ----------------- #
+    if is_http:
+        new: dict[str, Any] = {"name": name, "transport": transport, "url": url}
+        if headers:
+            new["headers"] = headers
+        if header_secrets:
+            new["header_secrets"] = header_secrets
+        if auth:
+            new["auth"] = auth
+        # A pack that moved off stdio leaves its env secrets behind.
+        deletes.extend(env_secrets.values())
+    else:
+        new = {
+            "name": name,
+            "command": command.strip(),
+            "args": [str(a) for a in args],
+            "env": env,
+        }
+        if env_secrets:
+            new["env_secrets"] = env_secrets
+        if cwd:
+            new["cwd"] = cwd
+        # A pack that moved off http leaves its header / auth secrets behind.
+        deletes.extend(header_secrets.values())
+        if auth and auth.get("secret"):
+            deletes.append(str(auth["secret"]))
+    for key, value in row.items():
+        if key not in _PACK_SHAPE_KEYS:
+            new[key] = value
+    if body.auto_approve is True:
+        new["auto_approve"] = True
+    elif body.auto_approve is False:
+        new.pop("auto_approve", None)  # absent == off, matching POST
+
+    # -- the vault, then the row, then the vault's leftovers --------------- #
+    secrets = getattr(d.platform, "secrets", None)
+    try:
+        for sname, value, key in writes:
+            if secrets is None:
+                raise RuntimeError("no vault")
+            secrets.set(sname, value, kind="api_key", description=f"MCP pack {name}: {key}")
+    except Exception as exc:  # noqa: BLE001 — names only, never the value
+        refused = sorted(key for _s, _v, key in writes)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"the vault could not store {', '.join(refused)} "
+                f"({type(exc).__name__}); the pack was not changed"
+            ),
+        )
+    servers[idx] = new
+    d.platform.config.mcp_servers = servers
+    d._persist_config(["mcp_servers"])
+    for sname in dict.fromkeys(deletes):
+        try:
+            if secrets is not None:
+                secrets.delete(sname)
+        except Exception as exc:  # noqa: BLE001 — the row no longer names it
+            log.warning("MCP pack %r: vault row %r could not be deleted: %s", name, sname, type(exc).__name__)
+
+    # -- unload, then load again through the one loader -------------------- #
+    from ...mcp.tools import mcp_tools as _mcp_tools
+    from ...mcp.tools import unload_pack_tools as _unload_pack_tools
+
+    _unload_pack_tools(d.platform.registry, name)
+    loaded = 0
+    errors: dict[str, dict[str, Any]] = {}
+    try:
+        # `home`: the reload re-diffs the pack against its manifest, as a
+        # Retry does, so a tool that arrived with the edit is held back
+        # exactly as it would be at the next boot.
+        for tool in _mcp_tools(
+            [new],
+            secret_resolver=d.platform.secrets.get,
+            home=d.platform.config.home,
+            errors=errors,
+        ):
+            d.platform.registry.register(tool, mcp=True)
+            loaded += 1
+    except Exception as exc:  # noqa: BLE001 — the row is saved; say why it did not start
+        errors.setdefault(name, {"reason": f"{type(exc).__name__}: {exc}"})
+        loaded = 0
+    notes: list[str] = []
+    if not loaded:
+        failure = errors.get(name)
+        if failure is not None:
+            reason = failure.get("reason") or failure.get("error") or "it did not start"
+            notes.append(f"saved, but it did not start: {reason}; see its row for the fix")
+        else:
+            notes.append("saved; it connected but advertised no tools, see its row")
+    if body.auto_approve is not None and bool(body.auto_approve) != bool(old.get("auto_approve")):
+        notes.append("restart Iron Jarvis for autonomous agents to pick up the auto-approve change")
+    return {
+        **mcp_server_row(d, new),
+        "reloaded": loaded > 0,
+        "note": "; ".join(notes) if notes else None,
+    }
 
 
 def register(app: FastAPI, d) -> None:
@@ -3008,104 +3386,12 @@ def register(app: FastAPI, d) -> None:
         """Configured MCP servers, each annotated with how many of its tools are
         currently LIVE in the registry (0 = configured but not loaded — usually a
         server that failed to connect, or was added and needs a restart)."""
-        from ...mcp.tools import load_status as _mcp_load_status
-
-        servers = []
-        for s in list(getattr(d.platform.config, "mcp_servers", None) or []):
-            name = s.get("name") or ""
-            loaded = d.platform.registry.mcp_names(name) if name else []
-            # v1.299.0: the per-tool view, read off the LIVE Tool objects so the
-            # row and the resolver cannot disagree about what is held back.
-            tool_rows = []
-            for full in loaded:
-                live = d.platform.registry.get(full)
-                tool_rows.append(
-                    {
-                        "name": full.split("__", 2)[-1],
-                        "write_like": bool(getattr(live, "write_like", True)),
-                        "quarantined": bool(getattr(live, "quarantined", False)),
-                    }
-                )
-            # v1.229.0 (audit U4): WHY a server holds 0 tools. The load record
-            # keeps the skip reason (e.g. "FileNotFoundError: npx not found")
-            # that used to live only in a daemon.log warning; `null` means it
-            # loaded (or was never attempted in this process).
-            status = _mcp_load_status(name) if name else None
-            # v1.342.0 (lane C): a row carries env KEY NAMES, never a value.
-            # `env` (plain entries) and `env_secrets` (vault names) stay out
-            # of the answer; `env_keys` + `secret_keys` say what is set. A
-            # pre-migration row that still holds a plain token is masked the
-            # same way — the key is listed, the value never leaves.
-            _plain_env = dict(s.get("env") or {})
-            _env_secrets = dict(s.get("env_secrets") or {})
-            # v1.343.0 (lane H): an http pack's `headers` are VALUES and its
-            # `header_secrets` are vault names — neither rides the row; the
-            # row lists header NAMES and says whether an auth value is set.
-            _plain_headers = dict(s.get("headers") or {})
-            _header_secrets = dict(s.get("header_secrets") or {})
-            _row = {
-                k: v
-                for k, v in s.items()
-                if k not in ("env", "env_secrets", "headers", "header_secrets")
-            }
-            # v1.342.0 (integration): an HTTP pack's header token (`auth.value`,
-            # the non-env secret shape _build_transport reads) is a VALUE too.
-            # The row keeps the auth shape and says a value is set, never what.
-            # v1.343.0: the same for `auth.secret` (the vault name the POST
-            # door stores) — the row says `value_set`, not where.
-            _auth_set = False
-            if isinstance(_row.get("auth"), dict):
-                _auth_set = bool(_row["auth"].get("value") or _row["auth"].get("secret"))
-                _row["auth"] = {
-                    k: v for k, v in _row["auth"].items() if k not in ("value", "secret")
-                } | {"value_set": _auth_set}
-            servers.append(
-                {
-                    **_row,
-                    # Rows saved by the marketplace connect flow OMIT env/args
-                    # when empty — normalize so clients can rely on the keys
-                    # (a missing env crashed the Tools page on real installs).
-                    "args": list(s.get("args") or []),
-                    "env_keys": sorted(str(k) for k in _plain_env),
-                    "secret_keys": sorted(str(k) for k in _env_secrets),
-                    # v1.343.0: the http shape — transport ("stdio" when the
-                    # row predates it), header NAMES, whether auth is set.
-                    "transport": (
-                        s["transport"]
-                        if isinstance(s.get("transport"), str) and s.get("transport")
-                        else "stdio"
-                    ),
-                    "header_names": sorted(
-                        {str(k) for k in _plain_headers} | {str(k) for k in _header_secrets}
-                    ),
-                    "auth_set": _auth_set,
-                    "tools_loaded": len(loaded),
-                    "tool_names": [n.split("__", 2)[-1] for n in loaded],
-                    # v1.299.0 (additive): write-like tools that APPEARED or
-                    # CHANGED since the pack was first trusted; they ask until
-                    # `POST /mcp/servers/{name}/tools/{tool}/trust`.
-                    "tools": tool_rows,
-                    "quarantined": [t["name"] for t in tool_rows if t["quarantined"]],
-                    "last_error": status.get("last_error") if status else None,
-                    # v1.256.0 (R-02): the same raw text, plus what it MEANS and
-                    # what to do. Classified once on the load record so this row
-                    # and the Overview hero cannot form two opinions about it.
-                    "reason": status.get("reason") if status else None,
-                    "fix": status.get("fix") if status else None,
-                    "last_attempt_at": status.get("at") if status else None,
-                    # v1.311.0: "starting" while the daemon's background load
-                    # has not answered yet (packs load after boot now) — a row
-                    # must not read as "0 tools, broken" in that window.
-                    # v1.342.0: "ok" / "failed" / "failing" (loaded, but its
-                    # calls fail) — the row says it in words.
-                    "state": status.get("state") if status else None,
-                    # v1.342.0: call-time failures since the last success or
-                    # Retry, and the child's last output (masked, bounded) —
-                    # the one clue a crashed pack leaves behind.
-                    "failures": int(status.get("failures") or 0) if status else 0,
-                    "stderr_tail": str(status.get("stderr_tail") or "") if status else "",
-                }
-            )
+        # v1.343.0 (lane J): the row is built by `mcp_server_row` so the
+        # PATCH answer and this list cannot disagree.
+        servers = [
+            mcp_server_row(d, s)
+            for s in list(getattr(d.platform.config, "mcp_servers", None) or [])
+        ]
         # The Tools page checkbox binds to EFFECTIVE (what the boot-time
         # resolver actually grants: the global switch OR any per-server flag) —
         # a checkbox showing "off" while agents run tools unprompted would be
@@ -3296,19 +3582,24 @@ def register(app: FastAPI, d) -> None:
         return add_mcp_pack(d, body)
 
     @app.patch("/mcp/servers/{name}")
-    def patch_mcp_server(name: str, body: McpServerPatch) -> dict[str, Any]:
-        """Change a connected pack's auto-approve (v1.103.0).
+    def patch_mcp_server(name: str, body: McpServerPatchBody) -> dict[str, Any]:
+        """Edit a connected pack (v1.343.0, lane J: PARTIAL — see
+        :func:`update_mcp_pack`), or just flip its auto-approve (v1.103.0).
 
-        It could only ever be set at CONNECT time — changing your mind meant
-        deleting the pack and re-adding it, and the Tools page offered a
-        checkbox that looked like a setting but was really a form field for the
-        next connect, so it never reflected or changed what was stored.
+        The auto-approve flip could only ever be set at CONNECT time —
+        changing your mind meant deleting the pack and re-adding it, and the
+        Tools page offered a checkbox that looked like a setting but was really
+        a form field for the next connect, so it never reflected or changed
+        what was stored. A body carrying nothing but ``auto_approve`` still
+        takes this path, byte for byte: no reload, the same answer.
 
         Takes effect for autonomous agents at the next restart (the ask-resolver
         is built once at boot), and the response says so rather than implying it
         is live. Turning it OFF is honest immediately in the sense that it stops
         being re-applied on the next boot.
         """
+        if not body.only_auto_approve():
+            return update_mcp_pack(d, name, body)
         servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
         target = next((s for s in servers if s.get("name") == name), None)
         if target is None:

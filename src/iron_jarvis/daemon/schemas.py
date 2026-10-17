@@ -1478,15 +1478,34 @@ class McpServerBody(BaseModel):
     url: str | None = None
     headers: dict[str, str] = {}
     auth: McpAuthBody | None = None
+    #: v1.343.0 (lane J), the npm/GitHub door: ``launcher`` is one of
+    #: ``mcp.import_config.LAUNCHERS`` (npx / uvx / pipx / node / python /
+    #: command) and ``package`` a bare package reference. With ``package``
+    #: and no ``command`` the daemon builds the command line itself
+    #: (``build_launch``), guessing the launcher (``guess_launcher``) when
+    #: none was named. Either field marks the body as the npm door's: the
+    #: route then normalises the name with ``safe_name``.
+    launcher: str = ""
+    package: str = ""
 
     @model_validator(mode="after")
     def _shape_matches_transport(self) -> "McpServerBody":
+        from ..mcp.import_config import LAUNCHERS, build_launch, guess_launcher
+
         kind = (self.transport or "stdio").strip().lower()
         if kind in ("streamable-http", "streamable_http"):
             kind = "http"
         if kind not in ("stdio", "http", "sse"):
             raise ValueError("transport must be stdio, http or sse")
         self.transport = kind
+        launcher = (self.launcher or "").strip().lower()
+        if launcher and launcher not in LAUNCHERS:
+            raise ValueError("launcher must be one of " + ", ".join(LAUNCHERS))
+        self.launcher = launcher
+        self.package = (self.package or "").strip()
+        if kind == "stdio" and self.package and not (self.command or "").strip():
+            self.launcher = launcher or guess_launcher(self.package)
+            self.command, self.args = build_launch(self.package, self.launcher)
         if kind == "stdio":
             if not (self.command or "").strip():
                 raise ValueError("a stdio pack needs a command")
@@ -1505,11 +1524,75 @@ class McpServerBody(BaseModel):
         return self
 
 
-class McpServerPatch(BaseModel):
-    """Edit a connected MCP pack (v1.103.0). ``None`` means "leave alone", so a
-    UI that only flips auto-approve can't blank the rest of the record."""
+class McpServerPatchBody(BaseModel):
+    """Edit a connected MCP pack, PARTIALLY (v1.343.0, lane J; the auto-approve
+    flip is v1.103.0's and keeps its shape).
 
+    Omitted = keep; ``""`` is a value, never a clear (the v1.164.0 rule).
+    ``env`` and ``headers`` are MERGED onto the stored ones key by key (a
+    secret-named key's value goes to the vault, the row keeps its name);
+    ``clear_secrets`` / ``clear_headers`` name the keys to drop (vault row
+    and row entry); ``auth: null`` clears the token, ``auth`` with a value
+    replaces it, ``auth`` with no value keeps the stored one and changes the
+    header/format. ``name`` may only repeat the path's name (a rename is
+    refused: the name is the pack's identity). A body carrying nothing but
+    ``auto_approve`` behaves exactly as before this release (no reload).
+    """
+
+    name: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    cwd: str | None = None
+    transport: str | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = None
+    auth: McpAuthBody | None = None
     auto_approve: bool | None = None
+    clear_secrets: list[str] = []
+    clear_headers: list[str] = []
+
+    @model_validator(mode="after")
+    def _normalise(self) -> "McpServerPatchBody":
+        if self.transport is not None:
+            kind = self.transport.strip().lower()
+            if kind in ("streamable-http", "streamable_http"):
+                kind = "http"
+            if kind not in ("stdio", "http", "sse"):
+                raise ValueError("transport must be stdio, http or sse")
+            self.transport = kind
+        if self.auth is not None:
+            if "{value}" not in (self.auth.format or ""):
+                raise ValueError("the auth format must contain {value}")
+            if not (self.auth.header or "").strip():
+                raise ValueError("the auth header needs a name")
+        # NOTE: nothing below assigns a field. An assignment inside an
+        # `after` validator marks the field as SET on pydantic v2, and
+        # `only_auto_approve` reads `model_fields_set` to tell the v1.103.0
+        # flip from an edit — the clear lists are normalised by the two
+        # accessors instead.
+        return self
+
+    def cleared_secrets(self) -> list[str]:
+        """``clear_secrets`` stripped, blanks dropped."""
+        return [str(k).strip() for k in (self.clear_secrets or []) if str(k).strip()]
+
+    def cleared_headers(self) -> list[str]:
+        """``clear_headers`` stripped, blanks dropped."""
+        return [str(h).strip() for h in (self.clear_headers or []) if str(h).strip()]
+
+    def clears_auth(self) -> bool:
+        """``auth: null`` was SENT (a token Clear) — not merely omitted."""
+        return "auth" in self.model_fields_set and self.auth is None
+
+    def only_auto_approve(self) -> bool:
+        """Nothing but ``auto_approve`` (or nothing at all) was sent: the
+        v1.103.0 path, byte for byte."""
+        return self.model_fields_set <= {"auto_approve"}
+
+
+#: The v1.103.0 name, kept for importers.
+McpServerPatch = McpServerPatchBody
 
 
 class McpSettingsPatch(BaseModel):

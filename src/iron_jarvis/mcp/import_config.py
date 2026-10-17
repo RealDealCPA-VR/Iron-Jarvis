@@ -115,6 +115,48 @@ def guess_launcher(pkg: Any) -> str:
     return "npx"
 
 
+_PACKAGE_PREFIX_RX = re.compile(r"^(?:pip|pypi|npm):", re.IGNORECASE)
+
+
+def bare_package(pkg: Any) -> str:
+    """``pkg`` without a ``pip:`` / ``pypi:`` / ``npm:`` prefix, stripped."""
+    return _PACKAGE_PREFIX_RX.sub("", str(pkg or "").strip())
+
+
+def build_launch(pkg: Any, launcher: Any) -> tuple[str, list[str]]:
+    """The ``(command, args)`` that starts package ``pkg`` under ``launcher``
+    (lane J, the npm/GitHub door's server half; the dashboard's
+    ``lib/mcpImport.buildLaunch`` is its twin and must agree):
+
+    * ``npx``     -> ``npx -y <pkg>``
+    * ``uvx``     -> ``uvx <pkg>``
+    * ``pipx``    -> ``pipx run <pkg>``
+    * ``node``    -> ``node <pkg>``
+    * ``python``  -> ``python -m <pkg>``
+    * ``command`` -> the text as a command line (first word runs, the rest
+      are its args; a quoted word stays one arg)
+
+    An unknown launcher reads as ``npx``. ``("", [])`` when nothing is left
+    after the prefix is stripped.
+    """
+    p = bare_package(pkg)
+    kind = str(launcher or "npx").strip().lower()
+    if not p:
+        return "", []
+    if kind == "uvx":
+        return "uvx", [p]
+    if kind == "pipx":
+        return "pipx", ["run", p]
+    if kind == "node":
+        return "node", [p]
+    if kind == "python":
+        return "python", ["-m", p]
+    if kind == "command":
+        words = _split_command_line(p)
+        return (words[0] if words else ""), words[1:]
+    return "npx", ["-y", p]
+
+
 @dataclass
 class PackSpec:
     """The one shape every door produces and every route consumes.
