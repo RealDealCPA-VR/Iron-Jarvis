@@ -183,18 +183,27 @@ class RunSink:
         )
 
     def tool_finished(
-        self, call_id: str, name: str, ok: bool, preview: str = ""
+        self,
+        call_id: str,
+        name: str,
+        ok: bool,
+        preview: str = "",
+        detail: dict[str, str] | None = None,
     ) -> None:
-        self._emit(
-            "tool_call",
-            {
-                "id": call_id,
-                "name": name,
-                "status": "finished",
-                "ok": bool(ok),
-                "output": preview,
-            },
-        )
+        data: dict[str, Any] = {
+            "id": call_id,
+            "name": name,
+            "status": "finished",
+            "ok": bool(ok),
+            "output": preview,
+        }
+        # v1.349.0 (B1d): WHAT THE STEP DID — ``{"input", "output"}``, which
+        # MUST already be masked by the caller (``daemon/chat_turn.
+        # step_detail``, the chat stream lane's own helper). Present only
+        # when given, so a caller that sends none keeps its old frame.
+        if detail is not None:
+            data["detail"] = detail
+        self._emit("tool_call", data)
 
     def step_end(self, step: int) -> None:
         self._emit("round", {"round": step})

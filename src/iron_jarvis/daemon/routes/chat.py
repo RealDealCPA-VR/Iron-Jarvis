@@ -4599,9 +4599,14 @@ async def chat_stream(
                         ran = _slots[_i]["ran"]
                         if _plans[_i]["refused"]:
                             # Answered, not run (v1.274.0): no counters move.
+                            # v1.349.0 (B1d): a refused step opens too — its
+                            # input and the refusal sentence, masked.
                             yield _sse("tool_call", {
                                 "id": tc.id, "name": tc.name, "status": "finished",
                                 "ok": False, "output": str(content)[:2000],
+                                "detail": _chat_turn.step_detail(
+                                    tc.name, _plans[_i]["safe_args"], content,
+                                ),
                             })
                             # v1.344.0 (P1): a refused call is an outcome the
                             # agent should know about too (lock-step).
@@ -4724,9 +4729,21 @@ async def chat_stream(
                         _prior_results.append(prior_tool_result_entry(
                             tc.name, _plans[_i]["safe_args"], ran, content,
                         ))
+                        # WHAT THE STEP DID (v1.349.0, B1d): `detail` is a
+                        # MASKED copy — the redacted args and the UNFENCED
+                        # output, masked before the cut (chat_turn.
+                        # step_detail) — so the step opens in the chat, even
+                        # reopened next week. `output` stays as it was
+                        # (pinned byte for byte). MIRROR NOTE (lock-step):
+                        # the POST lane (chat_turn.run_chat_turn) sends no
+                        # frames, so detail is intentionally absent there —
+                        # its response key set is pinned.
                         yield _sse("tool_call", {
                             "id": tc.id, "name": tc.name, "status": "finished",
                             "ok": ran, "output": str(content)[:2000],
+                            "detail": _chat_turn.step_detail(
+                                tc.name, _plans[_i]["safe_args"], content,
+                            ),
                         })
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                name=tc.name, content=str(_tool_content)[:12000]))

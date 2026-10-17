@@ -2208,6 +2208,76 @@ def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: obj
     }
 
 
+#: v1.349.0 (B1d) — WHAT A STEP DID, so a step in the chat can be opened to
+#: show its input and output, even in a chat reopened next week. Every
+#: FINISHED ``tool_call`` frame of the /chat/stream lane (refused calls too)
+#: and of the agent runtime's session stream (``core/streams.RunSink.
+#: tool_finished``) carries ``detail: {"input", "output"}`` built by
+#: :func:`step_detail`. The frame's old ``output`` key is untouched (pinned
+#: byte for byte). POST /chat sends no frames, so its response carries no
+#: detail — intentionally (its key set is pinned in
+#: tests/test_chat_turn_service.py).
+STEP_DETAIL_INPUT_CHARS = 300
+#: The escalation row's output cap (``daemon/schemas.PRIOR_RESULT_OUTPUT_CHARS``)
+#: — equal, so a step's detail and its row show the same text (pinned).
+STEP_DETAIL_OUTPUT_CHARS = 1_500
+
+
+def _step_unfenced(text: str) -> str:
+    """*text* without the untrusted fence, for a step's detail. The chat
+    lanes fence a WHOLE output (:func:`_unfenced` takes it off, exactly as
+    the escalation rows do); the agent runtime may cut a fenced output at
+    its context cap or append its repeat note after the fence, so a text
+    that still OPENS with the fence loses its header, and its closing fence
+    where there is one. Anything else passes through."""
+    out = _unfenced(text)
+    if out != text:
+        return out
+    from ..computeruse.safety import _FENCE_BOTTOM, _FENCE_TOP
+
+    if not text.startswith(_FENCE_TOP + "\n"):
+        return text
+    at = text.find("\n---\n")
+    if at < 0:
+        return text
+    body = text[at + len("\n---\n"):]
+    close = "\n---\n" + _FENCE_BOTTOM
+    k = body.rfind(close)
+    return body[:k] + body[k + len(close):] if k >= 0 else body
+
+
+def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]:
+    """``{"input", "output"}`` for one finished step: ``input`` is the
+    REDACTED args (``Tool.redact_args`` — the started frame's ``args``) as
+    one JSON line, masked, at most ``STEP_DETAIL_INPUT_CHARS`` (``""`` when
+    the call took no arguments); ``output`` is what the tool answered with
+    the untrusted fence removed, masked with ``detections.redact.mask``
+    BEFORE the cut (a cut can never leave half a secret), at most
+    ``STEP_DETAIL_OUTPUT_CHARS``. The same steps as
+    :func:`prior_tool_result_entry` (the args dumped the same way, the same
+    ``_unfenced``, the same ``mask``, the same output cap), so a chat step's
+    detail and its ``prior_tool_results`` row can never disagree (pinned).
+    *name* keeps the call sites shaped like that helper's; the frame already
+    names the tool, so the detail does not repeat it. Never raises: a
+    display must never fail the turn."""
+    from ..detections.redact import mask
+
+    try:
+        if safe_args is None or (isinstance(safe_args, (str, dict, list, tuple)) and not safe_args):
+            args_text = ""
+        else:
+            try:
+                args_text = _json.dumps(safe_args, default=str, ensure_ascii=False, sort_keys=True)
+            except Exception:  # noqa: BLE001
+                args_text = repr(safe_args)
+        return {
+            "input": str(mask(args_text))[:STEP_DETAIL_INPUT_CHARS],
+            "output": str(mask(_step_unfenced(str(content or ""))))[:STEP_DETAIL_OUTPUT_CHARS],
+        }
+    except Exception:  # noqa: BLE001 — a display must never fail the turn
+        return {"input": "", "output": ""}
+
+
 def cap_prior_tool_results(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The list an escalation carries: *entries* through the ONE normaliser
     the runtime renders with (``agents/runtime.normalize_prior_tool_results``

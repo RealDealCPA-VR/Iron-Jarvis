@@ -3237,11 +3237,23 @@ class AgentRuntime:
                             f"is blocking you.]"
                         )
                 if sink:
+                    # WHAT THE STEP DID (v1.349.0, B1d): the same masked
+                    # ``detail`` the chat stream lane sends — the redacted
+                    # args (the started frame's) and the unfenced output,
+                    # masked before the cut — built by the chat's own
+                    # helper so the two surfaces cannot drift.
+                    from ..daemon.chat_turn import redacted_args, step_detail
+
                     sink.tool_finished(
                         tc.id,
                         tc.name,
                         ok=call_ok,
                         preview=str(content)[:500],
+                        detail=step_detail(
+                            tc.name,
+                            redacted_args(self.p.registry, tc.name, tc.arguments),
+                            content,
+                        ),
                     )
                 messages.append(
                     LLMMessage(
