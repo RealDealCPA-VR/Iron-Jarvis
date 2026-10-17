@@ -206,6 +206,27 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "guide_search",
         "app_search",
         "app_status",
+        # SELF-CARE READERS (v1.344.0, "Jarvis looks after itself"). Each one
+        # qualifies on the module docstring's three facts, stated per name:
+        #  * `app_health` — `Reversibility.READONLY`, replay-safe; reads the
+        #    same cached snapshots the routes read (`/diagnostics`, the doctor's
+        #    runtime rows, the recent-errors ring, loop_health, the pack load
+        #    records) off the loop; never probes, never spawns, never carries a
+        #    secret VALUE or a path outside the app's own folders. Cheap, and
+        #    arming it on a sentence that was not about the app costs a schema
+        #    and nothing else — the benign extra arming the docstring licenses.
+        #  * `pack_status` — READONLY over `mcp.tools.load_status()`: state,
+        #    reason, fix, a MASKED stderr tail, env KEY NAMES. A read of a
+        #    record that already exists; it starts nothing.
+        #  * `run_doctor` — READONLY; the onboarding doctor's runtime check rows
+        #    (name, ok, detail, fix, level), off the loop. The same rows
+        #    `GET /doctor` answers; no integrity scan, no probe.
+        # The two REPAIR tools (`pack_restart`, `provider_rescan`) are NOT here:
+        # they restart a child process / re-detect providers, so they ride
+        # `ASK_TIER_TOOLS` below — visible, carded, never granted by a sentence.
+        "app_health",
+        "pack_status",
+        "run_doctor",
     }
 )
 
@@ -936,6 +957,103 @@ def _position_allows(msg: str, start: int, branch: str, cut: int) -> bool:
     # negation earlier in that clause scopes over what follows.
     clause = max(msg.rfind(end, 0, start) for end in _CLAUSE_END) + 1
     return _NEGATION.search(msg, clause, start) is None
+
+#: THE FAILURE / HEALTH VOCABULARY (v1.344.0). ONE string, used by the health
+#: rule (readers: app_health / run_doctor / pack_status) and by the record
+#: question rule (app_search / app_status) so the two cannot drift — the
+#: `_XL_NOUNS` lesson. Every alternative is word-bounded and PREDICATIVE on
+#: purpose:
+#:  * "fail"/"broken" count only when they are said OF something — "why did
+#:    that fail", "the pack keeps failing", "something is broken" — and NOT
+#:    when they are an ADJECTIVE in front of a record noun ("delete the FAILED
+#:    schedule", "retry the failed run"). That sentence is an imperative aimed
+#:    at a writer, and arming a health reader beside it would spend a slot and
+#:    say the sentence was about the app's health when it was about one row.
+#:    The lookahead lists the nouns a failure adjective is attached to in this
+#:    app; a noun outside the list ("my schedule failed last night" — "last"
+#:    follows) still counts, which is the right reading of that sentence.
+#:  * "errors" and "slow" are everyday words in a tax practice ("errors in
+#:    column B", "the client is slow to pay"), so each needs an APP-SHAPED
+#:    neighbour within the clause: app/daemon/jarvis/tool/pack/provider/model/
+#:    loop/chat/reply/log. "what errors has the daemon logged" and "why is the
+#:    app slow" fire; "fix the errors in this spreadsheet" does not.
+#:  * The connectivity words (unreachable, offline, timed out, not responding,
+#:    can't connect, "<provider> is down") are specific enough to stand alone.
+#: FALSE ARMS, honestly stated: "what's wrong with this formula" and "healthy"
+#: in a sentence about a client's finances arm `app_health`. It is READONLY and
+#: cheap; the excel/document rules outscore it where they apply; a reader that
+#: answers "everything is fine" is the module's standing cheap over-name.
+_APP_NOUN = (
+    r"(?:app|daemon|jarvis|tools?|packs?|providers?|models?|loops?|chat|"
+    r"replies|reply|responses?|server|endpoint|fleet|ollama|claude|codex|"
+    r"background|mcp|startup|boot|system)"
+)
+#: The slow/hung branch may also take a PRONOUN subject ("why is it so slow",
+#: "everything is frozen"); the errors branch may not — "the errors in THIS
+#: spreadsheet" is a workbook sentence, and with `this` in the list it armed
+#: `app_health` (measured on the first cut).
+_SLOW_SUBJECT = r"(?:" + _APP_NOUN + r"|it|this|everything)"
+_ATTRIBUTIVE_TARGET = (
+    r"(?!\s+(?:[a-z]+\s+)?(?:schedules?|workflows?|runs?|jobs?|tasks?|packs?|"
+    r"tools?|sessions?|steps?|attempts?|calls?|turns?|items?|agents?|missions?|"
+    r"assignments?|logins?|builds?|tests?|deploys?|rows?|entries|entry)\b)"
+)
+_FAILURE_WORDS = (
+    r"(?:\bfail(?:s|ed|ing|ures?)?\b" + _ATTRIBUTIVE_TARGET
+    # "broken" is PREDICATIVE only: after a copula ("something is broken",
+    # "the pack's broken") or closing a clause ("is my workflow broken?",
+    # "it's all broken again"). "fix the BROKEN link in this doc" is an
+    # adjective on a document word, and the noun list above cannot enumerate
+    # every noun a broken thing can be — so the shape, not a list, decides.
+    + r"|\b(?:is|are|was|were|'s|seems?|looks?|got|gets|appears?|all|still|"
+    r"totally|completely)\s+broken\b"
+    + r"|\bbroken\b(?=\s*(?:[.!?,;:]|$|again\b|now\b|since\b|after\b|too\b))"
+    + r"|\bcrash(?:ed|es|ing)?\b"
+    + r"|\b" + _APP_NOUN + r"\b[^.!?]{0,20}\b(?:died|dies|is\s+dead|has\s+died)\b"
+    + r"|\b(?:not|isn'?t|aren'?t|wasn'?t|stopped|quit|won'?t|doesn'?t|didn'?t|"
+    r"can'?t|cannot|never)\s+(?:even\s+)?(?:work(?:ing|s)?|load(?:ing|s)?|"
+    r"run(?:ning|s)?|start(?:ing|s)?|respond(?:ing|s)?|connect(?:ing|s)?|"
+    r"answer(?:ing|s)?|open(?:ing|s)?|reply(?:ing)?|replies)\b"
+    + r"|\bwent\s+wrong\b|\bwhat(?:'s|\s+is|s)\s+wrong\b|\bwrong\s+with\b"
+    + r"|\b(?:unreachable|offline|timed?\s*out|not\s+responding|unresponsive|"
+    r"disconnected)\b|\bcan(?:no|')t\s+(?:connect|reach)\b"
+    + r"|\b" + _APP_NOUN + r"\b[^.!?]{0,20}\b(?:is|went|seems|looks|are)\s+"
+    r"(?:all\s+|still\s+)?down\b"
+    + r"|\bhealthy\b|\bhealth\s+(?:check|status)\b|\b(?:app|system)\s+health\b"
+    + r"|\b(?:is|are)\s+everything\s+(?:ok|okay|fine|alright|working|running)\b"
+    + r"|\b" + _SLOW_SUBJECT + r"\b[^.!?]{0,20}\b(?:so\s+|very\s+|really\s+)?"
+    r"(?:slow|sluggish|laggy|lagging|hanging|hangs|hung|stuck|frozen|"
+    r"freezing|freezes)\b"
+    + r"|\berrors?\b[^.!?]{0,40}\b" + _APP_NOUN + r"\b"
+    + r"|\b" + _APP_NOUN + r"\b[^.!?]{0,40}\berrors?\b"
+    + r"|\b(?:error|failure|crash)\s+logs?\b|\blogged\b[^.!?]{0,20}"
+    r"\b(?:errors?|failures?|warnings?)\b"
+    + r"|\b(?:errors?|failures?|warnings?)\b[^.!?]{0,30}\blogged\b"
+    + r")"
+)
+_FAILURE_RX = re.compile(_FAILURE_WORDS, re.IGNORECASE)
+
+#: A TOOL PACK, named. "pack" alone is "pack up my things", so the word needs
+#: a pack-shaped neighbour: "mcp", "tool pack", "the github pack", "the pack
+#: keeps failing", "which packs are loaded".
+_PACK_RX = re.compile(
+    r"\bmcp\b|\b(?:tool|mcp|server)\s+packs?\b"
+    r"|\b(?:the|my|this|that|our|which|every|each)\s+[\w.-]+\s+packs?\b"
+    r"|\bpacks?\s+(?:is|isn'?t|was|are|were|keeps?|kept|won'?t|does|doesn'?t|"
+    r"didn'?t|not|failed|failing|crashed|died|broke|stopped|named|called|that|"
+    r"which|status)\b",
+    re.IGNORECASE,
+)
+
+#: The user's own records, for the question "what went wrong with my <record>"
+#: — answered by the READERS over those rows (`app_search` / `app_status`),
+#: never by the record writers (`settings.records.record_tools_for` holds the
+#: matching guard on its side: a question is not consent to a writer).
+_RECORD_NOUN = (
+    r"\b(?:schedules?|scheduled|workflows?|goals?|reflex(?:es)?|rules?|"
+    r"webhooks?|sentinels?|watchers?|agents?|missions?|assignments?|runs?|"
+    r"jobs?|sessions?|nightly|weekly|daily|cron)\b"
+)
 
 # Signal rules: (regex, {tool: weight}). Scores accumulate across rules; the
 # highest-scoring tools fill the free slots. Weights are relative only.
@@ -2109,6 +2227,49 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         {"guide_search": 6, "app_search": 5, "app_status": 3},
     ),
+    # --- the app's HEALTH (v1.344.0, "Jarvis looks after itself") -----------
+    # "something is broken", "why did that fail", "is the app healthy", "what
+    # errors has the daemon logged", "my MCP pack is not loading", "the tool
+    # failed, can you fix it", "why is the app slow". Before this rule a user
+    # whose pack had died asked chat and got a guess, because the readers that
+    # KNOW (`app_health`, `pack_status`, `run_doctor`) were armed by nobody —
+    # the `history_search`/`view_image`/`rename_file` shape, again.
+    #
+    # READ-ONLY BY CONSTRUCTION, so the rule stays UNGATED (no `_imperative()`):
+    # every tool it awards is a reader in `AUTO_SAFE_TOOLS`, and a question
+    # about the app's health is exactly the sentence that wants one. The REPAIR
+    # verbs ("restart the pack", "rescan providers") are a different rule in
+    # `_ASK_RULES`, gated, because they change something.
+    #
+    # WEIGHTS: `app_health` at 8 leads a plain failure sentence; `run_doctor`
+    # rides at 5 (the doctor's rows are the second thing to read); `pack_status`
+    # at 4 is lifted past both by the pack rule below when a pack is named.
+    (
+        _FAILURE_RX,
+        {"app_health": 8, "run_doctor": 5, "pack_status": 4},
+    ),
+    # A PACK is named: `pack_status` leads (it carries the reason, the fix and
+    # the masked stderr tail; `app_health` only names the pack), `app_health`
+    # rides beneath it for the rest of the picture.
+    (
+        _PACK_RX,
+        {"pack_status": 9, "app_health": 4},
+    ),
+    # "what went wrong with my schedule", "why did the nightly run fail", "is my
+    # workflow broken" — a failure question about one of the user's OWN records.
+    # The rows live behind `app_search`/`app_status` (the Guide's lookups), so
+    # those are what a question deserves; the record WRITERS (`schedule_update`,
+    # `schedule_delete`, `workflow_schedule`, …) are ask tier in
+    # `settings/records.py` and its `record_tools_for` refuses a question-shaped
+    # message on its own side. Both orders, same clause.
+    (
+        re.compile(
+            _RECORD_NOUN + r"[^.!?]{0,60}?" + _FAILURE_WORDS
+            + r"|" + _FAILURE_WORDS + r"[^.!?]{0,60}?" + _RECORD_NOUN,
+            re.IGNORECASE,
+        ),
+        {"app_search": 7, "app_status": 5},
+    ),
     # --- YOUR BROWSER, read tier (v1.235.0) --------------------------------
     # WITHOUT THIS ENTRY THE THREE BROWSER TOOLS WERE REGISTERED AND ARMABLE BY
     # NOBODY. `AUTO_SAFE_TOOLS` is only the allowlist FILTER at the bottom of
@@ -2398,6 +2559,46 @@ _RULE_POS_GROUPS: list[tuple[str, ...]] = [
 _MAX_POSITION_RETRIES = 12
 
 
+def _rule_fires(
+    rx: re.Pattern[str], gates: tuple[str, ...], msg: str, cutbox: list[int]
+) -> bool:
+    """Does one scoring rule AWARD on *msg*? The imperative-position gate, in
+    one place (v1.344.0) so :func:`select_auto_tools` and
+    :func:`select_ask_tools` ask the same question of a gated rule — the ask
+    tier's repair rule is fronted with :func:`_imperative` exactly like the
+    image rule, and a second copy of this loop would drift.
+
+    *cutbox* holds the offset of the first :data:`_ENQUIRY` marker (``-1`` =
+    not scanned yet); it is a one-element list so the scan is paid at most
+    once per message across every rule, lazily — only a GATED rule that fired
+    through a POSITIONAL branch ever asks for it.
+    """
+    if not gates:
+        return rx.search(msg) is not None
+    # A GATED RULE, and the shape here is what keeps the gate off the hot
+    # path. The FIRST search is exactly the one the ungated branch does, so a
+    # rule that does not fire costs what it always did; only a rule that DID
+    # fire pays for the marker scan, and only a rule whose match came through
+    # a POSITIONAL branch pays for a retry.
+    m = rx.search(msg)
+    tries = 0
+    while m is not None and tries < _MAX_POSITION_RETRIES:
+        hit = next((g for g in gates if m.group(g) is not None), None)
+        if hit is None:  # a CONTEXT-FREE branch matched: award, no context
+            break
+        if cutbox[0] < 0:
+            found = _ENQUIRY.search(msg)
+            cutbox[0] = found.start() if found else len(msg) + 1
+        if _position_allows(msg, m.start(hit), m.group(hit), cutbox[0]):
+            break
+        # Retry from just AFTER the refused position rather than after the
+        # whole match: a rejected match can be long enough to swallow a
+        # legitimate later one, and `finditer` would skip it.
+        m = rx.search(msg, m.start(hit) + 1)
+        tries += 1
+    return m is not None and tries < _MAX_POSITION_RETRIES
+
+
 def select_auto_tools(
     text: str,
     *,
@@ -2466,35 +2667,14 @@ def select_auto_tools(
             scores[name] = scores.get(name, 0) + w
 
     msg = (text or "")[:4000]
-    cut = -1  # lazy: the _ENQUIRY scan is only paid for if a gated rule matches
+    # lazy: the _ENQUIRY scan is only paid for if a gated rule matches. A
+    # one-element list so `_rule_fires` can fill it in and the attachment pass
+    # below can reuse the answer.
+    cutbox = [-1]
     for (rx, weights), gates in zip(_RULES, _RULE_POS_GROUPS):
-        if not gates:
-            if rx.search(msg):
-                bump(weights)
-            continue
-        # A GATED RULE, and the shape here is what keeps the gate off the hot
-        # path. The FIRST search is exactly the one the ungated branch does, so a
-        # rule that does not fire costs what it always did; only a rule that DID
-        # fire pays for the marker scan, and only a rule whose match came through
-        # a POSITIONAL branch pays for a retry.
-        m = rx.search(msg)
-        tries = 0
-        while m is not None and tries < _MAX_POSITION_RETRIES:
-            hit = next((g for g in gates if m.group(g) is not None), None)
-            if hit is None:  # a CONTEXT-FREE branch matched: award, no context
-                break
-            if cut < 0:
-                found = _ENQUIRY.search(msg)
-                cut = found.start() if found else len(msg) + 1
-            if _position_allows(msg, m.start(hit), m.group(hit), cut):
-                break
-            # Retry from just AFTER the refused position rather than after the
-            # whole match: a rejected match can be long enough to swallow a
-            # legitimate later one, and `finditer` would skip it.
-            m = rx.search(msg, m.start(hit) + 1)
-            tries += 1
-        if m is not None and tries < _MAX_POSITION_RETRIES:
+        if _rule_fires(rx, gates, msg, cutbox):
             bump(weights)
+    cut = cutbox[0]
     if _URL_RX.search(msg):
         bump({"web_fetch": 9, "web_search": 3})
     if _PATH_RX.search(msg):
@@ -2607,6 +2787,15 @@ ASK_TIER_TOOLS: frozenset[str] = frozenset(
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        # SELF-REPAIR (v1.344.0). `pack_restart` kills and respawns a pack's
+        # child process (irreversible — a call that was mid-flight is gone);
+        # `provider_rescan` re-detects providers and can change which model
+        # answers next. Both are ASK tier and `core/trust.LOW_TRUST_DENY`
+        # members, so they are visible here and carded on every call; the
+        # READERS they pair with (`app_health`, `pack_status`, `run_doctor`)
+        # live in `AUTO_SAFE_TOOLS`, never here.
+        "pack_restart",
+        "provider_rescan",
     }
 )
 
@@ -2736,6 +2925,46 @@ _ASK_RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         re.compile(r"\bclose\b[^?!\n]{0,30}\btabs?\b", re.IGNORECASE),
         {"browser_close_tab": 8},
     ),
+    # --- SELF-REPAIR (v1.344.0): "restart the github pack", "reload the pack",
+    # "fix the pack", "re-detect providers", "rescan providers". FRONTED WITH
+    # `_imperative()` like the image rule, because both tools CHANGE something
+    # (a child process is killed and respawned; the provider table is rebuilt)
+    # and a repair verb inside a question or a report is not a request for one:
+    # "why did the provider rescan fail?" and "the memo says to restart the
+    # github pack" must arm neither. The gate is the one `select_auto_tools`
+    # uses (`_rule_fires`), so an ask rule reads imperative mood exactly the
+    # way an auto rule does. Each rule needs its NOUN beside the verb — "fix"
+    # and "restart" are everyday words ("fix the formula", "restart the
+    # numbering") — and the readers ride from `_RULES` on the same sentence, so
+    # a model that restarts a pack can also read what the restart said.
+    (
+        re.compile(
+            _imperative()
+            + r"(?:restart|re-?start|reload|re-?load|retry|re-?try|fix|repair|"
+            r"bounce|kick|relaunch|re-?launch)\b[^.!?]{0,30}"
+            r"\b(?:packs?|mcp|tool\s+packs?|mcp\s+servers?)\b",
+            re.IGNORECASE,
+        ),
+        {"pack_restart": 8},
+    ),
+    (
+        re.compile(
+            _imperative()
+            + r"(?:re-?detect|re-?scan|rescan|redetect|re-?check|refresh|"
+            r"look\s+again\s+for|detect)\b[^.!?]{0,30}"
+            r"\b(?:providers?|models?|connections?|clis?|endpoints?)\b",
+            re.IGNORECASE,
+        ),
+        {"provider_rescan": 8},
+    ),
+]
+
+#: The positional-branch group names each ask rule carries, in ``_ASK_RULES``
+#: order — read off the compiled pattern exactly as :data:`_RULE_POS_GROUPS`
+#: is, so a gated ask rule is gated by construction and an ungated one takes
+#: the cheap path.
+_ASK_RULE_POS_GROUPS: list[tuple[str, ...]] = [
+    tuple(n for n in rx.groupindex if n.startswith(_POS_PREFIX)) for rx, _ in _ASK_RULES
 ]
 
 
@@ -2757,8 +2986,9 @@ def select_ask_tools(text: str, *, cap: int = 2) -> list[str]:
         return []
     scores: dict[str, int] = {}
     msg = (text or "")[:4000]
-    for rx, weights in _ASK_RULES:
-        if rx.search(msg):
+    cutbox = [-1]
+    for (rx, weights), gates in zip(_ASK_RULES, _ASK_RULE_POS_GROUPS):
+        if _rule_fires(rx, gates, msg, cutbox):
             for name, w in weights.items():
                 scores[name] = scores.get(name, 0) + w
     ranked = sorted(

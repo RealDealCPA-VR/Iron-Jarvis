@@ -131,12 +131,75 @@ _UNDO_WORDS = re.compile(
 )
 
 
+#: A QUESTION IS NOT CONSENT TO A WRITER (v1.344.0, "Jarvis looks after
+#: itself"). Every rule below keys on a NOUN, so "what went wrong with my
+#: schedule?" and "why did the nightly run fail" armed ``schedule_update`` /
+#: ``schedule_delete`` / ``workflow_schedule`` — three writers shown to the
+#: model off a sentence that asked for a reader (measured; the defect this
+#: guard closes). The shape is read off the message the way
+#: ``tools/autoselect._imperative`` reads it, inverted: a message whose HEAD
+#: is a question word or an inverted auxiliary over a non-"you" subject ("is
+#: my", "did the", "should I"), or whose last clause ENDS in "?" with no
+#: polite request in it ("can you …?", "could you …?", "please …?"), is a
+#: question. ``when`` is deliberately NOT a head word — "when a client email
+#: happens, start an intake session" is the reflex-rule shape, an instruction
+#: — and "can you" / "could you" / "would you" / "will you" are requests, not
+#: questions, which is why the auxiliary branch requires a subject other than
+#: ``you``. Discourse openers ("ok,", "so", "hey") are consumed first so a
+#: real question behind one is still seen.
+#:
+#: Under a question only the READERS survive (:data:`_RECORD_READERS`);
+#: ``grant_revoke`` (allow tier — it would RUN with no card) and
+#: ``config_undo`` go with the writers. HONEST COST: "move my schedule to
+#: 7am?" — an imperative typed with a question mark — arms nothing; the user
+#: drops the mark or says "can you".
+_QUESTION_HEAD = re.compile(
+    r"\A\s*(?:(?:ok(?:ay)?|so|but|hey|hi|hello|alright|right|now|actually|well|also)"
+    r"\b[,\s]+){0,2}"
+    r"(?:(?:what|why|how|where|which|who|whose|whom|whether)\b"
+    r"|(?:is|are|was|were|do|does|did|has|have|had|can|could|should|would|"
+    r"will|might|may|shall)\s+"
+    r"(?:i|we|it|this|that|these|those|there|my|our|the|a|an|any|anyone|"
+    r"someone|something|he|she|they|everything|jarvis)\b)",
+    re.IGNORECASE,
+)
+_POLITE_REQUEST = re.compile(
+    r"\b(?:can|could|would|will)\s+you\b|\bplease\b|\bkindly\b|\bgo\s+ahead\b",
+    re.IGNORECASE,
+)
+#: The record tools a question may still arm: they only READ.
+_RECORD_READERS = frozenset({"goal_list"})
+
+
+def is_question(text: str) -> bool:
+    """Is this message asking rather than telling? See :data:`_QUESTION_HEAD`."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _QUESTION_HEAD.search(t):
+        return True
+    if t.endswith("?"):
+        last = re.split(r"[.!?\n]", t[:-1])[-1]
+        return _POLITE_REQUEST.search(last) is None
+    return False
+
+
 def record_tools_for(text: str) -> list[str]:
     """The record tools a chat message plausibly asks for, by the record it
     names (chat-only arming, like ``settings.tools.wants_settings``). The
     stream lane arms them VISIBLE, never granted: an ask-tier one renders
-    the card, ``grant_revoke`` (allow) and ``goal_list`` (read) run."""
+    the card, ``grant_revoke`` (allow) and ``goal_list`` (read) run.
+
+    A QUESTION-shaped message ("what went wrong with my schedule?") keeps only
+    the readers — see :data:`_QUESTION_HEAD`."""
     t = text or ""
+    out = _record_tools_named(t)
+    if is_question(t):
+        return [n for n in out if n in _RECORD_READERS]
+    return out
+
+
+def _record_tools_named(t: str) -> list[str]:
     out: list[str] = []
     if _SCHEDULE_WORDS.search(t):
         out += ["schedule_update", "schedule_delete", "workflow_schedule"]
