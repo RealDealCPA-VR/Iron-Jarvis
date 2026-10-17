@@ -101,6 +101,10 @@ export type SSEEvent =
       /** v1.332.0: a "local only" chat's card for a tool that reaches past
        *  this PC. It offers "Allow once" and "Deny" only. */
       once_only?: boolean;
+      /** v1.346.0: what the call would SPEND, in the daemon's words ("Generate
+       *  1 image on Pixio for 12 credits (your price)"). Sent only when the
+       *  tool quoted a price; the card shows it as one quiet line. */
+      cost_note?: string;
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -555,6 +559,11 @@ export function sseEventFrom(
       // v1.332.0: whitelisted too, a real `true` only, or a local-only card
       // would quietly offer the wider answers again.
       if (data.once_only === true) ev.once_only = true;
+      // v1.346.0: the spend words, whitelisted like every field here — a
+      // non-empty string only, or the card would quietly say nothing about
+      // money on a call that costs some.
+      if (typeof data.cost_note === "string" && data.cost_note.trim())
+        ev.cost_note = data.cost_note;
       return ev;
     }
     case "approval_resolved": {
@@ -1066,6 +1075,9 @@ export interface PendingApproval {
   argsHash?: string;
   /** v1.332.0: a "local only" chat's card; "Allow once" and "Deny" only. */
   onceOnly?: boolean;
+  /** v1.346.0: what the call would spend, in the daemon's words; present
+   *  only when the tool quoted a price (media generation). */
+  costNote?: string;
 }
 
 /**
@@ -1414,6 +1426,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 canAlways: ev.can_always === true,
                 argsHash: ev.args_hash,
                 ...(ev.once_only === true ? { onceOnly: true } : {}),
+                ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
               });
               break;
             case "approval_resolved":

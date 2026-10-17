@@ -137,9 +137,23 @@ export const BELL_EVENT_TYPES: readonly string[] = [
   "computeruse.run_finished",
   // v1.342.0: a pack that failed to load or whose calls fail (once per episode)
   "mcp.pack_failed",
+  // v1.346.0: a media generation that finished in the background, or failed
+  "media.completed",
+  "media.failed",
   // the busy-runs ask (v1.333.0)
   "runs.busy",
 ];
+
+/** v1.346.0: the media kinds `generate_media` makes; anything else reads as
+ *  plain "media" so a newer daemon's kind never puts a wrong word in a row. */
+const MEDIA_KINDS: ReadonlySet<string> = new Set(["image", "video", "audio", "music"]);
+
+/** Where a media row opens: the chat it was asked in, else the chat page. */
+function mediaHref(threadId: unknown): string {
+  return typeof threadId === "string" && threadId.trim()
+    ? `/chat?thread=${encodeURIComponent(threadId.trim())}`
+    : "/chat";
+}
 
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
@@ -450,6 +464,33 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: AlertTriangle,
       title: `Pack ${name} is failing: ${reason}`,
       body: typeof p.fix === "string" ? p.fix.trim() : "",
+    };
+  }
+  if (e.type === "media.completed" || e.type === "media.failed") {
+    // v1.346.0: a media generation (image/video/audio/music) finished in the
+    // background. The daemon appended the result to the chat it was asked
+    // in; the row says so in the Handbook's words and opens THAT chat.
+    // Payload: completed {job_id, kind, provider, thread_id, path, cost_note};
+    // failed {job_id, kind, provider, thread_id, error} (plain words, masked
+    // by the daemon). An agent-run job carries no thread_id: the row still
+    // rings and opens the chat page.
+    const kind =
+      typeof p.kind === "string" && MEDIA_KINDS.has(p.kind) ? p.kind : "media";
+    const ok = e.type === "media.completed";
+    const body = ok
+      ? typeof p.cost_note === "string"
+        ? p.cost_note.trim()
+        : ""
+      : typeof p.error === "string"
+        ? p.error.trim()
+        : "";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: mediaHref(p.thread_id),
+      icon: ok ? CheckCircle2 : AlertTriangle,
+      title: ok ? `Your ${kind} is ready` : `Your ${kind} could not be made`,
+      body: body.length > 140 ? `${body.slice(0, 139)}…` : body,
     };
   }
   if (e.type === "computeruse.run_finished") {

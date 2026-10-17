@@ -43,6 +43,12 @@
 // asks on every call, so its card (`onceOnly`) offers Allow once and Deny and
 // nothing wider (no tab, no conversation, no Always), with one quiet line that
 // says why. The daemon reads any wider answer as once anyway.
+//
+// WHAT IT COSTS (v1.346.0): a call that spends money (media generation) asks
+// with `costNote` — the daemon's own words for the quote ("Generate 1 image on
+// Pixio for 12 credits (your price)"). The card shows it as ONE quiet line in
+// the local-only line's style, right under what will run, and nothing else
+// about the card changes: a card with no quote is byte-for-byte today's.
 
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
@@ -217,6 +223,12 @@ export function ApprovalCard({
               ))}
             </div>
           )}
+
+      {approval.costNote && (
+        <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400">
+          {approval.costNote}
+        </p>
+      )}
 
       <p data-testid="approval-waiting" className="text-[11px] font-medium text-tone-warn">
         {waitingLine(approval.timeoutS)}
