@@ -20,11 +20,21 @@ import path from "node:path";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const loads = vi.hoisted(() => ({ core: 0, engine: 0 }));
+const loads = vi.hoisted(() => ({ core: 0, engine: 0, created: 0 }));
 
 vi.mock("shiki/core", async (importOriginal) => {
   loads.core += 1;
-  return await importOriginal();
+  const real = await importOriginal<typeof import("shiki/core")>();
+  return {
+    ...real,
+    // Count every engine BUILT, not only the module import: the module cache
+    // makes the import happen once whatever lib/highlight does, so counting
+    // imports alone could not see an engine built per pass (review).
+    createHighlighterCore: (...args: Parameters<typeof real.createHighlighterCore>) => {
+      loads.created += 1;
+      return real.createHighlighterCore(...args);
+    },
+  };
 });
 vi.mock("shiki/engine/javascript", async (importOriginal) => {
   loads.engine += 1;
@@ -97,12 +107,12 @@ describe("code colours load only when a block that needs them is on screen", () 
     expect(FakeObserver.all[0].targets).toEqual([inside("below-fold")]);
     // A real wait: an eager load would have started on the first tick.
     await act(() => new Promise((r) => setTimeout(r, 60)));
-    expect(loads).toEqual({ core: 0, engine: 0 });
+    expect(loads).toEqual({ core: 0, engine: 0, created: 0 });
     for (const id of ["unknown", "tall", "below-fold"]) expect(inside(id).dataset.highlighted, id).toBe("false");
 
     act(() => FakeObserver.all[0].enter());
     await waitFor(() => expect(inside("below-fold").dataset.highlighted).toBe("true"), { timeout: 8_000 });
-    expect(loads).toEqual({ core: 1, engine: 1 });
+    expect(loads).toEqual({ core: 1, engine: 1, created: 1 });
     expect(inside("unknown").dataset.highlighted).toBe("false");
     expect(inside("tall").dataset.highlighted).toBe("false");
   });
@@ -121,7 +131,9 @@ describe("code colours load only when a block that needs them is on screen", () 
       },
       { timeout: 8_000 },
     );
-    expect(loads).toEqual({ core: 1, engine: 1 });
+    // Two more blocks, two more grammars, still the ONE engine built (by the
+    // test above, or by the first of these when this test runs alone).
+    expect(loads).toEqual({ core: 1, engine: 1, created: 1 });
   });
 });
 
