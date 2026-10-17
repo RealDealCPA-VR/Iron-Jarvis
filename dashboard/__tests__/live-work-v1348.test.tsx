@@ -291,6 +291,16 @@ describe("the live line ticks itself", () => {
     expect(screen.getByTestId("live-work-words").textContent).toBe("Working for 6 s");
   });
 
+  it("with the turn's start it counts the WHOLE turn, not from the first call", () => {
+    // Review pin: the page is meant to pass the stream's own start so the
+    // live line and the folded "Worked for …" count the same span. The call
+    // started 11.8 s ago; the turn started 17 s ago.
+    vi.useFakeTimers();
+    vi.setSystemTime(T0 + 12_000);
+    render(<LiveToolRows cards={[running("a", "read_file", { path: "x.md" })]} since={T0 - 5_000} />);
+    expect(screen.getByTestId("live-work-words").textContent).toBe("Working for 17 s");
+  });
+
   it("is one quiet line: no box, whole pixels, not read out every second", () => {
     render(<LiveToolRows cards={SIX} since={T0} />);
     const line = screen.getByTestId("live-work-summary");
@@ -355,6 +365,16 @@ describe("only the newest steps show; older ones fold into 'N earlier steps'", (
     expect(liveWindow(SIX.slice(0, 4)).earlier).toBe(0);
     render(<LiveToolRows cards={SIX.slice(0, 4)} />);
     expect(screen.getAllByTestId("work-row")).toHaveLength(4);
+    expect(screen.queryByTestId("live-earlier")).toBeNull();
+  });
+
+  it("a running old step that leaves only ONE to fold: nothing folds, no toggle", () => {
+    // Review pin: five calls, the oldest still running. The window would hide
+    // just c1, and a toggle row for one step saves nothing.
+    const five = [running("p1", "read_file", { path: "C:\\work\\slow.xlsx" }), ...SIX.slice(0, 4)];
+    expect(liveWindow(five).earlier).toBe(0);
+    render(<LiveToolRows cards={five} />);
+    expect(screen.getAllByTestId("work-row")).toHaveLength(5);
     expect(screen.queryByTestId("live-earlier")).toBeNull();
   });
 
