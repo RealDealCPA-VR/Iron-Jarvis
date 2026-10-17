@@ -275,7 +275,12 @@ describe("v1.344.0 — the escalation carries what the chat already ran", () => 
     await finishEscalating({});
     await waitFor(() => expect(postTo("/sessions")).toBeTruthy());
     const body = postTo("/sessions")!.body;
-    expect(Object.keys(body).sort()).toEqual(["agent_type", "origin", "task", "wait"]);
+    // v1.345.0: the session door carries the chat it was opened from —
+    // `chat_thread_id` is the id the at-send PUT minted (this harness names a
+    // new chat "t1"), so the daemon can append the run's final line to it.
+    expect(Object.keys(body).sort()).toEqual(["agent_type", "chat_thread_id", "origin", "task", "wait"]);
+    expect(body.chat_thread_id).toBe("t1");
+    expect(H.api.puts.some((p) => p.path === "/chat/threads/new")).toBe(true); // the PUT that minted it
     expect("prior_tool_results" in body).toBe(false);
   });
 

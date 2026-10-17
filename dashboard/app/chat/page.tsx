@@ -274,6 +274,12 @@ interface PanelResponse {
   tools?: string[];
   /** Panel mode: how much of the chat the speakers were shown (honesty). */
   context?: { chat_messages?: number; chat_dropped?: number };
+  /** v1.345.0: the daemon APPENDED the round's replies to the saved chat
+   *  named by `thread_id` before answering, and this is the chat's new
+   *  version stamp. The page then re-reads the chat instead of saving its
+   *  own copy of the round. An older daemon answers neither. */
+  appended?: boolean;
+  updated_at?: string | null;
 }
 import { useEvents } from "@/lib/useEvents";
 import { CHAT_EVENT_TYPES } from "@/components/chat/chatEventTypes";
@@ -290,6 +296,7 @@ import {
   type PriorToolResult,
 } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import { adoptDaemonLines, daemonLineFor, panelWorkingLabel, threadIsNewer } from "@/lib/chatReread";
 import { settledSplit } from "@/lib/streamSplit";
 import { useModels } from "@/lib/useModels";
 import {
@@ -590,6 +597,11 @@ interface ChatMessage {
   /** The agent session that produced this reply — the "Keep this as a
    *  workflow?" chip's hook (v1.120.0). */
   fromSession?: string;
+  /** v1.345.0: the same fact as the DAEMON writes it when it appends an
+   *  agent session's final line to the chat it was asked in (chat_append's
+   *  key). Read through lib/chatReread.adoptDaemonLines, which stands it in
+   *  for `fromSession` so the reply renders exactly as a page-composed one. */
+  sessionId?: string;
   /** What that session ACTUALLY did, from the tool ledger (v1.149.0) — files
    *  created/changed, tools run, errors, and what can still be reverted.
    *  Distinct from `content`, which is the model's own account of the work. */
@@ -3321,6 +3333,26 @@ const PREP_WORDS: Record<PrepStep, string> = {
  * takes the composer's place in the dock (<DockAsk>); only the record of
  * an app's question that ENDED stays, as one quiet line.
  */
+/** v1.345.0: the live bubble while an @-ROUND runs — WHO is working and for
+ *  how long since the send, the same grey row and clock the chat lane shows
+ *  (contract 5c). A six-minute remote round used to show "Thinking…" with no
+ *  clock at all (no stream runs for a round), which is what a hang looks like.
+ *  The clock ticks itself (TurnClock), so the page never re-renders for it. */
+function PanelWorking({ names, since }: { names: string[]; since: number }) {
+  return (
+    <Bubble role="assistant">
+      <div data-testid="panel-working" className="grid gap-1">
+        <WorkRow
+          icon={Loader2}
+          running
+          title={panelWorkingLabel(names)}
+          meta={<TurnClock since={since} after={1000} />}
+        />
+      </div>
+    </Bubble>
+  );
+}
+
 function LiveReply({
   stream,
   onGrow,
@@ -3718,6 +3750,16 @@ export default function ChatPage() {
   // The agent a running hand-off session belongs to (v1.284.0), so its reply
   // bubble is attributed to it when the run lands; null = a plain escalation.
   const awaitingWhoRef = useRef<string | null>(null);
+  // v1.345.0: an @-ROUND in flight — who was asked (the names typed after
+  // "@") and when it was sent, for the live bubble's "builder is working ·
+  // 2:13". The ref is read by the thread_updated effect: while the round's
+  // POST is airborne, the daemon's append for THIS chat is announced on the
+  // bus before the POST answers, and the POST's own re-read lands it.
+  const [panelLive, setPanelLive] = useState<{ names: string[]; since: number } | null>(null);
+  // The conversation generation (convGenRef) whose round is airborne, or
+  // null — keyed on the generation so a round of a LEFT conversation can
+  // never clear (or be mistaken for) the open one's.
+  const panelLiveRef = useRef<number | null>(null);
   // Caret offset in the composer. The picker keys off the "/" token AT THE
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
@@ -5172,9 +5214,79 @@ export default function ChatPage() {
         openStale = true;
     }
     if (listStale) void refreshThreads();
-    if (openStale) void refetchCommThread();
+    if (openStale) {
+      if (saveTargetRef.current.daemon) void refetchCommThread();
+      // v1.345.0: a USER-owned chat is announced too now — the daemon
+      // appends an @-round's reply, a remote's later report and an agent
+      // session's final line to the chat they were asked in. This page's
+      // own PUT announces nothing, so every such frame is ANOTHER writer:
+      // re-read and adopt (the stamp decides; never overwrite). Not while
+      // this page's own @-round is airborne — its POST re-reads itself.
+      else if (panelLiveRef.current !== convGenRef.current) void rereadOpenThread();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events]);
+
+  /** v1.345.0: re-read the OPEN user-owned chat after the daemon appended
+   *  to it, and ADOPT the server's array when its stamp is one this window
+   *  does not hold. While an agent session this page waits on turns out to
+   *  have landed (its line is in the array), finalize is asked to settle the
+   *  wait through its own re-read — the live bubble must not sit under a
+   *  reply that already arrived. Best-effort: a failed read changes nothing;
+   *  the next frame (or the poll) tries again. */
+  async function rereadOpenThread() {
+    const target = saveTargetRef.current;
+    const id = target.id;
+    if (!id || target.daemon) return;
+    const gen = chatGenRef.current;
+    let t: ThreadDetail;
+    try {
+      t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
+    } catch {
+      return;
+    }
+    if (chatGenRef.current !== gen || saveTargetRef.current !== target) return;
+    if (!t || !Array.isArray(t.messages)) return; // not a thread this window can adopt
+    const waited = awaitingIdRef.current;
+    if (waited && daemonLineFor(t.messages, waited)) {
+      void finalize(waited);
+      return;
+    }
+    adoptThread(t, target);
+  }
+
+  /** v1.345.0: lay the server's copy of the open chat over this window's —
+   *  the two-window merge rule, adopt and never overwrite. The save box
+   *  takes the server's stamp and length; the array this window held is
+   *  recorded as the REBASE base, so a save still being built by an in-flight
+   *  turn (its closure holds the old array by reference) is rewritten onto
+   *  the server's array by `rebased()` instead of clobbering what the daemon
+   *  appended. `messages` (when given) is the array to show in place of the
+   *  server's raw one — the daemon's agent lines read as the page's own.
+   *  Returns false when this window already holds that version. */
+  function adoptThread(
+    t: ThreadDetail,
+    target: SaveTarget,
+    opts: { force?: boolean; messages?: ChatMessage[] } = {},
+  ): boolean {
+    const stamp = t.updated_at ?? undefined;
+    if (!opts.force && !threadIsNewer(stamp, target.updatedAt)) return false;
+    const server = opts.messages ?? adoptDaemonLines(t.messages ?? []);
+    const local = messagesRef.current;
+    target.updatedAt = stamp;
+    target.syncedLen = server.length;
+    target.rebase = local.length ? { local, server } : undefined;
+    const path = `/chat/threads/${t.id}`;
+    const had = cachedGet<ThreadDetail>(path);
+    cacheSet(path, { ...(had ?? { title: "" }), ...t, messages: server } satisfies ThreadDetail);
+    messagesRef.current = server;
+    setMessages(server);
+    // The server's array is the truth for this chat; a Retry offered against
+    // an older copy of it (CL5) is retired along with that copy.
+    setFailedTurn(null);
+    setAddressee(addresseeOf(server)); // still talking to whoever answered last
+    return true;
+  }
 
   // A REMOTE AGENT MESSAGED BACK (v1.285.0). Its line lands in the ROOM this
   // conversation's @-rounds live in (the daemon owns the room; the browser
@@ -5480,6 +5592,11 @@ export default function ChatPage() {
       ...(target.updatedAt ? { if_updated_at: target.updatedAt } : {}),
     });
     let res: ThreadSaveResult;
+    // v1.345.0: the synced prefix AS OF THIS SEND. A re-read that adopts the
+    // daemon's append (adoptThread) moves `syncedLen` to the server's length
+    // while this PUT is airborne; the 409 merge below must cut `sent` where
+    // IT matched the server, or the bubble this save carries is dropped.
+    const syncedAtSend = target.syncedLen ?? 0;
     try {
       res = await put<ThreadSaveResult>(
         `/chat/threads/${target.id ?? "new"}`,
@@ -5489,7 +5606,7 @@ export default function ChatPage() {
       if (!(e instanceof ApiError && e.status === 409 && target.id)) throw e;
       const fresh = await get<ThreadDetail>(`/chat/threads/${target.id}`);
       const server = Array.isArray(fresh.messages) ? fresh.messages : [];
-      const k = Math.min(target.syncedLen ?? 0, sent.length);
+      const k = Math.min(syncedAtSend, sent.length);
       target.rebase = { local: sent.slice(0, k), server };
       target.updatedAt = fresh.updated_at ?? undefined;
       sent = [...server, ...sent.slice(k)];
@@ -6882,6 +6999,40 @@ export default function ChatPage() {
       const status = (session.status || "").toLowerCase();
       if (status !== "completed" && status !== "failed" && status !== "cancelled") {
         return; // still running — leave the working bubble up; retry later
+      }
+      // THE DAEMON MAY HAVE APPENDED THE REPLY ALREADY (v1.345.0): every
+      // session door this page opens from chat carries `chat_thread_id`,
+      // and the daemon's terminal path appends ONE line (the reply, its
+      // files, its receipt) to that chat. So re-read the chat first: when
+      // the session's line is there, show the server's array and skip the
+      // compose + PUT below — a PUT would race the append (409 at best, a
+      // doubled reply at worst). An older daemon that appended nothing, a
+      // chat not yet saved, a messaging thread, or a failed read keeps the
+      // composing path exactly as it was.
+      const box = saveTargetRef.current;
+      if (box.id && !box.daemon) {
+        let t: ThreadDetail | null = null;
+        try {
+          t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(box.id)}`);
+        } catch {
+          t = null; // compose as before
+        }
+        if (awaitingIdRef.current !== id) return; // left while the read was out
+        if (t && !Array.isArray(t.messages)) t = null; // not a readable thread: compose
+        const server = t ? adoptDaemonLines(t.messages) : [];
+        const line = daemonLineFor(server, id);
+        if (t && line) {
+          // The wait is over: the mark on the question goes (as the compose
+          // path strips it), and the server's array is what this window holds.
+          adoptThread(t, box, { force: true, messages: stripAwaiting(server) });
+          awaitingWhoRef.current = null;
+          if (line.documents?.length) showDocPreview(line.documents);
+          tts.speak(line.content); // no-op unless voice replies are on
+          awaitingIdRef.current = null;
+          setAwaitingId(null);
+          inputRef.current?.focus(); // type-ready for the next turn
+          return;
+        }
       }
       const summary = (session.summary || "").trim();
       const content =
@@ -8894,6 +9045,12 @@ export default function ChatPage() {
             : {}),
           ...posture,
           ...carried,
+          // THE CHAT RIDES EVERY DOOR (v1.345.0): the daemon appends the
+          // session's final line to this chat itself, so a reply that lands
+          // after the user left still comes home. `box.id` is set by the
+          // at-send save above (a new chat is named before the daemon is
+          // asked); a messaging thread's box has none and sends nothing.
+          ...(box.id ? { chat_thread_id: box.id } : {}),
         });
       } else {
         // First message opens a session — carry the chat recap into the task so
@@ -8925,6 +9082,8 @@ export default function ChatPage() {
                 // Presence asserted — see the POST /sessions branch below.
                 origin: "chat",
                 ...carried,
+                // v1.345.0 — see the continue branch above.
+                ...(box.id ? { chat_thread_id: box.id } : {}),
               },
             )
           : await post<SessionView>("/sessions", {
@@ -8972,6 +9131,8 @@ export default function ChatPage() {
               // surface can state.
               origin: "chat",
               ...carried,
+              // v1.345.0 — see the continue branch above.
+              ...(box.id ? { chat_thread_id: box.id } : {}),
             });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
@@ -9151,10 +9312,39 @@ export default function ChatPage() {
       {
         role: "user",
         content: message,
+        at: new Date().toISOString(),
         ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
       },
     ];
     setMessages(history);
+    messagesRef.current = history; // the at-send save and a re-read read the ref
+    // THE ROUND COMES HOME (v1.345.0). The user's report: in a NEW chat,
+    // "@hermes-mac-mini do some tax research…" ran for six minutes; they
+    // opened another saved chat meanwhile; when the round answered, this
+    // continuation did setMessages([@, reply]) + queueSave over WHATEVER
+    // CHAT WAS OPEN — the other chat's messages were overwritten on disk and
+    // the reply never appeared in the chat it was asked in. Three things,
+    // each pinned: (1) the generation of THIS conversation is captured at
+    // send (convGenRef: leaving the conversation moves it, Stop does not),
+    // and once it moved nothing below touches the screen or the save box;
+    // (2) the question is SAVED AT SEND — the same at-send save sendChat
+    // and sendAgent make — so the chat has an id BEFORE the daemon is asked
+    // and the round always carries `thread_id`; the daemon then APPENDS the
+    // replies to that chat itself (`appended: true`); (3) while the user is
+    // still here, the page RE-READS the chat and shows what the daemon
+    // appended instead of saving its own copy of the round.
+    const gen = convGenRef.current;
+    const box = saveTargetRef.current;
+    queueSave(history, box);
+    await saveChainRef.current; // on disk (and named) before the daemon is asked
+    const stillHere = () => convGenRef.current === gen && saveTargetRef.current === box;
+    // The live bubble names who is working, with a clock since the send
+    // (contract 5c) — a six-minute round used to look exactly like a hang.
+    setPanelLive({ names: mentions, since: Date.now() });
+    panelLiveRef.current = gen;
+    const roundOver = () => {
+      if (panelLiveRef.current === gen) panelLiveRef.current = null;
+    };
     const priorRoom = [...before].reverse().find((m) => m.panelThreadId)?.panelThreadId;
     // The files ride the wire by PATH (the kanban/agent precedent), so a round
     // that cannot open them at least knows they exist; a session gets them
@@ -9166,15 +9356,31 @@ export default function ChatPage() {
       const res = await post<PanelResponse>("/chat/panel", {
         message: wire,
         mentions,
-        ...(threadId ? { chat_thread_id: threadId } : {}),
+        // The chat this round belongs to — the box's id, which the at-send
+        // save just minted for a new chat (the `threadId` state lags it).
+        ...(box.id ? { chat_thread_id: box.id } : {}),
         ...(priorRoom ? { panel_thread_id: priorRoom } : {}),
         history: panelHistoryOf(before),
         ...(atts.length ? { hands: true } : {}),
         // v1.332.0: a "local only" chat's agents speak only on local models
         // (the daemon reads the saved chat's setup too).
         ...(localOnlyRef.current ? { local_only: true } : {}),
-        ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
+        ...(box.id ? { thread_id: box.id } : {}),
       });
+      roundOver();
+      if (!stillHere()) {
+        // THE USER LEFT while the round ran. The daemon appended the replies
+        // to the chat they were asked in (`appended`) — the rail's unread dot
+        // lights it through chat.thread_updated, and reopening it shows them.
+        // Nothing here may touch the conversation that is open now. An older
+        // daemon that appended nothing gets the round saved into the
+        // ORIGINAL box (sendAgent's torn-down idiom): the reply still comes
+        // home, and never to another chat.
+        if (res.mode === "session" || res.appended) return;
+        queueSave(roundMessages(history, res), box);
+        return;
+      }
+      setPanelLive(null);
       if (atts.length) setAttachments([]); // consumed — the daemon has them now
       if (res.mode === "session" && res.target) {
         // WORK, NOT A QUESTION: the same lane a chat escalation takes. The
@@ -9196,30 +9402,38 @@ export default function ChatPage() {
         });
         return;
       }
-      // The user's own turn is already in `history`; keep only the agents'.
-      const replies = (res.entries ?? []).filter((e) => e.who && e.who !== "user");
-      const dropped = res.context?.chat_dropped ?? 0;
-      const note =
-        dropped > 0
-          ? `${dropped} earlier message${dropped === 1 ? "" : "s"} did not fit the agent's context window`
-          : "";
-      const full: ChatMessage[] = [
-        ...history,
-        ...replies.map((e, idx) => ({
-          role: "assistant" as const,
-          content: e.content || "(no reply)",
-          panelWho: e.who,
-          panelThreadId: res.thread_id,
-          ...(e.error ? { panelError: true } : {}),
-          ...(idx === 0 && note ? { panelNote: note } : {}),
-        })),
-      ];
-      setMessages(full);
-      // The conversation is WITH these agents now — the next plain message
-      // goes to them too. The daemon's `spoke` is the truth of who answered.
+      // The daemon's `spoke` is the truth of who answered — the conversation
+      // is WITH these agents now, and the next plain message goes to them.
       const spoke = (res.spoke ?? []).filter(Boolean);
-      setAddressee(spoke.length ? spoke : addresseeOf(full));
-      queueSave(full);
+      if (res.appended && box.id) {
+        // THE DAEMON WROTE THE ROUND: re-read the chat and show its array —
+        // never queueSave the page's own copy (that PUT would carry a stale
+        // stamp and race the append). A read that fails shows the round from
+        // the answer and adopts the answer's stamp, so the next save carries
+        // the version the daemon made.
+        let t: ThreadDetail | null = null;
+        try {
+          t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(box.id)}`);
+        } catch {
+          t = null;
+        }
+        if (!stillHere()) return;
+        if (t && !Array.isArray(t.messages)) t = null; // not a readable thread
+        if (t) adoptThread(t, box, { force: true });
+        else {
+          box.updatedAt = res.updated_at ?? box.updatedAt;
+          const full = roundMessages(history, res);
+          messagesRef.current = full;
+          setMessages(full);
+        }
+        if (spoke.length) setAddressee(spoke);
+      } else {
+        // An older daemon appended nothing: the page's own copy, saved.
+        const full = roundMessages(history, res);
+        setMessages(full);
+        setAddressee(spoke.length ? spoke : addresseeOf(full));
+        queueSave(full, box);
+      }
       if (res.unknown_mentions?.length) {
         setError(
           `No agent matched ${res.unknown_mentions
@@ -9228,15 +9442,55 @@ export default function ChatPage() {
         );
       }
     } catch (e) {
+      roundOver();
+      if (!stillHere()) return; // the open conversation is somebody else's now
+      setPanelLive(null);
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setError(err.status === 0 ? "Daemon offline. The panel didn't run." : err.message);
       composer.setText(message); // never lose the typed message
       if (atts.length) setAttachments(atts); // ...nor the files (never cleared before the POST landed)
       setMessages(before);
     } finally {
-      setChatBusy(false);
-      sendingRef.current = false;
+      roundOver();
+      // The conversation that was left owns none of this state any more
+      // (leaveConversation reset it; a turn there may be running now).
+      if (stillHere()) {
+        setPanelLive(null);
+        setChatBusy(false);
+        // The synchronous double-send guard too: openThread and newChat
+        // already dropped it for the conversation they opened, and a turn
+        // there may hold it up right now (an agent send sits with `busy`
+        // false until its session is named) — a round of a LEFT conversation
+        // landing in that window must not hand Enter a second turn.
+        sendingRef.current = false;
+      }
     }
+  }
+
+  /** The round as the page composes it (v1.150.0 shape, unchanged): the
+   *  question, then each agent's line attributed to its participant key and
+   *  bound to the room, the context note on the first. The daemon's
+   *  chat_append writes the SAME shape — this stays for an older daemon and
+   *  for a read that failed. */
+  function roundMessages(history: ChatMessage[], res: PanelResponse): ChatMessage[] {
+    // The user's own turn is already in `history`; keep only the agents'.
+    const replies = (res.entries ?? []).filter((e) => e.who && e.who !== "user");
+    const dropped = res.context?.chat_dropped ?? 0;
+    const note =
+      dropped > 0
+        ? `${dropped} earlier message${dropped === 1 ? "" : "s"} did not fit the agent's context window`
+        : "";
+    return [
+      ...history,
+      ...replies.map((e, idx) => ({
+        role: "assistant" as const,
+        content: e.content || "(no reply)",
+        panelWho: e.who,
+        panelThreadId: res.thread_id,
+        ...(e.error ? { panelError: true } : {}),
+        ...(idx === 0 && note ? { panelNote: note } : {}),
+      })),
+    ];
   }
 
   /**
@@ -9373,6 +9627,10 @@ export default function ChatPage() {
     saveDraftNow();
     setFollowups(null);
     convGenRef.current += 1;
+    // v1.345.0: an @-round still airborne belongs to the conversation being
+    // left — its bubble goes with it; its reply comes home through the
+    // daemon's append (see sendPanel), never through this page's state.
+    setPanelLive(null);
     // The next conversation opens at its bottom at once (see openingRef).
     openingRef.current = true;
     queuedSendRef.current = false;
@@ -11300,7 +11558,13 @@ export default function ChatPage() {
                         {/* v1.250.0 (S-03): the live bubble is its own
                             component so a streamed token re-renders IT, not
                             this page. Same bubble, same order, same clock. */}
-                        <LiveReply stream={stream} onGrow={scrollLiveIntoView} />
+                        {/* v1.345.0: an @-round names who is working, with a
+                            clock since the send — no stream runs for a round. */}
+                        {panelLive ? (
+                          <PanelWorking names={panelLive.names} since={panelLive.since} />
+                        ) : (
+                          <LiveReply stream={stream} onGrow={scrollLiveIntoView} />
+                        )}
                         {/* v1.278.0: the steer notes sent to this turn. Honest
                             wording — a note lands at the next step, never
                             inside a sentence already being written. */}
