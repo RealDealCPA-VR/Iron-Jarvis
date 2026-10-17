@@ -531,7 +531,7 @@ export const LiveToolRows = memo(function LiveToolRows({
           aria-expanded={open}
           aria-controls={listId}
           onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 items-center gap-2 text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:underline focus-visible:underline-offset-[3px] focus-visible:outline-none"
+          className="flex min-w-0 items-center gap-2 text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:underline focus-visible:underline-offset-[3px] focus-visible:outline-none motion-reduce:transition-none"
         >
           <ChevronRight
             size={14}
@@ -609,7 +609,7 @@ export function WorkLine(props: WorkInput) {
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none"
+        className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
       >
         <Check size={14} aria-hidden="true" className="shrink-0" />
         <span data-testid="work-summary" className="min-w-0 truncate">

@@ -37,6 +37,7 @@ import { useEffect, useState } from "react";
 import { FileText, RotateCcw, Square } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
 import { Markdown, MemoMarkdown, CopyIconButton } from "@/components/Markdown";
+import { MediaGroup } from "@/components/MediaLightbox";
 import { DocPreview } from "@/components/chat/DocPreview";
 import {
   MISSION_TERMINAL,
@@ -145,11 +146,15 @@ const STREAMING_CARET_CLASS =
  *  finding's plan) is a later wave's job — chat/page.tsx is not this track's
  *  file. */
 function LiveMarkdown({ content, caret }: { content: string; caret: boolean }) {
+  // v1.348.0: one picture group for both parts (no element of its own), so
+  // the lightbox's arrows walk the whole report — same as StreamingText.
   const cut = settledSplit(content);
   return (
     <div className={caret ? STREAMING_CARET_CLASS : undefined}>
-      {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
-      <Markdown content={cut > 0 ? content.slice(cut) : content} />
+      <MediaGroup>
+        {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
+        <Markdown content={cut > 0 ? content.slice(cut) : content} />
+      </MediaGroup>
     </div>
   );
 }

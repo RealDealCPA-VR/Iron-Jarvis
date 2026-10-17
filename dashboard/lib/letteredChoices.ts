@@ -19,6 +19,9 @@
  */
 
 import type { McpField } from "@/lib/mcpInteract";
+// Elements that take typing: a letter typed there is a letter, not a pick.
+// ONE selector, shared with the dock's Enter/Esc rules.
+import { TAKES_TYPING } from "@/lib/dockAsk";
 
 /** The most rows that get letters (A to J). */
 export const MAX_LETTERED = 10;
@@ -46,9 +49,6 @@ export function letteredField(fields: readonly McpField[]): string | null {
   return (only.enum?.length ?? 0) <= MAX_LETTERED ? only.name : null;
 }
 
-/** Elements that take typing: a letter typed there is a letter, not a pick. */
-const TAKES_TYPING =
-  'input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]), select, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"], [role="textbox"]';
 
 /** The upper-case letter a key press means, or null. Modifier chords (Ctrl,
  *  Alt, Meta), held keys and IME composition are never a pick; Shift is

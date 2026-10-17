@@ -56,7 +56,7 @@ export function ThinkingDisclosure({ text, live = false, seconds }: ThinkingDisc
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex max-w-full items-center gap-2 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none"
+        className="inline-flex max-w-full items-center gap-2 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
       >
         <Brain
           size={14}

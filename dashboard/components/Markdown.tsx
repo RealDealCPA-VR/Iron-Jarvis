@@ -34,6 +34,7 @@ import { MediaGroup, ZoomableImage } from "@/components/MediaLightbox";
 import { isLocalMediaRef, localMediaSrc, localPathOf } from "@/lib/mediaLightbox";
 import { blankDraftFence, DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
 import { ChartCard } from "@/components/chat/ChartCard";
+import { CodeBlock } from "@/components/chat/CodeBlock";
 import { CHART_FENCE, parseChartSpec } from "@/lib/chartSpec";
 import { nextSort, rowsToCsv, sortOrder, type SortDir, type SortState } from "@/lib/tableData";
 
@@ -123,12 +124,29 @@ export function CopyIconButton({
   );
 }
 
-// Lets the <code> override know it sits inside a <pre> block (block code keeps
-// the pre's styling; standalone inline code gets the accent pill).
-const PreContext = createContext(false);
+/** A code fence's language word AS WRITTEN, lower-cased — `c#` keeps its `#`.
+ *  `fenceLang` (the draft/chart router) reads `[\w-]+` and so cuts "c#" to
+ *  "c"; this read is for the code block only, so a highlight alias with a
+ *  symbol (lib/highlight ALIASES "c#") can match. */
+function codeFenceLang(children: ReactNode): string {
+  let lang = "";
+  Children.forEach(children, (child) => {
+    if (!isValidElement(child)) return;
+    const cls = (child.props as { className?: string }).className || "";
+    const found = /language-(\S+)/.exec(cls);
+    if (found) lang = found[1].toLowerCase();
+  });
+  return lang;
+}
 
 /** Fenced code block: dark panel + hover copy button — unless the fence is a
- *  draft, which becomes a boxed, rich-copyable card instead. */
+ *  draft, which becomes a boxed, rich-copyable card instead.
+ *
+ *  v1.348.0: an ordinary fence renders through `components/chat/CodeBlock` —
+ *  the same panel, classes and copy button, plus syntax colours loaded lazily
+ *  (lib/highlight). The block draws its own `<code>` from the raw text, so
+ *  react-markdown's children (and the old in-pre context) are no longer
+ *  rendered here; the draft, blank-draft and chart routes are unchanged. */
 function MarkdownPre({ children }: { children?: ReactNode }) {
   const text = nodeText(children).replace(/\n$/, "");
   // The fence's CONTENT is markdown, not code: the model writes **bold** and
@@ -155,31 +173,12 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
     const spec = parseChartSpec(text);
     if (spec) return <ChartCard spec={spec} />;
   }
-  return (
-    <div className="group/code relative my-2">
-      <CopyIconButton
-        text={text}
-        title="Copy code"
-        className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-zinc-400 opacity-0 transition-opacity hover:text-zinc-100 focus-visible:opacity-100 group-hover/code:opacity-100"
-      />
-      <PreContext.Provider value={true}>
-        <pre className="overflow-x-auto rounded border border-white/[0.06] bg-ink-900/80 p-3 font-mono text-xs leading-relaxed text-zinc-200">
-          {children}
-        </pre>
-      </PreContext.Provider>
-    </div>
-  );
+  return <CodeBlock code={text} lang={codeFenceLang(children)} />;
 }
 
-function MarkdownCode({
-  className,
-  children,
-}: {
-  className?: string;
-  children?: ReactNode;
-}) {
-  const inPre = useContext(PreContext);
-  if (inPre) return <code className={className}>{children}</code>;
+/** Inline code. A fenced block never reaches this: MarkdownPre hands the
+ *  fence's raw text to CodeBlock, which draws its own `<code>`. */
+function MarkdownCode({ children }: { className?: string; children?: ReactNode }) {
   // v1.330.0 (calm wave 13): one pixel under the text around it. 0.85em was
   // 11.9px in a 14px reply; `1em - 1px` still follows a heading or a 13px
   // table cell (15 / 14 / 13 / 12 px) and lands on a whole pixel wherever
@@ -276,6 +275,23 @@ export function mediaUrlTransform(url: string, key: string): string {
   return defaultUrlTransform(url);
 }
 
+/** True inside a markdown link (v1.348.0): a picture there stays a plain
+ *  picture so the link keeps working (see MarkdownMediaInner). */
+const LinkContext = createContext(false);
+
+function MarkdownLink({ children, href }: { children?: ReactNode; href?: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:decoration-accent"
+    >
+      <LinkContext.Provider value={true}>{children}</LinkContext.Provider>
+    </a>
+  );
+}
+
 function MarkdownMedia({ src, alt }: { src?: string | Blob; alt?: string }) {
   const raw = typeof src === "string" ? src : "";
   if (!raw) return null;
@@ -290,6 +306,7 @@ function MarkdownMedia({ src, alt }: { src?: string | Blob; alt?: string }) {
 }
 
 function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
+  const inLink = useContext(LinkContext);
   let resolved = raw;
   if (isLocalMediaRef(raw)) {
     const path = localPathOf(raw);
@@ -312,6 +329,20 @@ function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
   }
   if (AUDIO_EXT_RX.test(raw)) {
     return <audio src={resolved} controls className="my-2 w-full max-w-xl" />;
+  }
+  // v1.348.0 (integration): a picture the model wrapped in a LINK keeps the
+  // link — the plain picture, exactly as before v1.348.0. A zoom button there
+  // would sit inside an <a> (invalid HTML) and swallow the link's click.
+  if (inLink) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={resolved}
+        alt={alt || "generated media"}
+        loading="lazy"
+        className="my-2 max-h-96 w-auto max-w-full rounded-xl border border-white/10"
+      />
+    );
   }
   // v1.348.0: a picture opens full screen (components/MediaLightbox). It looks
   // exactly as it did — the margin moved to the button around it, which adds
@@ -553,16 +584,7 @@ const MD_COMPONENTS: Components = {
       {children}
     </td>
   ),
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:decoration-accent"
-    >
-      {children}
-    </a>
-  ),
+  a: MarkdownLink,
   blockquote: ({ children }) => (
     <blockquote className="my-2 border-l-2 border-accent/40 pl-3 text-zinc-400 [&>p]:my-0.5">
       {children}

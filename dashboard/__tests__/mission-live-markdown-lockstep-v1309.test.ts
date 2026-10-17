@@ -47,6 +47,21 @@ describe("LiveMarkdown stays in lock-step with chat's StreamingText", () => {
     }
   });
 
+  it("v1.348.0: both put the head and the tail in ONE picture group", () => {
+    // The lightbox's arrows walk one MediaGroup; two bare Markdowns would be
+    // two groups, so mid-stream the arrows stopped at the settled/tail cut.
+    for (const [name, body] of [
+      ["StreamingText", streaming],
+      ["LiveMarkdown", live],
+    ] as const) {
+      const open = body.indexOf("<MediaGroup>");
+      const close = body.indexOf("</MediaGroup>");
+      expect(open, name).toBeGreaterThan(-1);
+      expect(body.indexOf("<MemoMarkdown content={content.slice(0, cut)} />"), name).toBeGreaterThan(open);
+      expect(body.indexOf("<Markdown content={cut > 0 ? content.slice(cut) : content} />"), name).toBeLessThan(close);
+    }
+  });
+
   it("the caret classes are identical", () => {
     const chatCaret = caretClasses(streaming);
     // LiveMarkdown names its caret through STREAMING_CARET_CLASS

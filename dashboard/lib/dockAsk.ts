@@ -81,8 +81,10 @@ export function dockAskKeyHint(kind: DockAskItem["kind"]): string {
 const OWNS_ENTER =
   'button, a[href], input, select, textarea, summary, [contenteditable=""], [contenteditable="true"], [role="button"], [role="checkbox"], [role="combobox"], [role="listbox"], [role="textbox"], [role="menuitem"]';
 
-/** Elements that take typing (Esc may mean "close my dropdown" there). */
-const TAKES_TYPING =
+/** Elements that take typing (Esc may mean "close my dropdown" there; a
+ *  letter typed there is a letter, not a lettered pick — lib/letteredChoices
+ *  reads this same selector). */
+export const TAKES_TYPING =
   'input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]), select, textarea, [contenteditable=""], [contenteditable="true"], [role="combobox"], [role="textbox"]';
 
 /** What a key pressed with `target` focused does to the dock question:

@@ -73,6 +73,7 @@ const S = vi.hoisted(() => ({
     streaming: false,
     tools: [] as unknown[],
     approval: null as Record<string, unknown> | null,
+    startedAt: undefined as number | undefined,
   },
   bodies: [] as Record<string, unknown>[],
   result: { reply: "ok" } as Record<string, unknown>,
@@ -86,6 +87,7 @@ vi.mock("@/lib/useChatStream", () => ({
     text: "",
     tools: S.stream.tools,
     approval: S.stream.approval,
+    startedAt: S.stream.startedAt,
     run: async (body: Record<string, unknown>) => {
       S.bodies.push(body);
       return S.result;
@@ -172,6 +174,7 @@ beforeEach(() => {
   S.stream.streaming = false;
   S.stream.tools = [];
   S.stream.approval = null;
+  S.stream.startedAt = undefined;
   S.bodies = [];
   S.result = { reply: "ok" };
   window.localStorage.clear();
@@ -250,6 +253,31 @@ describe("the pane folds a reply's work into the chat page's line", () => {
     const rows = within(live).getByTestId("live-tool-rows");
     expect(rows.textContent).toContain("Reading harbor.xlsx");
     expect(screen.queryByTestId("pane-tool-card")).toBeNull();
+  });
+
+  it("v1.348.0 integration: ONE clock in the pane — the live line counts the turn, Thinking's clock steps aside", async () => {
+    const now = Date.now();
+    S.stream.streaming = true;
+    S.stream.startedAt = now - 12_000;
+    S.stream.tools = [
+      { id: "c1", name: "read_file", status: "done", ok: true, args: { path: "C:/work/demo/a.md" }, startedAt: now - 2_000, endedAt: now - 1_900 },
+    ];
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    const live = await screen.findByTestId("pane-chat-live");
+    await waitFor(() =>
+      expect(within(live).getByTestId("live-work-words").textContent).toMatch(/^Working for 1[2-9] s · read 1 file$/),
+    );
+    expect(within(live).getByText(/Thinking…/)).toBeTruthy();
+    expect(within(live).queryByTestId("turn-clock")).toBeNull();
+  });
+
+  it("v1.348.0 integration: no steps yet — the pane's Thinking keeps its clock", async () => {
+    S.stream.streaming = true;
+    S.stream.startedAt = Date.now() - 12_000;
+    render(<PaneChat paneId="p1" cwd={CWD} />);
+    const live = await screen.findByTestId("pane-chat-live");
+    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9]s$/));
+    expect(within(live).queryByTestId("live-work-words")).toBeNull();
   });
 });
 

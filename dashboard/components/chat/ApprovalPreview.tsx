@@ -233,7 +233,7 @@ function CommandLine({ command }: { command: string }) {
 }
 
 /** Code that wants to run (repl, run_code), verbatim and whole. */
-function CodeBlock({ code }: { code: string }) {
+function CodeLines({ code }: { code: string }) {
   return (
     <pre
       data-testid="approval-code"
@@ -264,7 +264,7 @@ export function ApprovalPreview({ tool, args }: { tool: string; args: Record<str
             case "command":
               return <CommandLine key={i} command={p.command} />;
             case "code":
-              return <CodeBlock key={i} code={p.code} />;
+              return <CodeLines key={i} code={p.code} />;
           }
         })}
       </div>

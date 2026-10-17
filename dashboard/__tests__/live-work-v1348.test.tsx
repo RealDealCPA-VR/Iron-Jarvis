@@ -39,6 +39,8 @@ const H = vi.hoisted(() => {
     streaming: false,
     version: 0,
     live: { tools: [] as unknown[], thinking: "" },
+    // v1.348.0 integration: the turn's start, as the real hook reports it.
+    startedAt: undefined as number | undefined,
     listeners: new Set<() => void>(),
     settle: null as null | ((r: Record<string, unknown>) => void),
     bump() {
@@ -105,6 +107,7 @@ vi.mock("@/lib/useChatStream", async () => {
         text: "",
         thinking: H.stream.live.thinking,
         tools: H.stream.live.tools,
+        startedAt: H.stream.startedAt,
         mcpAsks: [],
         approval: null,
         phase: H.stream.streaming ? "working" : null,
@@ -158,6 +161,7 @@ beforeEach(() => {
   H.stream.streaming = false;
   H.stream.settle = null;
   H.stream.live = { tools: [], thinking: "" };
+  H.stream.startedAt = undefined;
   H.getResponses = {
     "/models": { models: [{ provider: "claude-cli", model: "claude-opus-5-5", label: "Opus 5.5", available: true }] },
     "/chat/personas": { personas: [] },
@@ -535,5 +539,40 @@ describe("on the chat page", () => {
     for (const r of rows) expect(boxClasses(r)).toEqual([]);
     fireEvent.click(within(live).getByTestId("live-earlier"));
     expect(within(live).getAllByTestId("work-row")).toHaveLength(7);
+  });
+
+  it("v1.348.0 integration: ONE clock — the live line counts the whole turn and the Thinking row's clock steps aside", async () => {
+    // The turn began 12 s ago; its first call only 2 s ago. Counting from the
+    // first call (the line without the page's `since`) would read "2 s", a
+    // different number from the Thinking row's clock and from "Worked for".
+    const now = Date.now();
+    H.stream.startedAt = now - 12_000;
+    H.stream.live = {
+      thinking: "",
+      tools: [{ ...done("c1", "read_file", { path: "C:\\work\\a.xlsx" }), startedAt: now - 2_000, endedAt: now - 1_900 }],
+    };
+    render(<ChatPage />);
+    const el = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;
+    fireEvent.change(el, { target: { value: "read it" } });
+    fireEvent.keyDown(el, { key: "Enter" });
+    const live = await screen.findByTestId("live-work");
+    await waitFor(() =>
+      expect(within(live).getByTestId("live-work-words").textContent).toMatch(/^Working for 1[2-9] s · read 1 file$/),
+    );
+    // The page's "Thinking…" row is still there, but without a clock of its own.
+    expect(within(live).getByText("Thinking…")).toBeTruthy();
+    expect(within(live).queryByTestId("turn-clock")).toBeNull();
+  });
+
+  it("v1.348.0 integration: with no steps yet, the Thinking row keeps its clock (no live line)", async () => {
+    H.stream.startedAt = Date.now() - 12_000;
+    H.stream.live = { thinking: "", tools: [] };
+    render(<ChatPage />);
+    const el = (await screen.findByPlaceholderText(/Message Iron Jarvis/)) as HTMLTextAreaElement;
+    fireEvent.change(el, { target: { value: "think" } });
+    fireEvent.keyDown(el, { key: "Enter" });
+    const live = await screen.findByTestId("live-work");
+    await waitFor(() => expect(within(live).getByTestId("turn-clock").textContent).toMatch(/^1[2-9]s$/));
+    expect(within(live).queryByTestId("live-work-words")).toBeNull();
   });
 });

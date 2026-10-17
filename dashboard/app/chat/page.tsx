@@ -1815,11 +1815,17 @@ function StreamingText({ content }: { content: string }) {
   // `::after` on the LAST child of this wrapper, so an empty tail would hang
   // it on a blank line. Blocks that continue across the boundary (a list, a
   // table) keep their own paragraph, because the cut is always a blank line.
+  //
+  // v1.348.0: ONE picture group for both parts (MediaGroup draws no element,
+  // so the caret's last-child selector is untouched): the lightbox's arrows
+  // walk the whole reply, not the settled head and the tail separately.
   const cut = settledSplit(content);
   return (
     <div className="[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-caret [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']">
-      {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
-      <Markdown content={cut > 0 ? content.slice(cut) : content} />
+      <MediaGroup>
+        {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
+        <Markdown content={cut > 0 ? content.slice(cut) : content} />
+      </MediaGroup>
     </div>
   );
 }
@@ -3379,7 +3385,10 @@ function LiveReply({
           for …" line. Empty (no thinking, no tools, words flowing) = hidden. */}
       <div data-testid="live-work" className="mb-2 grid gap-1 empty:hidden">
         <ThinkingDisclosure text={thinking} live={!text} />
-        <LiveToolRows cards={stream.tools} />
+        {/* v1.348.0: the live "Working for …" line counts from the TURN's
+            start, so it reads the same number the folded "Worked for …"
+            line will (and the Thinking row's clock below steps aside). */}
+        <LiveToolRows cards={stream.tools} since={stream.startedAt ?? null} />
         {!text && (
           <WorkRow
             icon={Loader2}
@@ -3396,7 +3405,9 @@ function LiveReply({
                   ? "Reading your files…"
                   : "Thinking…"
             }
-            meta={<TurnClock since={stream.startedAt ?? null} />}
+            // v1.348.0: once steps are listed, their summary line carries the
+            // clock; one clock ticking, never two with different numbers.
+            meta={stream.tools.length ? null : <TurnClock since={stream.startedAt ?? null} />}
           />
         )}
       </div>

@@ -1278,7 +1278,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
                 "Running excel_query"), one grey line each. */}
             {stream.tools.length > 0 ? (
               <div className="mb-2">
-                <LiveToolRows cards={stream.tools} />
+                <LiveToolRows cards={stream.tools} since={stream.startedAt ?? null} />
               </div>
             ) : null}
             {stream.text ? (
@@ -1286,8 +1286,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             ) : (
               <div className="flex items-center gap-2 text-xs text-zinc-500">
                 <Loader2 size={12} className="animate-spin" /> Thinking…
-                {/* v1.246.0: how long — same clock as the Chat page. */}
-                <TurnClock since={stream.startedAt ?? null} />
+                {/* v1.246.0: how long — same clock as the Chat page.
+                    v1.348.0: once steps are listed, their "Working for …"
+                    line carries the clock, so this one steps aside. */}
+                {stream.tools.length ? null : <TurnClock since={stream.startedAt ?? null} />}
               </div>
             )}
           </div>
