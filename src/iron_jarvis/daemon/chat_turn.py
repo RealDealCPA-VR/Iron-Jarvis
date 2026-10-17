@@ -2054,6 +2054,45 @@ RECOVERY_BLOCK = (
 )
 
 
+#: THE SPEND CHECK IN THE POST LANE (v1.346.0, post-lane spend). The user's
+#: rule is "ask before EVERY spend". The stream lane asks with a card
+#: (routes/chat.py's `_spend`); the agent runtime pauses. ``POST /chat``
+#: (`run_chat_turn`) has NO card: every armed tool is its own grant, so a raw
+#: API caller sending ``tools: ["generate_media"]`` with a priced prompt used
+#: to run a PAID generation with nobody asked (the dashboard never sends that;
+#: the phone lane arms `auto_tools` only, which never arms the ASK tier). So
+#: this lane REFUSES a priced verdict without running it, through the registry's
+#: deny path (`deny_reason`/`deny_label`) — the ledger row, the `tool.denied`
+#: event and the reply footnote all see it — and a free verdict runs exactly
+#: as today. LOCK-STEP NOTE: this is a POST-LANE-ONLY policy by design — the
+#: stream lane CARDS the same verdict instead; do not mirror this refusal there.
+SPEND_NOT_ASKED_LABEL = "NOT RUN"
+SPEND_NOT_ASKED_TAIL = (
+    "this lane cannot ask for approval; use the chat page (POST /chat/stream),"
+    " or make the request one the service does for free."
+)
+#: The FOOTNOTE key for that refusal. It cannot be the registry label: the
+#: repeated-call breaker (`repeated_call_refusal`) also starts its sentence
+#: with ``NOT RUN:`` and is deliberately NOT footnoted (v1.344.0 pin), so
+#: `refusal_label` tells the two apart by this refusal's own tail sentence.
+SPEND_NOT_ASKED_FOOTNOTE = "spend not asked"
+
+
+def spend_not_asked_invoke_kwargs(check: Any) -> dict[str, Any]:
+    """``{"deny_reason", "deny_label"}`` for a call whose spend check says
+    ``ask`` (a paid or unknown price) in the lane that cannot ask, else ``{}``
+    — so the common path's invoke stays byte-identical. The model-facing tool
+    content becomes ``NOT RUN: <the verdict's words> — this lane cannot ask for
+    approval; …`` (the registry formats ``f"{label}: {reason}"``)."""
+    if check is None or not bool(getattr(check, "ask", False)):
+        return {}
+    words = str(getattr(check, "words", "") or "").strip() or "this call would spend money"
+    return {
+        "deny_reason": f"{words} — {SPEND_NOT_ASKED_TAIL}",
+        "deny_label": SPEND_NOT_ASKED_LABEL,
+    }
+
+
 #: v1.344.0 (M3) — the refusal labels a chat turn footnotes, mapped to the
 #: words the user reads. The keys are the registry's ``deny_label`` prefixes
 #: (``tools/registry.py``: ``f"{label}: {reason}"``) plus the one the lanes
@@ -2062,6 +2101,8 @@ REFUSAL_FOOTNOTE_WORDS: dict[str, str] = {
     "permission denied": "permission denied",
     "not armed": "not turned on for this chat",
     "low trust": "blocked under low trust",
+    # v1.346.0 (post-lane spend): a priced call the POST lane could not ask about.
+    SPEND_NOT_ASKED_FOOTNOTE: "needs an approval this lane cannot ask for",
 }
 
 
@@ -2077,6 +2118,10 @@ def refusal_label(error: str) -> str:
         return "not armed"
     if text.startswith("low trust:"):
         return "low trust"
+    if text.startswith(f"{SPEND_NOT_ASKED_LABEL}:") and SPEND_NOT_ASKED_TAIL in text:
+        # v1.346.0: the POST lane's spend refusal — the breaker's own
+        # ``NOT RUN:`` sentence (no tail) keeps reading as "" below.
+        return SPEND_NOT_ASKED_FOOTNOTE
     if "permission denied" in text:
         return "permission denied"
     return ""
@@ -6229,6 +6274,7 @@ async def run_chat_turn(
             # MIRROR NOTE (lock-step): routes/chat.py's stream loop runs the
             # same three phases (plus its cards, resolved before the batch).
             from ..tools.base import ToolResult as _ToolResult
+            from ..tools.base import spend_checks_for as _spend_checks_for
 
             _keys: list[tuple[str, str]] = []
             _refused: list[str] = []
@@ -6241,6 +6287,19 @@ async def run_chat_turn(
                     _refused.append(repeated_call_refusal(tc.name, _failed_calls[_call_key]))
                 else:
                     _refused.append("")
+            # THE SPEND CHECK (v1.346.0, post-lane spend): ONCE per call of the
+            # round, BEFORE anything runs, each armed tool with an opinion
+            # about money is asked (`Tool.spend_check` — today only
+            # `generate_media`). The stream lane reads the same map to decide
+            # its CARD (routes/chat.py `_spend`); this lane has no card, so a
+            # verdict with `ask` True is REFUSED at invoke (below, through the
+            # registry's deny path) and a free one runs exactly as today. The
+            # quote is cached by the tool, so a free start pays no second
+            # estimate. POST-LANE-ONLY policy by design: the stream lane cards
+            # instead of refusing — see `spend_not_asked_invoke_kwargs`.
+            _spend = await _spend_checks_for(
+                d.platform.registry, calls, ctx, set(armed)
+            )
             _batched = [
                 not _refused[i] and _batchable_call(tc.name, tc.arguments)
                 for i, tc in enumerate(calls)
@@ -6269,7 +6328,14 @@ async def run_chat_turn(
                     # invoke doubles take no kw. MIRROR NOTE (lock-step):
                     # routes/chat.py folds the same refusal into its
                     # ``_deny_reason``.
+                    # A PRICED CALL IS REFUSED, NOT RUN (v1.346.0, post-lane
+                    # spend): with no card to ask on, the spend verdict's
+                    # words ride the same deny path (ledger row + tool.denied
+                    # + the reply footnote). The low-trust refusal, when
+                    # both apply, names the deeper cause and wins. POST lane
+                    # only — the stream lane cards the same verdict.
                     _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
+                    _deny_kw = _low_kw or spend_not_asked_invoke_kwargs(_spend.get(id(tc)))
                     return await d.platform.registry.invoke(
                         tc.name,
                         # ``shell`` isolates under low trust (v1.298.0).
@@ -6280,7 +6346,7 @@ async def run_chat_turn(
                         # v1.246.0: the agent run's tool deadline, so a hung
                         # tool ends as a failed result instead of a hung turn.
                         deadline_s=chat_tool_deadline(d.platform),
-                        **_low_kw,
+                        **_deny_kw,
                         # STANDING GRANTS (v1.299.0) — lock-step with the
                         # stream lane: the store + this turn's scopes ride
                         # into the registry's gate (only when a store
