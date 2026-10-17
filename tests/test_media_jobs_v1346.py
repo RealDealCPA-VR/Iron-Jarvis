@@ -619,6 +619,8 @@ async def test_the_routes_answer_the_jobs_and_never_a_key(app, tmp_path):
     view = one.json()
     assert set(view) == {
         "id", "provider", "kind", "model", "prompt", "params", "status", "thread_id",
+        # v1.347.0: the turn that asked + when the line reached the chat.
+        "turn_id", "homed_at",
         "session_id", "project_id", "provider_job_id", "output_path", "artifact", "error",
         "cost_note", "created_at", "finished_at",
     }

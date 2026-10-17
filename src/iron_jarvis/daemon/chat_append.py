@@ -27,7 +27,9 @@ Rules, each pinned in ``tests/test_chat_append_v1345.py``:
   server exactly as the PUT route stamps (aware ISO, ``+00:00``);
 * a line whose ``sessionId`` / ``fromSession`` already names a session that
   has a line in the thread is SKIPPED (idempotent — a session's terminal
-  path and a page that still composes must not make two replies);
+  path and a page that still composes must not make two replies); so is a
+  line whose ``mediaJob`` already has one (v1.347.0 — a job's own finish
+  and the turn-link route may both try to deliver the same result);
 * ``updated_at`` moves the way the PUT route moves it (strictly monotonic,
   the v1.326.0 tick rule) and ``archived_at`` is cleared (a reply un-archives,
   like ``comm/threads.append``);
@@ -73,6 +75,10 @@ LINE_KEYS: tuple[str, ...] = (
     "agentType",
     "sessionId",
     "fromSession",
+    # v1.347.0: a media job's line names its job, so a second delivery of the
+    # same result (the link route racing the job's own finish, the boot
+    # reconcile) is SKIPPED like a session's second line.
+    "mediaJob",
     "runResult",
     "receipt",
     "remembered",
@@ -90,6 +96,17 @@ _APPEND_LOCK = CONVERSATION_WRITE_LOCK
 def _session_of(line: dict[str, Any]) -> str:
     """The session a line belongs to, by either key the page knows."""
     return str(line.get("sessionId") or line.get("fromSession") or "").strip()
+
+
+def _line_key(line: dict[str, Any]) -> str:
+    """What makes a line a REPEAT: its session (either key), else its media
+    job (v1.347.0) — ``media:<id>`` so a job id can never collide with a
+    session id."""
+    sid = _session_of(line)
+    if sid:
+        return sid
+    job = str(line.get("mediaJob") or "").strip()
+    return f"media:{job}" if job else ""
 
 
 def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
@@ -198,11 +215,11 @@ def append_to_chat_thread(
             except Exception:  # noqa: BLE001 — a corrupt blob must not wedge the append
                 msgs = []
             known = {
-                _session_of(m) for m in msgs if isinstance(m, dict) and _session_of(m)
+                _line_key(m) for m in msgs if isinstance(m, dict) and _line_key(m)
             }
             added: list[dict[str, Any]] = []
             for line in cleaned:
-                sid = _session_of(line)
+                sid = _line_key(line)
                 if sid and sid in known:
                     out["skipped"] += 1
                     continue

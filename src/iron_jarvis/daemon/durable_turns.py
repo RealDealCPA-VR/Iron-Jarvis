@@ -245,6 +245,16 @@ class TurnLogs:
         self._evict()
         return self._logs.get(turn_id)
 
+    def thread_for(self, turn_id: str) -> str:
+        """The chat ``turn_id`` belongs to as far as THIS process knows — the
+        live turn's link, else a link waiting for the turn to start; "" when
+        neither (the turn's record may still say; v1.347.0, read by a media
+        job that has to find the chat a new chat's first turn ended up in)."""
+        lg = self._logs.get(turn_id)
+        if lg is not None and lg.thread_id:
+            return lg.thread_id
+        return self._links.get(turn_id, "")
+
     def running(self) -> list[TurnLog]:
         return [lg for lg in self._logs.values() if lg.status == "running"]
 

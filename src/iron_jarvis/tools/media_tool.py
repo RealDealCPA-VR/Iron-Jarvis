@@ -205,7 +205,13 @@ class GenerateMediaTool(Tool):
         model = str(args.get("model") or "").strip() or await provider.default_model(kind)
         extra = args.get("params") if isinstance(args.get("params"), dict) else {}
         params: dict[str, Any] = {"prompt": prompt, **{str(k): v for k, v in extra.items()}}
-        return provider, model, params, kind, _clean_refs(args.get("reference_paths"))
+        refs = _clean_refs(args.get("reference_paths"))
+        # v1.347.0: the provider checks the pair BEFORE the quote and the
+        # start — a bare id gets its prefix, a model that needs an input file
+        # (an editor) is refused with models that work from a prompt, so a
+        # wrong pick costs one round and no money.
+        model, params = await provider.prepare(model, params, kind, has_refs=bool(refs))
+        return provider, model, params, kind, refs
 
     async def _quote(self, provider: Any, model: str, params: dict[str, Any], kind: str, refs: list[str]) -> Quote:
         key = _hash_params(provider.id, model, params, refs)
@@ -317,11 +323,16 @@ class GenerateMediaTool(Tool):
             cost_note=cost_note,
             eta_s=eta,
         )
+        # v1.347.0: a NEW chat's first turn has no thread id yet — the job
+        # finds its chat through the turn once the page links it. Passed only
+        # when set (an agent run has none; older doubles take no such kwarg).
+        turn_id = str(getattr(ctx, "turn_id", "") or "")
         job_id = jobs.start_background(
             spec,
             thread_id=str(getattr(ctx, "thread_id", "") or ""),
             session_id=ctx.session_id,
             project_id=getattr(ctx, "project_id", None),
+            **({"turn_id": turn_id} if turn_id else {}),
         )
         return ToolResult(
             ok=True,

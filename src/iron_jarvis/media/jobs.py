@@ -22,7 +22,18 @@ STARTED job to :meth:`MediaJobs.start_background`. From there:
   and :data:`MEDIA_COMPLETED` goes out for the bell;
 * on failure the line says "Your <kind> could not be made: <reason>" and
   :data:`MEDIA_FAILED` goes out;
-* a job with NO thread id (an agent run) appends nothing and only publishes;
+* a job finds its chat by ``thread_id``, else by the chat TURN that asked
+  (``turn_id``, v1.347.0): a NEW chat's first question is sent before the
+  page's first save names the chat, so the tool sees no thread id — the
+  page links the turn a moment later and :meth:`MediaJobs._home_for` reads
+  that link (the live turn, a link waiting for its turn, the turn's record).
+  A job that finishes before the link lands keeps ``homed_at`` empty and
+  :meth:`MediaJobs.home_turn` (called by ``POST /chat/turns/{id}/thread``)
+  delivers it then; :meth:`MediaJobs.home_strays` does the same once at boot
+  for rows an older build left with no chat (found through the turn record
+  that names the job). One ``asyncio.Lock`` orders "which chat" against the
+  link, and ``chat_append`` skips a second line for the same ``mediaJob``;
+* a job with no chat at all (an agent run) appends nothing and only publishes;
 * every job is a :class:`~iron_jarvis.media.models.MediaJobRecord` row, so a
   restart finds what was live: :meth:`MediaJobs.reconcile_at_boot` re-polls
   each queued/running row by its ``provider_job_id`` (Pixio keeps the
@@ -41,7 +52,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +61,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.ids import new_id, utcnow
+from ..core.models import ChatTurnRecord
 from ..core.logging import get_logger
 from ..detections.redact import mask
 from .base import MediaError
@@ -84,6 +96,11 @@ NO_SERVICE = "the media service is not connected anymore"
 PANEL_KIND = "media"
 #: Who the CHAT_THREAD_UPDATED event names as the writer.
 WHO = "media"
+
+#: The boot catch-up (:meth:`MediaJobs.home_strays`) looks this far back for
+#: finished jobs that never reached a chat, and at most this many.
+STRAY_LOOKBACK_DAYS = 14
+STRAY_MAX = 50
 
 
 @dataclass
@@ -169,6 +186,8 @@ def _view(row: MediaJobRecord) -> dict[str, Any]:
         "params": params if isinstance(params, dict) else {},
         "status": row.status,
         "thread_id": row.thread_id,
+        "turn_id": row.turn_id,
+        "homed_at": _iso(row.homed_at),
         "session_id": row.session_id,
         "project_id": row.project_id,
         "provider_job_id": row.provider_job_id,
@@ -207,6 +226,10 @@ class MediaJobs:
         #: Jobs this process is driving, by id — a job the tool just handed
         #: over is readable here before its row is written (one loop hop).
         self._live: dict[str, dict[str, Any]] = {}
+        #: Orders "which chat does this job belong to" (a finish) against
+        #: "this turn belongs to that chat" (the link route), so a result is
+        #: never left with no chat because the two crossed (v1.347.0).
+        self._home_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ doors
     def start_background(
@@ -216,10 +239,13 @@ class MediaJobs:
         thread_id: str = "",
         session_id: str = "chat",
         project_id: str | None = None,
+        turn_id: str = "",
     ) -> str:
         """Take a STARTED generation into the background; returns the job id
         at once (the row is written by the task, off the loop). Must be
-        called on the daemon's loop (a tool's ``execute`` is)."""
+        called on the daemon's loop (a tool's ``execute`` is). ``turn_id``
+        is the chat turn that asked — how a job started in a NEW chat finds
+        the chat once the page has saved it."""
         if not spec.provider_job_id:
             raise ValueError("a background media job needs the service's job id")
         row = MediaJobRecord(
@@ -231,6 +257,7 @@ class MediaJobs:
             params_json=json.dumps(spec.params or {}, default=str),
             status=QUEUED,
             thread_id=str(thread_id or ""),
+            turn_id=str(turn_id or ""),
             session_id=str(session_id or ""),
             project_id=str(project_id or ""),
             provider_job_id=spec.provider_job_id,
@@ -266,7 +293,48 @@ class MediaJobs:
             picked += 1
         if picked:
             log.info("media: re-polling %d generation(s) a restart left running", picked)
+        try:
+            homed = await self.home_strays()
+            if homed:
+                log.info("media: delivered %d finished generation(s) to their chat", homed)
+        except Exception:  # noqa: BLE001 — the catch-up never blocks the reconcile
+            log.warning("media: delivering finished generations to their chat failed", exc_info=True)
         return picked
+
+    async def home_turn(self, turn_id: str, thread_id: str) -> int:
+        """The page has just said which chat ``turn_id`` belongs to
+        (``POST /chat/turns/{id}/thread``). Every job that turn started and
+        that has no chat yet takes this one; a job that already FINISHED
+        delivers its line now. Returns how many lines were delivered."""
+        turn_id = str(turn_id or "").strip()
+        thread_id = str(thread_id or "").strip()
+        if not turn_id or not thread_id:
+            return 0
+        async with self._home_lock:
+            finished = await asyncio.to_thread(self._adopt_turn, turn_id, thread_id)
+        delivered = 0
+        for row in finished:
+            if await self._deliver_finished(row, thread_id):
+                delivered += 1
+        return delivered
+
+    async def home_strays(self) -> int:
+        """Boot catch-up: a finished job with no chat and no delivery (an
+        older build lost a NEW chat's first-turn result this way) finds its
+        chat through its turn — ``turn_id`` when it has one, else the turn
+        whose record names the job ("... (job mj_x)" is in the tool's
+        output). Bounded to :data:`STRAY_LOOKBACK_DAYS` and
+        :data:`STRAY_MAX`; no bell (the bell already rang once)."""
+        rows = await asyncio.to_thread(self._stray_rows)
+        delivered = 0
+        for row in rows:
+            async with self._home_lock:
+                thread_id = await asyncio.to_thread(self._stray_thread, row)
+                if thread_id:
+                    await asyncio.to_thread(self._update, row.id, thread_id=thread_id)
+            if thread_id and await self._deliver_finished(row, thread_id):
+                delivered += 1
+        return delivered
 
     def cancel_all(self) -> int:
         """Cancel every live job task (lifespan shutdown). The rows stay
@@ -408,12 +476,129 @@ class MediaJobs:
             for key, value in cols.items():
                 view[key] = _iso(value) if isinstance(value, datetime) else value
 
+    # which chat ---------------------------------------------------------------
+    def _thread_of_turn(self, turn_id: str) -> str:
+        """The chat a turn was linked to: the live turn, a link waiting for
+        its turn to start, then the turn's record. "" when nobody said yet.
+        SYNC (it reads the DB)."""
+        if not turn_id:
+            return ""
+        logs = getattr(self._platform, "turn_logs", None)
+        if logs is not None:
+            try:
+                tid = str(logs.thread_for(turn_id) or "")
+            except Exception:  # noqa: BLE001 — an older/odd holder reads as unknown
+                tid = ""
+            if tid:
+                return tid
+        try:
+            with session_scope(self._platform.engine) as db:
+                rec = db.get(ChatTurnRecord, turn_id)
+                return str(rec.thread_id or "") if rec is not None else ""
+        except Exception:  # noqa: BLE001 — a read fault is "not known yet"
+            log.warning("media: could not read chat turn %s", turn_id, exc_info=True)
+            return ""
+
+    def _home_for(self, job_id: str, fallback_thread: str, turn_id: str) -> str:
+        """Which chat ``job_id``'s result goes to, decided NOW: the row's own
+        ``thread_id`` (a link may have landed while it ran), else its turn's
+        chat — written onto the row when found. SYNC; called under
+        ``_home_lock`` from the loop via ``to_thread``."""
+        current = fallback_thread
+        try:
+            with session_scope(self._platform.engine) as db:
+                row = db.get(MediaJobRecord, job_id)
+                if row is not None:
+                    current = row.thread_id or current
+                    turn_id = row.turn_id or turn_id
+        except Exception:  # noqa: BLE001 — fall back to what the job started with
+            log.warning("media: could not re-read job %s", job_id, exc_info=True)
+        if current:
+            return current
+        found = self._thread_of_turn(turn_id)
+        if found:
+            self._update(job_id, thread_id=found)
+        return found
+
+    def _adopt_turn(self, turn_id: str, thread_id: str) -> list[MediaJobRecord]:
+        """Give ``thread_id`` to every job of ``turn_id`` that has no chat;
+        return the FINISHED, undelivered ones (detached) for delivery."""
+        finished: list[MediaJobRecord] = []
+        adopted: list[str] = []
+        with session_scope(self._platform.engine) as db:
+            rows = db.exec(
+                select(MediaJobRecord).where(
+                    MediaJobRecord.turn_id == turn_id,
+                    MediaJobRecord.thread_id == "",
+                )
+            ).all()
+            for row in rows:
+                row.thread_id = thread_id
+                db.add(row)
+            db.commit()
+            for row in rows:
+                db.refresh(row)
+                db.expunge(row)
+                adopted.append(row.id)
+                if row.status not in LIVE_STATUSES and row.homed_at is None:
+                    finished.append(row)
+        for job_id in adopted:
+            view = self._live.get(job_id)
+            if view is not None:
+                view["thread_id"] = thread_id
+        return finished
+
+    def _stray_rows(self) -> list[MediaJobRecord]:
+        """Finished chat jobs with no chat and no delivery, newest first."""
+        since = (utcnow() - timedelta(days=STRAY_LOOKBACK_DAYS)).replace(tzinfo=None)
+        with session_scope(self._platform.engine) as db:
+            rows = db.exec(
+                select(MediaJobRecord)
+                .where(
+                    MediaJobRecord.thread_id == "",
+                    MediaJobRecord.homed_at == None,  # noqa: E711 — SQL IS NULL
+                    MediaJobRecord.session_id == "chat",
+                    MediaJobRecord.status.in_((SUCCEEDED, FAILED)),  # type: ignore[attr-defined]
+                    MediaJobRecord.created_at >= since,
+                )
+                .order_by(MediaJobRecord.created_at.desc(), text("rowid DESC"))  # type: ignore[attr-defined]
+                .limit(STRAY_MAX)
+            ).all()
+            for r in rows:
+                db.expunge(r)
+            return list(rows)
+
+    def _stray_thread(self, row: MediaJobRecord) -> str:
+        """A stray's chat: its turn's link, else the ONE linked turn whose
+        record names the job (the tool's output says "(job <id>)"), started
+        within two hours before the job and ten minutes after."""
+        if row.turn_id:
+            return self._thread_of_turn(row.turn_id)
+        created = row.created_at
+        if created is None:
+            return ""
+        if created.tzinfo is not None:
+            created = created.astimezone(timezone.utc).replace(tzinfo=None)
+        needle = f"(job {row.id})"
+        with session_scope(self._platform.engine) as db:
+            hits = db.exec(
+                select(ChatTurnRecord.thread_id).where(
+                    ChatTurnRecord.thread_id != "",
+                    ChatTurnRecord.started_at >= created - timedelta(hours=2),
+                    ChatTurnRecord.started_at <= created + timedelta(minutes=10),
+                    text("instr(frames_json, :needle) > 0").bindparams(needle=needle),
+                )
+            ).all()
+        threads = {str(t) for t in hits if t}
+        return threads.pop() if len(threads) == 1 else ""
+
     # the job ----------------------------------------------------------------
     async def _run(self, row: MediaJobRecord, spec: MediaJobSpec, *, insert: bool) -> None:
         # Read every scalar BEFORE the insert: a committed row is expired and
         # re-reading it outside a session raises (DetachedInstanceError).
         job_id = row.id
         thread_id = row.thread_id
+        turn_id = row.turn_id
         session_id = row.session_id or None
         project_id = row.project_id or None
         try:
@@ -422,7 +607,7 @@ class MediaJobs:
             registry = self._registry()
             provider = registry.get(spec.provider) if registry is not None else None
             if provider is None:
-                await self._finish_failed(job_id, spec, thread_id, NO_SERVICE)
+                await self._finish_failed(job_id, spec, thread_id, turn_id, NO_SERVICE)
                 return
             await asyncio.to_thread(self._update, job_id, status=RUNNING)
             started = self._clock()
@@ -433,14 +618,14 @@ class MediaJobs:
                     break
                 if self._clock() - started >= self._max_s():
                     await self._finish_failed(
-                        job_id, spec, thread_id, f"{TOO_LONG} (over {int(self._max_s())} s)"
+                        job_id, spec, thread_id, turn_id, f"{TOO_LONG} (over {int(self._max_s())} s)"
                     )
                     return
                 await self._sleep(delay)
                 delay = min(delay * 2, BACKOFF_MAX_S)
             if state.status != "succeeded":
                 await self._finish_failed(
-                    job_id, spec, thread_id, state.error or "the service reported a failure"
+                    job_id, spec, thread_id, turn_id, state.error or "the service reported a failure"
                 )
                 return
             data = await provider.fetch(state)
@@ -458,37 +643,44 @@ class MediaJobs:
                 artifact_sink=self._sink(),
             )
             cost_note = state.cost_note or spec.cost_note or ""
-            await self._finish_succeeded(job_id, spec, thread_id, landed, cost_note)
+            await self._finish_succeeded(job_id, spec, thread_id, turn_id, landed, cost_note)
         except asyncio.CancelledError:
             # Shutdown: the row stays live for the next boot's reconcile.
             raise
         except MediaError as exc:
-            await self._finish_failed(job_id, spec, thread_id, exc.words)
+            await self._finish_failed(job_id, spec, thread_id, turn_id, exc.words)
         except Exception as exc:  # noqa: BLE001 — a job never crashes the daemon; words
             # Masked ONCE, in _finish_failed — the one door every failure
             # (provider words, the cap, the reconcile, this) passes through.
-            await self._finish_failed(job_id, spec, thread_id, f"{type(exc).__name__}: {exc}")
+            await self._finish_failed(job_id, spec, thread_id, turn_id, f"{type(exc).__name__}: {exc}")
 
     async def _finish_succeeded(
         self,
         job_id: str,
         spec: MediaJobSpec,
         thread_id: str,
+        turn_id: str,
         landed: dict[str, Any],
         cost_note: str,
     ) -> None:
         abs_path = str(landed.get("abs_path") or "")
-        await asyncio.to_thread(
-            self._update,
-            job_id,
-            status=SUCCEEDED,
-            output_path=abs_path,
-            artifact=str(landed.get("artifact") or ""),
-            cost_note=cost_note,
-            finished_at=utcnow(),
-        )
-        if thread_id:
-            await self._append_line(thread_id, ready_line(spec.kind, abs_path, job_id))
+        async with self._home_lock:
+            # Which chat is decided and the row marked finished in ONE hold of
+            # the lock the link route takes: a link either lands first (and
+            # this finish sees the chat) or after (and finds a finished,
+            # undelivered row it delivers itself).
+            thread_id = await asyncio.to_thread(self._home_for, job_id, thread_id, turn_id)
+            await asyncio.to_thread(
+                self._update,
+                job_id,
+                status=SUCCEEDED,
+                output_path=abs_path,
+                artifact=str(landed.get("artifact") or ""),
+                cost_note=cost_note,
+                finished_at=utcnow(),
+            )
+        if thread_id and await self._append_line(thread_id, ready_line(spec.kind, abs_path, job_id)):
+            await asyncio.to_thread(self._update, job_id, homed_at=utcnow())
         await self._publish(
             MEDIA_COMPLETED,
             {
@@ -502,17 +694,25 @@ class MediaJobs:
         )
 
     async def _finish_failed(
-        self, job_id: str, spec: MediaJobSpec, thread_id: str, error: str
+        self, job_id: str, spec: MediaJobSpec, thread_id: str, turn_id: str, error: str
     ) -> None:
         error = mask(str(error or "")) or "unknown failure"
-        try:
-            await asyncio.to_thread(
-                self._update, job_id, status=FAILED, error=error, finished_at=utcnow()
-            )
-        except Exception:  # noqa: BLE001 — the row is best-effort; the words still go out
-            log.warning("media job %s: failed status not written", job_id, exc_info=True)
-        if thread_id:
-            await self._append_line(thread_id, failed_line(spec.kind, error, job_id))
+        async with self._home_lock:
+            try:
+                thread_id = await asyncio.to_thread(self._home_for, job_id, thread_id, turn_id)
+            except Exception:  # noqa: BLE001 — the words still go out
+                log.warning("media job %s: chat not resolved", job_id, exc_info=True)
+            try:
+                await asyncio.to_thread(
+                    self._update, job_id, status=FAILED, error=error, finished_at=utcnow()
+                )
+            except Exception:  # noqa: BLE001 — the row is best-effort; the words still go out
+                log.warning("media job %s: failed status not written", job_id, exc_info=True)
+        if thread_id and await self._append_line(thread_id, failed_line(spec.kind, error, job_id)):
+            try:
+                await asyncio.to_thread(self._update, job_id, homed_at=utcnow())
+            except Exception:  # noqa: BLE001
+                log.warning("media job %s: delivery not recorded", job_id, exc_info=True)
         await self._publish(
             MEDIA_FAILED,
             {
@@ -524,7 +724,23 @@ class MediaJobs:
             },
         )
 
-    async def _append_line(self, thread_id: str, line: dict[str, Any]) -> None:
+    async def _deliver_finished(self, row: MediaJobRecord, thread_id: str) -> bool:
+        """The line for a job that finished before its chat was known
+        (``home_turn`` / ``home_strays``); marks it delivered. No bell — the
+        bell rang when the job finished."""
+        if row.status == SUCCEEDED and row.output_path:
+            line = ready_line(row.kind, row.output_path, row.id)
+        elif row.status == FAILED:
+            line = failed_line(row.kind, row.error or "unknown failure", row.id)
+        else:
+            return False
+        if not await self._append_line(thread_id, line):
+            return False
+        await asyncio.to_thread(self._update, row.id, homed_at=utcnow())
+        return True
+
+    async def _append_line(self, thread_id: str, line: dict[str, Any]) -> bool:
+        """True when the line is in the chat (newly, or already there)."""
         append = self._append
         if append is None:
             from ..daemon.chat_append import append_to_chat_thread as append  # lazy: keeps media/ free of daemon/ at import
@@ -542,8 +758,11 @@ class MediaJobs:
                 log.warning(
                     "media: the chat line did not land in %s: %s", thread_id, (out or {}).get("why")
                 )
+                return False
+            return True
         except Exception:  # noqa: BLE001 — the bell still rings
             log.warning("media: chat append failed for %s", thread_id, exc_info=True)
+            return False
 
     async def _publish(self, kind: str, payload: dict[str, Any]) -> None:
         bus = getattr(self._platform, "event_bus", None)

@@ -148,11 +148,14 @@ export const BELL_EVENT_TYPES: readonly string[] = [
  *  plain "media" so a newer daemon's kind never puts a wrong word in a row. */
 const MEDIA_KINDS: ReadonlySet<string> = new Set(["image", "video", "audio", "music"]);
 
-/** Where a media row opens: the chat it was asked in, else the chat page. */
-function mediaHref(threadId: unknown): string {
-  return typeof threadId === "string" && threadId.trim()
-    ? `/chat?thread=${encodeURIComponent(threadId.trim())}`
-    : "/chat";
+/** Where a media row opens: the chat it was asked in; a FINISHED result
+ *  with no chat (v1.347.0: nobody could say which chat yet) opens the
+ *  Creative library, where the file is; anything else the chat page. */
+function mediaHref(threadId: unknown, path?: unknown): string {
+  if (typeof threadId === "string" && threadId.trim()) {
+    return `/chat?thread=${encodeURIComponent(threadId.trim())}`;
+  }
+  return typeof path === "string" && path.trim() ? "/creative" : "/chat";
 }
 
 /** Map one live event to an activity notification (null = not a notified type). */
@@ -487,7 +490,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: mediaHref(p.thread_id),
+      href: mediaHref(p.thread_id, ok ? p.path : undefined),
       icon: ok ? CheckCircle2 : AlertTriangle,
       title: ok ? `Your ${kind} is ready` : `Your ${kind} could not be made`,
       body: body.length > 140 ? `${body.slice(0, 139)}…` : body,

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.346.1 (2026-10-04).*
+holds itself to. Current as of v1.347.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## A picture made in a new chat appears in that chat (v1.347.0)
+
+In v1.346, a picture asked for as the **first message of a new chat** could
+finish without ever appearing there: the chat had not been saved yet when
+the request went out, so the finished file had nowhere to go. It went to
+the Creative library only, and the bell opened an empty chat page.
+
+- The result now finds its chat through the message that asked for it, so
+  it appears in that chat whether it finishes in two seconds or twenty
+  minutes, and whether or not you are still looking at it.
+- After this update, a picture an earlier version lost this way (in the
+  last two weeks) is put into its chat once, the next time the app starts.
+- If a result truly has no chat (an agent run started it), the bell opens
+  the **Creative library**, where the file is, instead of an empty chat.
+- **Fewer failed tries.** When you don't name a model, Jarvis now picks one
+  that works from a description alone. Before, the cheapest "image" model on
+  Pixio was often an editor that needs a picture to start from, and the
+  first try failed. If a model is named that can't do the job (an editor
+  with no picture attached, a model for another kind of media, or one that
+  doesn't exist), Jarvis is told why and given models that would work,
+  without anything being spent. A model name without its `pixio/` prefix is
+  fixed for you.
 
 ## A tool pack's helper processes always stop with it (v1.346.1)
 

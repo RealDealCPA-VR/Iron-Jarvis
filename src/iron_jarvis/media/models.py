@@ -46,9 +46,19 @@ class MediaJobRecord(SQLModel, table=True):
     #: JSON object: the params the generation was started with (never a key).
     params_json: str = "{}"
     status: str = Field(default=QUEUED, index=True)
-    #: The saved chat the result comes home to ("" = an agent run: nothing
-    #: is appended, only the events go out).
+    #: The saved chat the result comes home to ("" = not known yet — a NEW
+    #: chat's first turn carries no thread id; ``turn_id`` finds it — or an
+    #: agent run, where only the events go out).
     thread_id: str = Field(default="", index=True)
+    #: The chat TURN that asked (v1.347.0). A new chat's first question is
+    #: sent before its first save names the chat, so the tool sees no
+    #: thread id; the page links the turn to the chat a moment later
+    #: (``POST /chat/turns/{id}/thread``), and the job finds its chat
+    #: through the turn — at finish, or when the link lands after it.
+    turn_id: str = Field(default="", index=True)
+    #: When the result's line landed in the chat (None = not yet: the job
+    #: is still running, or it finished before anyone could say which chat).
+    homed_at: datetime | None = None
     session_id: str = ""
     project_id: str = ""
     #: The SERVICE's job id — what the reconcile re-polls by.

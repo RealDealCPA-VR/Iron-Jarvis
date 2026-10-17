@@ -2406,10 +2406,22 @@ def register(app: FastAPI, d) -> None:
             lg.thread_id = lg.thread_id or tid
             lg._dirty = True
             lg.maybe_persist(d.platform.engine)
-            return {"ok": True, "linked": "running" if lg.status == "running" else "kept"}
-        logs.link_later(turn_id, tid)
-        await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
-        return {"ok": True, "linked": "later"}
+            linked = "running" if lg.status == "running" else "kept"
+        else:
+            logs.link_later(turn_id, tid)
+            await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
+            linked = "later"
+        # v1.347.0: a picture/video/song this turn started comes home to the
+        # chat now named — and one that FINISHED before the link (a new chat's
+        # first question carried no thread id) is delivered here.
+        media_homed = 0
+        jobs = getattr(d.platform, "media_jobs", None)
+        if jobs is not None:
+            try:
+                media_homed = await jobs.home_turn(turn_id, tid)
+            except Exception:  # noqa: BLE001 — the link itself already landed
+                log.warning("media: homing turn %s failed", turn_id, exc_info=True)
+        return {"ok": True, "linked": linked, "media_homed": media_homed}
 
     @app.get("/chat/turns")
     def list_chat_turns(thread_id: str, limit: int = 3) -> dict[str, Any]:

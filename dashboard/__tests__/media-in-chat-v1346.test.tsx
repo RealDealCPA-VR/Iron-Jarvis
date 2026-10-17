@@ -253,6 +253,14 @@ describe("the bell says when a generation is done", () => {
       "Your media is ready",
     );
     expect(toActivity(mediaEvent("media.completed", { kind: "audio" }))!.href).toBe("/chat");
+    // v1.347.0: a FINISHED result nobody could place in a chat opens the
+    // Creative library, where the file is — never a blank chat page.
+    expect(
+      toActivity(mediaEvent("media.completed", { kind: "image", thread_id: "", path: "C:/x/mj_1.png" }))!.href,
+    ).toBe("/creative");
+    expect(
+      toActivity(mediaEvent("media.failed", { kind: "image", thread_id: "", path: "C:/x/mj_1.png" }))!.href,
+    ).toBe("/chat");
     expect(toActivity(mediaEvent("media.failed", { kind: "music", thread_id: "a b/c" }))!.href).toBe(
       "/chat?thread=a%20b%2Fc",
     );

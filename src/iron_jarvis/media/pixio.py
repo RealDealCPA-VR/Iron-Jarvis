@@ -20,10 +20,23 @@ module encodes (the pixio-skill, mirrored 2026-10-07):
   requiredCredits / shortfall), ``content_policy`` (422, final, ``inputHint``),
   ``concurrency_limit`` (429 + Retry-After, account-wide), ``provider_error``.
   ``DELETE /generations/{id}`` does NOT cancel, so nothing here cancels.
-* Model ids start with ``pixio/``; each has a kind/category.
+* Model ids start with ``pixio/``; each row has a ``type`` that says what
+  goes IN and what comes OUT (``text-to-image``, ``image-to-image``,
+  ``text-to-audio``, ``video-extend`` ...) and an ``inputs`` list with
+  ``required`` flags (measured 2026-10-17: 657 models, 104 text-to-image).
+  Music has no type of its own — it is ``text-to-audio`` with a music name.
 * ``GET /pricing`` lists ``yourCredits`` per model — the default model for a
-  kind is the CHEAPEST by that figure (the user's own price), falling back
-  to the first model of that kind from ``GET /models``.
+  kind is the CHEAPEST by that figure (the user's own price) among the
+  models that work from a PROMPT ALONE (:func:`prompt_only`), falling back
+  to the first such model from ``GET /models``. v1.346.0 picked from every
+  model whose words said "image", so the cheapest was an editor that needs
+  an input picture — the user's first try failed "Field required
+  (body.image_url)".
+* :meth:`PixioProvider.prepare` checks a NAMED model before any quote: a
+  bare id gets the ``pixio/`` prefix (the model asked for "gpt-image-1" and
+  Pixio answered 404), a model that is not in the catalog, makes another
+  kind, or needs more than a prompt is refused with up to three models that
+  would work, and a prompt the model calls ``text`` is filled in.
 """
 
 from __future__ import annotations
@@ -59,6 +72,19 @@ from .pixio_http import (
 #: background job (``media_inline_wait_s`` decides, not this table).
 DEFAULT_ETA_S: dict[str, int] = {"image": 20, "video": 300, "audio": 90, "music": 120}
 
+#: Required inputs a prompt can fill (some speech models call it ``text``).
+PROMPT_INPUTS = ("prompt", "text", "text_prompt")
+#: Ids that name an editor, a reference/likeness model or a trainer even
+#: under a ``text-to-*`` type — none of them works from a prompt alone.
+_NEEDS_MORE_ID_WORDS = (
+    "/edit", "reference", "/lora", "lora/", "/train", "inpaint", "face-swap", "upscale",
+)
+#: A ``text-to-audio`` model whose id or name says this makes MUSIC. (Never
+#: "udio": it is inside "audio", and every speech model read as music.)
+_MUSIC_WORDS = ("music", "song", "lyria", "mureka", "sonilo", "suno")
+#: How many working models a refusal names.
+SUGGEST_MAX = 3
+
 _KIND_WORDS = {
     "music": ("music", "song"),
     "audio": ("audio", "sound", "sfx", "speech", "voice", "tts"),
@@ -68,8 +94,21 @@ _KIND_WORDS = {
 
 
 def model_kind(model: dict[str, Any]) -> str:
-    """One of KINDS for a ``/models`` row, judged from its kind/category/type
-    words (and, last, its id); "" when nothing says."""
+    """One of KINDS for a ``/models`` row — what the model MAKES. A Pixio
+    ``type`` of the form ``<in>-to-<out>`` is read by its output (an
+    ``image-to-video`` model makes video; a ``text-to-3d`` one none of
+    KINDS); ``audio`` output is ``music`` when the id or name says so. Rows
+    without such a type are judged from their kind/category/type words (and,
+    last, their id); "" when nothing says."""
+    typ = str(model.get("type") or "").strip().lower()
+    if "-to-" in typ:
+        out = typ.rsplit("-to-", 1)[1]
+        if out in ("image", "video"):
+            return out
+        if out == "audio":
+            ident = " ".join(str(model.get(k) or "") for k in ("id", "modelId", "name")).lower()
+            return "music" if any(w in ident for w in _MUSIC_WORDS) else "audio"
+        return ""
     text = " ".join(
         str(model.get(k) or "")
         for k in ("kind", "category", "type", "modality", "output", "outputType")
@@ -80,6 +119,48 @@ def model_kind(model: dict[str, Any]) -> str:
         if any(w in text for w in words):
             return kind
     return ""
+
+
+def _required_inputs(model: dict[str, Any]) -> list[dict[str, Any]]:
+    inputs = model.get("inputs")
+    if not isinstance(inputs, list):
+        return []
+    return [i for i in inputs if isinstance(i, dict) and i.get("required")]
+
+
+def prompt_only(model: dict[str, Any]) -> bool:
+    """Whether a ``/models`` row makes its output from a prompt ALONE: its
+    type takes text in (``text-to-*``; a type that names another input —
+    ``image-to-image``, ``video-extend``, ``lipsync`` — does not), its id
+    names no editor/reference/trainer, and every required input is one a
+    prompt fills. A row with no type and no inputs (a plain catalog entry)
+    counts — there is nothing that says otherwise."""
+    typ = str(model.get("type") or "").strip().lower()
+    if "-to-" in typ:
+        if not typ.startswith("text-to-"):
+            return False
+    elif "-" in typ:
+        return False
+    mid = _model_id(model).lower()
+    if any(w in mid for w in _NEEDS_MORE_ID_WORDS):
+        return False
+    return all(str(i.get("name") or "") in PROMPT_INPUTS for i in _required_inputs(model))
+
+
+def _needs_words(model: dict[str, Any]) -> str:
+    """What a model needs besides a prompt, in its own labels."""
+    names = [
+        str(i.get("label") or i.get("name") or "").strip()
+        for i in _required_inputs(model)
+        if str(i.get("name") or "") not in PROMPT_INPUTS
+    ]
+    names = [n for n in names if n]
+    if names:
+        return ", ".join(names[:3])
+    typ = str(model.get("type") or "").strip().lower()
+    if "-to-" in typ and not typ.startswith("text-to-"):
+        return f"an input {typ.split('-to-', 1)[0]}"
+    return "an input file"
 
 
 def _model_rows(payload: Any) -> list[dict[str, Any]]:
@@ -252,13 +333,27 @@ class PixioProvider(MediaProvider):
         chosen = str(pinned.get(kind) or "").strip()
         if chosen:
             return chosen
-        of_kind = await self.models(kind)
-        ids = {_model_id(r) for r in of_kind if _model_id(r)}
-        if not ids:
+        ranked = await self._working_models(kind)
+        if not ranked:
+            if await self.models(kind):
+                raise MediaError(
+                    "unknown_model",
+                    f"no {kind} model on this Pixio account works from a prompt alone — "
+                    "name one, or attach a file for a model that changes one",
+                )
             raise MediaError(
                 "unknown_model", f"no {kind} model is visible to this Pixio account"
             )
-        cheapest: tuple[float, str] | None = None
+        return ranked[0]
+
+    async def _working_models(self, kind: str) -> list[str]:
+        """The ids of ``kind`` that work from a prompt alone, cheapest first
+        by THIS account's price (``/pricing`` ``yourCredits``, else
+        ``listCredits``); unpriced ones follow in catalog order. A pricing
+        failure keeps catalog order."""
+        of_kind = [r for r in await self.models(kind) if prompt_only(r) and _model_id(r)]
+        ids = [_model_id(r) for r in of_kind]
+        prices: dict[str, float] = {}
         try:
             pricing, _ = await self._api("GET", "/api/v1/pricing")
             for row in _model_rows(pricing):
@@ -266,13 +361,66 @@ class PixioProvider(MediaProvider):
                 price = _num(row.get("yourCredits"))
                 if price is None:
                     price = _num(row.get("listCredits"))
-                if mid in ids and price is not None and (cheapest is None or price < cheapest[0]):
-                    cheapest = (price, mid)
+                if mid in ids and price is not None and mid not in prices:
+                    prices[mid] = price
         except MediaError:
-            cheapest = None
-        if cheapest:
-            return cheapest[1]
-        return next(_model_id(r) for r in of_kind if _model_id(r))
+            prices = {}
+        order = {mid: n for n, mid in enumerate(ids)}
+        return sorted(ids, key=lambda m: (m not in prices, prices.get(m, 0.0), order[m]))
+
+    async def _suggest(self, kind: str) -> str:
+        """" — try a, b or c" with up to :data:`SUGGEST_MAX` working models;
+        "" when none can be named."""
+        try:
+            ids = (await self._working_models(kind))[:SUGGEST_MAX]
+        except Exception:  # noqa: BLE001 — a suggestion is a courtesy, never a crash
+            return ""
+        if not ids:
+            return ""
+        if len(ids) == 1:
+            return f" — try {ids[0]}"
+        return " — try " + ", ".join(ids[:-1]) + f" or {ids[-1]}"
+
+    async def prepare(
+        self, model: str, params: dict[str, Any], kind: str, *, has_refs: bool = False
+    ) -> tuple[str, dict[str, Any]]:
+        model = str(model or "").strip()
+        if model and not model.startswith("pixio/"):
+            # Pixio's public ids all start with "pixio/" — a bare
+            # "gpt-image-1" 404s ("Public API model IDs must start with
+            # pixio/") on a model the account HAS.
+            model = "pixio/" + model.lstrip("/")
+        try:
+            rows = await self._all_models()
+        except Exception:  # noqa: BLE001 — no catalog: check nothing more, the start will say
+            rows = []
+        if not rows:
+            return model, params
+        row = next((r for r in rows if _model_id(r) == model), None)
+        if row is None:
+            raise MediaError(
+                "unknown_model",
+                f"Pixio has no model called {model}{await self._suggest(kind)}",
+            )
+        made = model_kind(row)
+        same = made == kind or (made in ("audio", "music") and kind in ("audio", "music"))
+        if made and not same:
+            raise MediaError(
+                "unknown_model",
+                f"{model} makes {made}, not {kind}{await self._suggest(kind)}",
+            )
+        if not has_refs and not prompt_only(row):
+            raise MediaError(
+                "unknown_model",
+                f"{model} needs {_needs_words(row)} as well as a prompt; leave the model "
+                f"out to use one that works from a prompt alone{await self._suggest(kind)}",
+            )
+        required = {str(i.get("name") or "") for i in _required_inputs(row)}
+        prompt = str(params.get("prompt") or "")
+        for alias in ("text", "text_prompt"):
+            if alias in required and alias not in params and prompt:
+                params = {**params, alias: prompt}
+        return model, params
 
     async def quote(self, model: str, params: dict[str, Any], kind: str) -> Quote:
         payload, _ = await self._api(

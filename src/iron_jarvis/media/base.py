@@ -229,6 +229,16 @@ class MediaProvider(abc.ABC):
         """The job's current state. Never raises for a job the service does
         not know — that is a failed state with words."""
 
+    async def prepare(
+        self, model: str, params: dict[str, Any], kind: str, *, has_refs: bool = False
+    ) -> tuple[str, dict[str, Any]]:
+        """Check a (model, params) pair BEFORE anything is quoted or started
+        (v1.347.0): normalise the model id, fill a prompt the model calls by
+        another name, and refuse — in words that name models that WOULD work
+        — a model that cannot make ``kind`` from a prompt. Default: unchanged.
+        Raises :class:`MediaError`."""
+        return model, params
+
     async def fetch(self, state: JobState) -> bytes:
         """The finished bytes. Default: the payload the provider holds, else a
         public download of ``output_url`` with NO headers (never the key)."""

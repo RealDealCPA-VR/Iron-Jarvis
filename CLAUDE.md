@@ -3635,6 +3635,39 @@ does not need a bump, stop and bump it.
   order through spies; the behavioural kill test keeps proving the tree
   dies). Rule: a process you mean to own by Job is CREATED SUSPENDED, never
   adopted after the fact.
+  v1.347.0 (a USER BUG: "the image was generated, but never appeared back
+  in the chat"; it was only in the Creative library). Read off the live
+  ledger: a NEW chat's first question goes out BEFORE the page's first save
+  names the chat, so `body.thread_id` (→ `ctx.thread_id`) was "" — the job
+  finished with `thread_id = ""`, appended nothing, and the bell opened a
+  blank `/chat`. FIX: `MediaJobRecord.turn_id` (+ `homed_at`, additive) from
+  `ctx.turn_id` (passed only when set — doubles take no kwarg);
+  `MediaJobs._home_for` decides the chat AT FINISH (row's thread, else
+  `TurnLogs.thread_for(turn)` = live turn or pending `link_later`, else
+  `ChatTurnRecord.thread_id`) under `_home_lock`, the SAME lock
+  `home_turn(turn, thread)` takes — called by `POST /chat/turns/{id}/thread`
+  (answer gains `media_homed`) — so a link either lands first (the finish
+  sees it) or after (it delivers the finished, undelivered row itself).
+  `home_strays()` runs inside `reconcile_at_boot`: a finished chat job with
+  no chat (≤ 14 days, ≤ 50) finds it via `turn_id`, else the ONE linked
+  turn record whose `frames_json` holds "(job <id>)" within −2 h/+10 min
+  (the v1.346.0 rows; ambiguous = nothing). `chat_append.LINE_KEYS` gained
+  `mediaJob` and `_line_key` skips a second line for the same job. The bell
+  opens `/creative` for a FINISHED result with no chat. SAME RELEASE, the
+  two failed tries before it: Pixio's default model was "cheapest whose
+  words say image" — an EDITOR (`image-to-image`, 0 credits) — so
+  `media/pixio.model_kind` reads a `<in>-to-<out>` type by its OUTPUT
+  (`text-to-audio` is music by id/name words — never "udio", it is inside
+  "audio"), `prompt_only(row)` (type `text-to-*`, no editor/reference/lora
+  id, every required input in `PROMPT_INPUTS`) filters the default, and
+  `MediaProvider.prepare(model, params, kind, has_refs=)` (base: unchanged;
+  called in `GenerateMediaTool._resolve` before the quote) prefixes a bare
+  id with `pixio/`, refuses unknown / other-kind / needs-more models with up
+  to three that work (`_suggest`), and fills a speech model's `text` from
+  the prompt; an empty or unreadable catalog checks nothing more. Live
+  check (read-only GETs): image → `bria/text-to-image/base`, music →
+  `lyria3-clip`; the live DB COPY delivered the user's apple once. Pins:
+  `tests/test_media_comes_home_v1347.py` (12 mutations, all red).
 
 - **A line that arrives while nobody is looking is written by the DAEMON,
   into the chat it belongs to** (v1.345.0, a USER BUG: "@hermes-mac-mini …"
