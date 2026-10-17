@@ -292,4 +292,15 @@ def test_the_services_and_the_routes_share_the_one_closer_in_mcp_tools():
             f"{label} still unregisters a pack's tools without closing them"
         )
     assert "_close_mcp_tools" not in route, "routes/agents.py still reaches the closer through platform"
-    assert route.count("close_tools_clients(") >= 2, "the Retry and DELETE routes do not call the lifted closer"
+    # DELETE (remove_mcp_pack, v1.343.0) calls the closer in the route module.
+    assert route.count("close_tools_clients(") >= 1, "the DELETE route does not call the lifted closer"
+    # v1.344.0: the Retry route's body lives in mcp.tools.reload_pack (shared
+    # with the pack_restart tool) — the door still ends in the one closer,
+    # one level down, so the pin follows the call there.
+    assert "reload_pack(" in route, "the Retry route does not call mcp.tools.reload_pack"
+    tools_src = _read(SRC / "mcp" / "tools.py")
+    body = re.search(r"\ndef reload_pack\(.*?(?=\ndef |\Z)", tools_src, re.S)
+    assert body, "mcp.tools.reload_pack is missing"
+    assert "close_tools_clients(" in body.group(0) or "unload_pack_tools(" in body.group(0), (
+        "reload_pack does not close the clients of the tools it replaces"
+    )

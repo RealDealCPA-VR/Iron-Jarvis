@@ -3547,6 +3547,74 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Jarvis reads its own health through TOOLS, repairs only with a card,
+  and a failed call is answered by a rule** (v1.344.0, wave 3 of the
+  reliability arc; the survey behind it: no chat tool could reach
+  /diagnostics, /diagnostics/errors, the doctor, a pack reload or a rescan
+  — all HTTP-only — and "something is broken" armed nothing).
+  `tools/selfcare.py`: `app_health` / `pack_status` / `run_doctor` (allow,
+  READONLY, replay-safe; off the loop; every section its own try and a
+  failed one NAMED as unreadable; every log/pack/provider text through
+  `redact.mask`; `app_health` NEVER spawns or probes — cached availability
+  only, the v1.334.0 system-map rule) and `pack_restart` / `provider_rescan`
+  (ASK tier, irreversible, in `LOW_TRUST_DENY`). ONE TRUTH per reading:
+  `routes.settings.diagnostics_snapshot(d)` (the route calls it),
+  `mcp.tools.reload_pack(platform, name, home=)` (the Retry route calls it),
+  `routes.connections.rescan_providers` (the rescan route calls it). TIERS
+  LIVE IN `core/config.py`'s default permission table — a tool with no row
+  fail-closes to ASK (the integrator found the three readers asking); the
+  five are listed in `tests/test_roster_coverage_v1178._OFF_ROSTER_BY_DESIGN`
+  (chat arms them, no roster carries them). `tools/autoselect.py`: a
+  failure/health sentence arms the readers (`_FAILURE_WORDS`; "fail"/
+  "broken" only predicatively, "errors"/"slow" only beside an app noun), a
+  repair imperative ASK-arms the two repairs through `_rule_fires` (the
+  imperative gate the auto rules use; `select_ask_tools` runs it now), and
+  `settings/records.is_question` keeps a QUESTION about a schedule/workflow
+  from arming its writers (only `goal_list` survives; cost: an imperative
+  typed with a trailing "?" and no "can you"/"please" arms no writer).
+  CHAT (lock-step): `chat_turn.RECOVERY_BLOCK` rides the "# Tools" section
+  only when a tool is armed (the text-only golden `test_text_only_handoff_
+  v1330` is unchanged); `with_second_failure_note` marks the 2nd failure of
+  the same key on the model-facing tool message; `refusal_footnotes` adds
+  "not turned on for this chat" / "blocked under low trust" lines beside
+  "permission denied", one per tool. ESCALATION: `cap_prior_tool_results`
+  (12 entries / 12,000 chars newest kept; redacted args, masked
+  `output_head`) rides the POST response and the done frame iff escalate;
+  `SessionCreate`/`ContinueBody`/`SpawnBody.prior_tool_results` validate
+  (422 past caps); `create_session` stores it under options (never an empty
+  key; a continuation never inherits the parent's); `runtime.
+  prior_results_block` appends ONE "What the chat already did this turn"
+  block after the task, each entry `wrap_untrusted`; the page spreads the
+  frame's list into POST /sessions, /agents/{slug}/spawn and /continue
+  (`useChatStream` whitelists + caps it; absent = body byte-identical).
+  LESSONS of the wave: (1) the L-tools lane's reviewer died without a
+  hand-off and left a MUTATION APPLIED (`pack_status` carrying env VALUES)
+  plus two scratch harness files in the tree — the integrator caught it; a
+  mutation harness restores in a `finally` and a lane that ends without a
+  structured result is re-reviewed, never trusted. The RE-REVIEW
+  (a5c4213a) then found the real defect the dead reviewer had not: the
+  readers called `onboarding.doctor.runtime_checks`, which `httpx.get`s a
+  custom endpoint's `/models` and reads CLI sign-in through
+  `DEFAULT_PROBE.verdict` OUTSIDE `cached_verdicts()` — a stale verdict
+  spawns `claude auth status`. `runtime_checks(platform, *, probe=True)`:
+  the readers pass `probe=False` (wrapped in `cached_verdicts()`, no gateway
+  GET; `run_doctor` therefore omits the `custom_endpoint_model` row and says
+  so); the Settings doctor keeps the default. Pin:
+  `test_the_readers_never_probe_the_network_or_start_a_process` (httpx +
+  Popen spies, a `_CACHED_ONLY` recorder, and a CONTROL that the probing
+  path still GETs). A reader that "only reads" is proven by spying on the
+  network and the process table, not by reading its code. (2) a "real
+  files are untouched" guard compares `~/.claude.json` by its `mcpServers`
+  sections only (`_view` in both v1343 test files) — Claude Code rewrites
+  the rest of that file while a suite runs under a session. Known cost:
+  `runtime_checks` runs `PRAGMA integrity_check` on every `app_health` /
+  `run_doctor` call (off the loop, but a whole-DB scan on a large DB). Pins: `tests/test_{selfcare_tools,
+  autoselect_failure_vocab,chat_recovery,escalation_carries_results,
+  integration_pins}_v1344.py`, `dashboard/__tests__/chat-escalation-carry-
+  v1344.test.tsx`. Known: `pack_status`'s sentence joins `last_error` and
+  the lowercase `reason`; an escalating turn's `reply` may still quote raw
+  tool output (the carried rows are masked, the reply is another seam).
+
 - **The calm chat, finished** (v1.330.0, calm chat waves 10-13: L1-L4,
   M1-M5, N1-N4, O1-O2). REASONING DEFAULT: `GET /models` rows carry
   `reasoning_default` LAST (low|medium|high|off|auto; "" = unknown, never a

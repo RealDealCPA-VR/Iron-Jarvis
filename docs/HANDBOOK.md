@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.343.0 (2026-10-04).*
+holds itself to. Current as of v1.344.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Jarvis looks after itself (v1.344.0)
+
+When something in the app goes wrong, Jarvis can now find out what, and fix
+the common cases, from the chat:
+
+- **It can check its own health.** Ask "something is broken", "why did that
+  fail", "is the app healthy", "what errors has the daemon logged" or "why
+  does the github pack keep failing", and Jarvis reads the app's own health
+  (the model in use and whether it is reachable, failing background tasks,
+  packs that did not start or keep failing with their reason and fix, the
+  last errors the daemon logged, disk space, the doctor's checks) and a
+  pack's last output. These are read-only and need no approval; keys and
+  tokens never appear in what it reads.
+- **It can make the two common repairs, with your OK.** "Restart the github
+  pack" or "re-detect my providers" shows an approval card first (the same
+  as Retry on the Tools page and Re-detect on Connections); nothing restarts
+  without your press, and neither runs for content Jarvis does not trust.
+- **It recovers from a failed step instead of flailing.** Every chat turn
+  with tools now carries a short rule: read the error; fix a wrong argument
+  once; never retry something you declined; if the failure is the app's
+  (a pack exited, a model is down), check the app's health or tell you
+  exactly where to fix it; never claim a result it did not get. The second
+  failure of the same call is marked so the model changes approach (the
+  third was already refused), and a reply now says in a footnote when a
+  tool could not run because it was not turned on for the chat or was
+  blocked under low trust, not only when you declined it.
+- **Handing off to an agent keeps what the chat already did.** When a
+  question grows into an agent job, the agent now starts with the files and
+  results the chat already read (treated as data, never as instructions),
+  instead of reading everything again.
+- **A question about a schedule or workflow never arms a writer.** "What
+  went wrong with my schedule" used to turn on the schedule-editing tools;
+  it now turns on the readers only. An instruction ("delete the failed
+  schedule") still arms what it asks for.
 
 ## Add a tool pack in one paste (v1.343.0)
 
