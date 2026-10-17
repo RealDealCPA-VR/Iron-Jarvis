@@ -2227,9 +2227,12 @@ def _step_unfenced(text: str) -> str:
     """*text* without the untrusted fence, for a step's detail. The chat
     lanes fence a WHOLE output (:func:`_unfenced` takes it off, exactly as
     the escalation rows do); the agent runtime may cut a fenced output at
-    its context cap or append its repeat note after the fence, so a text
-    that still OPENS with the fence loses its header, and its closing fence
-    where there is one. Anything else passes through."""
+    its context cap (no closing fence, a truncation line after it), so a
+    text that still OPENS with the fence loses its header, and its closing
+    fence where there is one; any text after that closing fence is kept.
+    (The runtime's repeat note is the loop's words to the model, never the
+    user's: the runtime cuts it off BEFORE calling :func:`step_detail`.)
+    Anything else passes through."""
     out = _unfenced(text)
     if out != text:
         return out

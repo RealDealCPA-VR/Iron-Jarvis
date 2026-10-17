@@ -3256,9 +3256,13 @@ class AgentRuntime:
                             # words to the MODEL (v1.288.0), not what the tool
                             # returned; the chat lanes' cards keep the bare
                             # content too (v1.344.0 M2). Cut at the note's
-                            # literal head: linear, no regex over the output.
+                            # literal head (linear, no regex over the output),
+                            # and ONLY on the step the note was appended: a
+                            # tool's own error that happens to carry the same
+                            # words is what it returned and stays whole.
                             content.rsplit("\n\n[repeat — this is failure ", 1)[0]
                             if not call_ok
+                            and fail_streaks.get(signature) == _BREAKER_NOTE_AT
                             else content,
                         ),
                     )

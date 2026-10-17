@@ -219,16 +219,21 @@ def test_a_detail_never_disagrees_with_the_escalation_row():
         assert d["input"][:PRIOR_RESULT_ARGS_CHARS] == row["args_summary"], args
 
 
-def test_a_runtime_output_fenced_then_cut_or_noted_still_loses_its_fence():
+def test_a_runtime_output_fenced_then_cut_or_trailed_still_loses_its_fence():
     # The agent runtime fences, then cuts at its 16,000-char context cap
-    # (the closing fence is gone) or appends its repeat note AFTER the fence.
+    # (the closing fence is gone). The helper is note-agnostic: text AFTER a
+    # closing fence is kept and only the fence comes off. (The runtime's own
+    # repeat note never reaches the helper — the runtime cuts it off first;
+    # pinned through the real loop in
+    # test_the_runtime_s_detail_drops_the_loop_s_repeat_note.)
     cut = wrap_untrusted(RAW + "q" * 20000)[:16000] + "\n[... truncated 9 chars — full output in the transcript]"
     d = step_detail(READER, {"q": "x"}, cut)
     assert d["output"].startswith("page says: key sk-ant-***\nAuthorization: Bearer ***")
     assert _FENCE_TOP not in d["output"] and TOKEN not in d["output"]
-    noted = wrap_untrusted(BOOM) + "\n\n[repeat — this is failure 2 in a row]"
-    d = step_detail(FAILS, {"q": "x"}, noted)
-    assert d["output"] == "boom: upstream answered password=***\n\n[repeat — this is failure 2 in a row]"
+    trailed = wrap_untrusted(BOOM) + "\n\n(a line after the fence)"
+    d = step_detail(FAILS, {"q": "x"}, trailed)
+    assert d["output"] == "boom: upstream answered password=***\n\n(a line after the fence)"
+    assert _FENCE_TOP not in d["output"] and _FENCE_BOTTOM not in d["output"]
 
 
 def test_a_detail_never_raises():
@@ -460,3 +465,40 @@ async def test_the_runtime_s_detail_drops_the_loop_s_repeat_note(tmp_path):
     bare = {"input": '{"q": "x"}', "output": "boom: upstream answered password=***"}
     assert c1["detail"] == bare
     assert c2["detail"] == bare, "the loop's repeat note is not the tool's output"
+
+
+async def test_a_tool_s_own_words_that_look_like_the_note_stay_whole(tmp_path):
+    # Fix round of B1d: the runtime cuts at the note's head ONLY on the step
+    # the loop appended its note. A tool whose OWN error carries the same
+    # words (a remote pack answers its text verbatim) returned them, and a
+    # single failure appends no note — so the detail keeps every word.
+    from iron_jarvis.agents.orchestrator import Orchestrator
+
+    own = BOOM + "\n\n[repeat — this is failure 9, says the remote]"
+    bad = _FakeTool(FAILS, ok=False, text=own)
+    platform = _app(tmp_path, bad)
+    adapter = _Scripted([_calls(_call("c1", FAILS)), "done"])
+    platform.providers.register(adapter.provider, lambda model=None: adapter)
+    session = await Orchestrator(platform).create_session(
+        "look it up", AgentType.BUILDER, provider=adapter.provider,
+    )
+    run = AgentRun(session_id=session.id, agent_type=AgentType.BUILDER,
+                   provider=session.provider, model=session.model, state=AgentState.RUNNING)
+    hub = StreamHub()
+    q = hub.subscribe(session.id)
+    await AgentRuntime(platform).perceive_act(
+        run, session, get_agent_definition(AgentType.BUILDER),
+        system_prompt="sys", messages=[LLMMessage(role="user", content="look it up")],
+        tool_specs=platform.registry.specs([FAILS]),
+        session_allow=set(), sink=hub.sink(session.id, run.id), max_steps=3,
+    )
+    assert len(bad.calls) == 1, "anti-vacuity: one failure, so the loop appended no note"
+    finished = {}
+    while not q.empty():
+        f = q.get_nowait()
+        if f["event"] == "tool_call" and f["data"]["status"] == "finished":
+            finished[f["data"]["id"]] = f["data"]
+    c1 = finished["c1"]
+    assert c1["detail"]["output"] == (
+        "boom: upstream answered password=***\n\n[repeat — this is failure 9, says the remote]"
+    ), "the tool's own words are what it returned"
