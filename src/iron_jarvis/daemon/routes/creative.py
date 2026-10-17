@@ -443,6 +443,29 @@ def register(app: FastAPI, d) -> None:
             key = None
         return key or os.environ.get("PIXIO_API_KEY") or None
 
+    # Background media jobs (v1.346.0): what ``generate_media`` handed to the
+    # background and how it went. Rows carry the user's OWN file paths and the
+    # service's job id — never a key (the job store builds its views so).
+    @app.get("/media/jobs")
+    def media_jobs(thread_id: str = "", limit: int = 50) -> dict[str, Any]:
+        """Media jobs, newest first; ``thread_id`` scopes to one chat."""
+        jobs = getattr(d.platform, "media_jobs", None)
+        if jobs is None:
+            raise HTTPException(status_code=503, detail="media jobs are not available")
+        rows = jobs.list_jobs(thread_id=thread_id.strip(), limit=limit)
+        return {"jobs": rows, "count": len(rows)}
+
+    @app.get("/media/jobs/{job_id}")
+    def media_job(job_id: str) -> dict[str, Any]:
+        """One media job (404 unknown)."""
+        jobs = getattr(d.platform, "media_jobs", None)
+        if jobs is None:
+            raise HTTPException(status_code=503, detail="media jobs are not available")
+        row = jobs.get_job(job_id.strip())
+        if row is None:
+            raise HTTPException(status_code=404, detail="no such media job")
+        return row
+
     @app.get("/creative/items")
     def creative_items(limit: int = 200, project_id: str = "") -> dict[str, Any]:
         """The gallery: every media artifact, newest first. ``project_id`` scopes

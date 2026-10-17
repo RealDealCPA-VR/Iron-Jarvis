@@ -952,6 +952,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "notify_interrupted_comm",
             lambda: inbound_poller.notify_interrupted(since=_boot_started_at),
         )
+        # Media jobs (v1.346.0): a generation the last process was waiting on
+        # is RE-POLLED by the service's own job id (Pixio keeps the record;
+        # the fake answers "lost at restart") and never started again — a
+        # second dispatch would be a second spend. The read is off the loop
+        # and the polling runs in each job's tracked task: boot never waits
+        # on the network.
+        _media_jobs = getattr(platform, "media_jobs", None)
+        if _media_jobs is not None:
+            _t = time.perf_counter()
+            try:
+                await _media_jobs.reconcile_at_boot()
+                _tick("reconcile_media_jobs", True)
+            except Exception as exc:  # noqa: BLE001 — never block boot, but SAY so
+                _tick("reconcile_media_jobs", False, exc)
+                log.exception("boot rehydration step reconcile_media_jobs failed")
+            finally:
+                _boot_step("reconcile_media_jobs", _t)
         # AFTER session reconciliation by contract: a goal stranded mid-iteration
         # reads its session's honest FAILED/interrupted verdict (v1.208.0).
         _rehydrate_step("rehydrate_goals", platform.goal_engine.rehydrate)
@@ -1796,6 +1813,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.wait_for(inbound_poller.drain(), timeout=5.0)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
+            # Media jobs (v1.346.0): a generation still polling is cancelled
+            # with the other background runs; its row stays queued/running so
+            # the next boot's reconcile re-polls it by the service's job id.
+            _media_jobs_svc = getattr(platform, "media_jobs", None)
+            if _media_jobs_svc is not None:
+                try:
+                    _media_jobs_svc.cancel_all()
+                    await asyncio.wait_for(_media_jobs_svc.drain(), timeout=5.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             _dispatcher_stop.set()
             _curator_stop.set()
             for task in bg_tasks.values():

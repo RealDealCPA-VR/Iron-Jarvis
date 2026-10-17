@@ -297,6 +297,12 @@ class Platform:
     #: picks which service makes an image/video/audio for ``generate_media``
     #: (Pixio, OpenAI Images, the fake under IRONJARVIS_MEDIA_FAKE=1).
     media: "object | None" = None
+    #: Background media jobs (v1.346.0): ``media.jobs.MediaJobs`` — a
+    #: generation that takes a while finishes here, comes home to its chat
+    #: and rings the bell; the daemon lifespan reconciles it at boot and
+    #: cancels it at shutdown. Built always (no disk, no thread, no task
+    #: until a job is handed over).
+    media_jobs: "object | None" = None
     #: Iron-Proxy (v1.301.0): the ONE service that locates / starts / stops
     #: Iron-Proxy and hands out its client (``iron_proxy.service``). Also
     #: reachable as ``iron_proxy.service.current()`` for the adapters.
@@ -1566,6 +1572,13 @@ def build_platform(
     from .media.registry import build_registry as _build_media_registry
 
     platform.media = _build_media_registry(platform)
+    # Background media jobs (v1.346.0): built here beside the registry it
+    # polls — no disk, no thread, no task until ``generate_media`` hands a
+    # started generation over; the lifespan reconciles rows at boot and
+    # cancels the tasks at shutdown.
+    from .media.jobs import MediaJobs as _MediaJobs
+
+    platform.media_jobs = _MediaJobs(platform)
     # Iron-Proxy (v1.301.0): constructed always (cheap: no disk, no network,
     # no process); it does nothing until the switch is on and the daemon's
     # lifespan watch loop (or POST /iron-proxy/enable) starts it.
