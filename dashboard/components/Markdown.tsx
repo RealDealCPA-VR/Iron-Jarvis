@@ -29,7 +29,9 @@ import {
 import { ArrowDown, ArrowUp, ArrowUpDown, Check, Copy, Download } from "lucide-react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { API_BASE, ijToken } from "@/lib/api";
+import { API_BASE } from "@/lib/api";
+import { MediaGroup, ZoomableImage } from "@/components/MediaLightbox";
+import { isLocalMediaRef, localMediaSrc, localPathOf } from "@/lib/mediaLightbox";
 import { blankDraftFence, DraftCard, draftFromFence, fenceLang } from "@/components/chat/DraftCard";
 import { ChartCard } from "@/components/chat/ChartCard";
 import { CHART_FENCE, parseChartSpec } from "@/lib/chartSpec";
@@ -288,17 +290,15 @@ function MarkdownMedia({ src, alt }: { src?: string | Blob; alt?: string }) {
 }
 
 function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
-  const isLocal = /^([A-Za-z]:[\\/]|\/(?!\/))/.test(raw) || raw.startsWith("file://");
   let resolved = raw;
-  if (isLocal) {
-    const path = raw.replace(/^file:\/\//, "");
+  if (isLocalMediaRef(raw)) {
+    const path = localPathOf(raw);
     if (!MEDIA_EXT_RX.test(path)) {
       return <code className="text-[12px] text-zinc-400">{raw}</code>;
     }
-    const token = ijToken();
-    resolved = `${API_BASE}/creative/file-by-path?path=${encodeURIComponent(path)}${
-      token ? `&token=${encodeURIComponent(token)}` : ""
-    }`;
+    // v1.348.0: the ONE local-media URL (lib/mediaLightbox.localMediaSrc) —
+    // the composer's attachment thumbnail loads through the same helper.
+    resolved = localMediaSrc(path);
   }
   if (VIDEO_EXT_RX.test(raw)) {
     return (
@@ -313,13 +313,17 @@ function MarkdownMediaInner({ raw, alt }: { raw: string; alt?: string }) {
   if (AUDIO_EXT_RX.test(raw)) {
     return <audio src={resolved} controls className="my-2 w-full max-w-xl" />;
   }
+  // v1.348.0: a picture opens full screen (components/MediaLightbox). It looks
+  // exactly as it did — the margin moved to the button around it, which adds
+  // only the zoom-in cursor and a keyboard stop. Video and audio above keep
+  // their native players and never open the lightbox.
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
+    <ZoomableImage
       src={resolved}
+      raw={raw}
       alt={alt || "generated media"}
-      loading="lazy"
-      className="my-2 max-h-96 w-auto max-w-full rounded-xl border border-white/10"
+      buttonClassName="my-2 rounded-xl"
+      imgClassName="block max-h-96 w-auto max-w-full rounded-xl border border-white/10"
     />
   );
 }
@@ -576,10 +580,16 @@ const MD_COMPONENTS: Components = {
 const REMARK_PLUGINS = [remarkGfm];
 
 export function Markdown({ content }: { content: string }) {
+  // v1.348.0: MediaGroup = this render's pictures, so Left/Right in the
+  // lightbox walk the pictures of the SAME message. It renders no element (a
+  // reply's last child stays its last child), and a nested render — a draft
+  // card's markdown — joins the group around it.
   return (
-    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS} urlTransform={mediaUrlTransform}>
-      {content}
-    </ReactMarkdown>
+    <MediaGroup>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS} urlTransform={mediaUrlTransform}>
+        {content}
+      </ReactMarkdown>
+    </MediaGroup>
   );
 }
 

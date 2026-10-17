@@ -123,6 +123,8 @@ import {
 } from "@/components/chat/WorkflowDraftCard";
 import type { RunResult } from "@/components/chat/RunResultCard";
 import { CopyIconButton, Markdown, MemoMarkdown } from "@/components/Markdown";
+import { AttachmentThumb, MediaGroup } from "@/components/MediaLightbox";
+import { isThumbImage } from "@/lib/mediaLightbox";
 import {
   TurnReceipt,
   receiptWantsAttention,
@@ -12358,12 +12360,22 @@ export default function ChatPage() {
                             {chatRefNote}
                           </span>
                         )}
+                        {/* v1.348.0: an attached picture shows a small square
+                            thumbnail in its chip (it opens full screen; Left/
+                            Right walk the attached pictures); any other file
+                            keeps the paperclip. */}
+                        <MediaGroup>
                         {attachments.map((a, i) => (
                           <span
                             key={`${a.path}-${i}`}
+                            data-testid="attachment-chip"
                             className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2 py-1 text-[12px] text-zinc-300"
                           >
-                            <Paperclip size={11} className="shrink-0 text-accent-soft" />
+                            {isThumbImage(a.path) ? (
+                              <AttachmentThumb path={a.path} name={a.name} />
+                            ) : (
+                              <Paperclip size={11} className="shrink-0 text-accent-soft" />
+                            )}
                             <span className="max-w-[14rem] truncate">{a.name}</span>
                             <span className="text-zinc-500">{fmtSize(a.bytes)}</span>
                             <button
@@ -12376,6 +12388,7 @@ export default function ChatPage() {
                             </button>
                           </span>
                         ))}
+                        </MediaGroup>
                       </div>
                     )}
                     {/* Voice status strip — live mic/speech feedback for both the
