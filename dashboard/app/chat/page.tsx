@@ -5597,6 +5597,13 @@ export default function ChatPage() {
     // while this PUT is airborne; the 409 merge below must cut `sent` where
     // IT matched the server, or the bubble this save carries is dropped.
     const syncedAtSend = target.syncedLen ?? 0;
+    // The stamp this PUT goes out under. An adopt that lands while it is
+    // airborne moves `target.updatedAt`; when the PUT then SUCCEEDS anyway, it
+    // committed BEFORE the write the adopt read (a stale stamp is refused),
+    // so the adopted stamp and length are the newer truth and the answer's
+    // must not be written over them — the next save would go out under the
+    // older stamp, be refused, and the merge would double the appended line.
+    let stampAtSend = target.updatedAt;
     try {
       res = await put<ThreadSaveResult>(
         `/chat/threads/${target.id ?? "new"}`,
@@ -5609,6 +5616,7 @@ export default function ChatPage() {
       const k = Math.min(syncedAtSend, sent.length);
       target.rebase = { local: sent.slice(0, k), server };
       target.updatedAt = fresh.updated_at ?? undefined;
+      stampAtSend = target.updatedAt;
       sent = [...server, ...sent.slice(k)];
       res = await put<ThreadSaveResult>(
         `/chat/threads/${target.id}`,
@@ -5616,24 +5624,28 @@ export default function ChatPage() {
       );
     }
     target.id = res.id; // "new" → real id; later saves in this convo reuse it
-    if (res.updated_at) target.updatedAt = res.updated_at;
-    target.syncedLen = sent.length;
-    // v1.311.0: keep this window's copy of the thread as current as the disk,
-    // so reopening it (or coming back to Chat) paints what was last saved, not
-    // what it held when it was first opened. The setup and persona this save
-    // carried ride the copy too (the daemon stores them wholesale), so a paint
-    // never restores a setup older than the one on disk.
-    const cachePath = `/chat/threads/${res.id}`;
-    const had = cachedGet<ThreadDetail>(cachePath);
-    cacheSet(cachePath, {
-      ...(had ?? { title: "" }),
-      id: res.id,
-      messages: sent,
-      updated_at: target.updatedAt ?? null,
-      project_id: body.project_id ?? null,
-      ...(body.setup ? { setup: body.setup } : {}),
-      ...(body.persona ? { persona: body.persona } : {}),
-    } satisfies ThreadDetail);
+    if (target.updatedAt === stampAtSend) {
+      // nothing adopted a newer version meanwhile: the answer is the newest
+      if (res.updated_at) target.updatedAt = res.updated_at;
+      target.syncedLen = sent.length;
+      // v1.311.0: keep this window's copy of the thread as current as the
+      // disk, so reopening it (or coming back to Chat) paints what was last
+      // saved, not what it held when it was first opened. The setup and
+      // persona this save carried ride the copy too (the daemon stores them
+      // wholesale), so a paint never restores a setup older than the one on
+      // disk. (An adopt that landed meanwhile already wrote the newer copy.)
+      const cachePath = `/chat/threads/${res.id}`;
+      const had = cachedGet<ThreadDetail>(cachePath);
+      cacheSet(cachePath, {
+        ...(had ?? { title: "" }),
+        id: res.id,
+        messages: sent,
+        updated_at: target.updatedAt ?? null,
+        project_id: body.project_id ?? null,
+        ...(body.setup ? { setup: body.setup } : {}),
+        ...(body.persona ? { persona: body.persona } : {}),
+      } satisfies ThreadDetail);
+    }
     if (sent !== msgs && saveTargetRef.current === target) {
       // The merged array is what is on disk: show it (the other window's
       // bubbles included) instead of the stale copy this window built.
@@ -9335,16 +9347,23 @@ export default function ChatPage() {
     // appended instead of saving its own copy of the round.
     const gen = convGenRef.current;
     const box = saveTargetRef.current;
-    queueSave(history, box);
-    await saveChainRef.current; // on disk (and named) before the daemon is asked
     const stillHere = () => convGenRef.current === gen && saveTargetRef.current === box;
     // The live bubble names who is working, with a clock since the send
     // (contract 5c) — a six-minute round used to look exactly like a hang.
+    // Armed BEFORE the at-send save is awaited: a leave during that await
+    // runs leaveConversation's setPanelLive(null), which must come AFTER this
+    // arm — armed after the await, the bubble landed in the conversation
+    // opened next, where nothing cleared it (every clear below is gated on
+    // stillHere()), and it stood in place of that conversation's next live
+    // reply. The ref stays keyed on `gen`, so a left conversation's round can
+    // never be mistaken for the open one's.
     setPanelLive({ names: mentions, since: Date.now() });
     panelLiveRef.current = gen;
     const roundOver = () => {
       if (panelLiveRef.current === gen) panelLiveRef.current = null;
     };
+    queueSave(history, box);
+    await saveChainRef.current; // on disk (and named) before the daemon is asked
     const priorRoom = [...before].reverse().find((m) => m.panelThreadId)?.panelThreadId;
     // The files ride the wire by PATH (the kanban/agent precedent), so a round
     // that cannot open them at least knows they exist; a session gets them

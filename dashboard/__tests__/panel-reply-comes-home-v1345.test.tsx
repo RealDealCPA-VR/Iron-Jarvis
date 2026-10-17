@@ -63,6 +63,9 @@ const H = vi.hoisted(() => {
        *  holds and resolves or rejects by hand), or return undefined to let
        *  the default below answer it. */
       putHook: null as null | ((path: string, body: Record<string, unknown>) => unknown),
+      /** The same for a GET: hand back a promise the test holds, or undefined
+       *  to let `getResponses` answer. */
+      getHook: null as null | ((path: string) => unknown),
     },
     stream: { bodies: [] as Record<string, unknown>[], held: null as Promise<void> | null },
     events: {
@@ -82,6 +85,8 @@ vi.mock("@/lib/api", () => ({
   ijToken: () => "",
   get: async (path: string) => {
     H.api.gets.push(path);
+    const hooked = H.api.getHook?.(path);
+    if (hooked !== undefined) return hooked;
     const r = H.api.getResponses[path];
     // A real fetch parses fresh JSON every time; the page's save rebase keys
     // on object identity (v1.232.0), so a fixture handed back BY REFERENCE
@@ -267,6 +272,7 @@ beforeEach(() => {
   H.stream.bodies.length = 0;
   H.stream.held = null;
   H.api.putHook = null;
+  H.api.getHook = null;
   H.events.list = [];
   for (const k of Object.keys(H.api.postResponses)) delete H.api.postResponses[k];
   H.api.getResponses = {
@@ -487,6 +493,45 @@ describe("an @ reply comes home (v1.345.0)", () => {
     await screen.findByText(REPLY);
     await waitFor(() => expect(screen.queryByTestId("panel-working")).toBeNull());
   });
+
+  it("a leave DURING the at-send save leaves no working bubble in the next conversation (U-review)", async () => {
+    // The at-send PUT of the @ chat is held; the user opens Orlando while it
+    // is airborne; the PUT then lands and the round goes out (with thread_id,
+    // correctly). The bubble armed AFTER that await used to land in Orlando's
+    // state, where nothing ever cleared it — it is gated by `busy`, so it hid
+    // until Orlando's next turn and then stood IN PLACE of that turn's live
+    // reply ("builder is working" over a Jarvis turn).
+    holdPanel(); // the round itself stays airborne throughout
+    let releasePut!: (v: unknown) => void;
+    const heldPut = new Promise<unknown>((r) => (releasePut = r));
+    let holdUsed = false;
+    H.api.putHook = (path) => {
+      if (path === "/chat/threads/new" && !holdUsed) {
+        holdUsed = true;
+        return heldPut;
+      }
+      return undefined;
+    };
+    render(<ChatPage />);
+    await catalogReady();
+    await type("@builder hello");
+    await waitFor(() => expect(putsTo("/chat/threads/new")).toHaveLength(1));
+    expect(panelPosts()).toHaveLength(0); // the daemon is not asked before the chat is named
+    await openOrlando();
+    await act(async () => {
+      releasePut({ id: "t1", title: "t", updated_at: "S1" });
+    });
+    await waitFor(() => expect(panelPosts()).toHaveLength(1));
+    expect(panelPosts()[0].body.thread_id).toBe("t1"); // the round still rides the chat it was asked in
+    // a Jarvis turn in Orlando, held before its first word: ITS live bubble
+    // is what shows — never the left conversation's "builder is working"
+    H.stream.held = new Promise<void>(() => {});
+    await type("what about brunch?");
+    await waitFor(() => expect(H.stream.bodies).toHaveLength(1));
+    await settle();
+    expect(screen.queryByTestId("panel-working")).toBeNull();
+    expect(screen.queryByText(/builder is working/)).toBeNull();
+  });
 });
 
 describe("an agent session started from chat comes home (v1.345.0)", () => {
@@ -604,6 +649,8 @@ describe("an agent session started from chat comes home (v1.345.0)", () => {
   });
 
   it("an older daemon that appended nothing still gets the composed reply, saved", async () => {
+    // CONTROL: green before this wave (it pins the compose + PUT fallback the
+    // wave keeps) — do not re-measure it against a reverted page.
     sessionVerdict();
     render(<ChatPage />);
     await catalogReady();
@@ -623,6 +670,8 @@ describe("an agent session started from chat comes home (v1.345.0)", () => {
   });
 
   it("finalize after leaving writes nothing — the session's completion reaches no other chat", async () => {
+    // CONTROL: green before this wave (openThread already tore the poll down;
+    // this pins the negative so the re-read path never widens it).
     sessionVerdict();
     render(<ChatPage />);
     await catalogReady();
@@ -643,6 +692,102 @@ describe("an agent session started from chat comes home (v1.345.0)", () => {
     expect(putsTo(ORLANDO_PATH)).toHaveLength(0);
     expect(screen.getByText("Try Se7en Bites.")).toBeTruthy();
     expect(screen.queryByText("Made the PDF.")).toBeNull();
+  }, 10_000);
+
+  /** The @ chat as the daemon holds it once session s1's line is appended. */
+  function t1WithSessionLine() {
+    return {
+      id: "t1",
+      title: "PDF",
+      updated_at: "S3",
+      messages: [
+        { role: "user", content: "@builder write me a PDF summary" },
+        { role: "assistant", content: "Made the PDF.", sessionId: "s1", agentType: "builder", panelWho: "builtin:builder", documents: ["C:\\w\\brief.pdf"], receipt: RESULT_DONE },
+      ],
+    };
+  }
+  /** Send the hand-off, wait for its session and its at-send save, then hold
+   *  the FIRST GET of `path` that finalize's poll makes; answers the release. */
+  async function handOffThenHold(path: string) {
+    sessionVerdict();
+    render(<ChatPage />);
+    await catalogReady();
+    await type("@builder write me a PDF summary");
+    await waitFor(() => expect(sessionPosts()).toHaveLength(1));
+    await waitFor(() => expect(putsTo("/chat/threads/t1").length).toBeGreaterThan(0));
+    let release!: (v: unknown) => void;
+    const held = new Promise<unknown>((r) => (release = r));
+    let holdUsed = false;
+    H.api.getHook = (p) => {
+      if (p === path && !holdUsed) {
+        holdUsed = true;
+        return held;
+      }
+      return undefined;
+    };
+    await waitFor(() => expect(holdUsed).toBe(true), { timeout: 4000 });
+    return release;
+  }
+
+  it("finalize's SESSION read lands after the user left: nothing is composed into the chat open now (U-review)", async () => {
+    // The poll's GET /sessions/s1 is airborne when the user opens Orlando; it
+    // answers "completed" afterwards. The guard right after that read is what
+    // keeps the compose + PUT out of Orlando (whose box is the open one now).
+    const release = await handOffThenHold("/sessions/s1?transcript=0");
+    await openOrlando();
+    H.api.getResponses["/sessions/s1/result"] = RESULT_DONE;
+    H.api.getResponses["/chat/threads/t1"] = t1WithSessionLine();
+    await act(async () => {
+      release(JSON.parse(JSON.stringify(SESSION_DONE)));
+    });
+    await settle(6);
+    expect(screen.getByText("find me a place to eat in orlando")).toBeTruthy();
+    expect(screen.getByText("Try Se7en Bites.")).toBeTruthy();
+    expect(screen.queryByText("Made the PDF.")).toBeNull();
+    expect(putsTo(ORLANDO_PATH)).toHaveLength(0);
+    expect(putsCarrying("Made the PDF.")).toHaveLength(0);
+  }, 10_000);
+
+  it("finalize's SESSION read lands after the user left for a NEW chat: nothing is composed there either (U-review)", async () => {
+    // The guard after the session read is the ONLY one on this path: a new
+    // unsaved chat has no box id, so the re-read (and its own guard) is
+    // skipped and the compose + PUT would go straight into the fresh chat
+    // — a thread minted out of another conversation's reply.
+    const release = await handOffThenHold("/sessions/s1?transcript=0");
+    await act(async () => {
+      window.dispatchEvent(new Event("ij:new-chat"));
+    });
+    await waitFor(() => expect(screen.queryByText("@builder write me a PDF summary")).toBeNull());
+    const putsBefore = H.api.puts.length;
+    H.api.getResponses["/sessions/s1/result"] = RESULT_DONE;
+    H.api.getResponses["/chat/threads/t1"] = t1WithSessionLine();
+    await act(async () => {
+      release(JSON.parse(JSON.stringify(SESSION_DONE)));
+    });
+    await settle(6);
+    expect(screen.queryByText("Made the PDF.")).toBeNull();
+    expect(H.api.puts.length).toBe(putsBefore); // nothing minted, nothing saved
+    expect(putsCarrying("Made the PDF.")).toHaveLength(0);
+  }, 10_000);
+
+  it("finalize's THREAD re-read lands after the user left: the daemon's line is not adopted into the chat open now (U-review)", async () => {
+    // The session read answered "completed" and finalize's re-read of t1 is
+    // airborne when the user opens Orlando; it answers with s1's line
+    // afterwards. The guard right after THAT read is what keeps adoptThread
+    // from laying t1's array over Orlando's screen and box.
+    H.api.getResponses["/sessions/s1?transcript=0"] = SESSION_DONE;
+    H.api.getResponses["/sessions/s1/result"] = RESULT_DONE;
+    const release = await handOffThenHold("/chat/threads/t1");
+    await openOrlando();
+    await act(async () => {
+      release(t1WithSessionLine());
+    });
+    await settle(6);
+    expect(screen.getByText("find me a place to eat in orlando")).toBeTruthy();
+    expect(screen.getByText("Try Se7en Bites.")).toBeTruthy();
+    expect(screen.queryByText("Made the PDF.")).toBeNull();
+    expect(putsTo(ORLANDO_PATH)).toHaveLength(0);
+    expect(putsCarrying("Made the PDF.")).toHaveLength(0);
   }, 10_000);
 });
 
@@ -781,7 +926,75 @@ describe("a chat.thread_updated from another writer (v1.345.0)", () => {
     expect(screen.getByText("Hermes reporting back.")).toBeTruthy();
   });
 
+  it("an adopt that landed while the at-send PUT was airborne is KEPT when that PUT then succeeds (it committed before the append): the end save carries the adopted stamp and no doubled line (U-review)", async () => {
+    // The other ordering of the 409 case above: the at-send PUT committed
+    // FIRST (so the daemon answers it 200 under its own stamp S8), the other
+    // writer appended after it, the frame + re-read adopted the row (S9, four
+    // messages) — and only THEN did the PUT's 200 reach this window. The
+    // success path used to overwrite the adopted stamp/length with the older
+    // S8/3: the end save then went out under S8, the daemon refused it, and the
+    // merge cut at 3 — doubling the Hermes line on disk.
+    window.history.replaceState({}, "", `/chat?thread=${ORLANDO.id}`);
+    render(<ChatPage />);
+    await screen.findByText("Try Se7en Bites.");
+    let releaseStream!: () => void;
+    H.stream.held = new Promise<void>((r) => (releaseStream = r));
+    let resolvePut!: (v: unknown) => void;
+    const heldPut = new Promise<unknown>((r) => (resolvePut = r));
+    let holdUsed = false;
+    H.api.putHook = (path, body) => {
+      const carries = ((body.messages ?? []) as { content?: string }[]).some((m) => m.content === "what about brunch?");
+      if (path === ORLANDO_PATH && carries && !holdUsed) {
+        holdUsed = true;
+        return heldPut;
+      }
+      // the daemon's rule: a PUT under a stamp older than the row's is refused
+      if (path === ORLANDO_PATH && body.if_updated_at !== "S9") {
+        return Promise.reject(new H.FakeApiError("the thread changed", 409));
+      }
+      return undefined;
+    };
+    await type("what about brunch?");
+    await waitFor(() => expect(putsTo(ORLANDO_PATH)).toHaveLength(1)); // the at-send save, airborne
+    // the append landed after that PUT committed: the row holds the question AND Hermes
+    H.api.getResponses[ORLANDO_PATH] = {
+      ...ORLANDO,
+      updated_at: "S9",
+      messages: [
+        ...ORLANDO.messages,
+        { role: "user", content: "what about brunch?" },
+        { role: "assistant", content: "Hermes reporting back.", panelWho: "remote:hermes", panelThreadId: ROOM },
+      ],
+    };
+    await act(async () => {
+      H.events.push({ id: "e5", type: "chat.thread_updated", payload: { thread_id: ORLANDO.id, who: "remote:hermes", entries: 1 } });
+    });
+    await screen.findByText("Hermes reporting back."); // adopted: S9, four messages
+    // ...and only now does the at-send PUT's 200 arrive, stamped S8
+    await act(async () => {
+      resolvePut({ id: ORLANDO.id, title: "t", updated_at: "S8" });
+    });
+    await settle();
+    releaseStream();
+    await screen.findByText("Noted.");
+    await waitFor(() => expect(putsCarrying("Noted.").length).toBeGreaterThan(0));
+    await settle();
+    const end = putsCarrying("Noted.")[0];
+    expect(end.body.if_updated_at).toBe("S9"); // the adopted stamp, not the older PUT's
+    for (const p of putsCarrying("Noted.")) {
+      expect((p.body.messages as { content: string }[]).map((m) => m.content)).toEqual([
+        "find me a place to eat in orlando",
+        "Try Se7en Bites.",
+        "what about brunch?",
+        "Hermes reporting back.",
+        "Noted.",
+      ]);
+    }
+  });
+
   it("another chat's frame does not re-read the open one", async () => {
+    // CONTROL: green before this wave (pre-existing openThread behaviour —
+    // the negative of the re-read above).
     window.history.replaceState({}, "", `/chat?thread=${ORLANDO.id}`);
     render(<ChatPage />);
     await screen.findByText("Try Se7en Bites.");
