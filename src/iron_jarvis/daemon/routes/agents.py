@@ -3741,6 +3741,9 @@ def register(app: FastAPI, d) -> None:
             # LOCAL ONLY RIDES THE ESCALATION (v1.332.0): stored on the row; a
             # provider off this network is refused inside create_session (409).
             options={"local_only": True} if getattr(body, "local_only", False) else None,
+            # v1.344.0: what the chat already ran this turn rides the
+            # custom-agent escalation too (SpawnBody.prior_tool_results).
+            prior_tool_results=getattr(body, "prior_tool_results", None),
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and

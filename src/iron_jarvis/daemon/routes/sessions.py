@@ -397,6 +397,10 @@ def register(app: FastAPI, d) -> None:
                 # LOCAL ONLY RIDES TOO (v1.332.0): stored on the row; a
                 # provider off this network is refused inside create_session.
                 options={"local_only": True} if body.local_only else None,
+                # v1.344.0: what the chat already ran this turn (the done
+                # frame's prior_tool_results) rides into the row's options so
+                # the run does not redo those reads.
+                prior_tool_results=body.prior_tool_results,
             )
         except LocalOnlyRefused:
             raise  # v1.332.0: the app's 409 local-only shape, not a 400
@@ -678,6 +682,9 @@ def register(app: FastAPI, d) -> None:
                 # v1.337.0: Continue after a restart resumes the run's own
                 # conversation when it kept one.
                 resume=bool(body.resume),
+                # v1.344.0: an escalation that continues an earlier run
+                # carries what the chat already ran this turn.
+                prior_tool_results=body.prior_tool_results,
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")

@@ -159,6 +159,17 @@ def default_permissions() -> dict[str, str]:
         "guide_read": "allow",
         "app_search": "allow",
         "app_status": "allow",
+        # SELF-CARE (v1.344.0, "Jarvis looks after itself"): the three readers
+        # answer "is the app healthy" from cached state only (no probe, no
+        # spawn, never a secret value), so a scheduled run may check on itself
+        # unasked; the two repairs respawn a pack child / re-probe sign-ins and
+        # ask on the ordinary card (and are denied under low trust —
+        # core/trust.LOW_TRUST_DENY).
+        "app_health": "allow",
+        "pack_status": "allow",
+        "run_doctor": "allow",
+        "pack_restart": "ask",
+        "provider_rescan": "ask",
         # THE DURABLE WORKLIST (v1.177.0, permissioned v1.178.0). These four had
         # NO entry, so they fail-closed to "ask" and a headless agent run —
         # every agent run — was DENIED all four. The whole checkpointing
