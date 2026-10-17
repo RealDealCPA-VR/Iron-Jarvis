@@ -94,7 +94,14 @@ export type OpenWay = { kind: "file"; path: string } | { kind: "web"; href: stri
 export function openWayFor(raw: string): OpenWay {
   const s = (raw || "").trim();
   if (!s || s.startsWith("data:")) return null;
-  if (isLocalMediaRef(s)) return { kind: "file", path: localPathOf(s) };
+  if (isLocalMediaRef(s)) {
+    const path = localPathOf(s);
+    // v1.348.0 (re-review): an SVG can carry script, and Open hands the file
+    // to the OS default app (often a browser) — a model-written path must not
+    // become a local page that runs. The picture still shows in the lightbox.
+    if (/\.svg$/i.test(path.split(/[?#]/)[0])) return null;
+    return { kind: "file", path };
+  }
   if (/^https?:\/\//i.test(s)) return { kind: "web", href: s };
   return null;
 }

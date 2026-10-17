@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.347.0 (2026-10-04).*
+holds itself to. Current as of v1.348.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,33 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The chat shows its work more clearly (v1.348.0)
+
+Small touches, with the chat's look unchanged:
+
+- **One line while Jarvis works.** While a reply is being made, one quiet
+  line counts up in the same words the finished reply uses ("Working for
+  12 s · read 2 files, searched the web"). Only the newest three steps show;
+  older ones fold into "N earlier steps", which opens them in place.
+- **A soft light sweep** across the step that is running and across
+  "Thinking…" replaces the old pulsing. With reduced motion turned on in
+  Windows, the text stays still (and so do the spinners).
+- **See the change before you approve it.** An approval card now shows what
+  will happen: a file edit as a short before-and-after, a new file's first
+  lines, a command as one terminal line, and anything else as tidy
+  "name: value" lines instead of raw code.
+- **Lettered choices.** A question with fixed answers shows them as A, B,
+  C…; press the letter to choose. Where the question can be skipped, a quiet
+  **Skip** does that.
+- **Code in colour.** Code blocks in replies are coloured by language. The
+  colouring loads only when a code block appears, so the chat opens as fast
+  as before, and it follows your light or dark theme.
+- **Pictures.** A picture you attach shows as a small thumbnail before you
+  send. Clicking any picture in the chat opens it full screen; arrow keys
+  move between the pictures of the same reply, Esc closes, and **Open**
+  opens the file in its app (SVG drawings are shown but not opened that
+  way).
 
 ## A picture made in a new chat appears in that chat (v1.347.0)
 

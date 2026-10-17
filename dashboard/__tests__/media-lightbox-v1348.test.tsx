@@ -195,6 +195,9 @@ describe("the pure helpers", () => {
     expect(openWayFor("file:///C:/x/y.png")).toEqual({ kind: "file", path: "/C:/x/y.png" });
     expect(openWayFor("https://cdn.example/a.png")).toEqual({ kind: "web", href: "https://cdn.example/a.png" });
     expect(openWayFor("data:image/png;base64,AAAA")).toBeNull();
+    // v1.348.0 (re-review): a local SVG is never handed to the OS to open.
+    expect(openWayFor("C:/x/drawing.svg")).toBeNull();
+    expect(openWayFor("C:/x/DRAWING.SVG")).toBeNull();
   });
 });
 

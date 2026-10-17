@@ -301,6 +301,13 @@ body::before {
   .animate-spin-slow {
     animation: none;
   }
+  /* v1.348.0: Tailwind's own `animate-spin` too — a dozen live spinners
+     (the chat's Thinking/Still-working rows, the Build pane's chat) carried
+     it with no motion-reduce variant. Same reasoning as above: the guard
+     lives on the class, and every one of them sits beside words. */
+  .animate-spin {
+    animation: none;
+  }
 }
 
 /* App-wide arc-reactor aura: a faint cyan bloom anchored top-left/right. */

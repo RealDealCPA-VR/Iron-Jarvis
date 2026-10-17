@@ -3547,6 +3547,46 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **The chat shows its work: ideas from agent-elements, never its boxes**
+  (v1.348.0, polish wave A; 21st.dev agent-elements is MIT, IDEAS only —
+  no component installed; every addition is a quiet row in the calm style).
+  LIVE WORK (`components/chat/WorkLine.tsx`): `LiveToolRows` draws ONE
+  `LiveWorkLine` ("Working for 12 s · read 2 files, …") counted by the SAME
+  `lib/stepWords` counter as the folded "Worked for" line (only FINISHED
+  steps count; a failed one says "1 failed"), its clock ticks itself
+  (`TurnClock`'s pattern — rows never re-render per second) from
+  `since={stream.startedAt}` (page `LiveReply` + PaneChat pass it; the
+  Thinking row's own clock is hidden once steps are listed); only the newest
+  3 steps show, older finished ones fold into `live-earlier` ("N earlier
+  steps", only when it hides ≥ 2), a RUNNING step never folds. SHIMMER:
+  `.ij-shimmer` in globals.css (currentColor + theme text token, static
+  under reduced motion / forced colours) on the running step and the live
+  "Thinking…" (ThinkingDisclosure); `.animate-spin` now also stops under
+  reduced motion (beside `.animate-spin-slow`). APPROVAL PREVIEW
+  (`components/chat/ApprovalPreview.tsx` + `lib/approvalPreview.ts`):
+  every ApprovalCard renders its REDACTED args as an edit diff (lib/diff),
+  a new file's head, one "$ command" line, or "key: value" lines (nested
+  summarised) — buttons/ids unchanged. LETTERED QUESTIONS
+  (`lib/letteredChoices.ts`, DockAsk + ElicitationCard): fixed choices read
+  A/B/C, the letter key chooses (DockAsk's key-arming rules), Skip maps onto
+  the existing decline path. CODE COLOURS: `components/chat/CodeBlock.tsx`
+  + `lib/highlight.ts` — `shiki@4.4.3` (exact pin) loaded LAZILY (fine-grained
+  core + the JavaScript regex engine, no wasm; ONE engine shared), tokens as
+  React spans (never innerHTML), theme by `<html data-scheme>` with a
+  MutationObserver, > 2,000 lines / 100 KB stay plain; `Markdown.tsx`'s
+  ordinary fences ALL render through it (draft/chart fences routed first,
+  copy button identical). In jsdom (no IntersectionObserver) a ts/python
+  fence loads Shiki for real — the first place to look if a Markdown test
+  slows on the Release runner. PICTURES: `components/MediaLightbox.tsx`
+  (on `<Modal>`): any chat picture is a zoom button opening a full-screen
+  view, Left/Right within ONE reply's group, Esc closes, Open = POST
+  /documents/open for a local file (`lib/mediaLightbox.openWayFor` returns
+  null for an .svg — script-capable, model-written path) or a new tab for a
+  web picture; a remote picture reaches it only after its gate press;
+  composer chips of attached pictures show a thumbnail through the same
+  local-media URL helper. /chat First Load 345 → 355 kB (Shiki stays in an
+  async chunk). Pins: every `*-v1348` file in `dashboard/__tests__/`
+  (lanes ~110 mutations, integrator 12, re-review 8, all red).
 - **Media is QUOTED before it is made, a spend is CARDED, free is free, a
   long render comes home through the daemon** (v1.346.0, the user's
   decisions 2026-10-17: any service — theirs is Pixio — with the door open;
