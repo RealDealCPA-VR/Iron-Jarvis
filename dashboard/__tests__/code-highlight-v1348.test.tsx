@@ -482,6 +482,50 @@ describe("CodeBlock: the same panel, now in colour", () => {
     }
   });
 
+  it("a scheme switch re-colours at once, while a same-scheme change still waits out the gap (fix round)", async () => {
+    // The throttle keys on the scheme + language of the last pass ISSUED, so
+    // the first pass after a switch must not wait for the gap. A `waitFor`
+    // cannot tell 0 ms from 250 ms, so the clock is held: timers and
+    // performance.now are faked only AFTER the first pass has landed (Shiki
+    // loads on real timers), and the test steps time by hand.
+    const code = sample("switch-at-once");
+    const grown = `${code}\nconst grown = 1;`;
+    const { rerender } = render(<CodeBlock code={code} lang="ts" />);
+    await waitFor(() => expect(block().dataset.highlighted).toBe("true"), LOAD);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      highlightSpy.mockClear();
+      await act(async () => {
+        document.documentElement.setAttribute("data-scheme", "light");
+      });
+      // Zero fake milliseconds: only a pass scheduled with no wait can run.
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(highlightSpy).toHaveBeenCalledTimes(1);
+      expect(highlightSpy).toHaveBeenLastCalledWith(code, "ts", "light");
+
+      // Control (anti-vacuity): the same scheme a moment later IS throttled,
+      // so the pass above went at once because the scheme changed, not
+      // because the throttle was off.
+      rerender(<CodeBlock code={grown} lang="ts" />);
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(highlightSpy).not.toHaveBeenCalledWith(grown, "ts", "light");
+      await act(async () => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(highlightSpy).toHaveBeenLastCalledWith(grown, "ts", "light");
+    } finally {
+      vi.useRealTimers();
+    }
+    // ...and the light colours land.
+    await waitFor(() => expect(spansWithText("const")).toHaveLength(2), LOAD);
+    expect(codeEl().textContent).toBe(grown);
+    expect(spansWithText("const")[0].style.color).toBe(await themeColourOf(code, "light", "const"));
+  });
+
   it("an older pass that finishes late never replaces a newer one", async () => {
     const real = highlightSpy.getMockImplementation()!;
     const first = sample("late-pass");
