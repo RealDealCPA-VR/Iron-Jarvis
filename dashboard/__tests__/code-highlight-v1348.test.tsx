@@ -269,13 +269,20 @@ describe("CodeBlock: the same panel, now in colour", () => {
     const had = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     try {
-      render(<CodeBlock code={code} lang="ts" />);
+      const { rerender } = render(<CodeBlock code={code} lang="ts" />);
       await waitFor(() => expect(block().dataset.highlighted).toBe("true"), LOAD);
       fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
       expect(writeText).toHaveBeenCalledWith(code);
       const live = block().querySelector('[aria-live="polite"]')!;
       await waitFor(() => expect(live.textContent).toBe("Copied"));
       expect(live.className).toBe("sr-only");
+      // Mid-stream (review): the block has grown since its last pass. Copy
+      // takes the text on screen now, never the last coloured pass's text.
+      const grown = `${code}\nconst grown = 1;`;
+      rerender(<CodeBlock code={grown} lang="ts" />);
+      expect(codeEl().textContent).toBe(grown);
+      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      expect(writeText).toHaveBeenLastCalledWith(grown);
     } finally {
       if (had) Object.defineProperty(navigator, "clipboard", had);
       else delete (navigator as { clipboard?: unknown }).clipboard;
