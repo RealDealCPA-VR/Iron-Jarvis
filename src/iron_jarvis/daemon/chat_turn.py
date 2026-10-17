@@ -2003,6 +2003,101 @@ def repeated_call_refusal(name: str, times: int) -> str:
     )
 
 
+#: v1.344.0 (M2) — THE SECOND FAILURE IS NAMED TO THE MODEL. When the same
+#: (tool, canonical args) key fails for the REPEATED_CALL_LIMIT-th time in one
+#: turn, this line trails the role=tool content, so the model reads the count
+#: beside the error instead of discovering the refusal on the next call. It
+#: mirrors the agent runtime's repeat note (agents/runtime.py, armed at
+#: ``_BREAKER_NOTE_AT``); the runtime's note is an inline f-string, so the
+#: threshold agreement — not a string — is what the v1344 test pins. Both
+#: lanes, lock-step: appended ONLY to the model-facing tool message, never to
+#: the stream frame (the frame is what the user's tool card shows).
+SECOND_FAILURE_NOTE = (
+    f"[repeat: this is failure {REPEATED_CALL_LIMIT} of the same call; "
+    "change the approach or stop]"
+)
+
+
+def with_second_failure_note(content, failures: int) -> str:
+    """The role=tool content for a failed call: *content* plus
+    :data:`SECOND_FAILURE_NOTE` on a trailing line exactly when this failure
+    is the REPEATED_CALL_LIMIT-th of its key — the first carries nothing, the
+    third is already a refusal (``repeated_call_refusal``) and never gets here
+    with a count of two."""
+    text = str(content)
+    if failures == REPEATED_CALL_LIMIT:
+        return f"{text}\n{SECOND_FAILURE_NOTE}"
+    return text
+
+
+#: v1.344.0 (M1) — WHAT TO DO WHEN A CALL FAILS, said once beside the tools.
+#: Rides the "# Tools" section of BOTH lanes whenever at least one tool is
+#: armed (the v1.262.0 rule: a brief beside no tool is a lie — a text-only
+#: turn is byte-identical to before). Plain imperative lines: fix a bad
+#: argument ONCE, never retry a refusal, hand the app's own failures to the
+#: self-care readers when they are armed, never a third identical call, never
+#: a claimed result. The refusal words quoted here are the registry's own
+#: labels (``not armed`` / ``permission denied`` / ``low trust``) and the
+#: stream lane's card decline (``you declined``), so the model can match them.
+RECOVERY_BLOCK = (
+    "WHEN A CALL FAILS: read the error before doing anything else.\n"
+    "- A missing or wrong argument: fix the call ONCE with the arguments the"
+    " error names.\n"
+    "- \"not armed\", \"permission denied\", \"low trust\" or \"you declined\":"
+    " do not retry; tell the user what was refused and why.\n"
+    "- The app's own failure (a pack exited or is failing, a provider is down,"
+    " a background loop is failing): call app_health or pack_status when they"
+    " are armed; otherwise tell the user exactly what is wrong and where to"
+    " fix it (Settings → Tools, or Settings → Connections).\n"
+    "- Never run the identical call a third time, and never claim a result"
+    " you did not get."
+)
+
+
+#: v1.344.0 (M3) — the refusal labels a chat turn footnotes, mapped to the
+#: words the user reads. The keys are the registry's ``deny_label`` prefixes
+#: (``tools/registry.py``: ``f"{label}: {reason}"``) plus the one the lanes
+#: have string-matched since v1.165.0 (``permission denied``).
+REFUSAL_FOOTNOTE_WORDS: dict[str, str] = {
+    "permission denied": "permission denied",
+    "not armed": "not turned on for this chat",
+    "low trust": "blocked under low trust",
+}
+
+
+def refusal_label(error: str) -> str:
+    """Which refusal a failed ``ToolResult.error`` is — ``"permission denied"``
+    (the engine's own deny, a declined card, a standing refusal), ``"not
+    armed"`` (the v1.227.0 roster gate), ``"low trust"`` (a kept-away call
+    under a low door or a taint) — or ``""`` for an ordinary tool failure.
+    The two labelled refusals are matched on the registry's prefix; the
+    permission one keeps the substring match both lanes have always used."""
+    text = str(error or "")
+    if text.startswith("not armed:"):
+        return "not armed"
+    if text.startswith("low trust:"):
+        return "low trust"
+    if "permission denied" in text:
+        return "permission denied"
+    return ""
+
+
+def refusal_footnotes(refused: "list[tuple[str, str]]") -> str:
+    """The reply footnotes for this turn's refused calls: ONE line per
+    (tool, refusal), in first-seen order, deduped — ``_Note: X could not run
+    (permission denied)._`` keeps its v1.165.0 words byte for byte; ``not
+    armed`` reads ``(not turned on for this chat)`` and ``low trust``
+    ``(blocked under low trust)``. Unknown labels are skipped (never a
+    footnote that names a refusal nobody made). Both lanes, lock-step."""
+    out = ""
+    for name, label in dict.fromkeys(refused):
+        words = REFUSAL_FOOTNOTE_WORDS.get(label)
+        if not words:
+            continue
+        out += f"\n\n_Note: {name} could not run ({words})._"
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # A ROUND'S READERS RUN TOGETHER (v1.311.0, chat-tools-run-serially) — the
 # classifier and the round runner BOTH chat lanes call, lock-step.
@@ -5657,6 +5752,11 @@ async def run_chat_turn(
     config_cards: list[dict[str, Any]] = []  # redesign S3/S4: settings changed / credentials asked
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
     denied_tools: list[str] = []
+    # v1.344.0 (M3): every labelled refusal this turn — (tool, label) in call
+    # order — for the reply footnotes (`refusal_footnotes`); `denied_tools`
+    # keeps carrying the permission-denied names on the response as before.
+    # MIRROR NOTE (lock-step): routes/chat.py's stream loop keeps the same list.
+    refused_tools: list[tuple[str, str]] = []
     _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn        # armed tools the engine refused this turn
     # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating tool just
     # changed. Appended only inside the `if ran:` block below — the same gate
@@ -5743,6 +5843,11 @@ async def run_chat_turn(
                 else ""
             )
             + "Use them when they help; answer directly when they don't."
+            # RECOVERY (v1.344.0, M1): what to do when a call fails — beside
+            # the tools it applies to, only on a turn that armed one. MIRROR
+            # NOTE (lock-step): routes/chat.py's stream lane carries the same
+            # constant at the same seam — edit both or neither.
+            + "\n" + RECOVERY_BLOCK
             + (
                 "\nSPREADSHEET FIGURES: never compute numbers yourself —"
                 " call excel_query (profile the workbook first with"
@@ -6086,14 +6191,26 @@ async def run_chat_turn(
                     ran = _slots[_i]["ran"]
                     if ran:
                         last_tool_output = str(result.output or "")
-                    elif result is not None and "permission denied" in (result.error or ""):
-                        # An honest permission refusal is not "used" — record
-                        # it so the reply can note it (a tool-internal failure
-                        # just rides back to the model as its tool content).
-                        denied_tools.append(tc.name)
+                    elif result is not None:
+                        # An honest refusal is not "used" — record it so the
+                        # reply can note it (a tool-internal failure just
+                        # rides back to the model as its tool content).
+                        # v1.344.0 (M3): "not armed" and "low trust" are
+                        # footnoted too; `denied_tools` keeps its old
+                        # permission-denied contract. MIRROR NOTE (lock-step):
+                        # routes/chat.py's stream loop does the same.
+                        _label = refusal_label(result.error or "")
+                        if _label == "permission denied":
+                            denied_tools.append(tc.name)
+                        if _label:
+                            refused_tools.append((tc.name, _label))
                     if not ran:
                         _call_key = _keys[_i]
                         _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
+                        # SECOND FAILURE (v1.344.0, M2): the model-facing tool
+                        # message names the count — only the message, never a
+                        # frame. MIRROR NOTE (lock-step): routes/chat.py.
+                        content = with_second_failure_note(content, _failed_calls[_call_key])
                     # tools_used counts ONLY tools that actually executed — a
                     # denied or failed call is not honestly reported as run.
                     if ran:
@@ -6280,16 +6397,14 @@ async def run_chat_turn(
         # "(no reply)" placeholder (the client captions the card), and no
         # creation-honesty note (it would call this turn a failure).
         reply = reply.strip()
-        if denied_tools:
-            names = ", ".join(dict.fromkeys(denied_tools))
-            reply += f"\n\n_Note: {names} could not run (permission denied)._"
+        # v1.344.0 (M3): one line per refused (tool, reason) — permission
+        # denied, not armed, low trust. MIRROR NOTE (lock-step): routes/chat.py.
+        reply += refusal_footnotes(refused_tools)
     else:
         if not reply.strip():
             # v1.246.0: said in plain words — never the bare "(no reply)".
             reply = _no_text_reply(tools_used, last_tool_output)
-        if denied_tools:
-            names = ", ".join(dict.fromkeys(denied_tools))
-            reply += f"\n\n_Note: {names} could not run (permission denied)._"
+        reply += refusal_footnotes(refused_tools)
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
         if lang_note:

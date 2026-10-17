@@ -71,6 +71,11 @@ from ..chat_turn import (
     REPEATED_CALL_LIMIT,
     _repeat_key,
     repeated_call_refusal,
+    # v1.344.0 — recovery seams, lock-step with chat_turn (M1/M2/M3).
+    RECOVERY_BLOCK,
+    with_second_failure_note,
+    refusal_label,
+    refusal_footnotes,
     _low_trust_args,
     _low_trust_invoke_kwargs,
     chat_grant_scopes,
@@ -3527,6 +3532,11 @@ async def chat_stream(
                 else ""
             )
             + "Use them when they help; answer directly when they don't."
+            # RECOVERY (v1.344.0, M1): what to do when a call fails — beside
+            # the tools it applies to, only on a turn that armed or ask-armed
+            # one. MIRROR NOTE (lock-step): chat_turn.py's Tools seam carries
+            # the same constant at the same place — edit both or neither.
+            + "\n" + RECOVERY_BLOCK
             + (
                 "\nSPREADSHEET FIGURES: never compute numbers yourself —"
                 " call excel_query (profile the workbook first with"
@@ -3684,6 +3694,9 @@ async def chat_stream(
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
         denied_tools: list[str] = []        # armed tools refused this turn
+        # v1.344.0 (M3): every labelled refusal — (tool, label) in call order
+        # — for `refusal_footnotes`; lock-step with chat_turn.
+        refused_tools: list[tuple[str, str]] = []
         _failed_calls: dict[tuple[str, str], int] = {}  # v1.274.0 — (tool, args) -> failures this turn
         # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
         # tool just changed. Appended only inside the `if ran:` block —
@@ -4502,8 +4515,16 @@ async def chat_stream(
                             continue
                         if ran:
                             last_tool_output = str(result.output or "")
-                        elif result is not None and "permission denied" in (result.error or ""):
-                            denied_tools.append(tc.name)
+                        elif result is not None:
+                            # v1.344.0 (M3): "not armed" and "low trust" are
+                            # footnoted beside "permission denied";
+                            # `denied_tools` keeps its old contract. MIRROR
+                            # NOTE (lock-step): chat_turn.py's tool loop.
+                            _label = refusal_label(result.error or "")
+                            if _label == "permission denied":
+                                denied_tools.append(tc.name)
+                            if _label:
+                                refused_tools.append((tc.name, _label))
                         if ran:
                             tools_used.append(tc.name)
                             # DOOR (v1.199.0): a successful creating tool
@@ -4583,15 +4604,21 @@ async def chat_stream(
                                     continue
                                 if _cp not in made_docs:
                                     made_docs.append(_cp)
+                        # SECOND FAILURE (v1.344.0, M2): the model-facing
+                        # tool message names the count; the frame (the
+                        # user's tool card) keeps the bare content. MIRROR
+                        # NOTE (lock-step): chat_turn.py's tool loop.
+                        _tool_content = content
                         if not ran:
                             _call_key = _plans[_i]["key"]
                             _failed_calls[_call_key] = _failed_calls.get(_call_key, 0) + 1  # v1.274.0
+                            _tool_content = with_second_failure_note(content, _failed_calls[_call_key])
                         yield _sse("tool_call", {
                             "id": tc.id, "name": tc.name, "status": "finished",
                             "ok": ran, "output": str(content)[:2000],
                         })
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                               name=tc.name, content=str(content)[:12000]))
+                                               name=tc.name, content=str(_tool_content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees
@@ -4801,16 +4828,14 @@ async def chat_stream(
             # Mirrors chat_complete: a draft exit is a success — no
             # placeholder, no creation-honesty note.
             reply = reply.strip()
-            if denied_tools:
-                names = ", ".join(dict.fromkeys(denied_tools))
-                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            # v1.344.0 (M3): one line per refused (tool, reason) — lock-step
+            # with chat_turn.
+            reply += refusal_footnotes(refused_tools)
         else:
             if not reply.strip():
                 # v1.246.0 — lock-step with chat_turn.
                 reply = _no_text_reply(tools_used, last_tool_output)
-            if denied_tools:
-                names = ", ".join(dict.fromkeys(denied_tools))
-                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            reply += refusal_footnotes(refused_tools)
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
             if lang_note:
