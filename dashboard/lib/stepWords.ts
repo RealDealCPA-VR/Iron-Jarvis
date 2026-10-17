@@ -50,6 +50,33 @@ export const STEP_WORDS: Record<WorkKind, KindWords> = {
   tool: { done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "tool")}` },
 };
 
+/** The order counts are said in: looking before making, tools last. */
+export const KIND_ORDER: readonly WorkKind[] = ["read", "folder", "search", "page", "web", "change", "make", "command", "tool"];
+
+/**
+ * v1.348.0: "read 2 files, ran 1 tool" pieces, in a fixed order, plus
+ * "1 failed". ONE counter for both lines that sum up a turn's work: the
+ * folded "Worked for 3.2 s · …" above a settled reply and the live
+ * "Working for 12 s · …" while the turn runs (components/chat/WorkLine), so
+ * the live words and the folded words can never drift apart.
+ */
+export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | null }>): string[] {
+  const n = new Map<WorkKind, number>();
+  let failed = 0;
+  for (const st of steps) {
+    const k = toolKind(st.name);
+    n.set(k, (n.get(k) ?? 0) + 1);
+    if (st.ok === false) failed += 1;
+  }
+  const out: string[] = [];
+  for (const k of KIND_ORDER) {
+    const c = n.get(k);
+    if (c) out.push(STEP_WORDS[k].count(c));
+  }
+  if (failed) out.push(`${failed} failed`);
+  return out;
+}
+
 /** The subject a row names after its words, and whether it is a file. A known
  *  tool names its safe target; any other tool names its own id ("Ran
  *  excel_query"). Null = no subject: the row keeps the older shape, words ·

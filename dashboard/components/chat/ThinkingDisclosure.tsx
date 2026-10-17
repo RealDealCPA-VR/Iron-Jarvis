@@ -45,6 +45,10 @@ export function ThinkingDisclosure({ text, live = false, seconds }: ThinkingDisc
   // process detail (components/chat/WorkLine) — a 14px icon, the words, a
   // chevron — and the text opens under a hairline, never inside a box. While
   // live the brain pulses softly; reduced motion keeps it still.
+  // v1.348.0: the live "Thinking…" words SHIMMER (a soft light sweep,
+  // `.ij-shimmer` in app/globals.css, from the theme's own inks) instead of
+  // pulsing, like the running step's words in the rows below; the stylesheet
+  // makes them still text under reduced motion and forced colours.
   return (
     <div data-testid="thinking-disclosure" className="min-w-0 text-[13px] leading-5 text-zinc-500">
       <button
@@ -61,7 +65,7 @@ export function ThinkingDisclosure({ text, live = false, seconds }: ThinkingDisc
         />
         <span
           data-testid="thinking-summary"
-          className={live ? "animate-pulse text-zinc-300 motion-reduce:animate-none" : "text-zinc-400"}
+          className={live ? "ij-shimmer text-zinc-300" : "text-zinc-400"}
         >
           {thinkingSummary(live, seconds)}
         </span>

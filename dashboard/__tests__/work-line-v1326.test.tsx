@@ -5,7 +5,8 @@
  * - While a turn runs, its thinking, each tool call and the step it is on are
  *   grey ONE-LINE rows (14px icon, words, a dot, a short summary; a file name
  *   with a dotted underline). The running step spins and pulses, and both stop
- *   under reduced motion. No row is a box.
+ *   under reduced motion. No row is a box. (v1.348.0: the pulse is now a
+ *   shimmer, `.ij-shimmer`.)
  * - When the answer lands, all of it folds under ONE line above the reply:
  *   "Worked for 3.2 s · read 2 files, ran 1 tool", with a chevron. Built from
  *   what the message stores; a reply with no process detail has no line.
@@ -351,13 +352,17 @@ describe("live tool calls are grey one-line rows", () => {
     for (const r of [read, write, scan]) expect(boxClasses(r)).toEqual([]);
   });
 
-  it("the running step spins and pulses, and both stop under reduced motion", () => {
+  it("the running step spins and shimmers, and both stop under reduced motion", () => {
     render(<LiveToolRows cards={cards} />);
     const scan = screen.getAllByTestId("work-row")[2];
     const spinner = scan.querySelector("svg")!;
     expect(classes(spinner)).toEqual(expect.arrayContaining(["animate-spin", "motion-reduce:animate-none"]));
     const title = within(scan).getByText("Running");
-    expect(classes(title)).toEqual(expect.arrayContaining(["animate-pulse", "motion-reduce:animate-none"]));
+    // v1.348.0: the soft pulse became a shimmer (`.ij-shimmer`); the
+    // stylesheet stops it under reduced motion (pinned from the CSS source in
+    // live-work-v1348.test.tsx, since jsdom evaluates no media query).
+    expect(classes(title)).toContain("ij-shimmer");
+    expect(classes(title)).not.toContain("animate-pulse");
   });
 });
 

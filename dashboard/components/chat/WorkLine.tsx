@@ -7,7 +7,17 @@
  * call, the model's thinking and the step it is on is ONE grey line: a 14px
  * icon, a few plain words, a small dot, and a short summary (a file name with
  * a dotted underline, a search, a duration). The step still running carries a
- * spinner and a soft pulse, both of which stop under reduced motion.
+ * spinner and a soft shimmer across its words (v1.348.0, `.ij-shimmer` in
+ * app/globals.css; it replaced an opacity pulse), both of which stop under
+ * reduced motion.
+ *
+ * v1.348.0: the running state reads like the finished one. Above the live
+ * rows, ONE quiet line counts up in the folded line's own words, "Working for
+ * 12 s · read 2 files, searched the web" (the same counter, lib/stepWords
+ * stepCounts, so the two can never drift), and its clock ticks itself (a
+ * leaf, so nothing above it re-renders each second). Under it only the last
+ * few steps show; older finished ones fold into a quiet "N earlier steps"
+ * toggle that opens them in place. A step still running is never folded.
  *
  * When the answer lands, all of it folds under ONE line above the reply:
  * "Worked for 3.2 s · read 2 files, ran 1 tool", with a chevron. Pressing it
@@ -31,6 +41,7 @@ import { memo, useId, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
+  ChevronRight,
   FilePen,
   FilePlus,
   FileText,
@@ -39,6 +50,7 @@ import {
   Loader2,
   Search,
   SquareTerminal,
+  Timer,
   Wrench,
   X,
   type LucideIcon,
@@ -46,8 +58,9 @@ import {
 import type { ToolCard } from "@/lib/useChatStream";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
+import { elapsedWords, useNow } from "@/components/chat/TurnClock";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
-import { STEP_WORDS, rowSubject, stepPhrase } from "@/lib/stepWords";
+import { STEP_WORDS, rowSubject, stepCounts, stepPhrase } from "@/lib/stepWords";
 
 /* ------------------------------------------------------------- vocabulary */
 
@@ -68,9 +81,6 @@ const ICON: Record<WorkKind, LucideIcon> = {
   command: SquareTerminal,
   tool: Wrench,
 };
-
-/** The order counts are said in: looking before making, tools last. */
-const KIND_ORDER: WorkKind[] = ["read", "folder", "search", "page", "web", "change", "make", "command", "tool"];
 
 /** v1.324.0: an app's progress report in words — "40%" when it said how far
  *  it has to go, else "step 3"; its own message after a dot, kept short.
@@ -123,22 +133,11 @@ export function workSteps(input: WorkInput): ReceiptStep[] {
   return out;
 }
 
-/** "read 2 files, ran 1 tool" pieces, in a fixed order, plus "1 failed". */
+/** "read 2 files, ran 1 tool" pieces, in a fixed order, plus "1 failed".
+ *  v1.348.0: the counter itself lives in lib/stepWords (stepCounts), shared
+ *  with the live line; this name stays for existing callers. */
 export function workCounts(steps: ReceiptStep[]): string[] {
-  const n = new Map<WorkKind, number>();
-  let failed = 0;
-  for (const st of steps) {
-    const k = toolKind(st.name);
-    n.set(k, (n.get(k) ?? 0) + 1);
-    if (st.ok === false) failed += 1;
-  }
-  const out: string[] = [];
-  for (const k of KIND_ORDER) {
-    const c = n.get(k);
-    if (c) out.push(STEP_WORDS[k].count(c));
-  }
-  if (failed) out.push(`${failed} failed`);
-  return out;
+  return stepCounts(steps);
 }
 
 /** How long the turn took, from its own timing; null when not known. */
@@ -220,8 +219,11 @@ export function WorkRow({
   subjectFile,
   subjectTitle,
 }: WorkRowProps) {
+  // v1.348.0: a running title SHIMMERS (a soft light sweep, `.ij-shimmer` in
+  // app/globals.css, from the theme's own inks) instead of pulsing; the
+  // stylesheet makes it still text under reduced motion and forced colours.
   const titleTone = running
-    ? "animate-pulse text-zinc-300 motion-reduce:animate-none"
+    ? "ij-shimmer text-zinc-300"
     : failed
       ? "text-tone-danger"
       : "text-zinc-400";
@@ -414,16 +416,136 @@ function ToolRow({ card }: { card: ToolCard }) {
   );
 }
 
-/** The live tool calls of a running turn, one grey row each. Memoized: it
- *  sits in the per-frame subtree and its cards change only on a tool frame
- *  (v1.257.0 S-02). */
-export const LiveToolRows = memo(function LiveToolRows({ cards }: { cards: readonly ToolCard[] }) {
+/* ------------------------------------------------- the live summary (v1.348.0) */
+
+/** The FINISHED calls of a running turn as steps, for the live line's counts.
+ *  A call still running is not counted yet: the line says what HAS been done
+ *  ("read 2 files" while the third file is still being read in its row). */
+export function liveSteps(cards: readonly ToolCard[]): ReceiptStep[] {
+  const out: ReceiptStep[] = [];
+  for (const c of cards) {
+    if (!c || c.status !== "done" || typeof c.name !== "string" || !c.name.trim()) continue;
+    const ms =
+      typeof c.startedAt === "number" && typeof c.endedAt === "number" && c.endedAt >= c.startedAt
+        ? c.endedAt - c.startedAt
+        : null;
+    out.push({ name: c.name, ok: typeof c.ok === "boolean" ? c.ok : null, ms });
+  }
+  return out;
+}
+
+/**
+ * The live line's words, shaped like the folded line's ("Worked for 14 s ·
+ * read 2 files, ran 1 tool") and counted by the same counter:
+ *   "Working for 12 s · read 2 files, searched the web"
+ *   "Working for 4 s"                (nothing finished yet)
+ *   "Working · read 1 file"          (no clock known, or under a second)
+ */
+export function liveWorkSummary(steps: ReceiptStep[], elapsedMs: number | null): string {
+  const counts = stepCounts(steps);
+  const clock = elapsedWords(elapsedMs);
+  const head = clock ? `Working for ${clock}` : "Working";
+  return counts.length ? `${head} · ${counts.join(", ")}` : head;
+}
+
+/** How many of the newest steps stay on screen while a turn runs. */
+export const LIVE_RECENT = 3;
+
+/**
+ * Which live calls show while the window is closed: the newest LIVE_RECENT,
+ * plus any call still RUNNING however old (parallel calls: a running step is
+ * never folded away). `earlier` is how many finished calls fold into the
+ * "N earlier steps" toggle; folding fewer than two would trade one row for a
+ * toggle row and save nothing, so then everything shows.
+ */
+export function liveWindow(cards: readonly ToolCard[]): { recent: readonly ToolCard[]; earlier: number } {
+  const cut = cards.length - LIVE_RECENT;
+  if (cut < 2) return { recent: cards, earlier: 0 };
+  const recent = cards.filter((c, i) => i >= cut || c.status !== "done");
+  const earlier = cards.length - recent.length;
+  return earlier < 2 ? { recent: cards, earlier: 0 } : { recent, earlier };
+}
+
+/** When the first call started (client clock); null when none says. */
+function firstStart(cards: readonly ToolCard[]): number | null {
+  let first: number | null = null;
+  for (const c of cards) {
+    const t = c.startedAt;
+    if (typeof t === "number" && Number.isFinite(t) && (first === null || t < first)) first = t;
+  }
+  return first;
+}
+
+/** The live line. A LEAF that ticks itself (useNow): its clock re-renders
+ *  this line alone, never the rows, the bubble or the chat page.
+ *  `aria-live="off"`: it sits inside the bubble's polite live region, and a
+ *  line that changes every second must not be read out every second (the
+ *  rows themselves still are, as they arrive). */
+function LiveWorkLine({ steps, since }: { steps: ReceiptStep[]; since: number | null }) {
+  const now = useNow(since != null);
+  const ms = since != null ? Math.max(0, now - since) : null;
+  return (
+    <div
+      data-testid="live-work-summary"
+      aria-live="off"
+      className="flex min-w-0 items-center gap-2 text-[13px] leading-5 text-zinc-500"
+    >
+      <Timer size={14} aria-hidden="true" className="shrink-0" />
+      <span data-testid="live-work-words" className="min-w-0 truncate tabular-nums">
+        {liveWorkSummary(steps, ms)}
+      </span>
+    </div>
+  );
+}
+
+/** The live tool calls of a running turn. Memoized: it sits in the
+ *  per-frame subtree and its cards change only on a tool frame (v1.257.0
+ *  S-02).
+ *
+ *  v1.348.0: ONE quiet line on top, "Working for 12 s · read 2 files", then
+ *  only the newest few rows; older finished ones fold into a quiet "N earlier
+ *  steps" toggle that opens them in place, in call order. `since` is when the
+ *  turn started (the stream's own clock), so the line counts the whole turn
+ *  the way the folded "Worked for …" does; without it the line counts from
+ *  the first call. */
+export const LiveToolRows = memo(function LiveToolRows({
+  cards,
+  since,
+}: {
+  cards: readonly ToolCard[];
+  since?: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
   if (!cards.length) return null;
+  const { recent, earlier } = liveWindow(cards);
+  const shown = open || !earlier ? cards : recent;
+  const start = typeof since === "number" && Number.isFinite(since) ? since : firstStart(cards);
   return (
     <div data-testid="live-tool-rows" className="grid gap-1">
-      {cards.map((c) => (
-        <ToolRow key={c.id} card={c} />
-      ))}
+      <LiveWorkLine steps={liveSteps(cards)} since={start} />
+      {earlier ? (
+        <button
+          type="button"
+          data-testid="live-earlier"
+          aria-expanded={open}
+          aria-controls={listId}
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 items-center gap-2 text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:underline focus-visible:underline-offset-[3px] focus-visible:outline-none"
+        >
+          <ChevronRight
+            size={14}
+            aria-hidden="true"
+            className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+          />
+          <span className="min-w-0 truncate">{earlier === 1 ? "1 earlier step" : `${earlier} earlier steps`}</span>
+        </button>
+      ) : null}
+      <div id={listId} data-testid="live-steps" className="grid gap-1">
+        {shown.map((c) => (
+          <ToolRow key={c.id} card={c} />
+        ))}
+      </div>
     </div>
   );
 });

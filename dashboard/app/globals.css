@@ -518,6 +518,58 @@ table {
   -webkit-text-fill-color: transparent;
 }
 
+/* ---- Shimmer (v1.348.0) ----------------------------------------------------
+   A soft light sweep across a RUNNING label: the words of the step a chat
+   turn is on ("Reading harbor.xlsx", "Thinking…") and the live "Thinking…"
+   of the model's reasoning row. It replaced their opacity pulse, which faded
+   the words themselves in and out.
+
+   Built ONLY from the theme, so every Mark, every palette the user makes and
+   both schemes work with no colour of its own: the words keep their own ink
+   (currentColor, read from `color` — the fill is what goes transparent), and
+   the band that sweeps across them is the theme's strongest text ink
+   (--zinc-50: near-white on the dark Marks, near-black on the light ones).
+   The words never drop below their own ink, so the label is never harder to
+   read than the still one.
+
+   STILL TEXT, with nothing to undo, where it cannot or should not move:
+   under prefers-reduced-motion, in forced-colours mode, and where
+   background-clip:text is unsupported (the words would be invisible). */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .ij-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      currentColor 0%,
+      currentColor 40%,
+      rgb(var(--zinc-50)) 50%,
+      currentColor 60%,
+      currentColor 100%
+    );
+    background-size: 300% 100%;
+    background-position: 100% 0;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: ij-shimmer 2.2s ease-in-out infinite;
+  }
+}
+@keyframes ij-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .ij-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
 /* ---------------------------------------------------------------------------
    Warning notices — the daemon-offline banner and its siblings (v1.153.1).
 
