@@ -2947,13 +2947,25 @@ def register(app: FastAPI, d) -> None:
         from ...mcp.import_config import parse_any
 
         text = body.text or ""
+        source = (body.source or "").strip()
         if text.strip():
             specs = parse_any(text)
-        elif (body.source or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail="importing from another app's config file is not available on this daemon",
-            )
+        elif source:
+            # v1.343.0 (lane I): the sources door. The file is RE-READ here by
+            # its scan key — the browser never sends a path, and a key the
+            # scan does not know is refused — so values come off the disk
+            # and go straight into the vault, never through the browser.
+            from ...mcp.import_sources import read_source
+
+            scanned = read_source(d.platform, source)
+            if scanned is None:
+                raise HTTPException(status_code=404, detail="no such config file source")
+            if not scanned.readable:
+                raise HTTPException(
+                    status_code=409,
+                    detail=scanned.note or f"{scanned.label}'s config file was not found",
+                )
+            specs = scanned.specs
         else:
             raise HTTPException(status_code=400, detail="paste a config block, a command line or a URL")
         if not body.names:
@@ -2961,6 +2973,35 @@ def register(app: FastAPI, d) -> None:
         return _apply_specs(
             d, specs, list(body.names), dict(body.overrides or {}), bool(body.auto_approve), bool(body.replace)
         )
+
+    @app.get("/mcp/import/sources")
+    async def mcp_import_sources() -> dict[str, Any]:
+        """The MCP servers the user's other apps already have (v1.343.0).
+
+        ``mcp/import_sources.scan`` reads, READ-ONLY and off the loop,
+        ``~/.claude.json`` (``CLAUDE_CONFIG_DIR`` honoured), Claude Code's
+        ``settings.json``, the active project's ``.mcp.json``, Claude
+        Desktop's config, Codex's ``config.toml`` (``CODEX_HOME`` honoured),
+        Cursor's ``mcp.json`` and VS Code's user ``settings.json``. Each
+        row is ``{source, label, origin, readable, note, servers}`` with the
+        same preview rows the paste door answers — names only, never a
+        value. A missing file is ``readable: false`` with an empty note; a
+        malformed one names the file in one line, never its contents. Iron
+        Jarvis's own server entries are not listed.
+        """
+        from ...mcp.import_sources import scan
+
+        def _rows() -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for item in scan(d.platform):
+                try:
+                    servers = preview_rows(d, item.specs) if item.readable else []
+                except Exception:  # noqa: BLE001 — one bad file never hides the rest
+                    servers = []
+                out.append(item.row(servers))
+            return out
+
+        return {"sources": await asyncio.to_thread(_rows)}
 
     @app.get("/mcp/servers")
     def mcp_servers() -> dict[str, Any]:
