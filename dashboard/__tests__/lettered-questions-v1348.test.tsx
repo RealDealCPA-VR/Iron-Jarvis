@@ -297,3 +297,51 @@ describe("lib/letteredChoices (pure)", () => {
     expect(choiceKey({ key: "b", ctrlKey: false, altKey: false, metaKey: false, repeat: false, isComposing: false }, input)).toBeNull();
   });
 });
+
+/* ------------------------------------------------------------ review fixes */
+
+describe("review: the lettered rows keep the calm look; an optional choice can be cleared", () => {
+  it("rows, Skip and Clear choice: no border or shadow, transitions stop under reduced motion, whole pixels", () => {
+    render(<ElicitationCard ask={ask([{ ...CHOICE, required: false }])} onAnswer={vi.fn()} docked />);
+    fireEvent.click(row("B"));
+    const group = screen.getByRole("radiogroup");
+    const els = [
+      group,
+      ...Array.from(group.querySelectorAll("*")),
+      screen.getByTestId("mcp-elicitation-skip"),
+      screen.getByTestId("mcp-choice-target-clear"),
+    ];
+    for (const el of els) {
+      const cls = (el.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+      expect(cls.filter((c) => /^(border|shadow)/.test(c)), el.outerHTML.slice(0, 80)).toEqual([]);
+      if (cls.some((c) => c.startsWith("transition"))) {
+        expect(cls, el.outerHTML.slice(0, 80)).toContain("motion-reduce:transition-none");
+      }
+      expect(cls.filter((c) => /^text-\[\d+\.\d+px\]$/.test(c))).toEqual([]);
+    }
+  });
+
+  it("an OPTIONAL choice offers 'Clear choice' once picked: it unpicks, keeps focus in the group, and Send leaves the field out", async () => {
+    const onAnswer = vi.fn(async () => ({ ok: true }));
+    render(<ElicitationCard ask={ask([{ ...CHOICE, required: false }, NOTE])} onAnswer={onAnswer} />);
+    expect(screen.queryByTestId("mcp-choice-target-clear")).toBeNull();
+    fireEvent.click(row("C"));
+    expect(checked()).toEqual(["C"]);
+    const clear = screen.getByRole("button", { name: "Clear choice" });
+    expect(clear.getAttribute("type")).toBe("button");
+    fireEvent.click(clear);
+    expect(checked()).toEqual([]);
+    expect(document.activeElement).toBe(row("A"));
+    expect(screen.queryByTestId("mcp-choice-target-clear")).toBeNull();
+    expect(onAnswer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onAnswer).toHaveBeenCalledWith("accept", {}));
+  });
+
+  it("CONTROL: a REQUIRED choice never offers Clear", () => {
+    render(<ElicitationCard ask={ask()} onAnswer={vi.fn()} />);
+    fireEvent.click(row("B"));
+    expect(checked()).toEqual(["B"]);
+    expect(screen.queryByTestId("mcp-choice-target-clear")).toBeNull();
+  });
+});

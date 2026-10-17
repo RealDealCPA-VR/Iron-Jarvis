@@ -26,7 +26,9 @@
 // dock, so "B" then Enter picks and sends through the same checks as a
 // click. In that shape "Not now" is a quiet "Skip": the SAME cancel answer,
 // words and all ("Skipped for now"), no new call. A form with several choice
-// fields keeps its menus exactly as before.
+// fields keeps its menus exactly as before. An OPTIONAL lettered field that
+// has a pick offers a quiet "Clear choice", so it can be left unanswered
+// again, as the menu's "Choose…" row allowed.
 
 import { useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { MessageCircleQuestion } from "lucide-react";
@@ -360,16 +362,37 @@ export function ElicitationCard({
           let control;
           if (f.name === lettered) {
             const labelId = `${id}-label`;
+            const picked = typeof values[f.name] === "string" ? (values[f.name] as string) : "";
             control = (
               <>
-                <span id={labelId} className="block text-xs font-medium text-zinc-300">
-                  {label}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span id={labelId} className="block text-xs font-medium text-zinc-300">
+                    {label}
+                  </span>
+                  {/* An optional choice can be left unanswered again, as the
+                      menu's "Choose…" allowed (a radio group cannot unpick). */}
+                  {!f.required && picked !== "" && !closed && !busy && (
+                    <button
+                      type="button"
+                      data-testid={`mcp-choice-${f.name}-clear`}
+                      onClick={() => {
+                        set(f.name, "");
+                        document
+                          .getElementById(id)
+                          ?.querySelector<HTMLElement>('[role="radio"]')
+                          ?.focus({ preventScroll: true });
+                      }}
+                      className="ml-auto rounded px-1 text-[11px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none"
+                    >
+                      Clear choice
+                    </button>
+                  )}
+                </div>
                 <LetteredChoices
                   field={f}
                   id={id}
                   labelId={labelId}
-                  value={typeof values[f.name] === "string" ? (values[f.name] as string) : ""}
+                  value={picked}
                   disabled={closed || !!busy}
                   invalid={!!err}
                   describedBy={err ? errId : undefined}

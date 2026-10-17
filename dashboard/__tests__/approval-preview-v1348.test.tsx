@@ -433,3 +433,55 @@ describe("lib/approvalPreview (pure)", () => {
     expect(exampleValue(null)).toBe("(empty)");
   });
 });
+
+/* ------------------------------------------------------------ review fixes */
+
+describe("review: a real tool's path keys, and a swap's own settings", () => {
+  it("rename_file's real `new_path` (and other *_path keys) is never cut", () => {
+    const deep = "C:/Users/Someone/" + "Clients/".repeat(30) + "2026 return.pdf";
+    const renamed = deep.replace(".pdf", " (final).pdf");
+    expect(deep.length).toBeGreaterThan(VALUE_CHARS);
+    card({ id: "r1", tool: "rename_file", args: { path: deep, new_path: renamed } });
+    const text = preview().textContent ?? "";
+    expect(text).toContain(`new_path: ${renamed}`);
+    expect(text).not.toContain("…");
+    expect(screen.queryByTestId("approval-args-more")).toBeNull();
+    expect(argEntry("output_path", deep).cut).toBe(false);
+    expect(argEntry("result_path", deep).cut).toBe(false);
+    expect(argEntry("targetDir", deep).cut).toBe(false);
+    expect(argEntry("paths", [deep, renamed]).cut).toBe(false);
+    // CONTROL: long text that is not a location is still cut.
+    expect(argEntry("body", deep).cut).toBe(true);
+    expect(argEntry("notes", [deep, renamed]).cut).toBe(true);
+  });
+
+  it("docx_edit: a replace's count / match_case are said under its diff, the op is read as the daemon reads it, a missing replace deletes", () => {
+    card({
+      id: "r2",
+      tool: "docx_edit",
+      args: {
+        path: "Letter.docx",
+        operations: [
+          { op: " Replace ", find: "Smith", replace: "Jones", count: 1, match_case: false },
+          { op: "replace", find: "DRAFT" },
+        ],
+      },
+    });
+    const diff = screen.getByTestId("approval-diff");
+    expect(rowsOf(diff, "note").map((r) => r.textContent)).toEqual(["count: 1, match_case: false"]);
+    expect(rowsOf(diff, "removed").map((r) => r.textContent)).toEqual(["−removed: Smith", "−removed: DRAFT"]);
+    expect(rowsOf(diff, "added").map((r) => r.textContent)).toEqual(["+added: Jones"]);
+    expect(screen.getByTestId("approval-diff-counts").textContent).toBe("+1 −2");
+  });
+
+  it("a MultiEdit edit's replace_all is said under its swap", () => {
+    card({
+      id: "r3",
+      tool: "MultiEdit",
+      args: { file_path: "a.py", edits: [{ old_string: "x = 1", new_string: "x = 2", replace_all: true }] },
+    });
+    expect(rowsOf(screen.getByTestId("approval-diff"), "note").map((r) => r.textContent)).toEqual([
+      "replace_all: true",
+    ]);
+  });
+});

@@ -25,7 +25,10 @@
  *     summarised ("3 items", "2 fields: a, b"), a long string is cut with an
  *     ellipsis, and the card offers "Show in full". A path is never cut
  *     (v1.314.0: a path cut off at the one moment the user is deciding is a
- *     decision made on half the facts).
+ *     decision made on half the facts); `isPathKey` says which keys are
+ *     paths, including the real tools' `new_path` / `output_path`.
+ *   - A swap's other settings (docx_edit's `count` / `match_case`, an edit's
+ *     `replace_all`) are drawn under its diff: they decide how much changes.
  * The parts keep the arguments' own order, so the block sits where its
  * argument sat (`path`, then the change).
  */
@@ -107,6 +110,16 @@ const PATH_KEYS = new Set([
   "uri",
   "href",
 ]);
+/** A key that ENDS in a location word is a location too: the real tools'
+ *  own spellings (rename_file's `new_path`, redact_pii's `output_path`, a
+ *  worklist's `result_path`) and any app's `target_dir` / `source_url`. */
+const PATH_SUFFIX = /(?:^|_)(?:path|paths|file|files|filename|dir|dirs|directory|folder|folders|url|urls|uri|href)$/i;
+const PATH_CAMEL = /[a-z](?:Path|Paths|File|Filename|Dir|Directory|Folder|Url|Uri)$/;
+
+/** True for an argument whose value is a location (never cut). */
+export function isPathKey(key: string): boolean {
+  return PATH_KEYS.has(key) || PATH_SUFFIX.test(key) || PATH_CAMEL.test(key);
+}
 
 /** A text as the lines a diff compares: "" is no lines at all (not one empty
  *  line), and one trailing newline does not add an empty last line. */
@@ -167,7 +180,7 @@ export function argEntry(key: string, value: unknown): ArgEntry {
   if (value === null || value === undefined) return empty;
   if (typeof value === "string") {
     if (value === "") return empty;
-    return line(PATH_KEYS.has(key) ? value : clipText(value), value);
+    return line(isPathKey(key) ? value : clipText(value), value);
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return line(String(value), String(value));
@@ -176,7 +189,8 @@ export function argEntry(key: string, value: unknown): ArgEntry {
     if (value.length === 0) return empty;
     if (value.every(isPrimitive)) {
       const joined = value.map(String).join(", ");
-      const short = clipText(joined);
+      // A list of locations is never cut either.
+      const short = isPathKey(key) ? joined : clipText(joined);
       // Cut, the full form is the exact list (a comma inside an item would
       // make the joined line ambiguous).
       return short === joined ? line(joined, joined) : summary(short);
@@ -206,7 +220,17 @@ export function exampleValue(value: unknown): string {
   return e.empty ? "(empty)" : e.short;
 }
 
-type Segment = { before: string; after: string } | { note: string };
+/** A text swap, plus `extra`: the swap's other settings in words
+ *  ("count: all, match_case: false", "replace_all: true"), which change how
+ *  much of the file it touches and so are drawn under it, never dropped. */
+type Segment = { before: string; after: string; extra?: string } | { note: string };
+
+/** The other keys of a swap's record, in words ("" when there are none). */
+function extraWords(rec: Record<string, unknown>, used: readonly string[]): string {
+  const rest = Object.fromEntries(Object.entries(rec).filter(([k]) => !used.includes(k)));
+  const words = argEntry("", rest);
+  return words.empty ? "" : words.short;
+}
 
 /** The diff part for one or more text swaps (and plain-word notes). */
 function diffPart(segments: Segment[]): PreviewPart {
@@ -224,6 +248,7 @@ function diffPart(segments: Segment[]): PreviewPart {
       if (l.kind === "added") added++;
       else if (l.kind === "removed") removed++;
     }
+    if (s.extra) rows.push({ kind: "note", text: s.extra });
   });
   return { type: "diff", rows, added, removed };
 }
@@ -237,13 +262,19 @@ function editList(value: unknown): Segment[] | null {
     const rec = e as Record<string, unknown>;
     const pair = EDIT_PAIRS.find(([o, n]) => typeof rec[o] === "string" && typeof rec[n] === "string");
     if (!pair) return null;
-    out.push({ before: rec[pair[0]] as string, after: rec[pair[1]] as string });
+    out.push({
+      before: rec[pair[0]] as string,
+      after: rec[pair[1]] as string,
+      extra: extraWords(rec, pair),
+    });
   }
   return out;
 }
 
 /** docx_edit's operations: each `replace` is a text swap, every other
- *  operation one line of plain words. Null when nothing in it is a swap. */
+ *  operation one line of plain words. Null when nothing in it is a swap.
+ *  Read the way the daemon reads them (documents/docx_edit.py): the op name
+ *  is trimmed and lower-cased, and a missing or null `replace` deletes. */
 function docxOperations(value: unknown): Segment[] | null {
   if (!Array.isArray(value) || value.length === 0) return null;
   const out: Segment[] = [];
@@ -251,8 +282,10 @@ function docxOperations(value: unknown): Segment[] | null {
   for (const op of value) {
     if (!op || typeof op !== "object") continue;
     const rec = op as Record<string, unknown>;
-    if (rec.op === "replace" && typeof rec.find === "string" && typeof rec.replace === "string") {
-      out.push({ before: rec.find, after: rec.replace });
+    const kind = typeof rec.op === "string" ? rec.op.trim().toLowerCase() : "";
+    const replacement = rec.replace === undefined || rec.replace === null ? "" : rec.replace;
+    if (kind === "replace" && typeof rec.find === "string" && rec.find !== "" && typeof replacement === "string") {
+      out.push({ before: rec.find, after: replacement, extra: extraWords(rec, ["op", "find", "replace"]) });
       swaps++;
     } else {
       const { op: name, ...rest } = rec;
