@@ -33,6 +33,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -158,7 +159,11 @@ function ZoomButton({
   // a prop (a streaming reply) never needs a fresh registration.
   const latest = useRef<LightboxPicture>({ src, raw, name: shownName, alt });
   latest.current = { src, raw, name: shownName, alt };
-  useEffect(() => {
+  // A LAYOUT effect, so the picture is in its group in the same commit that
+  // puts the button on the page: a passive effect runs later, and a press in
+  // between found no entry and silently did nothing (a flaky page test on a
+  // slow runner; v1.348.0 review).
+  useLayoutEffect(() => {
     if (!group) return;
     return group.register({ el: () => ref.current, picture: () => latest.current });
   }, [group]);

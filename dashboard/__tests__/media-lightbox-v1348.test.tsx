@@ -20,6 +20,7 @@
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
@@ -244,6 +245,41 @@ describe("a picture in a reply opens full screen", () => {
     await screen.findByRole("dialog");
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(dialog()).toBeNull());
+  });
+
+  it("a press the moment the picture appears still opens it (it joins its group in the same commit)", async () => {
+    // Review fix: the picture used to join its group in a PASSIVE effect, so a
+    // press between the commit and that effect found no entry and did nothing
+    // (the chat-page pin below went red that way on a cold run). Here the
+    // reply arrives OUTSIDE act, the press lands as soon as the button is on
+    // the page, and the lightbox must still open.
+    let show: (v: boolean) => void = () => {};
+    function Late() {
+      const [on, setOn] = useState(false);
+      show = setOn;
+      return on ? <Markdown content={`![late](${PNG})`} /> : null;
+    }
+    render(<Late />);
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const before = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      const appeared = new Promise<HTMLButtonElement>((resolve) => {
+        const mo = new MutationObserver(() => {
+          const b = document.querySelector<HTMLButtonElement>('[data-testid="zoomable-image"]');
+          if (b) {
+            mo.disconnect();
+            resolve(b);
+          }
+        });
+        mo.observe(document.body, { subtree: true, childList: true });
+      });
+      show(true);
+      (await appeared).click();
+      await waitFor(() => expect(screen.getByRole("dialog", { name: "Picture: late" })).toBeTruthy());
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = before;
+    }
   });
 
   it("the daemon's media line (an angle-bracket path with a space) opens by its file name", async () => {
