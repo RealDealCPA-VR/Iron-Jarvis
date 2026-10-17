@@ -16,6 +16,12 @@ default resolver falls back to the ``PIXIO_API_KEY`` env var. Default accounts
 allow ONE in-flight generation, so 429 is surfaced as a clear one-liner
 instead of being retried blindly.
 
+v1.346.0: the HTTP transport, the error map, ``pixio_publish`` and the
+delivery path live in :mod:`iron_jarvis.media.pixio_http` and
+:mod:`iron_jarvis.media.deliver` — shared with the ``generate_media`` tool's
+:class:`~iron_jarvis.media.pixio.PixioProvider`. The old private names are
+re-exported here because the avatar and creative routes import them.
+
 Testability: the HTTP transport is dependency-injected (same pattern as
 :mod:`iron_jarvis.tools.websearch`). The constructor takes an optional
 ``http(method, url, headers, json_body) -> response-like`` (anything with
@@ -28,186 +34,57 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import re
 import time
-from pathlib import PurePosixPath
-from typing import Any, Callable
-from urllib.parse import quote, urlparse
+from typing import Any
+from urllib.parse import quote
 
+from ..media.base import fetch_public
+from ..media.deliver import ArtifactSink, deliver
+from ..media.pixio_http import BASE_URL as _BASE_URL
+from ..media.pixio_http import MISSING_KEY_ERROR as _MISSING_KEY_ERROR
+from ..media.pixio_http import (
+    HttpRequest,
+    HttpUpload,
+    KeyResolver,
+    api_call,
+    pixio_publish,
+)
+from ..media.pixio_http import default_http as _default_http
+from ..media.pixio_http import default_http_upload as _default_http_upload
+from ..media.pixio_http import detail as _detail
+from ..media.pixio_http import env_key_resolver as _env_key_resolver
+from ..media.pixio_http import ext_from_url as _ext_from_url
+from ..media.pixio_http import http_error as _http_error
+from ..media.pixio_http import output_url as _output_url
+from ..media.pixio_http import safe_name as _safe_name
 from .base import Tool, ToolContext, ToolResult
 
-#: (method, url, headers, json_body) -> response-ish with
-#: ``.status_code`` / ``.content`` / ``.json()``.
-HttpRequest = Callable[[str, str, dict[str, str], "dict[str, Any] | None"], Any]
-#: (url, headers, blob, filename, mime) -> response-ish — multipart uploads.
-HttpUpload = Callable[[str, "dict[str, str]", bytes, str, str], Any]
-#: () -> Pixio API key (or ``None`` when not configured).
-KeyResolver = Callable[[], "str | None"]
-#: (artifact_name, blob, filename, kind, session_id, *, project_id=...) —
-#: durable gallery sink. The platform wires this to ArtifactStore.save so every
-#: generation lands in the Creative gallery (and fires artifact.generated)
-#: instead of dying with the disposable session workspace. v1.200.0:
-#: ``project_id`` rides as a KEYWORD, and only when the producing ToolContext
-#: carries one — so a pre-v1.200.0 five-arg sink keeps working — because chat
-#: runs as session_id="chat" (not a Session row) and the store's session
-#: inheritance can never scope a chat generation to its project on its own.
-ArtifactSink = Callable[..., Any]
+__all__ = [
+    "ArtifactSink",
+    "HttpRequest",
+    "HttpUpload",
+    "KeyResolver",
+    "PixioGenerateTool",
+    "PixioModelsTool",
+    "PixioParamsTool",
+    "PixioStatusTool",
+    "PixioUploadTool",
+    "pixio_publish",
+    "pixio_tools",
+    "_BASE_URL",
+    "_MISSING_KEY_ERROR",
+    "_default_http",
+    "_default_http_upload",
+    "_detail",
+    "_env_key_resolver",
+    "_ext_from_url",
+    "_http_error",
+    "_output_url",
+    "_safe_name",
+]
 
-_BASE_URL = "https://beta.pixio.myapps.ai"
 _POLL_SECONDS = 5.0
 _DEFAULT_TIMEOUT_SECONDS = 600
-_MISSING_KEY_ERROR = (
-    "Pixio API key not configured — add a secret named 'pixio' (Secrets page) "
-    "or set PIXIO_API_KEY"
-)
-
-#: A plausible file extension: dot + up to 8 alphanumerics (``.png``, ``.mp4``).
-_EXT_RX = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
-
-
-def _env_key_resolver() -> str | None:
-    """Default key source — the ``PIXIO_API_KEY`` env var (vault closure wins in prod)."""
-    return os.environ.get("PIXIO_API_KEY") or None
-
-
-def _default_http(
-    method: str, url: str, headers: dict[str, str], json_body: dict[str, Any] | None
-) -> Any:
-    """Production transport — httpx imported lazily so import stays dependency-light."""
-    import httpx
-
-    # Generous read timeout: media downloads can be tens of MB.
-    timeout = httpx.Timeout(120.0, connect=10.0)
-    return httpx.request(
-        method, url, headers=headers, json=json_body, timeout=timeout, follow_redirects=True
-    )
-
-
-def _default_http_upload(
-    url: str, headers: dict[str, str], blob: bytes, filename: str, mime: str
-) -> Any:
-    """Production multipart transport (uploads can be large — generous timeout)."""
-    import httpx
-
-    timeout = httpx.Timeout(300.0, connect=10.0)
-    return httpx.request(
-        "POST",
-        url,
-        headers=headers,
-        files={"file": (filename, blob, mime or "application/octet-stream")},
-        timeout=timeout,
-        follow_redirects=True,
-    )
-
-
-def pixio_publish(
-    key: str,
-    *,
-    blob: bytes | None = None,
-    filename: str = "",
-    mime: str = "",
-    url: str | None = None,
-    endpoint: str = "media",
-    http: HttpRequest | None = None,
-    http_upload: HttpUpload | None = None,
-) -> str:
-    """Publish media to Pixio's public CDN → a CLEAN, PERMANENT, PUBLIC url
-    (no signed query string) usable directly in generation params.
-
-    ``POST /api/v1/images`` (images only) / ``POST /api/v1/media`` (any media).
-    Two input modes: a local ``blob`` (multipart ``file=``) or a remote ``url``
-    to mirror (JSON ``{"url": …}``). Both return ``{"url": "https://…"}``.
-    SYNC (callers run it off the loop); raises ``RuntimeError`` with an honest
-    message on any failure — never a fabricated URL.
-    """
-    path_part = "images" if endpoint == "images" else "media"
-    target = f"{_BASE_URL}/api/v1/{path_part}"
-    auth = {"Authorization": f"Bearer {key}"}
-    if url:
-        resp = (http or _default_http)(
-            "POST", target, {**auth, "Accept": "application/json"}, {"url": url}
-        )
-    elif blob is not None:
-        resp = (http_upload or _default_http_upload)(
-            target, auth, blob, filename or "file.bin", mime
-        )
-    else:
-        raise RuntimeError("pixio_publish needs a blob or a url")
-    status = int(getattr(resp, "status_code", 0) or 0)
-    try:
-        payload = resp.json()
-    except Exception:  # noqa: BLE001 — non-JSON error bodies happen
-        payload = {}
-    err = _http_error(status, payload if isinstance(payload, dict) else {})
-    if err:
-        raise RuntimeError(err)
-    public = str((payload or {}).get("url") or "") if isinstance(payload, dict) else ""
-    if not public:
-        raise RuntimeError("Pixio upload returned no url")
-    return public
-
-
-def _detail(payload: Any) -> str:
-    """Best-effort human detail from an API body (error/message/detail, str or dict)."""
-    if not isinstance(payload, dict):
-        return ""
-    for key in ("error", "message", "detail"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            value = value.get("message") or value.get("detail") or ""
-        if value:
-            return str(value)
-    return ""
-
-
-def _http_error(status: int, payload: Any) -> str | None:
-    """Map a Pixio HTTP status to one clear line (``None`` when 2xx). Honest errors
-    beat fabricated output — each mapped line tells the agent what to DO next."""
-    if 200 <= status < 300:
-        return None
-    detail = _detail(payload)
-    suffix = f": {detail}" if detail else ""
-    if status == 401:
-        return "Pixio rejected the API key (401) — update the 'pixio' secret or PIXIO_API_KEY"
-    if status == 402:
-        return f"Pixio: insufficient credits (402) — top up the account before generating{suffix}"
-    if status == 404:
-        return f"Pixio: not found (404){suffix or ' — check the model/generation id'}"
-    if status == 429:
-        return (
-            "Pixio concurrency limit — one generation at a time on default accounts; "
-            "wait for the current one"
-        )
-    return f"Pixio API error {status}{suffix}"
-
-
-def _output_url(payload: dict[str, Any]) -> str:
-    """Extract the result URL — ``outputUrl`` is canonical, ``outputs`` tolerated."""
-    url = payload.get("outputUrl") or payload.get("output_url") or ""
-    if not url:
-        outputs = payload.get("outputs")
-        if isinstance(outputs, list) and outputs:
-            first = outputs[0]
-            if isinstance(first, str):
-                url = first
-            elif isinstance(first, dict):
-                url = first.get("url") or first.get("outputUrl") or ""
-    return str(url or "")
-
-
-def _ext_from_url(url: str) -> str:
-    """Guess a file extension from the URL path (``.bin`` when unguessable)."""
-    try:
-        suffix = PurePosixPath(urlparse(url).path).suffix
-    except (ValueError, TypeError):
-        return ".bin"
-    return suffix if _EXT_RX.match(suffix or "") else ".bin"
-
-
-def _safe_name(generation_id: str) -> str:
-    """Generation ids become filenames — strip anything filesystem-hostile."""
-    return re.sub(r"[^A-Za-z0-9._-]", "_", generation_id) or "generation"
 
 
 class _PixioTool(Tool):
@@ -248,20 +125,19 @@ class _PixioTool(Tool):
     ) -> tuple[int, Any]:
         """One authenticated round-trip → ``(status_code, parsed-json)``. The transport
         is a SYNC callable (httpx by default), so it runs off the event loop — a slow
-        Pixio round-trip must not freeze the daemon."""
-        headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
-        resp = await asyncio.to_thread(self._http, method, _BASE_URL + path, headers, json_body)
-        status = int(getattr(resp, "status_code", 0) or 0)
-        try:
-            payload = resp.json()
-        except Exception:  # noqa: BLE001 — non-JSON error bodies happen
-            payload = {}
-        return status, payload if isinstance(payload, (dict, list)) else {}
+        Pixio round-trip must not freeze the daemon (``media.pixio_http.api_call``)."""
+        answer = await api_call(self._http, method, path, key, json_body)
+        return answer.status, answer.payload
 
     async def _deliver(
         self, generation_id: str, payload: dict[str, Any], ctx: ToolContext
     ) -> ToolResult:
-        """A generation SUCCEEDED — download its output into the session workspace."""
+        """A generation SUCCEEDED — download its output into the session workspace.
+
+        The download and the write run OFF the loop; the landing itself is
+        :func:`iron_jarvis.media.deliver.deliver` (shared with ``generate_media``),
+        kept under the documented ``pixio/<id>.<ext>`` folder via ``rel_dir``.
+        """
         url = _output_url(payload)
         if not url:
             return ToolResult(
@@ -270,54 +146,34 @@ class _PixioTool(Tool):
                 data={"generation_id": generation_id, "status": "succeeded"},
             )
         # Output URLs are public CDN links — never send the bearer key to a
-        # third-party host. Downloaded off the event loop like every round-trip.
-        resp = await asyncio.to_thread(self._http, "GET", url, {}, None)
-        status = int(getattr(resp, "status_code", 0) or 0)
-        if not 200 <= status < 300:
+        # third-party host (fetch_public sends NO headers).
+        try:
+            blob = await asyncio.to_thread(fetch_public, url, self._http)
+        except Exception as exc:  # noqa: BLE001 — a failed download is a plain error
             return ToolResult(
                 ok=False,
-                error=f"output download failed ({status}) for {url}",
+                error=f"{exc} for {url}",
                 data={"generation_id": generation_id, "output_url": url, "status": "succeeded"},
             )
-        blob: bytes = getattr(resp, "content", b"") or b""
-        rel = f"pixio/{_safe_name(generation_id)}{_ext_from_url(url)}"
-        # Workspace-scoped by construction (§17). resolve() because the
-        # workspace itself may be RELATIVE, and chat drops relative paths from
-        # `created_paths` by design — an unresolved dest would be a silent
-        # non-disclosure. abs_path and created_paths both come from this one
-        # value, so the two reports stay byte-identical.
-        dest = (ctx.workspace / rel).resolve()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        existed = dest.exists()  # created_paths means CREATED, not overwritten
-        dest.write_bytes(blob)
-        # Durable copy → the Creative gallery (ArtifactStore; fires
-        # artifact.generated so the dashboard updates live). The workspace copy
-        # is DISPOSABLE — without this, creations vanish with the session.
-        gallery_note = ""
-        artifact_name = ""
-        if self._artifact_sink is not None:
-            try:
-                from ..creative.service import media_kind
-
-                artifact_name = f"creative-{_safe_name(generation_id)}"
-                # v1.200.0: tag the artifact with the grounded project so it
-                # shows in that project's Media view. getattr + keyword-only-
-                # when-present keeps old ToolContext/sink test doubles working.
-                sink_kwargs: dict[str, Any] = {}
-                project_id = getattr(ctx, "project_id", None)
-                if project_id:
-                    sink_kwargs["project_id"] = project_id
-                self._artifact_sink(
-                    artifact_name,
-                    blob,
-                    dest.name,
-                    media_kind(dest.name) or "file",
-                    ctx.session_id,
-                    **sink_kwargs,
-                )
-                gallery_note = " — added to the Creative gallery"
-            except Exception:  # noqa: BLE001 — the gallery is a bonus, never break delivery
-                artifact_name = ""
+        landed = await asyncio.to_thread(
+            deliver,
+            blob,
+            kind="",
+            provider="pixio",
+            job_id=generation_id,
+            ext=_ext_from_url(url),
+            workspace=ctx.workspace,
+            session_id=ctx.session_id,
+            # v1.200.0: tag the artifact with the grounded project so it shows in
+            # that project's Media view (getattr keeps old ToolContext doubles working).
+            project_id=getattr(ctx, "project_id", None),
+            artifact_sink=self._artifact_sink,
+            rel_dir="pixio",
+        )
+        rel = landed["rel"]
+        dest = landed["abs_path"]
+        artifact_name = landed["artifact"]
+        gallery_note = " — added to the Creative gallery" if artifact_name else ""
         return ToolResult(
             ok=True,
             output=(
@@ -330,7 +186,7 @@ class _PixioTool(Tool):
                 "generation_id": generation_id,
                 "output_url": url,
                 "saved_path": rel,
-                "abs_path": str(dest),
+                "abs_path": dest,
                 **({"artifact": artifact_name} if artifact_name else {}),
                 "status": "succeeded",
             },
@@ -339,7 +195,7 @@ class _PixioTool(Tool):
             # never carry it because nothing was written. Only when this call
             # brought the file into existence (a re-delivery over an existing
             # file journaled as "created" would let undo unlink it).
-            created_paths=None if existed else [str(dest)],
+            created_paths=[dest] if landed["created"] else None,
         )
 
     @staticmethod

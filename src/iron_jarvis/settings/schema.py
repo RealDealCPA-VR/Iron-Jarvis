@@ -266,6 +266,29 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Let agents drive their own separate browser (never your logged-in one).",
       tier="ask", floor_when=(True,), attr="computer_use.enabled", section="Browser",
       aliases=("computer use", "agent browser")),
+    # Media in chat (v1.346.0): which service makes images/video/audio, and
+    # when a generation asks before spending. The rows are config fields;
+    # the Settings page draws them from here.
+    S("media_provider", "Media service", "connections", "enum",
+      "Which service makes images, video and audio from chat. Auto = the only one connected; "
+      "when two are connected, pick one here.",
+      options=(("auto", "Auto (the only connected one)"), ("pixio", "Pixio"),
+               ("openai_images", "OpenAI Images")),
+      tier="ask", section="Media", aliases=("media provider", "image service", "pixio", "media generation")),
+    S("media_ask_when_free", "Ask even when a generation is free", "connections", "bool",
+      "A generation the service says is free (a daily allowance, a plan-covered model) runs "
+      "without asking. Turn this on to be asked every time. A paid or unknown price always asks.",
+      tier="allow", section="Media", aliases=("ask before free generation",)),
+    S("media_inline_wait_s", "Wait in chat up to (seconds)", "connections", "number",
+      "A quick generation (an image) is waited for in the chat. Longer work finishes in the "
+      "background and the bell tells you when it is ready.",
+      tier="allow", section="Media", advanced=True, check=_range(0, 600)),
+    S("media_job_max_s", "Give up on a generation after (seconds)", "connections", "number",
+      "How long a background generation may take before it is marked failed.",
+      tier="allow", section="Media", advanced=True, check=_range(60, 86400)),
+    S("media_default_models", "Default media models", "connections", "dict",
+      "The model to use per kind (image, video, audio, music). Empty = the service's cheapest model of that kind.",
+      tier="ask", section="Media", advanced=True),
     S("mcp_auto_approve", "Run app tools without asking", "permissions", "bool",
       "Let every app (MCP) tool run without an approval card. Not recommended.",
       tier="ask-floor", restart=True, put=False, aliases=("mcp auto approve",)),

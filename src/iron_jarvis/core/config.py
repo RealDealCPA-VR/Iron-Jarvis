@@ -435,6 +435,22 @@ class Config(BaseModel):
     #: Project folder instructions (AGENTS.md / CLAUDE.md) in every chat
     #: turn (v1.326.0). On by default.
     chat_folder_rules: bool = True
+    #: MEDIA IN CHAT (v1.346.0). Which service makes images/video/audio for
+    #: ``generate_media``: "auto" = the only connected one (two connected =
+    #: the user is asked to pick), else a provider id (pixio, openai_images).
+    media_provider: str = "auto"
+    #: A quote the service verified as FREE (Pixio's Maker allowance, a
+    #: plan-covered model) runs without an approval card unless this is on.
+    #: A paid or unknown price ALWAYS asks.
+    media_ask_when_free: bool = False
+    #: An image (any job whose eta is at most this) is waited for inline;
+    #: longer work finishes in the background and the bell says so.
+    media_inline_wait_s: int = 45
+    #: A background media job older than this is given up on (seconds).
+    media_job_max_s: int = 1800
+    #: Pinned default model per kind (image/video/audio/music) for the chosen
+    #: provider; empty = the provider's cheapest model of that kind.
+    media_default_models: dict[str, str] = Field(default_factory=dict)
     # A SECOND copy of every backup (v1.249.0, R-05): after each automatic or
     # manual backup the newest archive is copied here and pruned to the same
     # keep count, and — with backup_mirror_media — the generated-media library

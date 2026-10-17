@@ -293,6 +293,10 @@ class Platform:
     approvals: "object | None" = None
     #: Standing grants store (v1.299.0): exact-argument grants per scope.
     grants: "object | None" = None
+    #: Media services (v1.346.0): the ``media.registry.MediaRegistry`` that
+    #: picks which service makes an image/video/audio for ``generate_media``
+    #: (Pixio, OpenAI Images, the fake under IRONJARVIS_MEDIA_FAKE=1).
+    media: "object | None" = None
     #: Iron-Proxy (v1.301.0): the ONE service that locates / starts / stops
     #: Iron-Proxy and hands out its client (``iron_proxy.service``). Also
     #: reachable as ``iron_proxy.service.current()`` for the adapters.
@@ -1555,6 +1559,13 @@ def build_platform(
     from .core.grants import GrantStore as _GrantStore
 
     platform.grants = _GrantStore(platform.engine, platform.event_bus)
+    # Media in chat (v1.346.0): the registry of media services (Pixio over
+    # the vault secret, OpenAI Images over the connections key, the fake
+    # only under IRONJARVIS_MEDIA_FAKE=1). No disk, no network: availability
+    # is a key-presence read.
+    from .media.registry import build_registry as _build_media_registry
+
+    platform.media = _build_media_registry(platform)
     # Iron-Proxy (v1.301.0): constructed always (cheap: no disk, no network,
     # no process); it does nothing until the switch is on and the daemon's
     # lifespan watch loop (or POST /iron-proxy/enable) starts it.
