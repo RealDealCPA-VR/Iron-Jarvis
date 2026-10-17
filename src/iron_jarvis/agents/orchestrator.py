@@ -61,6 +61,7 @@ from .runtime import (
     normalize_prior_tool_results,
 )
 from .team import MISSION_ORIGIN
+from . import chat_delivery as _chat_delivery
 from .decompose import is_bulk_task
 from .supervisor import run_supervised, with_worklist
 from .types import AgentDefinition, get_agent_definition
@@ -881,8 +882,17 @@ class Orchestrator:
         trust_reason: str = "",
         options: dict | None = None,
         prior_tool_results: list | None = None,
+        chat_thread_id: str = "",
     ) -> Session:
         """Create (never start) a session row.
+
+        ``chat_thread_id`` (v1.345.0, lane T): the SAVED chat this work was
+        asked in. Stored under ``options["chat_thread_id"]`` only when
+        non-empty (a door may also put it in ``options``; the kwarg wins),
+        so a run no chat waits on is byte-identical. Every terminal path of
+        a session carrying it appends ONE line to that chat
+        (``agents/chat_delivery``) — the reply comes home even when the user
+        has moved on.
 
         ``prior_tool_results`` (v1.344.0, lane P): what the chat turn that
         escalated into this session already ran (the done frame's rows,
@@ -966,6 +976,16 @@ class Orchestrator:
             options["prior_tool_results"] = _prior_clean
         else:
             options.pop("prior_tool_results", None)
+        # THE CHAT THIS WAS ASKED IN (v1.345.0, lane T): same rule as the
+        # rows above — the kwarg wins over a door's ``options`` entry, one
+        # trimmed id or no key at all.
+        _chat_id = _chat_delivery.clean_chat_thread_id(
+            chat_thread_id or options.get(_chat_delivery.CHAT_THREAD_OPTION)
+        )
+        if _chat_id:
+            options[_chat_delivery.CHAT_THREAD_OPTION] = _chat_id
+        else:
+            options.pop(_chat_delivery.CHAT_THREAD_OPTION, None)
 
         repo_for_worktree: Path | None = None
         # A project-folder task runs DIRECTLY in the user's folder (full
@@ -1281,6 +1301,10 @@ class Orchestrator:
                 session.output_tokens = run.output_tokens
                 session.finished_at = utcnow()
                 self._save(session)
+                # THE REPLY COMES HOME (v1.345.0, lane T) — BEFORE the
+                # completion event, so a page that re-reads the chat on
+                # ``agent.completed`` finds the line already there.
+                await self._deliver_to_chat(session)
                 await self.p.event_bus.publish(
                     EventType.SESSION_COMPLETED,
                     _completion_payload(session),
@@ -1731,6 +1755,39 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             log.exception("assignment tail failed for session %s", session.id)
 
+    def _deliver_to_chat_sync(self, session: Session) -> dict[str, Any]:
+        """The reply comes home (v1.345.0, lane T): append this session's ONE
+        line to the chat it was asked in (``options.chat_thread_id``) through
+        the daemon's one writer. A session no chat waits on returns at once
+        with nothing read or written. BLOCKING — the async twin hops it off
+        the loop; the boot reconcile calls it directly. Never raises."""
+        try:
+            if not _chat_delivery.chat_thread_of(session):
+                return {"ok": False, "why": "no chat", "appended": 0, "skipped": 0}
+            out = _chat_delivery.deliver_session_line(
+                self.p.engine, session, event_bus=getattr(self.p, "event_bus", None)
+            )
+            if not out.get("ok"):
+                log.warning(
+                    "session %s could not report to its chat: %s", session.id, out.get("why")
+                )
+            return out
+        except Exception:  # noqa: BLE001 — a delivery miss must never break a finalize
+            log.exception("chat delivery failed for session %s", session.id)
+            return {"ok": False, "why": "delivery failed", "appended": 0, "skipped": 0}
+
+    async def _deliver_to_chat(self, session: Session) -> dict[str, Any]:
+        """``_deliver_to_chat_sync`` off the loop (the ledger read + the
+        append are SQLite work; the finalizers already run theirs there).
+        A session carrying no chat never leaves the loop."""
+        if not _chat_delivery.chat_thread_of(session):
+            return {"ok": False, "why": "no chat", "appended": 0, "skipped": 0}
+        try:
+            return await asyncio.to_thread(self._deliver_to_chat_sync, session)
+        except Exception:  # noqa: BLE001 — never block teardown on the chat
+            log.exception("chat delivery failed for session %s", session.id)
+            return {"ok": False, "why": "delivery failed", "appended": 0, "skipped": 0}
+
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
@@ -1800,6 +1857,9 @@ class Orchestrator:
             self._save(session)
         except Exception:  # noqa: BLE001 - never block teardown on persistence
             log.exception("failed to persist FAILED state for %s", session.id)
+        # v1.345.0 (lane T): the failure sentence lands in the chat it was
+        # asked in, before the event the page re-reads on.
+        await self._deliver_to_chat(session)
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
@@ -1873,6 +1933,9 @@ class Orchestrator:
             except asyncio.CancelledError:
                 pass  # a second cancel: the restore finishes on its own task
         await asyncio.to_thread(_persist_cancel)
+        # v1.345.0 (lane T): the stopped sentence lands in the chat it was
+        # asked in, before the event the page re-reads on.
+        await self._deliver_to_chat(session)
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,
@@ -2055,9 +2118,15 @@ class Orchestrator:
         approval_mode: str | None = None,
         resume: bool = False,
         prior_tool_results: list | None = None,
+        chat_thread_id: str = "",
     ) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and
         a compact recap of the prior task/result, enabling multi-turn work.
+
+        ``chat_thread_id`` (v1.345.0, lane T): the chat THIS follow-up was
+        asked in — its own, never the parent's (the parent's line already
+        landed in the parent's chat; a follow-up asked from nowhere must not
+        append to it).
 
         ``prior_tool_results`` (v1.344.0, lane P): the escalating chat turn's
         tool outcomes for THIS follow-up (the same shape ``create_session``
@@ -2108,6 +2177,12 @@ class Orchestrator:
         _prior_clean = normalize_prior_tool_results(prior_tool_results)
         if _prior_clean:
             options["prior_tool_results"] = _prior_clean
+        # v1.345.0 (lane T): the chat a run reports to belongs to ONE ask; a
+        # follow-up carries its own chat or none, never the parent's.
+        options.pop(_chat_delivery.CHAT_THREAD_OPTION, None)
+        _chat_id = _chat_delivery.clean_chat_thread_id(chat_thread_id)
+        if _chat_id:
+            options[_chat_delivery.CHAT_THREAD_OPTION] = _chat_id
         if getattr(prev, "origin", None) == MISSION_ORIGIN:
             # A MISSION'S FOLLOW-UP KEEPS THE USER'S OWN WORDS (v1.309.0). The
             # recap above is MODEL-facing (it must carry the earlier task and
@@ -2541,6 +2616,12 @@ class Orchestrator:
         # loop serves requests.
         for sid in interrupted:
             self._release_worklist_claims(sid)
+            # v1.345.0 (lane T): an interrupted run asked from a chat tells
+            # that chat so (the row's own words, "interrupted by a daemon
+            # restart" or the summary it kept). Sync at boot, like the rest.
+            row = self.get_session(sid)
+            if row is not None:
+                self._deliver_to_chat_sync(row)
         # ONE event per boot, never one per session (v1.249.0, R-02): the bell
         # and the Overview poll `/sessions/interrupted`, and this is what makes
         # them show the offer without waiting out a poll interval. Fifty

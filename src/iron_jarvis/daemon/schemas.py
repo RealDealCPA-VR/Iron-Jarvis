@@ -221,6 +221,13 @@ class SessionCreate(BaseModel):
     # Past the caps (``PRIOR_RESULTS_MAX_ENTRIES`` / ``_CHARS`` and the
     # per-row ones) the body is a 422 with one plain sentence, never cut.
     prior_tool_results: list[PriorToolResult] | None = None
+    # THE CHAT THIS WORK WAS ASKED IN (v1.345.0, lane T): the SAVED chat
+    # thread id the page escalated from. Stored under
+    # ``options["chat_thread_id"]`` (never an empty key); every terminal
+    # path of the run appends ONE line (the reply, its files, its receipt)
+    # to that chat through ``daemon.chat_append`` so the answer comes home
+    # even when the user has left for another chat. "" = today's body.
+    chat_thread_id: str = ""
 
     @field_validator("origin")
     @classmethod
@@ -675,6 +682,9 @@ class ContinueBody(BaseModel):
     # Same contract as SessionCreate.prior_tool_results (v1.344.0): the chat
     # page sends the escalating turn's tool outcomes on a follow-up too.
     prior_tool_results: list[PriorToolResult] | None = None
+    # Same contract as SessionCreate.chat_thread_id (v1.345.0): a follow-up
+    # carries ITS OWN chat, never the parent's.
+    chat_thread_id: str = ""
 
     @field_validator("prior_tool_results")
     @classmethod
@@ -1890,6 +1900,8 @@ class SpawnBody(BaseModel):
     local_only: bool = False
     # Same contract as SessionCreate.prior_tool_results (v1.344.0).
     prior_tool_results: list[PriorToolResult] | None = None
+    # Same contract as SessionCreate.chat_thread_id (v1.345.0).
+    chat_thread_id: str = ""
 
     @field_validator("origin")
     @classmethod
