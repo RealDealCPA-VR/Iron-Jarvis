@@ -384,6 +384,44 @@ describe("CodeBlock: the same panel, now in colour", () => {
     await waitFor(() => expect(block().dataset.highlighted).toBe("true"));
   });
 
+  it("a re-render that only grows the plain tail does not redraw the coloured lines (review)", async () => {
+    // A streaming reply re-renders its block every frame. Drawing a token
+    // reads its text, so count every read of the pass the block shows: the
+    // frames between two passes must read none (rebuilding every span each
+    // frame cost ~65 ms per re-render for a 1,000-line block in jsdom).
+    const real = highlightSpy.getMockImplementation()!;
+    let reads = 0;
+    highlightSpy.mockImplementationOnce(async (...args) => {
+      const r = await real(...args);
+      if (!r) return r;
+      const lines = r.lines.map((line) =>
+        line.map((t) =>
+          Object.defineProperty({ ...t }, "content", {
+            enumerable: true,
+            get: () => {
+              reads += 1;
+              return t.content;
+            },
+          }),
+        ),
+      );
+      return { ...r, lines };
+    });
+    let code = sample("memo");
+    const { rerender } = render(<CodeBlock code={code} lang="ts" />);
+    await waitFor(() => expect(block().dataset.highlighted).toBe("true"), LOAD);
+    // Anti-vacuity: drawing the pass did read its tokens.
+    expect(reads).toBeGreaterThan(0);
+    reads = 0;
+    for (let i = 0; i < 5; i++) {
+      code += ` tail${i}`;
+      act(() => rerender(<CodeBlock code={code} lang="ts" />));
+      expect(codeEl().textContent).toBe(code);
+      expect(block().dataset.highlighted).toBe("true");
+    }
+    expect(reads).toBe(0);
+  });
+
   it("a fast-growing block is re-coloured at a steady pace, not on every change, and the last change always lands", async () => {
     let code = sample("throttle");
     const { rerender } = render(<CodeBlock code={code} lang="ts" />);

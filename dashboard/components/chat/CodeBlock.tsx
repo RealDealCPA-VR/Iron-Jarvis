@@ -27,7 +27,7 @@
  * never an HTML string, and never a colour written in this source.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { Check, Copy } from "lucide-react";
 import {
   codeLangId,
@@ -143,6 +143,15 @@ function renderTokens(lines: CodeToken[][]): ReactNode[] {
   return out;
 }
 
+/** The coloured lines of ONE finished pass, drawn once. A streaming reply
+ *  re-renders its block every frame while only the plain tail changes; built
+ *  inline, every frame rebuilt every token span (review, measured in jsdom: a
+ *  coloured 1,000-line block cost ~65 ms per re-render against 0.5 ms plain).
+ *  `lines` is the pass's own array, so it changes only when a pass lands. */
+const ColouredLines = memo(function ColouredLines({ lines }: { lines: CodeToken[][] }) {
+  return <>{renderTokens(lines)}</>;
+});
+
 export function CodeBlock({ code, lang }: { code: string; lang?: string | null }) {
   const langId = codeLangId(lang);
   const wanted = langId !== null && !tooLargeToHighlight(code);
@@ -201,12 +210,11 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string | null }
   const shown = remembered ?? current;
   let body: ReactNode = code;
   let coloured = false;
-  if (shown && shown.code === code) {
-    body = renderTokens(shown.lines);
-    coloured = true;
-  } else if (shown && code.startsWith(shown.code)) {
-    // Streaming: the start is coloured, the tail that arrived since is plain.
-    body = [...renderTokens(shown.lines), code.slice(shown.code.length)];
+  if (shown && code.startsWith(shown.code)) {
+    // Up to date, or streaming: the start is coloured, the tail that arrived
+    // since is plain (empty when up to date). One shape for both, so the
+    // coloured part is never remounted when the tail empties.
+    body = [<ColouredLines key="coloured" lines={shown.lines} />, code.slice(shown.code.length)];
     coloured = true;
   }
 
