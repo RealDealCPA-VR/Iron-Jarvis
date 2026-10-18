@@ -464,6 +464,42 @@ def test_reading_about_a_files_history_is_not_accused(reply):
     assert _claimed_write_note(reply, ["read_document"]) == "", reply
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # v1.351.0 fix round: read-only answers the review's cut still accused.
+        "I moved on to the second tab of budget.xlsx.",
+        "I changed my approach and looked at budget.xlsx again.",
+        "I compared the files and updated my notes on report.docx below.",
+        "Edited by Alice (report.docx metadata).",
+        "Modified on Oct 3: budget.xlsx shows the old rate.",
+        "I updated the forecast and then looked at budget.xlsx.",
+        "I updated the table above and found the old rate in budget.xlsx.",
+    ],
+)
+def test_the_assistants_own_work_or_a_reading_verb_is_not_a_claim(reply):
+    """The file is not the thing changed when the change verb's object is the
+    assistant's own ("my notes"), the verb is a phrase or a passive with its
+    agent ("moved on", "edited by"), or a second, READING verb takes the
+    file ("… and looked at budget.xlsx")."""
+    assert _claimed_write_note(reply, ["read_document"]) == "", reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # A second CHANGE verb still takes the file — the reading-verb skip
+        # must never swallow it.
+        "I changed the fee and updated budget.xlsx.",
+        "I edited the intro and the outro of report.docx.",
+        "Done! I edited the intro of report.docx and saved it.",
+    ],
+)
+def test_a_second_change_verb_is_still_a_claim(reply):
+    note = _claimed_write_note(reply, ["read_document"])
+    assert note and "did not change" in note, reply
+
+
 def test_a_creation_claim_reads_exactly_as_before():
     note = _claimed_write_note("Saved to report.docx.", ["read_document"])
     assert note == (

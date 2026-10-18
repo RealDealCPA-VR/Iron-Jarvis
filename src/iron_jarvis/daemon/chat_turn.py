@@ -4294,10 +4294,18 @@ _CHANGE_SUBJECT_RX = _re.compile(
 #: Words BETWEEN a change verb and the filename that make the file the
 #: SOURCE, not the thing changed ("I updated my summary using the numbers in
 #: budget.xlsx", "Updated figures from budget.xlsx: …") or deny the change
-#: ("changed nothing in budget.xlsx") — not a claim (v1.351.0 review).
+#: ("changed nothing in budget.xlsx") — not a claim (v1.351.0 review). Also
+#: (v1.351.0 fix round): the assistant's OWN thing as the object ("I updated
+#: my notes on report.docx", "I changed my approach and …"), the verb as a
+#: phrase or a passive with its agent ("I moved on to the second tab of",
+#: "Edited by Alice (report.docx)", "modified on Oct 3"), and a second,
+#: READING verb that takes the file ("… and looked at budget.xlsx again").
 _CHANGE_GAP_SKIP_RX = _re.compile(
     r"\b(?:from|using|based\s+on|according\s+to|per|against|nothing|no|not|"
-    r"none|without)\b",
+    r"none|without|my)\b"
+    r"|^" + _CHANGE_VERBS + r"\s+(?:on|by)\b"
+    r"|\b(?:and|then)\s+(?:then\s+)?(?:looked|read|checked|reviewed|opened|"
+    r"compared|saw|found|noticed|scanned|inspected|examined|went)\b",
     _re.IGNORECASE,
 )
 
