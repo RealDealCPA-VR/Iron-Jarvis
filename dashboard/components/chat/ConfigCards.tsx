@@ -11,13 +11,25 @@
  * Activity page has. A credential card posts the pasted value STRAIGHT to the
  * daemon (POST /config/secret): it never becomes a chat message, a tool
  * argument or a line in the transcript, and the field is cleared on save.
+ *
+ * v1.351.0 (G15): an APP's card says what the save did — "GitHub connected ·
+ * 26 tools", "Saved, but its tools did not load — open Apps & tools", or what
+ * an app with two keys still needs — and, while its reply is the newest, one
+ * quiet Continue carries the user's task on (lib/appConnect).
  */
 
 import { useState, type FormEvent } from "react";
-import { Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
+import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
 import { showValue, type ConfigCard, type ConfigChangeCard, type SecretRequestCard } from "@/lib/configCards";
+import {
+  connectedFromSave,
+  connectedOf,
+  connectedWords,
+  waitingWords,
+  type AppConnected,
+} from "@/lib/appConnect";
 
 function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (next: ConfigCard) => void }) {
   const [busy, setBusy] = useState(false);
@@ -98,9 +110,13 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
 export function CredentialCard({
   card,
   onSettle,
+  onContinue,
 }: {
   card: SecretRequestCard;
   onSettle: (next: ConfigCard) => void;
+  /** v1.351.0 (G15): carry the task on after an app connected. Given only
+   *  while the reply holding this card is the newest and no turn runs. */
+  onContinue?: () => void;
 }) {
   const [value, setValue] = useState("");
   const [show, setShow] = useState(false);
@@ -118,7 +134,15 @@ export function CredentialCard({
         value,
       });
       setValue(""); // never kept in the page once saved
-      onSettle({ ...card, saved: res.status, ...(res.action_id ? { action_id: res.action_id } : {}) });
+      // v1.351.0 (G15): what the app did, when it is an app's card (names,
+      // a count and plain words — the daemon never answers with a value).
+      const connected = connectedFromSave(card.name, res);
+      onSettle({
+        ...card,
+        saved: res.status,
+        ...(res.action_id ? { action_id: res.action_id } : {}),
+        ...(connected ? { connected } : {}),
+      } as ConfigCard);
     } catch (err) {
       const detail = (err as { message?: string })?.message;
       setError(detail && !detail.includes(value) ? detail : "Couldn't save it — try again.");
@@ -149,14 +173,31 @@ export function CredentialCard({
     );
   }
   if (card.saved) {
+    const connected = connectedOf(card);
     return (
       <div
         data-testid="credential-card-saved"
         className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-[13px]"
       >
-        <span className="inline-flex items-center gap-1.5 font-medium text-tone-success">
-          <Check size={13} aria-hidden /> {card.label} {card.saved === "replaced" ? "replaced" : "saved"} securely
-        </span>
+        {connected ? (
+          <AppOutcome connected={connected} label={card.label} saved={card.saved} />
+        ) : (
+          <span className="inline-flex items-center gap-1.5 font-medium text-tone-success">
+            <Check size={13} aria-hidden /> {card.label} {card.saved === "replaced" ? "replaced" : "saved"} securely
+          </span>
+        )}
+        {connected && connected.tools > 0 && !connected.continued && onContinue && (
+          <button
+            type="button"
+            data-testid="credential-card-continue"
+            onClick={onContinue}
+            title="Carry on with what you asked, now that it is connected"
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.08]"
+          >
+            Continue
+            <ArrowRight size={12} aria-hidden />
+          </button>
+        )}
         {card.action_id && (
           <button
             type="button"
@@ -223,13 +264,54 @@ export function CredentialCard({
   );
 }
 
+/** v1.351.0 (G15): the saved app card's one line — connected with its tool
+ *  count, still waiting for another key, or saved but not loaded (with the
+ *  way to the app's row). Quiet words in the card's own style. */
+function AppOutcome({
+  connected,
+  label,
+  saved,
+}: {
+  connected: AppConnected;
+  label: string;
+  saved: "stored" | "replaced";
+}) {
+  if (connected.tools > 0)
+    return (
+      <span data-testid="credential-card-connected" className="inline-flex items-center gap-1.5 font-medium text-tone-success">
+        <Check size={13} aria-hidden /> {connectedWords(connected)}
+      </span>
+    );
+  if (connected.waiting?.length)
+    return (
+      <span data-testid="credential-card-waiting" className="inline-flex flex-wrap items-center gap-x-1.5 text-zinc-300">
+        <span className="inline-flex items-center gap-1.5 font-medium text-tone-success">
+          <Check size={13} aria-hidden /> {label} {saved === "replaced" ? "replaced" : "saved"} securely
+        </span>
+        <span className="text-zinc-400">· {waitingWords(connected)}</span>
+      </span>
+    );
+  return (
+    <span data-testid="credential-card-not-loaded" className="text-zinc-300" title={connected.reason || undefined}>
+      Saved, but its tools did not load —{" "}
+      <a href="/tools" className="text-accent-soft underline-offset-2 hover:underline">
+        open Apps &amp; tools
+      </a>
+    </span>
+  );
+}
+
 export function ConfigCards({
   cards,
   onSettle,
+  onContinue,
 }: {
   cards: ConfigCard[];
   /** Store a card's new state on the message (Undo pressed, secret saved). */
   onSettle: (index: number, next: ConfigCard) => void;
+  /** v1.351.0 (G15): Continue on a connected app's card (card index). Given
+   *  only while the reply is the newest and no turn runs. */
+  onContinue?: (index: number) => void;
 }) {
   if (!cards.length) return null;
   return (
@@ -238,7 +320,12 @@ export function ConfigCards({
         c.kind === "change" ? (
           <ChangeCard key={c.change_id} card={c} onSettle={(n) => onSettle(i, n)} />
         ) : (
-          <CredentialCard key={c.request_id} card={c} onSettle={(n) => onSettle(i, n)} />
+          <CredentialCard
+            key={c.request_id}
+            card={c}
+            onSettle={(n) => onSettle(i, n)}
+            onContinue={onContinue ? () => onContinue(i) : undefined}
+          />
         ),
       )}
     </div>

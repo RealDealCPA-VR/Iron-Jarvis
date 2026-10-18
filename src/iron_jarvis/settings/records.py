@@ -467,15 +467,59 @@ def restore_app(platform: Any, connector_id: str, prior: dict[str, Any] | None) 
     return f"undo: {'disconnected' if prior is None else 'restored'} the app '{connector_id}'"
 
 
-def reload_app_after_secret(platform: Any, connector_id: str) -> None:
+def app_waiting_for(platform: Any, connector_id: str) -> list[str]:
+    """The LABELS of the app's required secrets the vault still has no value
+    for (v1.351.0, G15) — Box takes two; the first card's save must not try
+    the pack (it cannot start yet) nor call it broken. ``[]`` when nothing is
+    missing, the app is unknown, or the vault cannot be read (the load is
+    tried, as before). Never raises."""
+    try:
+        from ..connectors.catalog import get_connector
+        from ..connectors.service import _secret_name
+
+        conn = get_connector(connector_id)
+        if conn is None:
+            return []
+        missing: list[str] = []
+        for f in conn.fields:
+            if f.kind != "secret" or f.optional:
+                continue
+            if not platform.secrets.get(_secret_name(conn.id, f.name)):
+                missing.append(f.label)
+        return missing
+    except Exception:  # noqa: BLE001 — unknown = try the load
+        return []
+
+
+def reload_app_after_secret(platform: Any, connector_id: str) -> dict[str, Any] | None:
     """A credential card saved an app's token: load the pack now if its config
-    is waiting for it (best-effort; never raises)."""
+    is waiting for it (best-effort; never raises).
+
+    v1.351.0 (G15): answers what happened, so the card can say it —
+    ``{"tools_loaded": N}`` and, when N is 0, ``"reason"`` (the load record's
+    plain words, else what is known). ``None`` when the app has no saved pack
+    to load (a key saved before ``app_connect`` ran)."""
     try:
         cfg = snap_app(platform, connector_id)
-        if cfg is not None:
-            load_app(platform, cfg)
+        if cfg is None:
+            return None
+        loaded = int(load_app(platform, cfg) or 0)
     except Exception:  # noqa: BLE001
         log.warning("app %s: reload after its credential failed", connector_id, exc_info=True)
+        return {"tools_loaded": 0, "reason": "its tools could not be loaded"}
+    out: dict[str, Any] = {"tools_loaded": loaded}
+    if not loaded:
+        reason = ""
+        try:
+            from ..detections.redact import mask
+            from ..mcp.tools import load_status
+
+            status = load_status(connector_id) or {}
+            reason = mask(str(status.get("reason") or status.get("last_error") or ""))[:300]
+        except Exception:  # noqa: BLE001
+            reason = ""
+        out["reason"] = reason or "it started but listed no tools"
+    return out
 
 
 def _dt(v: Any) -> Any:
@@ -1404,6 +1448,23 @@ class AppConnectTool(_RecordTool):
                 data={"secret_requests": [req]},
             )
         values = args.get("values") if isinstance(args.get("values"), dict) else {}
+        # v1.351.0 (G15): an app that is ALREADY connected and working is not
+        # connected again — no card asking for a token it has, no record
+        # change, no "waiting for its token". The page turns the app on for
+        # this chat when it sees this call succeed (chat/page.tsx,
+        # lib/appConnect.appConnectIds), which is what the sentence promises.
+        if not values:
+            have = await asyncio.to_thread(snap_app, self.platform, conn.id)
+            live = len(self.platform.registry.mcp_names(conn.id)) if have is not None else 0
+            if have is not None and live:
+                return ToolResult(
+                    ok=True,
+                    output=(
+                        f"{conn.name} is already connected ({live} {'tool' if live == 1 else 'tools'}). "
+                        "It is on for this chat now; its tools can be used from the next message."
+                    ),
+                    data={"app": conn.id, "already_connected": True, "tools_loaded": live},
+                )
         cfg_args = list(conn.args)
         env: dict[str, str] = {}
         env_secrets: dict[str, str] = {}
@@ -1432,7 +1493,25 @@ class AppConnectTool(_RecordTool):
                 cfg_args = [a.replace(f"<{f.name}>", val) for a in cfg_args]
             else:
                 env[f.name] = val
+        # v1.351.0 (G12): a value typed into an ARGUMENT (Postgres's
+        # `postgresql://me:password@host/db`) is kept in the vault like any
+        # pack's argument secret: config.toml holds the masked text, the vault
+        # the real one, and the pack launches with the real one.
+        from ..mcp.secrets import split_args, store_arg_secrets
+
+        cfg_args, arg_values = split_args(cfg_args)
+        arg_secrets: dict[str, str] = {}
+        if arg_values:
+            try:
+                arg_secrets = await asyncio.to_thread(store_arg_secrets, self.platform.secrets, conn.id, arg_values)
+            except Exception as exc:  # noqa: BLE001 — names only, never the value
+                return ToolResult(
+                    ok=False,
+                    error=f"The vault could not keep {conn.name}'s private setting ({type(exc).__name__}); nothing was connected.",
+                )
         cfg: dict[str, Any] = {"name": conn.id, "command": conn.command, "args": cfg_args}
+        if arg_secrets:
+            cfg["arg_secrets"] = arg_secrets
         if env:
             cfg["env"] = env
         if env_secrets:

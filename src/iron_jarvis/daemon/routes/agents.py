@@ -373,11 +373,24 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
     # `_build_transport` has resolved since the first HTTP pack). A stdio
     # body is stored exactly as before, byte for byte.
     from ...mcp.secrets import is_secret_key as _is_secret_key
+    from ...mcp.secrets import split_args as _split_args
     from ...mcp.secrets import split_env as _split_env
+    from ...mcp.secrets import split_url as _split_url
+    from ...mcp.secrets import store_arg_secrets as _store_arg_secrets
     from ...mcp.secrets import store_env_secrets as _store_env_secrets
+    from ...mcp.secrets import store_url_secret as _store_url_secret
     from ...mcp.secrets import vault_name as _vault_name
 
     plain_env, secret_values = _split_env(name, body.env or {})
+    # v1.351.0 (G12): a secret INSIDE an argument (an mcp-remote block's
+    # `--header "Authorization: Bearer …"`, `--api-key=…`, `--api-key …`, a
+    # connection string's password) or a url (`?api_key=…`) is kept in the
+    # vault too: the stored arg / url is the MASKED text, `arg_secrets[i]` /
+    # `url_secret` name the vault rows, and `_build_transport` puts the real
+    # text back at launch. Every pasted, imported, typed or Directory pack
+    # comes through here, so this is the one split for them all.
+    shown_args, arg_values = ([], {}) if is_http else _split_args([str(a) for a in body.args])
+    shown_url, url_value = _split_url(body.url) if is_http else ("", "")
     plain_headers: dict[str, str] = {}
     header_secret_values: dict[str, str] = {}
     if is_http:
@@ -412,10 +425,14 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
                 kind="api_key",
                 description=f"MCP pack {name}: {body.auth.header} value",
             )
+        arg_secrets = _store_arg_secrets(d.platform.secrets, name, arg_values)
+        url_secret = _store_url_secret(d.platform.secrets, name, url_value) if url_value else ""
     except Exception as exc:  # noqa: BLE001 — names only, never the value
         refused = sorted(secret_values) + sorted(
             f"header {h}" for h in header_secret_values
-        ) + (["the auth value"] if auth_value else [])
+        ) + (["the auth value"] if auth_value else []) + [
+            f"argument {i + 1}" for i in sorted(arg_values)
+        ] + (["the url"] if url_value else [])
         raise HTTPException(
             status_code=503,
             detail=(
@@ -427,7 +444,8 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
         cfg = {
             "name": name,
             "transport": body.transport,
-            "url": body.url,
+            "url": shown_url,
+            **({"url_secret": url_secret} if url_secret else {}),
             **({"headers": plain_headers} if plain_headers else {}),
             **({"header_secrets": header_secrets} if header_secrets else {}),
             **(
@@ -447,7 +465,8 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
         cfg = {
             "name": name,
             "command": body.command.strip(),
-            "args": [str(a) for a in body.args],
+            "args": shown_args,
+            **({"arg_secrets": arg_secrets} if arg_secrets else {}),
             "env": plain_env,
             **({"env_secrets": env_secrets} if env_secrets else {}),
             **({"cwd": body.cwd} if body.cwd else {}),
@@ -891,11 +910,24 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
     # row lists header NAMES and says whether an auth value is set.
     _plain_headers = dict(s.get("headers") or {})
     _header_secrets = dict(s.get("header_secrets") or {})
+    # v1.351.0 (G12): `arg_secrets` / `url_secret` are vault NAMES (the
+    # argv / url twins of `env_secrets`) — they stay out of the row like the
+    # others. And the command, args and url are shown MASKED, as the import
+    # preview's rows have been since v1.343.0 (`PackSpec.preview_row`): a
+    # stored placeholder is already masked, and a row from before the
+    # migration (or a Directory connect that has not been migrated yet) must
+    # still never put a token in front of the browser.
+    from ...detections.redact import mask as _mask
+
     _row = {
         k: v
         for k, v in s.items()
-        if k not in ("env", "env_secrets", "headers", "header_secrets")
+        if k not in ("env", "env_secrets", "headers", "header_secrets", "arg_secrets", "url_secret")
     }
+    if isinstance(_row.get("command"), str):
+        _row["command"] = _mask(_row["command"])
+    if isinstance(_row.get("url"), str):
+        _row["url"] = _mask(_row["url"])
     # v1.342.0 (integration): an HTTP pack's header token (`auth.value`,
     # the non-env secret shape _build_transport reads) is a VALUE too.
     # The row keeps the auth shape and says a value is set, never what.
@@ -912,7 +944,8 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
         # Rows saved by the marketplace connect flow OMIT env/args
         # when empty — normalize so clients can rely on the keys
         # (a missing env crashed the Tools page on real installs).
-        "args": list(s.get("args") or []),
+        # v1.351.0 (G12): each argument masked (see above).
+        "args": [_mask(str(a)) for a in (s.get("args") or [])],
         "env_keys": sorted(str(k) for k in _plain_env),
         "secret_keys": sorted(str(k) for k in _env_secrets),
         # v1.343.0: the http shape — transport ("stdio" when the
@@ -970,6 +1003,9 @@ _PACK_SHAPE_KEYS: frozenset[str] = frozenset(
         "headers",
         "header_secrets",
         "auth",
+        # v1.351.0 (G12): rebuilt by the edit, never copied blindly.
+        "arg_secrets",
+        "url_secret",
     }
 )
 
@@ -1040,11 +1076,72 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             deletes.append(sname)
         env.pop(key, None)
     command = body.command if body.command is not None else str(row.get("command") or "")
-    args = body.args if body.args is not None else list(row.get("args") or [])
     cwd = body.cwd if body.cwd is not None else str(row.get("cwd") or "")
+    # v1.351.0 (G12): the args. The row SHOWED them masked, and the editor
+    # sends that masked line back whenever anything in it changed (often
+    # split on whitespace). So: args sent back as shown = unchanged (the
+    # stored args and their vault rows stay exactly as they are); otherwise
+    # every `***` is put back to the real text it stood for
+    # (`carry_masked_args` — one it cannot place is a 422, never a literal
+    # `***` over a working secret), then split again like the add door.
+    from ...detections.redact import mask as _mask
+    from ...mcp.secrets import MaskedValueLeft as _MaskedValueLeft
+    from ...mcp.secrets import arg_key as _arg_key
+    from ...mcp.secrets import args_unchanged as _args_unchanged
+    from ...mcp.secrets import carry_masked_args as _carry_masked_args
+    from ...mcp.secrets import resolve_args as _resolve_args
+    from ...mcp.secrets import split_args as _split_args
+    from ...mcp.secrets import split_url as _split_url
+
+    _vault_get = getattr(getattr(d.platform, "secrets", None), "get", None)
+    stored_args = [str(a) for a in (row.get("args") or [])]
+    old_arg_secrets = {str(k): str(v) for k, v in dict(row.get("arg_secrets") or {}).items()}
+    args: list[str] = stored_args
+    arg_secrets: dict[str, str] = dict(old_arg_secrets)
+    if body.args is not None:
+        shown_before = [_mask(a) for a in stored_args]
+        if not _args_unchanged(body.args, shown_before):
+            try:
+                real_args, carried = _carry_masked_args(
+                    body.args, shown_before, _resolve_args(stored_args, old_arg_secrets, _vault_get)
+                )
+            except _MaskedValueLeft as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            args, arg_values = _split_args(real_args)
+            # A value put back for a `***` stays a secret even when, split off
+            # its `Authorization:`, it no longer looks like one.
+            for i in carried:
+                if i not in arg_values:
+                    arg_values[i] = real_args[i]
+                    args[i] = str(body.args[i])
+            arg_secrets = {}
+            for i, value in sorted(arg_values.items()):
+                sname = _vault_name(name, _arg_key(i))
+                writes.append((sname, value, f"argument {i + 1}"))
+                arg_secrets[str(i)] = sname
+            deletes.extend(n for n in old_arg_secrets.values() if n not in arg_secrets.values())
 
     # -- the http half ----------------------------------------------------- #
-    url = body.url if body.url is not None else str(row.get("url") or "")
+    # v1.351.0 (G12): the url, the same way — sent back as the row showed it
+    # = unchanged; a NEW url that carries a secret is vaulted; a `***` that
+    # does not match the stored url is a 422.
+    stored_url = str(row.get("url") or "")
+    url = stored_url
+    url_secret = str(row.get("url_secret") or "")
+    if body.url is not None and body.url != _mask(stored_url):
+        if "***" in body.url:
+            raise HTTPException(
+                status_code=422,
+                detail="the url still shows *** where a hidden value was; type the whole url again",
+            )
+        url, url_value = _split_url(body.url)
+        if url_value:
+            sname = _vault_name(name, "url")
+            writes.append((sname, url_value, "the url"))
+            url_secret = sname
+        elif url_secret:
+            deletes.append(url_secret)
+            url_secret = ""
     headers: dict[str, str] = {
         str(k): ("" if v is None else str(v)) for k, v in dict(row.get("headers") or {}).items()
     }
@@ -1108,14 +1205,18 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     # -- the new row: today's stored shapes, byte for byte ----------------- #
     if is_http:
         new: dict[str, Any] = {"name": name, "transport": transport, "url": url}
+        if url_secret:
+            new["url_secret"] = url_secret
         if headers:
             new["headers"] = headers
         if header_secrets:
             new["header_secrets"] = header_secrets
         if auth:
             new["auth"] = auth
-        # A pack that moved off stdio leaves its env secrets behind.
+        # A pack that moved off stdio leaves its env (and argument) secrets
+        # behind.
         deletes.extend(env_secrets.values())
+        deletes.extend(arg_secrets.values())
     else:
         new = {
             "name": name,
@@ -1123,14 +1224,19 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             "args": [str(a) for a in args],
             "env": env,
         }
+        if arg_secrets:
+            new["arg_secrets"] = arg_secrets
         if env_secrets:
             new["env_secrets"] = env_secrets
         if cwd:
             new["cwd"] = cwd
-        # A pack that moved off http leaves its header / auth secrets behind.
+        # A pack that moved off http leaves its header / auth (and url)
+        # secrets behind.
         deletes.extend(header_secrets.values())
         if auth and auth.get("secret"):
             deletes.append(str(auth["secret"]))
+        if url_secret:
+            deletes.append(url_secret)
     for key, value in row.items():
         if key not in _PACK_SHAPE_KEYS:
             new[key] = value

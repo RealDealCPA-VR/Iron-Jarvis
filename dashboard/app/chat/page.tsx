@@ -185,6 +185,16 @@ import {
   looksLikeSecret,
   type ConfigCard,
 } from "@/lib/configCards";
+import {
+  appConnectIds,
+  appIdOf,
+  connectedOf,
+  continueText,
+  taskBefore,
+  withAppConnected,
+  withConnectors,
+  type AppSecretCard,
+} from "@/lib/appConnect";
 import { getDeviceId } from "@/lib/device";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import {
@@ -2817,6 +2827,9 @@ export interface RowHandlers {
   /** Redesign S3/S4: a settings card under reply `index` changed (Undo
    *  pressed, credential saved) — store it on the message and save. */
   settleConfigCard: (index: number, cardIndex: number, next: ConfigCard) => void;
+  /** v1.351.0 (G15): Continue on an app's card under reply `index` — the app
+   *  is on for this chat; send the user's task on. */
+  continueConnected: (index: number, cardIndex: number) => void;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
   crystallize: (threadId: string) => void;
@@ -3093,7 +3106,9 @@ const MessageRow = memo(function MessageRow({
     );
   }
   const suggestion = decodeSuggestion(m.suggestion);
-  const configCards = decodeConfigCards(m.configCards);
+  // v1.351.0 (G15): an app card's `connected` (what its save did) rides
+  // beside the whitelist decoder, which does not know it.
+  const configCards = withAppConnected(decodeConfigCards(m.configCards), m.configCards);
   // Calm chat W1-5 (v1.326.0): the receipt lives in the action row below, and
   // that row shows on hover only for an older reply. A warning (mock answer,
   // failover, blocked tools, low trust, "Remembered: …") must never wait for
@@ -3301,7 +3316,13 @@ const MessageRow = memo(function MessageRow({
       {/* SETTINGS CARDS (redesign S3/S4): a change made in chat, with its
           Undo, and the secure card a credential is pasted into. Decoded again
           here because a reopened thread hands back whatever the disk held. */}
-      <ConfigCards cards={configCards} onSettle={(ci, next) => h.settleConfigCard(i, ci, next)} />
+      <ConfigCards
+        cards={configCards}
+        onSettle={(ci, next) => h.settleConfigCard(i, ci, next)}
+        // v1.351.0 (G15): Continue only on the newest reply and between
+        // turns — an older card's task has already moved on.
+        onContinue={isLast && !busy ? (ci) => h.continueConnected(i, ci) : undefined}
+      />
       {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
           SERVER-derived from the tools that executed ok (files excluded; the
           ArtifactsRail owns files). Rides the message, so live and persisted
@@ -6925,6 +6946,18 @@ export default function ChatPage() {
     markSetupChanged();
   }
 
+  /** v1.351.0 (G15): an app connected FROM this chat is ON in this chat —
+   *  the same "+" › Connections switch, only ever turned on (never off),
+   *  saved with the thread setup like a toggle. Called when an app's card is
+   *  saved and when a turn's `app_connect` succeeded (an app that was
+   *  already connected: the tool says "It is on for this chat now"). */
+  function turnOnConnectors(ids: string[]) {
+    const want = ids.filter(Boolean);
+    if (want.length === 0) return;
+    setSelectedConnectors((prev) => withConnectors(prev, want, MAX_CONNECTORS));
+    markSetupChanged();
+  }
+
   /** AUTO TOOLS toggle — a persisted preference, not thread setup. */
   function toggleAutoTools() {
     setAutoTools((prev) => {
@@ -8249,6 +8282,10 @@ export default function ChatPage() {
         if (chatGenRef.current !== gen) return;
         feedTTS(reply, true); // flush any trailing fragment
         const toolsUsed = (tools_used ?? []).filter((t) => Boolean(t));
+        // v1.351.0 (G15): an app this turn connected (or found already
+        // connected) is turned ON for this chat — its tools ride the next
+        // message without a trip to the "+" menu.
+        turnOnConnectors(appConnectIds(streamToolsRef.current));
         // Sources the turn's web tools ACTUALLY returned (never prose links).
         const sources = extractWebSources(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
@@ -10606,6 +10643,32 @@ export default function ChatPage() {
       messagesRef.current = updated;
       setMessages(updated);
       if (!busy) queueSave(updated);
+      // v1.351.0 (G15): an app's token saved here turns that app ON for this
+      // chat, so the next message has its tools without the "+" menu.
+      const app = next.kind === "secret" && next.saved ? appIdOf(next.name) : "";
+      if (app) turnOnConnectors([app]);
+    },
+    continueConnected: (index, cardIndex) => {
+      // v1.351.0 (G15): "GitHub connected · 26 tools" → Continue. The card
+      // remembers it was pressed (every later save, like any settled card),
+      // the app is on for this chat, and the task goes on as an ordinary
+      // message the user can read: "<App> is connected. Please carry on
+      // with: <the question it was asked for>".
+      const cur = messagesRef.current;
+      const card = cur[index]?.configCards?.[cardIndex];
+      const connected = connectedOf(card);
+      if (!card || card.kind !== "secret" || !connected || connected.continued || connected.tools <= 0 || busy)
+        return;
+      const next: ConfigCard = { ...card, connected: { ...connected, continued: true } } as AppSecretCard;
+      settledCardsRef.current.set(cardId(next), next);
+      const cards = (cur[index].configCards ?? []).map((c, k) => (k === cardIndex ? next : c));
+      const updated = cur.map((m, j) => (j === index ? { ...m, configCards: cards } : m));
+      messagesRef.current = updated;
+      setMessages(updated);
+      turnOnConnectors([connected.app]);
+      // No save here: the turn send() starts saves the conversation, and the
+      // settled-card map carries the pressed card into that save.
+      send(continueText(connected.name, taskBefore(updated, index)));
     },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
@@ -10645,6 +10708,8 @@ export default function ChatPage() {
       rateReply: (index, rating) => rowImplRef.current.rateReply(index, rating),
       settleConfigCard: (index, cardIndex, next) =>
         rowImplRef.current.settleConfigCard(index, cardIndex, next),
+      continueConnected: (index, cardIndex) =>
+        rowImplRef.current.continueConnected(index, cardIndex),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),

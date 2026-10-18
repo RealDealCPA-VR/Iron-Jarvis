@@ -364,8 +364,13 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
         # `timeout` here is only the default for deadline-less calls (the
         # boot `tools/list`, itself bounded by `_connect_with_timeout`).
         # Connecting stays short; `name` lets every error NAME the pack.
+        # v1.351.0 (G12): a url that carried a secret (`?api_key=…`,
+        # `https://me:pw@host`) is stored MASKED with `url_secret` naming its
+        # vault row; the real url is put back here, at connect time.
+        from .secrets import resolve_url as _resolve_url
+
         return HttpTransport(
-            cfg["url"],
+            _resolve_url(cfg["url"], cfg.get("url_secret"), secret_resolver),
             headers=headers,
             connect_timeout=HTTP_CONNECT_TIMEOUT_S,
             name=str(cfg.get("name") or "") or None,
@@ -393,13 +398,19 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
             if value:
                 env[str(env_key)] = value
     merged_env = {**_os.environ, **env} if env else None
+    # v1.351.0 (G12): an argument that carried a secret (an mcp-remote
+    # `--header "Authorization: Bearer …"`, `--api-key …`, a connection
+    # string's password) is stored MASKED with `arg_secrets[i]` naming its
+    # vault row — the env_secrets twin for argv. The real text goes back in
+    # here, at launch, and only here.
+    from .secrets import resolve_args as _resolve_args
+
+    launch_args = _resolve_args(cfg.get("args") or [], cfg.get("arg_secrets"), secret_resolver)
     # Heal superseded package names at LAUNCH: the upstream Brave server was
     # deprecated/archived — it still connects but advertises no tools, which
     # read as a broken connector. Mapping here fixes EXISTING config.toml
     # entries without a manual disconnect/reconnect.
-    args = [
-        _SUPERSEDED_PACKAGES.get(str(a), str(a)) for a in (cfg.get("args") or [])
-    ]
+    args = [_SUPERSEDED_PACKAGES.get(str(a), str(a)) for a in launch_args]
     # NO transport floor for a registry pack (v1.291.0 review): its calls are
     # bounded by the registry deadline — `registry.invoke(deadline_s=
     # config.tool_call_timeout_s)`, 600 s by default and set in Settings —

@@ -118,12 +118,42 @@ class CredentialStore:
                 secrets.set(vault, value, kind="api_key" if "key" in vault else "password")
             status = "replaced" if prior else "stored"
             action_id = self._journal(name, vault, backup, bool(prior), status, actor, change_id)
+        out: dict[str, Any] = {"secret": name, "label": sdef.label, "status": status, "action_id": action_id}
         if name.startswith("app."):
             # A pack saved by app_connect waits for this token: load it now.
-            from .records import reload_app_after_secret
+            # v1.351.0 (G15): and SAY what happened — the card reads "GitHub
+            # connected · 26 tools", "Saved, but its tools did not load", or
+            # (an app that takes two keys) what it still needs. Names, counts
+            # and plain words only; never a value.
+            out.update(self._app_outcome(arg))
+        return out
 
-            reload_app_after_secret(self.platform, arg)
-        return {"secret": name, "label": sdef.label, "status": status, "action_id": action_id}
+    def _app_outcome(self, connector_id: str) -> dict[str, Any]:
+        """``{app, app_name, tools_loaded[, load_reason][, waiting_for]}`` for
+        an ``app.*`` credential just stored. Never raises."""
+        from .records import app_waiting_for, reload_app_after_secret
+
+        try:
+            from ..connectors.catalog import get_connector
+
+            conn = get_connector(connector_id)
+            app_name = conn.name if conn is not None else connector_id
+        except Exception:  # noqa: BLE001
+            app_name = connector_id
+        out: dict[str, Any] = {"app": connector_id, "app_name": app_name}
+        waiting = app_waiting_for(self.platform, connector_id)
+        if waiting:
+            # Not launched yet: it cannot start without the rest.
+            out["tools_loaded"] = 0
+            out["waiting_for"] = waiting
+            return out
+        loaded = reload_app_after_secret(self.platform, connector_id)
+        if loaded is None:
+            return out
+        out["tools_loaded"] = int(loaded.get("tools_loaded") or 0)
+        if not out["tools_loaded"] and loaded.get("reason"):
+            out["load_reason"] = str(loaded["reason"])
+        return out
 
     def restore(self, desc: dict[str, Any]) -> str:
         """Undo: put the backed-up value back (or remove a key that did not
