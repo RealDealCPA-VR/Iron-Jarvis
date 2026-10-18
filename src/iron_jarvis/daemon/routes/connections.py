@@ -402,21 +402,34 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
     # Per-endpoint live discovery reuses the same URL-keyed cache, asked the
     # way the endpoint chats (v1.332.0: it was never actually asked before);
     # an endpoint that lists nothing keeps its default model.
+    # v1.350.1: a proxy's /v1/models answers every ALIAS in its config —
+    # names it no longer runs, several names for one server, embedding
+    # models that cannot chat. `fleet.picker.picker_rows` keeps one row per
+    # real deployment (the sampler's topology children say where each alias
+    # routes) with the other names in `aliases` (templates accept them), and
+    # drops embedding models; never the endpoint's own default model.
+    from ...fleet.picker import picker_rows as _picker_rows
+
     try:
         for node, ids in zip(nodes, answers[len(discovering):]):
             prov = f"fleet-{node.id}"
             label = node.label or node.id
             if isinstance(ids, Exception) or not ids:
                 ids = [node.default_model or "default"]
-            for mid in ids:
-                models.append(
-                    {
-                        "provider": prov,
-                        "model": mid,
-                        "name": label,
-                        "source": "endpoint",
-                    }
-                )
+            try:
+                children = d.fleet.children_of(node.id)
+            except Exception:  # noqa: BLE001 — no topology: names kept as listed
+                children = []
+            for row in _picker_rows(ids, default_model=node.default_model or "", children=children):
+                entry = {
+                    "provider": prov,
+                    "model": row["model"],
+                    "name": label,
+                    "source": "endpoint",
+                }
+                if row["aliases"]:
+                    entry["aliases"] = row["aliases"]
+                models.append(entry)
     except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
         pass
     # THE CLAUDE SUBSCRIPTION'S OWN PICKER (v1.300.0): claude-cli lists the

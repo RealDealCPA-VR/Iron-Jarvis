@@ -3547,6 +3547,40 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A catalog names a package that EXISTS; a proxy's picker offers its real
+  models** (v1.350.1, two user reports off the live install). (1) The
+  prebuilt MCP catalog in `daemon/app.py` offered
+  `@modelcontextprotocol/server-sequentialthinking` — npm never had it (the
+  real package is `server-sequential-thinking`, which `connectors/catalog.py`
+  always had): the user's pack failed "npm error 404 … is not in this
+  registry". TWO CATALOGS NAME THE SAME PACKS — the pin compares every
+  `@modelcontextprotocol/*` name they share. `mcp/package_fixes.
+  RENAMED_PACKAGES` (wrong names THE APP shipped, never a guess about a
+  user's pack) is applied by `repair_known_package_names` in `build_platform`
+  right after `migrate_mcp_env_secrets` (exact arg or `@version` suffix,
+  persisted, idempotent). `classify_load_failure` reads an npm / uv registry
+  404 FIRST (`_missing_package_in`) as "the package X is not in its
+  registry, so the pack's name for it is wrong" — before the crash branch,
+  whose "read its last output" sent the user to an npm dump. When adding to
+  either catalog: `npm view <pkg>` / PyPI first. NOTE: both catalogs still
+  name `@modelcontextprotocol/server-github`, which npm marks deprecated
+  (still installs; GitHub's own server is a different transport — a
+  separate decision). (2) A fleet endpoint's picker rows go through
+  `fleet/picker.picker_rows`: a LiteLLM proxy's `/v1/models` answers every
+  ALIAS (the user's RTX6000ada: 7 names → 2 servers, two names it no longer
+  runs, three embedding names); rows are ONE per deployment (routed model +
+  api_base, from the sampler's topology children), keeping the node's
+  default name, else the deployment's own id, else the first listed; the
+  other names ride `aliases` (templates.analyze_requirements accepts them,
+  so a pinned old name is not "not connected"); embedding/reranker names
+  (`looks_like_embedding`) are dropped — NEVER the node's default; an empty
+  result offers the default; names the children do not route are kept as
+  listed (no topology yet / not a proxy). The composer's per-provider model
+  panel is `components/chat/FitPanel` (`fitPlacement`: up, capped to the
+  room above; down from the row's top when a high row has more room below;
+  scrolls) — it ran off the window's top. Pins:
+  `tests/test_pack_name_and_endpoint_picker_v13501.py`,
+  `dashboard/__tests__/fit-panel-v13501.test.tsx` (10 mutations, all red).
 - **A helper agent's plan is a checklist; approving it first is an OFF-by-
   default setting** (v1.350.0, polish wave C: lanes C1 dashboard, C2 daemon,
   ideas from agent-elements' Todo/Plan tools, MIT, nothing installed).

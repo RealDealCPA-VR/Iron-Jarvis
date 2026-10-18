@@ -638,6 +638,27 @@ def _exit_code_in(raw: str) -> int | None:
         return None
 
 
+_NPM_404_NAME_RE = re.compile(r"'(@?[\w.\-/]+?)@[^']*' is not in (?:this|the npm) registry")
+_UV_404_NAME_RE = re.compile(r"Because ([\w.\-]+) was not found in the package registry")
+
+
+def _missing_package_in(raw: str) -> str | None:
+    """The package an installer said does not exist: its name, "" when the
+    text says so without naming it, None when it says nothing of the kind.
+    npm: "npm error 404 '<pkg>@*' is not in this registry"; uv (uvx): "Because
+    <pkg> was not found in the package registry"."""
+    m = _NPM_404_NAME_RE.search(raw)
+    if m:
+        return m.group(1)
+    m = _UV_404_NAME_RE.search(raw)
+    if m:
+        return m.group(1)
+    low = raw.lower()
+    if "e404" in low and "not in this registry" in low:
+        return ""
+    return None
+
+
 def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict[str, str]:
     """Turn a raw load exception into a sentence the user can act on (v1.256.0, R-02).
 
@@ -664,6 +685,20 @@ def classify_load_failure(cfg: dict[str, Any] | None, error: str | None) -> dict
     command = str((cfg or {}).get("command") or "").strip()
     launcher = command.split()[0] if command else ""
     low = raw.lower()
+
+    # THE PACKAGE DOES NOT EXIST (v1.350.1). npx / uvx could not find the
+    # package the pack names, so the "server" that exited was the installer.
+    # Checked before the crash branch: that text is a crash too, but "read
+    # its last output" sends the user to an npm dump when the answer is "the
+    # name is wrong". (The user's sequentialthinking pack, added from the
+    # app's own catalog under a name npm never had.)
+    missing = _missing_package_in(raw)
+    if missing is not None:
+        name = f" {missing}" if missing else ""
+        return {
+            "reason": f"the package{name} is not in its registry, so the pack's name for it is wrong",
+            "fix": "edit the pack in Settings → Tools and correct the package name (its README gives the exact one)",
+        }
 
     # A CRASH (v1.342.0): the pack's server started and then exited — at the
     # handshake or mid-call. Checked FIRST: the raw text carries the child's

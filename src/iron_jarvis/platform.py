@@ -1385,6 +1385,12 @@ def build_platform(
     from .mcp.secrets import migrate_mcp_env_secrets as _migrate_mcp_env_secrets
 
     _migrate_mcp_env_secrets(config=config, secrets=secrets)
+    # v1.350.1: a package name the app's own catalog shipped wrong
+    # (server-sequentialthinking -> server-sequential-thinking) is repaired in
+    # installed packs before any of them launches.
+    from .mcp.package_fixes import repair_known_package_names as _repair_pack_names
+
+    _repair_pack_names(config=config)
     _mcp_configs = [s for s in (getattr(config, "mcp_servers", None) or []) if isinstance(s, dict)]
     _mcp_deferred: list[dict] = []
     if defer_mcp and _mcp_configs:

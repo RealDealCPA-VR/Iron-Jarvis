@@ -3013,7 +3013,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "name": "Step-by-step reasoning",
             "description": "A scratchpad that lets the agent work through hard problems in explicit steps. Official reference server.",
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
             "category": "reference",
             "needs": "Node",
         },

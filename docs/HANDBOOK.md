@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.350.0 (2026-10-04).*
+holds itself to. Current as of v1.350.1 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,27 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Sequential thinking starts; an endpoint's model list is its real models (v1.350.1)
+
+- **The Sequential thinking tool pack works.** The app's own list of
+  one-click packs named its package wrong (`server-sequentialthinking`;
+  the real one is `server-sequential-thinking`), so it failed at its first
+  call with "npm error 404 … is not in this registry". The list is fixed,
+  and a pack already installed under the wrong name is repaired the next
+  time the app starts. When a pack fails because its package doesn't exist,
+  the Tools page now says so plainly ("the package … is not in its
+  registry, so the pack's name for it is wrong") instead of asking you to
+  read npm's output.
+- **A model endpoint shows the models it really runs.** A LiteLLM proxy
+  answers every name in its configuration, including old names that now
+  point at the same model and embedding models that can't chat. The model
+  menu now shows one entry per real model behind the endpoint (your chosen
+  default name when it is one of them) and leaves embedding models out.
+  Old names still work if something was set to use them.
+- **The model list stays on screen.** A connection's model list near the
+  top of the menu used to run off the top of the window. It now fits the
+  space above it, or opens downward when there isn't room, and scrolls.
 
 ## An agent's plan is a checklist; approving it first is optional (v1.350.0)
 

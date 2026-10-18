@@ -133,6 +133,7 @@ import {
 } from "@/components/chat/TurnReceipt";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { LiveToolRows, WorkLine, WorkRow } from "@/components/chat/WorkLine";
+import { FitPanel } from "@/components/chat/FitPanel";
 import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { turnWindow } from "@/lib/turnChanges";
 import { FollowupChips } from "@/components/chat/FollowupChips";
@@ -13392,8 +13393,14 @@ export default function ChatPage() {
                                   {modelSub === p.id && (
                                     /* Anchored to the BOTTOM so a long catalog
                                        (OpenRouter) grows UPWARD over the chat area
-                                       instead of being clipped at the card edge. */
-                                    <div className="absolute bottom-0 right-full z-30 mr-1 max-h-[24rem] w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                                       instead of being clipped at the card edge —
+                                       and v1.350.1: never past the WINDOW's top
+                                       (FitPanel caps it to the room above, or
+                                       opens it downward when a row sits high). */
+                                    <FitPanel
+                                      testId="model-sub"
+                                      className="absolute right-full z-30 mr-1 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                                    >
                                       {models
                                         .filter((m) => m.provider === p.id)
                                         .map((m) => {
@@ -13424,7 +13431,7 @@ export default function ChatPage() {
                                             </button>
                                           );
                                         })}
-                                    </div>
+                                    </FitPanel>
                                   )}
                                 </div>
                               ))}
