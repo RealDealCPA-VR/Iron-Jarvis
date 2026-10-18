@@ -1399,8 +1399,11 @@ export function NotificationBell() {
   // Informational activity (inbound comm / schedule fires / finished
   // computer-use runs): shown in the dropdown + pinged to the desktop, but NOT
   // counted as pending — nothing here waits on the user, so it must not
-  // inflate the badge or the tab title. Dedupe by event id, keep the 6 newest
-  // (the events buffer is already newest-first).
+  // inflate `count`. (v1.351.0: an `attention` row — unattended work that
+  // failed or fell short — is added to the BADGE and the tab title as
+  // `unseen` until the bell is opened; `count` and its "N pending" ping are
+  // unchanged.) Dedupe by event id (the events buffer is already
+  // newest-first).
   // v1.351.0: every mapped live row (newest first) — the desktop ping reads
   // the newest of THESE — and the 6 the list shows, failures kept in sight.
   const allActivity = useMemo(() => {
@@ -1811,7 +1814,8 @@ export function NotificationBell() {
                   })}
 
                   {/* Informational activity — same row pattern, neutral chrome,
-                      never counted in the pending badge. */}
+                      never counted as pending (an unattended failure counts
+                      on the badge only until the bell is opened, v1.351.0). */}
                   {activity.length > 0 && (
                     <li className="bg-white/[0.02] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
                       Recent activity
