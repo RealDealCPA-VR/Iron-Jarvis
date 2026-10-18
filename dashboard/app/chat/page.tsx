@@ -7131,6 +7131,14 @@ export default function ChatPage() {
       } catch {
         /* no card; the reply still lands */
       }
+      // v1.349.0 re-review: the user may have left (New chat, another chat,
+      // Stop) while the LEDGER read was out, like the two reads above. The
+      // compose below writes messagesRef — the conversation open NOW — so it
+      // must not run: the reply would be minted into a chat it was never
+      // asked in (or, after Stop, land a second ending under "Stopped.").
+      // A chat that was LEFT still waits on the session (its saved last
+      // bubble names it), so reopening that chat lands the reply there.
+      if (awaitingIdRef.current !== id) return;
       // A hand-off's reply is the AGENT's, and says so (v1.284.0) — the same
       // chip a panel reply wears, so "who said this" reads the same either way.
       const who = awaitingWhoRef.current;
@@ -7162,6 +7170,11 @@ export default function ChatPage() {
       setAwaitingId(null);
       inputRef.current?.focus(); // type-ready for the next turn
     } catch (e) {
+      // v1.349.0 re-review: a read that failed after the user left belongs
+      // to a wait that is already over. Its cleanup below (an error banner,
+      // stripping and SAVING messagesRef, clearing the wait) would land on
+      // the conversation open now and end ITS wait, not this one's.
+      if (awaitingIdRef.current !== id) return;
       if (e instanceof ApiError && e.status === 0) {
         // Transient network blip — keep the turn alive and let the 1.5s poll
         // retry, so a reply that already completed server-side isn't dropped.
