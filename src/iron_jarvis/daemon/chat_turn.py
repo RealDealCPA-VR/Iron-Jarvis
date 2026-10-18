@@ -4320,31 +4320,76 @@ _CLAIM_NEGATION_RX = _re.compile(
 )
 
 
-def _may_have_changed_files(tools_used: list[str]) -> bool:
+#: Tools OUTSIDE the registry's list whose success changes a real file the
+#: call never names (v1.351.0 fix round) — so after one of them a CHANGE
+#: claim cannot be judged either: a note appended into the user's vault
+#: (``ltm_append`` — an Obsidian or synced markdown folder), an agent's
+#: NOTES.md (``notebook``) or AGENTS.md (``create_agent`` rewrites the
+#: instructions file), a skill's SKILL.md (``skill_create``), and a document
+#: open in the browser (a click, a typed value, Ctrl+S — the page saves it).
+_CHANGES_A_FILE_UNNAMED = frozenset(
+    {
+        "ltm_append",
+        "notebook",
+        "create_agent",
+        "skill_create",
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+        "web_action",
+    }
+)
+
+
+def custom_tools_used(platform, tools_used) -> frozenset[str]:
+    """The user- or agent-made command tools among *tools_used* (v1.351.0 fix
+    round), read off the platform's live registry — the one place their names
+    are known. Empty when nothing ran or the platform has no registry (a test
+    double); never raises. Both chat lanes hand it to
+    :func:`_claimed_write_note` as ``custom_tools``."""
+    if not tools_used:
+        return frozenset()
+    try:
+        names = set(platform.registry.custom_names())
+    except Exception:  # noqa: BLE001 — no registry here: nothing is known as custom
+        return frozenset()
+    return frozenset(str(n) for n in tools_used if str(n) in names)
+
+
+def _may_have_changed_files(tools_used: list[str], custom_tools=()) -> bool:
     """True when a tool that can change a file WITHOUT naming it succeeded
     this turn (v1.351.0 review): a shell line, code, a hand-off to an agent
     or a workflow (the registry's own list, ``tools.registry._MUTATING_TOOLS``
     — the read cache drops on the same calls), a Build pane's CLI
-    (``pane_send``), or a connected pack's tool (``mcp__*``).
+    (``pane_send``), a connected pack's tool (``mcp__*``), one of
+    :data:`_CHANGES_A_FILE_UNNAMED`, or a user-made command tool
+    (*custom_tools*, from :func:`custom_tools_used` — the registry counts
+    those as mutating too).
 
     THE FALSE ACCUSATION THIS ENDS: G06 made a claimed CHANGE ("I updated
-    notes.md") draw the note, and after ``shell`` really rewrote notes.md the
-    reply got "nothing was written to disk this turn … so that file did not
-    change" — in both chat lanes and on every agent run's summary (the
-    orchestrator calls the same checker). The note can only say "no tool that
-    changes files succeeded" when that is true, so after one of these the
-    change claim is left alone. (A user-made custom tool is not known by name
-    here — the same blind spot the creation claim has always had.)"""
+    notes.md") draw the note, and after ``shell`` (or a custom tool) really
+    rewrote notes.md the reply got "nothing was written to disk this turn …
+    so that file did not change" — in both chat lanes and on every agent
+    run's summary (the orchestrator calls the same checker). The note can
+    only say "no tool that changes files succeeded" when that is true, so
+    after one of these the change claim is left alone."""
     from ..tools.registry import _MUTATING_TOOLS
 
+    custom = set(custom_tools or ())
     for name in tools_used or ():
         n = str(name or "")
-        if n in _MUTATING_TOOLS or n == "pane_send" or n.startswith("mcp__"):
+        if (
+            n in _MUTATING_TOOLS
+            or n in _CHANGES_A_FILE_UNNAMED
+            or n in custom
+            or n == "pane_send"
+            or n.startswith("mcp__")
+        ):
             return True
     return False
 
 
-def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
+def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=()) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
     The sibling note above keys off the USER's phrasing, which is why it stayed
@@ -4370,7 +4415,9 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     the note says the file is unchanged — not that it does not exist. A
     creation-only claim reads exactly as it always has. A change claim is
     not judged at all after a tool that can change a file without naming it
-    (:func:`_may_have_changed_files`: shell, code, a hand-off, a pack).
+    (:func:`_may_have_changed_files`: shell, code, a hand-off, a pack, a vault
+    note, a browser action, a custom tool — *custom_tools* names the
+    user-made ones that ran; a caller without a registry passes none).
     """
     if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
@@ -4386,7 +4433,7 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     # A CHANGE claim is judged only when nothing that can change a file
     # without naming it succeeded (v1.351.0 review) — see
     # :func:`_may_have_changed_files`.
-    judge_changes = not _may_have_changed_files(tools_used)
+    judge_changes = not _may_have_changed_files(tools_used, custom_tools)
     for m in _FILE_CHANGE_CLAIM_RX.finditer(reply) if judge_changes else ():
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
@@ -7013,8 +7060,11 @@ async def run_chat_turn(
             # v1.153.2: and check the reply's own CLAIMS against the
             # ledger — the note above keys off the user's phrasing and
             # so missed a reply announcing a saved file after only a
-            # scan had run. MIRROR NOTE (lock-step): both lanes.
-            reply += _claimed_write_note(reply, tools_used)
+            # scan had run. MIRROR NOTE (lock-step): both lanes. v1.351.0 fix
+            # round: the custom tools that ran are named from the live
+            # registry — a user-made tool can change a file it never names.
+            _custom_ran = custom_tools_used(d.platform, tools_used)
+            reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

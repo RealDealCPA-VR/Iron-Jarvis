@@ -5015,8 +5015,10 @@ async def chat_stream(
                 # v1.153.2: and check the reply's own CLAIMS against the
                 # ledger — the note above keys off the user's phrasing and
                 # so missed a reply announcing a saved file after only a
-                # scan had run. MIRROR NOTE (lock-step): both lanes.
-                reply += _claimed_write_note(reply, tools_used)
+                # scan had run. MIRROR NOTE (lock-step): both lanes. v1.351.0
+                # fix round: the custom tools that ran, from the live registry.
+                _custom_ran = _chat_turn.custom_tools_used(d.platform, tools_used)
+                reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

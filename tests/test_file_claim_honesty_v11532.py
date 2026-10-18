@@ -140,8 +140,13 @@ def test_both_chat_lanes_actually_append_the_note():
     root = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
     for rel in ("chat_turn.py", "routes/chat.py"):
         src = (root / rel).read_text(encoding="utf-8")
-        assert "_claimed_write_note(reply, tools_used)" in src, (
+        # v1.351.0 fix round: the call also names the custom tools that ran
+        # (read off the live registry), so the needle grew its keyword.
+        assert "_claimed_write_note(reply, tools_used, custom_tools=_custom_ran)" in src, (
             f"{rel} never appends the claim-check note"
+        )
+        assert "custom_tools_used(d.platform, tools_used)" in src, (
+            f"{rel} does not name the custom tools that ran"
         )
 
 

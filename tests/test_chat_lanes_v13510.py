@@ -516,6 +516,96 @@ def test_a_change_claim_after_a_tool_that_can_change_files_is_left_alone(tool):
     assert _claimed_write_note(reply, ["read_document", tool]) == "", tool
 
 
+@pytest.mark.parametrize(
+    "tool",
+    ["ltm_append", "notebook", "skill_create", "create_agent",
+     "browser_click", "browser_type", "browser_press_key", "web_action"],
+)
+def test_a_change_claim_after_a_tool_that_writes_a_file_it_does_not_name_is_left_alone(tool):
+    """v1.351.0 fix round: past the registry's list, these SUCCEED by changing
+    a real file the call never names — a note in the user's vault
+    (``ltm_append``), an agent's NOTES.md (``notebook``) or AGENTS.md
+    (``create_agent``), a skill's SKILL.md, a document open in the browser
+    (a click, a typed value, Ctrl+S). Before G06 a change claim was never
+    judged, so judging one here would be a new false accusation."""
+    reply = "I updated notes.md with the new line."
+    assert _claimed_write_note(reply, ["read_document"]), "anti-vacuity: the claim alone draws the note"
+    assert _claimed_write_note(reply, ["read_document", tool]) == "", tool
+
+
+def test_a_custom_tool_that_ran_can_have_changed_the_file():
+    """v1.351.0 fix round: a user- or agent-made command tool runs a program
+    the registry cannot inspect — the registry counts it as mutating
+    (``ToolRegistry._custom``), and so does the note. Its name is only known
+    to the live registry, which the lanes hand over as ``custom_tools``."""
+    reply = "I updated notes.md with the new line."
+    used = ["read_document", "bump_notes"]
+    assert _claimed_write_note(reply, used), "anti-vacuity: an unknown name alone is judged"
+    assert _claimed_write_note(reply, used, custom_tools={"bump_notes"}) == ""
+    # A custom tool that exists but did not RUN this turn silences nothing.
+    assert _claimed_write_note(reply, ["read_document"], custom_tools={"bump_notes"})
+    # The creation claim keeps its v1.153.2 behaviour byte for byte.
+    assert _claimed_write_note(
+        "Saved to report.docx.", ["bump_notes"], custom_tools={"bump_notes"}
+    ) == _claimed_write_note("Saved to report.docx.", ["read_document"]) != ""
+
+
+def test_custom_tools_used_reads_the_live_registry(tmp_path):
+    """The one helper both lanes call: the custom tools among what ran, read
+    off the platform's own registry; a platform without one answers empty."""
+    p = create_app(str(tmp_path / "home")).state.platform
+    _custom_tool(p, "bump_notes", "open('notes.md','w').write('new')")
+    used = ["read_document", "bump_notes", "shell"]
+    assert chat_turn.custom_tools_used(p, used) == frozenset({"bump_notes"})
+    assert chat_turn.custom_tools_used(p, ["read_document"]) == frozenset()
+    assert chat_turn.custom_tools_used(SimpleNamespace(), used) == frozenset()
+    assert chat_turn.custom_tools_used(p, []) == frozenset()
+
+
+def _custom_tool(platform, name: str, code: str) -> None:
+    """Register a REAL custom command tool (the `tool_create` path)."""
+    import sys
+
+    rec = platform.tools_registry.register(name, f"custom {name}", [], [sys.executable, "-c", code])
+    platform.registry.register(platform.tools_registry.build_tool(rec), custom=True)
+
+
+@pytest.mark.parametrize("lane", ["post", "stream"])
+def test_a_file_a_custom_tool_really_changed_is_not_accused(tmp_path, lane):
+    """Through BOTH real lanes: a custom tool rewrote notes.md and the reply
+    said so — no note. One that FAILED is not a change, so the same claim
+    still gets the note (the control)."""
+    client = TestClient(create_app(str(tmp_path / "home")))
+    p = client.app.state.platform
+    _custom_tool(p, "bump_notes", "open('notes.md','w').write('new')")
+    _custom_tool(p, "bump_fails", "import sys; sys.exit(3)")
+    ws = tmp_path / "work"
+    ws.mkdir()
+    for tool, changes in (("bump_notes", True), ("bump_fails", False)):
+        (ws / "notes.md").write_text("old\n", encoding="utf-8")
+        model = _ScriptedModel(
+            ToolCall(id="c1", name=tool, arguments={}), "I updated notes.md with the new line."
+        )
+        p.providers.get = lambda prov, m=None, _m=model: _m
+        body = {
+            "messages": [{"role": "user", "content": "put new in notes.md"}],
+            "tools": [tool], "workspace_dir": str(ws), "approval_mode": "yolo",
+        }
+        if lane == "post":
+            r = client.post("/chat", json=body)
+            assert r.status_code == 200, r.text
+            out = r.json()
+        else:
+            out = _stream_done(client, body)
+        text = (ws / "notes.md").read_text(encoding="utf-8")
+        if changes:
+            assert tool in out["tools_used"] and text.strip() == "new", (out["tools_used"], text)
+            assert "did not change" not in out["reply"] and "_Note:" not in out["reply"], out["reply"]
+        else:
+            assert tool not in out["tools_used"] and text == "old\n", (out["tools_used"], text)
+            assert "The reply says it changed `notes.md`" in out["reply"], out["reply"]
+
+
 def test_a_creation_claim_after_shell_is_judged_as_it_always_was():
     """Only the CHANGE claims G06 added are left alone after a shell line —
     the creation claim keeps its v1.153.2 behaviour byte for byte."""
