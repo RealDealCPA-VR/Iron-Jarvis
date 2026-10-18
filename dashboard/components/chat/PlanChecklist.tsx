@@ -192,8 +192,10 @@ export function useLivePlan({ session, events, boundary = null, eager = false, h
 
   // Nothing followed (the run ended, or the page left it): what was known
   // belonged to that run. The next run a page follows starts afresh, even
-  // under the same key (the session page's follow-up continues the SAME
-  // session): no daemon answer and no spent read carry over to it.
+  // under the same key (a session that goes live again while its page stays
+  // open: a queued run promoted, or a run restarted under its own id; a
+  // follow-up is a NEW session and so a new key anyway): no daemon answer
+  // and no spent read carry over to it.
   useEffect(() => {
     if (key) return;
     triesRef.current = { key: null, eager: false, hinted: false };

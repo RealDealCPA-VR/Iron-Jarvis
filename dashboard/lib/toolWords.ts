@@ -56,6 +56,11 @@ const WORDS: Record<string, string> = {
   reflex_update: "change a rule that acts on its own",
   reflex_delete: "remove a rule that acts on its own",
   config_undo: "undo your last change",
+  // v1.350.0: the daemon's own plan approval (agents/runtime.py
+  // PLAN_APPROVAL_TOOL), not a registry tool: its arguments are the plan's
+  // steps. No custom tool may take this name (tools/dynamic.py
+  // RESERVED_TOOL_NAMES), so these words stay true.
+  approve_plan: "follow this plan",
 };
 
 // The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/
@@ -89,6 +94,12 @@ const BROWSER_TOOLS: ReadonlySet<string> = new Set([
 export function isBuiltinBrowserTool(tool: string): boolean {
   return typeof tool === "string" && BROWSER_TOOLS.has(tool);
 }
+
+/** v1.350.0: the daemon's own plan approval (agents/runtime.py
+ *  PLAN_APPROVAL_TOOL): approved or declined, nothing wider, and a name no
+ *  custom tool may take. The one definition the card, the chat page and the
+ *  bell share. */
+export const PLAN_TOOL = "approve_plan";
 
 /** Plain words for a tool id, or null when this map does not know it. */
 export function toolWords(tool: string): string | null {

@@ -1839,6 +1839,28 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## An agent's plan is a checklist; approving it first is optional (v1.350.0)
+
+- **The plan ticks off.** When an agent that chat handed work to splits the
+  job into steps (it happens most on local models), its row in the chat
+  shows the plan as a quiet list: an empty circle for a step still waiting,
+  an arrow for the one it is on, a tick with the words struck through for a
+  step done, an x for one that failed, and a dash for one it never got to.
+  Closed, the row adds "1 of 4 done". When the agent finishes, the chat
+  keeps the plan as it ended, so a chat you reopen later still shows it. The
+  session's own page shows the same list in its Live run card while the run
+  is going. A screen reader hears each step's state in words.
+- **Ask me to approve an agent's plan before it starts** (Settings, Agents &
+  automation; OFF by default, and then nothing waits). Turn it on and an
+  agent you are watching (from chat, the Agents page or a project) shows you
+  its plan, numbered, in the question box's place before any step runs.
+  **Allow once** runs the plan as shown; **Deny** ends the run before any
+  step runs, and its result says you declined. A plan is never allowed "for
+  this conversation" or "always": the next plan is a different one.
+  Scheduled, workflow and phone runs never wait for this, and a run you
+  Continue after a restart carries on with the plan it already had. A page
+  you reload while a plan waits shows the same card with the same steps.
+
 ## Open a step to see what it did; one row for a helper agent (v1.349.0)
 
 - **Every step opens.** The grey rows under a reply ("Read harbor.xlsx",

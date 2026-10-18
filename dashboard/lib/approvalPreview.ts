@@ -39,6 +39,7 @@
  */
 
 import { diffLines, textLines } from "@/lib/diff";
+import { PLAN_TOOL } from "@/lib/toolWords";
 
 /** Diff rows / written lines shown before "Show all N lines". */
 export const PREVIEW_LINES = 12;
@@ -80,8 +81,9 @@ export type PreviewPart =
 
 export type PreviewKind = "edit" | "write" | "command" | "code" | "plan" | "args";
 
-/** The plan ask's tool (lane C2's optional `plan_approval` ask). */
-export const PLAN_TOOL = "approve_plan";
+/** The plan ask's tool (lane C2's optional `plan_approval` ask), defined
+ *  once in lib/toolWords (dependency-free, so the bell can read it too). */
+export { PLAN_TOOL };
 /** No real plan has more steps (agents/decompose.py MAX_PLAN_STEPS_CEILING);
  *  a longer list is cut here, and the card says how many more there were. */
 export const PLAN_STEPS_MAX = 20;

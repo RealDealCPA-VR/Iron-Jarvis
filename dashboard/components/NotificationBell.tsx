@@ -34,6 +34,8 @@ import { shortId, clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN } from "@/lib/missionLinks";
+// v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
+import { PLAN_TOOL } from "@/lib/toolWords";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -779,6 +781,9 @@ interface PendingAgentApproval {
    *  plain job and on an older daemon (no key). */
   missionId?: string;
   projectId?: string;
+  /** v1.350.0: approved once or declined, nothing wider (the plan approval
+   *  says `once_only`): the row offers no "Allow for this run". */
+  onceOnly?: boolean;
 }
 
 /** Parse one /chat/approvals/pending row (null = not a usable row). */
@@ -797,6 +802,7 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     ...(r.can_always === true ? { canAlways: true } : {}),
     ...(typeof r.mission_id === "string" && r.mission_id ? { missionId: r.mission_id } : {}),
     ...(typeof r.project_id === "string" && r.project_id ? { projectId: r.project_id } : {}),
+    ...(r.once_only === true ? { onceOnly: true } : {}),
   };
 }
 
@@ -852,7 +858,14 @@ function AgentApprovalRow({
             An agent is asking permission
           </span>
           <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
-            It wants to run <span className="font-mono">{ask.tool}</span>
+            {ask.tool === PLAN_TOOL ? (
+              // v1.350.0: the plan approval is not a tool to run.
+              <>It wants you to approve its plan</>
+            ) : (
+              <>
+                It wants to run <span className="font-mono">{ask.tool}</span>
+              </>
+            )}
             {ask.count > 1 ? (
               <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
             ) : null}
@@ -870,15 +883,17 @@ function AgentApprovalRow({
             >
               {busy === "once" ? "Approving…" : "Approve once"}
             </button>
-            <button
-              type="button"
-              onClick={() => void answer("conversation")}
-              disabled={busy !== null}
-              title={`Approve ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
-              className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
-            >
-              {busy === "conversation" ? "Allowing…" : "Allow for this run"}
-            </button>
+            {!ask.onceOnly && !(ask.tool === PLAN_TOOL) && (
+              <button
+                type="button"
+                onClick={() => void answer("conversation")}
+                disabled={busy !== null}
+                title={`Approve ${ask.tool} for the rest of this run. Every pending ask for it clears at once.`}
+                className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
+              >
+                {busy === "conversation" ? "Allowing…" : "Allow for this run"}
+              </button>
+            )}
             {ask.canAlways && (
               // v1.299.0: a standing grant on the EXACT arguments — offered
               // only when the daemon said it can key one (never for a batch).

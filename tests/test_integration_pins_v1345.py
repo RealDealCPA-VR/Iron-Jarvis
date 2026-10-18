@@ -207,7 +207,10 @@ def test_a_second_delivery_of_the_same_session_is_skipped_by_session_id(tmp_path
 def _page_block(name: str) -> str:
     src = _src(PAGE)
     start = src.index(f"function {name}(")
-    return src[start : start + 6000]
+    # Generous (CLAUDE.md: "Pin the CONTENT; keep the window generous"):
+    # v1.350.0's plan read in finalize pushed its compose past 6,000 chars,
+    # and the pin then read "never there" instead of the words it checks.
+    return src[start : start + 14000]
 
 
 def test_the_daemon_panel_line_is_the_pages_roundmessages_shape():

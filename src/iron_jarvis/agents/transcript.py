@@ -272,6 +272,15 @@ def latest_plan(engine: Any, session_id: str) -> dict[str, Any] | None:
                 select(AgentRun).where(AgentRun.id.in_([row[0] for row in rows]))  # type: ignore[union-attr]
             ).all()
         }
+        # Every run of the session, to know which one is its NEWEST (v1.350.0
+        # integrate). A session normally has one top-level run (a follow-up
+        # is a NEW session; a child agent has its own), but a run restarted
+        # under the same id must not show the PREVIOUS run's plan as its own:
+        # its checklist would read as live and be stamped on its hand-off.
+        session_runs = [
+            (r.id, _naive(r.created_at))
+            for r in db.exec(select(AgentRun).where(AgentRun.session_id == session_id)).all()
+        ]
         sess = db.get(Session, session_id)
         session_status = _value(sess.status) if sess is not None else ""
 
@@ -283,6 +292,15 @@ def latest_plan(engine: Any, session_id: str) -> dict[str, Any] | None:
         return (_naive(created) or written, written)
 
     run_id, plan_text, results_text, _updated = max(rows, key=_when)
+    # The newest run of the session made no plan (yet): it has none to show,
+    # and an older run's plan is not its plan. Strictly NEWER only — two rows
+    # stamped in one clock tick never hide a plan.
+    plan_started = _naive(runs.get(run_id, (None, ""))[0])
+    if plan_started is not None and any(
+        rid != run_id and started is not None and started > plan_started
+        for rid, started in session_runs
+    ):
+        return None
     try:
         plan = json.loads(plan_text or "[]")
         results = json.loads(results_text or "[]")

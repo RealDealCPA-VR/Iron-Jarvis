@@ -240,9 +240,11 @@ describe("sessions/[id]: the plan checklist in the Live run card", () => {
     expect(screen.queryByTestId("plan-checklist")).toBeNull();
   });
 
-  /* v1.350.0 lane C1 review: "Send a follow-up" keeps this page mounted on
-   * the SAME session, so the next run must not inherit the last one's plan
-   * (its daemon copy, its spent reads, or its events still in the window). */
+  /* v1.350.0 lane C1 review: a session that goes live AGAIN while this page
+   * stays mounted on it (a queued run promoted, a run restarted under its own
+   * id) must not inherit the last run's plan (its daemon copy, its spent
+   * reads, or its events still in the window). ("Send a follow-up" itself
+   * opens the NEW session's page: POST /continue mints a new session.) */
   const setStatus = (status: string) => {
     (H.responses["/sessions/s-1"] as { session: { status: string } }).session.status = status;
   };

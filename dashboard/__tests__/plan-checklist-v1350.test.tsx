@@ -592,6 +592,18 @@ describe("the daemon's copy and the saved form", () => {
     expect(readSavedPlan([{ goal: "a", state: "done" }])).toBeNull();
   });
 
+  it("v1.350.0 integrate: a step known only by its place is saved by its place, so a reopen never renumbers it", () => {
+    // An older daemon (no GET /plan) and a plan.created that was never seen:
+    // only step 3 is known, by its index.
+    const gap = foldPlanEvents(null, [completed(2)])!;
+    expect(gap.steps).toEqual([{ index: 2, goal: "", state: "done" }]);
+    const saved = toSavedPlan(gap)!;
+    expect(saved.steps).toEqual([{ goal: "Step 3", state: "done" }]);
+    const back = readSavedPlan(JSON.parse(JSON.stringify(saved)))!;
+    render(<PlanChecklist plan={back} />);
+    expect(screen.getByTestId("plan-step-goal").textContent).toBe("Step 3");
+  });
+
   it("settles a plan when the run ends: nothing is left waiting or spinning", () => {
     const live = foldPlanEvents(null, [created(), started(0), completed(0), started(1)])!;
     expect(settlePlan(live, "cancelled")!.steps.map((s) => s.state)).toEqual(["done", "skipped", "skipped"]);
@@ -1129,10 +1141,15 @@ describe("the plan ask: approve_plan's steps as a numbered list on the ordinary 
     const items = within(list).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual(["read the ledger", "draft the summary", long]);
     expect(within(preview).getByTestId("approval-plan").querySelector("p")!.textContent).toBe("plan: 3 steps");
-    // The same buttons every ask has.
+    // v1.350.0 integrate (changed on purpose): a plan is approved or
+    // declined, nothing wider, even when the card was given no `onceOnly`
+    // (a listing or a session row carries no flags): Allow once and Deny, no
+    // conversation answer, and not the local-only line.
     expect(screen.getByRole("button", { name: "Allow once" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Allow for this conversation" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Allow for this conversation" })).toBeNull();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    expect(screen.queryByTestId("approval-local-only")).toBeNull();
+    expect(screen.getByText(/No step runs until you answer\. “Allow once” lets it follow this plan; Deny ends the run before any step runs\./)).toBeTruthy();
     expect(boxes(within(preview).getByTestId("approval-plan"))).toEqual([]);
   });
 

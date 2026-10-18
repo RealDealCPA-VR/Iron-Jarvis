@@ -215,11 +215,15 @@ async def test_a_link_that_lands_while_the_job_runs_is_where_the_result_goes(app
     job_id = jobs.start_background(
         _spec(provider, handle, kind="image"), thread_id="", session_id="chat", turn_id="turn-r"
     )
-    # Let the job write its row and start polling, then link mid-run.
-    for _ in range(50):
-        await asyncio.sleep(0)
+    # Let the job write its row and start polling, then link mid-run. Wait
+    # for the ROW itself (bounded in real time): 50 bare yields were not
+    # enough on a loaded machine (v1.350.0 integrate saw it under -n 4), the
+    # link then found no row to home and the next line read thread_id "".
+    for _ in range(500):
         if jobs.get_job(job_id) and _row_exists(engine, job_id):
             break
+        await asyncio.sleep(0.01)
+    assert _row_exists(engine, job_id), "the job never wrote its row"
     assert await jobs.home_turn("turn-r", tid) == 0  # nothing finished yet
     assert jobs.get_job(job_id)["thread_id"] == tid
     await jobs.drain()

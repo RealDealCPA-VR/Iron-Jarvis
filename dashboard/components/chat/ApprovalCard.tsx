@@ -44,6 +44,10 @@
 // nothing wider (no tab, no conversation, no Always), with one quiet line that
 // says why. The daemon reads any wider answer as once anyway.
 //
+// A PLAN TO APPROVE (v1.350.0): the optional plan ask (tool `approve_plan`,
+// args `{steps}`) is once-only too, known by its name on every surface, and
+// says what each answer does to the plan instead of the local-only line.
+//
 // WHAT IT COSTS (v1.346.0): a call that spends money (media generation) asks
 // with `costNote` — the daemon's own words for the quote ("Generate 1 image on
 // Pixio for 12 credits (your price)"). The card shows it as ONE quiet line in
@@ -65,7 +69,7 @@ import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
 import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
 import { exampleValue } from "@/lib/approvalPreview";
-import { isBuiltinBrowserTool, toolWords } from "@/lib/toolWords";
+import { isBuiltinBrowserTool, PLAN_TOOL, toolWords } from "@/lib/toolWords";
 import type { PendingApproval } from "@/lib/useChatStream";
 import { ShieldQuestion } from "lucide-react";
 
@@ -121,7 +125,12 @@ export function ApprovalCard({
   // tool called `browser_backup` runs its author's command, has no tab, and the
   // daemon never grants it one, so offering "Allow for this tab" was a lie.
   // v1.332.0: a local-only card answers for this one call and no wider.
-  const onceOnly = approval.onceOnly === true;
+  // v1.350.0: the plan approval (`approve_plan`, a name the daemon keeps for
+  // itself) is approved or declined, nothing wider, on EVERY surface: the
+  // daemon always sends `once_only` for it, but a listing or a session row
+  // carries no flags, so the card knows it by its name too.
+  const planAsk = approval.tool === PLAN_TOOL;
+  const onceOnly = approval.onceOnly === true || planAsk;
   const browserAction = isBuiltinBrowserTool(approval.tool) && !onceOnly;
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
@@ -219,7 +228,12 @@ export function ApprovalCard({
         {waitingLine(approval.timeoutS)}
       </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
-        {onceOnly ? (
+        {planAsk ? (
+          <>
+            No step runs until you answer. “Allow once” lets it follow this
+            plan; Deny ends the run before any step runs.
+          </>
+        ) : onceOnly ? (
           <>
             The turn is paused until you answer. “Allow once” runs only this
             call; Deny refuses it and the assistant is told you declined.
@@ -239,7 +253,9 @@ export function ApprovalCard({
         )}
       </p>
 
-      {onceOnly && (
+      {/* Only a local-only chat's card says so: a plan ask is once-only for
+          its own reason (the line above). */}
+      {onceOnly && !planAsk && (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.
         </p>

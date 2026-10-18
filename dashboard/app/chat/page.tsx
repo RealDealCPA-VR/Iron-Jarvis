@@ -350,6 +350,8 @@ import {
 // v1.350.0 (lane C1): the live plan checklist in that row.
 import { readSessionPlan, useLivePlan } from "@/components/chat/PlanChecklist";
 import { settlePlan, type PlanView } from "@/lib/planChecklist";
+// v1.350.0 (integrate): the plan approval's tool name (lane C2's ask).
+import { PLAN_TOOL } from "@/lib/toolWords";
 import type { StepDetail } from "@/lib/stepDetail";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
@@ -515,6 +517,9 @@ interface SessionAsk {
   count?: number;
   examples?: Record<string, unknown>[];
   timeoutS?: number;
+  /** v1.350.0: an ask answered once or declined, nothing wider (the plan
+   *  approval's `once_only`), so its card offers no conversation answer. */
+  onceOnly?: boolean;
 }
 
 interface ChatMessage {
@@ -5473,6 +5478,11 @@ export default function ChatPage() {
    *      `setup: null` forever and the grant is gone on reopen, breaking the
    *      card's own "stops asking here" promise. */
   function armFromApproval(tool: string) {
+    // v1.350.0: a plan is approved or declined, never armed — `approve_plan`
+    // is the daemon's own ask, not a tool, and must not take a slot in the
+    // "+" set or ride `tools` on later turns. (Its card is once-only, so this
+    // is reached only by a card that lost the flag.)
+    if (tool === PLAN_TOOL) return;
     // v1.312.0 (W4-2): the GRANT is recorded first and always — uncapped,
     // sent on every turn, persisted with the setup. It never arms anything
     // by itself (the daemon honours it only for a tool armed some other way),
@@ -7313,6 +7323,11 @@ export default function ChatPage() {
             ? { examples: p.examples as Record<string, unknown>[] }
             : {}),
           ...(typeof p.timeout_s === "number" ? { timeoutS: p.timeout_s } : {}),
+          // v1.350.0: the plan approval says `once_only` (approve or
+          // decline, nothing wider): its card must not offer "Allow for
+          // this conversation", which would arm a tool name that is not a
+          // tool.
+          ...(p.once_only === true ? { onceOnly: true } : {}),
         });
       }
     }
@@ -7335,6 +7350,7 @@ export default function ChatPage() {
           session_id?: unknown;
           count?: unknown;
           timeout_s?: unknown;
+          once_only?: unknown;
         }[];
       }>("/chat/approvals/pending");
       if (awaitingIdRef.current !== id) return;
@@ -7345,19 +7361,34 @@ export default function ChatPage() {
           tool: String(a.tool ?? ""),
           ...(typeof a.count === "number" && a.count > 1 ? { count: a.count } : {}),
           ...(typeof a.timeout_s === "number" ? { timeoutS: a.timeout_s } : {}),
+          ...(a.once_only === true ? { onceOnly: true } : {}),
         }));
       setPolledAsks(mine);
     } catch {
       /* best-effort — the event fold and the bell still cover it */
     }
   }
+  // v1.350.0 (integrate): the listing never carries arguments, so a plan ask
+  // a reload found has no steps of its own. The run's plan is already known
+  // here (useLivePlan read the daemon's copy for a reopened chat; every step
+  // reads "waiting" while the plan awaits Approve), so the card shows those
+  // goals: approving a plan you cannot read is not a decision. It changes
+  // only when a step does, never per token.
+  const planGoals = useMemo(
+    () => (livePlan ? livePlan.steps.map((s) => s.goal).filter(Boolean) : []),
+    [livePlan],
+  );
   const sessionAsks = useMemo(() => {
     const seen = new Set(askFold.asks.map((a) => a.id));
-    const extra = polledAsks.filter(
-      (a) => !seen.has(a.id) && !askFold.resolved.has(a.id),
-    );
+    const extra = polledAsks
+      .filter((a) => !seen.has(a.id) && !askFold.resolved.has(a.id))
+      .map((a) =>
+        a.tool === PLAN_TOOL && !a.args && planGoals.length > 0
+          ? { ...a, args: { steps: planGoals } }
+          : a,
+      );
     return extra.length ? [...askFold.asks, ...extra] : askFold.asks;
-  }, [askFold, polledAsks]);
+  }, [askFold, polledAsks, planGoals]);
 
   // CALM CHAT W1-6 (v1.326.0): every question waiting on the user, in one
   // list, drawn in the composer's place (<DockAsk>): this chat turn's
@@ -7380,6 +7411,7 @@ export default function ChatPage() {
               count: ask.count,
               examples: ask.examples,
               timeoutS: ask.timeoutS,
+              ...(ask.onceOnly ? { onceOnly: true } : {}),
             }))
           : null,
       }),

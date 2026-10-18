@@ -213,11 +213,12 @@ export default function SessionDetailPage({
    * run already under way reads the daemon's copy once (plan.created came
    * before it was watching); a 404 (no plan, or an older daemon) leaves what
    * the events said, or nothing.
-   * A follow-up sent from this page ("Send a follow-up" keeps the page
-   * mounted on the same session) is a NEW run: its checklist starts after
-   * the newest event this page held while the session sat idle, so the last
-   * run's plan (its events, or the daemon's copy read for it) never shows as
-   * the new run's. A page opened on a live run has no boundary: the whole
+   * A run that goes live while this page is open on the same session (a
+   * queued run promoted, or a run restarted under its own id; "Send a
+   * follow-up" opens a NEW session's page) starts its checklist after the
+   * newest event this page held while the session sat idle, so an earlier
+   * run's plan (its events, or the daemon's copy read for it) never shows
+   * as this one's. A page opened on a live run has no boundary: the whole
    * window is this run's. */
   const planLive = isActive && !isQueued;
   const planSinceRef = useRef<string | null>(null);

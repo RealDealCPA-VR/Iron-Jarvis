@@ -284,6 +284,17 @@ class CommandTool(Tool):
         )
 
 
+#: Names the DAEMON uses for asks that are not registry tools (v1.350.0
+#: integrate). ``approve_plan`` is the plan approval
+#: (``agents/runtime.PLAN_APPROVAL_TOOL``): the runtime gives any call by that
+#: name the plan ask's rules (the setting is its tier, approve/decline only)
+#: and every card words it "follow this plan" — so a custom command tool of
+#: that name would put a plan's consent card in front of a command. Both
+#: creation doors (``tool_create`` and ``POST /tools/custom``) end in
+#: :meth:`DynamicToolRegistry.register`, which refuses these.
+RESERVED_TOOL_NAMES: frozenset[str] = frozenset({"approve_plan"})
+
+
 class DynamicToolRegistry:
     """Persisted registry of agent/user-authored tools. ``load`` rebuilds them on
     boot so they survive a restart; ``register`` upserts by unique ``name``."""
@@ -311,6 +322,10 @@ class DynamicToolRegistry:
         name = (name or "").strip()
         if not name:
             raise ValueError("tool name is required")
+        if name in RESERVED_TOOL_NAMES:
+            raise ValueError(
+                f"'{name}' is a name Iron Jarvis keeps for its own approvals; choose another name"
+            )
         if not argv:
             raise ValueError("tool command (argv) is required")
         params_json = json.dumps(list(params or []))

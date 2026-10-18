@@ -1070,6 +1070,11 @@ def register(app: FastAPI, d) -> None:
             _wait = payload.get("timeout_s")
             if isinstance(_wait, (int, float)) and not isinstance(_wait, bool):
                 meta[aid]["timeout_s"] = int(_wait)
+            # v1.350.0 integrate — a FLAG, never args: an ask answered once or
+            # declined, nothing wider (the plan approval), so a page that
+            # reloads mid-ask draws the same two buttons the live event did.
+            if payload.get("once_only") is True:
+                meta[aid]["once_only"] = True
         # Ids with no event row are DROPPED, not padded with "unknown": the
         # chat stream lane files into this same registry but announces via
         # its SSE frame only — that ask's one answering surface is the chat

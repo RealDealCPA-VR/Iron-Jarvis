@@ -2619,12 +2619,16 @@ let askWaitingCount = 0;
 //: `move_file` are not built-in tools (an agent-made or connected tool runs
 //: whatever its author wrote — tools/dynamic.py), so the app cannot vouch for
 //: them in its own words; they fall back to "use <its name>" below.
+//: v1.350.0: approve_plan is the daemon's own plan approval (a name no custom
+//: tool may take — tools/dynamic.RESERVED_TOOL_NAMES); the card says "follow
+//: this plan", the toast "follow a plan".
 const ASK_PHRASES = {
   rename_file: ["rename or move", "file", "files"],
   write_file: ["save", "file", "files"],
   write_document: ["create", "document", "documents"],
   excel_edit: ["edit", "workbook", "workbooks"],
   shell: ["run", "command", "commands"],
+  approve_plan: ["follow", "plan", "plans"],
 };
 
 function plainAskSummary(ask) {

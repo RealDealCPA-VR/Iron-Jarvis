@@ -226,9 +226,12 @@ export function readPlanResponse(raw: unknown): PlanView | null {
  *  clean goal of at most MAX_GOAL_CHARS and its state. Null for no plan. */
 export function toSavedPlan(view: PlanView | null | undefined): SavedPlan | null {
   if (!view || view.steps.length === 0) return null;
+  // A step known only by its index (its plan.created never seen, and no
+  // daemon copy) is saved by its place ("Step 3"): the saved form keeps no
+  // indices, and read back it would otherwise be renumbered by position.
   const steps = view.steps
     .slice(0, MAX_PLAN_STEPS)
-    .map((s) => ({ goal: cleanGoal(s.goal), state: s.state }));
+    .map((s) => ({ goal: cleanGoal(stepGoalText(s)), state: s.state }));
   const total = typeof view.total === "number" && Number.isInteger(view.total) && view.total >= steps.length
     ? view.total
     : null;

@@ -777,7 +777,13 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             text = f"{who} is on step {int(data.get('index') or 0) + 1}: {_short(data.get('goal') or '', 100)}"
         elif ev.type == EventType.APPROVAL_REQUESTED:
             tool = str(data.get("tool") or "a tool")
-            text, tone = f"{who} is waiting for your OK to use {tool.replace('_', ' ')}", "ask"
+            from .runtime import PLAN_APPROVAL_TOOL  # lazy: the runtime is heavy
+
+            if tool == PLAN_APPROVAL_TOOL:
+                # v1.350.0: the plan approval is not a tool to "use".
+                text, tone = f"{who} is waiting for you to approve the plan", "ask"
+            else:
+                text, tone = f"{who} is waiting for your OK to use {tool.replace('_', ' ')}", "ask"
         elif ev.type == EventType.APPROVAL_RESOLVED:
             decision = str(data.get("decision") or "")
             if decision == "deny":

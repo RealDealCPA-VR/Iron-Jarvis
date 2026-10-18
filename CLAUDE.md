@@ -3547,6 +3547,61 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A helper agent's plan is a checklist; approving it first is an OFF-by-
+  default setting** (v1.350.0, polish wave C: lanes C1 dashboard, C2 daemon,
+  ideas from agent-elements' Todo/Plan tools, MIT, nothing installed).
+  DAEMON: `GET /sessions/{id}/plan` → `{run_id, steps: [{goal, state}]}`,
+  state waiting|running|done|failed|skipped (`transcript.latest_plan` +
+  `plan_checklist`; every step `waiting` while the plan ask is pending; off
+  the loop; ETagged; 404 for no plan / unknown session / unreadable record).
+  `latest_plan` answers None when the session's NEWEST AgentRun (strictly
+  newer `created_at`) is not the planned one — a run restarted under its own
+  id never shows the previous run's plan. NOTE a follow-up is a NEW session
+  (`continue_session` mints one; chat's `awaitingId` and the session page's
+  router.push both follow it), so a session normally has one run.
+  `Config.plan_approval` (schema row, automation group, allow tier, turning
+  it OFF from chat asks first) — with it on, `run_decomposed` asks ONCE
+  between `plan.created` and the first step, only for `ATTENDED_ORIGINS`,
+  never on a resume, via `runtime.ask_plan_approval`: an ordinary pause for
+  the synthetic tool `approve_plan` (`PLAN_APPROVAL_TOOL`), args
+  `{"steps": [goal, ...]}`, `once_only: true`, `can_always: false`, no clock
+  when attended. Deny / unanswered → run FAILED before any step, every step
+  saved `attempted: False` (reads `skipped`). There is NO `plan.proposed`
+  event. `approve_plan` is RESERVED (`tools/dynamic.RESERVED_TOOL_NAMES`,
+  refused at `DynamicToolRegistry.register`, which both creation doors
+  call): `_pause_needed` gives any call by that name the plan ask's rules.
+  The pending listing carries `once_only` (a flag, never args); the mission
+  screen says "is waiting for you to approve the plan"; the desktop toast
+  "follow a plan" = the card's `toolWords` "follow this plan". DASHBOARD:
+  `lib/planChecklist.ts` folds `plan.created/step_started/step_completed`
+  ON TOP of what was already known (never the 150-event window alone);
+  `useLivePlan` (components/chat/PlanChecklist.tsx) reads the daemon's copy
+  only when the page joined mid-run (`eager`) or a step/phase points at an
+  unseen plan, at most twice a turn, one read in flight per session, and
+  drops its seed + read budget when it follows nothing; finalize stamps
+  `agentRun.plan` (≤ 20 steps, ≤ 200 chars a goal, settled; a goal-less step
+  saved as "Step N") on BOTH paths, reads the daemon copy only when a step is
+  still open or the chat was reopened after the run ended, and re-checks
+  `awaitingIdRef` after that read; an old stamp has no `plan` key. The
+  session page passes `useLivePlan` a boundary (the newest event it held
+  while the session was idle). `ApprovalCard` treats `approve_plan` as
+  once-only BY NAME on every surface (a listing / session row carries no
+  flags): Allow once + Deny, its own sentence, never the local-only line;
+  the chat's ask fold and listing poll also read `once_only`;
+  `armFromApproval` never arms `approve_plan`; a polled plan ask (no args)
+  borrows its goals from the live plan; the bell says "It wants you to
+  approve its plan" and drops "Allow for this run" (flag or name).
+  `PLAN_TOOL` is defined ONCE in `lib/toolWords.ts` (dependency-free — the
+  bell is on every page; `lib/approvalPreview` re-exports it). The contract is ONE fixture
+  (`dashboard/__tests__/fixtures/plan-contract-v1350.json`, regenerate with
+  `IJ_REGEN_PLAN_CONTRACT=1`). Pins: `tests/test_plan_{checklist,contract,
+  integration}_v1350.py`, `dashboard/__tests__/plan-{checklist,
+  checklist-session,contract,finalize-fresh}-v1350.test.tsx`;
+  `chat-wave3-v1311` derives `lib/planChecklist`'s event types. Known: a
+  restart while a plan card is unanswered reconciles the run FAILED and
+  Continue resumes it WITHOUT asking (resume is never gated) while its
+  checklist shows step 1 "failed"; mission teammates (`job:mission-member`,
+  attended) each ask for their own plan when the setting is on.
 - **A step can be opened; a helper agent is one row** (v1.349.0, polish
   wave B). Every FINISHED tool_call frame (both /chat/stream sites, refused
   calls too, and `RunSink.tool_finished` from the runtime) carries
