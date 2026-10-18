@@ -228,8 +228,10 @@ describe("the Schedules page row", () => {
     fireEvent.click(await screen.findByTitle("Run now"));
     const note = await screen.findByTestId("schedule-run-warn");
     expect(note.textContent).toContain('"nightly" finished, but it needs you');
-    expect(note.getAttribute("role")).toBe("status");
-    expect(note.className).toMatch(/text-tone-warn/);
+    // ui's WarnNote (reused, never a page copy): role=status, the warn tone.
+    const box = within(note).getByRole("status");
+    expect(box.getAttribute("data-tone")).toBe("warn");
+    expect(box.className).toMatch(/text-tone-warn/);
     expect(screen.queryByText(/Ran "nightly"/)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });

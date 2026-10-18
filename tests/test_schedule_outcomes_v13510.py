@@ -493,3 +493,65 @@ def test_chat_still_answers_with_emergency_stop_on(tmp_path):
     r = client.post("/chat", json={"messages": [{"role": "user", "content": "hello there"}]})
     assert r.status_code == 200, r.text
     assert str(r.json().get("reply") or "").strip()
+
+
+# --------------------------------------------------------------------------- #
+# Review of lane 1A (v1.351.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_failed_run_whose_ask_expired_reads_needs_you_not_failed(tmp_path, monkeypatch):
+    """``derive_outcome``: when an ask expired the PERSON is the headline, even
+    for a run that ended FAILED (not by raising) — the row and the notice say
+    it needs them, never "The run failed"."""
+    app, client = _app(tmp_path)
+    platform = app.state.platform
+    _plant_on_create(platform, "schedule:", _expired_ask)
+    monkeypatch.setattr(
+        platform.orchestrator.runtime,
+        "run",
+        _fake_run(AgentState.FAILED, "Stopped at the folder it was not allowed to open."),
+    )
+    _add_task(client, "tidy-scans")
+    mock = _mock_channel(app)
+    before = len(mock.sent)
+
+    body = client.post("/schedules/tidy-scans/run").json()
+
+    assert body["last_status"] == "needs_you", body
+    assert body["last_detail"].startswith(ro.NEEDS_YOU_LEAD), body
+    assert "The run failed" not in body["last_detail"], body
+    sent = _schedule_messages(mock, before, "tidy-scans")
+    assert sent and all("finished, but it needs you" in m for m in sent), sent
+
+
+async def test_emergency_stop_never_touches_a_self_development_run_a_person_started(tmp_path):
+    """``create_session`` writes origin "self_dev" for a self-development run
+    a person started (the Self-development page, ``ij``, a rerun of one). The
+    switch must neither refuse it nor cancel it — "work you start keeps
+    going" — while an unattended row beside it IS stopped (the control)."""
+    from iron_jarvis.agents.orchestrator import SELF_DEV_ORIGIN, emergency_stop_covers
+    from iron_jarvis.platform import build_platform
+
+    platform = build_platform(str(tmp_path))
+    orch = Orchestrator(platform)
+    platform.config.autonomy_kill_switch = True
+    assert SELF_DEV_ORIGIN == "self_dev"
+    assert not emergency_stop_covers("self_dev")
+    assert emergency_stop_covers("autonomy") and emergency_stop_covers("schedule:x")
+    assert orch.emergency_stop_reason("self_dev") == ""
+    rerun = await orch.create_session("tidy the repo", origin="self_dev")
+    assert rerun.id, "a rerun of a self-development run is not refused"
+    with session_scope(platform.engine) as db:
+        mine = Session(task="tidy the repo", origin="self_dev", status=SessionStatus.ACTIVE)
+        rule = Session(task="file the email", origin="reflex:inbox", status=SessionStatus.ACTIVE)
+        db.add(mine)
+        db.add(rule)
+        db.commit()
+        mine_id, rule_id = mine.id, rule.id
+
+    stopped = orch.stop_unattended()
+
+    assert rule_id in stopped and mine_id not in stopped, stopped
+    assert orch.get_session(mine_id).status is SessionStatus.ACTIVE
+    assert orch.get_session(rule_id).status is SessionStatus.CANCELLED

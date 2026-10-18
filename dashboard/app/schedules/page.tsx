@@ -15,7 +15,6 @@ import {
   ArrowUpRight,
   Pencil,
   X,
-  TriangleAlert,
 } from "lucide-react";
 import { post, del, get, patch, ApiError } from "@/lib/api";
 import { CRON_TO_LABEL, REPEAT_PRESETS } from "@/lib/schedules";
@@ -31,6 +30,7 @@ import {
   SkeletonRows,
   ErrorNote,
   SuccessNote,
+  WarnNote,
   LoaderInline,
   ConfirmButton,
 } from "@/components/ui";
@@ -67,23 +67,6 @@ const ROW_TONE_BY: Record<string, string> = {
   warn: "text-tone-warn",
   muted: "text-zinc-600",
 };
-
-/** Run now's amber answer (v1.351.0, G01): the SuccessNote / ErrorNote shape
- *  in the warn tone, for a run that finished short of the job or did not
- *  run. role=status — it reports, it does not interrupt. */
-function WarnNote({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-testid="schedule-run-warn"
-      className="flex items-start gap-2.5 rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-sm text-tone-warn"
-    >
-      <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
-      <span>{children}</span>
-    </div>
-  );
-}
 
 /** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
  * morning" is the schedule people actually mean; workflow/event serve
@@ -931,7 +914,13 @@ export default function SchedulesPage() {
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}
                 </button>
                 {ok && <SuccessNote>{ok}</SuccessNote>}
-                {warn && <WarnNote>{warn}</WarnNote>}
+                {/* Run now's amber answer (v1.351.0, G01): a run that finished
+                    short of the job, or did not run — ui's WarnNote. */}
+                {warn && (
+                  <div data-testid="schedule-run-warn">
+                    <WarnNote>{warn}</WarnNote>
+                  </div>
+                )}
                 {formError && <ErrorNote>{formError}</ErrorNote>}
               </form>
             </Card>

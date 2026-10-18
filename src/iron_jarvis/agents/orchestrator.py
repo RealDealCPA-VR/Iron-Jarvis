@@ -409,7 +409,7 @@ def is_unattended_origin(origin: str | None) -> bool:
 #: the Autonomy page flashed "all autonomy halted" — schedules, goals, reflex
 #: rules, the phone and queued assignments kept running. Every unattended
 #: door ends in ``Orchestrator.create_session``, so the refusal lives THERE
-#: (one rule, ``is_unattended_origin``), and ``stop_unattended`` cancels what
+#: (one rule, ``emergency_stop_covers``), and ``stop_unattended`` cancels what
 #: such doors already have running when the switch is engaged. Chat, a
 #: mission, a project task and a session a person started are attended and
 #: are never touched.
@@ -435,6 +435,25 @@ def emergency_stop_on(config) -> bool:
     """Is Emergency stop engaged? Read live (a settings write flips the
     attribute in place). Anything but a real ``True`` reads as off."""
     return getattr(config, "autonomy_kill_switch", False) is True
+
+
+#: The origin ``create_session`` writes for a self-development run when the
+#: door stamped none: the Self-development page, ``ij`` and a rerun of one
+#: — a PERSON started it. (Autonomy's own self-dev proposals stamp
+#: "autonomy".)
+SELF_DEV_ORIGIN = "self_dev"
+
+
+def emergency_stop_covers(origin: str | None) -> bool:
+    """Does Emergency stop refuse (and stop) a run of ``origin``? Every
+    unattended door (``is_unattended_origin``) EXCEPT the ``self_dev``
+    default above: that run was started by a person, and the setting
+    promises "work you start keeps going". (Review of v1.351.0 lane 1A:
+    engaging the switch cancelled a running self-development session and
+    refused its rerun.) ``is_unattended_origin`` itself is unchanged — the
+    background lane and the busy count keep their own reading."""
+    text = str(origin or "").strip()
+    return text != SELF_DEV_ORIGIN and is_unattended_origin(text)
 
 
 def busy_notice_threshold(config) -> int:
@@ -980,7 +999,7 @@ class Orchestrator:
         # phone, a queued assignment, autonomy — ends here, so this is the one
         # refusal. Judged on the origin the DOOR stamped (before the self-dev
         # default below): an untagged run is a person, never refused.
-        if is_unattended_origin(origin) and emergency_stop_on(self.p.config):
+        if emergency_stop_covers(origin) and emergency_stop_on(self.p.config):
             raise EmergencyStopOn(EMERGENCY_STOP_REFUSAL)
 
         # LOCAL ONLY (v1.332.0). A session is local only when the door says so
@@ -1533,7 +1552,7 @@ class Orchestrator:
         its work instead of trying and failing (the assignment dispatcher —
         a refused start there would strike the job). Never raises."""
         try:
-            if is_unattended_origin(origin) and emergency_stop_on(self.p.config):
+            if emergency_stop_covers(origin) and emergency_stop_on(self.p.config):
                 return EMERGENCY_STOP_REFUSAL
         except Exception:  # noqa: BLE001 — an unreadable switch is "off", like the loop reads it
             pass
@@ -1573,7 +1592,7 @@ class Orchestrator:
             return []
         stopped: list[str] = []
         for sid, origin in rows:
-            if not sid or not is_unattended_origin(origin):
+            if not sid or not emergency_stop_covers(origin):
                 continue
             self._stop_reasons[sid] = reason
             try:
