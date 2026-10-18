@@ -4251,13 +4251,77 @@ _FILE_CLAIM_RX = _re.compile(
 #: The verbs of a claim that an EXISTING file was changed (v1.351.0, G06).
 _CHANGE_VERBS = r"(?:updated|edited|modified|changed|renamed|moved)"
 
-#: "I updated budget.xlsx" — a change verb, then a filename (v1.351.0, G06).
-#: Unlike the creation verbs, these words also DESCRIBE files the user gave
-#: ("here is what changed in report.docx", "the totals moved in Q3.xlsx"), so
-#: a match only counts as a claim when its run-up names the assistant as the
-#: one who did it — see :data:`_CHANGE_SUBJECT_RX`.
+#: Words that cannot sit inside the OBJECT of a change claim (v1.351.0
+#: review 2): a preposition or clause word, a reading or helper verb, a
+#: pronoun. Each one means the file is not the thing the verb changed — "I
+#: updated the email TO mention invoice.pdf", "I updated the table WITH the
+#: figures in budget.xlsx", "I updated the forecast and LOOKED at …".
+_CHANGE_OBJECT_STOP = (
+    r"(?:with|for|to|from|using|by|on|at|so|that|which|who|it|below|above|as|"
+    r"into|onto|about|after|before|per|against|without|via|through|then|in|of|"
+    r"inside|within|looked|read|checked|reviewed|opened|compared|saw|found|"
+    r"noticed|scanned|inspected|examined|went|will|would|can|could|should|is|"
+    r"are|was|were|be|been|has|have|had|nothing|no|not|none|my|our|i|we|you)"
+)
+
+#: One word of a change claim's object ("the Q3 TOTALS in budget.xlsx").
+_CHANGE_OBJECT_WORD = r"(?!" + _CHANGE_OBJECT_STOP + r"\b)[\w$%'’-]+"
+
+#: Things a chat reply writes in the chat itself, never in the file it names:
+#: "I updated the SUMMARY of report.docx below" changed the summary.
+_CHAT_TEXT_NOUNS = (
+    r"(?:summary|summaries|email|emails|e-mail|draft|drafts|reply|answer|"
+    r"response|message|letter|note|notes|list|outline|overview|recap|analysis|"
+    r"review|breakdown|explanation|description|translation|text|wording|"
+    r"paragraph|paragraphs|prompt|query|code|script|snippet|steps|plan|"
+    r"instructions|example|examples)"
+)
+
+#: What may stand between the verb's object and the name: a folder path, and
+#: the quotes/backticks/bold a reply wraps a filename in.
+_CLAIMED_NAME_LEAD = r"[`\"'*“‘]{0,3}(?:[^\s`\"'*<>|]*[\\/])?"
+
+#: "I updated budget.xlsx" — a change verb whose OBJECT is the file (v1.351.0,
+#: G06). Unlike the creation verbs, these words also DESCRIBE files the user
+#: gave ("here is what changed in report.docx", "the totals moved in
+#: Q3.xlsx"), so a match only counts as a claim when its run-up names the
+#: assistant as the one who did it — see :data:`_CHANGE_SUBJECT_RX`.
+#:
+#: v1.351.0 review 2 — THE FILE MUST BE WHAT CHANGED. The first cut let the
+#: filename sit anywhere in the next 90 characters, and a reply that edits
+#: TEXT in the chat and mentions a file is the most ordinary reply there is:
+#: "I've updated the email to mention invoice.pdf", "I updated the code to
+#: read config.json", "I edited the summary of report.docx below" — 23 of 24
+#: such read-only replies got "The reply says it changed X … so that file did
+#: not change" (before G06 none did). Now only two shapes claim a change:
+#:   1. the file is the object — "updated budget.xlsx", "edited the file
+#:      `report.docx`";
+#:   2. a part of the file is — "changed the fee in budget.xlsx", "edited the
+#:      intro and the outro of report.docx": a determiner, at most five plain
+#:      words (no preposition, reading verb or pronoun — :data:`_CHANGE_OBJECT_STOP`)
+#:      whose last is not a thing the chat writes (:data:`_CHAT_TEXT_NOUNS`),
+#:      then in/of the file.
+#: A rename or move says where the file went — :data:`_FILE_MOVED_TO_RX`.
 _FILE_CHANGE_CLAIM_RX = _re.compile(
-    r"\b" + _CHANGE_VERBS + r"\b[^.\n]{0,90}?" + _CLAIMED_NAME,
+    r"\b" + _CHANGE_VERBS + r"\b\s+"
+    r"(?:"
+    r"(?:(?:the|your|this|that|its|both)\s+)?"
+    r"(?:(?:file|workbook|document|spreadsheet|sheet|deck|copy|scan)\s+)?"
+    r"|(?:the|your|this|that|its|both)\s+"
+    r"(?:" + _CHANGE_OBJECT_WORD + r"\s+){0,4}"
+    r"(?!" + _CHAT_TEXT_NOUNS + r"\b)" + _CHANGE_OBJECT_WORD + r"\s+"
+    r"(?:in|of|inside|within)\s+(?:(?:the|your)\s+)?"
+    r"(?:(?:file|workbook|document|spreadsheet|sheet|deck)\s+)?"
+    r")" + _CLAIMED_NAME_LEAD + _CLAIMED_NAME,
+    _re.IGNORECASE,
+)
+
+#: "I renamed the scan to Smith_2025.pdf" — a rename or a move names the file
+#: it ended as, right after "to" (v1.351.0 review 2). "I moved on to the
+#: second tab of budget.xlsx" is not one (the gap check below).
+_FILE_MOVED_TO_RX = _re.compile(
+    r"\b(?:renamed|moved)\b\s+(?:[\w$%'’.-]+\s+){1,4}?to\s+"
+    + _CLAIMED_NAME_LEAD + _CLAIMED_NAME,
     _re.IGNORECASE,
 )
 
@@ -4266,8 +4330,19 @@ _FILE_CHANGE_CLAIM_RX = _re.compile(
 #: made; the simple past ("budget.xlsx was modified on Oct 3", "report.docx
 #: was updated last week by your colleague") is how a reply DESCRIBES a
 #: file's history, so it is not a claim (v1.351.0 review).
+#:
+#: LINEAR (v1.351.0 review 2): this pattern has no verb in front to anchor
+#: it, so without the look-behind the name part restarted at EVERY character
+#: of a long name-like run and rescanned it to the end — a 50 KB ``a.a.a…``
+#: reply took 54 s, on the event loop (the v1.349.0 redact lesson again). A
+#: name can only start where a run of name characters starts — where the
+#: leftmost match always started, so the first claim found is unchanged and
+#: nothing new is ever found. The one shape no longer read is a SECOND claim
+#: glued to the end of the first by a name character ("… is now
+#: updated(budget.xlsx has been updated)"): the conservative direction.
 _FILE_CHANGED_AFTER_RX = _re.compile(
-    _CLAIMED_NAME
+    r"(?<![\w.$~()\[\]-])"
+    + _CLAIMED_NAME
     + r"(?:\s+(?:file|workbook|document|spreadsheet))?\s+"
     r"(?:has\s+been|have\s+been|is\s+now|are\s+now)\s+"
     r"(?:(?:just|now|also|already|successfully)\s+)?"
@@ -4434,7 +4509,11 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=()) -
     # without naming it succeeded (v1.351.0 review) — see
     # :func:`_may_have_changed_files`.
     judge_changes = not _may_have_changed_files(tools_used, custom_tools)
-    for m in _FILE_CHANGE_CLAIM_RX.finditer(reply) if judge_changes else ():
+    claims = (
+        [*_FILE_CHANGE_CLAIM_RX.finditer(reply), *_FILE_MOVED_TO_RX.finditer(reply)]
+        if judge_changes else []
+    )
+    for m in sorted(claims, key=lambda c: c.start()):
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
             continue  # an offer, a denial, or a description — not a claim

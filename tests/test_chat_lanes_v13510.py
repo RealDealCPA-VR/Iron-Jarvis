@@ -501,6 +501,123 @@ def test_a_second_change_verb_is_still_a_claim(reply):
 
 
 @pytest.mark.parametrize(
+    "reply",
+    [
+        # v1.351.0 review 2: a reply that changed TEXT IN THE CHAT and mentions
+        # a file — the most ordinary reply there is. The first cut let the name
+        # sit anywhere after the verb and accused 23 of 24 of these.
+        "I've updated the email to mention invoice.pdf.",
+        "I've updated the response to reflect what's in report.docx.",
+        "I edited the draft below so it references invoice.pdf.",
+        "I changed the wording of the cover letter for resume.pdf.",
+        "I updated the list with totals in budget.xlsx.",
+        "I've updated the table below with the figures in budget.xlsx.",
+        "I modified the query so it reads budget.csv correctly.",
+        "I changed the formula to =SUM(B2:B9) for budget.xlsx; paste it in B10.",
+        "Updated the answer: the totals in budget.xlsx are $5,000.",
+        "I edited the paragraph to cite report.pdf.",
+        "We changed the plan to use data.csv instead.",
+        "I updated the code to read config.json.",
+        "I changed the filename in the script to report.docx.",
+        "I renamed the variable; it now points at data.json.",
+        "I updated the table and found rates in budget.xlsx.",
+        "Then I moved on to budget.xlsx and found the rate.",
+        "I updated the analysis of budget.xlsx above.",
+        "I've edited the notes of report.docx for clarity.",
+    ],
+)
+def test_a_reply_that_changed_chat_text_and_names_a_file_is_not_accused(reply):
+    """The file must be WHAT CHANGED — the verb's object ("updated
+    budget.xlsx") or a part of it ("changed the fee in budget.xlsx") — never a
+    file named somewhere after an edit to the email, the code or the answer."""
+    assert _claimed_write_note(reply, ["read_document"]) == "", reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I updated `budget.xlsx` with the new totals.",
+        "I updated **budget.xlsx** with the new totals.",
+        "I updated C:/work/budget.xlsx with the new totals.",
+        "I edited the file report.docx.",
+        "I changed the rate in the workbook budget.xlsx.",
+        "I updated the totals in the budget.xlsx file.",
+        "I modified the header of report.docx.",
+        "I moved the scan to archive/Smith_2025.pdf.",
+        "I renamed it to Smith_2025.pdf.",
+    ],
+)
+def test_a_change_to_the_file_itself_is_still_a_claim(reply):
+    """The narrowing keeps every way a reply says the FILE changed: quoted,
+    bold or with its folder, "the file X", a part of it, a rename or a move."""
+    note = _claimed_write_note(reply, ["read_document"])
+    assert note and "did not change" in note, reply
+
+
+def _best_time(fn, text: str, repeat: int) -> float:
+    import time
+
+    best = float("inf")
+    for _ in range(repeat):
+        t0 = time.perf_counter()
+        fn(text)
+        best = min(best, time.perf_counter() - t0)
+    return best
+
+
+def test_the_claim_check_costs_what_its_reply_does():
+    """v1.351.0 review 2: the "X has been updated" pattern had no verb in
+    front to anchor it and rescanned a long name-like run from every
+    character — a 50 KB ``a.a.a…`` reply took 54 s, ON THE EVENT LOOP (the
+    stream lane runs this check in its generator). Four times the reply costs
+    about four times the time, never ~16x (a RATIO, never a wall-clock bar —
+    the v1.349.0 redact pin's method)."""
+    def check(s: str) -> str:
+        return _claimed_write_note(s, ["read_document"])
+
+    for unit in ("a.", "a-.", "(a).", "x$~."):
+        small = "I updated " + unit * (2_000 // len(unit))
+        big = "I updated " + unit * (8_000 // len(unit))
+        check(small)  # warm
+        t_small, t_big = _best_time(check, small, 9), _best_time(check, big, 5)
+        ratio = t_big / max(t_small, 1e-7)
+        assert ratio < 9, (unit, ratio, t_small, t_big)
+
+
+def test_the_anchored_after_pattern_finds_what_it_found_before():
+    """The look-behind only stops a match starting INSIDE a run of name
+    characters — where the leftmost match never started. On fuzzed text the
+    first claim is the same name at the same place, and the new pattern never
+    finds one the old did not (it can miss a second claim glued to the first
+    by a name character — the conservative direction)."""
+    import random
+    import re
+
+    old = re.compile(
+        chat_turn._CLAIMED_NAME
+        + r"(?:\s+(?:file|workbook|document|spreadsheet))?\s+"
+        r"(?:has\s+been|have\s+been|is\s+now|are\s+now)\s+"
+        r"(?:(?:just|now|also|already|successfully)\s+)?"
+        + chat_turn._CHANGE_VERBS + r"\b",
+        re.IGNORECASE,
+    )
+    new = chat_turn._FILE_CHANGED_AFTER_RX
+    alphabet = ["a", "B", "1", ".", "-", "(", ")", "[", "]", "$", "~", " ", "_",
+                "x.pdf", ".xlsx", "budget.xlsx", "report.docx", "/", "`", "*",
+                " has been updated", " is now edited", " file", " was updated", "\n"]
+    rng = random.Random(13510)
+    hits = 0
+    for _ in range(3000):
+        s = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 14)))
+        a = [(m.start(), m.group(1)) for m in old.finditer(s)]
+        b = [(m.start(), m.group(1)) for m in new.finditer(s)]
+        assert a[:1] == b[:1], repr(s)
+        assert set(b) <= set(a), repr(s)
+        hits += bool(a)
+    assert hits > 100, hits  # anti-vacuity: the fuzz really exercises matches
+
+
+@pytest.mark.parametrize(
     "tool",
     ["shell", "run_code", "code_run", "delegate", "spawn_agent", "workflow_run",
      "pane_send", "mcp__filesystem__edit_file"],
