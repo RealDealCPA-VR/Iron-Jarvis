@@ -500,6 +500,61 @@ def test_a_second_change_verb_is_still_a_claim(reply):
     assert note and "did not change" in note, reply
 
 
+@pytest.mark.parametrize(
+    "tool",
+    ["shell", "run_code", "code_run", "delegate", "spawn_agent", "workflow_run",
+     "pane_send", "mcp__filesystem__edit_file"],
+)
+def test_a_change_claim_after_a_tool_that_can_change_files_is_left_alone(tool):
+    """v1.351.0 review: a shell line, code, a hand-off or a pack's tool can
+    change a file without naming it, so after one SUCCEEDED the note cannot
+    say "no tool that changes files succeeded" — a change claim is left
+    alone (the checker is shared by both chat lanes and every agent run's
+    summary)."""
+    reply = "I updated notes.md with the new line."
+    assert _claimed_write_note(reply, ["read_document"]), "anti-vacuity: the claim alone draws the note"
+    assert _claimed_write_note(reply, ["read_document", tool]) == "", tool
+
+
+def test_a_creation_claim_after_shell_is_judged_as_it_always_was():
+    """Only the CHANGE claims G06 added are left alone after a shell line —
+    the creation claim keeps its v1.153.2 behaviour byte for byte."""
+    assert _claimed_write_note("Saved to report.docx.", ["shell"]) == _claimed_write_note(
+        "Saved to report.docx.", ["read_document"]
+    ) != ""
+
+
+def test_a_file_shell_really_changed_is_not_accused(tmp_path):
+    """THE FALSE ACCUSATION THE REVIEW FOUND, through the real POST lane: the
+    shell line really rewrote notes.md and the reply said so — it used to
+    get "nothing was written to disk this turn … so that file did not
+    change". A shell line that FAILED is not a change, so the same claim
+    then still gets the note (the control)."""
+    client = TestClient(create_app(str(tmp_path / "home")))
+    ws = tmp_path / "work"
+    ws.mkdir()
+    for command, changes in (("echo new> notes.md", True), ("exit 3", False)):
+        (ws / "notes.md").write_text("old\n", encoding="utf-8")
+        model = _ScriptedModel(
+            ToolCall(id="c1", name="shell", arguments={"command": command}),
+            "I updated notes.md with the new line.",
+        )
+        client.app.state.platform.providers.get = lambda p, m=None, _m=model: _m
+        r = client.post("/chat", json={
+            "messages": [{"role": "user", "content": "put new in notes.md"}],
+            "tools": ["shell"], "workspace_dir": str(ws), "approval_mode": "yolo",
+        })
+        assert r.status_code == 200, r.text
+        out = r.json()
+        text = (ws / "notes.md").read_text(encoding="utf-8")
+        if changes:
+            assert "shell" in out["tools_used"] and text.strip() == "new", (out["tools_used"], text)
+            assert "did not change" not in out["reply"] and "_Note:" not in out["reply"], out["reply"]
+        else:
+            assert "shell" not in out["tools_used"] and text == "old\n", (out["tools_used"], text)
+            assert "The reply says it changed `notes.md`" in out["reply"], out["reply"]
+
+
 def test_a_creation_claim_reads_exactly_as_before():
     note = _claimed_write_note("Saved to report.docx.", ["read_document"])
     assert note == (

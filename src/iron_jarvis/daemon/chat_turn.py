@@ -4320,6 +4320,30 @@ _CLAIM_NEGATION_RX = _re.compile(
 )
 
 
+def _may_have_changed_files(tools_used: list[str]) -> bool:
+    """True when a tool that can change a file WITHOUT naming it succeeded
+    this turn (v1.351.0 review): a shell line, code, a hand-off to an agent
+    or a workflow (the registry's own list, ``tools.registry._MUTATING_TOOLS``
+    — the read cache drops on the same calls), a Build pane's CLI
+    (``pane_send``), or a connected pack's tool (``mcp__*``).
+
+    THE FALSE ACCUSATION THIS ENDS: G06 made a claimed CHANGE ("I updated
+    notes.md") draw the note, and after ``shell`` really rewrote notes.md the
+    reply got "nothing was written to disk this turn … so that file did not
+    change" — in both chat lanes and on every agent run's summary (the
+    orchestrator calls the same checker). The note can only say "no tool that
+    changes files succeeded" when that is true, so after one of these the
+    change claim is left alone. (A user-made custom tool is not known by name
+    here — the same blind spot the creation claim has always had.)"""
+    from ..tools.registry import _MUTATING_TOOLS
+
+    for name in tools_used or ():
+        n = str(name or "")
+        if n in _MUTATING_TOOLS or n == "pane_send" or n.startswith("mcp__"):
+            return True
+    return False
+
+
 def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     """'' unless the REPLY claims a file exists that no tool actually wrote.
 
@@ -4344,7 +4368,9 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     gets the note. Those verbs also describe a user's own files, so they count
     only with the assistant as their subject (:data:`_CHANGE_SUBJECT_RX`), and
     the note says the file is unchanged — not that it does not exist. A
-    creation-only claim reads exactly as it always has.
+    creation-only claim reads exactly as it always has. A change claim is
+    not judged at all after a tool that can change a file without naming it
+    (:func:`_may_have_changed_files`: shell, code, a hand-off, a pack).
     """
     if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
@@ -4357,7 +4383,11 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
         if name not in named:
             named.append(name)
     changed: list[str] = []
-    for m in _FILE_CHANGE_CLAIM_RX.finditer(reply):
+    # A CHANGE claim is judged only when nothing that can change a file
+    # without naming it succeeded (v1.351.0 review) — see
+    # :func:`_may_have_changed_files`.
+    judge_changes = not _may_have_changed_files(tools_used)
+    for m in _FILE_CHANGE_CLAIM_RX.finditer(reply) if judge_changes else ():
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
             continue  # an offer, a denial, or a description — not a claim
@@ -4365,7 +4395,7 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
             continue  # the file is the SOURCE ("… using budget.xlsx"), or a denial
         if m.group(1) not in changed:
             changed.append(m.group(1))
-    for m in _FILE_CHANGED_AFTER_RX.finditer(reply):
+    for m in _FILE_CHANGED_AFTER_RX.finditer(reply) if judge_changes else ():
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead):
             continue  # "once budget.xlsx has been updated, …"
