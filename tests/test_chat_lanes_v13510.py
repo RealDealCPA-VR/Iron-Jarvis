@@ -211,6 +211,43 @@ async def test_a_new_chats_first_turn_is_listed_under_the_chat_it_was_linked_to(
             lg.task.cancel()
 
 
+def test_a_chat_parked_on_an_apps_question_is_listed_with_no_card(tmp_path):
+    """The listing's NO-CARD branch, through the real route (v1.351.0
+    review): a chat parked on an app's question holds no approval in the
+    shared registry, so the route takes its early return — that return must
+    carry the chat row too, and must drop it once a window follows the turn
+    or the chat stops waiting."""
+    from iron_jarvis.core.turns import TURNS
+
+    client = TestClient(create_app(str(tmp_path)))
+    platform = client.app.state.platform
+    logs = dt.TurnLogs(platform.engine)
+    platform.turn_logs = logs
+    lg = dt.TurnLog("turn-app", "th-app")
+    logs._logs["turn-app"] = lg  # a running daemon-owned turn, nobody following
+    entry = TURNS.new_thread_turn("th-app")
+    TURNS.enter_thread(entry)
+    entry.park()  # the chat reads "waiting" (an app asked the user something)
+    try:
+        r = client.get("/chat/approvals/pending")
+        assert r.status_code == 200, r.text
+        rows = r.json()["approvals"]
+        assert [(x["id"], x["kind"], x["thread_id"], x["tool"]) for x in rows] == [
+            ("chat:th-app", "chat", "th-app", "")
+        ], rows
+        assert rows[0]["mission_id"] is None and rows[0]["project_id"] is None
+
+        follower: asyncio.Queue = asyncio.Queue()
+        lg._followers.add(follower)  # a window opened the chat: its card shows
+        assert client.get("/chat/approvals/pending").json()["approvals"] == []
+        lg._followers.discard(follower)
+
+        entry.unpark()  # answered: the chat no longer waits
+        assert client.get("/chat/approvals/pending").json()["approvals"] == []
+    finally:
+        TURNS.leave_thread(entry)
+
+
 def test_the_helper_lists_only_running_unwatched_turns_that_wait():
     """``waiting_unwatched`` — the rule, on the real TurnLog/TurnLogs."""
     logs = dt.TurnLogs(engine=None)
@@ -402,6 +439,28 @@ def test_a_claimed_change_no_tool_made_gets_the_note(reply):
     ],
 )
 def test_describing_a_change_is_not_claiming_one(reply):
+    assert _claimed_write_note(reply, ["read_document"]) == "", reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # v1.351.0 review: read-only answers about a document's history that
+        # the first cut accused ("The reply says it changed report.docx …").
+        "Here's what was changed in report.docx: the fee went up.",
+        "budget.xlsx was modified on Oct 3, per the file info.",
+        "The file report.docx was updated last week by your colleague.",
+        "I read budget.xlsx. The rates were updated in budget.xlsx last March.",
+        "I updated my summary using the numbers in budget.xlsx.",
+        "Sure! Updated figures from budget.xlsx: revenue 10, cost 5.",
+        "I compared both versions and changed nothing in budget.xlsx.",
+    ],
+)
+def test_reading_about_a_files_history_is_not_accused(reply):
+    """A reply that DESCRIBES a file's changes (a simple-past passive, the
+    file as the source, a denial after the verb) is not a claim that this
+    turn changed it — the note would be a false accusation on a read-only
+    turn, the trust failure G06 exists to end."""
     assert _claimed_write_note(reply, ["read_document"]) == "", reply
 
 
@@ -610,6 +669,32 @@ def test_a_local_fleet_model_is_told_it_runs_on_the_users_network(tmp_path, monk
     assert "The model answering (you) runs on a computer on the user's own network" in system
     assert "runs in the cloud" not in system and "You run locally" not in system
     assert out["route"]["on_this_network"] is True
+
+
+@pytest.mark.parametrize("lane", ["post", "stream"])
+def test_a_projects_cloud_default_is_told_it_runs_in_the_cloud(tmp_path, monkeypatch, lane):
+    """v1.351.0 review: an in-project chat with NO explicit pick is answered
+    by the PROJECT's default model — the where-line must read that rung (the
+    project is now loaded before the line is built), not the configured
+    default (the offline demo here, which would say "this PC")."""
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import Project
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        box = _wire(client, monkeypatch, _Box("anthropic"))
+        pid = client.post("/projects", json={"name": "Cloud work"}).json()["id"]
+        with session_scope(client.app.state.platform.engine) as db:
+            row = db.get(Project, pid)
+            row.default_provider, row.default_model = "anthropic", "m1"
+            db.add(row)
+            db.commit()
+        body = {**_HI, "project_id": pid}
+        out = client.post("/chat", json=body).json() if lane == "post" else _stream_done(client, body)
+    assert out["route"]["provider"] == "anthropic", out.get("route")
+    system = box.systems[0]
+    assert "The model answering (you) runs in the cloud" in system, system[:600]
+    assert "runs on this PC" not in system
+    assert out["route"]["on_this_network"] is False
 
 
 def test_the_where_line_follows_the_one_predicate():

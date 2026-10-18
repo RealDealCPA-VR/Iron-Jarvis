@@ -1005,8 +1005,11 @@ def register(app: FastAPI, d) -> None:
 
         A CHAT NOBODY IS WATCHING (v1.351.0, G05): the chat card is the right
         surface only while a window is following that turn. A daemon-owned
-        turn parked on the user that NO window follows (the user went to
-        Build, or closed the window to the tray) is listed as ONE row per
+        turn parked on the user that NO window follows (the window was
+        closed to the tray, or the user opened another chat — NOTE: moving
+        to another page in the same window, e.g. Build, does not end the
+        chat page's fetch, so that turn still reads as followed until the
+        window closes) is listed as ONE row per
         chat, ``{id: "chat:<thread id>", kind: "chat", thread_id, tool,
         requested_at, mission_id: null, project_id: null}`` — names only, no
         arguments, and no approval id (it is answered in its chat, where the

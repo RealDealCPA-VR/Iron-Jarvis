@@ -4262,27 +4262,42 @@ _FILE_CHANGE_CLAIM_RX = _re.compile(
 )
 
 #: "budget.xlsx has been updated" — the same claim with the filename first.
+#: Only the PERFECT passive ("has been", "is now") announces a change just
+#: made; the simple past ("budget.xlsx was modified on Oct 3", "report.docx
+#: was updated last week by your colleague") is how a reply DESCRIBES a
+#: file's history, so it is not a claim (v1.351.0 review).
 _FILE_CHANGED_AFTER_RX = _re.compile(
     _CLAIMED_NAME
     + r"(?:\s+(?:file|workbook|document|spreadsheet))?\s+"
-    r"(?:has\s+been|have\s+been|was|were|is\s+now|are\s+now)\s+"
+    r"(?:has\s+been|have\s+been|is\s+now|are\s+now)\s+"
     r"(?:(?:just|now|also|already|successfully)\s+)?"
     + _CHANGE_VERBS + r"\b",
     _re.IGNORECASE,
 )
 
 #: The run-up that makes a change verb a CLAIM: the assistant as subject
-#: ("I", "I've", "we have"), a passive ("has been", "was"), a joined action
-#: ("… and updated"), or the start of a sentence / list item ("Updated
-#: budget.xlsx with the new totals."). Anything else — "what changed in",
-#: "the totals changed in", "you updated" — describes, and is left alone.
+#: ("I", "I've", "we have"), a perfect passive ("has been", "is now"), a
+#: joined action ("… and updated"), or the start of a sentence / list item
+#: ("Updated budget.xlsx with the new totals."). Anything else — "what
+#: changed in", "here's what was changed in", "the rates were updated in",
+#: "you updated" — describes, and is left alone.
 _CHANGE_SUBJECT_RX = _re.compile(
     r"(?:\b(?:I|we)(?:'ve|'d|\s+have|\s+had)?"
-    r"|\b(?:has|have|had)\s+been"
-    r"|\b(?:was|were|is\s+now|are\s+now)"
+    r"|\b(?:has|have)\s+been"
+    r"|\b(?:is|are)\s+now"
     r"|\b(?:and|then)"
     r"|^|[.!?:;—–]|\n\s*(?:[-*•]|\d+[.)])?)"
     r"(?:\s+(?:just|now|also|already|successfully|finally|then))*\s*$",
+    _re.IGNORECASE,
+)
+
+#: Words BETWEEN a change verb and the filename that make the file the
+#: SOURCE, not the thing changed ("I updated my summary using the numbers in
+#: budget.xlsx", "Updated figures from budget.xlsx: …") or deny the change
+#: ("changed nothing in budget.xlsx") — not a claim (v1.351.0 review).
+_CHANGE_GAP_SKIP_RX = _re.compile(
+    r"\b(?:from|using|based\s+on|according\s+to|per|against|nothing|no|not|"
+    r"none|without)\b",
     _re.IGNORECASE,
 )
 
@@ -4338,6 +4353,8 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
         lead = reply[max(0, m.start() - 40) : m.start()]
         if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
             continue  # an offer, a denial, or a description — not a claim
+        if _CHANGE_GAP_SKIP_RX.search(reply[m.start() : m.start(1)]):
+            continue  # the file is the SOURCE ("… using budget.xlsx"), or a denial
         if m.group(1) not in changed:
             changed.append(m.group(1))
     for m in _FILE_CHANGED_AFTER_RX.finditer(reply):
