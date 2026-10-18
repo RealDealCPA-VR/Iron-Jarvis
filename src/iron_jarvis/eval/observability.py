@@ -373,6 +373,24 @@ def _parse_dt(value) -> "datetime | None":
     return dt
 
 
+#: Most event types one ``type=a,b,c`` filter may name (v1.351.0): the bell
+#: names ~20; a cap keeps a pasted list from building an unbounded IN clause.
+_TYPE_LIST_MAX = 40
+
+
+def _type_list(value) -> list[str]:
+    """``type`` as a list: one type, or a comma-separated list, blanks dropped,
+    duplicates removed in order, at most ``_TYPE_LIST_MAX``. ``[]`` = none."""
+    out: list[str] = []
+    for part in str(value or "").split(","):
+        name = part.strip()
+        if name and name not in out:
+            out.append(name)
+        if len(out) >= _TYPE_LIST_MAX:
+            break
+    return out
+
+
 def _encode_cursor(created_at, entry_id: str) -> str:
     return f"{_iso(created_at)}|{entry_id}"
 
@@ -460,7 +478,13 @@ class AuditTimeline:
         want_total = cursor is None
 
         kind = (kind or "").strip().lower() or None
-        etype = (type or "").strip() or None
+        # v1.351.0 (G04): ``type`` may be ONE type or a comma-separated LIST
+        # (the bell replays every type it maps in one read after the window
+        # was closed). De-duplicated in order, bounded so a pasted list can
+        # never build an unbounded IN clause. One type behaves exactly as it
+        # always did.
+        etypes = _type_list(type)
+        etype = etypes[0] if len(etypes) == 1 else None
 
         # Decide which source streams contribute + how, from the kind filter.
         include_tools = True
@@ -515,6 +539,30 @@ class AuditTimeline:
                     event_types_in = (etype,)
                 else:
                     include_events = False
+        elif len(etypes) > 1:
+            # A LIST: the same rules as one type, applied to each. tool.* names
+            # select the tool-invocation stream (both = either verdict); every
+            # other name constrains the event stream to the listed types the
+            # kind filter admits.
+            wants_exec = "tool.executed" in etypes
+            wants_deny = "tool.denied" in etypes
+            if wants_exec and not wants_deny:
+                include_tools = include_tools and tool_verdict != "deny"
+                tool_verdict = "allow"
+            elif wants_deny and not wants_exec:
+                include_tools = include_tools and tool_verdict != "allow"
+                tool_verdict = "deny"
+            elif not wants_exec:
+                include_tools = False
+            named = [t for t in etypes if t not in _TOOL_EVENT_TYPES]
+            if event_types_in is None:
+                keep = [t for t in named if t not in event_types_ex]
+            else:
+                keep = [t for t in named if t in event_types_in]
+            if keep:
+                event_types_in = tuple(keep)
+            else:
+                include_events = False
 
         # A tool-name filter only makes sense against the tool-invocation stream
         # (event rows carry no canonical tool column), so it excludes events.
@@ -741,6 +789,9 @@ class AuditTimeline:
             "id": tid,
             "ts": _iso(created),
             "_sort": (created, tid),
+            # v1.351.0 (G04): the event type this row stands for, so a reader
+            # can map an entry the way it maps a live event.
+            "type": "tool.denied" if is_deny else "tool.executed",
             "kind": kind,
             "actor": actor,
             "session_id": sid,
@@ -810,6 +861,10 @@ class AuditTimeline:
             "id": eid,
             "ts": _iso(created),
             "_sort": (created, eid),
+            # v1.351.0 (G04): the raw event type. ``kind`` is the projection's
+            # bucket; the bell maps entries back through its own per-type
+            # words after the window was closed, and needs the type for that.
+            "type": etype,
             "kind": kind,
             "actor": origin or etype,
             "session_id": sid,

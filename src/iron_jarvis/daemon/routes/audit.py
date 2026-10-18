@@ -34,6 +34,12 @@ def register(app: FastAPI, d) -> None:
         Returns ``{entries: [AuditEntry], next_cursor, total?}`` — ``total`` only
         on the first page (``before`` unset). Pass ``before=<next_cursor>`` to
         walk older entries. ``limit`` defaults to 100, hard-capped at 500.
+
+        ``type`` is one event type or, since v1.351.0 (G04), a comma-separated
+        LIST (``type=session.completed,media.failed``; at most 40 names) — the
+        bell's one read of what happened while its window was closed. Every
+        entry carries ``type`` (the raw event type; ``tool.executed`` /
+        ``tool.denied`` for a ledger row) beside its ``kind`` bucket.
         """
         return d.platform.observability.timeline(
             session_id=session_id,

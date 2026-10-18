@@ -258,9 +258,16 @@ class DesktopChannel(Channel):
     ``send`` hands the message to a process-wide sink the daemon wires at
     startup (an event-bus publish scheduled thread-safely onto the loop); the
     dashboard's bridge component turns the resulting ``comm.desktop`` event
-    into a native OS notification via the Electron preload. The renderer stays
-    alive while the window is minimized to the tray, so alerts land exactly
-    when they matter most — when the user is NOT looking at the app.
+    into a native OS notification via the Electron preload — WHILE A WINDOW
+    EXISTS. Minimised, the window keeps its renderer and the toast shows.
+    Closed to the TRAY, the renderer is destroyed (``hideToTray`` in
+    desktop/main.js), so a ``comm.desktop`` message sent then raises NO toast:
+    it is only recorded in the event log. (Corrected v1.351.0, G03 — this
+    docstring used to promise the opposite.) What still reaches a user with no
+    window: the desktop app's own ``installAskWatcher`` toasts asks that wait
+    on them, and the bell replays the finished and failed unattended runs it
+    missed (``session.completed`` and the rest, via ``GET /audit``) the next
+    time a window opens.
 
     The sink is a class attribute rather than a constructor arg on purpose:
     channels are built in two places (boot + the add-channel route) through a

@@ -13,9 +13,14 @@
 // WHAT IT CANNOT DO, and used to claim it could (v1.249.0, R-03): closing the
 // window to the TRAY destroys the renderer (`hideToTray` in desktop/main.js),
 // so this bridge — and every other page-side toast — is gone until a window
-// exists again. The desktop app itself watches for jobs waiting on the user
-// while no window is open (`installAskWatcher`); a `comm.desktop` message that
-// arrives with no window still waits in the bell rather than raising a toast.
+// exists again. The desktop app itself watches for asks waiting on the user
+// while no window is open (`installAskWatcher`: agent and chat approvals only).
+// A `comm.desktop` message that arrives with no window raises NO toast and is
+// NOT in the bell either — it is only in the event log (corrected v1.351.0,
+// G03: this comment used to say it waited in the bell). What the bell DOES
+// remember: when a window opens again it replays the unattended runs that
+// finished, fell short or failed meanwhile (NotificationBell's "While you were
+// away", read from GET /audit).
 
 import { useEffect, useRef } from "react";
 

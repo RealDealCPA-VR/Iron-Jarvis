@@ -308,7 +308,8 @@ def _session_row(d, session) -> dict[str, Any]:
     sentence or ``""``) and ``tainted_at`` (ISO or None) — the session's
     TRUST posture — ride ``_session_view`` itself (``app.py``), so EVERY
     route that serves a row carries them; nothing is added here (one
-    renderer, so the pin on this route covers them all).
+    renderer, so the pin on this route covers them all). The same holds for
+    v1.351.0's ``agent_name`` and ``interrupted_at`` (G18).
     """
     return _session_view(session, d)
 
@@ -1012,10 +1013,20 @@ def register(app: FastAPI, d) -> None:
         See ``agents/outcome.py``: files created/changed come from journaled
         mutations, so a reply that claims a file it never wrote disagrees with
         this endpoint, and the disagreement is the point.
+
+        v1.351.0 (G18): this is the RECEIPT read — it also names the provider,
+        model, agent, the route note when the model failed over, whether the
+        model stays on this network, and the newest plain action lines.
         """
         from ...agents.outcome import session_result
 
-        result = session_result(d.platform.engine, session_id)
+        result = session_result(
+            d.platform.engine,
+            session_id,
+            receipt=True,
+            manager=getattr(d.platform, "providers", None),
+            config=getattr(d.platform, "config", None),
+        )
         if not result.get("found"):
             raise HTTPException(status_code=404, detail="session not found")
         return result

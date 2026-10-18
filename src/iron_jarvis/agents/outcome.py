@@ -159,12 +159,67 @@ def _rel(path: str, workspace: str) -> str:
         return path
 
 
-def session_result(engine, session_id: str) -> dict[str, Any]:
+#: Newest action lines a receipt carries (v1.351.0, G18).
+RECEIPT_ACTIVITY_MAX = 20
+
+
+def _fill_receipt(out: dict[str, Any], db, session: Session, manager: Any, config: Any) -> None:
+    """The receipt half of :func:`session_result` (v1.351.0, G18), filled in
+    place. Each key is its own try — a failed read leaves that key at its
+    default and never costs the rest of the result. Lazy imports: ``mission``
+    imports this module, and ``egress`` is the providers layer."""
+    from .mission import activity_lines, display_name, route_note_for
+    from .roster import session_roster_name
+
+    who = display_name(session_roster_name(session) or "")
+    try:
+        out["route_note"] = route_note_for(db, session.id, who)
+    except Exception:  # noqa: BLE001 — a receipt line, never the result
+        out["route_note"] = ""
+    try:
+        provider = out.get("provider") or ""
+        if provider:
+            from ..providers.egress import stays_on_this_network
+
+            out["on_this_network"] = bool(stays_on_this_network(provider, manager, config))
+    except Exception:  # noqa: BLE001
+        out["on_this_network"] = None
+    try:
+        out["activity"] = activity_lines(
+            db, [session.id], {session.id: who}, newest=RECEIPT_ACTIVITY_MAX
+        )
+    except Exception:  # noqa: BLE001
+        out["activity"] = []
+
+
+def session_result(
+    engine,
+    session_id: str,
+    *,
+    receipt: bool = False,
+    manager: Any = None,
+    config: Any = None,
+) -> dict[str, Any]:
     """The honest outcome of one session.
 
     Read-only and defensive — this feeds a UI card and an SSE frame, so a
     half-written session or a missing row must degrade to a smaller report, never
     raise. An unknown session id returns ``{"found": False}``.
+
+    v1.351.0 (G18): every result names WHO ran it and ON WHAT — ``provider``
+    and ``model`` (the Session row; the orchestrator writes the SERVED pair
+    when a run ends), ``agent_name`` (the roster name a door resolved, e.g. a
+    custom agent; ``None`` when none was) and ``agent_type``. With
+    ``receipt=True`` (``GET /sessions/{id}/result`` — the reads a receipt
+    needs, kept off the finalize/coach/compaction callers) it also carries
+    ``route_note`` (one sentence when the run's model failed over or was
+    refused, else ``""`` — the mission screen's words), ``on_this_network``
+    (``egress.stays_on_this_network`` for the run's provider; ``manager`` /
+    ``config`` let it read a local endpoint's URL; ``None`` when there is no
+    provider to judge) and ``activity`` (the newest
+    ``RECEIPT_ACTIVITY_MAX`` plain action lines, oldest first, in the mission
+    screen's words: ``{at, who, session_id, text, tone}``). Each of the three
+    is its own try: a failed read costs that key's value, never the result.
     """
     out: dict[str, Any] = {
         "found": False,
@@ -190,7 +245,16 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
         # before the columns existed (additive, never absent).
         "trust": "full",
         "trust_reason": "",
+        # v1.351.0 (G18): who ran it, on what (additive, never absent).
+        "provider": "",
+        "model": "",
+        "agent_name": None,
+        "agent_type": "",
     }
+    if receipt:
+        out["route_note"] = ""
+        out["on_this_network"] = None
+        out["activity"] = []
     try:
         with session_scope(engine) as db:
             session = db.get(Session, session_id)
@@ -198,6 +262,15 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
                 return out
             out["found"] = True
             out["status"] = getattr(session.status, "value", str(session.status))
+            out["provider"] = str(getattr(session, "provider", "") or "")
+            out["model"] = str(getattr(session, "model", "") or "")
+            out["agent_name"] = (
+                " ".join(str(getattr(session, "agent_name", "") or "").split()) or None
+            )
+            agent_type = getattr(session, "agent_type", "")
+            out["agent_type"] = str(getattr(agent_type, "value", agent_type) or "")
+            if receipt:
+                _fill_receipt(out, db, session, manager, config)
             out["trust"] = (
                 "low" if str(getattr(session, "trust", "") or "").lower() == "low" else "full"
             )

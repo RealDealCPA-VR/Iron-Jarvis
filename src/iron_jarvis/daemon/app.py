@@ -246,6 +246,16 @@ def _session_view(session, d=None) -> dict[str, Any]:
         "output_tokens": getattr(session, "output_tokens", 0),
         "created_at": session.created_at.isoformat(),
         "finished_at": session.finished_at.isoformat() if session.finished_at else None,
+        # v1.351.0 (G18), additive: the roster name the creating door resolved
+        # (a custom agent's own name; None when no door named one — the run
+        # then IS its ``agent_type``), and when a restart cut the run off
+        # (the boot reconcile's tag; None otherwise), so a list can say so.
+        "agent_name": " ".join(str(getattr(session, "agent_name", "") or "").split()) or None,
+        "interrupted_at": (
+            getattr(session, "interrupted_at", None).isoformat()
+            if getattr(session, "interrupted_at", None) is not None
+            else None
+        ),
     }
 
 

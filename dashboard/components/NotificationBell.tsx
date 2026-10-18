@@ -25,7 +25,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { ApiError, post, put } from "@/lib/api";
+import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
@@ -33,7 +33,9 @@ import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { shortId, clockTime, formatTokens } from "@/lib/format";
 import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 import { agentsPath, missionPath } from "@/lib/mission";
-import { MISSION_ORIGIN } from "@/lib/missionLinks";
+import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
+// v1.351.0 (G04): what happened while the window was closed (dependency-free).
+import { auditEntriesToEvents, awayPath, awaySince, writeBellLastSeen } from "@/lib/bellAway";
 // v1.350.0: the plan approval's name (dependency-free; the bell is on every page).
 import { PLAN_TOOL } from "@/lib/toolWords";
 
@@ -93,6 +95,11 @@ export interface ActivityItem {
   body: string;
   /** v1.305.0: a row for the dropdown only — never pinged to the desktop. */
   quiet?: boolean;
+  /** v1.351.0 (G03): unattended work that FAILED or FELL SHORT. Counted on
+   *  the bell's badge (and the tab title) until the dropdown is opened —
+   *  nobody was watching when it happened, so the badge is how they learn.
+   *  Never set together with `quiet`. */
+  attention?: boolean;
 }
 
 /** v1.309.0 (contract 8): where an agent's row opens — THAT agent on Your
@@ -106,23 +113,14 @@ function agentHref(name: unknown): string {
     : agentsPath({ kind: "team" });
 }
 
-/** Every /events type the bell reads (v1.311.0, wave 3,
- *  events-unfiltered-page-subscribers): what `toActivity` maps, the review
- *  badge, the approval and workflow refetch triggers. The bell is in the
- *  layout on every page, and every other frame (add-on tab switches,
- *  provider.routed per LLM call) cost it a render for nothing. ADD A TYPE
- *  HERE in the same change that makes the bell read it — a missing one is a
- *  silent "the bell never showed it" (pinned against this file's own
- *  comparisons in hooks-wave3-typesets-v1311). */
-export const BELL_EVENT_TYPES: readonly string[] = [
-  // the review badge (review.requested, and its resolutions)
-  "review.*",
-  // the agent-asks refetch + the workflow-question refetch
-  "approval.requested",
-  "approval.resolved",
-  "workflow.waiting",
-  // toActivity
+/** Exactly the types `toActivity` maps (v1.351.0, G04). Also the ONE list
+ *  the bell's replay read names in `GET /audit?type=…`, so a type added to
+ *  toActivity is remembered across a closed window in the same change. Part
+ *  of BELL_EVENT_TYPES below. */
+export const BELL_ACTIVITY_TYPES: readonly string[] = [
   "session.completed",
+  // v1.351.0 (G03): a workflow run that ended (failed rings, done is quiet)
+  "workflow.completed",
   "preference.suggested",
   "detection.finding",
   "trust.lowered",
@@ -142,6 +140,25 @@ export const BELL_EVENT_TYPES: readonly string[] = [
   // v1.346.0: a media generation that finished in the background, or failed
   "media.completed",
   "media.failed",
+];
+
+/** Every /events type the bell reads (v1.311.0, wave 3,
+ *  events-unfiltered-page-subscribers): what `toActivity` maps, the review
+ *  badge, the approval and workflow refetch triggers. The bell is in the
+ *  layout on every page, and every other frame (add-on tab switches,
+ *  provider.routed per LLM call) cost it a render for nothing. ADD A TYPE
+ *  HERE in the same change that makes the bell read it — a missing one is a
+ *  silent "the bell never showed it" (pinned against this file's own
+ *  comparisons in hooks-wave3-typesets-v1311). */
+export const BELL_EVENT_TYPES: readonly string[] = [
+  // the review badge (review.requested, and its resolutions)
+  "review.*",
+  // the agent-asks refetch + the workflow-question refetch
+  "approval.requested",
+  "approval.resolved",
+  "workflow.waiting",
+  // toActivity
+  ...BELL_ACTIVITY_TYPES,
   // the busy-runs ask (v1.333.0)
   "runs.busy",
 ];
@@ -160,10 +177,109 @@ function mediaHref(threadId: unknown, path?: unknown): string {
   return typeof path === "string" && path.trim() ? "/creative" : "/chat";
 }
 
+/** How a finished run ended, read off a `session.completed` payload (the
+ *  orchestrator's `_completion_payload`: status + ok + outcome). Shared by the
+ *  mission rows and the unattended rows (v1.351.0) so the two can never
+ *  disagree about what "done" means. `status` says the RUN ended cleanly;
+ *  `outcome` (Session.outcome, the ledger's verdict on the JOB) says whether
+ *  the work was done — "done" needs POSITIVE proof: outcome "completed". */
+function runVerdict(p: Record<string, unknown>): {
+  cancelled: boolean;
+  ran: boolean;
+  done: boolean;
+  outcome: string;
+} {
+  const status = typeof p.status === "string" ? p.status : "";
+  const ran = status === "completed" && p.ok !== false;
+  const outcome = typeof p.outcome === "string" ? p.outcome : "";
+  return { cancelled: status === "cancelled", ran, done: ran && outcome === "completed", outcome };
+}
+
+/** v1.351.0 (G03): the doors that start work with NOBODY watching — a
+ *  schedule, a goal, a workflow step, a reflex rule, a message from the
+ *  phone, autonomy — and how a row names each run (`Session.origin` is
+ *  `<door>:<name>`; autonomy stamps a bare "autonomy"). A goal's suffix is
+ *  its internal id, never shown (the OriginChip rule). A workflow's STEP
+ *  says so: whether the WORKFLOW finished is its own row
+ *  (`workflow.completed`). */
+const UNATTENDED_SUBJECT: Record<string, (name: string) => string> = {
+  schedule: (n) => (n ? `Your schedule ${n}` : "A schedule"),
+  goal: () => "Your goal's run",
+  workflow: (n) => (n ? `A step of your workflow ${n}` : "A workflow step"),
+  reflex: (n) => (n ? `Your reflex ${n}` : "A reflex rule"),
+  comm: (n) => (n ? `Your request from ${n}` : "A request from your phone"),
+  autonomy: () => "An autonomy run",
+};
+
+/** The unattended door a run came through, or null (chat, a mission, a job
+ *  the user started, an untagged run — those keep their own rules). */
+export function unattendedDoor(origin: unknown): { kind: string; name: string } | null {
+  if (typeof origin !== "string") return null;
+  const value = origin.trim();
+  const i = value.indexOf(":");
+  const kind = (i >= 0 ? value.slice(0, i) : value).trim();
+  if (!Object.prototype.hasOwnProperty.call(UNATTENDED_SUBJECT, kind)) return null;
+  return { kind, name: i >= 0 ? value.slice(i + 1).trim() : "" };
+}
+
+/** A summary cut for a one-line row. */
+function clip(text: unknown): string {
+  const s = typeof text === "string" ? text.trim() : "";
+  return s.length > 140 ? `${s.slice(0, 139)}…` : s;
+}
+
+/** v1.351.0 (G03): an unattended run's `session.completed` as a bell row.
+ *  It FAILED or FELL SHORT → a row that RINGS: the mission rows' words
+ *  ("could not finish" / "finished, but part of it failed" / "needs you"),
+ *  the warning icon, counted on the badge until the bell is opened, a
+ *  desktop ping while a window is open. It finished cleanly → a QUIET row
+ *  (no badge, no ping). A workflow STEP that finished cleanly says nothing:
+ *  its workflow's own row does. A run the user STOPPED says nothing either.
+ *  The row opens the run (`missionLinks.sessionHref`). */
+function unattendedCompletion(
+  e: IJEvent,
+  p: Record<string, unknown>,
+  door: { kind: string; name: string },
+): ActivityItem | null {
+  const sid = typeof e.session_id === "string" ? e.session_id : "";
+  if (!sid) return null;
+  const v = runVerdict(p);
+  if (v.cancelled) return null;
+  if (v.done && door.kind === "workflow") return null;
+  const words = !v.ran
+    ? "could not finish"
+    : v.done
+      ? "finished"
+      : v.outcome === "needs_you"
+        ? "needs you"
+        : v.outcome === "completed_with_failures"
+          ? "finished, but part of it failed"
+          : "finished. Check what it did";
+  return {
+    id: e.id,
+    ts: e.ts,
+    href: sessionHref({
+      id: sid,
+      origin: typeof p.origin === "string" ? p.origin : null,
+      project_id: typeof p.project_id === "string" ? p.project_id : null,
+    }),
+    icon: v.done ? CheckCircle2 : AlertTriangle,
+    title: `${UNATTENDED_SUBJECT[door.kind](door.name)} ${words}`,
+    body: clip(p.summary),
+    ...(v.done ? { quiet: true } : { attention: true }),
+  };
+}
+
 /** Map one live event to an activity notification (null = not a notified type). */
 export function toActivity(e: IJEvent): ActivityItem | null {
   const p = e.payload ?? {};
   if (e.type === "session.completed") {
+    // v1.351.0 (G03): a run nobody was watching (a schedule, a goal, a
+    // workflow step, a reflex, the phone, autonomy) tells the user how it
+    // ended — before this only missions rang, so a 7 am schedule that failed
+    // said nothing at all.
+    const door = unattendedDoor(p.origin);
+    if (door) return unattendedCompletion(e, p, door);
     // v1.309.0: a finished MISSION tells the user (contract 2: the payload
     // carries `origin` + `project_id`). Before this the bell had no
     // session.completed branch at all, so an objective the user walked away
@@ -175,9 +291,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     if (p.origin !== MISSION_ORIGIN) return null;
     const sid = typeof e.session_id === "string" ? e.session_id : "";
     if (!sid) return null;
-    const status = typeof p.status === "string" ? p.status : "";
-    if (status === "cancelled") return null;
-    const ran = status === "completed" && p.ok !== false;
+    const { cancelled, ran, done, outcome } = runVerdict(p);
+    if (cancelled) return null;
     // `status` says the RUN ended cleanly; `outcome` (Session.outcome, the
     // ledger's verdict on the JOB) says whether the work was done. A run whose
     // ask timed out ends COMPLETED with outcome "needs_you" — the exact false
@@ -189,8 +304,8 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // optimistic default) reads a neutral "finished" with the warning icon —
     // the mission screen then says what actually happened. The words match
     // the mission screen's own headline (lib/mission.missionHeadline).
-    const outcome = typeof p.outcome === "string" ? p.outcome : "";
-    const done = ran && outcome === "completed";
+    // (v1.351.0: the reading lives in `runVerdict`, shared with the
+    // unattended rows.)
     const title = !ran
       ? "Your objective could not be finished"
       : done
@@ -213,6 +328,40 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       title,
       body: summary.length > 140 ? `${summary.slice(0, 139)}…` : summary,
     };
+  }
+  if (e.type === "workflow.completed") {
+    // v1.351.0 (G03): a workflow run ended (workflows/engine.py publishes
+    // {workflow, status, run_id, sessions} at its end). A FAILED run rings —
+    // a schedule may have started it at 3 am — and opens the Workflows page,
+    // where the run says which step stopped; a finished run is a quiet row
+    // (its clean steps say nothing on their own); a cancelled one says
+    // nothing (the user pressed Stop).
+    const status = typeof p.status === "string" ? p.status : "";
+    const name = typeof p.workflow === "string" ? p.workflow.trim() : "";
+    const subject = name ? `Your workflow ${name}` : "A workflow";
+    if (status === "failed") {
+      return {
+        id: e.id,
+        ts: e.ts,
+        href: "/workflows",
+        icon: AlertTriangle,
+        title: `${subject} could not finish`,
+        body: "The Workflows page shows which step stopped.",
+        attention: true,
+      };
+    }
+    if (status === "completed") {
+      return {
+        id: e.id,
+        ts: e.ts,
+        href: "/workflows",
+        icon: CheckCircle2,
+        title: `${subject} finished`,
+        body: "",
+        quiet: true,
+      };
+    }
+    return null;
   }
   if (e.type === "preference.suggested") {
     // v1.305.0: a preference the user's OWN press minted ("Look through my
@@ -379,8 +528,16 @@ export function toActivity(e: IJEvent): ActivityItem | null {
   if (e.type === "assignment.finished") {
     // v1.296.0: a queued job ended. Success is QUIET (the inbox and the
     // session list already say so); only a failure rings the bell.
-    // Payload: {id, assignee, title, ok, session_id, error}.
-    if (p.ok !== false) return null;
+    // Payload: {id, assignee, title, ok, session_id, error, status}.
+    // v1.351.0 (G03): a job that ended "completed" but whose run's outcome
+    // fell short (`outcome` needs_you / completed_with_failures) rings too;
+    // a payload without `outcome` keeps the old behaviour exactly. Every
+    // ringing row counts on the badge — unless the user cancelled the job
+    // (status "cancelled": the old "Failed:" row stays, with no badge).
+    const outcome = typeof p.outcome === "string" ? p.outcome : "";
+    const shortfall =
+      p.ok !== false && (outcome === "needs_you" || outcome === "completed_with_failures");
+    if (p.ok !== false && !shortfall) return null;
     const title = typeof p.title === "string" && p.title ? p.title : "a job";
     const assignee = typeof p.assignee === "string" && p.assignee ? p.assignee : "an agent";
     const sid =
@@ -389,13 +546,21 @@ export function toActivity(e: IJEvent): ActivityItem | null {
         : typeof e.session_id === "string"
           ? e.session_id
           : "";
+    const cancelledByUser = p.status === "cancelled";
     return {
       id: e.id,
       ts: e.ts,
       href: sid ? `/sessions/${encodeURIComponent(sid)}` : agentHref(p.assignee),
       icon: AlertTriangle,
-      title: `Failed: ${title}`,
-      body: `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
+      title: shortfall
+        ? outcome === "needs_you"
+          ? `Needs you: ${title}`
+          : `Part of it failed: ${title}`
+        : `Failed: ${title}`,
+      body: shortfall
+        ? assignee
+        : `${assignee}: ${typeof p.error === "string" ? p.error : ""}`,
+      ...(cancelledByUser ? {} : { attention: true }),
     };
   }
   if (e.type === "grant.revoked") {
@@ -786,10 +951,63 @@ interface PendingAgentApproval {
   onceOnly?: boolean;
 }
 
-/** Parse one /chat/approvals/pending row (null = not a usable row). */
+/** v1.351.0 (G03, with G05): a CHAT turn parked on its own approval card
+ *  while nobody watches it. GET /chat/approvals/pending lists one
+ *  metadata-only row per such chat — {id: "chat:<thread_id>", kind: "chat",
+ *  thread_id, tool}, never arguments — and the card can only be answered IN
+ *  the chat (it shows what the call would do), so the bell row is a link,
+ *  never Approve/Deny buttons. */
+export interface ChatWaitingAsk {
+  id: string;
+  threadId: string;
+}
+
+/** Parse one pending row of kind "chat" (null = not a chat row). */
+export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind !== "chat") return null;
+  const id = typeof r.id === "string" ? r.id : "";
+  if (!id) return null;
+  return { id, threadId: typeof r.thread_id === "string" ? r.thread_id.trim() : "" };
+}
+
+/** Where a waiting chat opens: that chat, else the chat page. */
+function chatAskHref(ask: ChatWaitingAsk): string {
+  return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
+}
+
+/** The waiting chat as a bell row: the computer-use row's exact look (the
+ *  amber tile, a title, one quiet line, the arrow). */
+function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => void }) {
+  return (
+    <li data-testid="bell-chat-waiting">
+      <Link
+        href={chatAskHref(ask)}
+        onClick={onOpen}
+        className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
+      >
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+          <MessageSquare size={15} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-zinc-100">
+            A chat is waiting for your OK
+          </span>
+          <span className="block text-[11px] text-zinc-500">Open the chat</span>
+        </span>
+        <ArrowRight size={13} className="shrink-0 text-zinc-600" />
+      </Link>
+    </li>
+  );
+}
+
+/** Parse one /chat/approvals/pending row (null = not a usable row). A chat
+ *  row (v1.351.0) is not an agent ask: `parseChatAsk` reads it. */
 function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  if (r.kind === "chat") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
   return {
@@ -950,6 +1168,64 @@ function AgentApprovalRow({
   );
 }
 
+/** How many rows each activity list shows ("Recent activity" and, since
+ *  v1.351.0, "While you were away"). */
+const ACTIVITY_SHOWN = 6;
+
+/** The rows a list shows (v1.351.0): at most `max`, in the order given
+ *  (newest first), keeping the rows that need the user (`attention`) ahead
+ *  of the rest — a run of quiet "finished" rows must never push a failure
+ *  out of sight (and off the badge). With no attention row this is exactly
+ *  the first `max`, as before. */
+export function pickShown(
+  items: readonly ActivityItem[],
+  max: number = ACTIVITY_SHOWN,
+): ActivityItem[] {
+  const keep = new Set<string>();
+  for (const it of items) if (it.attention && keep.size < max) keep.add(it.id);
+  for (const it of items) if (keep.size < max) keep.add(it.id);
+  return items.filter((it) => keep.has(it.id));
+}
+
+/** One informational row — the same markup for the live list and the
+ *  replayed one (v1.351.0: lifted out of the list so both share it). */
+function ActivityRow({
+  item,
+  onOpen,
+  testId,
+}: {
+  item: ActivityItem;
+  onOpen: () => void;
+  testId?: string;
+}) {
+  const Icon = item.icon;
+  return (
+    <li data-testid={testId} data-attention={item.attention ? "true" : undefined}>
+      <Link
+        href={item.href}
+        onClick={onOpen}
+        className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
+      >
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-zinc-300">
+          <Icon size={15} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium text-zinc-100">
+            {item.title}
+          </span>
+          {item.body && (
+            <span className="block truncate text-[11px] text-zinc-500">{item.body}</span>
+          )}
+          <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
+            {clockTime(item.ts)}
+          </span>
+        </span>
+        <ArrowRight size={13} className="shrink-0 text-zinc-600" />
+      </Link>
+    </li>
+  );
+}
+
 /**
  * Notification center: a bell + unread badge counting work that needs a human —
  * unresolved review requests (from the live event stream) plus any pending
@@ -1032,6 +1308,17 @@ export function NotificationBell() {
     }
     return out;
   }, [agentAsksApi.data, answeredAgentAsks]);
+  // v1.351.0 (G03): chat turns parked on their own card while nobody looks
+  // (the same pending list, kind "chat"). They wait on the user like the
+  // asks above, so they count; the row only opens the chat.
+  const chatAsks = useMemo(() => {
+    const out: ChatWaitingAsk[] = [];
+    for (const raw of agentAsksApi.data?.approvals ?? []) {
+      const ask = parseChatAsk(raw);
+      if (ask) out.push(ask);
+    }
+    return out;
+  }, [agentAsksApi.data]);
 
   // A live approval.requested/resolved event means the polled list is stale —
   // refetch right away (same idiom as the workflow.waiting refresh below).
@@ -1114,7 +1401,9 @@ export function NotificationBell() {
   // counted as pending — nothing here waits on the user, so it must not
   // inflate the badge or the tab title. Dedupe by event id, keep the 6 newest
   // (the events buffer is already newest-first).
-  const activity = useMemo(() => {
+  // v1.351.0: every mapped live row (newest first) — the desktop ping reads
+  // the newest of THESE — and the 6 the list shows, failures kept in sight.
+  const allActivity = useMemo(() => {
     const out: ActivityItem[] = [];
     const seen = new Set<string>();
     for (const e of events) {
@@ -1122,10 +1411,79 @@ export function NotificationBell() {
       if (!item || seen.has(item.id)) continue;
       seen.add(item.id);
       out.push(item);
-      if (out.length >= 6) break;
     }
     return out;
   }, [events]);
+  const activity = useMemo(() => pickShown(allActivity), [allActivity]);
+
+  // v1.351.0 (G04): WHAT HAPPENED WHILE THE WINDOW WAS CLOSED. Closing to the
+  // tray destroys this renderer and the live socket replays nothing, so on
+  // first mount the bell reads the persisted events it maps, newer than the
+  // last time it was opened (lib/bellAway), through the same toActivity.
+  // Shown under "While you were away", never pinged (they are not new to the
+  // desktop's clock — a reload must not re-fire a backlog). Nothing is set
+  // when nothing came back, so an empty read costs no render. `get` is
+  // reached through a resolved promise: a test's bare lib/api mock (or an
+  // older daemon's 4xx) degrades to no rows, never a crash.
+  const [away, setAway] = useState<ActivityItem[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const path = awayPath(BELL_ACTIVITY_TYPES, awaySince());
+    void Promise.resolve()
+      .then(() => get<{ entries?: unknown }>(path))
+      .then((res) => {
+        if (!alive) return;
+        const rows: ActivityItem[] = [];
+        for (const ev of auditEntriesToEvents(res?.entries, BELL_ACTIVITY_TYPES)) {
+          const item = toActivity(ev);
+          if (item) rows.push(item);
+        }
+        if (rows.length) setAway(rows);
+      })
+      .catch(() => {
+        /* the bell's memory is a bonus: the live rows still work */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const awayShown = useMemo(() => {
+    const live = new Set(allActivity.map((a) => a.id));
+    return pickShown(away.filter((a) => !live.has(a.id)));
+  }, [away, allActivity]);
+
+  // v1.351.0 (G03/G04): failures and shortfalls of unattended work count on
+  // the badge until the user OPENS the bell. Opening records the moment
+  // (`ij.bell.lastSeen`), so the next window's replay starts after it and
+  // what was seen is not shown again.
+  const [seenAttention, setSeenAttention] = useState<ReadonlySet<string>>(new Set());
+  const attentionKey = useMemo(
+    () =>
+      [...activity, ...awayShown]
+        .filter((a) => a.attention)
+        .map((a) => a.id)
+        .join("\n"),
+    [activity, awayShown],
+  );
+  const unseen = attentionKey
+    ? attentionKey.split("\n").filter((id) => !seenAttention.has(id)).length
+    : 0;
+  useEffect(() => {
+    if (!open) return;
+    writeBellLastSeen();
+    if (!attentionKey) return;
+    setSeenAttention((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of attentionKey.split("\n")) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [open, attentionKey]);
 
   // Use the larger of live-streamed vs polled reviews so neither a fresh reload
   // (no events yet) nor a just-arrived live event under-reports the badge/title.
@@ -1136,9 +1494,15 @@ export function NotificationBell() {
     reviewish +
     waiting.length +
     agentAsks.length +
+    chatAsks.length +
     failingLoops.length +
     interrupted.jobs.length +
     (busyAsk ? 1 : 0);
+  // v1.351.0: what the badge and the tab title show — the work waiting on
+  // the user PLUS the unattended failures they have not looked at yet. The
+  // "N pending" desktop ping below still keys on `count` alone: a failure
+  // row pings once, as itself (the activity ping), never twice.
+  const badge = count + unseen;
   // v1.226.0: a polled source that FAILED (non-0 status, e.g. a 500) makes the
   // badge under-count — "You're all caught up" would then be a false empty
   // state. Offline (status 0) is the banner's story, not the bell's.
@@ -1161,10 +1525,10 @@ export function NotificationBell() {
     // v1.283.0: a popped-out module titles its window by name (TitleBar
     // leaves the base title on <html data-ij-title>); the count rides in front.
     const base = document.documentElement.dataset.ijTitle || "Iron Jarvis";
-    if (count === 0) {
+    if (badge === 0) {
       document.title = base;
     } else {
-      document.title = `(${count}) ${base}`;
+      document.title = `(${badge}) ${base}`;
     }
 
     if (count > prev) {
@@ -1183,6 +1547,10 @@ export function NotificationBell() {
         parts.push(
           `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission`,
         );
+      if (chatAsks.length)
+        parts.push(
+          `${chatAsks.length} chat${chatAsks.length === 1 ? "" : "s"} waiting for your OK`,
+        );
       if (failingLoops.length)
         parts.push(
           `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`,
@@ -1197,10 +1565,12 @@ export function NotificationBell() {
     }
   }, [
     count,
+    badge,
     reviews.length,
     pendingApprovals,
     waiting.length,
     agentAsks.length,
+    chatAsks.length,
     failingLoops.length,
     interrupted.jobs.length,
     busyAsk,
@@ -1210,16 +1580,18 @@ export function NotificationBell() {
   // Ping a desktop notification when a NEW activity event arrives. The event
   // buffer starts empty on load and /events only streams (never replays
   // history), so a page reload can't re-fire a backlog of old notifications.
+  // (v1.351.0: the replayed "While you were away" rows are a separate list
+  // and never ping; the newest LIVE row is read before the 6-row cut.)
   const prevActivityId = useRef<string | null>(null);
   useEffect(() => {
-    const latest = activity[0];
+    const latest = allActivity[0];
     if (!latest || prevActivityId.current === latest.id) return;
     prevActivityId.current = latest.id;
     if (latest.quiet) return; // v1.305.0: a dropdown row, never a desktop ping
     notify(latest.title, latest.body || "Open the dashboard for details.", () =>
       setOpen(true),
     );
-  }, [activity, notify]);
+  }, [allActivity, notify]);
 
   // Lazily request notification permission the first time the user opens the
   // bell — a real user gesture, so the browser actually shows the prompt.
@@ -1253,7 +1625,7 @@ export function NotificationBell() {
       <button
         type="button"
         onClick={toggleOpen}
-        aria-label={count ? `${count} notifications` : "Notifications"}
+        aria-label={badge ? `${badge} notifications` : "Notifications"}
         // v1.313.0: the bar's one control height (TitleBar's BAR_CONTROL_H) —
         // 36px tap target on a phone, 32px with a pointer, same radius.
         className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition-colors sm:h-8 sm:w-8 ${
@@ -1263,9 +1635,9 @@ export function NotificationBell() {
         }`}
       >
         <Bell size={17} strokeWidth={2} />
-        {count > 0 && (
+        {badge > 0 && (
           <span className="absolute -right-1 -top-1 grid h-4 min-w-[1rem] place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-ink-950 shadow-glow-sm">
-            {count > 99 ? "99+" : count}
+            {badge > 99 ? "99+" : badge}
           </span>
         )}
       </button>
@@ -1286,7 +1658,10 @@ export function NotificationBell() {
             </header>
 
             <div className="max-h-[22rem] overflow-y-auto">
-              {count === 0 && activity.length === 0 && conflicts.length === 0 ? (
+              {count === 0 &&
+              activity.length === 0 &&
+              awayShown.length === 0 &&
+              conflicts.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
                   <Inbox size={22} className="text-zinc-600" />
                   {pollError ? (
@@ -1312,6 +1687,12 @@ export function NotificationBell() {
                       ask={ask}
                       onGone={handleAgentAskGone}
                     />
+                  ))}
+
+                  {/* v1.351.0 (G03): a chat parked on its own card while
+                      nobody looks — answered in the chat, so a link. */}
+                  {chatAsks.map((ask) => (
+                    <ChatWaitingRow key={ask.id} ask={ask} onOpen={() => setOpen(false)} />
                   ))}
 
                   {/* v1.249.0 (R-02): jobs a restart cut off, with the Continue
@@ -1436,36 +1817,29 @@ export function NotificationBell() {
                       Recent activity
                     </li>
                   )}
-                  {activity.map((n) => {
-                    const Icon = n.icon;
-                    return (
-                      <li key={n.id}>
-                        <Link
-                          href={n.href}
-                          onClick={() => setOpen(false)}
-                          className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
-                        >
-                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-zinc-300">
-                            <Icon size={15} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium text-zinc-100">
-                              {n.title}
-                            </span>
-                            {n.body && (
-                              <span className="block truncate text-[11px] text-zinc-500">
-                                {n.body}
-                              </span>
-                            )}
-                            <span className="mt-0.5 block font-mono text-[10px] text-zinc-600">
-                              {clockTime(n.ts)}
-                            </span>
-                          </span>
-                          <ArrowRight size={13} className="shrink-0 text-zinc-600" />
-                        </Link>
-                      </li>
-                    );
-                  })}
+                  {activity.map((n) => (
+                    <ActivityRow key={n.id} item={n} onOpen={() => setOpen(false)} />
+                  ))}
+
+                  {/* v1.351.0 (G04): what finished, failed or fell short
+                      while no window was open — read once from the event
+                      log, same rows, under its own quiet heading. */}
+                  {awayShown.length > 0 && (
+                    <li
+                      data-testid="bell-away-heading"
+                      className="bg-white/[0.02] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600"
+                    >
+                      While you were away
+                    </li>
+                  )}
+                  {awayShown.map((n) => (
+                    <ActivityRow
+                      key={`away-${n.id}`}
+                      item={n}
+                      testId="bell-away-row"
+                      onOpen={() => setOpen(false)}
+                    />
+                  ))}
                 </ul>
               )}
             </div>
@@ -1475,13 +1849,17 @@ export function NotificationBell() {
                 {/* Point at the surface that actually holds the pending work:
                     only-parked-workflows pending → the Workflows page; only
                     paused agent asks → the Agents page (they came from a job). */}
+                {/* v1.351.0: only waiting CHATS pending → the (first) chat,
+                    never the Agents page that cannot answer them. */}
                 <Link
                   href={
                     reviewish > 0
                       ? "/kanban"
                       : waiting.length > 0
                         ? "/workflows"
-                        : "/agents"
+                        : agentAsks.length === 0 && chatAsks.length > 0
+                          ? chatAskHref(chatAsks[0])
+                          : "/agents"
                   }
                   onClick={() => setOpen(false)}
                   className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
@@ -1490,7 +1868,9 @@ export function NotificationBell() {
                     ? "Open the review board"
                     : waiting.length > 0
                       ? "Open the Workflows page"
-                      : "Open the Agents page"}{" "}
+                      : agentAsks.length === 0 && chatAsks.length > 0
+                        ? "Open the chat"
+                        : "Open the Agents page"}{" "}
                   <ArrowRight size={12} />
                 </Link>
               </footer>

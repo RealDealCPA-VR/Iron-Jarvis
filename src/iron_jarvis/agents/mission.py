@@ -500,13 +500,44 @@ def _team_documents(db, sessions: dict[str, Session]) -> dict[str, list[str]]:
     return out
 
 
-def _route_note(route_events: list[tuple[str, str | None, str]], names: dict[str, str]) -> str:
+def _read_route_events(db, session_ids: list[str]) -> list[tuple[str, str | None, str]]:
+    """The newest ``_ROUTE_ROWS`` failover/downgrade events of these sessions,
+    as ``(type, session_id, payload_json)``, newest first — what
+    :func:`_route_note` reads. One bounded statement."""
+    return [
+        (str(t), s, str(p or "{}"))
+        for t, s, p in db.exec(
+            select(EventRecord.type, EventRecord.session_id, EventRecord.payload_json)
+            .where(
+                EventRecord.session_id.in_(session_ids),  # type: ignore[attr-defined, union-attr]
+                EventRecord.type.in_(_ROUTE_EVENT_TYPES),  # type: ignore[attr-defined]
+            )
+            .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
+            .limit(_ROUTE_ROWS)
+        )
+    ]
+
+
+def route_note_for(db, session_id: str, name: str) -> str:
+    """:func:`_route_note` for ONE run (v1.351.0, G18): the receipt of a
+    delegated or scheduled run says when its model failed over, in the same
+    words the mission screen uses. ``""`` when nothing moved. BLOCKING."""
+    names = {session_id: name or "The agent"}
+    return _route_note(_read_route_events(db, [session_id]), names, scope="run")
+
+
+def _route_note(
+    route_events: list[tuple[str, str | None, str]],
+    names: dict[str, str],
+    scope: str = "mission",
+) -> str:
     """ONE plain sentence when a failover or a downgrade touched this mission,
     else ``""`` (v1.309.0, mission-no-route-receipt). ``route_events`` are
     ``(type, session_id, payload_json)``, newest first. The newest change is
     named; more than one is counted. Provider names and the router's own
     DERIVED reason (``failure_reason``: "unreachable", "http 500", …) only —
-    never an error blob."""
+    never an error blob. ``scope`` is the word the count sentence uses
+    ("mission", or "run" for one session's receipt — v1.351.0)."""
     notes: list[str] = []
     for etype, sid, raw in route_events:
         try:
@@ -542,8 +573,126 @@ def _route_note(route_events: list[tuple[str, str | None, str]], names: dict[str
         return ""
     note = notes[0]
     if len(notes) > 1:
-        note = f"{note} There were {len(notes)} route changes in this mission."
+        note = f"{note} There were {len(notes)} route changes in this {scope}."
     return " ".join(note.split())
+
+
+def _read_tool_rows(
+    db, session_ids: list[str], limit: int = _SCAN_ROWS
+) -> tuple[list[Any], dict[str, str]]:
+    """The newest ``limit`` tool calls of these sessions (oldest first, as
+    explicit-column tuples) and WHO REFUSED each refused call
+    (``invocation_id`` → the ``tool.denied`` event's ``kind``). Two bounded
+    statements — lifted out of :func:`mission_view` (v1.351.0, G18) so one
+    run's receipt reads its actions the way the mission screen does."""
+    # EXPLICIT COLUMNS (v1.309.0): the log needs who/what/ok/when and the
+    # redacted args — never ``output``, which is up to 4,000 chars a row
+    # and was read 240 rows at a time, every 2 s, to be thrown away.
+    invocations = list(
+        db.exec(
+            select(
+                ToolInvocation.id,
+                ToolInvocation.session_id,
+                ToolInvocation.tool,
+                ToolInvocation.args_json,
+                ToolInvocation.ok,
+                ToolInvocation.verdict,
+                ToolInvocation.undo_of,
+                ToolInvocation.created_at,
+            )
+            .where(ToolInvocation.session_id.in_(session_ids))  # type: ignore[attr-defined]
+            .order_by(
+                ToolInvocation.created_at.desc(),  # type: ignore[attr-defined]
+                literal_column("toolinvocation.rowid").desc(),
+            )
+            .limit(limit)
+        )
+    )
+    invocations.reverse()
+    # WHO REFUSED each refused call (v1.309.0 review): the registry's
+    # ``tool.denied`` event names it (``kind``) and points at its ledger
+    # row (``invocation_id``). One bounded statement for the whole team,
+    # explicit column — a refusal is never more frequent than the calls
+    # it refuses, so the same window covers the invocations above.
+    denied_kind: dict[str, str] = {}
+    for raw in db.exec(
+        select(EventRecord.payload_json)
+        .where(
+            EventRecord.session_id.in_(session_ids),  # type: ignore[attr-defined, union-attr]
+            EventRecord.type == EventType.TOOL_DENIED,
+        )
+        .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
+        .limit(limit)
+    ):
+        try:
+            data = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("invocation_id"):
+            denied_kind[str(data["invocation_id"])] = str(data.get("kind") or "")
+    return invocations, denied_kind
+
+
+def tool_activity(
+    invocations: list[Any], denied_kind: dict[str, str], names: dict[str, str]
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """The plain-words log lines for tool calls read by :func:`_read_tool_rows`
+    — ``(lines oldest first, last line per session)``. Pure. Bookkeeping
+    tools (``_QUIET_TOOLS``) and undo rows are skipped; a refused call is
+    worded by WHO refused it (never "could not" for an ask the user did not
+    answer). Each line is ``{at, who, session_id, text, tone}``."""
+    last_line: dict[str, str] = {}
+    lines: list[dict[str, Any]] = []
+    for inv_id, inv_session, inv_tool, inv_args, inv_ok, inv_verdict, inv_undo, inv_at in invocations:
+        tool = inv_tool or ""
+        if inv_undo or tool in _QUIET_TOOLS:
+            continue
+        who = names.get(inv_session, "Agent")
+        verdict = str(getattr(inv_verdict, "value", inv_verdict) or "").lower()
+        kind = denied_kind.get(str(inv_id or "")) if verdict == "ask" and not inv_ok else None
+        if kind in _ASK_DENIAL_KINDS:
+            # A DENIED ASK IS NOT A FAILURE (v1.309.0, contract 5): the call
+            # needed the user's OK and did not get it (nobody could ask, the
+            # user said no, or the pause timed out). "Builder could not write
+            # report.md" read as the agent failing at the work; it was
+            # waiting on a person.
+            text, tone = f"needed your OK to use {tool.replace('_', ' ')}", "ask"
+        elif kind is not None:
+            # …and a refusal NOBODY was asked about is never worded as one
+            # (v1.309.0 review, honest copy): the breaker, the roster gate
+            # and low trust share the ``ask`` verdict but asked no one.
+            words = _REFUSAL_WORDS.get(kind, "was not allowed to use {t}")
+            text, tone = words.format(t=tool.replace("_", " ")), "warn"
+        else:
+            # No ``tool.denied`` event = not a refusal: an ``ask`` call the
+            # user APPROVED whose tool then failed reads as the failure it is
+            # (as does a refusal whose event was pruned — never "needed your
+            # OK" on a guess).
+            try:
+                args = json.loads(inv_args or "{}")
+            except (TypeError, ValueError):
+                args = {}
+            text = tool_line(tool, args if isinstance(args, dict) else {}, bool(inv_ok))
+            tone = "ok" if inv_ok else "warn"
+        last_line[inv_session] = text
+        lines.append({
+            "at": _iso(inv_at), "who": who, "session_id": inv_session,
+            "text": f"{who} {text}", "tone": tone,
+        })
+    return lines, last_line
+
+
+def activity_lines(
+    db, session_ids: list[str], names: dict[str, str], newest: int | None = None
+) -> list[dict[str, Any]]:
+    """The plain-words action log of these sessions' tool calls (v1.351.0,
+    G18): the mission screen's words for one run's receipt. Oldest first;
+    ``newest`` keeps only that many of the most recent lines. BLOCKING."""
+    invocations, denied_kind = _read_tool_rows(db, list(session_ids))
+    lines, _last = tool_activity(invocations, denied_kind, names)
+    if newest is not None:
+        lines = lines[-newest:] if newest > 0 else []
+    return lines
 
 
 def _handoff_key(data: dict[str, Any]) -> str:
@@ -601,63 +750,12 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             )
         )
         events.reverse()
-        # EXPLICIT COLUMNS (v1.309.0): the log needs who/what/ok/when and the
-        # redacted args — never ``output``, which is up to 4,000 chars a row
-        # and was read 240 rows at a time, every 2 s, to be thrown away.
-        invocations = list(
-            db.exec(
-                select(
-                    ToolInvocation.id,
-                    ToolInvocation.session_id,
-                    ToolInvocation.tool,
-                    ToolInvocation.args_json,
-                    ToolInvocation.ok,
-                    ToolInvocation.verdict,
-                    ToolInvocation.undo_of,
-                    ToolInvocation.created_at,
-                )
-                .where(ToolInvocation.session_id.in_(team_ids))  # type: ignore[attr-defined]
-                .order_by(
-                    ToolInvocation.created_at.desc(),  # type: ignore[attr-defined]
-                    literal_column("toolinvocation.rowid").desc(),
-                )
-                .limit(_SCAN_ROWS)
-            )
-        )
-        invocations.reverse()
-        # WHO REFUSED each refused call (v1.309.0 review): the registry's
-        # ``tool.denied`` event names it (``kind``) and points at its ledger
-        # row (``invocation_id``). One bounded statement for the whole team,
-        # explicit column — a refusal is never more frequent than the calls
-        # it refuses, so the same window covers the invocations above.
-        denied_kind: dict[str, str] = {}
-        for raw in db.exec(
-            select(EventRecord.payload_json)
-            .where(
-                EventRecord.session_id.in_(team_ids),  # type: ignore[attr-defined, union-attr]
-                EventRecord.type == EventType.TOOL_DENIED,
-            )
-            .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
-            .limit(_SCAN_ROWS)
-        ):
-            try:
-                data = json.loads(raw or "{}")
-            except (TypeError, ValueError):
-                continue
-            if isinstance(data, dict) and data.get("invocation_id"):
-                denied_kind[str(data["invocation_id"])] = str(data.get("kind") or "")
-        route_events = [
-            (str(t), s, str(p or "{}"))
-            for t, s, p in db.exec(
-                select(EventRecord.type, EventRecord.session_id, EventRecord.payload_json)
-                .where(
-                    EventRecord.session_id.in_(team_ids),  # type: ignore[attr-defined, union-attr]
-                    EventRecord.type.in_(_ROUTE_EVENT_TYPES),  # type: ignore[attr-defined]
-                )
-                .order_by(EventRecord.created_at.desc())  # type: ignore[attr-defined]
-                .limit(_ROUTE_ROWS)
-            )
-        ]
+        # The team's tool calls + who refused each refused one, and the route
+        # changes — the same bounded reads the receipt of one run uses
+        # (v1.351.0: lifted into ``_read_tool_rows`` / ``_read_route_events``),
+        # still inside this ONE transaction.
+        invocations, denied_kind = _read_tool_rows(db, team_ids)
+        route_events = _read_route_events(db, team_ids)
         try:
             team_docs = _team_documents(db, {root.id: root, **{m.id: m for m in members}})
         except Exception:  # noqa: BLE001 — files are a bonus on a card
@@ -715,44 +813,7 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
         slot["result"] = _short(data.get("result") or "", _RESULT_CHARS)
         slot["finished_at"] = _iso(ev.created_at)
 
-    last_line: dict[str, str] = {}
-    lines: list[dict[str, Any]] = []
-    for inv_id, inv_session, inv_tool, inv_args, inv_ok, inv_verdict, inv_undo, inv_at in invocations:
-        tool = inv_tool or ""
-        if inv_undo or tool in _QUIET_TOOLS:
-            continue
-        who = names.get(inv_session, "Agent")
-        verdict = str(getattr(inv_verdict, "value", inv_verdict) or "").lower()
-        kind = denied_kind.get(str(inv_id or "")) if verdict == "ask" and not inv_ok else None
-        if kind in _ASK_DENIAL_KINDS:
-            # A DENIED ASK IS NOT A FAILURE (v1.309.0, contract 5): the call
-            # needed the user's OK and did not get it (nobody could ask, the
-            # user said no, or the pause timed out). "Builder could not write
-            # report.md" read as the agent failing at the work; it was
-            # waiting on a person.
-            text, tone = f"needed your OK to use {tool.replace('_', ' ')}", "ask"
-        elif kind is not None:
-            # …and a refusal NOBODY was asked about is never worded as one
-            # (v1.309.0 review, honest copy): the breaker, the roster gate
-            # and low trust share the ``ask`` verdict but asked no one.
-            words = _REFUSAL_WORDS.get(kind, "was not allowed to use {t}")
-            text, tone = words.format(t=tool.replace("_", " ")), "warn"
-        else:
-            # No ``tool.denied`` event = not a refusal: an ``ask`` call the
-            # user APPROVED whose tool then failed reads as the failure it is
-            # (as does a refusal whose event was pruned — never "needed your
-            # OK" on a guess).
-            try:
-                args = json.loads(inv_args or "{}")
-            except (TypeError, ValueError):
-                args = {}
-            text = tool_line(tool, args if isinstance(args, dict) else {}, bool(inv_ok))
-            tone = "ok" if inv_ok else "warn"
-        last_line[inv_session] = text
-        lines.append({
-            "at": _iso(inv_at), "who": who, "session_id": inv_session,
-            "text": f"{who} {text}", "tone": tone,
-        })
+    lines, last_line = tool_activity(invocations, denied_kind, names)
     for ev in events:
         data = _payload(ev)
         who = names.get(ev.session_id or "", "Agent")
