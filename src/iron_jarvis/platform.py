@@ -93,6 +93,7 @@ from .search import SearchIndex
 from .search.tools import history_search_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
+from .scheduling import run_outcome as _run_outcome
 from .templates import MEMORY_REVIEW_SCHEDULE
 from .reflex import models as _reflex_models  # noqa: F401  (registers ReflexRule)
 from .personas import models as _persona_models  # noqa: F401  (registers PersonaRecord)
@@ -151,6 +152,13 @@ from .terminals import TerminalManager
 #: Module logger for the wiring itself. ``build_platform`` keeps a LOCAL ``log``
 #: bound to the event-bus logger, so anything that is not an event uses this one.
 _log = get_logger("platform")
+
+
+class _ScheduledRunFailed(RuntimeError):
+    """A scheduled task's session ended FAILED (v1.351.0, G01). Its message is
+    the run's own reason in plain words; ``_run_scheduled`` words the row
+    ("The run failed: <reason>"). A class of its own only so the log line can
+    say which kind of failure it was — the row never shows a class name."""
 
 
 @dataclass
@@ -1690,7 +1698,12 @@ def build_platform(
     # a saved workflow, or emits an event — then records how it went on the row
     # and delivers the result to the user's destinations. The recording is what
     # turns "it fired at 9:02" into "here is what happened".
-    def _record_outcome(name: str, status: str, detail: str, session_id: str = "") -> None:
+    def _record_outcome(
+        name: str, status: str, detail: str, session_id: str | None = ""
+    ) -> None:
+        """Stamp how a fire went on its row. ``session_id=None`` keeps the
+        row's last session link (a fire that started no session — an
+        Emergency-stop skip — must not erase the link to the last real run)."""
         from sqlmodel import select
 
         from .scheduling.models import ScheduledTaskRecord
@@ -1703,7 +1716,8 @@ def build_platform(
                 return  # deleted mid-fire — nothing to stamp
             rec.last_status = status
             rec.last_detail = " ".join((detail or "").split())[:300]
-            rec.last_session_id = session_id or ""
+            if session_id is not None:
+                rec.last_session_id = session_id or ""
             db.add(rec)
             db.commit()
 
@@ -1719,7 +1733,10 @@ def build_platform(
         excerpt = " ".join((detail or "").split())
         if len(excerpt) > 200:
             excerpt = excerpt[:200] + "…"
-        head = "done" if status == "ok" else "FAILED"
+        # v1.351.0 (G01): the head says what the ROW says — "finished, but it
+        # needs you" / "finished, but part of it failed", never "done" over a
+        # run that fell short ("done" and "FAILED" are unchanged).
+        head = _run_outcome.delivery_head(status)
         message = f"Schedule “{task.name}”: {head}" + (f" — {excerpt}" if excerpt else "")
         try:
             targets = payload.get("notify_channels") or platform.notifier.channels()
@@ -2025,11 +2042,28 @@ def build_platform(
             _record_memory_review(
                 review, session.id, status == "completed", summary or f"session {status}"
             )
-            if status != "completed":
-                raise RuntimeError(
-                    f"session ended {status}: {(done.summary or 'no summary')[:200]}"
+            # THE REAL OUTCOME (v1.351.0, readiness audit G01): the status says
+            # how the RUN ended, ``Session.outcome`` (the ledger's verdict,
+            # derived at finalize) says whether the JOB was done. A run that
+            # completed while an ask expired is ``needs_you``, not "✓ ok"; a
+            # FAILED run whose ask expired is ``needs_you`` too (the
+            # ``derive_outcome`` rule: the person is the headline). A run
+            # stopped before it ended (a cancel that won the race with the
+            # start) is ``cancelled``. ``_fire`` turns this into the row.
+            outcome = str(getattr(done, "outcome", None) or "")
+            fired["outcome"] = outcome
+            if status == "cancelled":
+                fired["outcome"] = _run_outcome.STATUS_CANCELLED
+                return _run_outcome.plain_sentence(summary) or _run_outcome.STOPPED_NO_WORDS
+            if status != "completed" and outcome != "needs_you":
+                # The reason in plain words; ``_fire`` words the row
+                # ("The run failed: <reason>") — never a Python class name.
+                raise _ScheduledRunFailed(
+                    _run_outcome.plain_text(summary) or f"the run ended {status}"
                 )
-            detail = summary or "session completed"
+            detail = _run_outcome.short_detail(
+                _run_outcome.fire_status(outcome), summary
+            ) or "session completed"
             if knob_notes:
                 # The row says what the knobs could not do (v1.299.0): "no
                 # earlier result from X yet", "the pre-run script exited 2".
@@ -2096,21 +2130,61 @@ def build_platform(
     def _run_scheduled(task):
         async def _fire():
             payload = json.loads(task.payload_json or "{}")
-            fired: dict = {"session_id": ""}
+            fired: dict = {"session_id": "", "outcome": ""}
+            # EMERGENCY STOP (v1.351.0, G13): a due schedule does not start,
+            # whatever its kind (a task, a workflow, an event, a goal), and
+            # its row says why. Nothing is delivered — the user turned the
+            # switch on; the row is the record. The session link is kept.
+            from .agents.orchestrator import emergency_stop_on
+
+            if emergency_stop_on(platform.config):
+                _record_outcome(
+                    task.name, "skipped", _run_outcome.EMERGENCY_STOP_SKIP, None
+                )
+                return
             try:
                 detail = await _dispatch_scheduled(task, payload, fired)
+            except asyncio.CancelledError:
+                # STOPPED MID-RUN (v1.351.0, G13): a Cancel on the session or
+                # Emergency stop. ``cancel_session`` cancels the task that
+                # runs this fire — on the scheduler thread that is the whole
+                # ``asyncio.run``, so re-raising only skipped the row and the
+                # ``next_run`` stamp and left an APScheduler traceback. The
+                # row says it was stopped, in the session's own words; the
+                # stop was the user's, so nothing is delivered.
+                sid = fired["session_id"]
+                words = ""
+                if sid and platform.orchestrator is not None:
+                    try:
+                        row = platform.orchestrator.get_session(sid)
+                        words = _run_outcome.plain_sentence(getattr(row, "summary", "") or "")
+                    except Exception:  # noqa: BLE001 — the status still lands
+                        words = ""
+                _record_outcome(
+                    task.name,
+                    _run_outcome.STATUS_CANCELLED,
+                    words or _run_outcome.STOPPED_NO_WORDS,
+                    sid,
+                )
+                return
             except Exception as exc:  # noqa: BLE001
                 # Record + deliver the failure, then swallow: the row and the
                 # notification ARE the error surface. Re-raising would only
                 # skip last_run stamping and dump a traceback into the
-                # scheduler thread nobody watches.
-                _record_outcome(
-                    task.name, "error", f"{type(exc).__name__}: {exc}", fired["session_id"]
+                # scheduler thread nobody watches. v1.351.0 (G01): the row
+                # reads "The run failed: <reason>" — the class name goes to
+                # the log, never to the user.
+                _log.warning(
+                    "schedule %r failed (%s)", task.name, type(exc).__name__, exc_info=True
                 )
-                _deliver_outcome(task, payload, "error", str(exc))
+                detail = _run_outcome.failure_detail(str(exc))
+                _record_outcome(task.name, "error", detail, fired["session_id"])
+                _deliver_outcome(task, payload, "error", detail)
                 return
-            _record_outcome(task.name, "ok", detail, fired["session_id"])
-            _deliver_outcome(task, payload, "ok", detail)
+            status = _run_outcome.fire_status(fired.get("outcome"))
+            _record_outcome(task.name, status, detail, fired["session_id"])
+            if status != _run_outcome.STATUS_CANCELLED:
+                _deliver_outcome(task, payload, status, detail)
 
         return _fire()
 
@@ -2281,6 +2355,33 @@ def build_platform(
     for tool in goal_tools(platform):
         platform.registry.register(tool)
     event_bus.add_handler(platform.intent.on_event)
+
+    # EMERGENCY STOP STOPS WHAT IS RUNNING (v1.351.0, readiness audit G13).
+    # The switch is written by several doors — the Autonomy page, the
+    # Settings row, Ctrl K ("stop everything"), a chat ``config_set`` — and
+    # every one goes through the ConfigWriter, which publishes ONE
+    # ``config.changed`` naming the keys. So this one watcher, not each door,
+    # cancels the runs unattended doors already started the moment the
+    # switch turns ON (``Orchestrator.stop_unattended``; chat and the work a
+    # person started are never touched). A sync handler: the bus runs it on a
+    # worker thread, where the blocking row read and the cross-thread cancel
+    # belong. Turning the switch OFF stops nothing and starts nothing.
+    def _emergency_stop_watch(ev) -> None:
+        from .core.events import EventType as _ET
+
+        if getattr(ev, "type", "") != _ET.CONFIG_CHANGED:
+            return
+        keys = (getattr(ev, "payload", None) or {}).get("keys") or []
+        if "autonomy_kill_switch" not in keys:
+            return
+        from .agents.orchestrator import emergency_stop_on
+
+        orch = getattr(platform, "orchestrator", None)
+        stop = getattr(orch, "stop_unattended", None)
+        if callable(stop) and emergency_stop_on(platform.config):
+            stop()
+
+    event_bus.add_handler(_emergency_stop_watch)
 
     # Sentinels ("always-on watchers"): durable, suggest-only filesystem watchers
     # that NOTICE changes and mint suggest-only proposals into the Motivation Layer

@@ -57,7 +57,17 @@ def status_line(d) -> dict[str, int]:
     AUDIT §4.5 R2): jobs a restart cut off, background loops and tool packs
     that are failing, and work running now. Numbers only — the detail lives
     in Everything › Status. Never raises."""
-    out = {"interrupted": 0, "failing_loops": 0, "failing_packs": 0, "running": 0}
+    out = {
+        "interrupted": 0,
+        "failing_loops": 0,
+        "failing_packs": 0,
+        "running": 0,
+        # v1.351.0 (readiness audit G02): enabled schedules whose LAST run
+        # failed or finished short of the job (an ask expired, a step
+        # failed) — the home offers "N scheduled jobs need a look". One
+        # indexed count on the schedules table; no probe.
+        "short_schedules": 0,
+    }
     try:
         from .sessions import interrupted_rows
 
@@ -84,6 +94,24 @@ def status_line(d) -> dict[str, int]:
     try:
         out["running"] = len(getattr(d.orchestrator, "_running", {}) or {})
     except Exception:  # noqa: BLE001
+        pass
+    try:
+        from sqlalchemy import func
+
+        from ...scheduling.models import ScheduledTaskRecord as S
+        from ...scheduling.run_outcome import SHORT_STATUSES
+
+        with session_scope(d.platform.engine) as db:
+            out["short_schedules"] = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(S)
+                    .where(S.enabled == True)  # noqa: E712
+                    .where(S.last_status.in_(SHORT_STATUSES))  # type: ignore[attr-defined]
+                )
+                or 0
+            )
+    except Exception:  # noqa: BLE001 — a count we cannot read is zero
         pass
     return out
 

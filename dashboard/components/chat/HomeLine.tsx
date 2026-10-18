@@ -12,6 +12,12 @@
  *   2. a background task or a tool pack failing
  *   3. work running, or waiting for an answer
  *
+ * v1.351.0 (readiness audit G02): a scheduled job whose last run failed or
+ * finished short of the job (an ask expired, a step failed) gets its own
+ * line — "1 scheduled job needs a look" — whose Open goes to /schedules,
+ * where the row says what happened. It ranks under an ask that is waiting
+ * NOW and above work that is merely running.
+ *
  * One read for the counts (GET /ui/status-line) plus the pending-asks list
  * the bell already uses — never a session poll from the chat page.
  *
@@ -21,7 +27,7 @@
  */
 
 import Link from "next/link";
-import { AlertTriangle, CircleDot, RotateCcw } from "lucide-react";
+import { AlertTriangle, CalendarClock, CircleDot, RotateCcw } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
 
@@ -30,11 +36,12 @@ interface StatusCounts {
   failing_loops?: number;
   failing_packs?: number;
   running?: number;
+  short_schedules?: number;
 }
 const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
 
 export interface HomeLineItem {
-  kind: "interrupted" | "failing" | "working";
+  kind: "interrupted" | "failing" | "working" | "schedules";
   text: string;
 }
 
@@ -45,6 +52,8 @@ export function homeLineItems(input: {
   failingPacks: number;
   running: number;
   waiting: number;
+  /** Enabled schedules whose last run failed or fell short (v1.351.0). */
+  shortSchedules?: number;
 }): HomeLineItem[] {
   const out: HomeLineItem[] = [];
   const s = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -61,17 +70,32 @@ export function homeLineItems(input: {
       text: `${failing} background ${s(failing, "task is", "tasks are")} failing.`,
     });
   }
+  const short = input.shortSchedules ?? 0;
+  const schedules: HomeLineItem | null =
+    short > 0
+      ? { kind: "schedules", text: `${short} scheduled ${s(short, "job needs", "jobs need")} a look` }
+      : null;
+  let working: HomeLineItem | null = null;
   if (input.running > 0 || input.waiting > 0) {
     const bits = [
       input.running > 0 ? `${input.running} ${s(input.running, "task", "tasks")} running` : "",
       input.waiting > 0 ? `${input.waiting} waiting for you` : "",
     ].filter(Boolean);
-    out.push({ kind: "working", text: bits.join(" · ") });
+    working = { kind: "working", text: bits.join(" · ") };
   }
+  // An ask waiting NOW outranks a schedule that fell short earlier; work that
+  // is only running does not.
+  const tail = input.waiting > 0 ? [working, schedules] : [schedules, working];
+  for (const item of tail) if (item) out.push(item);
   return out;
 }
 
-const ICON = { interrupted: RotateCcw, failing: AlertTriangle, working: CircleDot } as const;
+const ICON = {
+  interrupted: RotateCcw,
+  failing: AlertTriangle,
+  working: CircleDot,
+  schedules: CalendarClock,
+} as const;
 
 export function HomeLine() {
   const counts = usePolledApi<StatusCounts>("/ui/status-line", 20000);
@@ -83,6 +107,7 @@ export function HomeLine() {
     failingPacks: n(c.failing_packs),
     running: n(c.running),
     waiting: Array.isArray(approvals.data?.approvals) ? approvals.data!.approvals!.length : 0,
+    shortSchedules: n(c.short_schedules),
   });
   if (items.length === 0) return null;
   const [top, ...rest] = items;
@@ -100,13 +125,23 @@ export function HomeLine() {
         {top.text}
         {rest.length > 0 && <span className="text-zinc-500"> +{rest.length} more</span>}
       </span>
-      <Link
-        href="/everything#status"
-        onClick={() => window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }))}
-        className="shrink-0 rounded-md px-2 py-0.5 text-[12px] text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100"
-      >
-        Open
-      </Link>
+      {top.kind === "schedules" ? (
+        // The rows say what happened and link each run (v1.351.0, G02).
+        <Link
+          href="/schedules"
+          className="shrink-0 rounded-md px-2 py-0.5 text-[12px] text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100"
+        >
+          Open
+        </Link>
+      ) : (
+        <Link
+          href="/everything#status"
+          onClick={() => window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }))}
+          className="shrink-0 rounded-md px-2 py-0.5 text-[12px] text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100"
+        >
+          Open
+        </Link>
+      )}
     </div>
   );
 }

@@ -161,11 +161,14 @@ def test_a_failed_schedule_and_a_tripped_goal_turn_their_stars_amber(tmp_path):
     nodes = _nodes(client.get("/ui/system-map").json())
     assert nodes["schedules"]["attention"] is None and nodes["goals"]["attention"] is None
     with session_scope(app.state.platform.engine) as db:
-        db.add(ScheduledTaskRecord(name="nightly", cron="0 2 * * *", last_status="failed", last_run=utcnow()))
+        # v1.351.0 (G02): the value the scheduler REALLY writes for a failed
+        # run is "error" — this pin used to plant "failed", which nothing
+        # writes, so the flag it proved could never fire on a real install.
+        db.add(ScheduledTaskRecord(name="nightly", cron="0 2 * * *", last_status="error", last_run=utcnow()))
         db.add(GoalContractRecord(name="inbox zero", state="tripped"))
         db.commit()
     nodes = _nodes(client.get("/ui/system-map").json())
-    assert nodes["schedules"]["attention"] == "1 schedule failed on the last run"
+    assert nodes["schedules"]["attention"] == "1 schedule failed on its last run"
     assert nodes["schedules"]["setup"] == 1 and nodes["schedules"]["used"] == 1
     assert nodes["goals"]["attention"] == "1 goal stopped by its safety breaker"
 

@@ -15,6 +15,7 @@ import {
   ArrowUpRight,
   Pencil,
   X,
+  TriangleAlert,
 } from "lucide-react";
 import { post, del, get, patch, ApiError } from "@/lib/api";
 import { CRON_TO_LABEL, REPEAT_PRESETS } from "@/lib/schedules";
@@ -43,10 +44,46 @@ import { PageGrid } from "@/components/PageGrid";
 // read as words ("guide" → "Guide"), a custom agent keeps the name the user
 // typed. The workflow editor's map knew only its own five agents.
 import { agentLabel } from "@/lib/agentWorlds";
+// v1.351.0 (readiness audit G01): the ONE table of how a last run went —
+// shared with a project's Schedules list.
+import { runNowNote, scheduleDetail, scheduleStatusWords } from "@/lib/scheduleOutcome";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
 const FALLBACK_AGENTS = ["builder", "supervisor", "planner", "researcher", "reviewer"];
+
+/** v1.351.0 (G01): the last-run word's ink. The four the row always had keep
+ *  their exact classes (ok, failed, missed, skipped); every other verdict
+ *  takes the theme tone for its kind (lib/scheduleOutcome). */
+const ROW_TONE: Record<string, string> = {
+  ok: "text-emerald-300",
+  error: "text-rose-300",
+  missed: "text-amber-300",
+  skipped: "text-amber-300",
+};
+const ROW_TONE_BY: Record<string, string> = {
+  success: "text-tone-success",
+  danger: "text-tone-danger",
+  warn: "text-tone-warn",
+  muted: "text-zinc-600",
+};
+
+/** Run now's amber answer (v1.351.0, G01): the SuccessNote / ErrorNote shape
+ *  in the warn tone, for a run that finished short of the job or did not
+ *  run. role=status — it reports, it does not interrupt. */
+function WarnNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="schedule-run-warn"
+      className="flex items-start gap-2.5 rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-sm text-tone-warn"
+    >
+      <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  );
+}
 
 /** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
  * morning" is the schedule people actually mean; workflow/event serve
@@ -394,6 +431,9 @@ export default function SchedulesPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  // v1.351.0 (G01): Run now's amber answer — a run that finished short of
+  // the job, or did not run at all, is neither "Ran ✓" nor an error.
+  const [warn, setWarn] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
 
   // ?focus=add (the global search's deep link) rings the add card.
@@ -442,6 +482,7 @@ export default function SchedulesPage() {
     setTaskText(t.task);
     setRepeat(t.cron);
     setOk(null);
+    setWarn(null);
     setFormError(null);
   }
 
@@ -451,6 +492,7 @@ export default function SchedulesPage() {
     setBusy(true);
     setFormError(null);
     setOk(null);
+    setWarn(null);
 
     // Exactly one of cron / run_at must be sent. The payload carries what the
     // fire should do — and, for tasks, where the result should go.
@@ -528,6 +570,7 @@ export default function SchedulesPage() {
   async function runNow(schedName: string) {
     setActing(`run:${schedName}`);
     setOk(null);
+    setWarn(null);
     setFormError(null);
     try {
       // Run-now returns the OUTCOME (v1.119.0) — report how it went, not
@@ -537,11 +580,12 @@ export default function SchedulesPage() {
         last_status: string;
         last_detail: string;
       }>(`/schedules/${encodeURIComponent(schedName)}/run`);
-      if (r.last_status === "error") {
-        setFormError(`"${schedName}" failed — ${r.last_detail || "no detail"}`);
-      } else {
-        setOk(`Ran "${schedName}" ✓${r.last_detail ? ` — ${r.last_detail}` : ""}`);
-      }
+      // v1.351.0 (G01): the same verdict the row shows — amber for a run
+      // that finished but needs the user, partly failed, or did not run.
+      const note = runNowNote(schedName, r.last_status, r.last_detail);
+      if (note.tone === "danger") setFormError(note.text);
+      else if (note.tone === "warn") setWarn(note.text);
+      else setOk(note.text);
       reload();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
@@ -887,6 +931,7 @@ export default function SchedulesPage() {
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}
                 </button>
                 {ok && <SuccessNote>{ok}</SuccessNote>}
+                {warn && <WarnNote>{warn}</WarnNote>}
                 {formError && <ErrorNote>{formError}</ErrorNote>}
               </form>
             </Card>
@@ -975,29 +1020,27 @@ export default function SchedulesPage() {
                           </td>
                           <td className="px-2 py-2.5">
                             {/* The row tells the TRUTH (v1.119.0): how the last
-                                fire went + a link to the actual session. */}
-                            {s.last_status === "ok" ? (
-                              <span className="text-[12px] text-emerald-300">✓ ok</span>
-                            ) : s.last_status === "error" ? (
-                              <span className="text-[12px] text-rose-300">✗ failed</span>
-                            ) : s.last_status === "missed" ? (
-                              /* v1.231.0: the app was closed or asleep at fire time —
-                                 recorded, never fired late (last_detail says when). */
-                              <span className="text-[12px] text-amber-300">missed</span>
-                            ) : s.last_status === "skipped" ? (
-                              /* v1.231.0: the previous fire was still running. */
-                              <span className="text-[12px] text-amber-300">skipped</span>
-                            ) : (
-                              <span className="text-[12px] text-zinc-600">
-                                not run yet
-                              </span>
-                            )}
+                                fire went + a link to the actual session.
+                                v1.351.0 (G01): every verdict the daemon writes
+                                has its words (lib/scheduleOutcome) — a run that
+                                finished but needs the user, or partly failed,
+                                is amber, never "✓ ok" and never "not run
+                                yet"; the detail is plain words, never the
+                                report's markdown. */}
+                            <span
+                              className={`text-[12px] ${ROW_TONE[s.last_status ?? ""] ?? ROW_TONE_BY[scheduleStatusWords(s.last_status).tone]}`}
+                              data-testid={`schedule-status-${s.name}`}
+                              data-status={s.last_status || "none"}
+                            >
+                              {scheduleStatusWords(s.last_status).label}
+                            </span>
                             {s.last_detail ? (
                               <div
                                 className="max-w-[220px] truncate text-[11px] text-zinc-500"
-                                title={s.last_detail}
+                                title={scheduleDetail(s.last_detail)}
+                                data-testid={`schedule-detail-${s.name}`}
                               >
-                                {s.last_detail}
+                                {scheduleDetail(s.last_detail)}
                               </div>
                             ) : null}
                             {s.last_session_id ? (
@@ -1069,6 +1112,7 @@ export default function SchedulesPage() {
           onSaved={(msg) => {
             setEditing(null);
             setOk(msg);
+            setWarn(null);
             setFormError(null);
             reload();
           }}
@@ -1250,7 +1294,7 @@ function KnobFields({
             aria-label="Pre-run folder"
             className="field text-xs"
           >
-            <option value="">Run in the job's folder (workspace)</option>
+            <option value="">Run in the job&apos;s folder (workspace)</option>
             <option value="workspace">workspace</option>
             <option value="home">Iron Jarvis home</option>
           </select>

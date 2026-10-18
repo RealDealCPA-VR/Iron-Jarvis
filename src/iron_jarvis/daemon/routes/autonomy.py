@@ -97,12 +97,29 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/autonomy/kill")
     def autonomy_kill(body: KillBody) -> dict[str, Any]:
-        """Global kill switch: engage (default) or release. Persisted to config."""
+        """Global kill switch: engage (default) or release. Persisted to config.
+
+        v1.351.0 (readiness audit G13): engaging it is real. New unattended
+        work is refused at ``Orchestrator.create_session`` (a due schedule
+        records a skip on its row), and what unattended doors already have
+        RUNNING is cancelled here, before the answer — ``stopped`` counts it
+        so the page can say so. Chat and work a person started keep going.
+        (The platform's ``config.changed`` watcher does the same for every
+        other door that flips the switch; by the time it runs these rows are
+        already stopped, so it finds nothing twice.) A sync route: FastAPI's
+        threadpool, where the row read and the cross-thread cancel belong."""
         # Redesign S2: the one writer (ledger + Undo, loop re-armed).
         from .settings import config_writer
 
         config_writer(d).apply({"autonomy_kill_switch": bool(body.enabled)}, actor="autonomy_page")
-        return {"kill_switch": d.platform.config.autonomy_kill_switch}
+        engaged = bool(d.platform.config.autonomy_kill_switch)
+        stopped: list[str] = []
+        if engaged:
+            orch = getattr(d, "orchestrator", None) or getattr(d.platform, "orchestrator", None)
+            stop = getattr(orch, "stop_unattended", None)
+            if callable(stop):
+                stopped = list(stop() or [])
+        return {"kill_switch": d.platform.config.autonomy_kill_switch, "stopped": len(stopped)}
 
     @app.post("/autonomy/tick")
     async def autonomy_tick(wait: bool = False) -> dict[str, Any]:

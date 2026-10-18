@@ -14,6 +14,7 @@ import { useApi } from "@/lib/useApi";
 import { cronLabel } from "@/lib/schedules";
 import type { Schedule } from "@/lib/types";
 import { Card, Dot } from "@/components/ui";
+import { failureReason, scheduleDetail, scheduleStatusWords } from "@/lib/scheduleOutcome";
 
 /** The project a schedule runs inside. Prefers the server-decoded
  * `project_id` (additive on GET /schedules since v1.169.0); falls back to
@@ -131,15 +132,30 @@ export function ProjectSchedules({
               )}
             </span>
             <span className="flex shrink-0 flex-col items-end">
-              {/* Outcome truth (v1.119.0): how the last fire went + the session. */}
+              {/* Outcome truth (v1.119.0): how the last fire went + the session.
+                  v1.351.0 (G01): the Schedules page's words (lib/scheduleOutcome)
+                  — a run that finished but needs the user, or partly failed, is
+                  amber here too, and a detail is plain words. */}
               {s.last_status === "ok" ? (
                 <span className="text-[11px] text-tone-success">✓ ok</span>
               ) : s.last_status === "error" ? (
                 <span
                   className="max-w-[200px] truncate text-[11px] text-tone-danger"
-                  title={s.last_detail || undefined}
+                  title={scheduleDetail(s.last_detail) || undefined}
                 >
-                  ✗ failed{s.last_detail ? `: ${s.last_detail}` : ""}
+                  ✗ failed{s.last_detail ? `: ${failureReason(s.last_detail)}` : ""}
+                </span>
+              ) : s.last_status ? (
+                <span
+                  className={`max-w-[200px] truncate text-[11px] ${
+                    scheduleStatusWords(s.last_status).tone === "warn"
+                      ? "text-tone-warn"
+                      : "text-zinc-500"
+                  }`}
+                  title={scheduleDetail(s.last_detail) || undefined}
+                  data-testid={`project-schedule-status-${s.name}`}
+                >
+                  {scheduleStatusWords(s.last_status).label}
                 </span>
               ) : (
                 <span className="text-[11px] text-zinc-600">not run yet</span>

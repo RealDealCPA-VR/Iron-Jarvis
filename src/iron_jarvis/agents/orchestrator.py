@@ -403,6 +403,40 @@ def is_unattended_origin(origin: str | None) -> bool:
     return not text.startswith(ATTENDED_ORIGINS)
 
 
+#: EMERGENCY STOP (v1.351.0, readiness audit G13). ``config.
+#: autonomy_kill_switch`` used to be read by the motivation loop alone, while
+#: the setting promised "Immediately blocks every self-initiated action" and
+#: the Autonomy page flashed "all autonomy halted" — schedules, goals, reflex
+#: rules, the phone and queued assignments kept running. Every unattended
+#: door ends in ``Orchestrator.create_session``, so the refusal lives THERE
+#: (one rule, ``is_unattended_origin``), and ``stop_unattended`` cancels what
+#: such doors already have running when the switch is engaged. Chat, a
+#: mission, a project task and a session a person started are attended and
+#: are never touched.
+EMERGENCY_STOP_REFUSAL = (
+    "Emergency stop is on, so work that starts on its own (schedules, goals, "
+    "rules, phone jobs, queued jobs) cannot start. Turn it off on the Autonomy "
+    "page to let it run again."
+)
+#: The summary a run Emergency stop cut off carries (and the schedule row
+#: shows): the stop was the user's switch, not "cancelled by the user" at a
+#: Cancel button they never pressed.
+EMERGENCY_STOP_STOPPED = "Emergency stop was turned on, so this run was stopped."
+
+
+class EmergencyStopOn(RuntimeError):
+    """``create_session`` refused an unattended origin because Emergency stop
+    is on. A ``RuntimeError`` so every door that already turns a refused
+    start into a recorded failure (a reflex row, a workflow step, the memory
+    review's 400) says the sentence without a new branch."""
+
+
+def emergency_stop_on(config) -> bool:
+    """Is Emergency stop engaged? Read live (a settings write flips the
+    attribute in place). Anything but a real ``True`` reads as off."""
+    return getattr(config, "autonomy_kill_switch", False) is True
+
+
 def busy_notice_threshold(config) -> int:
     """``config.busy_runs_notice_at``, defaulted and sanitized (0 = never)."""
     raw = getattr(config, "busy_runs_notice_at", None)
@@ -584,6 +618,10 @@ class Orchestrator:
         self._busy_last_at: float | None = None
         self._busy_quiet_until = 0.0
         self._clock = time.monotonic  # a seam: tests count with a fake clock
+        # v1.351.0 (G13): why a run is being stopped when it is not the user's
+        # Cancel button — Emergency stop. Read by the cancel paths and popped
+        # by ``_finalize_cancelled``, so the row says what really happened.
+        self._stop_reasons: dict[str, str] = {}
 
     def register_running(self, session_id: str, task: asyncio.Task) -> None:
         """Track a background run so it can be cancelled (called by the daemon).
@@ -936,6 +974,14 @@ class Orchestrator:
         would manufacture a track record for a prompt that never ran.
         """
         import json as _json
+
+        # EMERGENCY STOP (v1.351.0, G13): every unattended door — a schedule,
+        # a goal iteration, a reflex rule, a workflow's agent step, the
+        # phone, a queued assignment, autonomy — ends here, so this is the one
+        # refusal. Judged on the origin the DOOR stamped (before the self-dev
+        # default below): an untagged run is a person, never refused.
+        if is_unattended_origin(origin) and emergency_stop_on(self.p.config):
+            raise EmergencyStopOn(EMERGENCY_STOP_REFUSAL)
 
         # LOCAL ONLY (v1.332.0). A session is local only when the door says so
         # (``options["local_only"]``: the chat's escalation, an assignment
@@ -1479,6 +1525,72 @@ class Orchestrator:
         """How many unattended runs are working right now (every door)."""
         return len(self._unattended_live)
 
+    # --- Emergency stop (v1.351.0, readiness audit G13) -------------------
+
+    def emergency_stop_reason(self, origin: str | None) -> str:
+        """The sentence ``create_session`` would refuse a run of ``origin``
+        with right now, or "" when it may start. For a door that should HOLD
+        its work instead of trying and failing (the assignment dispatcher —
+        a refused start there would strike the job). Never raises."""
+        try:
+            if is_unattended_origin(origin) and emergency_stop_on(self.p.config):
+                return EMERGENCY_STOP_REFUSAL
+        except Exception:  # noqa: BLE001 — an unreadable switch is "off", like the loop reads it
+            pass
+        return ""
+
+    def stop_unattended(
+        self, reason: str = EMERGENCY_STOP_STOPPED, *, limit: int = 500
+    ) -> list[str]:
+        """Cancel every live run an UNATTENDED door started (a schedule, a
+        goal, a reflex rule, a workflow step, the phone, an assignment,
+        autonomy) — what engaging Emergency stop does to work already going.
+        Attended work (chat, a mission, a project task, a run a person
+        started) is never touched, and neither is a delegated teammate (it
+        stops with the run it belongs to: cancelling the parent cancels the
+        awaited child).
+
+        Reads the live rows (ACTIVE/QUEUED, bounded) rather than ``_running``
+        alone, so a run parked in the governor's queue or a schedule fire on
+        the scheduler's own loop is found too; each goes through
+        ``cancel_session`` — the one stop path, cross-loop safe — with
+        ``reason`` as its summary. BLOCKING (SQLite): call it from a sync
+        route, a worker thread or ``asyncio.to_thread``. Returns the ids it
+        stopped; never raises."""
+        try:
+            with session_scope(self.p.engine) as db:
+                rows = db.exec(
+                    select(Session.id, Session.origin)
+                    .where(
+                        Session.status.in_(  # type: ignore[attr-defined]
+                            [SessionStatus.ACTIVE, SessionStatus.QUEUED]
+                        )
+                    )
+                    .limit(max(int(limit), 1))
+                ).all()
+        except Exception:  # noqa: BLE001
+            log.exception("Emergency stop could not read the live runs")
+            return []
+        stopped: list[str] = []
+        for sid, origin in rows:
+            if not sid or not is_unattended_origin(origin):
+                continue
+            self._stop_reasons[sid] = reason
+            try:
+                self.cancel_session(sid)
+            except (KeyError, ValueError):
+                # Finished (or gone) between the read and the stop.
+                self._stop_reasons.pop(sid, None)
+                continue
+            except Exception:  # noqa: BLE001 — one stuck run must not keep the rest going
+                self._stop_reasons.pop(sid, None)
+                log.exception("Emergency stop could not stop session %s", sid)
+                continue
+            stopped.append(sid)
+        if stopped:
+            log.warning("Emergency stop stopped %d unattended run(s)", len(stopped))
+        return stopped
+
     # --- the truth about a finished run (v1.227.0) ------------------------
 
     def _release_worklist_claims(self, session_id: str, run_ids=None) -> int:
@@ -1746,6 +1858,12 @@ class Orchestrator:
                     "session_id": session.id,
                     "error": row.last_error or error,
                     "status": row.status,
+                    # v1.351.0 (G01): the ledger's verdict on the JOB. ``ok``
+                    # says the run completed; a run that completed while an
+                    # ask expired (``needs_you``) or a step failed
+                    # (``completed_with_failures``) is not done, and a
+                    # reader (the bell) must be able to tell.
+                    "outcome": getattr(session, "outcome", None),
                 },
                 session_id=session.id,
             )
@@ -1896,7 +2014,11 @@ class Orchestrator:
         session.status = SessionStatus.CANCELLED
         session.summary = _with_folder_note(
             session.summary,
-            reason or _prose(session.summary) or "Session cancelled by the user.",
+            reason
+            # v1.351.0 (G13): a stop Emergency stop made says so.
+            or self._stop_reasons.pop(session.id, None)
+            or _prose(session.summary)
+            or "Session cancelled by the user.",
         )
         session.finished_at = utcnow()
 
@@ -1997,7 +2119,10 @@ class Orchestrator:
                 loop.call_soon_threadsafe(task.cancel)
                 session.status = SessionStatus.CANCELLED
                 session.summary = _with_folder_note(
-                    session.summary, _prose(session.summary) or "Session cancelled by the user."
+                    session.summary,
+                    self._stop_reasons.get(session_id)
+                    or _prose(session.summary)
+                    or "Session cancelled by the user.",
                 )
                 session.finished_at = utcnow()
                 self._save(session)
@@ -2007,7 +2132,9 @@ class Orchestrator:
             session.status = SessionStatus.CANCELLED
             session.summary = _with_folder_note(
                 session.summary,
-                _prose(session.summary) or "Cancelled while queued (never started).",
+                self._stop_reasons.pop(session_id, None)
+                or _prose(session.summary)
+                or "Cancelled while queued (never started).",
             )
             session.finished_at = utcnow()
             self._save(session)
@@ -2025,7 +2152,10 @@ class Orchestrator:
             # with no bound task, and ``settle_child`` keeps the CANCELLED.
             session.status = SessionStatus.CANCELLED
             session.summary = _with_folder_note(
-                session.summary, _prose(session.summary) or "Session cancelled by the user."
+                session.summary,
+                self._stop_reasons.pop(session_id, None)
+                or _prose(session.summary)
+                or "Session cancelled by the user.",
             )
             session.finished_at = utcnow()
             self._save(session)

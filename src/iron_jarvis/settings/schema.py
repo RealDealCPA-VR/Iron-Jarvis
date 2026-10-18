@@ -323,8 +323,13 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("autonomy_dry_run", "Dry-run mode", "automation", "bool",
       "Propose what it WOULD do without executing anything.",
       tier="allow", floor_when=(False,), section="Autonomy"),
+    # v1.351.0 (readiness audit G13): the promise is now enforced at
+    # ``Orchestrator.create_session`` (every unattended door) and engaging it
+    # stops what those doors have running — so the words name what it stops.
     S("autonomy_kill_switch", "Emergency stop", "automation", "bool",
-      "Immediately blocks every self-initiated action.",
+      "Immediately blocks every self-initiated action: schedules, goals, rules, phone jobs, "
+      "queued jobs and Autonomy do not start, and what they have running is stopped. "
+      "Chat and work you start keep going.",
       tier="allow", floor_when=(False,), section="Autonomy", aliases=("kill switch", "stop everything")),
     S("autonomy_tick_seconds", "Think every (seconds)", "automation", "number",
       "How often the background loop wakes up.", tier="ask", section="Autonomy", check=_range(10, 86400)),

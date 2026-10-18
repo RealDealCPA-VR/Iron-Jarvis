@@ -67,7 +67,8 @@ def _undo_last(client, d):
 def test_the_kill_switch_route_is_journaled_and_undone(app):
     client, d, rearmed = app
     assert d.platform.config.autonomy_kill_switch is False
-    assert client.post("/autonomy/kill", json={"enabled": True}).json() == {"kill_switch": True}
+    # v1.351.0 (G13): the answer also counts the unattended runs it stopped.
+    assert client.post("/autonomy/kill", json={"enabled": True}).json() == {"kill_switch": True, "stopped": 0}
     (row,) = _journal(d)
     assert json.loads(row.pre_inline)["prior"] == {"autonomy_kill_switch": False}
     assert "autonomy" in rearmed

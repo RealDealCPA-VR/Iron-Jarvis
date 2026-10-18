@@ -221,6 +221,26 @@ def _work(d, db, since) -> list[dict[str, Any]]:
     return out
 
 
+def schedules_attention(failed: int, short: int) -> str | None:
+    """The Schedules star's amber words (v1.351.0, G02): "1 schedule failed
+    on its last run", "2 schedules finished but need a look", or both joined.
+    None when every enabled schedule's last run was fine. Pure."""
+    parts: list[str] = []
+    if failed > 0:
+        parts.append(
+            "1 schedule failed on its last run"
+            if failed == 1
+            else f"{failed} schedules failed on their last run"
+        )
+    if short > 0:
+        parts.append(
+            "1 schedule finished but needs a look"
+            if short == 1
+            else f"{short} schedules finished but need a look"
+        )
+    return " · ".join(parts) or None
+
+
 def _automations(d, db, since) -> list[dict[str, Any]]:
     from ...core.models import Session
 
@@ -235,17 +255,30 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
     def schedules() -> dict[str, Any]:
         from ...scheduling.models import ScheduledTaskRecord as S
 
+        from ...scheduling.run_outcome import FAILED_STATUSES, NEEDS_A_LOOK_STATUSES
+
         enabled = _count(db, select(func.count()).select_from(S).where(S.enabled == True))  # noqa: E712
         used = _count(db, select(func.count()).select_from(S).where(S.last_run >= since))  # type: ignore[operator]
+        # v1.351.0 (readiness audit G02): this compared ``"failed"``, a value
+        # the scheduler never writes (it writes ``"error"``), so the flag
+        # could never fire. The vocabulary is ``scheduling/run_outcome`` now,
+        # and a run that FINISHED short of the job (``needs_you``/``partial``)
+        # is named too. Indexed counts on one small table, like the rest.
         failing = _count(
             db,
-            select(func.count()).select_from(S).where(S.enabled == True).where(S.last_status == "failed"),  # noqa: E712
+            select(func.count()).select_from(S).where(S.enabled == True)  # noqa: E712
+            .where(S.last_status.in_(FAILED_STATUSES)),  # type: ignore[attr-defined]
+        )
+        short = _count(
+            db,
+            select(func.count()).select_from(S).where(S.enabled == True)  # noqa: E712
+            .where(S.last_status.in_(NEEDS_A_LOOK_STATUSES)),  # type: ignore[attr-defined]
         )
         live = _active_session_count(db, Session.origin.like("schedule:%"))  # type: ignore[union-attr]
         return _node(
             "schedules", "Schedules", "/schedules", setup=enabled, used=used, live=live, unit="schedule",
             detail="Work handed to an agent on a clock.",
-            attention=f"{failing} schedule{'s' if failing != 1 else ''} failed on the last run" if failing else None,
+            attention=schedules_attention(failing, short),
         )
 
     def workflows() -> dict[str, Any]:

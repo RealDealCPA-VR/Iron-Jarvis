@@ -162,6 +162,14 @@ function count(v: number | null | undefined): string {
   return n.toLocaleString();
 }
 
+/** The flash after Emergency stop is engaged (v1.351.0, G13): what no longer
+ *  starts, and how many runs it stopped (the daemon's count). Pure. */
+function killEngagedWords(stopped: number | null | undefined): string {
+  const n = typeof stopped === "number" && Number.isFinite(stopped) && stopped > 0 ? Math.floor(stopped) : 0;
+  const base = "Kill switch engaged — schedules, goals, rules, phone jobs and autonomy will not start.";
+  return n > 0 ? `${base} Stopped ${n} running ${n === 1 ? "job" : "jobs"}.` : base;
+}
+
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
 }
@@ -303,8 +311,10 @@ export default function AutonomyPage() {
     setKillBusy(true);
     flash(null);
     try {
-      await post("/autonomy/kill", { enabled });
-      flash(enabled ? "Kill switch engaged — all autonomy halted." : "Kill switch released.");
+      const r = await post<{ kill_switch?: boolean; stopped?: number }>("/autonomy/kill", { enabled });
+      // v1.351.0 (readiness audit G13): the switch really stops self-started
+      // work now — say what it stopped, in the daemon's own count.
+      flash(enabled ? killEngagedWords(r?.stopped) : "Kill switch released.");
       status.reload();
     } catch (err) {
       flash(null, errText(err));
@@ -415,15 +425,18 @@ export default function AutonomyPage() {
                     ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
                     : killQuiet
                       ? // v1.316.0 (UX wave 4): while autonomy is OFF and
-                        // nothing waits, there is nothing for the switch to
-                        // stop (it halts only the motivation loop —
-                        // motivation/engine.py), so it rests neutral and turns
-                        // red on hover. Still enabled, still "Kill switch",
-                        // still one press.
+                        // nothing waits, it rests neutral and turns red on
+                        // hover. Still enabled, still "Kill switch", still one
+                        // press. (Since v1.351.0 it also stops schedules,
+                        // goals, rules and phone jobs; the look is unchanged.)
                         "border-white/15 bg-white/[0.04] text-zinc-300 hover:border-rose-500/40 hover:bg-rose-500/[0.1] hover:text-rose-300"
                       : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
                 }`}
-                title={killed ? "Release the global kill switch" : "Halt all autonomy now"}
+                title={
+                  killed
+                    ? "Release the global kill switch"
+                    : "Stop everything that starts on its own: schedules, goals, rules, phone jobs and autonomy"
+                }
               >
                 {killBusy ? (
                   <LoaderInline label={killed ? "Releasing…" : "Halting…"} />
@@ -462,9 +475,10 @@ export default function AutonomyPage() {
               <div className="font-semibold text-rose-200">
                 Kill switch engaged — autonomy is halted.
               </div>
-              <div className="mt-1 text-rose-100/60">
-                Nothing is checked and no goal can act. Release it above to resume
-                the settings below.
+              <div className="mt-1 text-rose-100/60" data-testid="kill-switch-scope">
+                Schedules, goals, rules, phone jobs and autonomy will not start, and
+                what they had running was stopped. Chat and work you start still
+                run. Release it above to resume.
               </div>
             </div>
           </div>
