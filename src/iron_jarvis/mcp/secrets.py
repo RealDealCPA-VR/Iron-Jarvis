@@ -294,33 +294,62 @@ def carry_masked_args(
     :class:`MaskedValueLeft`: storing a literal ``***`` would silently replace
     a working secret with the mask. The caller vaults every index in the
     returned set whatever ``mask`` says of it: a token split off its
-    ``Authorization:`` no longer LOOKS like a secret, and still is one."""
+    ``Authorization:`` no longer LOOKS like a secret, and still is one.
+
+    Several stored arguments can SHOW the same text (``--api-key ***
+    --token ***``): each stored value is used at most once, the one whose
+    preceding argument matches the new one's first (``--token``'s ``***``
+    gets the token, wherever the edit moved it), else the next unused one in
+    order — never one value for two arguments (v1.351.0 review: the first
+    cut kept a single value per shown text, so adding any argument to that
+    pack silently stored the token as the API key too)."""
     shown = ["" if a is None else str(a) for a in old_shown]
     real = ["" if a is None else str(a) for a in old_real]
-    whole = {s: r for s, r in zip(shown, real) if MASK in s}
-    by_token: dict[str, str] = {}
-    for s, r in zip(shown, real):
-        # Token by token only where the argument splits the same way both
-        # times (``mask`` swaps a non-space run for ``***``, so it does).
-        s_tok, r_tok = s.split(), r.split()
-        if MASK in s and len(s_tok) == len(r_tok):
-            for st, rt in zip(s_tok, r_tok):
-                if MASK in st and st not in by_token:
-                    by_token[st] = rt
+    new = ["" if a is None else str(a) for a in list(new_args or [])]
+    used_whole: set[int] = set()
+    used_token: set[tuple[int, int]] = set()
+
+    def _take_whole(n: int, a: str) -> str | None:
+        free = [
+            i
+            for i, s in enumerate(shown)
+            if s == a and i < len(real) and i not in used_whole and all(k[0] != i for k in used_token)
+        ]
+        if not free:
+            return None
+        prev = new[n - 1] if n > 0 else None
+        same_prev = [i for i in free if (shown[i - 1] if i > 0 else None) == prev]
+        i = (same_prev or free)[0]
+        used_whole.add(i)
+        return real[i]
+
+    def _take_token(a: str) -> str | None:
+        for i, (s, r) in enumerate(zip(shown, real)):
+            # Token by token only where the argument has several and splits
+            # the same way both times (``mask`` swaps a non-space run for
+            # ``***``, so it does); a one-token argument is a whole match.
+            s_tok, r_tok = s.split(), r.split()
+            if i in used_whole or MASK not in s or len(s_tok) < 2 or len(s_tok) != len(r_tok):
+                continue
+            for t, (st, rt) in enumerate(zip(s_tok, r_tok)):
+                if st == a and (i, t) not in used_token:
+                    used_token.add((i, t))
+                    return rt
+        return None
+
     out: list[str] = []
     carried: set[int] = set()
-    for n, raw in enumerate(list(new_args or [])):
-        a = "" if raw is None else str(raw)
+    for n, a in enumerate(new):
         if MASK in a:
-            if a in whole:
-                a = whole[a]
-            elif a in by_token:
-                a = by_token[a]
-            else:
+            put_back = _take_whole(n, a)
+            if put_back is None:
+                put_back = _take_token(a)
+            if put_back is None:
                 raise MaskedValueLeft(
                     f"argument {n + 1} still shows {MASK} where a hidden value was; "
                     "type the value again, or leave the arguments as they were"
                 )
+            a = put_back
             carried.add(n)
         out.append(a)
     return out, carried

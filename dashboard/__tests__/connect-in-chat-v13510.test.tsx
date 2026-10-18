@@ -390,3 +390,34 @@ describe("the look stays the calm card's (source)", () => {
     expect(src).not.toMatch(/text-\[\d+\.\d+px\]/);
   });
 });
+
+describe("review: a connect request that also carries the task IS the task", () => {
+  it("is not skipped — an older, unrelated question is never carried on instead", () => {
+    for (const t of [
+      "connect my GitHub and list my open PRs",
+      "connect my GitHub so you can list my open PRs",
+      "Connect GitHub, then show my open pull requests",
+      "set up Notion and summarize my meeting notes page",
+      "link my GitHub to see my open PRs",
+    ])
+      expect(isConnectRequest(t), t).toBe(false);
+    for (const t of ["please connect to GitHub", "connect my GitHub, please", "set up my Google Drive for me", "connect my GitHub account"])
+      expect(isConnectRequest(t), t).toBe(true);
+    const msgs = [
+      { role: "user", content: "what's the weather in Seattle" },
+      { role: "assistant", content: "Rainy." },
+      { role: "user", content: "connect my GitHub and list my open PRs" },
+      { role: "assistant", content: "card" },
+    ];
+    expect(taskBefore(msgs, 3)).toBe("connect my GitHub and list my open PRs");
+  });
+});
+
+describe("review: a pressed Continue is not offered again", () => {
+  it("even while its reply is the newest and the page gives the go-ahead", () => {
+    const raw = [{ ...GITHUB_CARD, saved: "stored", connected: { app: "github", name: "GitHub", tools: 2, continued: true } }];
+    render(<ConfigCards cards={withAppConnected(decodeConfigCards(raw), raw)} onSettle={() => {}} onContinue={() => {}} />);
+    expect(screen.getByTestId("credential-card-connected").textContent).toContain("GitHub connected · 2 tools");
+    expect(screen.queryByTestId("credential-card-continue")).toBeNull();
+  });
+});

@@ -358,3 +358,49 @@ def test_app_connect_keeps_a_connection_string_password_in_the_vault(client, mon
     assert DB_PASSWORD not in json.dumps(out.data, default=str) and DB_PASSWORD not in out.output
     # What the pack launches with is the real string.
     assert launched and _build_transport(dict(launched[0], command=sys.executable), platform.secrets.get).args[-1] == conn
+
+
+# --------------------------------------------------------------------------- #
+# Review (v1.351.0): two hidden values that SHOW the same text.
+# --------------------------------------------------------------------------- #
+def test_an_edit_keeps_each_of_two_hidden_values_that_show_the_same_text(client):
+    """``--api-key *** --token ***`` (and a bearer header beside them): the
+    first cut kept ONE value per shown text, so adding any argument stored the
+    token as the API key too — the pack then failed at launch with a key it
+    was never given. Each hidden value goes back to its own argument, also
+    when the edit moves or removes the ones around it."""
+    platform = client.app.state.platform
+    first, second = "AAA-first-LANE1E-review", "BBB-second-LANE1E-review"
+    header = f"Authorization: Bearer {TOKEN}"
+    res = client.post(
+        "/mcp/servers",
+        json={"name": "two", "command": NO_SUCH, "args": ["--api-key", first, "--token", second, "--header", header]},
+    )
+    assert res.status_code == 200, res.text
+
+    def real_args() -> list[str]:
+        entry = _entry(platform, "two")
+        return _build_transport(dict(entry, command=sys.executable), platform.secrets.get).args
+
+    # Add an argument (the editor sends the shown line back plus the change).
+    shown = _row(client, "two")["args"]
+    assert shown == ["--api-key", "***", "--token", "***", "--header", "Authorization: Bearer ***"]
+    res = client.patch("/mcp/servers/two", json={"args": [*shown, "--verbose"]})
+    assert res.status_code == 200, res.text
+    assert real_args() == ["--api-key", first, "--token", second, "--header", header, "--verbose"]
+
+    # The same, split on whitespace by the one-line editor.
+    split = ["--debug", *" ".join(_row(client, "two")["args"]).split()]
+    res = client.patch("/mcp/servers/two", json={"args": split})
+    assert res.status_code == 200, res.text
+    got = real_args()
+    assert got[:5] == ["--debug", "--api-key", first, "--token", second], got
+    assert TOKEN in got and first not in got[5:] and second not in got[5:], got
+
+    # Remove the FIRST pair: the token stays the token.
+    res = client.patch("/mcp/servers/two", json={"args": ["--token", "***"]})
+    assert res.status_code == 200, res.text
+    assert real_args() == ["--token", second]
+    text = _toml_text(platform)
+    for value in (first, second, TOKEN):
+        assert value not in text, value

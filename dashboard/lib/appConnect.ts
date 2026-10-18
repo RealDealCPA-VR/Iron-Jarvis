@@ -137,14 +137,30 @@ export function continueText(appName: string, task: string): string {
 
 const CONTINUE_RE = /^.{1,80} is connected\. Please carry on with: ([\s\S]+)$/;
 
+const CONNECT_RE =
+  /^(?:(?:ok(?:ay)?|now|then|so|and|yes|sure|great)[\s,.!]+)*(?:(?:please|pls|can you|could you|would you|will you|go ahead and|i(?:'d| would) like (?:you )?to|i want (?:you )?to|let'?s|let me|help me)\s+)*(?:re)?(?:connect|link|hook up|set up|setup|add|sign in to|log ?in to|authori[sz]e)\b/i;
+
+/** What may follow the app's name in a bare request ("… please", "… now"). */
+const POLITE_TAIL_RE = /[\s,]*(?:please|pls|thanks|thank you|now|for me)?[\s.!?]*$/i;
+
+/** A word or mark that starts a SECOND clause — the task itself rides the
+ *  same message ("connect my GitHub and list my open PRs", "… so you can
+ *  …", "… to see my PRs"; a leading "to" is just "connect to GitHub"). */
+const MORE_TASK_RE = /\b(?:and|then|so|but|also|plus|after|before|because|while|which|that|once)\b|\S\s+to\b|[,;:]/i;
+
 /** A message that only asks to connect something ("connect my GitHub",
- *  "please link Notion") — not the task to carry on with. */
+ *  "please link Notion") — not the task to carry on with. A request that
+ *  also carries the task ("connect my GitHub and list my open PRs") is NOT
+ *  one: it is the task (v1.351.0 review — skipping it carried an OLDER,
+ *  unrelated question on instead). */
 export function isConnectRequest(text: string): boolean {
   const t = str(text).trim();
   if (!t || t.length > 120) return false;
-  return /^(?:(?:ok(?:ay)?|now|then|so|and|yes|sure|great)[\s,.!]+)*(?:(?:please|pls|can you|could you|would you|will you|go ahead and|i(?:'d| would) like (?:you )?to|i want (?:you )?to|let'?s|let me|help me)\s+)*(?:re)?(?:connect|link|hook up|set up|setup|add|sign in to|log ?in to|authori[sz]e)\b/i.test(
-    t,
-  );
+  const m = CONNECT_RE.exec(t);
+  if (!m) return false;
+  const rest = t.slice(m[0].length).replace(POLITE_TAIL_RE, "").trim();
+  if (MORE_TASK_RE.test(rest)) return false;
+  return rest.split(/\s+/).filter(Boolean).length <= 6;
 }
 
 interface MessageLike {
