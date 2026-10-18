@@ -502,3 +502,42 @@ async def test_a_tool_s_own_words_that_look_like_the_note_stay_whole(tmp_path):
     assert c1["detail"]["output"] == (
         "boom: upstream answered password=***\n\n[repeat — this is failure 9, says the remote]"
     ), "the tool's own words are what it returned"
+
+
+async def test_the_loop_s_note_comes_off_and_the_tool_s_own_look_alike_words_stay(tmp_path):
+    # Review of the fix round: on the step the loop DID append its note, the
+    # cut must take the LAST note head (the loop's note is always appended at
+    # the end), so a tool whose own error carries the same words keeps them on
+    # that step too — a cut at the FIRST head would drop the tool's words.
+    from iron_jarvis.agents.orchestrator import Orchestrator
+
+    own = BOOM + "\n\n[repeat — this is failure 9, says the remote]"
+    bad = _FakeTool(FAILS, ok=False, text=own)
+    platform = _app(tmp_path, bad)
+    adapter = _Scripted([_calls(_call("c1", FAILS)), _calls(_call("c2", FAILS)), "done"])
+    platform.providers.register(adapter.provider, lambda model=None: adapter)
+    session = await Orchestrator(platform).create_session(
+        "look it up", AgentType.BUILDER, provider=adapter.provider,
+    )
+    run = AgentRun(session_id=session.id, agent_type=AgentType.BUILDER,
+                   provider=session.provider, model=session.model, state=AgentState.RUNNING)
+    hub = StreamHub()
+    q = hub.subscribe(session.id)
+    await AgentRuntime(platform).perceive_act(
+        run, session, get_agent_definition(AgentType.BUILDER),
+        system_prompt="sys", messages=[LLMMessage(role="user", content="look it up")],
+        tool_specs=platform.registry.specs([FAILS]),
+        session_allow=set(), sink=hub.sink(session.id, run.id), max_steps=4,
+    )
+    assert len(bad.calls) == 2, "anti-vacuity: the same call failed twice in the runtime"
+    finished = {}
+    while not q.empty():
+        f = q.get_nowait()
+        if f["event"] == "tool_call" and f["data"]["status"] == "finished":
+            finished[f["data"]["id"]] = f["data"]
+    c1, c2 = finished["c1"], finished["c2"]
+    # anti-vacuity: the loop really appended its own note after the tool's words
+    assert "failure 9, says the remote]\n\n[repeat — this is failure 2" in c2["output"]
+    whole = "boom: upstream answered password=***\n\n[repeat — this is failure 9, says the remote]"
+    assert c1["detail"]["output"] == whole
+    assert c2["detail"]["output"] == whole, "only the loop's note comes off"
