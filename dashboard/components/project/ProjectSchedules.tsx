@@ -138,7 +138,7 @@ export function ProjectSchedules({
                   amber here too, and a detail is plain words. */}
               {s.last_status === "ok" ? (
                 <span className="text-[11px] text-tone-success">✓ ok</span>
-              ) : s.last_status === "error" ? (
+              ) : s.last_status === "error" || s.last_status === "failed" ? (
                 <span
                   className="max-w-[200px] truncate text-[11px] text-tone-danger"
                   title={scheduleDetail(s.last_detail) || undefined}

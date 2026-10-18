@@ -34,6 +34,9 @@ export interface ScheduleStatusWords {
 const WORDS: Record<string, ScheduleStatusWords> = {
   ok: { label: "✓ ok", tone: "success" },
   error: { label: "✗ failed", tone: "danger" },
+  // Not written by the scheduler; a row planted by an older build or by hand
+  // reads like `error` — the daemon's FAILED_STATUSES counts it too.
+  failed: { label: "✗ failed", tone: "danger" },
   needs_you: { label: "finished · needs you", tone: "warn" },
   partial: { label: "finished · part failed", tone: "warn" },
   cancelled: { label: "stopped", tone: "warn" },
@@ -48,10 +51,14 @@ export function scheduleStatusWords(status: string | null | undefined): Schedule
   return WORDS[s] ?? { label: s.replace(/_/g, " "), tone: "muted" };
 }
 
+/** The daemon's `run_outcome.SHORT_STATUSES` (FAILED_STATUSES +
+ *  NEEDS_A_LOOK_STATUSES) — pinned equal by tests/test_wave1_seams_v13510.py. */
+export const SHORT_SCHEDULE_STATUSES: readonly string[] = ["error", "failed", "needs_you", "partial"];
+
 /** A last run the user should look at: it failed, or it finished short of
  *  the job (the daemon's `SHORT_STATUSES`; the home line counts the same). */
 export function isShortSchedule(status: string | null | undefined): boolean {
-  return status === "error" || status === "needs_you" || status === "partial";
+  return SHORT_SCHEDULE_STATUSES.includes((status ?? "").trim());
 }
 
 /** The row detail as plain words. New rows are already a plain sentence; an
@@ -84,6 +91,7 @@ export function runNowNote(name: string, status: string | null | undefined, deta
   const tail = d ? ` — ${d}` : "";
   switch ((status ?? "").trim()) {
     case "error":
+    case "failed":
       return { tone: "danger", text: `"${name}" failed — ${d || "no detail"}` };
     case "needs_you":
       return { tone: "warn", text: `"${name}" finished, but it needs you${tail}` };

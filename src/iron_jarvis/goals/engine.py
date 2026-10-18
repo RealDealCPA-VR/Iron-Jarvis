@@ -297,6 +297,13 @@ class GoalEngine:
             return await self._refuse(
                 goal, "an iteration is already running for this goal"
             )
+        # EMERGENCY STOP (v1.351.0, G13): an honest refusal (state untouched,
+        # no breaker strike), never create_session's EmergencyStopOn escaping
+        # as a 500 from the goal's Run now.
+        _stop = getattr(self.orch, "emergency_stop_reason", None)
+        _why = _stop(_goal_origin(goal.id)) if callable(_stop) else ""
+        if _why:
+            return await self._refuse(goal, _why)
         self._iterating.add(goal.id)
         try:
             return await self._iterate(goal, iteration=int(spent["iterations"]) + 1)

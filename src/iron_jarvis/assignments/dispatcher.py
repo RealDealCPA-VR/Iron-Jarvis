@@ -303,6 +303,15 @@ class AssignmentDispatcher:
 
     async def _hold_reason(self, row: AssignmentRecord) -> str:
         """``""`` when ``row`` may start now, else the sentence to hold it with."""
+        # EMERGENCY STOP (v1.351.0, G13): HOLD the job with the sentence; never
+        # claim it and let create_session refuse it — that path FAILS the row
+        # and counts a strike (3 = blocked), so every queued job would be lost
+        # to "failed" until the user pressed Retry on each one.
+        stop = getattr(self.orchestrator, "emergency_stop_reason", None)
+        if callable(stop):
+            reason = stop(f"assignment:{row.id}")
+            if reason:
+                return reason
         store = self.store
         name = row.assignee
         record = None

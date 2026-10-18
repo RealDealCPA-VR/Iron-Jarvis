@@ -3486,9 +3486,9 @@ does not need a bump, stop and bump it.
   `tests/test_{mcp_stderr_tail,mcp_honest_test,mcp_secrets_vault,
   mcp_close_on_disconnect,chat_mcp_error_fence,integration_pins}_v1342.py`,
   `dashboard/__tests__/{tools-pack-rows,bell-pack-failed}-v1342.test.tsx`.
-  Known: the Directory `no_tools` detail still says "restart" (pinned by
-  `test_wiki_access_v1172` line 92 — change both together); the error's
-  tail folds newlines to ' | ' while `stderr_tail()` keeps them.
+  Known: the error's tail folds newlines to ' | ' while `stderr_tail()`
+  keeps them. (The Directory `no_tools` detail no longer says "restart":
+  v1.351.0 G08 reworded it with `test_wiki_access_v1172`, moved together.)
 
 - **A pack is added through ONE door, from any dialect, and a secret never
   crosses the browser** (v1.343.0, "add a pack in one paste", wave 2 of the
@@ -3540,13 +3540,108 @@ does not need a bump, stop and bump it.
   (14 tools) with the token vault-only. Pins: `tests/test_mcp_{http_door,
   import_paste,import_sources,edit_pack}_v1343.py`, `tests/
   test_integration_pins_v1343.py`, `dashboard/__tests__/tools-{add,edit}-
-  pack-v1343.test.tsx`. Known: an `mcp-remote` entry INSIDE a pasted block
-  stays the stdio pack it spells, so a `--header` secret in its args is
-  stored plain in config.toml and shown raw in the row's `args` (same as a
-  token typed into args today) — follow-up: vault it or warn; a PATCH that
+  pack-v1343.test.tsx`. Known: (v1.351.0 G12 closed the old args leak: an
+  `mcp-remote` `--header` secret, a `--api-key` value or a connection
+  string's password in `args` / a url is now vaulted as `arg_secrets` /
+  `url_secret` and shown masked — see the v1.351.0 bullet) a PATCH that
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **Every surface tells the truth about an outcome — ONE verdict vocabulary,
+  and Emergency stop stops what starts on its own** (v1.351.0, product-
+  readiness Wave 1, gaps G01-G15 + G18; lanes 1A-1E + integrate). SCHEDULES:
+  `scheduling/run_outcome.py` is the ONE `last_status` vocabulary — `ok |
+  needs_you | partial | error | cancelled | skipped | missed | ""`;
+  `fire_status(Session.outcome)` maps the ledger verdict (`needs_you` →
+  needs_you, `completed_with_failures` → partial), a FAILED run whose ask
+  expired is `needs_you` (the person is the headline — `derive_outcome`'s
+  rule), a failed row reads "The run failed: <plain reason>" (class name in
+  the log only), the detail is `plain_sentence`. `FAILED_STATUSES` (error +
+  legacy "failed") / `NEEDS_A_LOOK_STATUSES` / `SHORT_STATUSES` are what the
+  Status map's Schedules star and `/ui/status-line` `short_schedules` count
+  (HomeLine: "N scheduled job(s) need a look · Open" → /schedules, below a
+  waiting ask). Its twin is `dashboard/lib/scheduleOutcome.ts`
+  (`SHORT_SCHEDULE_STATUSES` pinned EQUAL; words + tone for every value). A
+  new status value goes in BOTH. THE BELL (`NotificationBell.tsx`):
+  `unattendedDoor(origin)` (schedule/goal/workflow/reflex/comm/autonomy) →
+  a failed or short run is an `attention` row (counted on the badge, tab
+  title and ONE desktop ping until the bell is opened), a clean one `quiet`;
+  `needs_you` reads first, like the schedule row. `BELL_ACTIVITY_TYPES` is
+  the one list `GET /audit` replays on mount (comma-separated `type`, ≤ 40;
+  every entry carries `type`) since `ij.bell.lastSeen` ("While you were
+  away", lib/bellAway). A CHAT parked on the user with no window following
+  its turn is listed by `GET /chat/approvals/pending` as `{id:
+  "chat:<thread>" | "chat:turn:<turn id>", kind: "chat", thread_id, tool,
+  requested_at, mission_id: null, project_id: null}` — NAMES ONLY, never
+  args (`durable_turns.waiting_unwatched`, both route branches); the bell
+  (`parseChatAsk`, "A chat is waiting for your OK" → /chat?thread=) and the
+  desktop watcher (`planAskNotifications`, a toast only with no window)
+  read exactly that. EMERGENCY STOP: `Orchestrator.create_session` refuses
+  `emergency_stop_covers(origin)` (every `is_unattended_origin` EXCEPT the
+  person-started `self_dev` default) with `EmergencyStopOn` (a
+  RuntimeError; text `EMERGENCY_STOP_REFUSAL`); `stop_unattended` (blocking,
+  off the loop) cancels the live ones from `/autonomy/kill` AND the
+  platform's `config.changed` watcher (Settings row, Ctrl K, chat); a due
+  schedule records `skipped` with `EMERGENCY_STOP_SKIP` and keeps its link.
+  A door that should WAIT reads `emergency_stop_reason(origin)` first: the
+  assignment dispatcher HOLDS (never claims → never strikes), the goal
+  engine refuses honestly (200 `{ok:false, refused:true}`), the phone's
+  one-shot and chat hand-off and a desktop reply into a phone thread say
+  the sentence BEFORE any "On it" ack; any other route door gets the app's
+  409 `{detail, code: "emergency_stop"}` handler, never a 500. A person's
+  Continue is NOT refused (`continue_session` builds its row itself —
+  pinned). Known: a manual workflow Run's agent steps are refused (origin
+  `workflow:<name>` cannot tell a person from a trigger); the TOML
+  `[[triggers]]` cron in `workflows/triggers.py` has no live caller. THE
+  RECEIPT (G18, for wave 2): `agents/outcome.session_result` always carries
+  `provider`, `model` (the served pair), `agent_name` (roster name or None),
+  `agent_type`; with `receipt=True` — ONLY `GET /sessions/{id}/result`, the
+  finalize/coach/compaction callers skip it for cost — also `route_note`
+  (the mission screen's failover/refusal sentence, "in this run", else ""),
+  `on_this_network` (`egress.stays_on_this_network`, None with no
+  provider) and `activity` (≤ `RECEIPT_ACTIVITY_MAX` = 20 newest plain
+  lines, oldest first, `{at, who, session_id, text, tone: ok|warn|ask}` —
+  `mission.tool_activity`'s words, shared, not copied). `/sessions` rows
+  carry `agent_name` + `interrupted_at`. Dashboard types: `RunResult`
+  (components/chat/RunResultCard.tsx), `SessionView`, `AuditEntry.type`.
+  CHAT LANES (lock-step): G06 — the honesty note skips after any
+  `_FILE_CHANGING_TOOLS` / `_may_have_changed_files` tool, and judges a
+  CHANGE claim only when the file is what changed; `custom_tools_used(
+  platform, tools_used)` is passed as `custom_tools=` by BOTH lanes AND the
+  orchestrator's two summary sites. G10 — `is_demo_route` → one
+  `demo_note()`. G14 — the Environment line is `model_where_line` from
+  `egress.model_place` (the local-only lock's predicate; never "You run
+  locally"), and the route object's `on_this_network` is the LAST key on
+  both lanes (`egress.route_flags`). HONEST SIGNALS: `lib/stepWords` counts
+  a failed step ONLY as failed (WorkLine: warn triangle + "N failed");
+  DirectoryPage green only for `connected && status === "connected"`; every
+  Tools add door AND the Edit door (`reloaded: false`) say "…didn't start:
+  <reason>" in ui `WarnNote` (`lib/packStartWords`); a MISSION (origin
+  `job:mission`) whose worklist kept failed items finalizes
+  `completed_with_failures` (`_settle_finished_run`, missions only — a board
+  is keyed on the job's place), so the bell and `missionFinish` agree;
+  POST /documents/open opens a FOLDER behind the same gates. SECRETS (G12):
+  `mcp/secrets.split_args` / `store_arg_secrets` / `split_url` vault an
+  argument or url secret as `arg_secrets` / `url_secret` (resolved in
+  `_build_transport`), at every door — paste/import/HTTP/edit, the boot
+  migration, `app_connect` (`keep_others`: Undo launches what it shows) and
+  the Directory's Connect; Disconnect and delete sweep `delete_pack_secrets`.
+  CONNECT IN CHAT (G15): the save answers `app`, `app_name`,
+  `tools_loaded` (`CredentialStore._app_outcome`); the page turns the app
+  on for the chat (never on an Undo) and Continue sends "<App> is
+  connected. Please carry on with: <task>" (waits while a file uploads).
+  CONTRACT FIXTURE: `dashboard/__tests__/fixtures/wave1-seams-v13510.json`
+  holds what the real daemon sends (the waiting-chat row; five real fires'
+  `session.completed` + `last_status`) — `tests/test_wave1_seams_v13510.py`
+  checks the daemon against it (`IJ_REGEN_WAVE1_SEAMS=1` after an intended
+  change), `dashboard/__tests__/wave1-seams-v13510.test.tsx` feeds it
+  through the real bell and schedule words. Pins: `tests/test_{schedule_
+  outcomes,audit_type_list,session_receipt,chat_lanes,connector_honest_
+  status,documents_open_folder,pack_secrets_in_args,connect_in_chat,wave1_
+  seams}_v13510.py`, `dashboard/__tests__/{schedule-outcomes,emergency-stop,
+  bell-unattended,work-line-failures,mission-headline-part-failed,connect-
+  honest,connect-in-chat,wave1-seams}-v13510.test.tsx` (every lane change
+  and every integrator change mutation-checked red).
 - **A catalog names a package that EXISTS; a proxy's picker offers its real
   models** (v1.350.1, two user reports off the live install). (1) The
   prebuilt MCP catalog in `daemon/app.py` offered

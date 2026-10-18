@@ -468,6 +468,18 @@ def register(app: FastAPI, d) -> None:
                 "sent": sent,
             }
 
+        # EMERGENCY STOP (v1.351.0, G13): the hand-off below starts an agent
+        # stamped ``comm:<channel>`` (it may ask back through the phone), which
+        # the switch refuses. Say so as the reply — same words the phone door
+        # sends — before any "On it" ack, never a 500 after it.
+        _stop_why = (
+            poller._emergency_stop_reason(channel_name) if result.get("escalate") else ""
+        )
+        if _stop_why:
+            _append_reply(_stop_why)
+            sent = await poller.send_chunked(ch, _stop_why, chat_id=sender_id)
+            return {**result, "escalate": False, "reply": _stop_why, "sent": sent}
+
         if result.get("escalate"):
             _append_reply(ESCALATE_ACK)
             sent = await poller.send_chunked(ch, ESCALATE_ACK, chat_id=sender_id)

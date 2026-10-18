@@ -10644,8 +10644,9 @@ export default function ChatPage() {
       setMessages(updated);
       if (!busy) queueSave(updated);
       // v1.351.0 (G15): an app's token saved here turns that app ON for this
-      // chat, so the next message has its tools without the "+" menu.
-      const app = next.kind === "secret" && next.saved ? appIdOf(next.name) : "";
+      // chat, so the next message has its tools without the "+" menu. An
+      // Undo settles the same card again: that never turns the app back on.
+      const app = next.kind === "secret" && next.saved && !next.undone ? appIdOf(next.name) : "";
       if (app) turnOnConnectors([app]);
     },
     continueConnected: (index, cardIndex) => {
@@ -10657,7 +10658,19 @@ export default function ChatPage() {
       const cur = messagesRef.current;
       const card = cur[index]?.configCards?.[cardIndex];
       const connected = connectedOf(card);
-      if (!card || card.kind !== "secret" || !connected || connected.continued || connected.tools <= 0 || busy)
+      // A send that would not go out now (a file still uploading queues the
+      // BOX's text, a turn is starting) leaves the card un-pressed, so its
+      // Continue is still there instead of the task being lost.
+      if (
+        !card ||
+        card.kind !== "secret" ||
+        !connected ||
+        connected.continued ||
+        connected.tools <= 0 ||
+        busy ||
+        uploadingRef.current ||
+        sendingRef.current
+      )
         return;
       const next: ConfigCard = { ...card, connected: { ...connected, continued: true } } as AppSecretCard;
       settledCardsRef.current.set(cardId(next), next);

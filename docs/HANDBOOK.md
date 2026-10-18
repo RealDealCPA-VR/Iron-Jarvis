@@ -1839,6 +1839,70 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Jarvis tells you how things really went (v1.351.0)
+
+Work that runs while you are away now says how it ended, in the same plain
+words everywhere. The chat looks the same.
+
+- **A scheduled job says how it really went.** The Schedules page (and a
+  project's Schedules list) shows "✓ ok" only when the job was done. A run
+  that stopped to ask you something nobody answered reads "finished · needs
+  you", one where a step failed reads "finished · part failed", and a failed
+  run says why in a plain sentence ("The run failed: the model endpoint is
+  not answering"), never a code name. The note it sends says the same thing
+  ("finished, but it needs you"), and **Run now** answers in the same words.
+  "open session" still takes you to the run.
+- **You see it without going to look.** The Schedules light on the Status
+  map turns amber when a schedule failed or fell short last time, and the
+  line above the chat box offers "1 scheduled job needs a look · Open".
+- **The bell rings for work nobody was watching.** When a schedule, a goal,
+  a workflow, a rule, a message from your phone or an automatic run fails or
+  falls short, the bell says so ("Your schedule morning-brief could not
+  finish"), links to the run, and counts on its badge until you open it. A
+  run that finished cleanly is a quiet row with no badge. A queued job that
+  needs you, or partly failed, rings too.
+- **The bell remembers while the window was closed.** Close the app to the
+  tray, and when you open it again the bell lists what finished meanwhile
+  under "While you were away", once.
+- **A chat waiting for your OK is announced.** If you leave a chat whose
+  question card is still waiting, the bell shows "A chat is waiting for your
+  OK"; with the window closed to the tray, a desktop notice says the same.
+  Clicking either opens that chat, where the card is.
+- **Emergency stop really stops.** With it on, nothing that starts on its own
+  can start: schedules, goals, rules, phone jobs, queued jobs and automatic
+  work. Turning it on (from the Autonomy page, Settings, Ctrl K or chat) also
+  stops those that were already running, and their rows say so. Queued jobs
+  wait with the reason instead of failing, and a message from your phone, or
+  a goal's **Run now**, gets the reason back instead of silence. Chat and the
+  work you start yourself keep going.
+- **Chat notes are fair.** The "nothing was written" note no longer appears
+  after a file really changed (a resized photo, an edited sheet, a tool you
+  made), and it now catches a reply that claims an edit that failed. In the
+  offline demo the reply says once that it is the demo and to choose a model
+  above. A model that runs in the cloud no longer tells you it runs on your
+  computer.
+- **Failures show in the work line.** The line under a reply counts failed
+  steps as failures ("read 1 web page, 7 failed") with a warning mark in
+  place of the check.
+- **Green means it works.** A connected app in Connections reads "Connected"
+  in green only when it is really working; one that isn't reads "Needs
+  attention" with the reason and Retry. Adding or editing a tool pack that
+  didn't start says so in amber, with the reason, instead of a green note.
+  A working app's card says where to turn it on: "+ › Connections" in a chat.
+- **A mission that partly failed says so:** "Finished, but part of it
+  failed", in amber, and the bell uses the same words.
+- **Open on a chat's work folder opens the folder** in File Explorer.
+- **Private settings stay private.** A password or token inside a tool pack's
+  settings (an "Authorization: Bearer …" header, a database password in its
+  address) is kept in the app's safe store and shown masked (`***`)
+  everywhere; the pack still starts with the real value. Disconnecting an
+  app removes them.
+- **Connect an app right in the chat.** Ask "connect my GitHub", paste the
+  token into the secure card, and the card says "GitHub connected · 26 tools"
+  with **Continue**, which carries on with what you first asked, with GitHub
+  turned on for that chat. If the app was already connected, Jarvis says so
+  instead of asking for the token again.
+
 ## Sequential thinking starts; an endpoint's model list is its real models (v1.350.1)
 
 - **The Sequential thinking tool pack works.** The app's own list of

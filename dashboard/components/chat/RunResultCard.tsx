@@ -63,6 +63,24 @@ export interface RunResult {
    *  case: 24 rename calls "completed" with every one of them never approved,
    *  and this card said "Task complete". */
   unanswered_asks?: number;
+  // v1.351.0 (G18) — the receipt's who / on what / where / what it did. Not
+  // rendered yet (wave 2). On every result:
+  /** The served provider and model the run's row recorded. */
+  provider?: string;
+  model?: string;
+  /** The roster name a door recorded (a custom agent's "custom:<name>"),
+   *  null when none was; `agent_type` is the base type. */
+  agent_name?: string | null;
+  agent_type?: string;
+  // Only from GET /sessions/{id}/result (`session_result(receipt=True)`):
+  /** One sentence when the run's model failed over or was refused, else "". */
+  route_note?: string;
+  /** Did the run's model stay on this PC / the user's network? null = no
+   *  provider to judge. */
+  on_this_network?: boolean | null;
+  /** The newest 20 plain action lines, oldest first (the mission screen's
+   *  words); tone "ok" | "warn" | "ask". */
+  activity?: { at: string; who: string; session_id: string; text: string; tone: string }[];
 }
 
 const FAILED = new Set(["failed", "cancelled"]);

@@ -27,9 +27,33 @@ export function packStartReason(note: string | null | undefined): string {
   let t = typeof note === "string" ? note.trim() : "";
   if (!t) return "";
   t = t.replace(/^saved,?\s+but\s+it\s+did\s*n[o']t\s+start\s*:\s*/i, "");
-  t = t.replace(/^saved\s*[—–-]\s*/i, "");
-  t = t.replace(/\s*[—–;-]\s*see\s+its\s+row(\s+for\s+the\s+fix)?\s*\.?\s*$/i, "");
+  t = t.replace(/^it\s+did\s*n[o']t\s+start\s*:\s*/i, "");
+  // "saved — …" (an add) and "saved; …" (an edit, PATCH /mcp/servers/{name}).
+  t = t.replace(/^saved\s*[—–;-]\s*/i, "");
+  t = t.replace(/\s*[—–;,-]\s*see\s+its\s+row(\s+for\s+the\s+fix)?\s*\.?\s*$/i, "");
   return t.replace(/[\s.]+$/, "").trim();
+}
+
+/** The edit route's own extra note (routes/agents.py, PATCH): said after the
+ *  start sentence, never folded into its reason. */
+const AUTO_APPROVE_RESTART = /;\s*(restart Iron Jarvis for autonomous agents to pick up the auto-approve change)\s*$/i;
+
+/**
+ * v1.351.0 integrate (the Tools Edit door, G08's last green): an edit whose
+ * pack did not reload (`reloaded: false`) reads '"x" saved, but it didn't
+ * start: <reason>. Open its row below to retry.' in the warn note — it used
+ * to sit in the green box as '"x" saved. saved, but it did not start: …'.
+ */
+export function editedButNotStarted(note: string | null | undefined, subject: string): string {
+  let t = typeof note === "string" ? note.trim() : "";
+  let extra = "";
+  const m = AUTO_APPROVE_RESTART.exec(t);
+  if (m) {
+    extra = ` ${m[1].charAt(0).toUpperCase()}${m[1].slice(1)}.`;
+    t = t.slice(0, m.index);
+  }
+  const reason = packStartReason(t);
+  return `${subject} saved, but it didn't start${reason ? `: ${reason}` : ""}. Open its row below to retry.${extra}`;
 }
 
 /**

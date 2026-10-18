@@ -236,6 +236,24 @@ describe("Save sends a partial PATCH", () => {
     );
   });
 
+  it("v1.351.0 integrate (G08): an edit whose pack did not reload is a WARNING, never the green box", async () => {
+    api.patchResult = {
+      reloaded: false,
+      note: "saved, but it did not start: npx isn't installed; see its row for the fix",
+    };
+    const form = await openEditor("brave");
+    fireEvent.change(within(form).getByTestId("edit-env-brave-REGION"), { target: { value: "us" } });
+    fireEvent.click(within(form).getByTestId("edit-save-brave"));
+
+    const warn = await screen.findByTestId("mcp-add-warn");
+    expect(warn.textContent).toContain(
+      `"brave" saved, but it didn't start: npx isn't installed. Open its row below to retry.`,
+    );
+    expect(warn.querySelector('[data-tone="warn"]')).toBeTruthy();
+    expect(screen.queryByText(/"brave" saved\. saved, but/)).toBeNull();
+    expect(screen.queryByText(/"brave" saved and reloaded/)).toBeNull();
+  });
+
   it("nothing changed: no PATCH, one quiet line", async () => {
     const form = await openEditor("brave");
     fireEvent.click(within(form).getByTestId("edit-save-brave"));
@@ -287,7 +305,12 @@ describe("Save sends a partial PATCH", () => {
     fireEvent.change(within(form).getByTestId("edit-newenv-key-brave-1"), { target: { value: "NEW_KEY" } });
     fireEvent.change(within(form).getByTestId("edit-newenv-value-brave-1"), { target: { value: "v" } });
     fireEvent.click(within(form).getByTestId("edit-save-brave"));
-    expect((await screen.findByText(/"brave" saved\. it did not start: npx was not found/)).textContent).toBeTruthy();
+    // v1.351.0 integrate (G08), moved ON PURPOSE: a pack that did not reload
+    // used to sit in the GREEN box ('"brave" saved. it did not start: …');
+    // it is the warn note now, the reason said once.
+    expect((await screen.findByTestId("mcp-add-warn")).textContent).toContain(
+      `"brave" saved, but it didn't start: npx was not found. Open its row below to retry.`,
+    );
     expect(patchBody()).toEqual({ env: { NEW_KEY: "v" } });
   });
 

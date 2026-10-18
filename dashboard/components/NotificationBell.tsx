@@ -246,15 +246,21 @@ function unattendedCompletion(
   const v = runVerdict(p);
   if (v.cancelled) return null;
   if (v.done && door.kind === "workflow") return null;
-  const words = !v.ran
-    ? "could not finish"
-    : v.done
-      ? "finished"
-      : v.outcome === "needs_you"
-        ? "needs you"
-        : v.outcome === "completed_with_failures"
-          ? "finished, but part of it failed"
-          : "finished. Check what it did";
+  // An expired ask is the headline even when the run then ended FAILED (the
+  // daemon's `derive_outcome` rule) — the schedule's row reads "finished ·
+  // needs you" for that same run (scheduling/run_outcome.fire_status), so
+  // the bell says "needs you" too, never "could not finish" (v1.351.0
+  // integrate: one verdict, pinned by __tests__/fixtures/wave1-seams-v13510.json).
+  const words =
+    v.outcome === "needs_you"
+      ? "needs you"
+      : !v.ran
+        ? "could not finish"
+        : v.done
+          ? "finished"
+          : v.outcome === "completed_with_failures"
+            ? "finished, but part of it failed"
+            : "finished. Check what it did";
   return {
     id: e.id,
     ts: e.ts,

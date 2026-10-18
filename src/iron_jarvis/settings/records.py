@@ -1457,11 +1457,21 @@ class AppConnectTool(_RecordTool):
             have = await asyncio.to_thread(snap_app, self.platform, conn.id)
             live = len(self.platform.registry.mcp_names(conn.id)) if have is not None else 0
             if have is not None and live:
+                # v1.351.0 integrate: an app with a token says how to replace
+                # an expired one (`app.<id>` resolves to its first token field,
+                # credentials._resolve_app); an app with none says nothing.
+                _renew = (
+                    f" If its token stopped working, config_secret with name app.{conn.id} "
+                    "shows a secure card to replace it."
+                    if any(f.kind == "secret" for f in conn.fields)
+                    else ""
+                )
                 return ToolResult(
                     ok=True,
                     output=(
                         f"{conn.name} is already connected ({live} {'tool' if live == 1 else 'tools'}). "
                         "It is on for this chat now; its tools can be used from the next message."
+                        + _renew
                     ),
                     data={"app": conn.id, "already_connected": True, "tools_loaded": live},
                 )

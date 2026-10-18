@@ -86,10 +86,10 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
       </span>
       {card.restart && <span className="text-[12px] text-tone-warn">Takes full effect after a restart.</span>}
       <span className="ml-auto inline-flex items-center gap-2">
-        <a href="/settings" className="text-[12px] text-zinc-500 hover:text-zinc-300">
+        <Link href="/settings" className="text-[12px] text-zinc-500 hover:text-zinc-300">
           <Settings2 size={11} className="mr-1 inline align-[-1px]" aria-hidden />
           Settings
-        </a>
+        </Link>
         <button
           type="button"
           onClick={() => void undo()}

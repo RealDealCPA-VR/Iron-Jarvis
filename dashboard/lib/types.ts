@@ -80,6 +80,13 @@ export interface SessionView {
   trust_reason?: string | null;
   /** When trust was LOWERED mid-run (ISO), or null when it started low. */
   tainted_at?: string | null;
+  /** v1.351.0 (G18): the roster name the door that started it recorded
+   *  ("builder" | "custom:<name>" | "remote:<name>"), or null when none was
+   *  recorded (read `agent_type` then). */
+  agent_name?: string | null;
+  /** v1.351.0 (G18): when a restart (an update, a crash) cut the run off
+   *  mid-work (ISO); cleared once continued or dismissed. */
+  interrupted_at?: string | null;
   created_at: string;
   finished_at: string | null;
 }
@@ -313,6 +320,9 @@ export interface AuditEntry {
   undone?: boolean;
   summary?: string;
   payload?: Record<string, unknown>;
+  /** v1.351.0 (G04): the raw event type ("session.completed", …) on every
+   *  entry; GET /audit takes a comma-separated list of them in `type`. */
+  type?: string;
 }
 
 export interface AuditTimeline {

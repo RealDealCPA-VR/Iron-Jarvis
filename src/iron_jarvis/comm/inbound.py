@@ -1005,10 +1005,29 @@ class InboundPoller:
         # LOW TRUST (v1.298.0): a run the phone started may read and answer,
         # not change what the next run reads (``_comm_trust``).
         _trust, _trust_reason = self._comm_trust(name)
-        session = await self.orchestrator.create_session(
-            text, self.agent_type, origin=f"comm:{name}",
-            trust=_trust, trust_reason=_trust_reason,
-        )
+        from ..agents.orchestrator import EmergencyStopOn
+
+        _stop_why = self._emergency_stop_reason(name)
+        session = None
+        if not _stop_why:
+            try:
+                session = await self.orchestrator.create_session(
+                    text, self.agent_type, origin=f"comm:{name}",
+                    trust=_trust, trust_reason=_trust_reason,
+                )
+            except EmergencyStopOn as exc:  # the switch flipped since the read
+                _stop_why = str(exc)
+        if session is None:
+            # EMERGENCY STOP (v1.351.0, G13): the phone hears why, in the
+            # switch's own words — never silence.
+            body = f"{self.reply_prefix}{_stop_why}"[: self.max_reply_chars]
+            send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "emergency_stop",
+                "reason": _stop_why,
+                "sent": bool(send_res.get("ok")),
+            }
         await self._publish(
             EventType.COMM_RECEIVED,
             {"channel": name, "sender": msg.sender_id, "task": text},
@@ -1172,6 +1191,10 @@ class InboundPoller:
         # Refuse in the agent's own words BEFORE anything is created, and tell
         # the phone — the ledger read runs off the loop.
         refusal = await asyncio.to_thread(self._escalate_refusal, result)
+        if not refusal:
+            # EMERGENCY STOP (v1.351.0, G13): refused BEFORE the "On it" ack,
+            # in the same honest shape as the allowance refusal above.
+            refusal = self._emergency_stop_reason(name)
         if refusal:
             if tid:
                 tid = self._safe_append(
@@ -1216,15 +1239,35 @@ class InboundPoller:
         # LOW TRUST (v1.298.0): the escalated run is still a run the phone
         # started — same posture as the one-shot door (``_comm_trust``).
         _trust, _trust_reason = self._comm_trust(name)
-        session = await self.orchestrator.create_session(
-            task,
-            agent_type,
-            project_id=project_id or None,
-            origin=f"comm:{name}",  # v1.231.0 (AE17): may ask back via the phone
-            trust=_trust,
-            trust_reason=_trust_reason,
-            **_spawn_kwargs,
-        )
+        from ..agents.orchestrator import EmergencyStopOn
+
+        try:
+            session = await self.orchestrator.create_session(
+                task,
+                agent_type,
+                project_id=project_id or None,
+                origin=f"comm:{name}",  # v1.231.0 (AE17): may ask back via the phone
+                trust=_trust,
+                trust_reason=_trust_reason,
+                **_spawn_kwargs,
+            )
+        except EmergencyStopOn as exc:
+            # The switch flipped between the read above and this start: the
+            # ack already went, so the phone hears the refusal too.
+            why = str(exc)
+            if tid:
+                tid = self._safe_append(
+                    tid, "assistant", why,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                ) or tid
+            await self.send_chunked(ch, why, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "chat_refused",
+                "thread_id": tid,
+                "reason": why,
+                "sent": sent,
+            }
         await self._publish(
             EventType.COMM_RECEIVED,
             {"channel": name, "sender": str(msg.sender_id), "task": text},
@@ -1445,6 +1488,20 @@ class InboundPoller:
 
             return allowance.refusal_for(rec, self.platform.engine)
         except Exception:  # noqa: BLE001 — the door must never break the phone
+            return ""
+
+    def _emergency_stop_reason(self, name: str) -> str:
+        """EMERGENCY STOP (v1.351.0, G13): the sentence the phone hears when
+        the switch refuses a ``comm:<name>`` run, or ``""``. Read BEFORE any
+        ack is sent, so the phone never hears "On it" and then nothing —
+        before this, ``create_session``'s refusal escaped to ``poll_once``'s
+        generic handler and was only logged. Never raises."""
+        stop = getattr(self.orchestrator, "emergency_stop_reason", None)
+        if not callable(stop):
+            return ""
+        try:
+            return str(stop(f"comm:{name}") or "")
+        except Exception:  # noqa: BLE001 — an unreadable switch reads as off
             return ""
 
     async def _run_dynamic_session(self, session: Any, definition: Any) -> Any:

@@ -2021,6 +2021,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     app.add_exception_handler(_egress.LocalOnlyRefused, _local_only_refused)
 
+    from ..agents.orchestrator import EmergencyStopOn as _EmergencyStopOn
+
+    async def _emergency_stop_refused(request: Request, exc: Exception):  # noqa: ANN202
+        # EMERGENCY STOP (v1.351.0, G13): a route door that starts unattended
+        # work (a goal's Run now, Rerun of a schedule-made session, a desktop
+        # reply that hands a phone thread to an agent) answers the switch's
+        # own sentence as a 409 — never "internal error [err_…]:
+        # EmergencyStopOn: …". Doors that already turn a refused start into a
+        # recorded failure (reflex rows, workflow steps) never reach here.
+        return JSONResponse(
+            status_code=409, content={"detail": str(exc), "code": "emergency_stop"}
+        )
+
+    app.add_exception_handler(_EmergencyStopOn, _emergency_stop_refused)
+
     from fastapi.exceptions import RequestValidationError
 
     @app.exception_handler(RequestValidationError)

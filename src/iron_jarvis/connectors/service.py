@@ -278,7 +278,21 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
             platform.secrets.set(sname, val)
             env_secrets[f.name] = sname
 
+    # v1.351.0 (G12): a value typed into an ARGUMENT (Postgres's
+    # `postgresql://me:password@host/db`) goes to the vault like every other
+    # pack's argument secret — config.toml holds the masked text, the pack
+    # launches with the real one (`_build_transport` resolves `arg_secrets`).
+    # Before, this door stored it plain until the next boot's migration.
+    from ..mcp.secrets import split_args, store_arg_secrets
+
+    args, arg_values = split_args(args)
+    arg_secrets = (
+        store_arg_secrets(platform.secrets, connector.id, arg_values) if arg_values else {}
+    )
+
     cfg: dict[str, Any] = {"name": connector.id, "command": connector.command, "args": args}
+    if arg_secrets:
+        cfg["arg_secrets"] = arg_secrets
     if env:
         cfg["env"] = env
     if env_secrets:
@@ -429,6 +443,15 @@ def _disconnect_mcp_server(platform, server_id: str) -> dict[str, Any]:
                 platform.secrets.delete(sname)
             except Exception:  # noqa: BLE001
                 pass
+        # v1.351.0 (G12): and every `mcp.<server>.*` row — argument, url,
+        # header and auth secrets — the same sweep DELETE /mcp/servers/{name}
+        # does (names only in the log); they used to stay in the vault.
+        from ..mcp.secrets import delete_pack_secrets
+
+        try:
+            delete_pack_secrets(platform.secrets, server_id, removed)
+        except Exception:  # noqa: BLE001 — the pack is gone either way
+            pass
     return {"ok": True, "disconnected": server_id}
 
 

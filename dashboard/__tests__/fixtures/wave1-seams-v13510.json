@@ -1,0 +1,63 @@
+{
+  "chat_waiting_row": {
+    "id": "chat:th-seam",
+    "kind": "chat",
+    "thread_id": "th-seam",
+    "tool": "",
+    "requested_at": "2026-10-18T09:00:00Z",
+    "mission_id": null,
+    "project_id": null
+  },
+  "run_verdicts": [
+    {
+      "case": "seam-clean",
+      "completion": {
+        "origin": "schedule:seam-clean",
+        "status": "completed",
+        "outcome": "completed"
+      },
+      "last_status": "ok",
+      "short": false
+    },
+    {
+      "case": "seam-needs-you",
+      "completion": {
+        "origin": "schedule:seam-needs-you",
+        "status": "completed",
+        "outcome": "needs_you"
+      },
+      "last_status": "needs_you",
+      "short": true
+    },
+    {
+      "case": "seam-part-failed",
+      "completion": {
+        "origin": "schedule:seam-part-failed",
+        "status": "completed",
+        "outcome": "completed_with_failures"
+      },
+      "last_status": "partial",
+      "short": true
+    },
+    {
+      "case": "seam-failed-asked",
+      "completion": {
+        "origin": "schedule:seam-failed-asked",
+        "status": "failed",
+        "outcome": "needs_you"
+      },
+      "last_status": "needs_you",
+      "short": true
+    },
+    {
+      "case": "seam-failed",
+      "completion": {
+        "origin": "schedule:seam-failed",
+        "status": "failed",
+        "outcome": null
+      },
+      "last_status": "error",
+      "short": true
+    }
+  ]
+}

@@ -46,7 +46,7 @@ import {
   ConfirmButton,
   SectionLabel,
 } from "@/components/ui";
-import { addedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
+import { addedButNotStarted, editedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
@@ -1092,13 +1092,14 @@ export default function ToolsPage() {
   function onPackEdited(serverName: string, res: EditSaved) {
     setEditing(null);
     setMcpError(null);
-    setMcpOk(
-      res.note
-        ? `"${serverName}" saved. ${res.note}`
-        : res.reloaded === false
-          ? `"${serverName}" saved.`
-          : `"${serverName}" saved and reloaded.`,
-    );
+    // v1.351.0 integrate (G08): an edit whose pack did not reload is SAVED,
+    // not working — the warn note with the daemon's reason, never the green.
+    if (res.reloaded === false) {
+      setMcpNote({ text: editedButNotStarted(res.note, `"${serverName}"`), warn: true });
+      reloadServers();
+      return;
+    }
+    setMcpOk(res.note ? `"${serverName}" saved. ${res.note}` : `"${serverName}" saved and reloaded.`);
     reloadServers();
   }
 

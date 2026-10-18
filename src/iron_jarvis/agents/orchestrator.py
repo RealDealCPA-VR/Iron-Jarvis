@@ -1350,7 +1350,7 @@ class Orchestrator:
                 # agent layer (routes -> orchestrator), so a module-level
                 # import here would be the platform layer importing the daemon
                 # — the inversion v1.185.0 removed.
-                from ..daemon.chat_turn import _claimed_write_note
+                from ..daemon.chat_turn import _claimed_write_note, custom_tools_used
 
                 tools_used, outcome = await asyncio.to_thread(
                     self._settle_finished_run,
@@ -1358,7 +1358,12 @@ class Orchestrator:
                     getattr(run, "id", None),  # test doubles carry no id
                     session.status,
                 )
-                note = _claimed_write_note(run.result or "", tools_used)
+                # v1.351.0: a user-made command tool that ran may have changed
+                # the file the summary names (same rule as both chat lanes).
+                note = _claimed_write_note(
+                    run.result or "", tools_used,
+                    custom_tools=custom_tools_used(self.p, tools_used),
+                )
                 if note:
                     session.summary = _with_folder_note(prior_summary, f"{run.result}{note}")
                 session.outcome = outcome
@@ -1649,7 +1654,9 @@ class Orchestrator:
         then read the ledger ONCE for both the claimed-write check and the
         honest outcome. Returns ``(tools_used, outcome)``; a broken ledger
         read degrades to ``([], None)`` rather than failing the run."""
-        from .outcome import derive_outcome, session_result
+        from .outcome import (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES,
+                              derive_outcome, session_result)
+        from .team import MISSION_ORIGIN
 
         # An id-less run (a test double) releases every run of the session.
         self._release_worklist_claims(session.id, [run_id] if run_id else None)
@@ -1659,7 +1666,24 @@ class Orchestrator:
             log.exception("ledger read failed at finalize for %s", session.id)
             return [], None
         tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
-        return tools, derive_outcome(result, status)
+        outcome = derive_outcome(result, status)
+        # v1.351.0 integrate (G09 seam): a MISSION whose worklist kept failed
+        # items did not get all of its objective done, whatever the ledger
+        # says of the coordinator's own calls. The mission screen read that
+        # from the worklist while the bell read only this verdict ("Your
+        # objective is done"); one verdict now, from the same summary the
+        # screen reads (agents/mission.py). Missions only: a board is keyed on
+        # the JOB's place, so another door's rerun would inherit old items.
+        if outcome == OUTCOME_COMPLETED and str(getattr(session, "origin", "") or "") == MISSION_ORIGIN:
+            store = getattr(self.p, "worklist", None)
+            if store is not None:
+                try:
+                    summary = store.summary(store.root_session_for(session.id))
+                    if int(summary.get("failed") or 0) > 0:
+                        outcome = OUTCOME_WITH_FAILURES
+                except Exception:  # noqa: BLE001 — the verdict stands without it
+                    log.debug("mission worklist read failed for %s", session.id, exc_info=True)
+        return tools, outcome
 
     async def settle_child(self, child_session: Session, run: AgentRun) -> bool:
         """Finalize a DELEGATED / SPAWNED child's row on its success path
@@ -1716,7 +1740,7 @@ class Orchestrator:
         prior = child_session.summary
         child_session.summary = _with_folder_note(prior, run.result)
         try:
-            from ..daemon.chat_turn import _claimed_write_note
+            from ..daemon.chat_turn import _claimed_write_note, custom_tools_used
 
             tools_used, outcome = await asyncio.to_thread(
                 self._settle_finished_run,
@@ -1724,7 +1748,10 @@ class Orchestrator:
                 getattr(run, "id", None),
                 child_session.status,
             )
-            note = _claimed_write_note(run.result or "", tools_used)
+            note = _claimed_write_note(
+                run.result or "", tools_used,
+                custom_tools=custom_tools_used(self.p, tools_used),
+            )
             if note:
                 child_session.summary = _with_folder_note(prior, f"{run.result}{note}")
             child_session.outcome = outcome
