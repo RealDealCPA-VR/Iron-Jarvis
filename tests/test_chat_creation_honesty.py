@@ -49,8 +49,25 @@ def _chat(client, content: str, **extra):
 
 
 def test_no_file_written_gets_an_honest_note(tmp_path):
+    from iron_jarvis.providers.adapters.base import LLMResponse
+
     client = TestClient(create_app(str(tmp_path)))
-    # Auto-tools OFF and nothing armed: the mock replies with prose only.
+
+    # v1.351.0 (G10), changed ON PURPOSE: this used to ride the fresh
+    # install's offline DEMO, whose reply now carries the one demo note
+    # ("choose a model above") instead of these file notes — "arm a document
+    # tool" is the wrong fix for a scripted reply
+    # (tests/test_chat_lanes_v13510.py pins that). The note itself is
+    # unchanged for a REAL model, so it is pinned on one that answers in prose.
+    class _ProseAdapter:
+        provider = "anthropic"
+        model = "claude-opus-4-8"
+
+        async def complete(self, *, system, messages, tools):
+            return LLMResponse(text="Here are your top clients and their fees.")
+
+    client.app.state.platform.providers.get = lambda p, m=None: _ProseAdapter()
+    # Nothing armed: the model replies with prose only.
     out = _chat(client, "create an excel of my top clients")
     assert "no file was actually created" in out["reply"]
     assert "write_document" in out["reply"]  # the note teaches the fix

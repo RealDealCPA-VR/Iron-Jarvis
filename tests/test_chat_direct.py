@@ -46,7 +46,11 @@ def test_chat_replies_directly_with_history(tmp_path):
         ]},
     )
     assert r.status_code == 200
-    assert r.json()["reply"] == "hey there!"
+    # v1.351.0 (G10), ON PURPOSE: the spy wraps the fresh install's offline
+    # DEMO model, and a demo reply now says so in one note.
+    from iron_jarvis.daemon.chat_turn import demo_note
+
+    assert r.json()["reply"] == "hey there!" + demo_note([])
     # FULL history reaches the model (real multi-turn, not recap-chaining).
     assert [m.content for m in captured["messages"]] == ["hi", "hello!", "what did I just say?"]
 

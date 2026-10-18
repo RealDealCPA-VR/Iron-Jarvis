@@ -192,6 +192,9 @@ def test_default_route_discloses_default_with_empty_requested(tmp_path):
         # v1.332.0 (additive, last): not a local-only turn, no one-message OK.
         "local_only": False,
         "allowed_once": False,
+        # v1.351.0 (G14, additive, last): where the answering model runs —
+        # a provider that is not a local kind is the cloud (fail closed).
+        "on_this_network": False,
     }
 
 
@@ -249,6 +252,9 @@ def test_an_explicitly_chosen_mock_still_says_mock(tmp_path):
         # v1.332.0 (additive, last): not a local-only turn, no one-message OK.
         "local_only": False,
         "allowed_once": False,
+        # v1.351.0 (G14, additive, last): where the answering model runs —
+        # the offline mock runs inside this process.
+        "on_this_network": True,
     }
 
 
@@ -282,6 +288,9 @@ def test_stream_done_frame_route_is_identical_to_post_chat(tmp_path):
         # v1.332.0 (additive, last): not a local-only turn, no one-message OK.
         "local_only": False,
         "allowed_once": False,
+        # v1.351.0 (G14, additive, last): where the answering model runs —
+        # a provider that is not a local kind is the cloud (fail closed).
+        "on_this_network": False,
     }
 
 
@@ -484,6 +493,9 @@ def test_parity_explicit_pick_both_lanes_identical(tmp_path):
         # v1.332.0 (additive, last): not a local-only turn, no one-message OK.
         "local_only": False,
         "allowed_once": False,
+        # v1.351.0 (G14, additive, last): where the answering model runs —
+        # a provider that is not a local kind is the cloud (fail closed).
+        "on_this_network": False,
     }
 
 
@@ -560,6 +572,9 @@ def test_parity_failover_both_lanes_identical(tmp_path):
         # v1.332.0 (additive, last): not a local-only turn, no one-message OK.
         "local_only": False,
         "allowed_once": False,
+        # v1.351.0 (G14, additive, last): where the answering model runs —
+        # a provider that is not a local kind is the cloud (fail closed).
+        "on_this_network": False,
     }
     # Top-level provider/model tell the same story (old-client surface).
     assert flat.json()["provider"] == "grok-cli"

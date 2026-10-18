@@ -207,7 +207,11 @@ def test_an_unarmed_workflow_create_call_becomes_the_card_not_a_refusal(client, 
 def test_a_prose_only_reply_is_still_just_a_reply(client, monkeypatch):
     _force(client, monkeypatch, lambda i: [], text_per_round=lambda i: "1. Gather 2. Check")
     out = client.post("/chat", json=MSG).json()
-    assert out["workflow_draft"] is None and out["reply"] == "1. Gather 2. Check"
+    # v1.351.0 (G10), ON PURPOSE: the forced replies ride the fresh install's
+    # offline DEMO model, whose reply now carries the one demo note.
+    from iron_jarvis.daemon.chat_turn import demo_note
+
+    assert out["workflow_draft"] is None and out["reply"] == "1. Gather 2. Check" + demo_note([])
 
 
 def test_the_draft_carries_the_chats_project_in_both_lanes(client, monkeypatch):

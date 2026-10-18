@@ -2646,6 +2646,12 @@ function plainAskSummary(ask) {
 // While a window is open the page's bell owns the announcing: the ask is still
 // RECORDED here (so closing the window later does not re-announce it), but
 // nothing is raised, and reminders stay with the surface the user can see.
+//
+// A CHAT waiting for your OK (v1.351.0, G05): the listing carries one row per
+// chat whose turn is parked on the user with no window following it
+// ({id: "chat:<thread id>", kind: "chat", thread_id, tool} — names only). It
+// is announced like any ask, in its own words, and its click opens THAT chat
+// (where the card shows what it would do), not a job page.
 function planAskNotifications(seen, approvals, now, windowOpen) {
   const next = {};
   const notify = [];
@@ -2654,8 +2660,16 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     if (!id) continue;
     const prev = seen[id];
     const rec = prev ? { first: prev.first, sent: prev.sent } : { first: now, sent: 0 };
+    const isChat = ask.kind === "chat";
+    const hasTool = typeof ask.tool === "string" && ask.tool !== "";
     const summary = plainAskSummary(ask);
-    const sessionId = typeof ask.session_id === "string" ? ask.session_id : "";
+    const sessionId = !isChat && typeof ask.session_id === "string" ? ask.session_id : "";
+    const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
+    const where = isChat ? "the chat" : "the job";
+    // A chat parked on an app's question names no tool: say what to do, not
+    // "use a tool".
+    const what = isChat && !hasTool ? "" : `${summary} — `;
+    const target = isChat ? { chat: true, threadId } : {};
     if (!prev) {
       if (windowOpen) {
         rec.sent = 1; // the bell in front of the user has it
@@ -2663,8 +2677,9 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
         notify.push({
           id,
           sessionId,
-          title: "Jarvis is waiting for you",
-          body: `${summary} — click to open the job.`,
+          ...target,
+          title: isChat ? "A chat is waiting for your OK" : "Jarvis is waiting for you",
+          body: what ? `${what}click to open ${where}.` : `Click to open ${where}.`,
         });
         rec.sent = 1;
       }
@@ -2675,11 +2690,15 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
         // first reminder can land hours late (the window was open until now),
         // and "waiting 1 hour" for a job that has sat for five is a lie.
         const hours = Math.max(1, Math.floor((now - rec.first) / (60 * 60 * 1000)));
+        const waited = `waiting ${hours} hour${hours === 1 ? "" : "s"}`;
         notify.push({
           id,
           sessionId,
-          title: "Still waiting for you",
-          body: `${summary} has been waiting ${hours} hour${hours === 1 ? "" : "s"} — click to open the job.`,
+          ...target,
+          title: isChat ? "A chat is still waiting for your OK" : "Still waiting for you",
+          body: what
+            ? `${summary} has been ${waited} — click to open ${where}.`
+            : `It has been ${waited} — click to open ${where}.`,
         });
         rec.sent += 1;
       }
@@ -2709,7 +2728,12 @@ function showAskNotification(item) {
     const note = new Notification({ title: item.title, body: item.body });
     note.on("click", () => {
       showMainWindow();
-      if (item.sessionId && mainWin && !mainWin.isDestroyed()) {
+      if (!mainWin || mainWin.isDestroyed()) return;
+      if (item.chat) {
+        // v1.351.0 (G05): a waiting CHAT opens that chat, where its card is.
+        const q = item.threadId ? `?thread=${encodeURIComponent(item.threadId)}` : "";
+        mainWin.loadURL(`${DASHBOARD_URL}/chat${q}`);
+      } else if (item.sessionId) {
         mainWin.loadURL(`${DASHBOARD_URL}/sessions/${item.sessionId}`);
       }
     });

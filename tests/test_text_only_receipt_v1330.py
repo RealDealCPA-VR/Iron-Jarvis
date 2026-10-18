@@ -108,7 +108,10 @@ def test_text_only_pick_says_so_on_the_post_lane(client, monkeypatch):
     assert route["label"] == _LABEL
     # Additive: the two new keys follow every older key; v1.332.0's
     # local-only keys are appended after them.
-    assert list(route)[-4:] == ["label", "text_only", "local_only", "allowed_once"]
+    # v1.351.0 (G14): `on_this_network` is appended after them, last.
+    assert list(route)[-5:] == [
+        "label", "text_only", "local_only", "allowed_once", "on_this_network",
+    ]
 
 
 def test_text_only_pick_says_so_on_the_stream_lane(client, monkeypatch):
@@ -120,7 +123,10 @@ def test_text_only_pick_says_so_on_the_stream_lane(client, monkeypatch):
     assert route["provider"] == _PID
     assert route["text_only"] is True
     assert route["label"] == _LABEL
-    assert list(route)[-4:] == ["label", "text_only", "local_only", "allowed_once"]
+    # v1.351.0 (G14): `on_this_network` is appended after them, last.
+    assert list(route)[-5:] == [
+        "label", "text_only", "local_only", "allowed_once", "on_this_network",
+    ]
 
 
 def test_a_model_that_can_use_tools_is_not_text_only(client, monkeypatch):

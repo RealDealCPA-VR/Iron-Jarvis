@@ -248,6 +248,59 @@ def stays_on_this_network(provider: str, manager: Any = None, config: Any = None
         return False
 
 
+#: The three answers :func:`model_place` gives (v1.351.0, G14).
+PLACE_THIS_PC = "this_pc"
+PLACE_NETWORK = "network"
+PLACE_CLOUD = "cloud"
+
+
+def _loopback_host(url: str) -> bool:
+    """True when *url*'s host is THIS computer (127.0.0.0/8, ::1,
+    ``localhost``). Never raises; anything unreadable is False."""
+    try:
+        raw = str(url or "").strip()
+        if not raw:
+            return False
+        if "://" not in raw:
+            raw = "http://" + raw
+        host = (urlsplit(raw).hostname or "").strip().lower().rstrip(".")
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        try:
+            ip = ipaddress.ip_address(host.split("%", 1)[0])
+        except ValueError:
+            return False
+        mapped = getattr(ip, "ipv4_mapped", None)
+        return (mapped or ip).is_loopback
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def model_place(provider: str, manager: Any = None, config: Any = None) -> str:
+    """WHERE the model behind *provider* runs, in one of three words
+    (v1.351.0, G14): :data:`PLACE_THIS_PC`, :data:`PLACE_NETWORK` or
+    :data:`PLACE_CLOUD`.
+
+    The SAME predicate as :func:`stays_on_this_network` — anything it calls
+    cloud is cloud here, so the system prompt, the route object and the
+    local-only lock can never disagree. Inside "stays on this network" the
+    address splits the two local answers: a loopback endpoint (and the
+    offline demo model, which runs inside this process) is THIS PC; a fleet
+    node, a LAN box or a tailnet machine is the user's NETWORK, and so is a
+    local-by-construction provider whose address we cannot read (the honest
+    wider word — never "this PC" on a guess). Pure, cheap, never raises."""
+    try:
+        if not stays_on_this_network(provider, manager, config):
+            return PLACE_CLOUD
+        p = (provider or "").strip().lower()
+        if p == "mock":
+            return PLACE_THIS_PC
+        url = endpoint_url(p, manager, config)
+        return PLACE_THIS_PC if _loopback_host(url) else PLACE_NETWORK
+    except Exception:  # noqa: BLE001 — fail closed: cloud
+        return PLACE_CLOUD
+
+
 def friendly_name(provider: str, manager: Any = None) -> str:
     """The name a person reads for *provider*: the table above, a fleet node's
     own label, else the id. Never raises."""
@@ -512,15 +565,19 @@ def asks_first(registry: Any, name: str, scope: "LocalOnlyScope | None" = None) 
 
 
 def route_flags(provider: str, manager: Any = None) -> dict[str, bool]:
-    """The two receipt keys every chat lane puts on its route object:
-    ``local_only`` (this turn ran under the toggle) and ``allowed_once``
-    (it was answered off this network with the user's one-message OK)."""
+    """The receipt keys every chat lane puts on its route object:
+    ``local_only`` (this turn ran under the toggle), ``allowed_once``
+    (it was answered off this network with the user's one-message OK) and,
+    since v1.351.0 (G14, additive, LAST), ``on_this_network`` — whether the
+    model that ANSWERED runs on the user's own network (this PC included),
+    from :func:`stays_on_this_network`, the one predicate the local-only lock
+    and the system prompt's "where you run" line also read."""
     sc = current_scope()
+    here = stays_on_this_network(provider, manager)
     return {
         "local_only": bool(sc.on),
-        "allowed_once": bool(
-            sc.on and sc.allowed_once and not stays_on_this_network(provider, manager)
-        ),
+        "allowed_once": bool(sc.on and sc.allowed_once and not here),
+        "on_this_network": bool(here),
     }
 
 
@@ -672,6 +729,10 @@ __all__ = [
     "ltm_connector_is_local",
     "may_recall_local_only_chats",
     "make_scope",
+    "model_place",
+    "PLACE_CLOUD",
+    "PLACE_NETWORK",
+    "PLACE_THIS_PC",
     "private_host",
     "reaches_outside",
     "refusal_of",

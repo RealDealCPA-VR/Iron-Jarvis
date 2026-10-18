@@ -111,13 +111,43 @@ class TurnLog:
         self._persisting: "asyncio.Task | None" = None
         self.task: "asyncio.Task | None" = None
         self.finished_at: float | None = None
+        #: approval id -> (tool, asked at ISO) for every approval card this turn
+        #: has shown and not yet seen answered (v1.351.0, G05). NAMES ONLY —
+        #: never the card's arguments: :func:`waiting_unwatched` lists these
+        #: to every page and to the desktop.
+        self._asks: dict[str, tuple[str, str]] = {}
 
     # -- writing --------------------------------------------------------------
     def add(self, chunk: str) -> None:
         for q in list(self._followers):
             q.put_nowait(chunk)
         for event, data in parse_chunk(chunk):
+            self._note_ask(event, data)
             self._store(event, data)
+
+    def _note_ask(self, event: str, data: str) -> None:
+        """Keep the open approval cards' ids and tool names (v1.351.0, G05)."""
+        if event not in ("approval", "approval_resolved"):
+            return
+        try:
+            frame = json.loads(data)
+        except ValueError:
+            return
+        if not isinstance(frame, dict):
+            return
+        aid = frame.get("id")
+        if not isinstance(aid, str) or not aid:
+            return
+        if event == "approval":
+            self._asks[aid] = (str(frame.get("tool") or ""), _iso_utc(utcnow()) or "")
+        else:
+            self._asks.pop(aid, None)
+
+    def open_asks(self, pending: "set[str] | frozenset[str]") -> list[tuple[str, str, str]]:
+        """``[(approval id, tool, asked at)]`` for this turn's cards that are
+        still waiting — the shared registry (``pending``) is the truth: a card
+        it no longer holds was answered, timed out or abandoned."""
+        return [(aid, tool, at) for aid, (tool, at) in self._asks.items() if aid in pending]
 
     def _store(self, event: str, data: str) -> None:
         if event in _MERGEABLE and self.frames and self.frames[-1][0] == event:
@@ -310,6 +340,69 @@ class TurnLogs:
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def waiting_unwatched(
+    logs: "TurnLogs | None",
+    thread_states: "dict[str, dict[str, bool]] | None",
+    pending_ids: "Any" = (),
+) -> list[dict[str, Any]]:
+    """One row per chat that is WAITING FOR THE USER with nobody watching it
+    (v1.351.0, G05): ``{id: "chat:<thread id>", kind: "chat", thread_id,
+    tool, requested_at, mission_id: None, project_id: None}``.
+
+    THE SILENCE THIS ENDS: since v1.336.0 a chat turn keeps running after the
+    user leaves, but its approval card was announced only on its own SSE
+    stream. The user who asked for a file edit, went to Build before
+    answering and closed the window to the tray heard nothing — the bell and
+    the desktop watcher read ``GET /chat/approvals/pending``, which drops the
+    chat lane's asks — and an hour later the orphan guard stopped the turn.
+
+    WHICH turns: a daemon-owned turn still running, that NO window is
+    following (``watched()`` — a chat open in front of the user shows its own
+    card, and a second announcement would double-surface it), and that is
+    parked on the user — an approval card this turn showed that the shared
+    registry still holds (``pending_ids``; this also covers a NEW chat's first
+    turn, which has no per-chat entry), or its chat reading ``waiting`` in
+    ``TURNS.thread_states()`` (an app's question, a model request).
+
+    NEVER ARGUMENTS: the tool's NAME and the chat's id only — the same posture
+    as the listing it joins (it fans out to every page and to a toast on a
+    possibly shared screen). One row per chat (two waiting turns on one chat
+    are one thing to open). Never raises."""
+    rows: list[dict[str, Any]] = []
+    if logs is None:
+        return rows
+    try:
+        pending = frozenset(str(i) for i in (pending_ids or ()))
+        states = thread_states or {}
+        seen: set[str] = set()
+        for lg in logs.running():
+            if lg.watched():
+                continue
+            thread = str(lg.thread_id or "").strip()[:80]
+            asks = lg.open_asks(pending)
+            parked = bool(thread) and bool((states.get(thread) or {}).get("waiting"))
+            if not asks and not parked:
+                continue
+            row_id = f"chat:{thread}" if thread else f"chat:turn:{lg.turn_id}"
+            if row_id in seen:
+                continue
+            seen.add(row_id)
+            newest = asks[-1] if asks else ("", "", "")
+            rows.append({
+                "id": row_id,
+                "kind": "chat",
+                "thread_id": thread,
+                "tool": newest[1],
+                "requested_at": newest[2] or (_iso_utc(lg.started_at) or ""),
+                # The listing's contract (v1.310.0): present on EVERY row.
+                "mission_id": None,
+                "project_id": None,
+            })
+    except Exception:  # noqa: BLE001 — a listing never fails because of this
+        log.warning("could not list waiting chat turns", exc_info=True)
+    return rows
 
 
 def stop_predicate(get_log: Any) -> Any:

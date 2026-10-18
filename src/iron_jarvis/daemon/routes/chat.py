@@ -1002,10 +1002,24 @@ def register(app: FastAPI, d) -> None:
         (redacted) args for the one chat card watching that stream; this
         response fans out to EVERY dashboard page on a 15s poll, so metadata
         is copied key-by-key and args are dropped even when present.
+
+        A CHAT NOBODY IS WATCHING (v1.351.0, G05): the chat card is the right
+        surface only while a window is following that turn. A daemon-owned
+        turn parked on the user that NO window follows (the user went to
+        Build, or closed the window to the tray) is listed as ONE row per
+        chat, ``{id: "chat:<thread id>", kind: "chat", thread_id, tool,
+        requested_at, mission_id: null, project_id: null}`` — names only, no
+        arguments, and no approval id (it is answered in its chat, where the
+        card shows what it would do). A followed turn's ask stays off this
+        list exactly as before.
         """
         ids = _approvals(d).pending_ids()
+        # In-memory and cheap (no I/O): the running turns this process holds.
+        chat_rows = _durable.waiting_unwatched(
+            getattr(d.platform, "turn_logs", None), TURNS.thread_states(), ids,
+        )
         if not ids:
-            return {"approvals": []}
+            return {"approvals": chat_rows}
 
         def _recent_requests() -> list[tuple[str, str, str]]:
             # Bounded by ROW COUNT, not by age (corrected v1.249.0). The old
@@ -1125,7 +1139,9 @@ def register(app: FastAPI, d) -> None:
             mission_id, project_id = places.get(row["session_id"], (None, None))
             row["mission_id"] = mission_id
             row["project_id"] = project_id
-        return {"approvals": listed}
+        # v1.351.0 (G05): the chats waiting on the user with nobody watching,
+        # after the agent asks (their own shape — see the docstring).
+        return {"approvals": listed + chat_rows}
 
     @app.get("/chat/threads")
     def chat_threads(project_id: str = "", archived: str = "") -> dict[str, Any]:
@@ -2949,9 +2965,20 @@ async def chat_stream(
         PersonaStore(platform.engine), personas, want,
         getattr(d.platform.config, "default_persona", ""),
     )
+    # Read BEFORE the Environment line since v1.351.0 (G14): a project's
+    # default provider decides where the answering model runs. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn reads them at the same seam.
+    pid = (body.project_id or "").strip() or None
+    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
+    # WHERE THE MODEL RUNS (v1.351.0, G14) — the lock-step copy of
+    # chat_turn's: the explicit pick, else the project's default, else the
+    # configured default. MIRROR NOTE (lock-step): edit both or neither.
+    _where_provider = (body.provider or "").strip() or (
+        (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+    ) or str(getattr(getattr(d.platform, "config", None), "default_provider", "") or "")
     system = persona + (
         "\n\n# Environment\n"
-        f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
+        + _chat_turn.model_where_line(d.platform, _where_provider)
         # The two exit lines (escalate / workflow card): the ONE constant both
         # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
         # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step): chat_turn.
@@ -2979,8 +3006,7 @@ async def chat_stream(
     # the tool-free form below. MIRROR NOTE (lock-step): chat_turn.
     _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
     system += _browser_block
-    pid = (body.project_id or "").strip() or None
-    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
+    # (`pid` / `resolved_proj` are read above the Environment line — v1.351.0.)
 
     # GROUNDING (v1.311.0) — the ONE helper chat_turn.run_chat_turn calls at
     # the same seam: the project block, lessons, memory index, fabric,
@@ -4976,12 +5002,18 @@ async def chat_stream(
             _ctx_note = plan.note()
             if _ctx_note:
                 reply += f"\n\n_Note: {_ctx_note}._"
-            reply += _creation_honesty_note(body, armed, tools_used)
-            # v1.153.2: and check the reply's own CLAIMS against the
-            # ledger — the note above keys off the user's phrasing and
-            # so missed a reply announcing a saved file after only a
-            # scan had run. MIRROR NOTE (lock-step): both lanes.
-            reply += _claimed_write_note(reply, tools_used)
+            if _chat_turn.is_demo_route(route_provider, route_reason):
+                # v1.351.0 (G10): the OFFLINE DEMO answered — one note that
+                # names the real fix, in place of the two file notes. MIRROR
+                # NOTE (lock-step): chat_turn.run_chat_turn.
+                reply += _chat_turn.demo_note(tools_used)
+            else:
+                reply += _creation_honesty_note(body, armed, tools_used)
+                # v1.153.2: and check the reply's own CLAIMS against the
+                # ledger — the note above keys off the user's phrasing and
+                # so missed a reply announcing a saved file after only a
+                # scan had run. MIRROR NOTE (lock-step): both lanes.
+                reply += _claimed_write_note(reply, tools_used)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off

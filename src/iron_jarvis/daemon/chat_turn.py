@@ -1394,6 +1394,65 @@ def text_only_note(platform: Any, provider: str) -> str:
     return f"\n\n_Note: {name} can't run tools, so this turn was answered text only._"
 
 
+#: Where the model answering this turn runs, in the words its system prompt
+#: uses (v1.351.0, G14). Keyed by ``egress.model_place``'s three answers, plus
+#: ``auto`` (the model is picked per message, after this prompt is written) and
+#: ``""`` (no provider known at all).
+_MODEL_PLACE_WORDS = {
+    _egress.PLACE_THIS_PC: "runs on this PC",
+    _egress.PLACE_NETWORK: (
+        "runs on a computer on the user's own network, not in the cloud"
+    ),
+    _egress.PLACE_CLOUD: (
+        "runs in the cloud, on the provider's servers — not on this PC and not"
+        " on the user's network, so never say you run locally"
+    ),
+    "auto": (
+        "is picked per message (Auto) and may run on this PC, on the user's"
+        " network or in the cloud — do not claim to run locally"
+    ),
+    "": (
+        "may run on this PC, on the user's network or in the cloud — do not"
+        " claim to run locally"
+    ),
+}
+
+
+def model_where_line(platform: Any, provider: str) -> str:
+    """The Environment section's FIRST line: the app runs on the user's
+    machine, and WHERE the model answering runs (v1.351.0, G14).
+
+    THE LIE THIS REPLACES: both lanes told every model "You run locally on the
+    user's machine" — so asking a cloud model whether it runs locally invited
+    a confident yes, on a PC that holds client tax documents. The place now
+    comes from ``egress.model_place`` — the SAME predicate the local-only lock
+    and the route object's ``on_this_network`` read — for the provider the
+    turn will ask: the explicit pick, else the project's default, else the
+    configured default (the ladder ``_attachment_budgets`` scales by).
+    ``auto`` is not a place: the classifier picks the model later, so the
+    line says it may be any of the three. Never raises — an unreadable place
+    is the cloud (fail closed: never claim local on a guess).
+
+    MIRROR NOTE (lock-step): BOTH chat lanes send this line, built here."""
+    p = (provider or "").strip()
+    if not p or p.lower() == "auto":
+        place = p.lower()
+    else:
+        try:
+            place = _egress.model_place(
+                p,
+                getattr(platform, "providers", None),
+                getattr(platform, "config", None),
+            )
+        except Exception:  # noqa: BLE001 — the prompt must never break a turn
+            place = _egress.PLACE_CLOUD
+    return (
+        f"- Iron Jarvis runs on the user's machine; their home directory is "
+        f"{Path.home()}. The model answering (you) "
+        f"{_MODEL_PLACE_WORDS.get(place, _MODEL_PLACE_WORDS[_egress.PLACE_CLOUD])}.\n"
+    )
+
+
 #: The Environment section's two EXIT lines (v1.108.0 / v1.120.0), shared by
 #: BOTH lanes so a text-only turn can swap exactly these bytes. A turn that can
 #: use tools sends them verbatim, as it always has.
@@ -4148,13 +4207,82 @@ STRICT_ASK_TOOLS = (
     | {"web_search", "web_fetch"}
 )
 
+#: Every tool whose SUCCESS changes a file on disk (v1.351.0, G06) — the set
+#: the two honesty notes judge "did anything get written?" against. A WIDER
+#: set than `_FILE_WRITING_TOOLS` on purpose, and kept separate from it:
+#: `STRICT_ASK_TOOLS` and `_write_directive` derive from that one, so widening
+#: it would change who is carded and which tools a "produce the file" turn is
+#: told to call. THE FALSE ACCUSATION THIS ENDS: "make this photo smaller" ran
+#: `image_resize`, made photo_small.png, the receipt said "made 1 file" — and
+#: the reply carried "nothing was written to disk this turn … that file does
+#: not exist", because the image, PDF, edit and rename tools were missing
+#: here. The media makers and the REPL report the files they create
+#: (`created_paths`) the same way, so they count too: a false accusation on a
+#: turn that DID write the file is its own trust failure.
+_FILE_CHANGING_TOOLS = _FILE_WRITING_TOOLS | frozenset(
+    {
+        "edit_file",
+        "rename_file",
+        "pdf_arrange",
+        "pdf_split",
+        "image_convert",
+        "image_resize",
+        "generate_media",
+        "pixio_generate",
+        "pixio_status",
+        "repl",
+    }
+)
+
+#: The filename part of a claim (shared by every claim pattern below).
+_CLAIMED_NAME = (
+    r"([\w.$~()\[\]-]+\.(?:pdf|docx|doc|xlsx|xls|pptx|ppt|csv|txt|md|json|"
+    r"html|rtf|odt|png|jpg|jpeg|zip))"
+)
+
 #: An assertive claim that a file now EXISTS, followed by a filename. Used to
 #: check the reply against the tool ledger — see :func:`_claimed_write_note`.
 _FILE_CLAIM_RX = _re.compile(
     r"(?:saved|wrote|written|created|generated|exported|produced|redacted|"
-    r"placed|stored|output)\b[^.\n]{0,90}?"
-    r"([\w.$~()\[\]-]+\.(?:pdf|docx|doc|xlsx|xls|pptx|ppt|csv|txt|md|json|"
-    r"html|rtf|odt|png|jpg|jpeg|zip))",
+    r"placed|stored|output)\b[^.\n]{0,90}?" + _CLAIMED_NAME,
+    _re.IGNORECASE,
+)
+
+#: The verbs of a claim that an EXISTING file was changed (v1.351.0, G06).
+_CHANGE_VERBS = r"(?:updated|edited|modified|changed|renamed|moved)"
+
+#: "I updated budget.xlsx" — a change verb, then a filename (v1.351.0, G06).
+#: Unlike the creation verbs, these words also DESCRIBE files the user gave
+#: ("here is what changed in report.docx", "the totals moved in Q3.xlsx"), so
+#: a match only counts as a claim when its run-up names the assistant as the
+#: one who did it — see :data:`_CHANGE_SUBJECT_RX`.
+_FILE_CHANGE_CLAIM_RX = _re.compile(
+    r"\b" + _CHANGE_VERBS + r"\b[^.\n]{0,90}?" + _CLAIMED_NAME,
+    _re.IGNORECASE,
+)
+
+#: "budget.xlsx has been updated" — the same claim with the filename first.
+_FILE_CHANGED_AFTER_RX = _re.compile(
+    _CLAIMED_NAME
+    + r"(?:\s+(?:file|workbook|document|spreadsheet))?\s+"
+    r"(?:has\s+been|have\s+been|was|were|is\s+now|are\s+now)\s+"
+    r"(?:(?:just|now|also|already|successfully)\s+)?"
+    + _CHANGE_VERBS + r"\b",
+    _re.IGNORECASE,
+)
+
+#: The run-up that makes a change verb a CLAIM: the assistant as subject
+#: ("I", "I've", "we have"), a passive ("has been", "was"), a joined action
+#: ("… and updated"), or the start of a sentence / list item ("Updated
+#: budget.xlsx with the new totals."). Anything else — "what changed in",
+#: "the totals changed in", "you updated" — describes, and is left alone.
+_CHANGE_SUBJECT_RX = _re.compile(
+    r"(?:\b(?:I|we)(?:'ve|'d|\s+have|\s+had)?"
+    r"|\b(?:has|have|had)\s+been"
+    r"|\b(?:was|were|is\s+now|are\s+now)"
+    r"|\b(?:and|then)"
+    r"|^|[.!?:;—–]|\n\s*(?:[-*•]|\d+[.)])?)"
+    r"(?:\s+(?:just|now|also|already|successfully|finally|then))*\s*$",
     _re.IGNORECASE,
 )
 
@@ -4183,11 +4311,19 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     the record decides, never the prose.
 
     Deliberately conservative. It fires only on an assertive past-tense claim
-    naming a real-looking filename, and never when a document-writing tool ran
-    this turn — a false accusation on a turn that DID write the file would be
-    its own trust failure.
+    naming a real-looking filename, and never when a file-changing tool
+    SUCCEEDED this turn (``_FILE_CHANGING_TOOLS`` since v1.351.0 — a resized
+    photo or a split PDF used to be accused here) — a false accusation on a
+    turn that DID write the file would be its own trust failure.
+
+    v1.351.0 (G06): a claim that an EXISTING file was CHANGED ("I updated
+    budget.xlsx") is checked too, so a reply announcing an edit that failed
+    gets the note. Those verbs also describe a user's own files, so they count
+    only with the assistant as their subject (:data:`_CHANGE_SUBJECT_RX`), and
+    the note says the file is unchanged — not that it does not exist. A
+    creation-only claim reads exactly as it always has.
     """
-    if not reply or set(tools_used) & _FILE_WRITING_TOOLS:
+    if not reply or set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
     named: list[str] = []
     for m in _FILE_CLAIM_RX.finditer(reply):
@@ -4197,14 +4333,40 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
         name = m.group(1)
         if name not in named:
             named.append(name)
-    if not named:
+    changed: list[str] = []
+    for m in _FILE_CHANGE_CLAIM_RX.finditer(reply):
+        lead = reply[max(0, m.start() - 40) : m.start()]
+        if _CLAIM_NEGATION_RX.search(lead) or not _CHANGE_SUBJECT_RX.search(lead):
+            continue  # an offer, a denial, or a description — not a claim
+        if m.group(1) not in changed:
+            changed.append(m.group(1))
+    for m in _FILE_CHANGED_AFTER_RX.finditer(reply):
+        lead = reply[max(0, m.start() - 40) : m.start()]
+        if _CLAIM_NEGATION_RX.search(lead):
+            continue  # "once budget.xlsx has been updated, …"
+        if m.group(1) not in changed:
+            changed.append(m.group(1))
+    # A file the reply says it CHANGED existed before: never "does not exist".
+    named = [n for n in named if n not in changed]
+    if not named and not changed:
         return ""
-    shown = ", ".join(f"`{n}`" for n in named[:3])
+    said = ""
+    if named:
+        shown = ", ".join(f"`{n}`" for n in named[:3])
+        said += (
+            f" The reply mentions {shown}, but no document-writing tool ran — so"
+            f" that file does not exist."
+        )
+    if changed:
+        shown = ", ".join(f"`{n}`" for n in changed[:3])
+        which = "that file" if len(changed) == 1 else "those files"
+        said += (
+            f" The reply says it changed {shown}, but no tool that changes files"
+            f" succeeded this turn — so {which} did not change."
+        )
     return (
-        f"\n\n_Note: nothing was written to disk this turn. The reply mentions "
-        f"{shown}, but no document-writing tool ran — so that file does not "
-        f"exist. Ask again and arm a document tool (the “+” menu, or keep "
-        f"Auto-tools on)._"
+        f"\n\n_Note: nothing was written to disk this turn.{said} Ask again and"
+        f" arm a document tool (the “+” menu, or keep Auto-tools on)._"
     )
 
 
@@ -4286,7 +4448,9 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str
     """
     if not _asked_for_a_file(body):
         return ""
-    if set(tools_used) & _FILE_WRITING_TOOLS:
+    # v1.351.0 (G06): any tool that really changed a file counts — a resized
+    # photo or a split PDF is the file the user asked for.
+    if set(tools_used) & _FILE_CHANGING_TOOLS:
         return ""
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
@@ -4299,6 +4463,42 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str
         "\n\n_Note: no file was actually created this turn — no document-"
         "writing tool was armed. Arm write_document via the “+” menu (or "
         "keep Auto-tools on) and ask again._"
+    )
+
+
+def is_demo_route(provider: str, reason: str) -> bool:
+    """True when the OFFLINE DEMO model answered this turn (v1.351.0, G10).
+
+    BOTH halves of the router's own disclosure, not the provider name alone:
+    ``RouteResult.reason`` is ``"mock"`` exactly when the offline mock served
+    (``router._disclosed_reason``, applied at every terminal site of
+    ``complete()`` and ``stream()`` — pinned in test_route_disclosure_v1165),
+    so on a real install the two always agree. A test double that merely
+    LABELS its scripted reply "mock" without routing is not the demo, and
+    must keep its reply byte for byte."""
+    return (provider or "") == "mock" and (reason or "") == "mock"
+
+
+def demo_note(tools_used: list[str]) -> str:
+    """The ONE note an offline-demo reply carries (v1.351.0, G10).
+
+    BEFORE: a brand-new user who pressed "What can you do?" before choosing a
+    model got the demo's scripted "Done. Wrote RESULT.md summarizing the
+    task.", then the claim checker's "nothing was written … arm a document
+    tool", and the receipt's "Mock answer" — three statements that
+    contradict each other, and the wrong fix (no tool would help; a model
+    would). The demo's scripted text is left alone (many tests pin it); the
+    file notes are skipped on a demo turn and this is said instead.
+
+    "nothing was written" only when it is TRUE: with a file tool armed the
+    demo really writes its RESULT.md (and the demo picture is a real file),
+    so then the note says only what the reply is. MIRROR NOTE (lock-step):
+    both chat lanes append this in place of the two file notes."""
+    wrote = bool(set(tools_used or []) & _FILE_CHANGING_TOOLS)
+    return (
+        "\n\n_Note: this is the offline demo — a scripted reply, not a real"
+        " answer" + ("" if wrote else "; nothing was written") + ". Choose a"
+        " model above to get real answers._"
     )
 
 
@@ -5635,9 +5835,24 @@ async def run_chat_turn(
         PersonaStore(platform.engine), personas, want,
         getattr(platform.config, "default_persona", ""),
     )
+    # A project only applies INSIDE the Projects module: the in-project chat
+    # sends an explicit project_id and grounds in that project's
+    # instructions + brief + knowledge. The MAIN chat sends none and stays
+    # project-agnostic — the globally "active" project never leaks in here.
+    # Read BEFORE the Environment line since v1.351.0 (G14): a project's
+    # default provider decides where the answering model runs.
+    pid = (body.project_id or "").strip() or None
+    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
+    # WHERE THE MODEL RUNS (v1.351.0, G14): the provider this turn will ask —
+    # the explicit pick, else the project's default (`provider_choice`'s
+    # ladder below), else the configured default. MIRROR NOTE (lock-step):
+    # routes/chat.py's stream lane builds the same line the same way.
+    _where_provider = (body.provider or "").strip() or (
+        (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+    ) or str(getattr(getattr(platform, "config", None), "default_provider", "") or "")
     system = persona + (
         "\n\n# Environment\n"
-        f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
+        + model_where_line(platform, _where_provider)
         # The two exit lines (escalate / workflow card) — one constant both
         # lanes send, so a TEXT-ONLY turn can swap exactly these bytes below
         # (`text_only_system`, v1.330.0). MIRROR NOTE (lock-step).
@@ -5669,12 +5884,7 @@ async def run_chat_turn(
     # tool-free form below (`text_only_system`).
     _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
     system += _browser_block
-    # A project only applies INSIDE the Projects module: the in-project chat
-    # sends an explicit project_id and grounds in that project's
-    # instructions + brief + knowledge. The MAIN chat sends none and stays
-    # project-agnostic — the globally "active" project never leaks in here.
-    pid = (body.project_id or "").strip() or None
-    resolved_proj = await asyncio.to_thread(_load_project, d.platform, pid) if pid else None
+    # (`pid` / `resolved_proj` are read above the Environment line — v1.351.0.)
 
     # GROUNDING (v1.311.0): the project block, lessons, memory index, fabric,
     # connector memory, roster and saved workflows — every independent hop at
@@ -6737,12 +6947,19 @@ async def run_chat_turn(
         _ctx_note = plan.note()
         if _ctx_note:
             reply += f"\n\n_Note: {_ctx_note}._"
-        reply += _creation_honesty_note(body, armed, tools_used)
-        # v1.153.2: and check the reply's own CLAIMS against the
-        # ledger — the note above keys off the user's phrasing and
-        # so missed a reply announcing a saved file after only a
-        # scan had run. MIRROR NOTE (lock-step): both lanes.
-        reply += _claimed_write_note(reply, tools_used)
+        if is_demo_route(route.provider, getattr(route, "reason", "")):
+            # v1.351.0 (G10): the OFFLINE DEMO answered — one note that says
+            # so and names the real fix (choose a model), in place of the two
+            # file notes below, whose "arm a document tool" is the wrong fix
+            # for a scripted reply. MIRROR NOTE (lock-step): routes/chat.py.
+            reply += demo_note(tools_used)
+        else:
+            reply += _creation_honesty_note(body, armed, tools_used)
+            # v1.153.2: and check the reply's own CLAIMS against the
+            # ledger — the note above keys off the user's phrasing and
+            # so missed a reply announcing a saved file after only a
+            # scan had run. MIRROR NOTE (lock-step): both lanes.
+            reply += _claimed_write_note(reply, tools_used)
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.

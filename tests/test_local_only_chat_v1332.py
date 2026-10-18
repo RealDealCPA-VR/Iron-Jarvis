@@ -278,7 +278,8 @@ def test_the_allowed_provider_answers_and_the_route_says_so():
 
     route, flags = asyncio.run(go())
     assert route.provider == "claude-cli" and cloud.calls == 1
-    assert flags == {"local_only": True, "allowed_once": True}
+    # v1.351.0 (G14, additive): the answering model is a cloud CLI.
+    assert flags == {"local_only": True, "allowed_once": True, "on_this_network": False}
 
 
 @pytest.mark.parametrize("lane", LANES)
