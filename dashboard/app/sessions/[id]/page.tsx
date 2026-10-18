@@ -61,6 +61,7 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { stepLabel } from "@/components/chat/stepLabel";
+import { PlanChecklist, useLivePlan } from "@/components/chat/PlanChecklist";
 import { SessionFeedback } from "@/components/SessionFeedback";
 import { TimeTravelFeed } from "@/components/TimeTravelFeed";
 import { PageShell, Reveal } from "@/components/motion";
@@ -205,6 +206,19 @@ export default function SessionDetailPage({
     () => events.filter((e) => e.session_id === id),
     [events, id],
   );
+  /* ---- The run's plan (v1.350.0, lane C1): the chat's checklist ---------
+   * A run that makes a plan (the decomposed lane) shows it in the Live run
+   * card, under the phase line: the same checklist the chat's helper-agent
+   * row shows, folded from this page's own plan.* events. A page opened on a
+   * run already under way reads the daemon's copy once (plan.created came
+   * before it was watching); a 404 (no plan, or an older daemon) leaves what
+   * the events said, or nothing. */
+  const livePlan = useLivePlan({
+    session: isActive && !isQueued ? id : null,
+    events,
+    eager: true,
+    hint: runStream.phase?.detail ?? null,
+  });
   // The newest session-scoped event that warrants a refetch.
   const latestRefetch = sessionEvents.find((e) => REFETCH_EVENTS.has(e.type));
   /* Reload channel for SessionFiles (v1.168.0, P2): a finished session's
@@ -697,6 +711,7 @@ export default function SessionDetailPage({
                   )
                 }
               >
+                {livePlan ? <PlanChecklist plan={livePlan} className="mb-2.5" /> : null}
                 {runStream.tools.length > 0 && (
                   <div className="mb-2.5 flex flex-wrap gap-1.5">
                     {runStream.tools.map((t) => (

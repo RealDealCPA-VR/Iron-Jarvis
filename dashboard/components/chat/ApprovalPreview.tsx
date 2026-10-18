@@ -2,7 +2,8 @@
 
 // See it before you allow it (v1.348.0, polish wave A). The quiet block inside
 // ApprovalCard that shows what a call WILL DO: a file edit as a compact diff,
-// a file write as its first lines, a command as one terminal line, and every
+// a file write as its first lines, a command as one terminal line, a plan to
+// approve (v1.350.0, `approve_plan`) as a numbered list of its steps, and every
 // other argument as a tidy `key: value` line. lib/approvalPreview.ts decides
 // what each argument is; this file only draws it.
 //
@@ -232,6 +233,51 @@ function CommandLine({ command }: { command: string }) {
   );
 }
 
+/** v1.350.0 (lane C1): the plan the agent asks to follow (the optional plan
+ *  ask, tool `approve_plan`), as a numbered list in the card's own quiet
+ *  type. Each goal is whole (it wraps, never cut); a long plan shows its
+ *  first lines with the same "Show all" control a long diff has. */
+function PlanSteps({ part }: { part: Extract<PreviewPart, { type: "plan" }> }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const n = part.steps.length + part.more;
+  const capped = part.steps.length > PREVIEW_LINES;
+  const shown = open || !capped ? part.steps : part.steps.slice(0, PREVIEW_LINES);
+  return (
+    <div data-testid="approval-plan" className="space-y-1">
+      <p className="text-[11px] text-zinc-400">
+        <span className="text-zinc-500">plan:</span> {n === 1 ? "1 step" : `${n} steps`}
+      </p>
+      <ol
+        id={id}
+        aria-label={n === 1 ? "The plan, 1 step" : `The plan, ${n} steps`}
+        className="list-decimal space-y-0.5 pl-6 text-[12px] leading-relaxed text-zinc-300 marker:text-zinc-500"
+      >
+        {shown.map((goal, i) => (
+          <li key={i} data-testid="approval-plan-step" className="whitespace-pre-wrap break-words pl-1">
+            {goal || <span className="text-zinc-500">(no words)</span>}
+          </li>
+        ))}
+      </ol>
+      {part.more > 0 && (open || !capped) ? (
+        <p data-testid="approval-plan-more" className="pl-6 text-[11px] text-zinc-500">
+          …and {part.more === 1 ? "1 more step" : `${part.more} more steps`}
+        </p>
+      ) : null}
+      {capped && (
+        <MoreToggle
+          open={open}
+          onToggle={() => setOpen((v) => !v)}
+          controls={id}
+          closedLabel={`Show all ${part.steps.length} steps`}
+          openLabel="Show fewer steps"
+          testId="approval-plan-toggle"
+        />
+      )}
+    </div>
+  );
+}
+
 /** Code that wants to run (repl, run_code), verbatim and whole. */
 function CodeLines({ code }: { code: string }) {
   return (
@@ -265,6 +311,8 @@ export function ApprovalPreview({ tool, args }: { tool: string; args: Record<str
               return <CommandLine key={i} command={p.command} />;
             case "code":
               return <CodeLines key={i} code={p.code} />;
+            case "plan":
+              return <PlanSteps key={i} part={p} />;
           }
         })}
       </div>

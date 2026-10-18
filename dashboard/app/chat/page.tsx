@@ -347,6 +347,9 @@ import {
   stampMs,
   type AgentRunStamp,
 } from "@/lib/agentRun";
+// v1.350.0 (lane C1): the live plan checklist in that row.
+import { readSessionPlan, useLivePlan } from "@/components/chat/PlanChecklist";
+import { settlePlan, type PlanView } from "@/lib/planChecklist";
 import type { StepDetail } from "@/lib/stepDetail";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
@@ -6953,6 +6956,26 @@ export default function ChatPage() {
     return out;
   }, [events, awaitingId]);
 
+  // v1.350.0 (lane C1): the run's PLAN, when it makes one (the decomposed
+  // lane), as a checklist that ticks off in the helper-agent row. Folded
+  // from the same events after the same turn boundary, on top of what was
+  // already known (so a plan.created that left the 150-event window stays);
+  // a reopened chat waiting on a run reads the daemon's copy once (eager),
+  // and so does a step or phase speaking of a plan the events never showed.
+  // It changes only when a step starts or ends, never per token (S-03).
+  // finalize reads it through the ref to save the plan as it ended.
+  // (`resumedSessionRef` names only a wait openThread resumed: opening a
+  // thread clears `sessionId`, so no later turn here continues that session.)
+  const livePlan = useLivePlan({
+    session: awaitingId,
+    events,
+    boundary: sinceRef.current,
+    eager: awaitingId !== null && resumedSessionRef.current === awaitingId,
+    hint: runStream.phase?.detail ?? null,
+  });
+  const livePlanRef = useRef<{ session: string | null; plan: PlanView | null }>({ session: null, plan: null });
+  livePlanRef.current = { session: awaitingId, plan: livePlan };
+
   // Keep the newest message (or the live working bubble) in view — but ONLY when
   // the reader is pinned near the bottom, so scrolling up to re-read isn't yanked
   // back down on the next token. During a live stream scroll INSTANTLY (a smooth
@@ -7076,6 +7099,25 @@ export default function ChatPage() {
         noteRunStart(id, session.created_at); // v1.349.0: the live row's clock
         return; // still running — leave the working bubble up; retry later
       }
+      // v1.350.0 (lane C1): the plan the run worked through, as it ENDED,
+      // saved on the hand-off with the rest of the stamp (settleHandOff on
+      // both paths below), so a reopened chat shows it settled. The live
+      // checklist when this window followed the run. The daemon's copy is
+      // read (404 = no plan) when that cannot be trusted to be the end: a
+      // reopened chat whose run finished while it was closed, or a checklist
+      // with a step still open (this poll can see the run done a beat before
+      // the last plan.step_completed event lands). Like every read here, the
+      // user may leave while it is out.
+      let plan = livePlanRef.current.session === id ? livePlanRef.current.plan : null;
+      const planOpen = plan
+        ? plan.steps.some((s) => s.state === "waiting" || s.state === "running")
+        : resumedSessionRef.current === id;
+      if (planOpen) {
+        const fresh = await readSessionPlan(id); // never throws
+        if (awaitingIdRef.current !== id) return; // left while the read was out
+        if (fresh) plan = fresh;
+      }
+      const endedPlan = settlePlan(plan, status);
       // THE DAEMON MAY HAVE APPENDED THE REPLY ALREADY (v1.345.0): every
       // session door this page opens from chat carries `chat_thread_id`,
       // and the daemon's terminal path appends ONE line (the reply, its
@@ -7101,7 +7143,7 @@ export default function ChatPage() {
           // The wait is over: the mark on the question goes (as the compose
           // path strips it), and the server's array is what this window holds.
           // v1.349.0: its hand-off settles, saved (see above finalize).
-          const settled = settleHandOff(server, id, session, line.runResult?.steps);
+          const settled = settleHandOff(server, id, session, line.runResult?.steps, endedPlan);
           const adopted = stripAwaiting(settled);
           adoptThread(t, box, { force: true, messages: adopted });
           if (settled !== server) queueSave(adopted, box);
@@ -7144,7 +7186,7 @@ export default function ChatPage() {
       const who = awaitingWhoRef.current;
       awaitingWhoRef.current = null;
       // v1.349.0: the hand-off settles into its row (see above finalize).
-      const settled = settleHandOff(messagesRef.current, id, session, runResult?.steps);
+      const settled = settleHandOff(messagesRef.current, id, session, runResult?.steps, endedPlan);
       const full: ChatMessage[] = [
         ...stripAwaiting(settled), // the wait is over (v1.226.0)
         {
@@ -11722,6 +11764,7 @@ export default function ChatPage() {
                                 : null
                             }
                             phaseDetail={runStream.phase?.detail || null}
+                            plan={livePlan}
                           />
                           <AgentLiveText stream={runStream} onGrow={scrollLiveIntoView} />
                           {/* MID-RUN APPROVAL (v1.189.0): the run's asks are

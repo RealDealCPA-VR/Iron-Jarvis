@@ -24,15 +24,22 @@
  * row reads only the run's tool cards and phase (which the page already
  * holds), never its streamed text (S-02/S-03).
  *
- * WAVE C SLOT: the expanded body takes `children` between the hand-off reason
- * and the step rows. The next release puts the run's live plan checklist
- * there (plan.created / plan.step_started / plan.step_completed).
+ * WAVE C (v1.350.0, lane C1): a run that MAKES A PLAN (the decomposed lane)
+ * shows it as a quiet checklist (components/chat/PlanChecklist) in the
+ * expanded body, between the hand-off reason and the step rows, ticking off
+ * as plan.step_started / plan.step_completed arrive. Closed, the live row
+ * keeps "Step 2 of 4: …" and adds "1 of 4 done". The step rows below then
+ * leave out the plan's own progress lines ("Planned 4 steps", "Step 1 of 4
+ * done"): the checklist says them. The settled row opens to the plan as it
+ * ended (saved on the stamp by finalize). The body still takes `children`
+ * after the checklist.
  */
 
 import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -50,6 +57,8 @@ import {
   type AgentRunStamp,
   type HandOffLike,
 } from "@/lib/agentRun";
+import { PlanChecklist } from "@/components/chat/PlanChecklist";
+import { isPlanProgressLine, planCountWords, readSavedPlan, type PlanView } from "@/lib/planChecklist";
 
 /* ------------------------------------------------------------------- words */
 
@@ -215,9 +224,16 @@ export interface AgentRunLiveProps {
   phaseTitle?: string | null;
   /** The phase's detail ("step 2 of 4: draft the summary"). */
   phaseDetail?: string | null;
-  /** Wave C: the run's live plan checklist goes here. */
+  /** v1.350.0: the run's live plan checklist (components/chat/PlanChecklist
+   *  useLivePlan), or null for a run that made no plan (most never do). */
+  plan?: PlanView | null;
+  /** Anything else for the expanded body, after the checklist. */
   children?: ReactNode;
 }
+
+/** A phase detail naming the plan's step ("step 2 of 4: …"): the checklist
+ *  shows that step, so the running row need not say it again. */
+const STEP_DETAIL = /^step\s+\d+/i;
 
 /** The running row. Open by default, so the steps stay where they were. */
 export function AgentRunLive({
@@ -228,6 +244,7 @@ export function AgentRunLive({
   tools,
   phaseTitle,
   phaseDetail,
+  plan = null,
   children,
 }: AgentRunLiveProps) {
   const [open, setOpen] = useState(true);
@@ -236,6 +253,10 @@ export function AgentRunLive({
   const start = typeof since === "number" && Number.isFinite(since) ? since : mountedAt;
   const cards = tools ?? [];
   const lines = progress ?? [];
+  // With a checklist on screen, the plan's own progress lines ("Planned 4
+  // steps", "Step 1 of 4 done") are said by it: the step rows keep the rest.
+  const rowLines = plan ? lines.filter((l) => !isPlanProgressLine(l)) : lines;
+  const runningDetail = plan && phaseDetail && STEP_DETAIL.test(phaseDetail.trim()) ? null : phaseDetail || null;
 
   // While this row is on screen, the saved hand-off line for the same run
   // steps aside (HandOffLine): the row says the same thing and more.
@@ -268,6 +289,16 @@ export function AgentRunLive({
             <span className="ij-shimmer text-zinc-300">{name} is working</span>
             {current ? ` · ${current}` : ""}
           </span>
+          {/* v1.350.0: closed, the row still says how far the plan is ("1 of
+              4 done"); open, the checklist below says it step by step. */}
+          {!open && plan ? (
+            <>
+              <Dot />
+              <span data-testid="agent-run-plan-count" className="shrink-0 tabular-nums">
+                {planCountWords(plan)}
+              </span>
+            </>
+          ) : null}
           {headClock ? <RunClock since={start} /> : null}
           <Chevron open={open} />
         </button>
@@ -275,12 +306,13 @@ export function AgentRunLive({
       {open && (
         <div id={bodyId} data-testid="agent-run-body" className="grid gap-1.5">
           {why ? <Why text={why} /> : null}
+          {plan ? <PlanChecklist plan={plan} /> : null}
           {children}
           {/* Calm chat W1-5 (v1.326.0): the run's work as grey one-line rows,
               oldest first: the last few steps it finished, its tool calls,
               then the step it is on now (spinning, softly shimmering). */}
           <div data-testid="live-work" className="grid gap-1">
-            {lines.slice(1, 4).reverse().map((s, i) => (
+            {rowLines.slice(1, 4).reverse().map((s, i) => (
               <WorkRow key={`${i}-${s}`} icon={Check} title={s.replace(/…$/, "")} />
             ))}
             <LiveToolRows cards={cards} since={start} />
@@ -289,8 +321,8 @@ export function AgentRunLive({
             <WorkRow
               icon={Loader2}
               running
-              title={phaseTitle || (lines[0] ?? "Thinking…")}
-              detail={phaseDetail || null}
+              title={phaseTitle || (rowLines[0] ?? "Thinking…")}
+              detail={runningDetail}
             />
           </div>
         </div>
@@ -308,16 +340,20 @@ export interface AgentRunSettledProps {
   run: AgentRunStamp;
   /** The saved line's sentence ("Handing this to …: …."), shown open. */
   why?: string | null;
-  /** Wave C: the run's finished plan goes here. */
+  /** Anything else for the opened body, after the run's plan. */
   children?: ReactNode;
 }
 
-/** The row once the run is over: how long, how many steps, "Open run". */
+/** The row once the run is over: how long, how many steps, "Open run".
+ *  Opened, it says why the work was handed over and (v1.350.0) the plan the
+ *  run worked through, as it ended (the stamp's own copy, read from the
+ *  thread alone: nothing is fetched). */
 export function AgentRunSettled({ name, run, why, children }: AgentRunSettledProps) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const words = settledRunWords(name, run);
-  const canOpen = !!why || children != null;
+  const plan = useMemo(() => readSavedPlan(run.plan), [run.plan]);
+  const canOpen = !!why || !!plan || children != null;
   return (
     <div data-testid="agent-run-row" data-state="settled" className="grid gap-1.5">
       <div className="flex min-w-0 items-center gap-3">
@@ -355,6 +391,7 @@ export function AgentRunSettled({ name, run, why, children }: AgentRunSettledPro
       {open && canOpen && (
         <div id={bodyId} data-testid="agent-run-body" className="grid gap-1.5">
           {why ? <Why text={why} /> : null}
+          {plan ? <PlanChecklist plan={plan} /> : null}
           {children}
         </div>
       )}

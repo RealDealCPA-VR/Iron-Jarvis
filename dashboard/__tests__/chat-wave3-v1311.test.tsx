@@ -564,6 +564,12 @@ describe("the chat's event type list covers every type the page reads", () => {
     for (const m of src("components/chat/stepLabel.ts").matchAll(/case "([a-z_]+\.[a-z_.]+)"/g)) need.add(m[1]);
     for (const m of src("components/chat/ArtifactsRail.tsx").matchAll(/\.type\s*[!=]==\s*"([a-z_]+\.[a-z_.]+)"/g)) need.add(m[1]);
     for (const m of src("components/chat/BatchSuggestCard.tsx").matchAll(/\.type\s*[!=]==\s*"([a-z_]+\.[a-z_.]+)"/g)) need.add(m[1]);
+    // v1.350.0 (lane C1): the live plan checklist folds the page's plan.*
+    // events (lib/planChecklist, through useLivePlan on the page).
+    const planFold = new Set<string>();
+    for (const m of src("lib/planChecklist.ts").matchAll(/\.type\s*[!=]==\s*"([a-z_]+\.[a-z_.]+)"/g)) planFold.add(m[1]);
+    expect([...planFold].sort(), "the plan fold's event types").toEqual(["plan.created", "plan.step_completed", "plan.step_started"]);
+    for (const t of planFold) need.add(t);
     // Anti-vacuity: the derivation found the consumers the finding names.
     for (const t of ["chat.thread_updated", "agent_thread.updated", "remote.message", "agent.completed", "approval.requested", "approval.resolved", "action.reverted", "batch.file_done", "tool.executed", "plan.step_started"]) {
       expect(need.has(t), `derivation lost ${t}`).toBe(true);

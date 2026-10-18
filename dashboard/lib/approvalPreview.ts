@@ -29,6 +29,11 @@
  *     paths, including the real tools' `new_path` / `output_path`.
  *   - A swap's other settings (docx_edit's `count` / `match_case`, an edit's
  *     `replace_all`) are drawn under its diff: they decide how much changes.
+ *   - A PLAN TO APPROVE (v1.350.0, lane C1): the optional plan ask (setting
+ *     `plan_approval`) reaches the chat as an ordinary ask for the tool
+ *     `approve_plan` with args `{"steps": [goal, ...]}`; its steps are drawn
+ *     as a numbered list, each goal in full (approving a plan you cannot read
+ *     is not a decision), capped like a diff with "Show all N steps".
  * The parts keep the arguments' own order, so the block sits where its
  * argument sat (`path`, then the change).
  */
@@ -70,9 +75,35 @@ export type PreviewPart =
   | { type: "diff"; rows: PreviewRow[]; added: number; removed: number }
   | { type: "content"; lines: string[] }
   | { type: "command"; command: string }
-  | { type: "code"; code: string };
+  | { type: "code"; code: string }
+  | { type: "plan"; steps: string[]; more: number };
 
-export type PreviewKind = "edit" | "write" | "command" | "code" | "args";
+export type PreviewKind = "edit" | "write" | "command" | "code" | "plan" | "args";
+
+/** The plan ask's tool (lane C2's optional `plan_approval` ask). */
+export const PLAN_TOOL = "approve_plan";
+/** No real plan has more steps (agents/decompose.py MAX_PLAN_STEPS_CEILING);
+ *  a longer list is cut here, and the card says how many more there were. */
+export const PLAN_STEPS_MAX = 20;
+
+/** The plan ask's steps as goal texts (a goal string, or a `{goal}` record),
+ *  or null when `value` is not a list of them. Each goal keeps its words; a
+ *  run of spaces or line breaks reads as one space. */
+export function planSteps(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out: string[] = [];
+  for (const s of value) {
+    const raw =
+      typeof s === "string"
+        ? s
+        : s && typeof s === "object" && !Array.isArray(s) && typeof (s as Record<string, unknown>).goal === "string"
+          ? ((s as Record<string, unknown>).goal as string)
+          : null;
+    if (raw === null) return null;
+    out.push(raw.replace(/\s+/g, " ").trim());
+  }
+  return out;
+}
 
 export interface ApprovalPreviewModel {
   kind: PreviewKind;
@@ -332,6 +363,17 @@ export function approvalPreview(tool: string, args: Record<string, unknown>): Ap
     } else if (typeof args.code === "string") {
       special.set("code", { type: "code", code: args.code });
       kind = "code";
+    } else if (name === PLAN_TOOL) {
+      // v1.350.0: the plan the agent asks to follow, as a numbered list.
+      const steps = planSteps(args.steps);
+      if (steps) {
+        special.set("steps", {
+          type: "plan",
+          steps: steps.slice(0, PLAN_STEPS_MAX),
+          more: Math.max(0, steps.length - PLAN_STEPS_MAX),
+        });
+        kind = "plan";
+      }
     }
   }
 

@@ -23,6 +23,7 @@
  */
 
 import { normalizeIso } from "@/lib/format";
+import { readSavedPlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 
 /** What the settled row needs, stamped on the hand-off message by finalize. */
 export interface AgentRunStamp {
@@ -37,6 +38,11 @@ export interface AgentRunStamp {
    *  GET /sessions/{id}/result), the same number the run card under the reply
    *  shows, so the two never disagree. Null when not known. */
   steps: number | null;
+  /** v1.350.0 (lane C1): the plan the run worked through, as it ended (goal
+   *  + state per step, at most 20 steps of 200 characters; lib/planChecklist
+   *  SavedPlan). Absent for a run that made no plan, and on every stamp from
+   *  before v1.350.0, which read exactly as they did. */
+  plan?: SavedPlan;
 }
 
 /** The fields of a chat message this file reads; the page's ChatMessage
@@ -78,17 +84,22 @@ export function makeAgentRunStamp(input: {
   createdAt?: unknown;
   finishedAt?: unknown;
   steps?: unknown;
+  /** The run's checklist as it ended (settled), or nothing for no plan. */
+  plan?: PlanView | null;
 }): AgentRunStamp {
   const startedAt = stampMs(input.createdAt);
   let endedAt = stampMs(input.finishedAt);
   // An end before the start is a clock oddity: the length is then unknown,
   // and an unknown length is said as nothing rather than as a wrong one.
   if (startedAt !== null && endedAt !== null && endedAt < startedAt) endedAt = null;
+  const plan = toSavedPlan(input.plan);
   return {
     session: input.session,
     startedAt,
     endedAt,
     steps: countOrNull(input.steps),
+    // Only when there is one: a stamp with no plan keeps its old shape.
+    ...(plan ? { plan } : {}),
   };
 }
 
@@ -103,7 +114,16 @@ export function readAgentRun(m: unknown): AgentRunStamp | null {
   const startedAt = epochOrNull(r.startedAt);
   let endedAt = epochOrNull(r.endedAt);
   if (startedAt !== null && endedAt !== null && endedAt < startedAt) endedAt = null;
-  return { session: r.session, startedAt, endedAt, steps: countOrNull(r.steps) };
+  // v1.350.0: the saved plan, read as untrusted as the rest; a malformed one
+  // is no plan, and the stamp around it still reads.
+  const plan = toSavedPlan(readSavedPlan(r.plan));
+  return {
+    session: r.session,
+    startedAt,
+    endedAt,
+    steps: countOrNull(r.steps),
+    ...(plan ? { plan } : {}),
+  };
 }
 
 /** How long the run took in ms, or null when either end is unknown. */
@@ -144,17 +164,19 @@ export function stampHandOff<M extends HandOffLike>(
 /** finalize's one call (both of its paths, the composed reply and the
  *  daemon's appended line): stamp the hand-off waiting on `session` from the
  *  session row it read (`created_at`, `finished_at`) and the ledger's step
- *  count. The SAME array back when nothing waits on it (see stampHandOff). */
+ *  count, plus (v1.350.0) the run's settled plan checklist when it made one.
+ *  The SAME array back when nothing waits on it (see stampHandOff). */
 export function settleHandOff<M extends HandOffLike>(
   msgs: M[],
   session: string,
   row: { created_at?: unknown; finished_at?: unknown } | null | undefined,
   steps?: unknown,
+  plan?: PlanView | null,
 ): M[] {
   return stampHandOff(
     msgs,
     session,
-    makeAgentRunStamp({ session, createdAt: row?.created_at, finishedAt: row?.finished_at, steps }),
+    makeAgentRunStamp({ session, createdAt: row?.created_at, finishedAt: row?.finished_at, steps, plan }),
   );
 }
 
