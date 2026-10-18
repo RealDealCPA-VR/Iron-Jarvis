@@ -209,14 +209,39 @@ def split_url(url: Any) -> tuple[str, str]:
     return shown, (u if shown != u else "")
 
 
-def store_arg_secrets(secrets: Any, server: str, values: dict[int, str]) -> dict[str, str]:
+def _holds_other(secrets: Any, name: str, value: str) -> bool:
+    """True when vault row ``name`` already holds a value OTHER than ``value``
+    (a vault that cannot read says no: the row is written as before)."""
+    try:
+        held = secrets.get(name)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(held) and held != value
+
+
+def store_arg_secrets(
+    secrets: Any, server: str, values: dict[int, str], *, keep_others: bool = False
+) -> dict[str, str]:
     """Write each argument secret to the vault as ``mcp.<server>.arg.<i>`` and
     return the ``arg_secrets`` map (``str(i)`` -> vault name) the stored config
     carries. Raises whatever the vault raises (names only), like
-    :func:`store_env_secrets`."""
+    :func:`store_env_secrets`.
+
+    ``keep_others`` (``app_connect``, whose Undo restores the PRIOR config):
+    a row that already holds a DIFFERENT value is left alone and the value
+    goes under the next free name (``mcp.<server>.arg.<i>.2``, …). The prior
+    config's ``arg_secrets`` still name that row, so Undo launches the old
+    value it shows — overwritten, Undo showed the old host and launched the
+    new connection string (v1.351.0 review). The same value reuses its row;
+    deleting the pack removes them all (:func:`pack_vault_names`)."""
     out: dict[str, str] = {}
     for i in sorted(values):
-        name = vault_name(server, arg_key(i))
+        key = arg_key(i)
+        name = vault_name(server, key)
+        n = 2
+        while keep_others and n < 1000 and _holds_other(secrets, name, values[i]):
+            name = vault_name(server, f"{key}.{n}")
+            n += 1
         secrets.set(name, values[i], kind="api_key", description=f"MCP pack {server}: argument {int(i) + 1}")
         out[str(int(i))] = name
     return out

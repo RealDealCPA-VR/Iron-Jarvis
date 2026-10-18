@@ -1496,14 +1496,19 @@ class AppConnectTool(_RecordTool):
         # v1.351.0 (G12): a value typed into an ARGUMENT (Postgres's
         # `postgresql://me:password@host/db`) is kept in the vault like any
         # pack's argument secret: config.toml holds the masked text, the vault
-        # the real one, and the pack launches with the real one.
+        # the real one, and the pack launches with the real one. A reconnect
+        # with a DIFFERENT value never overwrites the row the prior config
+        # names (`keep_others`): Undo restores that config, and must launch
+        # the value it shows (v1.351.0 review).
         from ..mcp.secrets import split_args, store_arg_secrets
 
         cfg_args, arg_values = split_args(cfg_args)
         arg_secrets: dict[str, str] = {}
         if arg_values:
             try:
-                arg_secrets = await asyncio.to_thread(store_arg_secrets, self.platform.secrets, conn.id, arg_values)
+                arg_secrets = await asyncio.to_thread(
+                    store_arg_secrets, self.platform.secrets, conn.id, arg_values, keep_others=True
+                )
             except Exception as exc:  # noqa: BLE001 — names only, never the value
                 return ToolResult(
                     ok=False,

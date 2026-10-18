@@ -441,3 +441,56 @@ def test_a_split_header_before_a_bare_hidden_key_keeps_each_value_in_its_place(c
     assert real_args() == ["--api-key", API_KEY, "--header", "Authorization:", "Bearer", TOKEN]
     text = _toml_text(platform)
     assert TOKEN not in text and API_KEY not in text
+
+
+# --------------------------------------------------------------------------- #
+# Review (v1.351.0, round 3): Undo of an app_connect that CHANGED a vaulted
+# argument. The undo record is the PRIOR config, whose `arg_secrets` name its
+# vault row; the reconnect used to overwrite that row, so Undo showed the old
+# host (the masked text) and launched the NEW connection string.
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_undo_of_a_postgres_reconnect_launches_the_connection_it_shows(tmp_path, monkeypatch):
+    from iron_jarvis.settings import records
+    from tests.test_chat_approvals_v1187 import _drive_stream
+    from tests.test_settings_chat_tools_v1321 import _body, _calls_stream, _undo_card
+    from tests.test_settings_records_v1321 import _approve_all, _card
+
+    monkeypatch.setattr(records, "load_app", lambda p, cfg: 0)  # no npx launch
+    old = f"postgresql://me:{DB_PASSWORD}@old-host:5432/books"
+    new = "postgresql://me:NEWpw-LANE1E-review3@new-host:5432/books"
+    app = create_app(str(tmp_path))
+    p = app.state.platform
+
+    def launched() -> tuple[str, str]:
+        entry = records.snap_app(p, "postgres")
+        real = _build_transport(dict(entry, command=sys.executable), p.secrets.get).args[-1]
+        return entry["args"][-1], real
+
+    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": old}})])
+    await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
+    assert launched() == ("postgresql://me:***@old-host:5432/books", old)
+
+    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": new}})])
+    frames = await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
+    assert launched() == ("postgresql://me:***@new-host:5432/books", new)
+
+    # Undo (the card's own button, the real route): what it SHOWS is what it
+    # LAUNCHES — the old connection, not the new one under the old words.
+    await _undo_card(app, _card(frames, "App connected"))
+    assert launched() == ("postgresql://me:***@old-host:5432/books", old)
+    text = _toml_text(p)
+    assert DB_PASSWORD not in text and "NEWpw-LANE1E-review3" not in text
+
+    # A reconnect with the SAME string reuses its row (no pile of copies).
+    before = {r["name"] for r in p.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")}
+    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": old}})])
+    await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
+    after = {r["name"] for r in p.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")}
+    assert after == before and launched()[1] == old
+
+    # Removing the pack removes every argument row it ever had.
+    from fastapi.testclient import TestClient as _TC
+
+    assert _TC(app).delete("/mcp/servers/postgres").status_code == 200
+    assert not [r for r in p.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")]
