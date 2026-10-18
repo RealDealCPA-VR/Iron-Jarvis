@@ -3547,6 +3547,43 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **A step can be opened; a helper agent is one row** (v1.349.0, polish
+  wave B). Every FINISHED tool_call frame (both /chat/stream sites, refused
+  calls too, and `RunSink.tool_finished` from the runtime) carries
+  `detail {input ≤ 300, output ≤ 1500}` from `chat_turn.step_detail`:
+  the redacted args as sorted JSON; the output unfenced (`_step_unfenced`,
+  lenient for a runtime-cut fence) and MASKED BEFORE THE CUT; the runtime
+  removes the loop's repeat note only on the step it appended it (rsplit,
+  gated on `fail_streaks == _BREAKER_NOTE_AT`). The frame's old `output` is
+  unchanged (pinned) and POST /chat has no detail (its keys are pinned).
+  BOTH `step_detail` and `prior_tool_result_entry` mask through
+  `_masked_head` — only `MASK_WINDOW_CHARS` (16,000), never the whole output:
+  they run ON THE LOOP per call and a whole-output pass cost ~130 ms/MB twice
+  (`tests/test_step_detail_bounded_v1349.py` spies `mask`). `detections/
+  redact` rules 1 and 3 are LINEAR now (the `\b[\w.-]*` prefix made a long
+  `a.a.a…` run quadratic — 50 KB took 61 s on the loop); old and new give
+  the same output on fuzzed strings (`tests/test_redact_linear_v1349.py`),
+  and the dashboard's `DETAIL_MASK_RULES` are kept equal by that file. The
+  dashboard saves `step.detail` LAST (after `target`), through
+  `lib/stepDetail` — the ONE reader on decode, save and read-back (masked
+  again, cut by code points, ≤ 40 steps / 30,000 chars per message); never
+  `card.output`. `WorkRow expand` makes a row a disclosure
+  (`StepDetailPanel`). The frame contract is one fixture
+  (`dashboard/__tests__/fixtures/step-detail-frames-v1349.json`; regenerate
+  with `IJ_REGEN_STEP_FRAMES=1`). HELPER-AGENT ROW: `components/chat/
+  AgentRunRow.tsx` + `lib/agentRun.ts`; the `agentRun` stamp on the hand-off
+  message is written by `settleHandOff` on BOTH finalize paths (the daemon
+  path saves the adopted array); `HandOffLine` leaves a `data-handoff-hidden`
+  marker the messages.map wrapper hides on (`has-[[data-handoff-hidden]]:
+  hidden`, Chromium `:has`). finalize checks `awaitingIdRef` after EVERY
+  read before it writes `messagesRef` — the ledger read and the outer catch
+  too (re-review 20ae618c: a user who opened another chat while
+  GET /sessions/{id}/result was out got the agent's reply composed INTO
+  that chat). A stopped hand-off keeps its old line (no session row to
+  settle from). Pins: `step-detail-v1349`, `agent-run-row-v1349`,
+  `step-detail-contract-v1349`, `rereview-wave-b-v1349` (dashboard);
+  `test_step_detail_v1349`, `test_step_detail_contract_v1349`,
+  `test_redact_linear_v1349`, `test_step_detail_bounded_v1349`.
 - **The chat shows its work: ideas from agent-elements, never its boxes**
   (v1.348.0, polish wave A; 21st.dev agent-elements is MIT, IDEAS only —
   no component installed; every addition is a quiet row in the calm style).

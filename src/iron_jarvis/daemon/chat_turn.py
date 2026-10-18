@@ -2188,12 +2188,31 @@ def _unfenced(text: str) -> str:
     return m.group(1) if m else text
 
 
+#: How much of a tool's args / output is MASKED before the display cut
+#: (v1.349.0). ``mask`` is linear (tests/test_redact_linear_v1349.py) but a
+#: tool can answer megabytes, and these helpers run on the event loop in the
+#: /chat/stream lane — a whole-output pass cost ~130 ms per MB, twice per
+#: call. Only the first few hundred characters are ever SHOWN, so masking a
+#: window this much larger than any cap keeps "masked BEFORE the cut" true
+#: for everything shown (a secret that starts inside the shown head is whole
+#: inside the window) and bounds the work. The agent runtime bounds its
+#: copy the same way (``_MAX_TOOL_CONTEXT_CHARS``).
+MASK_WINDOW_CHARS = 16_000
+
+
+def _masked_head(text: str, cap: int) -> str:
+    """The first *cap* characters of *text* after masking — masking only
+    :data:`MASK_WINDOW_CHARS` of it (the window is far wider than any cap)."""
+    from ..detections.redact import mask
+
+    return str(mask(text[:MASK_WINDOW_CHARS]))[:cap]
+
+
 def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: object) -> dict[str, Any]:
     """One ``prior_tool_results`` row for a call that settled: the tool, the
     redacted args as one JSON line (masked, cut to the args cap), whether it
     ran, and the masked head of its output (the fence stripped; masked BEFORE
     the cut so a cut can never leave half a secret). Never raises."""
-    from ..detections.redact import mask
     from .schemas import PRIOR_RESULT_ARGS_CHARS, PRIOR_RESULT_OUTPUT_CHARS
 
     try:
@@ -2202,9 +2221,9 @@ def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: obj
         args_text = repr(safe_args)
     return {
         "tool": str(name),
-        "args_summary": str(mask(args_text))[:PRIOR_RESULT_ARGS_CHARS],
+        "args_summary": _masked_head(args_text, PRIOR_RESULT_ARGS_CHARS),
         "ok": bool(ok),
-        "output_head": str(mask(_unfenced(str(content or ""))))[:PRIOR_RESULT_OUTPUT_CHARS],
+        "output_head": _masked_head(_unfenced(str(content or "")), PRIOR_RESULT_OUTPUT_CHARS),
     }
 
 
@@ -2263,7 +2282,6 @@ def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]
     *name* keeps the call sites shaped like that helper's; the frame already
     names the tool, so the detail does not repeat it. Never raises: a
     display must never fail the turn."""
-    from ..detections.redact import mask
 
     try:
         if safe_args is None or (isinstance(safe_args, (str, dict, list, tuple)) and not safe_args):
@@ -2274,8 +2292,8 @@ def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]
             except Exception:  # noqa: BLE001
                 args_text = repr(safe_args)
         return {
-            "input": str(mask(args_text))[:STEP_DETAIL_INPUT_CHARS],
-            "output": str(mask(_step_unfenced(str(content or ""))))[:STEP_DETAIL_OUTPUT_CHARS],
+            "input": _masked_head(args_text, STEP_DETAIL_INPUT_CHARS),
+            "output": _masked_head(_step_unfenced(str(content or "")), STEP_DETAIL_OUTPUT_CHARS),
         }
     except Exception:  # noqa: BLE001 — a display must never fail the turn
         return {"input": "", "output": ""}

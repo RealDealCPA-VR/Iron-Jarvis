@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.348.0 (2026-10-04).*
+holds itself to. Current as of v1.349.0 (2026-10-04).*
 
 ---
 
@@ -1838,6 +1838,23 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Open a step to see what it did; one row for a helper agent (v1.349.0)
+
+- **Every step opens.** The grey rows under a reply ("Read harbor.xlsx",
+  "Ran a command") now open with a click, or Enter, to show what the step
+  was given and what came back. A command shows as one terminal line, other
+  steps as short "name: value" lines, and the result in plain text with
+  "Show all" for long output. This works in chats you reopen later and in a
+  Build pane's chat too. Keys and passwords in either are replaced with
+  `***` before anything is saved. Steps saved by earlier versions look the
+  same as before.
+- **One row for a helper agent.** When chat hands work to an agent, the
+  "Handing this to …" line and the separate live bubble are now one quiet
+  row: "Builder is working · Step 2 of 4: … · 1:24", with a ticking clock.
+  Open it for the steps. When the agent finishes, the row reads "Builder
+  worked for 2 min 5 s · 6 steps" with **Open run**, and its answer
+  appears below it as before.
 
 ## The chat shows its work more clearly (v1.348.0)
 
