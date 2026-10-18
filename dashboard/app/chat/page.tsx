@@ -345,7 +345,9 @@ import {
   readAgentRun,
   settleHandOff,
   stampMs,
+  type AgentRunStamp,
 } from "@/lib/agentRun";
+import type { StepDetail } from "@/lib/stepDetail";
 import { branchInfo, forkTail, switchBranch, type BranchSet } from "@/lib/branches";
 import { BranchPicker } from "@/components/chat/BranchPicker";
 import { REPLY_ACTION_BTN, REPLY_ACTION_SQUARE } from "@/components/chat/replyActions";
@@ -551,6 +553,9 @@ interface ChatMessage {
    *  "your invoice-chaser agent") — only set when a NON-default roster target
    *  was actually chosen (v1.139.0), so the bubble names the specialist. */
   escalatedTo?: string;
+  /** v1.349.0: how the hand-off's run went (lib/agentRun AgentRunStamp),
+   *  stamped by finalize and read back only through `readAgentRun`. */
+  agentRun?: AgentRunStamp;
   /** Display names of files attached to this (user) message — footer chips. */
   attachmentNames?: string[];
   /** Uploaded paths of those attachments, so a Regenerate can re-ground on them
@@ -653,8 +658,10 @@ interface ChatMessage {
    *  the reply offers Continue. */
   truncated?: boolean;
   /** v1.323.0: the turn's tool steps with how long each took (receipt).
-   *  v1.329.0: each may carry a short safe `target` (lib/workTarget), last. */
-  steps?: { name: string; ok: boolean | null; ms: number | null; target?: string }[];
+   *  v1.329.0: each may carry a short safe `target` (lib/workTarget), last.
+   *  v1.349.0: then the daemon's masked `detail` (lib/stepDetail), which the
+   *  step's work row opens to. */
+  steps?: { name: string; ok: boolean | null; ms: number | null; target?: string; detail?: StepDetail }[];
   /** v1.323.0: when the turn started, said its first word, and finished (ms
    *  epoch) — the receipt's speed line. */
   timing?: { startedAt: number; firstTokenAt: number | null; endedAt: number };
@@ -11585,11 +11592,18 @@ export default function ChatPage() {
                         // no box (`contents`) — so without this the replies
                         // and your bubble spread across the whole window. A
                         // hidden Continue turn renders nothing, so it keeps
-                        // no box (an empty one would add a gap).
+                        // no box (an empty one would add a gap). v1.349.0: so
+                        // does a hand-off whose saved line stepped aside for
+                        // the live helper-agent row (HandOffLine leaves only
+                        // its hidden `data-handoff-hidden` marker).
                         <div
                           key={i}
                           data-msg-index={i}
-                          className={m.continuation ? "contents" : "mx-auto w-full max-w-[760px]"}
+                          className={
+                            m.continuation
+                              ? "contents"
+                              : "mx-auto w-full max-w-[760px] has-[[data-handoff-hidden]]:hidden"
+                          }
                         >
                         <MessageRow
                           m={m}

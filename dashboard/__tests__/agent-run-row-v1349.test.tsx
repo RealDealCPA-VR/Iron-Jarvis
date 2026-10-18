@@ -368,6 +368,26 @@ describe("the stamp finalize saves on the hand-off message", () => {
     ).toBeNull();
   });
 
+  it("(integrate) reads a zone-less stamp as UTC whatever zone this machine is in", () => {
+    // The test above can only catch a stamp read as LOCAL time on a machine
+    // whose zone is not UTC; a UTC CI runner let that mutation through. The
+    // zone is forced here (Node re-reads TZ at runtime), so the pin bites on
+    // any runner.
+    const before = process.env.TZ;
+    process.env.TZ = "Asia/Tokyo";
+    try {
+      // anti-vacuity: the zone really changed for Date in this process
+      expect(Date.parse("2026-10-17T10:00:00")).toBe(Date.UTC(2026, 9, 17, 1, 0, 0));
+      expect(stampMs("2026-10-17T10:00:00")).toBe(Date.UTC(2026, 9, 17, 10, 0, 0));
+      expect(stampMs("2026-10-17 10:00:00.250000")).toBe(Date.UTC(2026, 9, 17, 10, 0, 0, 250));
+      const s = makeAgentRunStamp({ session: "s1", createdAt: "2026-10-17T10:00:00", finishedAt: "2026-10-17T10:02:05" });
+      expect([s.startedAt, s.endedAt]).toEqual([Date.UTC(2026, 9, 17, 10, 0, 0), Date.UTC(2026, 9, 17, 10, 2, 5)]);
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+  });
+
   it("stamps ONLY the hand-off message waiting on that run, and leaves every other message object as it was", () => {
     type Line = HandOffLike & { role: string; content: string };
     const user: Line = { role: "user", content: "q" };
@@ -556,6 +576,12 @@ describe("the saved line steps aside only for the live row of the SAME run", () 
     // Mounted in the same commit as the live row: already gone.
     expect(screen.queryByText(SENTENCE)).toBeNull();
     expect(liveRuns.has("s1")).toBe(true);
+    // (integrate) It leaves one HIDDEN marker, which the transcript's message
+    // wrapper keys its own hiding on (no empty item in the gap-4 column).
+    const marker = document.querySelector("[data-handoff-hidden]");
+    expect(marker).not.toBeNull();
+    expect(marker!.hasAttribute("hidden")).toBe(true);
+    expect(marker!.textContent).toBe("");
     rerender(
       <HandOffLine session="s1">
         <span>{SENTENCE}</span>
@@ -563,6 +589,7 @@ describe("the saved line steps aside only for the live row of the SAME run", () 
     );
     expect(screen.getByText(SENTENCE)).toBeTruthy();
     expect(liveRuns.has("s1")).toBe(false);
+    expect(document.querySelector("[data-handoff-hidden]")).toBeNull();
   });
 
   it("a line waiting on ANOTHER run, or on nothing, keeps showing", () => {
@@ -646,6 +673,13 @@ describe("on the chat page", () => {
     const said = screen.getAllByText(SENTENCE);
     expect(said).toHaveLength(1);
     expect(row.contains(said[0])).toBe(true);
+    // (integrate) The hand-off's own message wrapper takes no room meanwhile:
+    // it holds only the hidden marker and hides itself on it, so the live row
+    // sits where a plain agent turn's would (no extra 16 px gap).
+    const wrapper = document.querySelector('[data-msg-index="1"]')!;
+    expect(wrapper.querySelector("[data-handoff-hidden]")).not.toBeNull();
+    expect(classes(wrapper)).toContain("has-[[data-handoff-hidden]]:hidden");
+    expect(wrapper.textContent).toBe("");
     // The agent's live words stay where they were, below the row, and stay
     // when the row is closed.
     expect(screen.getByText("Drafting the summary now")).toBeTruthy();
@@ -780,5 +814,7 @@ describe("on the chat page", () => {
     render(<ChatPage />);
     expect(await screen.findByText(SENTENCE)).toBeTruthy();
     expect(screen.queryByTestId("agent-run-row")).toBeNull();
+    // (integrate) A line that shows leaves no marker, so its wrapper shows.
+    expect(document.querySelector("[data-handoff-hidden]")).toBeNull();
   });
 });

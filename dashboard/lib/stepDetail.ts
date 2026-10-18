@@ -61,19 +61,26 @@ const MASK = "***";
  * daemon this changes nothing (every rule leaves "***" alone). It is the
  * belt to that brace — a detail is SAVED with the chat, and a secret that
  * slipped through once would sit in the thread file for good.
+ *
+ * LOCK-STEP with redact.py: tests/test_redact_linear_v1349.py reads this
+ * array and fails when a pattern or its case rule differs from the daemon's.
+ * v1.349.0: the key=value rule has no `\b[\w.-]*` prefix and the URL rule
+ * starts only where a run of scheme characters starts — both used to rescan a
+ * long `a.a.a…` run from every word boundary in it (quadratic; a 1,500-char
+ * output cost ~200 ms per render of a 40-step message). Same output, linear.
  */
-const RULES: ReadonlyArray<readonly [RegExp, string]> = [
+export const DETAIL_MASK_RULES: ReadonlyArray<readonly [RegExp, string]> = [
   // Authorization: Bearer <v> / Basic <v> / Token <v> / <v>
   [/(\bauthorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token)\s+)?)[^\s"',;]+/gi, `$1${MASK}`],
   // key = value / "key": "value" for secret-named keys (refresh_token=…, pwd:…)
   [
-    /(\b[\w.-]*(?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+/gi,
+    /((?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+/gi,
     `$1${MASK}`,
   ],
   // curl -u user:pass / --user user:pass
   [/((?:^|\s)(?:-u|--user)[\s=]+["']?[^\s:"']+:)[^\s"']+/g, `$1${MASK}`],
   // scheme://user:pass@host
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)[^@\s/]+(@)/gi, `$1${MASK}$2`],
+  [/((?<![a-z0-9+.-])(?=[a-z0-9+.-]*?\b[a-z])[a-z0-9+.-]*:\/\/[^/\s:@]+:)[^@\s/]+(@)/gi, `$1${MASK}$2`],
   // known token shapes
   [/\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-ant-|sk-|xox[abprs]-)[A-Za-z0-9_-]{6,}/g, `$1${MASK}`],
   [/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, `$1${MASK}`],
@@ -83,16 +90,36 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
  *  "Authorization: Bearer ***", "sk-ant-***"). */
 export function maskDetailText(text: string): string {
   let out = text;
-  for (const [rx, repl] of RULES) out = out.replace(rx, repl);
+  for (const [rx, repl] of DETAIL_MASK_RULES) out = out.replace(rx, repl);
   return out;
 }
 
 /* --------------------------------------------------------------- the reader */
 
+/**
+ * The first `max` CHARACTERS of *s*, counted the daemon's way (Python counts
+ * code points; a JS string counts UTF-16 units, so an emoji is two). A plain
+ * `slice` cut an emoji-heavy output short and could end it on half a
+ * surrogate pair. Never longer than `slice(0, max * 2)`.
+ */
+export function cutCodePoints(s: string, max: number): string {
+  if (s.length <= max) return s; // fewer units than `max` = fewer code points
+  let i = 0;
+  let n = 0;
+  while (i < s.length && n < max) {
+    const c = s.charCodeAt(i);
+    const pair =
+      c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00;
+    i += pair ? 2 : 1;
+    n += 1;
+  }
+  return s.slice(0, i);
+}
+
 function field(v: unknown, max: number): string {
   if (typeof v !== "string" || !v) return "";
   // Masked BEFORE the cut, so a cut can never leave half a secret unmasked.
-  return maskDetailText(v).slice(0, max);
+  return cutCodePoints(maskDetailText(v), max);
 }
 
 /**

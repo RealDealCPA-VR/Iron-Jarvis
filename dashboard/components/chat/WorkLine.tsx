@@ -48,7 +48,7 @@
  * detail (an older chat, a running call) is the same plain row as before.
  */
 
-import { memo, useId, useState, type ReactNode } from "react";
+import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -181,7 +181,11 @@ export function workDuration(timing: ReceiptTiming | null | undefined): string |
  *   "Worked for 6.0 s · thought for 4 s"   (thinking only)
  */
 export function workSummary(input: WorkInput): string | null {
-  const steps = workSteps(input);
+  return summaryOf(workSteps(input), input);
+}
+
+/** workSummary's words from steps already read (WorkLine reads them once). */
+function summaryOf(steps: ReceiptStep[], input: WorkInput): string | null {
   const thought = typeof input.thinking === "string" && input.thinking.trim().length > 0;
   if (!steps.length && !thought) return null;
   const counts = workCounts(steps);
@@ -532,7 +536,9 @@ function ToolRow({ card }: { card: ToolCard }) {
   const failed = !running && card.ok === false;
   // v1.349.0: a FINISHED call with the daemon's masked detail opens to show
   // it (read through the one reader again: a card may come from anywhere).
-  const stepDetail = running ? null : cleanStepDetail(card.detail);
+  // (Read once per card change, not on every render: the live rows
+  // re-render as frames arrive.)
+  const stepDetail = useMemo(() => (running ? null : cleanStepDetail(card.detail)), [running, card.detail]);
   const kind = toolKind(card.name);
   const w = STEP_WORDS[kind];
   const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
@@ -809,9 +815,13 @@ function StepRow({ step }: { step: ReceiptStep }) {
 export function WorkLine(props: WorkInput) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const summary = workSummary(props);
+  // v1.349.0 (integrate): the steps are read ONCE per change of what they are
+  // read from — workSteps masks every saved detail again (up to 40 a
+  // message), and this line used to read them twice on every render.
+  const { steps: savedSteps, toolsUsed } = props;
+  const steps = useMemo(() => workSteps({ steps: savedSteps, toolsUsed }), [savedSteps, toolsUsed]);
+  const summary = summaryOf(steps, props);
   if (!summary) return null;
-  const steps = workSteps(props);
   const thinking = typeof props.thinking === "string" ? props.thinking : "";
   return (
     <div data-testid="work-line" className="mb-2">

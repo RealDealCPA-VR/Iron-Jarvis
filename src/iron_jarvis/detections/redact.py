@@ -29,9 +29,16 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1" + MASK,
     ),
     # key = value / "key": "value" for secret-named keys (refresh_token=…, pwd:…)
+    #
+    # v1.349.0: no `\b[\w.-]*` prefix. It only moved where a match STARTS (a
+    # keyword followed by `=`/`:` always sits at, or after, a word boundary in
+    # its own run), the replacement keeps that prefix as text either way, and
+    # it made every start inside a long `a.a.a…` / base64url run rescan the
+    # run: QUADRATIC (50 KB took 61 s on the event loop). Same output on
+    # 200,000 fuzzed strings; linear (tests/test_redact_linear_v1349.py).
     (
         re.compile(
-            r"""(\b[\w.-]*(?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+""",
+            r"""((?:api[_-]?key|access[_-]?key|client[_-]?secret|token|password|passwd|secret|pwd)["']?\s*[=:]\s*["']?)(?![*]{3})[^\s"'&,;}]+""",
             re.IGNORECASE,
         ),
         r"\1" + MASK,
@@ -42,7 +49,21 @@ _RULES: tuple[tuple[re.Pattern[str], str], ...] = (
         r"\1" + MASK,
     ),
     # scheme://user:pass@host
-    (re.compile(r"""(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+(@)""", re.IGNORECASE), r"\1" + MASK + r"\2"),
+    #
+    # v1.349.0: a match starts only where a run of scheme characters STARTS
+    # (the lookbehind), and the lookahead asks for the old rule's own start (a
+    # letter at a word boundary) inside that run. The old `\b[a-z]…` start
+    # retried at every boundary of a long `a.a.a…` run and rescanned it each
+    # time (quadratic); this reads each run once. Group 1 is kept as text, so
+    # where the match starts never shows: same output on 200,000 fuzzed
+    # strings (tests/test_redact_linear_v1349.py).
+    (
+        re.compile(
+            r"""((?<![a-z0-9+.-])(?=[a-z0-9+.-]*?\b[a-z])[a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+(@)""",
+            re.IGNORECASE,
+        ),
+        r"\1" + MASK + r"\2",
+    ),
     # known token shapes
     (
         re.compile(r"""\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|sk-ant-|sk-|xox[abprs]-)[A-Za-z0-9_\-]{6,}"""),

@@ -129,6 +129,13 @@ function useRunIsLive(session: string | null | undefined): boolean {
  * while a live row for the same run is on screen, which says the same thing
  * and more. A message that waits on nothing (or on a run this window is not
  * showing: another window's hand-off) always shows its line.
+ *
+ * While it steps aside it leaves ONE hidden marker (`data-handoff-hidden`),
+ * so the transcript's message wrapper can hide itself too
+ * (`has-[[data-handoff-hidden]]:hidden` on the chat page's messages.map
+ * wrapper): an EMPTY wrapper is still an item in the transcript's gap-4
+ * column, and the live row sat 16 px lower than a plain agent turn's, then
+ * jumped up when the run settled (v1.349.0 integrate).
  */
 export function HandOffLine({
   session,
@@ -138,7 +145,7 @@ export function HandOffLine({
   children: ReactNode;
 }) {
   const isLive = useRunIsLive(session ?? null);
-  return isLive ? null : <>{children}</>;
+  return isLive ? <span data-handoff-hidden="" hidden /> : <>{children}</>;
 }
 
 /* -------------------------------------------------------------- the pieces */
