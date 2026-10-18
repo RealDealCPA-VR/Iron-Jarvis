@@ -349,10 +349,44 @@ export function statusWord(s: MemberStatus): string {
   }
 }
 
+/** v1.351.0 (G09): the bell's own words for a finish that fell short
+ *  (components/NotificationBell: "Your objective finished, but part of it
+ *  failed"), so the screen and the bell say the same thing. */
+export const PART_FAILED_HEADLINE = "Finished, but part of it failed";
+export const NEEDS_YOU_HEADLINE = "Finished, but something needs you";
+
+/** v1.351.0 (G09): how a FINISHED mission ended, in the bell's terms:
+ *  "needs_you" (an ask went unanswered), "part_failed" (the ledger's
+ *  completed_with_failures, or its worklist kept failed items), "done", or
+ *  null while it is not finished. needs_you wins, as it does in the bell. */
+export function missionFinish(v: MissionView): "done" | "needs_you" | "part_failed" | null {
+  if (v.session.status !== "completed") return null;
+  const outcome = v.session.outcome;
+  if (outcome === "needs_you") return "needs_you";
+  if (outcome === "completed_with_failures") return "part_failed";
+  // A worklist that kept failed items is part of the objective that did not
+  // get done, whatever the ledger's verdict on the coordinator's own calls.
+  const failedItems = v.deliverable?.worklist?.failed ?? 0;
+  if (typeof failedItems === "number" && failedItems > 0) return "part_failed";
+  return "done";
+}
+
+/** v1.351.0 (G09): the headline's tone. A finish that fell short or needs
+ *  the user reads in the warn token, matching the bell's warning mark. */
+export function missionHeadlineWarn(v: MissionView): boolean {
+  const f = missionFinish(v);
+  return f === "needs_you" || f === "part_failed";
+}
+
 /** The one-line headline for the whole mission. */
 export function missionHeadline(v: MissionView): string {
   const st = v.session.status;
-  if (st === "completed") return v.session.outcome === "needs_you" ? "Finished, but something needs you" : "Finished";
+  if (st === "completed") {
+    const f = missionFinish(v);
+    if (f === "needs_you") return NEEDS_YOU_HEADLINE;
+    if (f === "part_failed") return PART_FAILED_HEADLINE;
+    return "Finished";
+  }
   if (st === "failed") return "Could not finish";
   if (st === "cancelled") return "Stopped";
   if (st === "queued") return "Queued, waiting for a free slot";

@@ -145,7 +145,8 @@ def test_directory_row_with_no_record_is_no_tools_with_empty_why_fields(tmp_path
     row = {r["id"]: r for r in connectors._user_mcp_connectors(platform)}["quiet"]
     assert row["status"] == "no_tools"
     assert row["reason"] == "" and row["fix"] == "" and row["stderr_tail"] == ""
-    assert "0 tools are loaded" in row["detail"]
+    # v1.351.0 (G08): plain words naming the card's own Test and Retry.
+    assert "isn't answering yet" in row["detail"]
     assert "Retry" in row["detail"]
 
 

@@ -30,6 +30,20 @@ def _server_cfg(platform, connector_id: str) -> "dict | None":
     return next((s for s in _mcp_servers(platform) if s.get("name") == connector_id), None)
 
 
+#: v1.351.0 (G08): the plain words for a saved pack with ZERO tools and no
+#: load record saying why, and for a connect whose pack did not start. The
+#: Directory card shows them beside its own Test and Retry, and Retry reloads
+#: the pack in place: they used to say "restart the daemon", which was never
+#: the fix a user could reach from that card.
+NO_TOOLS_DETAIL = "Saved, but it isn't answering yet. Press Test, then Retry."
+DID_NOT_START_NOTE = "Saved, but it didn't start. Press Retry."
+#: A saved memory source that is not live: it loads at start-up (no Retry).
+MEMORY_NOT_LIVE_NOTE = (
+    "Saved, but it isn't live yet. Check its settings on the Memory page, "
+    "then restart Iron Jarvis."
+)
+
+
 def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str, Any]:
     """The honest states of an MCP connector (v1.172.0; ``failed`` v1.342.0).
 
@@ -75,15 +89,12 @@ def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str
                 "fix": str(record.get("fix") or ""),
                 "stderr_tail": str(record.get("stderr_tail") or ""),
             }
+        # v1.351.0 (G08): the card under this detail carries Test AND Retry,
+        # and Retry reloads the pack in place — "restart" was never the fix.
         return {
             "connected": True,
             "status": "no_tools",
-            "detail": (
-                "connected, but 0 tools are loaded — open its row on Settings → "
-                "Tools and press Retry there. If it still loads nothing after a "
-                "restart, its command failed to launch (check the command and "
-                "that npx/uvx resolve)."
-            ),
+            "detail": NO_TOOLS_DETAIL,
             "reason": "",
             "fix": "",
             "stderr_tail": "",
@@ -201,8 +212,9 @@ def _memory_connectors(platform) -> list[dict[str, Any]]:
             "status": "connected" if connected else "disconnected",
             "tools_loaded": 0,
             "account": "",
-            "note": None if connected else
-            "saved but not live — check its config, then restart the daemon",
+            # v1.351.0 (G08): plain words, no "daemon". A memory source is
+            # loaded at start-up and has no Retry, so a restart IS its fix.
+            "note": None if connected else MEMORY_NOT_LIVE_NOTE,
         })
     return out
 
@@ -299,7 +311,7 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "connector": connector.id,
         "tools_loaded": loaded,
-        "note": None if loaded else "saved — restart the daemon (or check the command is installed) to load its tools",
+        "note": None if loaded else DID_NOT_START_NOTE,
     }
 
 
@@ -385,7 +397,7 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         if _memory_record(platform, connector_id) is not None:
             conn = platform.ltm.get(connector_id)
             if conn is None:
-                return {"ok": False, "error": "saved but not live — restart the daemon"}
+                return {"ok": False, "error": MEMORY_NOT_LIVE_NOTE}
             try:
                 conn.search("memory", k=1)
             except Exception as exc:  # noqa: BLE001

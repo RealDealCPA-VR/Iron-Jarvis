@@ -46,6 +46,11 @@
  * border, no tint. Both the folded "Worked for" rows (a reopened chat too:
  * the detail is saved with the step) and the live rows open. A step with no
  * detail (an older chat, a running call) is the same plain row as before.
+ *
+ * v1.351.0 (G07): the folded line tells the truth about failures. A failed
+ * step counts only as failed ("read 1 web page, 7 failed", never "read 8 web
+ * pages"), and a turn with any failed step folds under a warning triangle in
+ * the theme's warn tone instead of the check.
  */
 
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
@@ -62,6 +67,7 @@ import {
   Search,
   SquareTerminal,
   Timer,
+  TriangleAlert,
   Wrench,
   X,
   type LucideIcon,
@@ -71,7 +77,7 @@ import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
 import { elapsedWords, useNow } from "@/components/chat/TurnClock";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
-import { STEP_WORDS, rowSubject, stepCounts, stepPhrase } from "@/lib/stepWords";
+import { STEP_WORDS, failedSteps, failedWords, rowSubject, stepCounts, stepPhrase } from "@/lib/stepWords";
 import {
   STEP_OUTPUT_LINES,
   capStepDetails,
@@ -823,6 +829,12 @@ export function WorkLine(props: WorkInput) {
   const summary = summaryOf(steps, props);
   if (!summary) return null;
   const thinking = typeof props.thinking === "string" ? props.thinking : "";
+  // v1.351.0 (G07): a turn where any step failed folds under a warning mark,
+  // never a check, and its "N failed" piece carries the same tone. The row
+  // stays the same quiet line; only the theme's warn token marks it.
+  const failed = failedSteps(steps);
+  const failPiece = failed ? failedWords(failed) : "";
+  const split = failPiece && summary.endsWith(failPiece) ? summary.length - failPiece.length : -1;
   return (
     <div data-testid="work-line" className="mb-2">
       <button
@@ -830,11 +842,30 @@ export function WorkLine(props: WorkInput) {
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
+        data-outcome={failed ? "some-failed" : "ok"}
         className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-left text-[13px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
       >
-        <Check size={14} aria-hidden="true" className="shrink-0" />
+        {failed ? (
+          <TriangleAlert
+            size={14}
+            aria-hidden="true"
+            data-testid="work-line-warn"
+            className="shrink-0 text-tone-warn"
+          />
+        ) : (
+          <Check size={14} aria-hidden="true" data-testid="work-line-check" className="shrink-0" />
+        )}
         <span data-testid="work-summary" className="min-w-0 truncate">
-          {summary}
+          {split >= 0 ? (
+            <>
+              {summary.slice(0, split)}
+              <span data-testid="work-summary-failed" className="text-tone-warn">
+                {failPiece}
+              </span>
+            </>
+          ) : (
+            summary
+          )}
         </span>
         <ChevronDown
           size={14}

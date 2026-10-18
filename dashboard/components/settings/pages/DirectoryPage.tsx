@@ -242,10 +242,8 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             `Connected — ${res.tools_loaded} tool${res.tools_loaded === 1 ? "" : "s"} ready to use.`,
           );
         } else {
-          setNote(
-            res.note ??
-              "Saved — restart Iron Jarvis (or check the command is installed) to load its tools.",
-          );
+          // v1.351.0 (G08): the card's Retry loads it; no restart needed.
+          setNote(res.note ?? "Saved, but it didn't start. Press Retry.");
         }
         setOpen(false);
         setValues({});
@@ -352,18 +350,30 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
     setOpen((v) => !v);
   }
 
+  // v1.351.0 (G08): green ONLY when it works. `connected` stays true for a
+  // saved pack that did not start (service._mcp_status: the connection is
+  // real and survives restarts), so the green badge, ring and glyph read the
+  // backend's `status` instead: "connected" is green; a saved connection in
+  // any other state (failed, no_tools) "Needs attention", in the warn tone.
+  const healthy = c.connected && c.status === "connected";
+  const attention = c.connected && !healthy;
+
   return (
     <div
+      data-testid={`connector-card-${c.id}`}
+      data-health={healthy ? "connected" : attention ? "attention" : "off"}
       className={`card-surface relative flex flex-col gap-3.5 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-1 hover:ring-accent/20 ${
-        c.connected
+        healthy
           ? "ring-1 ring-emerald-500/25 shadow-[0_0_24px_-10px_rgba(52,211,153,0.35)]"
-          : ""
+          : attention
+            ? "ring-1 ring-tone-warn/30"
+            : ""
       }`}
     >
       {/* Header: glyph + name + via tag + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <BrandGlyph id={c.id} glyph={c.glyph} connected={c.connected} />
+          <BrandGlyph id={c.id} glyph={c.glyph} connected={healthy} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-zinc-100">{c.name}</h3>
@@ -372,11 +382,20 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             <p className="mt-0.5 truncate text-[11px] text-zinc-500">{c.category}</p>
           </div>
         </div>
-        {c.connected && (
+        {healthy ? (
           <span className="shrink-0">
             <Badge value="Connected" tone="green" />
           </span>
-        )}
+        ) : attention ? (
+          <span className="shrink-0">
+            <Badge
+              value="Needs attention"
+              tone="amber"
+              keepCase
+              data-testid={`connector-attention-${c.id}`}
+            />
+          </span>
+        ) : null}
       </div>
 
       {/* Blurb */}
@@ -446,6 +465,13 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
                   : c.account
                     ? `Signed in as ${c.account}`
                     : "Ready to use"}
+            </p>
+          )}
+          {/* v1.351.0 (G08): where a working pack is used, said on the card
+              (it was only a tooltip on the page's Back to chat door). */}
+          {c.connect_via === "mcp" && healthy && (
+            <p data-testid={`connector-chat-hint-${c.id}`} className="text-[11px] text-zinc-500">
+              Turn it on in a chat with + › Connections
             </p>
           )}
           {c.connect_via === "mcp" && (c.tool_names?.length ?? 0) > 0 && (

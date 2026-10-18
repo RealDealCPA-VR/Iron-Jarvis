@@ -88,8 +88,11 @@ def test_mcp_status_has_three_honest_states():
     # survives restarts (test_connectors::test_restart_survival pins that).
     # The capability truth is status + tools_loaded, not this flag.
     assert dark["connected"] is True
-    assert "0 tools are loaded" in dark["detail"]
-    assert "restart" in dark["detail"].lower()  # says what actually fixes it
+    # v1.351.0 (G08): the detail says what actually fixes it FROM THE CARD it
+    # sits on — Test, then Retry (Retry reloads the pack in place). It used to
+    # say "restart", which was never the fix a user could reach there.
+    assert dark["detail"] == "Saved, but it isn't answering yet. Press Test, then Retry."
+    assert "restart" not in dark["detail"].lower()
 
     live = _mcp_status(True, 3)
     assert live["status"] == "connected" and live["connected"] is True

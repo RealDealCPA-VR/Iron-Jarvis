@@ -41,10 +41,12 @@ import {
   SkeletonRows,
   ErrorNote,
   SuccessNote,
+  WarnNote,
   LoaderInline,
   ConfirmButton,
   SectionLabel,
 } from "@/components/ui";
+import { addedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
@@ -826,7 +828,14 @@ export default function ToolsPage() {
 
   const [mcpBusy, setMcpBusy] = useState<string | null>(null);
   const [mcpError, setMcpError] = useState<string | null>(null);
-  const [mcpOk, setMcpOk] = useState<string | null>(null);
+  // v1.351.0 (G08): the Extensions card's one note carries its tone. An add
+  // that SAVED a pack which loaded no tools is a warning ("Added, but it
+  // didn't start"), never the success box; every other note keeps its
+  // green, and `mcpOk` / `setMcpOk` read and write it exactly as before.
+  const [mcpNote, setMcpNote] = useState<{ text: string; warn: boolean } | null>(null);
+  const mcpOk = mcpNote && !mcpNote.warn ? mcpNote.text : null;
+  const mcpWarn = mcpNote?.warn ? mcpNote.text : null;
+  const setMcpOk = (text: string | null) => setMcpNote(text === null ? null : { text, warn: false });
 
   // Auto-approve is a PERSISTED setting (v1.127.0), not a form field for the
   // next connect — that version was reported twice as "the box doesn't stick".
@@ -975,13 +984,19 @@ export default function ToolsPage() {
       const approveNote = res.auto_approve
         ? " Autonomous agents may run MCP tools without asking after the next restart."
         : "";
-      setMcpOk(
-        res.note
-          ? `Extension "${serverName}" connected — ${res.note}${approveNote}`
-          : `Extension "${serverName}" connected — ${res.tools_loaded} tool${
-              res.tools_loaded === 1 ? "" : "s"
-            } ready to use.${approveNote}`,
-      );
+      if (packDidNotStart(res)) {
+        // v1.351.0 (G08): saved, but it loaded nothing: say so in the warn
+        // tone with the daemon's reason; its row below carries Retry.
+        setMcpNote({ text: `${addedButNotStarted(res.note, `Extension "${serverName}"`)}${approveNote}`, warn: true });
+      } else {
+        setMcpOk(
+          res.note
+            ? `Extension "${serverName}" connected — ${res.note}${approveNote}`
+            : `Extension "${serverName}" connected — ${res.tools_loaded} tool${
+                res.tools_loaded === 1 ? "" : "s"
+              } ready to use.${approveNote}`,
+        );
+      }
       setCfgId(null);
       reloadServers();
       return true;
@@ -1787,6 +1802,11 @@ export default function ToolsPage() {
           {mcpOk && (
             <div className="mb-3">
               <SuccessNote>{mcpOk}</SuccessNote>
+            </div>
+          )}
+          {mcpWarn && (
+            <div className="mb-3" data-testid="mcp-add-warn">
+              <WarnNote>{mcpWarn}</WarnNote>
             </div>
           )}
           {mcpError && (

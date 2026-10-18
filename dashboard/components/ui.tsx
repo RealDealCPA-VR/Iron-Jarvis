@@ -561,6 +561,26 @@ export function SuccessNote({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * v1.351.0 (G08): SuccessNote's honest sibling for a step that was SAVED but
+ * does not work yet ("Added, but it didn't start"). Same shape, the warn tone
+ * token and the warning triangle in place of the green check: a pack that
+ * loaded nothing must never be announced in the success colour.
+ */
+export function WarnNote({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-tone="warn"
+      className="flex items-start gap-2.5 rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-sm text-tone-warn"
+    >
+      <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
 export function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">

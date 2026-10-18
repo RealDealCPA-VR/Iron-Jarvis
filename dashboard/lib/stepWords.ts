@@ -59,22 +59,41 @@ export const KIND_ORDER: readonly WorkKind[] = ["read", "folder", "search", "pag
  * folded "Worked for 3.2 s · …" above a settled reply and the live
  * "Working for 12 s · …" while the turn runs (components/chat/WorkLine), so
  * the live words and the folded words can never drift apart.
+ *
+ * v1.351.0 (G07): a FAILED step is counted once, as failed, and never as
+ * work done. One page read and seven failed reads used to say "read 8 web
+ * pages, 7 failed"; it now says "read 1 web page, 7 failed".
  */
 export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | null }>): string[] {
   const n = new Map<WorkKind, number>();
   let failed = 0;
   for (const st of steps) {
+    if (st.ok === false) {
+      failed += 1;
+      continue;
+    }
     const k = toolKind(st.name);
     n.set(k, (n.get(k) ?? 0) + 1);
-    if (st.ok === false) failed += 1;
   }
   const out: string[] = [];
   for (const k of KIND_ORDER) {
     const c = n.get(k);
     if (c) out.push(STEP_WORDS[k].count(c));
   }
-  if (failed) out.push(`${failed} failed`);
+  if (failed) out.push(failedWords(failed));
   return out;
+}
+
+/** v1.351.0 (G07): how many of a turn's steps failed (ok === false). */
+export function failedSteps(steps: ReadonlyArray<{ ok?: boolean | null }>): number {
+  let n = 0;
+  for (const st of steps) if (st.ok === false) n += 1;
+  return n;
+}
+
+/** The failure piece of the counted line: "7 failed". */
+export function failedWords(n: number): string {
+  return `${n} failed`;
 }
 
 /** The subject a row names after its words, and whether it is a file. A known

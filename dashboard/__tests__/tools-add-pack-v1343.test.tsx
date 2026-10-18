@@ -479,9 +479,12 @@ describe("HTTP server door", () => {
     fireEvent.change(within(door).getByTestId("add-pack-url"), { target: { value: "http://127.0.0.1:9000/mcp" } });
     fireEvent.change(within(door).getByTestId("add-pack-http-name"), { target: { value: "My Local.Server" } });
     fireEvent.click(within(door).getByTestId("add-pack-http-add"));
-    expect((await within(door).findByTestId("add-pack-http-ok")).textContent).toContain(
-      '"my-local-server" added. it did not answer',
+    // v1.351.0 (G08): a pack that loaded NO tools was saved but did not
+    // start: the warn note with the daemon's reason, never the success box.
+    expect((await within(door).findByTestId("add-pack-http-warn")).textContent).toContain(
+      '"my-local-server" added, but it didn\'t start: it did not answer. Open its row below to retry.',
     );
+    expect(within(door).queryByTestId("add-pack-http-ok")).toBeNull();
     const body = posted("/mcp/servers")[0].body as Record<string, unknown>;
     expect(body.name).toBe("my-local-server");
     expect(body.transport).toBe("http");

@@ -257,7 +257,9 @@ describe("the folded line says what the turn did, in plain words", () => {
   });
 
   it("a failed step is counted and said", () => {
-    expect(workSummary({ steps: [{ name: "write_file", ok: false, ms: 10 }] })).toBe("Made 1 file, 1 failed");
+    // v1.351.0 (G07): a failed step counts ONLY as failed, never as work done
+    // (it used to read "Made 1 file, 1 failed" for a write that never landed).
+    expect(workSummary({ steps: [{ name: "write_file", ok: false, ms: 10 }] })).toBe("1 failed");
   });
 
   it("thinking only: how long it thought", () => {

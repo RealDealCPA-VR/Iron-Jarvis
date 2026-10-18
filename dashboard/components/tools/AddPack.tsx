@@ -20,9 +20,10 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, ClipboardPaste, FolderInput, Globe, Plus, X } from "lucide-react";
+import { Check, ClipboardPaste, FolderInput, Globe, Plus, TriangleAlert, X } from "lucide-react";
 import { ApiError, get, post } from "@/lib/api";
-import { Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
+import { Badge, ErrorNote, LoaderInline, SuccessNote, WarnNote } from "@/components/ui";
+import { addedButNotStarted, packDidNotStart } from "@/lib/packStartWords";
 import { StatusChip } from "./chips";
 import {
   httpServerBody,
@@ -165,27 +166,40 @@ function PreviewList({
   );
 }
 
-/** What apply answered, row by row. */
+/** What apply answered, row by row. v1.351.0 (G08): a pack that loaded NO
+ *  tools was saved but did not start, so its row carries the warning triangle
+ *  and "Added, but it didn't start: <why>. Open its row below to retry." in
+ *  the warn tone, never the green check. */
 function ApplyOutcome({ result }: { result: ApplyResult }) {
   return (
     <div className="mt-3 space-y-1" data-testid="import-outcome">
-      {result.added.map((a) => (
-        <div
-          key={`added:${a.name}`}
-          data-testid={`import-result-${a.name}`}
-          className="flex flex-wrap items-center gap-2 text-[12px] text-zinc-300"
-        >
-          <Check size={12} className="text-tone-success" aria-hidden />
-          <span className="font-mono font-semibold text-zinc-100">{a.name}</span>
-          {a.note ? (
-            <span className="text-tone-warn">{a.note}</span>
-          ) : (
-            <span>
-              {a.tools_loaded} tool{a.tools_loaded === 1 ? "" : "s"} ready
-            </span>
-          )}
-        </div>
-      ))}
+      {result.added.map((a) => {
+        const notStarted = packDidNotStart(a);
+        return (
+          <div
+            key={`added:${a.name}`}
+            data-testid={`import-result-${a.name}`}
+            data-outcome={notStarted ? "not-started" : "ok"}
+            className="flex flex-wrap items-center gap-2 text-[12px] text-zinc-300"
+          >
+            {notStarted ? (
+              <TriangleAlert size={12} className="text-tone-warn" aria-hidden data-testid={`import-warn-${a.name}`} />
+            ) : (
+              <Check size={12} className="text-tone-success" aria-hidden />
+            )}
+            <span className="font-mono font-semibold text-zinc-100">{a.name}</span>
+            {notStarted ? (
+              <span className="text-tone-warn">{addedButNotStarted(a.note)}</span>
+            ) : a.note ? (
+              <span className="text-tone-warn">{a.note}</span>
+            ) : (
+              <span>
+                {a.tools_loaded} tool{a.tools_loaded === 1 ? "" : "s"} ready
+              </span>
+            )}
+          </div>
+        );
+      })}
       {result.skipped.map((s) => (
         <div
           key={`skipped:${s.name}`}
@@ -516,6 +530,8 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  // v1.351.0 (G08): saved, but it loaded no tools: the warn note, not ok.
+  const [warn, setWarn] = useState<string | null>(null);
   const nextId = useState(() => ({ n: 1 }))[0];
 
   const derived = nameFromUrl(url);
@@ -526,16 +542,21 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setError(null);
     setOk(null);
+    setWarn(null);
     try {
       const res = await post<{ name: string; tools_loaded: number; note?: string | null }>(
         "/mcp/servers",
         httpServerBody({ name: finalName, url, transport, headers, token }),
       );
-      setOk(
-        res.note
-          ? `"${res.name}" added. ${res.note}`
-          : `"${res.name}" added with ${res.tools_loaded} tool${res.tools_loaded === 1 ? "" : "s"} ready.`,
-      );
+      if (packDidNotStart(res)) {
+        setWarn(addedButNotStarted(res.note, `"${res.name}"`));
+      } else {
+        setOk(
+          res.note
+            ? `"${res.name}" added. ${res.note}`
+            : `"${res.name}" added with ${res.tools_loaded} tool${res.tools_loaded === 1 ? "" : "s"} ready.`,
+        );
+      }
       setUrl("");
       setName("");
       setHeaders([]);
@@ -667,6 +688,11 @@ function HttpDoor({ onAdded }: { onAdded: () => void }) {
       {ok && (
         <div className="mt-2" data-testid="add-pack-http-ok">
           <SuccessNote>{ok}</SuccessNote>
+        </div>
+      )}
+      {warn && (
+        <div className="mt-2" data-testid="add-pack-http-warn">
+          <WarnNote>{warn}</WarnNote>
         </div>
       )}
     </div>

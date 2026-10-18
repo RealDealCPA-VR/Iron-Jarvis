@@ -47,6 +47,17 @@ _APP_LABEL = {
 }
 
 
+def _folder_app() -> str:
+    """What opens a FOLDER on this OS (v1.351.0, G11), in the answer's words."""
+    import sys
+
+    if sys.platform == "win32":
+        return "File Explorer"
+    if sys.platform == "darwin":
+        return "Finder"
+    return "your file manager"
+
+
 def _gated_source(raw: str, base: Path | None = None) -> Path:
     """Resolve a caller-supplied SOURCE path first, then gate the RESOLVED path.
 
@@ -370,7 +381,10 @@ def register(app: FastAPI, d) -> None:
     # Any policy-allowed ABSOLUTE path works: local disk, a network share,
     # or a tailnet folder (the daemon reads it like any other file).
     # ------------------------------------------------------------------ #
-    def _preview_path(raw: str) -> Path:
+    def _allowed_path(raw: str) -> Path:
+        """An ABSOLUTE path the file policy lets the app read, not inside a
+        protected root (400 / 403 otherwise). Says nothing about whether it
+        exists or what it is: the callers decide that."""
         from ...core.fs_policy import is_protected_path
 
         p = Path((raw or "").strip())
@@ -379,6 +393,10 @@ def register(app: FastAPI, d) -> None:
         ok, reason = fs_read_ok(str(p))
         if not ok or is_protected_path(str(p)):
             raise HTTPException(status_code=403, detail=reason or "path not allowed")
+        return p
+
+    def _preview_path(raw: str) -> Path:
+        p = _allowed_path(raw)
         if not p.is_file():
             raise HTTPException(status_code=404, detail=f"no such file: {p}")
         return p
@@ -534,7 +552,22 @@ def register(app: FastAPI, d) -> None:
     @app.post("/documents/open")
     def document_open(body: DocumentOpenBody) -> dict[str, Any]:
         """Open a document with its OS-associated app (Word/Excel/…) — an
-        explicit, user-initiated action from the preview panel's button."""
+        explicit, user-initiated action from the preview panel's button.
+
+        v1.351.0 (G11): a FOLDER opens too, in the OS file manager. The chat's
+        work-folder chip ("Open") posts its folder here, and the file-only
+        check answered it 404 "no such file" — the one button that shows a
+        no-project chat's saved work never worked. The same policy gates
+        apply first (absolute, readable, not protected); then a folder opens
+        natively and a file goes on through the file check as before.
+        Sync on purpose: FastAPI runs it on the threadpool, off the loop."""
+        folder = _allowed_path(body.path)
+        if folder.is_dir():
+            try:
+                _open_native(str(folder))
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=422, detail=f"could not open: {exc}")
+            return {"ok": True, "app": _folder_app(), "folder": True}
         p = _preview_path(body.path)
         try:
             _open_native(str(p))

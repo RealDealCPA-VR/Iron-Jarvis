@@ -47,6 +47,7 @@ import {
   MISSION_TERMINAL,
   baseName,
   missionHeadline,
+  missionHeadlineWarn,
   missionPath,
   type MissionView,
   type WaitingOn,
@@ -409,6 +410,8 @@ export function MissionOutput({
   const project = view?.session.project_id ?? "";
   const continuedAs = view?.session.continued_as ?? null;
   const failedItems = view?.deliverable.worklist?.failed ?? 0;
+  // v1.351.0 (G09): a finish that fell short reads in the warn token.
+  const headWarn = view !== null && missionHeadlineWarn(view);
 
   // Keep a preview selection only while that file is still in the list.
   useEffect(() => {
@@ -553,7 +556,14 @@ export function MissionOutput({
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <div data-testid="mission-headline" className="text-[12px] text-zinc-400">
+          {/* v1.351.0 (G09): a finish that fell short (part of it failed,
+              or something needs you) reads in the warn token, matching the
+              bell's warning mark; every other headline stays grey. */}
+          <div
+            data-testid="mission-headline"
+            data-tone={headWarn ? "warn" : "plain"}
+            className={`text-[12px] ${headWarn ? "text-tone-warn" : "text-zinc-400"}`}
+          >
             {view ? missionHeadline(view) : "Starting…"}
             {running && (live.coordinatorPhase || live.coordinatorNarration)
               ? ` · ${live.coordinatorPhase || live.coordinatorNarration}`

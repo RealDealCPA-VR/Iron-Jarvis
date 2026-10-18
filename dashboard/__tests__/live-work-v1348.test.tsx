@@ -238,8 +238,9 @@ describe("the live line says the work in the folded line's own words", () => {
       "Working for 12 s · read 3 files, searched the web, ran 1 tool",
     );
     expect(liveWorkSummary(liveSteps([running("r", "read_file", {})]), 4_000)).toBe("Working for 4 s");
+    // v1.351.0 (G07): a failed write counts only as failed, never as made.
     expect(liveWorkSummary(liveSteps([done("w", "write_file", { path: "out.md" }, false)]), 5_000)).toBe(
-      "Working for 5 s · made 1 file, 1 failed",
+      "Working for 5 s · 1 failed",
     );
   });
 
