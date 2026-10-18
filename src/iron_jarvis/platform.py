@@ -594,7 +594,7 @@ def _forget_load(name: str) -> None:
     try:
         from .mcp import tools as _mcp_tools_mod
 
-        _mcp_tools_mod._LOAD_STATUS.pop(name, None)
+        _mcp_tools_mod.forget_load_record(name)
         # v1.324.0: a pack with no tools has no tool client to close here, so
         # its live client (prompts/resources) is forgotten by name.
         _mcp_tools_mod.forget_live_client(name)

@@ -1150,6 +1150,19 @@ def _set_live_client(name: str, client: MCPClient) -> None:
         _LIVE_CLIENTS[name] = stack[-_LIVE_DEPTH:]
 
 
+def forget_load_record(name: str) -> None:
+    """Drop a pack's load record (v1.350.2): a REMOVED pack must not keep
+    reading as "ok" / "starting" on any surface that reads load_status. The
+    background loader drops it for a pack deleted while starting; the
+    delete route drops it for a pack that had already loaded (the Release
+    runner lost the v1.311.0 test's 3 s window and found that case). Never
+    raises."""
+    try:
+        _LOAD_STATUS.pop(name, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def forget_live_client(name: str) -> None:
     """Drop a pack's live client(s) (its pack was removed or failed to load).
     Never raises; does NOT close them — whoever unloads the pack's tools owns

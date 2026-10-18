@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.350.1 (2026-10-04).*
+holds itself to. Current as of v1.350.2 (2026-10-04).*
 
 ---
 
@@ -1856,6 +1856,9 @@ reads; it never writes, runs commands, or starts work on its own.
   menu now shows one entry per real model behind the endpoint (your chosen
   default name when it is one of them) and leaves embedding models out.
   Old names still work if something was set to use them.
+- **A removed tool pack is gone everywhere** (v1.350.2). Removing a pack
+  that had finished starting could leave it reading as "ready" in places
+  that list pack health.
 - **The model list stays on screen.** A connection's model list near the
   top of the menu used to run off the top of the window. It now fits the
   space above it, or opens downward when there isn't room, and scrolls.

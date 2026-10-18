@@ -319,6 +319,11 @@ def test_deleting_a_pack_that_already_loaded_closes_its_client(tmp_path, monkeyp
     assert gone.status_code == 200 and gone.json()["tools_unloaded"] >= 1
     assert names == []
     assert built[0].closed >= 1, "the deleted pack's client is still open (a live child leaks)"
+    # v1.350.2: and its load record is gone (the Release runner lost the test
+    # above's 3 s window, so the load landed first and the record stayed "ok").
+    from iron_jarvis.mcp.tools import load_status
+
+    assert load_status(PACK) is None, load_status(PACK)
 
 
 def test_a_retry_pressed_while_starting_wins_over_the_late_boot_load(tmp_path, monkeypatch):

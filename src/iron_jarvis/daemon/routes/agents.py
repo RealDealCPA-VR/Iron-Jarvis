@@ -563,9 +563,13 @@ def remove_mcp_pack(d, name: str) -> dict[str, Any]:
 
     close_tools_clients(removed)
     # v1.324.0: its prompts and resources go with it ("/" and "@").
-    from ...mcp.tools import forget_live_client
+    from ...mcp.tools import forget_live_client, forget_load_record
 
     forget_live_client(name)
+    # v1.350.2: and its load record — a removed pack that had finished
+    # loading kept reading as "ok" (the background loader only forgot it for
+    # a pack deleted WHILE starting).
+    forget_load_record(name)
     return {
         "removed": name,
         "tools_unloaded": unloaded,

@@ -3581,6 +3581,16 @@ does not need a bump, stop and bump it.
   scrolls) — it ran off the window's top. Pins:
   `tests/test_pack_name_and_endpoint_picker_v13501.py`,
   `dashboard/__tests__/fit-panel-v13501.test.tsx` (10 mutations, all red).
+  v1.350.2 (a REAL bug the v1.350.1 Release gate found, 48-min runner):
+  `remove_mcp_pack` unregistered and closed a LOADED pack but never dropped
+  its load record (`_LOAD_STATUS`), so a removed pack kept reading "ok" —
+  `test_a_pack_deleted_while_starting...` lost its 3 s window (the load
+  landed before the DELETE) and failed only on `record is None`. One door
+  now: `mcp.tools.forget_load_record(name)`, called by the delete route AND
+  `platform._forget_load`. Pinned deterministically in
+  `test_deleting_a_pack_that_already_loaded_closes_its_client` (the
+  mutation reproduces CI's exact error on an idle machine). Leave GATE_S at
+  3 s: another test there depends on the gate EXPIRING.
 - **A helper agent's plan is a checklist; approving it first is an OFF-by-
   default setting** (v1.350.0, polish wave C: lanes C1 dashboard, C2 daemon,
   ideas from agent-elements' Todo/Plan tools, MIT, nothing installed).
