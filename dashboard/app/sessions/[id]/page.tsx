@@ -212,10 +212,20 @@ export default function SessionDetailPage({
    * row shows, folded from this page's own plan.* events. A page opened on a
    * run already under way reads the daemon's copy once (plan.created came
    * before it was watching); a 404 (no plan, or an older daemon) leaves what
-   * the events said, or nothing. */
+   * the events said, or nothing.
+   * A follow-up sent from this page ("Send a follow-up" keeps the page
+   * mounted on the same session) is a NEW run: its checklist starts after
+   * the newest event this page held while the session sat idle, so the last
+   * run's plan (its events, or the daemon's copy read for it) never shows as
+   * the new run's. A page opened on a live run has no boundary: the whole
+   * window is this run's. */
+  const planLive = isActive && !isQueued;
+  const planSinceRef = useRef<string | null>(null);
+  if (!planLive) planSinceRef.current = events[0]?.id ?? null;
   const livePlan = useLivePlan({
-    session: isActive && !isQueued ? id : null,
+    session: planLive ? id : null,
     events,
+    boundary: planSinceRef.current,
     eager: true,
     hint: runStream.phase?.detail ?? null,
   });

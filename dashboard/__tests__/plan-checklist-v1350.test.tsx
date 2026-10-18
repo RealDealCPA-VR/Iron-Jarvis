@@ -834,6 +834,24 @@ describe("useLivePlan reads the daemon's copy only when the events cannot tell",
     expect(H.api.gets).toEqual([PLAN]);
   });
 
+  // v1.350.0 lane C1 review: the read budget is a guard of its own, not a
+  // side effect of the effect's deps. A decomposed run's phase words swing
+  // between "step N of M: …" (a plan) and "checking step N" (not) on every
+  // step; with an older daemon (404) and no plan events in the window, each
+  // swing back must not buy another read.
+  it("a phase whose words keep swinging never buys more reads than the turn allows", async () => {
+    const { rerender } = render(<Probe session="s1" events={[]} hint="step 1 of 3: read the ledger" />);
+    await waitFor(() => expect(H.api.gets).toEqual([PLAN]));
+    for (const hint of ["checking step 1", "step 2 of 3: draft", "checking step 2", "step 3 of 3: check"]) {
+      rerender(<Probe session="s1" events={[]} hint={hint} />);
+      await act(async () => {});
+    }
+    rerender(<Probe session="s1" events={[]} eager hint="step 3 of 3: check" />);
+    await act(async () => {});
+    expect(H.api.gets).toEqual([PLAN]);
+    expect(screen.getByTestId("probe").textContent).toBe("none");
+  });
+
   it("two readers of the same session share one read; a failed read is no plan, never an error", async () => {
     const h = holdNext(PLAN);
     const a = readSessionPlan("s1");

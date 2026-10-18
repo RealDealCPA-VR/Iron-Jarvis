@@ -190,6 +190,16 @@ export function useLivePlan({ session, events, boundary = null, eager = false, h
     lastRef.current = { key, plan, seed: seedPlan };
   }, [key, plan, seedPlan]);
 
+  // Nothing followed (the run ended, or the page left it): what was known
+  // belonged to that run. The next run a page follows starts afresh, even
+  // under the same key (the session page's follow-up continues the SAME
+  // session): no daemon answer and no spent read carry over to it.
+  useEffect(() => {
+    if (key) return;
+    triesRef.current = { key: null, eager: false, hinted: false };
+    setSeed((prev) => (prev === null ? prev : null));
+  }, [key]);
+
   const sawCreated = planEvents.some((e) => e.type === "plan.created");
   const hinted = planEvents.length > 0 || phaseSaysPlan(hint);
   useEffect(() => {

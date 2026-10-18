@@ -239,4 +239,60 @@ describe("sessions/[id]: the plan checklist in the Live run card", () => {
     expect(H.gets).not.toContain(PLAN);
     expect(screen.queryByTestId("plan-checklist")).toBeNull();
   });
+
+  /* v1.350.0 lane C1 review: "Send a follow-up" keeps this page mounted on
+   * the SAME session, so the next run must not inherit the last one's plan
+   * (its daemon copy, its spent reads, or its events still in the window). */
+  const setStatus = (status: string) => {
+    (H.responses["/sessions/s-1"] as { session: { status: string } }).session.status = status;
+  };
+
+  it("a follow-up run on the same page starts afresh: the last run's daemon copy is not its plan", async () => {
+    H.responses[PLAN] = { steps: GOALS.map((goal) => ({ goal, state: "running" })) };
+    const page = renderPage("running");
+    await waitFor(() => expect(states()).toEqual(["running", "running", "running"]));
+    // The run ends: the Live run card goes.
+    H.run.active = false;
+    H.run.phase = null;
+    setStatus("completed");
+    page.rerender(<SessionDetailPage params={fakeParams("s-1")} />);
+    await waitFor(() => expect(screen.queryByTestId("plan-checklist")).toBeNull());
+    // A follow-up starts a new run on the same session, with no plan of its own.
+    delete H.responses[PLAN];
+    H.run.active = true;
+    H.run.phase = { phase: "running", detail: "working the task" };
+    setStatus("running");
+    page.rerender(<SessionDetailPage params={fakeParams("s-1")} />);
+    // The new run asks the daemon again (a 404 now) and shows no plan.
+    await waitFor(() => expect(H.gets.filter((g) => g === PLAN)).toHaveLength(2));
+    await act(async () => {});
+    expect(screen.getByText("Live run")).toBeTruthy();
+    expect(screen.queryByTestId("plan-checklist")).toBeNull();
+  });
+
+  it("a follow-up run on the same page starts afresh: the last run's plan events are not its plan, its own are", async () => {
+    H.ev.list = [
+      ev("plan.created", { run_id: "r1", steps: GOALS }),
+      ev("plan.step_started", { run_id: "r1", index: 0, goal: GOALS[0] }),
+      ev("plan.step_completed", { run_id: "r1", index: 0, ok: true }),
+    ].reverse();
+    const page = renderPage("running");
+    await waitFor(() => expect(states()).toEqual(["done", "waiting", "waiting"]));
+    H.run.active = false;
+    setStatus("completed");
+    page.rerender(<SessionDetailPage params={fakeParams("s-1")} />);
+    await land(ev("session.completed", {}));
+    H.run.active = true;
+    H.run.phase = { phase: "running", detail: "working the task" };
+    setStatus("running");
+    page.rerender(<SessionDetailPage params={fakeParams("s-1")} />);
+    await waitFor(() => expect(H.gets).toContain(PLAN)); // the new run's own read (404)
+    await act(async () => {});
+    expect(screen.getByText("Live run")).toBeTruthy();
+    expect(screen.queryByTestId("plan-checklist")).toBeNull();
+    // The new run's own plan shows, made from its own events.
+    await land(ev("plan.created", { run_id: "r2", steps: ["sort the receipts", "file them"] }));
+    await waitFor(() => expect(states()).toEqual(["waiting", "waiting"]));
+    expect(screen.getByText("sort the receipts")).toBeTruthy();
+  });
 });
