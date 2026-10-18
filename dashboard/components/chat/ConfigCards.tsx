@@ -19,6 +19,7 @@
  */
 
 import { useState, type FormEvent } from "react";
+import Link from "next/link";
 import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
@@ -291,12 +292,16 @@ function AppOutcome({
         <span className="text-zinc-400">· {waitingWords(connected)}</span>
       </span>
     );
+  // The words name Settings › Connections › Apps & tools (the Directory, where
+  // the app's row shows why it did not start, with Test and Retry), so the
+  // link goes there: `/marketplace` is that page's address. `/tools` is
+  // "Tools & permissions", a different page (v1.351.0 review).
   return (
     <span data-testid="credential-card-not-loaded" className="text-zinc-300" title={connected.reason || undefined}>
       Saved, but its tools did not load —{" "}
-      <a href="/tools" className="text-accent-soft underline-offset-2 hover:underline">
+      <Link href="/marketplace" className="text-accent-soft underline-offset-2 hover:underline">
         open Apps &amp; tools
-      </a>
+      </Link>
     </span>
   );
 }

@@ -249,7 +249,13 @@ describe("connect from chat, then carry on (G15)", () => {
     });
     expect(saved.textContent).toContain("Saved, but its tools did not load");
     const link = within(saved).getByRole("link", { name: "open Apps & tools" });
-    expect(link.getAttribute("href")).toBe("/tools");
+    // Review: the words name Apps & tools (the Directory, `/marketplace` →
+    // Settings › Connections › Apps & tools, where the app's row says why it
+    // did not start). `/tools` opens "Tools & permissions", a different page.
+    expect(link.getAttribute("href")).toBe("/marketplace");
+    expect(readFileSync(join(__dirname, "..", "lib", "relocated.ts"), "utf8").replace(/\r\n/g, "\n")).toMatch(
+      /"\/marketplace": \{ base: "\/settings", extra: \{ section: "connections-apps" \} \}/,
+    );
     expect(within(saved).getByTestId("credential-card-not-loaded").getAttribute("title")).toBe("the package was not found");
     expect(screen.queryByTestId("credential-card-continue")).toBeNull();
   });
