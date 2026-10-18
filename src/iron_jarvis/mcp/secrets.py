@@ -297,53 +297,72 @@ def carry_masked_args(
     ``Authorization:`` no longer LOOKS like a secret, and still is one.
 
     Several stored arguments can SHOW the same text (``--api-key ***
-    --token ***``): each stored value is used at most once, the one whose
-    preceding argument matches the new one's first (``--token``'s ``***``
-    gets the token, wherever the edit moved it), else the next unused one in
-    order — never one value for two arguments (v1.351.0 review: the first
-    cut kept a single value per shown text, so adding any argument to that
-    pack silently stored the token as the API key too)."""
+    --token ***``, or a bare ``***`` beside ``Authorization: Bearer ***``):
+    each stored value is used at most once. A hidden value is a SLOT — a
+    whole argument, or one ``***`` token of a multi-token argument — and the
+    slot whose text came right before it in the stored line (``--token``,
+    ``Bearer``) wins, wherever the edit moved it, whole or split; else the
+    first unused slot in line order. Never one value for two arguments, and
+    never a whole-argument match taken ahead of the token the line was split
+    from (v1.351.0 review, twice: the first cut kept a single value per shown
+    text, and the second still preferred any whole ``***`` to a split header's
+    token, so ``--header "Authorization: Bearer ***" --api-key ***`` sent
+    back split swapped the token and the key)."""
     shown = ["" if a is None else str(a) for a in old_shown]
     real = ["" if a is None else str(a) for a in old_real]
     new = ["" if a is None else str(a) for a in list(new_args or [])]
+
+    def _before(i: int) -> set[str | None]:
+        # What came right before stored argument ``i``: the whole previous
+        # argument, or its last word when the editor split the line.
+        if i <= 0:
+            return {None}
+        prev = shown[i - 1]
+        words = prev.split()
+        return {prev, words[-1]} if words else {prev}
+
+    # Every hidden value as a slot, in line order: (arg index, token index or
+    # None for the whole argument, the text it shows, its real text, what
+    # came before it).
+    slots: list[tuple[int, int | None, str, str, set[str | None]]] = []
+    for i, s in enumerate(shown):
+        if MASK not in s or i >= len(real):
+            continue
+        slots.append((i, None, s, real[i], _before(i)))
+        # Token by token only where the argument has several and splits the
+        # same way both times (``mask`` swaps a non-space run for ``***``,
+        # so it does); a one-token argument is a whole match.
+        s_tok, r_tok = s.split(), real[i].split()
+        if len(s_tok) >= 2 and len(s_tok) == len(r_tok):
+            for t, (st, rt) in enumerate(zip(s_tok, r_tok)):
+                if MASK in st:
+                    slots.append((i, t, st, rt, {s_tok[t - 1]} if t > 0 else _before(i)))
     used_whole: set[int] = set()
     used_token: set[tuple[int, int]] = set()
 
-    def _take_whole(n: int, a: str) -> str | None:
-        free = [
-            i
-            for i, s in enumerate(shown)
-            if s == a and i < len(real) and i not in used_whole and all(k[0] != i for k in used_token)
-        ]
-        if not free:
+    def _free(slot: tuple[int, int | None, str, str, set[str | None]]) -> bool:
+        i, t = slot[0], slot[1]
+        if t is None:
+            return i not in used_whole and all(k[0] != i for k in used_token)
+        return i not in used_whole and (i, t) not in used_token
+
+    def _take(n: int, a: str) -> str | None:
+        match = [sl for sl in slots if sl[2] == a and _free(sl)]
+        if not match:
             return None
         prev = new[n - 1] if n > 0 else None
-        same_prev = [i for i in free if (shown[i - 1] if i > 0 else None) == prev]
-        i = (same_prev or free)[0]
-        used_whole.add(i)
-        return real[i]
-
-    def _take_token(a: str) -> str | None:
-        for i, (s, r) in enumerate(zip(shown, real)):
-            # Token by token only where the argument has several and splits
-            # the same way both times (``mask`` swaps a non-space run for
-            # ``***``, so it does); a one-token argument is a whole match.
-            s_tok, r_tok = s.split(), r.split()
-            if i in used_whole or MASK not in s or len(s_tok) < 2 or len(s_tok) != len(r_tok):
-                continue
-            for t, (st, rt) in enumerate(zip(s_tok, r_tok)):
-                if st == a and (i, t) not in used_token:
-                    used_token.add((i, t))
-                    return rt
-        return None
+        i, t, _s, r, _b = next((sl for sl in match if prev in sl[4]), match[0])
+        if t is None:
+            used_whole.add(i)
+        else:
+            used_token.add((i, t))
+        return r
 
     out: list[str] = []
     carried: set[int] = set()
     for n, a in enumerate(new):
         if MASK in a:
-            put_back = _take_whole(n, a)
-            if put_back is None:
-                put_back = _take_token(a)
+            put_back = _take(n, a)
             if put_back is None:
                 raise MaskedValueLeft(
                     f"argument {n + 1} still shows {MASK} where a hidden value was; "

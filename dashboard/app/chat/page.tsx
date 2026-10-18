@@ -10667,8 +10667,9 @@ export default function ChatPage() {
       setMessages(updated);
       turnOnConnectors([connected.app]);
       // No save here: the turn send() starts saves the conversation, and the
-      // settled-card map carries the pressed card into that save.
-      send(continueText(connected.name, taskBefore(updated, index)));
+      // settled-card map carries the pressed card into that save. The card's
+      // app is named so "add a task in Todoist" stays the task, not a request.
+      send(continueText(connected.name, taskBefore(updated, index, { id: connected.app, name: connected.name })));
     },
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),

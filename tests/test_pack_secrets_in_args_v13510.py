@@ -404,3 +404,40 @@ def test_an_edit_keeps_each_of_two_hidden_values_that_show_the_same_text(client)
     text = _toml_text(platform)
     for value in (first, second, TOKEN):
         assert value not in text, value
+
+
+def test_a_split_header_before_a_bare_hidden_key_keeps_each_value_in_its_place(client):
+    """Fix round 2: the first review's fix still took ANY whole ``***``
+    argument ahead of the token a split header was cut from. With the header
+    FIRST (``--header "Authorization: Bearer ***" --api-key ***``), the
+    one-line editor's split line put the API key into the header and the
+    header's token into ``--api-key`` — both still vaulted, both wrong, and
+    the pack then launched with neither credential where it belongs."""
+    platform = client.app.state.platform
+    header = f"Authorization: Bearer {TOKEN}"
+    res = client.post(
+        "/mcp/servers",
+        json={"name": "hdr", "command": NO_SUCH, "args": ["--header", header, "--api-key", API_KEY]},
+    )
+    assert res.status_code == 200, res.text
+
+    def real_args() -> list[str]:
+        entry = _entry(platform, "hdr")
+        return _build_transport(dict(entry, command=sys.executable), platform.secrets.get).args
+
+    shown = _row(client, "hdr")["args"]
+    assert shown == ["--header", "Authorization: Bearer ***", "--api-key", "***"]
+    # The one-line editor: the shown line split on whitespace, plus a change.
+    res = client.patch("/mcp/servers/hdr", json={"args": [*" ".join(shown).split(), "--verbose"]})
+    assert res.status_code == 200, res.text
+    assert real_args() == ["--header", "Authorization:", "Bearer", TOKEN, "--api-key", API_KEY, "--verbose"]
+
+    # Moved around (key pair first, header split): each value follows the
+    # word it came after.
+    res = client.patch(
+        "/mcp/servers/hdr", json={"args": ["--api-key", "***", "--header", "Authorization:", "Bearer", "***"]}
+    )
+    assert res.status_code == 200, res.text
+    assert real_args() == ["--api-key", API_KEY, "--header", "Authorization:", "Bearer", TOKEN]
+    text = _toml_text(platform)
+    assert TOKEN not in text and API_KEY not in text

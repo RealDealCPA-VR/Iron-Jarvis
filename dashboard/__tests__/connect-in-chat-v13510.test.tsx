@@ -124,6 +124,7 @@ import {
   connectedWords,
   continueText,
   isConnectRequest,
+  isGoAhead,
   taskBefore,
   waitingWords,
   withAppConnected,
@@ -419,5 +420,90 @@ describe("review: a pressed Continue is not offered again", () => {
     render(<ConfigCards cards={withAppConnected(decodeConfigCards(raw), raw)} onSettle={() => {}} onContinue={() => {}} />);
     expect(screen.getByTestId("credential-card-connected").textContent).toContain("GitHub connected · 2 tools");
     expect(screen.queryByTestId("credential-card-continue")).toBeNull();
+  });
+});
+
+describe("fix round 2: a task that starts with 'add' or 'set up' is the task", () => {
+  const TODOIST_CARD = {
+    kind: "secret",
+    name: "app.todoist",
+    label: "Todoist API token",
+    why: "to add the task",
+    request_id: "seq_td",
+  };
+
+  it("through the page: Continue carries 'add a task in Todoist' on, never the older question", async () => {
+    H.api.postResponses["/config/secret"] = { status: "stored", action_id: "tool_7", app: "todoist", app_name: "Todoist", tools_loaded: 5 };
+    render(<ChatPage />);
+    await send("what's the weather in Seattle", "Rainy.");
+    await send("add a task in Todoist", "Paste your Todoist token on the card.", { configCards: [TODOIST_CARD] });
+    const form = await screen.findByTestId("credential-card");
+    fireEvent.change(form.querySelector("input") as HTMLInputElement, { target: { value: "td-PAGE-NEVERSHOWN-1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save securely" }));
+    const saved = await screen.findByTestId("credential-card-saved");
+    expect(saved.textContent).toContain("Todoist connected · 5 tools");
+    H.stream.replies.push("Added it.");
+    fireEvent.click(within(saved).getByRole("button", { name: /Continue/ }));
+    await screen.findByText("Added it.");
+    expect(lastUser(H.stream.bodies.at(-1))).toBe("Todoist is connected. Please carry on with: add a task in Todoist");
+  });
+
+  it("judged for the card's app: its name or its key is a request; anything else after 'add'/'set up' is work", () => {
+    const github = { id: "github", name: "GitHub" };
+    for (const t of [
+      "connect my GitHub",
+      "set up GitHub",
+      "please add GitHub",
+      "add my GitHub token",
+      "add my github account",
+      "set up GitHub for me",
+      "connect it",
+      "yes, set it up",
+      "ok, add it",
+      "connect my Notion",
+    ])
+      expect(isConnectRequest(t, github), t).toBe(true);
+    for (const t of [
+      "add a comment on PR 42",
+      "set up a new repo called demo",
+      "add Bob as a collaborator",
+      "set up a meeting with Bob tomorrow",
+    ])
+      expect(isConnectRequest(t, github), t).toBe(false);
+    expect(isConnectRequest("add a task in Todoist", { id: "todoist", name: "Todoist" })).toBe(false);
+    expect(isConnectRequest("add Todoist", { id: "todoist", name: "Todoist" })).toBe(true);
+    const drive = { id: "google-drive", name: "Google Drive" };
+    expect(isConnectRequest("set up my Google Drive", drive)).toBe(true);
+    expect(isConnectRequest("set up my drive", drive)).toBe(true);
+    expect(isConnectRequest("add a folder in my Drive", drive)).toBe(false);
+    // With no app named, the rule is the first review's, unchanged.
+    expect(isConnectRequest("add a task in Todoist")).toBe(true);
+  });
+
+  it("a SHORT request that carries the task is the task (the second-clause rule alone), and a long one is too (the word limit alone)", () => {
+    // Under the six-word limit: only the second-clause rule can see these.
+    for (const t of ["connect GitHub and list PRs", "link GitHub to see PRs", "connect GitHub, then summarize", "set up Slack so I can post"])
+      expect(isConnectRequest(t), t).toBe(false);
+    // No conjunction, comma or later "to": only the word limit sees this one.
+    expect(isConnectRequest("link GitHub list my open pull requests today")).toBe(false);
+  });
+
+  it("a go-ahead ('yes') answers the offer to connect and is not the task", () => {
+    for (const t of ["yes", "Sure, go ahead", "ok please", "yes please!"]) expect(isGoAhead(t), t).toBe(true);
+    for (const t of ["", "yes list my PRs", "no", "what PRs do I have?"]) expect(isGoAhead(t), t).toBe(false);
+    const msgs = [
+      { role: "user", content: QUESTION },
+      { role: "assistant", content: "Shall I connect GitHub?" },
+      { role: "user", content: "yes" },
+      { role: "assistant", content: "card" },
+    ];
+    expect(taskBefore(msgs, 3, { id: "github", name: "GitHub" })).toBe(QUESTION);
+    const work = [
+      { role: "user", content: "what's the weather in Seattle" },
+      { role: "assistant", content: "Rainy." },
+      { role: "user", content: "set up a GitHub webhook for my repo" },
+      { role: "assistant", content: "card" },
+    ];
+    expect(taskBefore(work, 3, { id: "github", name: "GitHub" })).toBe("set up a GitHub webhook for my repo");
   });
 });

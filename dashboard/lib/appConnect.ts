@@ -138,7 +138,55 @@ export function continueText(appName: string, task: string): string {
 const CONTINUE_RE = /^.{1,80} is connected\. Please carry on with: ([\s\S]+)$/;
 
 const CONNECT_RE =
-  /^(?:(?:ok(?:ay)?|now|then|so|and|yes|sure|great)[\s,.!]+)*(?:(?:please|pls|can you|could you|would you|will you|go ahead and|i(?:'d| would) like (?:you )?to|i want (?:you )?to|let'?s|let me|help me)\s+)*(?:re)?(?:connect|link|hook up|set up|setup|add|sign in to|log ?in to|authori[sz]e)\b/i;
+  /^(?:(?:ok(?:ay)?|now|then|so|and|yes|sure|great)[\s,.!]+)*(?:(?:please|pls|can you|could you|would you|will you|go ahead and|i(?:'d| would) like (?:you )?to|i want (?:you )?to|let'?s|let me|help me)\s+)*(?:re)?(connect|link|hook up|set up|setup|add|sign in to|log ?in to|authori[sz]e|(?:set|hook) (?:it|that|this|them) up)\b/i;
+
+/** Verbs that also start ordinary work ("add a task in Todoist", "set up a
+ *  meeting with Bob"): with these, a message is a bare connect request only
+ *  when what follows names the app itself or its key. */
+const WORK_VERB_RE = /^(?:add|set ?up)$/i;
+
+/** Words that say nothing about WHAT is connected ("my", "account", "it"). */
+const CONNECT_FILLER = new Set([
+  "my", "the", "a", "an", "our", "your", "me", "us", "it", "its", "this", "them",
+  "to", "with", "up", "in", "into", "on", "again", "here", "now", "please", "jarvis", "chat",
+]);
+
+/** Words that say the request is about a credential ("my Notion token"). */
+const CREDENTIAL_WORDS = new Set([
+  "account", "accounts", "acct", "token", "tokens", "key", "keys", "api", "access", "app",
+  "integration", "integrations", "connection", "connector", "credential", "credentials", "login",
+]);
+
+/** The app a connect card is for, as `taskBefore` is told it. */
+export interface ConnectApp {
+  /** The connector id ("github", "google-drive"). */
+  id?: string;
+  /** Its name ("GitHub", "Google Drive"). */
+  name?: string;
+}
+
+function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[\s/]+/)
+    .map((w) => w.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "").replace(/'s$/, ""))
+    .filter(Boolean);
+}
+
+function appWords(app: ConnectApp): Set<string> {
+  const out = new Set<string>();
+  for (const part of [str(app.id), str(app.name)]) {
+    const ws = words(part.replace(/[-_.]+/g, " "));
+    for (const w of ws) out.add(w);
+    if (ws.length > 1) out.add(ws.join(""));
+  }
+  return out;
+}
+
+/** A reply that only says go ahead ("yes", "sure, go ahead") — it answers
+ *  Jarvis's offer to connect; it is not the task. */
+const GO_AHEAD_RE =
+  /^(?:(?:ok(?:ay)?|yes|yeah|yep|yup|sure|alright|all right|fine|please|go ahead|do it|please do|sounds good|of course|absolutely|thanks|thank you)[\s,.!]*)+$/i;
 
 /** What may follow the app's name in a bare request ("… please", "… now"). */
 const POLITE_TAIL_RE = /[\s,]*(?:please|pls|thanks|thank you|now|for me)?[\s.!?]*$/i;
@@ -152,15 +200,34 @@ const MORE_TASK_RE = /\b(?:and|then|so|but|also|plus|after|before|because|while|
  *  "please link Notion") — not the task to carry on with. A request that
  *  also carries the task ("connect my GitHub and list my open PRs") is NOT
  *  one: it is the task (v1.351.0 review — skipping it carried an OLDER,
- *  unrelated question on instead). */
-export function isConnectRequest(text: string): boolean {
+ *  unrelated question on instead).
+ *
+ *  Given the `app` the card is for, "add" and "set up" count only when what
+ *  follows names that app or a key ("set up GitHub", "add my Notion
+ *  token"): "add a task in Todoist" and "set up a meeting with Bob" are the
+ *  work itself (v1.351.0 fix round 2 — they read as bare requests, so
+ *  Continue carried an older question on instead). */
+export function isConnectRequest(text: string, app?: ConnectApp): boolean {
   const t = str(text).trim();
   if (!t || t.length > 120) return false;
   const m = CONNECT_RE.exec(t);
   if (!m) return false;
   const rest = t.slice(m[0].length).replace(POLITE_TAIL_RE, "").trim();
+  // "connect it", "set that up": only a pointer back at Jarvis's offer.
+  if (/^(?:it|that|this|them|that one|this one)(?:\s+up)?$/i.test(rest)) return true;
   if (MORE_TASK_RE.test(rest)) return false;
-  return rest.split(/\s+/).filter(Boolean).length <= 6;
+  if (rest.split(/\s+/).filter(Boolean).length > 6) return false;
+  if (!app || !WORK_VERB_RE.test(m[1].replace(/\s+/g, " "))) return true;
+  const said = words(rest);
+  if (said.some((w) => CREDENTIAL_WORDS.has(w))) return true;
+  const own = appWords(app);
+  return said.every((w) => CONNECT_FILLER.has(w) || own.has(w));
+}
+
+/** "yes", "sure, go ahead": a go-ahead, never the task. */
+export function isGoAhead(text: string): boolean {
+  const t = str(text).trim();
+  return t.length > 0 && t.length <= 40 && GO_AHEAD_RE.test(t);
 }
 
 interface MessageLike {
@@ -171,10 +238,11 @@ interface MessageLike {
 }
 
 /** The question to carry on with: the newest user message before `index`
- *  that is not a mid-turn note, a hidden Continue turn or a bare "connect my
- *  X" — and an earlier Continue's words are unwrapped to the task they
- *  carried. "" when there is none. */
-export function taskBefore(messages: readonly MessageLike[], index: number): string {
+ *  that is not a mid-turn note, a hidden Continue turn, a go-ahead ("yes")
+ *  or a bare "connect my X" (judged for `app`, the card's app, when given) —
+ *  and an earlier Continue's words are unwrapped to the task they carried.
+ *  "" when there is none. */
+export function taskBefore(messages: readonly MessageLike[], index: number, app?: ConnectApp): string {
   for (let j = Math.min(index, messages.length) - 1; j >= 0; j--) {
     const m = messages[j];
     if (!m || m.role !== "user" || m.steer || m.continuation) continue;
@@ -182,7 +250,7 @@ export function taskBefore(messages: readonly MessageLike[], index: number): str
     if (!text) continue;
     const carried = CONTINUE_RE.exec(text);
     if (carried) return carried[1].trim();
-    if (isConnectRequest(text)) continue;
+    if (isGoAhead(text) || isConnectRequest(text, app)) continue;
     return text;
   }
   return "";
