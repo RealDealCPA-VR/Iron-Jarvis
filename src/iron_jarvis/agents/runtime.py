@@ -95,6 +95,49 @@ def _ask_timeout_for(origin: str) -> float | None:
     return SESSION_APPROVAL_TIMEOUT_S
 
 
+#: THE PLAN ASK (v1.350.0). With ``config.plan_approval`` on, a planned-steps
+#: run that a person is watching shows its plan and waits for Approve before
+#: any step runs. The ask is an ORDINARY pause (``_pause_for_approval``: the
+#: same card, the same ``approval.requested``/``approval.resolved`` ledger,
+#: the same no-clock wait for an attended origin) for this synthetic tool
+#: name, with ``{"steps": [goal, ...]}`` as its arguments. No tool by this
+#: name exists, so a model can never call it (an unarmed name never asks).
+PLAN_APPROVAL_TOOL = "approve_plan"
+
+#: What a run whose plan the user declined says (its result; the plan's steps
+#: follow it). The run ends FAILED: the job was not done, and saying
+#: "completed" about work nobody did is the lie this app keeps refusing.
+PLAN_DECLINED_RESULT = "You declined the plan, so none of its steps ran."
+
+#: The same when the ask went unanswered — reachable only where the attended
+#: clock is set (a test seam; the app itself waits with no clock).
+PLAN_UNANSWERED_RESULT = "The plan was not approved in time, so none of its steps ran."
+
+
+class PlanDeclined(Exception):
+    """The user declined (or never answered) a plan they were asked to
+    approve (v1.350.0). Raised by ``decompose.run_decomposed`` BEFORE any step
+    runs and caught at its call site in :meth:`AgentRuntime._run_body`, which
+    ends the run FAILED with ``result`` — never the flat loop, which would do
+    the declined job anyway."""
+
+    def __init__(self, result: str) -> None:
+        super().__init__(result)
+        self.result = result
+
+
+def plan_approval_wanted(config, session) -> bool:
+    """Does this run show its plan and wait for Approve (v1.350.0)? Only with
+    ``config.plan_approval`` on AND an ATTENDED origin (chat, a job from the
+    Agents page, a project task, a user-started run). An untagged run cannot
+    ask at all (``ASKING_ORIGINS``), and the background doors — schedules,
+    goals, workflows, reflexes, the phone, autonomy, assignments — never
+    wait: nobody may be there to press Approve. Pure; never raises."""
+    if getattr(config, "plan_approval", False) is not True:
+        return False
+    return str(getattr(session, "origin", None) or "").startswith(ATTENDED_ORIGINS)
+
+
 #: The repeat breaker's note to the MODEL, appended to a failing tool's output.
 _LOOP_NOTE = re.compile(r"\s*\[repeat — this is failure .*?\]\s*$", re.S)
 #: The untrusted-content fence (``computeruse.safety.wrap_untrusted``): its
@@ -2169,6 +2212,9 @@ class AgentRuntime:
         # v1.339.0: ...and a resumed DECOMPOSED run carries on in its plan.
         if _resume_plan is not None:
             engage_decomposed = True
+        # v1.350.0: the user declined the plan they were asked to approve —
+        # the run ends below, before the flat loop could do the job anyway.
+        plan_declined: str | None = None
         if engage_decomposed:
             # WAVE C3 (v1.203.0): a measured-weak envelope that demands
             # per-step verification gates EVERY step — criteria-less ones on
@@ -2179,22 +2225,25 @@ class AgentRuntime:
             # `adaptations` (goal-gated retries only) BEFORE returning, so
             # the single resolved-bends publish below still carries every
             # bend of the run. Step outcomes feed the C4 ledger seam.
-            final_text = await _decompose.run_decomposed(
-                self,
-                run,
-                session,
-                agent_def,
-                system_prompt=system_prompt,
-                tool_specs=tool_specs,
-                session_allow=session_allow,
-                sink=sink,
-                verify_all=verify_all_enveloped(env_profile),
-                adaptations=adaptations,
-                record_outcome=step_outcome_recorder(
-                    self.p, env_provider, env_model
-                ),
-                **({"resume": _resume_plan} if _resume_plan is not None else {}),
-            )
+            try:
+                final_text = await _decompose.run_decomposed(
+                    self,
+                    run,
+                    session,
+                    agent_def,
+                    system_prompt=system_prompt,
+                    tool_specs=tool_specs,
+                    session_allow=session_allow,
+                    sink=sink,
+                    verify_all=verify_all_enveloped(env_profile),
+                    adaptations=adaptations,
+                    record_outcome=step_outcome_recorder(
+                        self.p, env_provider, env_model
+                    ),
+                    **({"resume": _resume_plan} if _resume_plan is not None else {}),
+                )
+            except PlanDeclined as declined:
+                plan_declined = declined.result or PLAN_DECLINED_RESULT
         # B4 (v1.202.0): the loop actually BENT under a measured envelope — say
         # so, ONCE per run. Published HERE, after the decompose decision has
         # RESOLVED, because deciding to decompose is not decomposing: the
@@ -2228,6 +2277,21 @@ class AgentRuntime:
                 )
             except Exception:  # noqa: BLE001 — narration must never break a run
                 pass
+        if plan_declined is not None:
+            # v1.350.0: no step ran, by the user's decision. FAILED, like the
+            # flat loop's own not-finished ending: the job was not done, so
+            # the session must not read "completed" (the outcome stays None —
+            # or ``needs_you`` when the ask went unanswered).
+            run.result = plan_declined
+            await self._set_state(run, AgentState.FAILED, session.id)
+            await self.p.event_bus.publish(
+                EventType.AGENT_COMPLETED,
+                {"run_id": run.id, "ok": False, "result": run.result},
+                session_id=session.id,
+            )
+            if sink:
+                sink.done(ok=False, result=run.result)
+            return run
         if final_text is None:
             # The FLAT loop has no planning stage, so it says so plainly rather
             # than leaving the client on a phase-less spinner (v1.149.0). Every
@@ -2325,6 +2389,17 @@ class AgentRuntime:
         # a door states, never a default.
         if not origin.startswith(ASKING_ORIGINS):
             return ""
+        if tc.name == PLAN_APPROVAL_TOOL:
+            # THE PLAN ASK (v1.350.0): the SETTING is its tier — the caller
+            # (``decompose.run_decomposed``) asks only when it is on — so no
+            # permission mode and no standing grant applies. Only an answer
+            # the user gave to an earlier plan card ("for this conversation")
+            # lifts it, read through the same posture as every other grant.
+            if inherited_approval_mode(getattr(session, "approval_mode", "")) == "always_ask":
+                plan_granted = self._run_grants.get(session.id, set())
+            else:
+                plan_granted = session_allow
+            return "" if PLAN_APPROVAL_TOOL in plan_granted else PLAN_APPROVAL_TOOL
         if tc.name in SAFE_HEADLESS_TOOLS:
             # The daemon's own resolver grants these with nobody present
             # (``delegate``/``spawn_agent`` never touch the host), so a
@@ -2497,8 +2572,14 @@ class AgentRuntime:
                 # v1.346.0: never on a priced ask — the next quote is a
                 # different spend.
                 and spend is None
+                # v1.350.0: never on a plan — the next plan is a different one.
+                and tc.name != PLAN_APPROVAL_TOOL
             ),
         }
+        if tc.name == PLAN_APPROVAL_TOOL:
+            # v1.350.0: a plan is approved or declined, nothing wider — the
+            # card's "Allow once" + "Deny" (the chat lane's local-only flag).
+            requested["once_only"] = True
         if spend is not None:
             # v1.346.0: what this call would spend, in the service's words —
             # the card's one quiet line (lock-step with the chat lane's frame).
@@ -2586,7 +2667,9 @@ class AgentRuntime:
             # no store / no scope, still ran the call: "always" degrades to
             # "once", never to a refusal.
             store = getattr(self.p, "grants", None)
-            if store is not None:
+            # v1.350.0: a plan card never offers "Always"; an answer that says
+            # it anyway approves THIS plan and remembers nothing.
+            if store is not None and tc.name != PLAN_APPROVAL_TOOL:
                 try:
                     store.bind_loop(asyncio.get_running_loop())
                     await asyncio.to_thread(self._mint_always, session, calls)
@@ -2600,6 +2683,42 @@ class AgentRuntime:
         if decision == "deny":
             return "the user declined this call when asked", set()
         return PAUSE_TIMEOUT_REASON, set()
+
+    async def ask_plan_approval(
+        self,
+        run: "AgentRun | None",
+        session: Session,
+        agent_def: AgentDefinition,
+        session_allow: set[str],
+        steps: list[str],
+    ) -> str:
+        """Ask the user to approve a plan before any of its steps runs
+        (v1.350.0). ``""`` = go (approved, or nothing could ask); otherwise
+        the plain sentence the run ends with (declined / unanswered).
+
+        One ordinary pause through :meth:`_pause_for_approval` — the same
+        card the chat renders for an agent's ask, the same ledger
+        (``approval.requested`` / ``approval.resolved``), the same WAITING
+        state on the run and the same no-clock wait for an attended origin —
+        for :data:`PLAN_APPROVAL_TOOL` with the step goals as its arguments.
+        The caller decides WHETHER to ask (:func:`plan_approval_wanted`, and
+        never on a resume); a cancel of the session while it waits propagates
+        exactly as it does for any other ask."""
+        from ..providers.adapters.base import ToolCall
+
+        call = ToolCall(
+            id=f"plan_{getattr(run, 'id', '') or session.id}",
+            name=PLAN_APPROVAL_TOOL,
+            arguments={"steps": [str(s) for s in steps]},
+        )
+        refusal, _grant = await self._pause_for_approval(
+            session, call, agent_def, session_allow, run=run
+        )
+        if not refusal:
+            return ""
+        if refusal == PAUSE_TIMEOUT_REASON:
+            return PLAN_UNANSWERED_RESULT
+        return PLAN_DECLINED_RESULT
 
     def _persist_grant(self, session_id: str, names: set[str]) -> list[str]:
         """Union ``names`` into the session row's ``allow_tools_json``

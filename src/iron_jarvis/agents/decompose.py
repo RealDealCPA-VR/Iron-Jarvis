@@ -1395,6 +1395,43 @@ async def run_decomposed(
         {"run_id": run.id, "steps": [s.goal for s in plan]},
         session_id=session.id,
     )
+    # THE PLAN ASK (v1.350.0). With "Ask me to approve an agent's plan" on
+    # (``config.plan_approval``, OFF by default) a run a person is watching
+    # shows its plan and waits for Approve before ANY step runs — one
+    # ordinary ask (``runtime.ask_plan_approval``: the chat's card, the ask
+    # ledger, no clock for an attended origin). Background doors never wait
+    # (``plan_approval_wanted``), and a RESUMED run carries on in the plan it
+    # already had. Approve runs the plan unchanged; Deny ends the run before
+    # any step, every step recorded as not attempted, the result saying so.
+    ask_plan = getattr(runtime, "ask_plan_approval", None)
+    if resume is None and callable(ask_plan):
+        from .runtime import PLAN_DECLINED_RESULT, PlanDeclined, plan_approval_wanted
+
+        if plan_approval_wanted(cfg, session):
+            if sink is not None:
+                sink.phase("planning", "waiting for you to approve the plan")
+            refusal = await ask_plan(
+                run, session, agent_def, session_allow, [s.goal for s in plan]
+            )
+            if refusal:
+                why = (
+                    "not run — you declined the plan"
+                    if refusal == PLAN_DECLINED_RESULT
+                    else "not run — the plan was not approved"
+                )
+                if on_step is not None:
+                    await on_step([
+                        StepResult(
+                            index=i, goal=s.goal, ok=False, reason=why,
+                            verified="none", attempted=False,
+                        )
+                        for i, s in enumerate(plan)
+                    ])
+                raise PlanDeclined(
+                    refusal
+                    + "\n\nThe plan was:\n"
+                    + "\n".join(f"{i + 1}. {s.goal}" for i, s in enumerate(plan))
+                )
     if sink is not None:
         sink.phase(
             "running",

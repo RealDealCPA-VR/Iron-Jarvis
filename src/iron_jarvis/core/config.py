@@ -618,6 +618,16 @@ class Config(BaseModel):
     # so the flat loop and the offline suite stay byte-for-byte unchanged; a
     # persisted config without this key defaults cleanly to False.
     decompose_all_tasks: bool = False
+    #: PLAN APPROVAL (v1.350.0): when an agent run splits its job into steps
+    #: (``agents/decompose.run_decomposed``), show the plan and WAIT for the
+    #: user's Approve before any step runs. Only runs a person is watching ask
+    #: (``runtime.ATTENDED_ORIGINS``: chat, a job from the Agents page, a
+    #: project task, a user-started run); schedules, goals, workflows, the
+    #: phone and every other background door never wait, and a resumed run
+    #: carries on in the plan it already had. OFF by default (the user's
+    #: decision, 2026-10-17): the plan shows as a live checklist and nothing
+    #: waits. A persisted config without the key loads cleanly to False.
+    plan_approval: bool = False
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the

@@ -1020,6 +1020,63 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="session not found")
         return result
 
+    @app.get("/sessions/{session_id}/plan")
+    async def session_plan(session_id: str, request: Request) -> Response:
+        """The plan of this session's newest planned run, as a live checklist
+        (v1.350.0): ``{run_id, steps: [{goal, state}]}``, ``state`` one of
+        waiting | running | done | failed | skipped (``transcript.
+        plan_checklist`` says how each is derived from the stored step
+        results and whether the run is still going). Every step is
+        ``waiting`` while the plan itself awaits the user's Approve.
+
+        404 — said plainly — for an unknown session, a session whose run has
+        not split its work into steps, and a plan record that cannot be read
+        (never a 500, never an older plan in its place). The reads run OFF the
+        loop; the pending-ask check stays ON it (the approvals registry is
+        in-memory and loop-owned). Served with the ``/sessions`` ETag, so an
+        unchanged poll is a bodiless 304."""
+        from ...agents.runtime import PLAN_APPROVAL_TOOL
+        from ...agents.transcript import PlanUnreadable, latest_plan, plan_checklist
+
+        awaiting = False
+        pending_for = getattr(getattr(d.platform, "approvals", None), "pending_for", None)
+        if callable(pending_for):
+            try:
+                awaiting = any(
+                    isinstance(a, dict) and a.get("tool") == PLAN_APPROVAL_TOOL
+                    for a in (pending_for(session_id) or [])
+                )
+            except Exception:  # noqa: BLE001 — a listing must never break the read
+                awaiting = False
+
+        def _read() -> tuple[str, dict[str, Any] | None]:
+            if d.orchestrator.get_session(session_id) is None:
+                return "missing", None
+            try:
+                return "ok", latest_plan(d.platform.engine, session_id)
+            except PlanUnreadable:
+                return "unreadable", None
+
+        kind, stored = await asyncio.to_thread(_read)
+        if kind == "missing":
+            raise HTTPException(status_code=404, detail="session not found")
+        if kind == "unreadable":
+            raise HTTPException(
+                status_code=404, detail="The plan this session kept could not be read."
+            )
+        if stored is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No plan for this session: its run has not split the work into steps.",
+            )
+        return _etagged_json(
+            {
+                "run_id": stored["run_id"],
+                "steps": plan_checklist(stored, awaiting_approval=awaiting),
+            },
+            request,
+        )
+
     @app.get("/sessions/{session_id}/team")
     def session_team(session_id: str) -> dict[str, Any]:
         """The delegation tree under one session (v1.166.0).

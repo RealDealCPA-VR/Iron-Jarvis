@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 from ..core.db import session_scope
@@ -220,6 +221,124 @@ def load_plan(engine: Any, run_id: str) -> tuple[list[Any], list[Any]] | None:
     if not plan or len(results) > len(plan):
         return None
     return plan, results
+
+
+# --- the plan as a live checklist (v1.350.0) --------------------------------
+
+#: A plan step's state on the checklist (``GET /sessions/{id}/plan``).
+STEP_STATES = ("waiting", "running", "done", "failed", "skipped")
+
+#: Session statuses that mean "still going" (queued counts: it will run).
+_LIVE_SESSION = ("active", "queued")
+#: Run states that mean "over", whatever the session row says yet.
+_ENDED_RUN = ("completed", "failed", "cancelled")
+
+
+class PlanUnreadable(ValueError):
+    """The newest plan a session kept could not be read (a corrupt record)."""
+
+
+def _value(x: Any) -> str:
+    return str(getattr(x, "value", x) or "").lower()
+
+
+def _naive(dt: Any) -> Any:
+    """Order stored timestamps without mixing aware and naive values."""
+    return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) is not None else dt
+
+
+def latest_plan(engine: Any, session_id: str) -> dict[str, Any] | None:
+    """The plan of ``session_id``'s NEWEST run that kept one, or None when no
+    run of it did. BLOCKING (two indexed reads) — callers hop off the loop.
+
+    ``{run_id, goals: [str], results: [dict], run_state, session_status}``;
+    raises :class:`PlanUnreadable` when that plan's record cannot be read —
+    never a half-read plan, and never an OLDER plan shown in its place."""
+    from sqlmodel import select
+
+    from ..core.models import AgentRun, RunPlan, Session
+
+    with session_scope(engine) as db:
+        rows = [
+            (r.run_id, r.plan_json, r.results_json, r.updated_at)
+            for r in db.exec(select(RunPlan).where(RunPlan.session_id == session_id)).all()
+            if (r.plan_json or "[]") != "[]"  # ``has_plan``'s rule
+        ]
+        if not rows:
+            return None
+        runs = {
+            r.id: (r.created_at, _value(r.state))
+            for r in db.exec(
+                select(AgentRun).where(AgentRun.id.in_([row[0] for row in rows]))  # type: ignore[union-attr]
+            ).all()
+        }
+        sess = db.get(Session, session_id)
+        session_status = _value(sess.status) if sess is not None else ""
+
+    def _when(row: tuple[Any, ...]) -> tuple[Any, Any]:
+        # The run's start, then the plan's last write (two runs can start in
+        # one clock tick); a missing run row orders by the plan alone.
+        created = runs.get(row[0], (None, ""))[0]
+        written = _naive(row[3]) or datetime.min
+        return (_naive(created) or written, written)
+
+    run_id, plan_text, results_text, _updated = max(rows, key=_when)
+    try:
+        plan = json.loads(plan_text or "[]")
+        results = json.loads(results_text or "[]")
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise PlanUnreadable(run_id) from exc
+    if (
+        not isinstance(plan, list)
+        or not plan
+        or not all(isinstance(s, dict) and isinstance(s.get("goal"), str) for s in plan)
+        or not isinstance(results, list)
+        or not all(isinstance(r, dict) for r in results)
+        or len(results) > len(plan)
+    ):
+        raise PlanUnreadable(run_id)
+    return {
+        "run_id": run_id,
+        "goals": [s["goal"] for s in plan],
+        "results": results,
+        "run_state": runs.get(run_id, (None, ""))[1],
+        "session_status": session_status,
+    }
+
+
+def plan_checklist(stored: dict[str, Any], *, awaiting_approval: bool = False) -> list[dict[str, str]]:
+    """``[{goal, state}]`` for a :func:`latest_plan` answer. Pure.
+
+    A step with a result is ``done`` (it passed), ``failed`` (it ran and did
+    not), or ``skipped`` (never attempted: the budget ran out, or the user
+    declined the plan). A step without one, while the run is LIVE, is
+    ``running`` (the first such step) or ``waiting`` — every one of them
+    ``waiting`` while the plan itself awaits the user's Approve. Once the run
+    is over they are ``skipped``, except the step a FAILED run was cut off in,
+    which is ``failed``."""
+    goals = list(stored.get("goals") or [])
+    results = list(stored.get("results") or [])
+    run_state = str(stored.get("run_state") or "")
+    status = str(stored.get("session_status") or "")
+    live = status in _LIVE_SESSION and run_state not in _ENDED_RUN
+    ended_failed = "failed" in (status, run_state)
+    done = len(results)
+    out: list[dict[str, str]] = []
+    for i, goal in enumerate(goals):
+        if i < done:
+            r = results[i]
+            if r.get("attempted", True) is False:
+                state = "skipped"
+            elif r.get("ok") is True:
+                state = "done"
+            else:
+                state = "failed"
+        elif live:
+            state = "running" if i == done and not awaiting_approval else "waiting"
+        else:
+            state = "failed" if i == done and ended_failed else "skipped"
+        out.append({"goal": str(goal), "state": state})
+    return out
 
 
 def load_for_resume(engine: Any, run_id: str, registry: Any = None) -> list[Any] | None:

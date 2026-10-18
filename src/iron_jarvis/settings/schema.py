@@ -304,6 +304,14 @@ SETTINGS: tuple[SettingDef, ...] = (
       "When there is no cap and more than this many background runs are going at once, "
       "the bell asks whether to queue the extras. 0 = never ask.",
       tier="allow", check=_range(0, 64), aliases=("busy notice", "busy runs")),
+    # v1.350.0: an agent's plan, shown before any step runs. Turning it OFF
+    # from chat asks every time (a model must not quietly drop the check).
+    S("plan_approval", "Ask me to approve an agent's plan before it starts", "automation", "bool",
+      "When an agent splits a job into steps, it shows you the plan and does nothing until "
+      "you press Approve. Only runs started from chat or the Agents page wait; schedules, "
+      "goals and other background runs never do. Off: the plan shows as a checklist and "
+      "the work starts at once.",
+      tier="allow", floor_when=(False,), aliases=("plan approval", "approve the plan", "approve plans")),
     S("autonomy_enabled", "Autonomy (the pulse)", "automation", "bool",
       "Let Iron Jarvis deliberate on your goals and propose (or, within budget, act).",
       tier="ask-floor", section="Autonomy", aliases=("autonomy",)),
