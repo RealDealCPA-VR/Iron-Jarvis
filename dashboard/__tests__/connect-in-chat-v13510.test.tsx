@@ -256,6 +256,12 @@ describe("connect from chat, then carry on (G15)", () => {
     expect(readFileSync(join(__dirname, "..", "lib", "relocated.ts"), "utf8").replace(/\r\n/g, "\n")).toMatch(
       /"\/marketplace": \{ base: "\/settings", extra: \{ section: "connections-apps" \} \}/,
     );
+    // ...and it is a client-side door (next/link, like the chat's other
+    // Directory links), not a plain <a> that reloads the whole chat page.
+    const cards = readFileSync(join(__dirname, "..", "components", "chat", "ConfigCards.tsx"), "utf8").replace(/\r\n/g, "\n");
+    expect(cards).toMatch(/^import Link from "next\/link";$/m);
+    const notLoaded = cards.slice(cards.indexOf('data-testid="credential-card-not-loaded"'));
+    expect(notLoaded.slice(0, notLoaded.indexOf("</span>"))).toMatch(/<Link href="\/marketplace"[^>]*>\s*open Apps &amp; tools\s*<\/Link>/);
     expect(within(saved).getByTestId("credential-card-not-loaded").getAttribute("title")).toBe("the package was not found");
     expect(screen.queryByTestId("credential-card-continue")).toBeNull();
   });
