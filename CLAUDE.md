@@ -3590,13 +3590,20 @@ does not need a bump, stop and bump it.
   the chat's ask fold and listing poll also read `once_only`;
   `armFromApproval` never arms `approve_plan`; a polled plan ask (no args)
   borrows its goals from the live plan; the bell says "It wants you to
-  approve its plan" and drops "Allow for this run" (flag or name).
+  approve its plan" and drops "Allow for this run" (flag or name). The
+  MISSION screen draws its OWN card (`MissionOutput`'s local
+  `ApprovalCard`, not the chat's) and teammate line (`AgentCards`), so the
+  chat card's rule never reached them (re-review): both know `approve_plan`
+  by name too — plan words, the parked session's plan read from
+  `GET /sessions/{id}/plan` (the coordinator's or the TEAMMATE's own), Allow
+  once + Decline, never "Allow for this task" (`plan-mission-v1350`). A NEW
+  answering surface must check `PLAN_TOOL` the same way.
   `PLAN_TOOL` is defined ONCE in `lib/toolWords.ts` (dependency-free — the
   bell is on every page; `lib/approvalPreview` re-exports it). The contract is ONE fixture
   (`dashboard/__tests__/fixtures/plan-contract-v1350.json`, regenerate with
   `IJ_REGEN_PLAN_CONTRACT=1`). Pins: `tests/test_plan_{checklist,contract,
   integration}_v1350.py`, `dashboard/__tests__/plan-{checklist,
-  checklist-session,contract,finalize-fresh}-v1350.test.tsx`;
+  checklist-session,contract,finalize-fresh,mission}-v1350.test.tsx`;
   `chat-wave3-v1311` derives `lib/planChecklist`'s event types. Known: a
   restart while a plan card is unanswered reconciles the run FAILED and
   Continue resumes it WITHOUT asking (resume is never gated) while its

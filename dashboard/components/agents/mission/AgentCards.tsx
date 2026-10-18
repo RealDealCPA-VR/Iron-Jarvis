@@ -20,6 +20,8 @@ import Link from "next/link";
 import { memo, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, Square } from "lucide-react";
 import { post } from "@/lib/api";
+// v1.350.0 re-review: the plan approval's name (dependency-free).
+import { PLAN_TOOL } from "@/lib/toolWords";
 import AgentFace, { type FaceMood } from "@/components/agents/AgentFace";
 import {
   baseName,
@@ -239,7 +241,10 @@ function AgentCard({
           )}
           {m.waiting_on && (
             <div className="text-tone-warn">
-              Waiting for your OK to use {m.waiting_on.tool.replace(/_/g, " ")}.
+              {/* v1.350.0 re-review: the plan approval is not a tool to use. */}
+              {m.waiting_on.tool === PLAN_TOOL
+                ? "Waiting for you to approve its plan."
+                : `Waiting for your OK to use ${m.waiting_on.tool.replace(/_/g, " ")}.`}
             </div>
           )}
           {m.result && (

@@ -39,6 +39,10 @@ import { ApiError, post } from "@/lib/api";
 import { Markdown, MemoMarkdown, CopyIconButton } from "@/components/Markdown";
 import { MediaGroup } from "@/components/MediaLightbox";
 import { DocPreview } from "@/components/chat/DocPreview";
+// v1.350.0 re-review: a plan ask is answered here too (see ApprovalCard).
+import { readSessionPlan } from "@/components/chat/PlanChecklist";
+import { stepGoalText, type PlanView } from "@/lib/planChecklist";
+import { PLAN_TOOL } from "@/lib/toolWords";
 import {
   MISSION_TERMINAL,
   baseName,
@@ -78,12 +82,44 @@ export function deliverableFor(view: MissionView | null, live: MissionLive): Del
   return { text: "", source: "none", who: "" };
 }
 
-function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: string; onAnswered: () => void }) {
+function ApprovalCard({
+  waiting,
+  who,
+  session,
+  onAnswered,
+}: {
+  waiting: WaitingOn;
+  who: string;
+  /** The session parked on the ask (the coordinator's or the teammate's):
+   *  whose plan a plan ask reads. */
+  session: string | null;
+  onAnswered: () => void;
+}) {
   // v1.309.0: also drawn for each TEAMMATE parked on an ask — the daemon files
   // a teammate's ask under the teammate's own session, and the answer route
   // takes the approval id alone, so the same three answers work for it.
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // v1.350.0 re-review: the PLAN ask (`approve_plan`, the optional "Ask me to
+  // approve an agent's plan") is approved once or declined, nothing wider, as
+  // on every other surface: this card is the mission screen's own, so the
+  // chat card's rule never reached it. It says so in words and shows the
+  // plan (the daemon's copy of that session's plan, every step waiting while
+  // the ask is out): approving a plan you cannot read is not a decision. A
+  // 404 (no copy) leaves the words and the two answers.
+  const planAsk = waiting.tool === PLAN_TOOL;
+  const [plan, setPlan] = useState<PlanView | null>(null);
+  useEffect(() => {
+    if (!planAsk || !session) return;
+    let alive = true;
+    void readSessionPlan(session).then((p) => {
+      if (alive) setPlan(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [planAsk, session]);
+  const more = plan && plan.total !== null && plan.total > plan.steps.length ? plan.total - plan.steps.length : 0;
   const answer = async (decision: "once" | "conversation" | "deny") => {
     setBusy(true);
     setNote(null);
@@ -103,22 +139,51 @@ function ApprovalCard({ waiting, who, onAnswered }: { waiting: WaitingOn; who: s
       data-testid="mission-approval"
       className="mt-3 rounded-xl border border-tone-warn/30 bg-tone-warn/10 px-3 py-2.5 text-[13px] text-zinc-100"
     >
-      <div>
-        <strong>{who}</strong> wants to use <strong>{waiting.tool.replace(/_/g, " ")}</strong>. Nothing runs until
-        you answer.
-      </div>
+      {planAsk ? (
+        <div>
+          <strong>{who}</strong> wants you to approve its plan. No step runs until you answer; Decline ends its run
+          before any step runs.
+        </div>
+      ) : (
+        <div>
+          <strong>{who}</strong> wants to use <strong>{waiting.tool.replace(/_/g, " ")}</strong>. Nothing runs until
+          you answer.
+        </div>
+      )}
+      {planAsk && plan ? (
+        <>
+          <ol
+            data-testid="mission-approval-plan"
+            aria-label={plan.steps.length === 1 ? "The plan, 1 step" : `The plan, ${plan.steps.length} steps`}
+            className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[12px] leading-relaxed text-zinc-300 marker:text-zinc-500"
+          >
+            {plan.steps.map((s) => (
+              <li key={s.index} className="whitespace-pre-wrap break-words pl-1">
+                {stepGoalText(s)}
+              </li>
+            ))}
+          </ol>
+          {more > 0 ? (
+            <div className="pl-5 text-[12px] text-zinc-500">
+              …and {more === 1 ? "1 more step" : `${more} more steps`}
+            </div>
+          ) : null}
+        </>
+      ) : null}
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" disabled={busy} className="btn-accent px-3 py-1 text-xs" onClick={() => void answer("once")}>
           Allow once
         </button>
-        <button
-          type="button"
-          disabled={busy}
-          className="btn-ghost px-3 py-1 text-xs"
-          onClick={() => void answer("conversation")}
-        >
-          Allow for this task
-        </button>
+        {!planAsk && (
+          <button
+            type="button"
+            disabled={busy}
+            className="btn-ghost px-3 py-1 text-xs"
+            onClick={() => void answer("conversation")}
+          >
+            Allow for this task
+          </button>
+        )}
         <button type="button" disabled={busy} className="btn-ghost px-3 py-1 text-xs" onClick={() => void answer("deny")}>
           Decline
         </button>
@@ -513,9 +578,23 @@ export function MissionOutput({
             {actNote}
           </div>
         )}
-        {waiting && <ApprovalCard waiting={waiting} who={view?.coordinator.name ?? "Jarvis"} onAnswered={onChanged} />}
+        {waiting && (
+          <ApprovalCard
+            key={waiting.approval_id}
+            waiting={waiting}
+            who={view?.coordinator.name ?? "Jarvis"}
+            session={sid || null}
+            onAnswered={onChanged}
+          />
+        )}
         {memberAsks.map((m) => (
-          <ApprovalCard key={m.waiting_on!.approval_id} waiting={m.waiting_on!} who={m.name} onAnswered={onChanged} />
+          <ApprovalCard
+            key={m.waiting_on!.approval_id}
+            waiting={m.waiting_on!}
+            who={m.name}
+            session={m.session_id}
+            onAnswered={onChanged}
+          />
         ))}
       </header>
 
