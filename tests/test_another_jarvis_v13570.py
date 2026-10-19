@@ -115,8 +115,12 @@ def lan(monkeypatch):
     return make
 
 
-def _scripted(answer: str, seen: list | None = None):
-    """B's model: one final answer (the run itself is the real runtime)."""
+def _scripted(answer: str, seen: list | None = None, *, provider: str = "mock", model: str = "mock"):
+    """B's model: one final answer (the run itself is the real runtime).
+    ``provider`` is the label the run records as what answered: "mock" is the
+    DEMO model, whose answer comes home with ``task_door.DEMO_ANSWER_NOTE``
+    (v1.357.0 re-review) — pass a real one where the scripted answer stands
+    in for a real model."""
 
     async def fake_stream(**kw):
         if seen is not None:
@@ -124,8 +128,8 @@ def _scripted(answer: str, seen: list | None = None):
         yield {
             "type": "final",
             "response": LLMResponse(text=answer),
-            "provider": "mock",
-            "model": "mock",
+            "provider": provider,
+            "model": model,
         }
 
     return fake_stream
@@ -494,7 +498,12 @@ async def test_two_computers_desk_does_the_task_and_the_answer_comes_home(tmp_pa
     b = create_app(str(tmp_path / "b"))  # "desk", the second computer
     net = lan({A_HOST: a, B_HOST: b})
     seen: list = []
-    b.state.platform.router.stream = _scripted("Desk read the notes: three action items.", seen)
+    # Desk answers on a REAL model here (v1.357.0 re-review: the scripted
+    # answer used to carry the demo model's label, which now comes home with
+    # the demo note — tests/test_rereview_wave7_v13570.py pins that case).
+    b.state.platform.router.stream = _scripted(
+        "Desk read the notes: three action items.", seen, provider="openai", model="gpt-5"
+    )
 
     async with _client(A_HOST) as ca, _client(B_HOST) as cb:
         # On B: Agents › Your team › Another computer running Jarvis › Turn on.

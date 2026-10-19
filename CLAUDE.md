@@ -3572,7 +3572,13 @@ does not need a bump, stop and bump it.
   (`is_task_door_url`); registering a door turns message-back on; a chat
   dialect for a door is refused before the credential is touched; one
   `routes/agents.reachability()` sentence serves both doors and nothing ever
-  opens a bind or edits `IRONJARVIS_HOST_ALLOWLIST`. Dashboard:
+  opens a bind or edits `IRONJARVIS_HOST_ALLOWLIST`. (re-review) The sender
+  DIALS `task_door.door_address(base_url)` — `is_task_door_url` accepts a
+  trailing "/", the auth exemption is exact, and the typed form looped on
+  "token does not match"; a finished run the DEMO model answered comes home
+  with `DEMO_ANSWER_NOTE` (a fresh second computer's scripted "all subtasks
+  complete" read as real work — the inbound line has no receipt).
+  `tests/test_rereview_wave7_v13570.py`. Dashboard:
   `components/agents/AnotherJarvisCard.tsx` (end of RemoteAgentsSection, the
   **New & manage** tab), `lib/anotherJarvis.ts`; `lib/remoteTask.ts` is the
   words ("From desk" on OriginChip / the session page, "A task from desk" in

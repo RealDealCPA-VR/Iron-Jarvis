@@ -1924,6 +1924,10 @@ screen. The look of the app is the same.
     reason is written on the run and on the tile. A task sent from a
     local-only chat is refused there when that computer's model is off its
     own network.
+  - If nobody has chosen a model on the computer doing the work yet, it
+    answers with its demo model, and the answer says so: "this answer came
+    from the demo model on that computer: a scripted demo, not real answers".
+    Choose a model there to get real answers.
   - Both computers must be opened to each other on purpose: the installed app
     answers only on its own PC. The tiles say what to set; nothing is opened
     for you.

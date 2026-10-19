@@ -486,18 +486,46 @@ def _take_reply_token(secrets: Any, session_id: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: The note a DEMO answer carries home (v1.357.0 re-review). A fresh install
+#: answers on the demo model, so a second computer nobody chose a model on
+#: turned "@desk summarise the Q3 notes" into "Delegated the task to a
+#: subagent; all subtasks complete." in the asking chat, undisclosed (the line
+#: an inbound door lands has no receipt to say it). In the canon's words
+#: (VOCABULARY.md; dashboard lib/demoWords DEMO_MODEL and DEMO_REPLIES), from
+#: the asking computer's side: "that computer" is the one that ran it.
+DEMO_ANSWER_NOTE = (
+    "Note: this answer came from the demo model on that computer: a scripted "
+    "demo, not real answers. Choose a model there to get real answers."
+)
+
+
+def _answered_by_demo(session: Any) -> bool:
+    """Did the demo model write this finished run's answer? (The served
+    provider is stamped on the row when the run ran; a run that failed or was
+    stopped carries a sentence of ours, not the demo's.)"""
+    from .chat_delivery import _status_value
+
+    return (
+        _status_value(session) == "completed"
+        and str(getattr(session, "provider", "") or "").strip() == "mock"
+    )
+
+
 def _reply_message(session: Any) -> str:
     """The answer, in the words the sender's chat would show for this run
     (``chat_delivery.content_for_session``), secrets masked, cut to what the
-    receiving door accepts."""
+    receiving door accepts — and, when the demo model wrote it, saying so
+    (:data:`DEMO_ANSWER_NOTE`, kept whole past the cut)."""
     from ..detections.redact import mask
     from .chat_delivery import content_for_session
 
     text = str(mask(content_for_session(session)) or "").strip()
-    if len(text) > REPLY_MESSAGE_CHARS:
+    demo = ("\n\n" + DEMO_ANSWER_NOTE) if _answered_by_demo(session) else ""
+    room = REPLY_MESSAGE_CHARS - len(demo)
+    if len(text) > room:
         note = "\n\n(The answer was longer; the rest is on the other computer.)"
-        text = text[: REPLY_MESSAGE_CHARS - len(note)].rstrip() + note
-    return text
+        text = text[: room - len(note)].rstrip() + note
+    return text + demo
 
 
 def _reply_files(engine: Any, session_id: str) -> tuple[list[dict[str, str]], list[str]]:
