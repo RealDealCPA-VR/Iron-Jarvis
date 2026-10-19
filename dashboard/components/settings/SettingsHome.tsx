@@ -18,6 +18,11 @@
  * its section is open.
  *
  * A daemon with no schema (older than the dashboard) gets the previous form.
+ *
+ * v1.352.0 (G27): Permissions & ledger opens with "What Jarvis can reach"
+ * (components/settings/AccessSummary.tsx) — read-only, drawn from the SAVED
+ * values this page already read plus a few existing reads; its "Manage" /
+ * "Review" presses open the group and section where each thing is set.
  */
 
 import dynamic from "next/dynamic";
@@ -34,6 +39,7 @@ import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ThemeMaker } from "@/components/ThemeMaker";
 import { SettingRow, type SchemaSetting } from "@/components/settings/SettingRow";
 import { LedgerPanel } from "@/components/settings/LedgerPanel";
+import { AccessSummary } from "@/components/settings/AccessSummary";
 
 const LegacySettingsForm = dynamic(() => import("@/components/settings/pages/LegacySettingsForm"), { ssr: false });
 
@@ -240,6 +246,19 @@ export function SettingsHome() {
     return ["auto", ...rows.filter((r) => r.available && r.provider).map((r) => String(r.provider)), "mock"];
   }, [health]);
 
+  // Open a group (and one of its sections) from inside the page — the
+  // access summary's "Manage apps" / "Review" presses.
+  const goTo = useCallback((groupId: string, sub?: string) => {
+    setQuery("");
+    setActive(groupId);
+    setPhoneList(false);
+    if (!sub) return;
+    setOpenSub(sub);
+    window.setTimeout(() => {
+      document.getElementById(sub)?.scrollIntoView?.({ block: "start" });
+    }, 50);
+  }, []);
+
   async function save() {
     setSaving(true);
     setError("");
@@ -382,6 +401,9 @@ export function SettingsHome() {
               <h2 className="text-lg font-semibold text-zinc-50">{group.label}</h2>
               <p className="text-[13px] text-zinc-400">{group.description}</p>
             </div>
+          )}
+          {!q && active === "permissions" && groups !== null && (
+            <AccessSummary values={original} defs={defs} onGo={goTo} />
           )}
           {q && shown.length === 0 && subsShown.length === 0 && (
             <p className="text-[13px] text-zinc-400">Nothing matches “{q}”. Ctrl K also searches pages and chats.</p>

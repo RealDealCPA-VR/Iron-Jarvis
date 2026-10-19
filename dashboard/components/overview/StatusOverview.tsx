@@ -20,9 +20,9 @@
  * early when a run starts or ends.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Activity, AlertTriangle, Cpu, FolderKanban, HardDrive, Zap } from "lucide-react";
+import { Activity, AlertTriangle, ChevronDown, Cpu, FolderKanban, HardDrive, Zap } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
@@ -38,6 +38,7 @@ import { isDemoDefault, noModelChosen } from "@/lib/onboarding";
 import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { PageShell, Reveal } from "@/components/motion";
 import { Heartbeat, MapLegend, SystemMap, type SystemMapData } from "@/components/overview/SystemMap";
+import { RunningNow } from "@/components/RunningNow";
 
 /** GET /ui/system-map — the map plus the status line's own counts. */
 export type SystemMapResponse = SystemMapData & {
@@ -135,6 +136,10 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
     const t = window.setTimeout(reloadMap, 1200);
     return () => window.clearTimeout(t);
   }, [events, reloadMap]);
+
+  // v1.352.0 (G26): the Running vital opens the Running now list in place.
+  const [runningOpen, setRunningOpen] = useState(false);
+  const runningListId = useId();
 
   const offline = !daemon.checking && !daemon.online;
   const status = map.data?.status;
@@ -314,7 +319,25 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
               label="Running"
               icon={<Zap size={12} />}
               tone={runningCount > 0 ? "accent" : "neutral"}
-              value={String(runningCount)}
+              value={
+                <button
+                  type="button"
+                  data-testid="status-running-toggle"
+                  aria-expanded={runningOpen}
+                  aria-controls={runningOpen ? runningListId : undefined}
+                  aria-label={`${runningCount} running. ${runningOpen ? "Hide" : "Show"} what is running`}
+                  title={runningOpen ? "Hide what is running" : "Show what is running"}
+                  onClick={() => setRunningOpen((o) => !o)}
+                  className="inline-flex items-center gap-1 rounded-md underline decoration-white/20 decoration-dotted underline-offset-4 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                >
+                  {String(runningCount)}
+                  <ChevronDown
+                    size={13}
+                    aria-hidden
+                    className={`text-zinc-500 transition-transform motion-reduce:transition-none ${runningOpen ? "rotate-180" : ""}`}
+                  />
+                </button>
+              }
             />
             <HeroStat
               label="Runs this week"
@@ -336,6 +359,11 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
               value={String(failures)}
             />
           </div>
+          {runningOpen && (
+            <div id={runningListId} className="-mx-3 mt-4" data-testid="status-running-list">
+              <RunningNow />
+            </div>
+          )}
           <div className="mt-5">
             <Heartbeat hours={map.data?.heartbeat ?? []} />
           </div>

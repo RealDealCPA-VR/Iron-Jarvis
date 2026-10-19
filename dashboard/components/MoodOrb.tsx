@@ -32,6 +32,13 @@ import type { IJEvent } from "@/lib/types";
  * also asks once, on each socket RECONNECT, how the runs it still thinks are
  * in flight really stand (the slim `GET /sessions/{id}?transcript=0`, one per
  * run, usually none or one). Nothing is read while connected.
+ *
+ * v1.352.0 (G26): in the sidebar footer the orb is a BUTTON that opens
+ * "Running now" (components/RunningNow.tsx, the popover AppSidebar draws on
+ * the Help menu's surface): pass `onPress` (+ `expanded`, `controls`). It
+ * keeps its look exactly; its words move to the button's name. Without
+ * `onPress` (the system map's reactor, which sits in an aria-hidden,
+ * pointer-events-none layer) it stays the decorative `role="img"` it was.
  */
 
 type Mood = "idle" | "thinking" | "alert";
@@ -72,7 +79,46 @@ export const MOOD_EVENT_TYPES: readonly string[] = [
 const ENDED = new Set(["completed", "failed", "cancelled"]);
 const NONE: ReadonlySet<string> = new Set();
 
-export function MoodOrb() {
+/**
+ * The sessions/agents that started and have not completed yet, in the
+ * window's order — the orb's THINKING rule, exported so the Running now list
+ * re-reads when this set changes (v1.352.0). `settled` holds START frame ids a
+ * reconnect check found already ended (see the reconnect effect below).
+ */
+export function inFlightIds(events: readonly IJEvent[], settled: ReadonlySet<string> = NONE): string[] {
+  const done = new Set<string>();
+  for (const e of events) {
+    if (e.type === "session.completed" || e.type === "agent.completed") done.add(sid(e));
+    if (e.type === "sessions.interrupted") {
+      const ids = (e.payload as { session_ids?: unknown } | null)?.session_ids;
+      if (Array.isArray(ids)) for (const id of ids) done.add(String(id));
+    }
+  }
+  const live: string[] = [];
+  for (const e of events) {
+    if (
+      (e.type === "session.created" || e.type === "agent.started") &&
+      !done.has(sid(e)) &&
+      !settled.has(String(e.id)) &&
+      !live.includes(sid(e))
+    )
+      live.push(sid(e));
+  }
+  return live;
+}
+
+export function MoodOrb({
+  onPress,
+  expanded = false,
+  controls,
+}: {
+  /** Makes the orb a button (the sidebar footer: opens Running now). */
+  onPress?: () => void;
+  /** Whether what it opens is open (aria-expanded). */
+  expanded?: boolean;
+  /** The id of what it opens (aria-controls). */
+  controls?: string;
+} = {}) {
   const { events, connected } = useEvents(100, { types: MOOD_EVENT_TYPES });
   // The START frames of runs the daemon said had ended when asked after a
   // reconnect (see above). Keyed by the frame, not the session: a continue
@@ -81,28 +127,7 @@ export function MoodOrb() {
   const [settled, setSettled] = useState<ReadonlySet<string>>(NONE);
 
   // THINKING: the sessions/agents that started and have not completed yet.
-  const inFlight = useMemo<string[]>(() => {
-    const done = new Set<string>();
-    for (const e of events) {
-      if (e.type === "session.completed" || e.type === "agent.completed")
-        done.add(sid(e));
-      if (e.type === "sessions.interrupted") {
-        const ids = (e.payload as { session_ids?: unknown } | null)?.session_ids;
-        if (Array.isArray(ids)) for (const id of ids) done.add(String(id));
-      }
-    }
-    const live: string[] = [];
-    for (const e of events) {
-      if (
-        (e.type === "session.created" || e.type === "agent.started") &&
-        !done.has(sid(e)) &&
-        !settled.has(String(e.id)) &&
-        !live.includes(sid(e))
-      )
-        live.push(sid(e));
-    }
-    return live;
-  }, [events, settled]);
+  const inFlight = useMemo<string[]>(() => inFlightIds(events, settled), [events, settled]);
   const inFlightRef = useRef(inFlight);
   inFlightRef.current = inFlight;
   const eventsRef = useRef(events);
@@ -174,13 +199,9 @@ export function MoodOrb() {
   const alert = mood === "alert";
   const dim = mood === "idle";
 
-  return (
-    <span
-      className="relative grid h-9 w-9 shrink-0 place-items-center sm:h-8 sm:w-8"
-      title={`${LABEL[mood]}${connected ? "" : " · stream offline"}`}
-      aria-label={LABEL[mood]}
-      role="img"
-    >
+  const words = `${LABEL[mood]}${connected ? "" : " · stream offline"}`;
+  const look = (
+    <>
       {/* soft halo */}
       <span
         className={`absolute inset-0 rounded-full blur-[6px] transition-opacity duration-500 ${
@@ -237,6 +258,36 @@ export function MoodOrb() {
         />
         <circle cx="12" cy="12" r="1.1" fill={color} stroke="none" />
       </svg>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <button
+        type="button"
+        onClick={onPress}
+        aria-haspopup="dialog"
+        aria-expanded={expanded}
+        aria-controls={controls}
+        aria-label={`Running now: ${LABEL[mood]}`}
+        title={`${words} · see what is running`}
+        data-testid="mood-orb"
+        data-mood={mood}
+        className="relative grid h-9 w-9 shrink-0 place-items-center rounded-lg hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-8 sm:w-8"
+      >
+        {look}
+      </button>
+    );
+  }
+
+  return (
+    <span
+      className="relative grid h-9 w-9 shrink-0 place-items-center sm:h-8 sm:w-8"
+      title={words}
+      aria-label={LABEL[mood]}
+      role="img"
+    >
+      {look}
     </span>
   );
 }

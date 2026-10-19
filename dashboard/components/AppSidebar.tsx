@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -22,6 +22,7 @@ import { EVERYTHING_TAB_EVENT, PINS_EVENT, SIDEBAR_HREFS, readPins, surfaceFor, 
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
+import { RunningNow } from "@/components/RunningNow";
 import SidebarChats from "@/components/chat/SidebarChats";
 
 /**
@@ -38,7 +39,7 @@ import SidebarChats from "@/components/chat/SidebarChats";
  *                                      elsewhere the same grouped list
  *                                      (SidebarChats: projects, dots, ages)
  *   PROJECTS
- *   ● Running · v1.x   Help ▾          status, version, the Help menu (Q17)
+ *   ● Ready · v1.x  (orb)  Help ▾       status, version, Running now, Help (Q17)
  *
  * It replaces v1.318.0's Simple hubs and the Advanced menu (Q2): with four
  * items, Everything and the palette, nothing needs hiding. The four come from
@@ -202,25 +203,59 @@ function SidebarProjects({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-/** Status + version + the Help menu (AUDIT Q17: Help lives here, not as a
- *  fifth nav item). The dot opens Everything › Status. */
+/** Status + version + Running now + the Help menu (AUDIT Q17: Help lives
+ *  here, not as a fifth nav item). The dot opens Everything › Status.
+ *
+ *  v1.352.0 (G26): the word beside the dot is "Ready" — it says the APP is
+ *  up (it read "Running", which a new user took for "something is running").
+ *  What IS running is one press away: the orb opens "Running now"
+ *  (components/RunningNow.tsx) on the Help menu's surface. One popover at a
+ *  time; Escape or a press outside closes it (Escape gives focus back to the
+ *  orb); following a row closes it (and the phone drawer). */
 function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
   const { online, health } = useDaemon();
   const version = health?.version;
   const [helpOpen, setHelpOpen] = useState(false);
+  const [runningOpen, setRunningOpen] = useState(false);
+  const runningId = useId();
+  const runningHeadingId = `${runningId}-heading`;
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const runningRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!helpOpen) return;
     const close = (e: KeyboardEvent) => e.key === "Escape" && setHelpOpen(false);
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [helpOpen]);
+  // Running now: focus moves in on open; Escape / a press outside the footer
+  // closes it, Escape also puts focus back on the orb.
+  useEffect(() => {
+    if (!runningOpen) return;
+    runningRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setRunningOpen(false);
+      footerRef.current?.querySelector<HTMLElement>('[data-testid="mood-orb"]')?.focus();
+    };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (t && footerRef.current?.contains(t)) return;
+      setRunningOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [runningOpen]);
   const help = [
     { href: "/help", label: "Help and guides" },
     { href: `/chat?ask=${encodeURIComponent("@guide ")}`, label: "Ask the Guide" },
     { href: "/updates", label: "What's new and updates" },
   ];
   return (
-    <div className="relative border-t border-white/[0.06] px-2 py-2">
+    <div ref={footerRef} className="relative border-t border-white/[0.06] px-2 py-2">
       <div className={`flex items-center gap-2 ${collapsed ? "flex-col" : ""}`}>
         <Link
           href="/everything#status"
@@ -230,7 +265,7 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
             onNavigate?.();
           }}
           data-testid="sidebar-status"
-          title={online ? "Running — open Status" : "Not running — reopen Iron Jarvis"}
+          title={online ? "Iron Jarvis is up — open Status" : "Not running — reopen Iron Jarvis"}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-[12px] hover:bg-white/[0.04]"
         >
           <span
@@ -241,15 +276,25 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
           />
           {!collapsed && (
             <span className="truncate">
-              <span className={online ? "text-zinc-300" : "text-zinc-500"}>{online ? "Running" : "Not running"}</span>
+              <span className={online ? "text-zinc-300" : "text-zinc-500"}>{online ? "Ready" : "Not running"}</span>
               <span className="font-mono text-zinc-600">{version ? ` · v${version}` : ""}</span>
             </span>
           )}
         </Link>
-        <MoodOrb />
+        <MoodOrb
+          onPress={() => {
+            setHelpOpen(false);
+            setRunningOpen((o) => !o);
+          }}
+          expanded={runningOpen}
+          controls={runningOpen ? runningId : undefined}
+        />
         <button
           type="button"
-          onClick={() => setHelpOpen((o) => !o)}
+          onClick={() => {
+            setRunningOpen(false);
+            setHelpOpen((o) => !o);
+          }}
           aria-haspopup="menu"
           aria-expanded={helpOpen}
           aria-label="Help"
@@ -259,6 +304,27 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
           <HelpCircle size={15} />
         </button>
       </div>
+      {runningOpen && (
+        <div
+          id={runningId}
+          ref={runningRef}
+          role="dialog"
+          aria-labelledby={runningHeadingId}
+          tabIndex={-1}
+          data-testid="running-now-popover"
+          className={`absolute z-50 max-h-[60vh] overflow-y-auto rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl outline-none backdrop-blur-xl ${
+            collapsed ? "bottom-2 left-full ml-2 w-72" : "bottom-12 left-2 right-2"
+          }`}
+        >
+          <RunningNow
+            headingId={runningHeadingId}
+            onNavigate={() => {
+              setRunningOpen(false);
+              onNavigate?.();
+            }}
+          />
+        </div>
+      )}
       {helpOpen && (
         <div
           role="menu"

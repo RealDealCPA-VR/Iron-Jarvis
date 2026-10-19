@@ -18,9 +18,20 @@
  *
  * The keys are the WIRE vocabulary: rename a label freely, never a key.
  * Order = strictest first, the old select's order and the menu's.
+ *
+ * v1.352.0 (G27): READING is not gated by any level. Every file tool reads
+ * through `core/fs_policy` (`fs_read_ok`), which refuses only the folders
+ * holding the app's keys and records, plus anything outside
+ * `IRONJARVIS_FS_ALLOWLIST` when an install sets one, and no level cards a
+ * read. So every level's description says so (`READS_LINE`), and Settings ›
+ * Permissions & ledger opens with the same fact (components/settings/
+ * AccessSummary.tsx).
  */
 
 export type PermissionMode = "always_ask" | "approve_for_me" | "yolo";
+
+/** The one sentence every level carries: reading never asks (v1.352.0, G27). */
+export const READS_LINE = "Reads files anywhere on this PC without asking";
 
 export type PermissionTone = "neutral" | "warn";
 
@@ -36,17 +47,17 @@ export interface PermissionLevel {
 export const PERMISSION_LEVELS: Readonly<Record<PermissionMode, PermissionLevel>> = {
   always_ask: {
     label: "Ask first",
-    description: "Asks before it edits files, uses the internet or runs commands",
+    description: `Asks before it edits files, uses the internet or runs commands. ${READS_LINE}`,
     tone: "neutral",
   },
   approve_for_me: {
     label: "Ask when risky",
-    description: "Edits files and searches the web on its own, asks before running commands",
+    description: `Edits files and searches the web on its own, asks before running commands. ${READS_LINE}`,
     tone: "neutral",
   },
   yolo: {
     label: "Don't ask",
-    description: "Runs commands and edits files without asking you first. Use with care",
+    description: `Runs commands and edits files without asking you first. ${READS_LINE}. Use with care`,
     tone: "warn",
   },
 };
@@ -63,6 +74,21 @@ export function asPermissionMode(raw: unknown): PermissionMode {
   return typeof raw === "string" && (PERMISSION_MODES as readonly string[]).includes(raw)
     ? (raw as PermissionMode)
     : DEFAULT_PERMISSION_MODE;
+}
+
+/** Where the chat page keeps the level a NEW chat starts in, on this window
+ *  (`app/chat/page.tsx`'s `APPROVAL_MODE_KEY`; a test keeps the two equal).
+ *  A chat's own saved setup overrides it once that chat is open. */
+export const CHAT_LEVEL_KEY = "ij_chat_approval_mode";
+
+/** The level a new chat starts in on this window, read the way the chat page
+ *  reads it (an unknown or missing value is the default). Never throws. */
+export function readChatPermissionMode(): PermissionMode {
+  try {
+    return asPermissionMode(window.localStorage.getItem(CHAT_LEVEL_KEY));
+  } catch {
+    return DEFAULT_PERMISSION_MODE;
+  }
 }
 
 /** Text classes for a level's tone. Theme tokens only, so every Mark inks it. */
