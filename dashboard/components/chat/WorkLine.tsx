@@ -51,10 +51,19 @@
  * step counts only as failed ("read 1 web page, 7 failed", never "read 8 web
  * pages"), and a turn with any failed step folds under a warning triangle in
  * the theme's warn tone instead of the check.
+ *
+ * v1.352.0 (G22): a connected app's step reads "gmail: search messages" under
+ * a plug, counted "used gmail"; a browser step reads "Used your browser ·
+ * click" under a window, counted "used your browser" (lib/stepWords). The
+ * tool's id stays in the hover title. A FAILED app step offers one quiet
+ * "Fix in Tools" link beneath it (the Tools page, where the pack's own
+ * failure, last output and Retry live — the bell's pack_failed door).
  */
 
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
+  AppWindow,
   Check,
   ChevronDown,
   ChevronRight,
@@ -64,6 +73,7 @@ import {
   Folder,
   Globe,
   Loader2,
+  Plug,
   Search,
   SquareTerminal,
   Timer,
@@ -77,7 +87,8 @@ import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { secondsText, type ReceiptStep, type ReceiptTiming } from "@/components/chat/TurnReceipt";
 import { elapsedWords, useNow } from "@/components/chat/TurnClock";
 import { cleanTarget, secretLooking, stepTarget, toolKind, type WorkKind } from "@/lib/workTarget";
-import { STEP_WORDS, failedSteps, failedWords, rowSubject, stepCounts, stepPhrase } from "@/lib/stepWords";
+import { failedSteps, failedWords, kindWords, rowSubject, stepCounts, stepHint, stepPhrase } from "@/lib/stepWords";
+import { appToolParts } from "@/lib/toolWords";
 import {
   STEP_OUTPUT_LINES,
   capStepDetails,
@@ -106,6 +117,9 @@ const ICON: Record<WorkKind, LucideIcon> = {
   web: Globe,
   page: Globe,
   command: SquareTerminal,
+  // v1.352.0 (G22): the browser the user connected, and a connected app.
+  browser: AppWindow,
+  app: Plug,
   tool: Wrench,
 };
 
@@ -470,6 +484,29 @@ export function StepDetailPanel({ id, name, detail }: { id: string; name: string
   );
 }
 
+/**
+ * v1.352.0 (G22): the way forward beside a connected app's FAILED step — one
+ * quiet link to the Tools page (the bell's pack_failed door), where the
+ * pack's own failure, its last output and Retry live. A sibling of the row,
+ * never inside it (a row that opens is a button), indented to the row's
+ * words; no box, no border.
+ */
+export function FixInTools({ name }: { name: string }) {
+  const parts = appToolParts(name);
+  return (
+    <div className="min-w-0 pl-[22px] text-[12px] leading-5">
+      <Link
+        href="/tools"
+        data-testid="step-fix-tools"
+        title={parts ? `Open Tools to check ${parts.app}` : "Open Tools"}
+        className="rounded-sm text-zinc-500 underline-offset-2 transition-colors hover:text-zinc-300 hover:underline focus-visible:text-zinc-300 focus-visible:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 motion-reduce:transition-none"
+      >
+        Fix in Tools
+      </Link>
+    </div>
+  );
+}
+
 /** The last segment of a path, either separator. */
 function baseName(p: string): string {
   const parts = p.split(/[/\\]/).filter(Boolean);
@@ -546,7 +583,6 @@ function ToolRow({ card }: { card: ToolCard }) {
   // re-render as frames arrive.)
   const stepDetail = useMemo(() => (running ? null : cleanStepDetail(card.detail)), [running, card.detail]);
   const kind = toolKind(card.name);
-  const w = STEP_WORDS[kind];
   const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
   // The hover: a live FILE keeps its full path (it is on this screen only and
   // is never saved); a search or a page shows the safe words and the tool id.
@@ -555,7 +591,10 @@ function ToolRow({ card }: { card: ToolCard }) {
   // hover ("git push origin main (shell)"): with a grant there is no card, so
   // this is the only place on the chat page that says which command runs.
   // Screen only, never saved; dropped whole when it looks like a credential.
-  const argHover = kind === "command" || kind === "tool" ? liveArgHover(card) : null;
+  // (v1.352.0: an app's or a browser step's hover keeps saying it too — they
+  // read as "tool" before they had words of their own.)
+  const argHover =
+    kind === "command" || kind === "tool" || kind === "app" || kind === "browser" ? liveArgHover(card) : null;
   const subjectTitle =
     kind === "tool"
       ? argHover ?? card.name
@@ -571,11 +610,11 @@ function ToolRow({ card }: { card: ToolCard }) {
   const row = (
     <WorkRow
       icon={ICON[kind]}
-      title={subject ? (running ? w.doingOn : w.doneOn) : running ? w.doing : w.done}
+      title={kindWords(kind, card.name, { subject: !!subject, running })}
       subject={subject?.text ?? null}
       subjectFile={!!subject?.file}
       subjectTitle={subjectTitle}
-      detail={subject ? null : card.name}
+      detail={subject ? null : stepHint(kind, card.name)}
       detailTitle={subject ? card.name : argHover ?? card.name}
       running={running}
       failed={failed}
@@ -617,11 +656,13 @@ function ToolRow({ card }: { card: ToolCard }) {
       }
     />
   );
-  if (!stepDetail) return row;
+  const fix = failed && kind === "app" ? <FixInTools name={card.name} /> : null;
+  if (!stepDetail && !fix) return row;
   return (
     <>
       {row}
-      {open ? <StepDetailPanel id={panelId} name={card.name} detail={stepDetail} /> : null}
+      {open && stepDetail ? <StepDetailPanel id={panelId} name={card.name} detail={stepDetail} /> : null}
+      {fix}
     </>
   );
 }
@@ -782,6 +823,9 @@ function StepRow({ step }: { step: ReceiptStep }) {
       subjectFile={p.file}
       subjectTitle={p.subject ? (p.kind === "tool" ? step.name : `${p.subject} (${step.name})`) : undefined}
       detail={p.hint}
+      // v1.352.0 (G22): a browser step's quiet word is its action ("click");
+      // its tool id is the hover.
+      detailTitle={p.hint && p.hint !== step.name ? step.name : undefined}
       failed={failed}
       expand={stepDetail ? { open, onToggle: () => setOpen((v) => !v), controls: panelId } : null}
       meta={
@@ -802,11 +846,13 @@ function StepRow({ step }: { step: ReceiptStep }) {
       }
     />
   );
-  if (!stepDetail) return row;
+  const fix = failed && p.kind === "app" ? <FixInTools name={step.name} /> : null;
+  if (!stepDetail && !fix) return row;
   return (
     <>
       {row}
-      {open ? <StepDetailPanel id={panelId} name={step.name} detail={stepDetail} /> : null}
+      {open && stepDetail ? <StepDetailPanel id={panelId} name={step.name} detail={stepDetail} /> : null}
+      {fix}
     </>
   );
 }

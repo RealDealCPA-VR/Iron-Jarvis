@@ -20,7 +20,18 @@
  */
 
 import { looksLikeSecret } from "@/lib/configCards";
+import { appToolParts, isBuiltinBrowserTool } from "@/lib/toolWords";
 
+/**
+ * v1.352.0 (G22): two kinds that are not one tool but a whole surface:
+ *   - "app": a connected app's tool, `mcp__<pack>__<tool>` ("gmail: search
+ *     messages", counted "used gmail"), so a pack call no longer reads
+ *     "Ran mcp__gmail__search_messages" and counts as "ran 1 tool";
+ *   - "browser": the 14 BUILT-IN browser tools, by exact name (the list
+ *     lib/toolWords keeps for the approval card — never a `browser_`
+ *     prefix), "Used your browser".
+ * Neither has a target: an app's or a page's arguments are not described.
+ */
 export type WorkKind =
   | "read"
   | "make"
@@ -30,6 +41,8 @@ export type WorkKind =
   | "web"
   | "page"
   | "command"
+  | "browser"
+  | "app"
   | "tool";
 
 /** Built-in tools by EXACT name. Anything else is a plain "tool". */
@@ -66,11 +79,16 @@ const KIND_OF: Record<string, WorkKind> = {
   repl: "command",
 };
 
-/** The kind of a tool id. Exact match only: never trimmed, never a prefix. */
+/** The kind of a tool id. Exact match only: never trimmed, never a prefix.
+ *  v1.352.0 (G22): a built-in browser tool (by its exact name) is "browser",
+ *  a connected app's `mcp__<pack>__<tool>` is "app"; anything else is a
+ *  plain "tool". */
 export function toolKind(name: string): WorkKind {
-  return typeof name === "string" && Object.prototype.hasOwnProperty.call(KIND_OF, name)
-    ? KIND_OF[name]
-    : "tool";
+  if (typeof name !== "string") return "tool";
+  if (Object.prototype.hasOwnProperty.call(KIND_OF, name)) return KIND_OF[name];
+  if (isBuiltinBrowserTool(name)) return "browser";
+  if (appToolParts(name)) return "app";
+  return "tool";
 }
 
 /** The longest target kept, in characters (the cut adds one "…"). */

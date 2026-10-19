@@ -245,10 +245,12 @@ describe("Kanban page at zero sessions", () => {
     hooks.responses["/sessions"] = { sessions: [] };
     hooks.responses["/sessions/teams"] = { parents: {} };
     render(<KanbanPage />);
+    // v1.352.0 (G17, updated on purpose): the lanes are named by the one
+    // status table ("Working", "Done"; were "Active", "Completed").
     for (const label of [
-      "No active sessions",
+      "No working sessions",
       "No sessions awaiting review",
-      "No completed sessions",
+      "No done sessions",
       "No failed sessions",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();

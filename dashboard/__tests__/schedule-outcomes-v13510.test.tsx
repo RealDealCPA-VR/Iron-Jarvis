@@ -165,14 +165,20 @@ describe("lib/scheduleOutcome — one table of words", () => {
 
 /* -------------------------------------------------------- the Schedules page */
 
+// v1.352.0 (G17, updated on purpose): the Schedules row speaks the ONE status
+// table's words (lib/statusWords.scheduleRunWords) — "Done", "Done · needs
+// you", "Done · part failed", "Failed", "Not run yet" — the words a session,
+// a mission and the board say for the same run, in theme tone tokens (the
+// row's literal emerald/rose inks are gone). It read "✓ ok", "finished ·
+// needs you", "✗ failed" and "not run yet".
 describe("the Schedules page row", () => {
-  it("a run that needs the user is amber 'finished · needs you' with its session link — never ✓ ok", async () => {
+  it("a run that needs the user is amber 'Done · needs you' with its session link — never a green Done", async () => {
     mountPage([row({ last_status: "needs_you", last_detail: NEEDS_YOU_DETAIL, last_session_id: "session_abc" })]);
     const word = await screen.findByTestId("schedule-status-nightly");
-    expect(word.textContent).toBe("finished · needs you");
+    expect(word.textContent).toBe("Done · needs you");
     expect(word.className).toMatch(/text-tone-warn/);
-    expect(screen.queryByText("✓ ok")).toBeNull();
-    expect(screen.queryByText("not run yet")).toBeNull();
+    expect(screen.queryByText("Done")).toBeNull();
+    expect(screen.queryByText("Not run yet")).toBeNull();
     const cell = word.parentElement as HTMLElement;
     expect(within(cell).getByText(/open session/).closest("a")?.getAttribute("href")).toBe(
       "/sessions/session_abc",
@@ -180,18 +186,18 @@ describe("the Schedules page row", () => {
     expect(screen.getByTestId("schedule-detail-nightly").textContent).toBe(NEEDS_YOU_DETAIL);
   });
 
-  it("a partly failed run reads 'finished · part failed'", async () => {
+  it("a partly failed run reads 'Done · part failed'", async () => {
     mountPage([row({ last_status: "partial", last_detail: "Some of its steps failed." })]);
     const word = await screen.findByTestId("schedule-status-nightly");
-    expect(word.textContent).toBe("finished · part failed");
+    expect(word.textContent).toBe("Done · part failed");
     expect(word.className).toMatch(/text-tone-warn/);
   });
 
   it("a failed run keeps its red word and reads 'The run failed: <reason>'", async () => {
     mountPage([row({ last_status: "error", last_detail: "The run failed: the endpoint is down" })]);
     const word = await screen.findByTestId("schedule-status-nightly");
-    expect(word.textContent).toBe("✗ failed");
-    expect(word.className).toMatch(/text-rose-300/);
+    expect(word.textContent).toBe("Failed");
+    expect(word.className).toMatch(/text-tone-danger/);
     expect(screen.getByTestId("schedule-detail-nightly").textContent).toBe(
       "The run failed: the endpoint is down",
     );
@@ -204,18 +210,27 @@ describe("the Schedules page row", () => {
     expect(detail.getAttribute("title")).not.toMatch(/[#*]/);
   });
 
-  it("the unchanged words: ✓ ok, skipped, missed, not run yet", async () => {
+  it("the other words: Done, Skipped, Missed, Stopped, Not run yet", async () => {
     mountPage([
       row({ name: "a", last_status: "ok" }),
       row({ name: "b", last_status: "skipped" }),
       row({ name: "c", last_status: "missed" }),
       row({ name: "d", last_status: "" }),
+      row({ name: "e", last_status: "cancelled" }),
     ]);
-    expect((await screen.findByTestId("schedule-status-a")).textContent).toBe("✓ ok");
-    expect(screen.getByTestId("schedule-status-a").className).toMatch(/text-emerald-300/);
-    expect(screen.getByTestId("schedule-status-b").textContent).toBe("skipped");
-    expect(screen.getByTestId("schedule-status-c").textContent).toBe("missed");
-    expect(screen.getByTestId("schedule-status-d").textContent).toBe("not run yet");
+    expect((await screen.findByTestId("schedule-status-a")).textContent).toBe("Done");
+    expect(screen.getByTestId("schedule-status-a").className).toMatch(/text-tone-success/);
+    expect(screen.getByTestId("schedule-status-b").textContent).toBe("Skipped");
+    expect(screen.getByTestId("schedule-status-b").className).toMatch(/text-tone-warn/);
+    expect(screen.getByTestId("schedule-status-c").textContent).toBe("Missed");
+    expect(screen.getByTestId("schedule-status-d").textContent).toBe("Not run yet");
+    // A run stopped mid-way is not a failure and not a warning: slate.
+    expect(screen.getByTestId("schedule-status-e").textContent).toBe("Stopped");
+    expect(screen.getByTestId("schedule-status-e").className).toMatch(/text-zinc-500/);
+    // Theme tokens only: no literal hue is left on the row.
+    for (const n of ["a", "b", "c", "d", "e"]) {
+      expect(screen.getByTestId(`schedule-status-${n}`).className).not.toMatch(/emerald|rose|amber/);
+    }
   });
 
   it("Run now on a run that needs the user answers in amber, never 'Ran ✓'", async () => {

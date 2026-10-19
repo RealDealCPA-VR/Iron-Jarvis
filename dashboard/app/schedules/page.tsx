@@ -33,6 +33,7 @@ import {
   WarnNote,
   LoaderInline,
   ConfirmButton,
+  type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -44,28 +45,28 @@ import { PageGrid } from "@/components/PageGrid";
 // read as words ("guide" → "Guide"), a custom agent keeps the name the user
 // typed. The workflow editor's map knew only its own five agents.
 import { agentLabel } from "@/lib/agentWorlds";
-// v1.351.0 (readiness audit G01): the ONE table of how a last run went —
-// shared with a project's Schedules list.
-import { runNowNote, scheduleDetail, scheduleStatusWords } from "@/lib/scheduleOutcome";
+// v1.351.0 (readiness audit G01): how a last run went — the detail and the
+// Run now note (lib/scheduleOutcome, shared with a project's Schedules list).
+import { runNowNote, scheduleDetail } from "@/lib/scheduleOutcome";
+// v1.352.0 (G17): the row's WORD and tone come from the ONE status table —
+// "Done", "Done · needs you", "Done · part failed", "Failed", "Stopped" —
+// the same words a session, a mission and the board say for the same run.
+import { scheduleRunWords } from "@/lib/statusWords";
 
 /** Fallback only — the real list comes live from GET /agents (builtin +
  * dynamic), the same source NewSessionForm's picker uses. */
 const FALLBACK_AGENTS = ["builder", "supervisor", "planner", "researcher", "reviewer"];
 
-/** v1.351.0 (G01): the last-run word's ink. The four the row always had keep
- *  their exact classes (ok, failed, missed, skipped); every other verdict
- *  takes the theme tone for its kind (lib/scheduleOutcome). */
-const ROW_TONE: Record<string, string> = {
-  ok: "text-emerald-300",
-  error: "text-rose-300",
-  missed: "text-amber-300",
-  skipped: "text-amber-300",
-};
-const ROW_TONE_BY: Record<string, string> = {
-  success: "text-tone-success",
-  danger: "text-tone-danger",
-  warn: "text-tone-warn",
-  muted: "text-zinc-600",
+/** The last-run word's ink, by the table's tone (v1.352.0, G17): theme
+ *  tokens only — the row's old literal emerald/rose/amber inks are the same
+ *  hues on the dark Marks and re-ink properly on the light ones. */
+const ROW_INK: Record<Tone, string> = {
+  green: "text-tone-success",
+  red: "text-tone-danger",
+  amber: "text-tone-warn",
+  cyan: "text-accent-soft",
+  violet: "text-tone-violet",
+  slate: "text-zinc-500",
 };
 
 /** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
@@ -1011,17 +1012,18 @@ export default function SchedulesPage() {
                             {/* The row tells the TRUTH (v1.119.0): how the last
                                 fire went + a link to the actual session.
                                 v1.351.0 (G01): every verdict the daemon writes
-                                has its words (lib/scheduleOutcome) — a run that
-                                finished but needs the user, or partly failed,
-                                is amber, never "✓ ok" and never "not run
-                                yet"; the detail is plain words, never the
-                                report's markdown. */}
+                                has its words — a run that finished but needs
+                                the user, or partly failed, is amber, never a
+                                green "Done" and never "Not run yet"; the detail
+                                is plain words, never the report's markdown.
+                                v1.352.0 (G17): the words are the ONE status
+                                table's (lib/statusWords.scheduleRunWords). */}
                             <span
-                              className={`text-[12px] ${ROW_TONE[s.last_status ?? ""] ?? ROW_TONE_BY[scheduleStatusWords(s.last_status).tone]}`}
+                              className={`text-[12px] ${ROW_INK[scheduleRunWords(s.last_status).tone]}`}
                               data-testid={`schedule-status-${s.name}`}
                               data-status={s.last_status || "none"}
                             >
-                              {scheduleStatusWords(s.last_status).label}
+                              {scheduleRunWords(s.last_status).word}
                             </span>
                             {s.last_detail ? (
                               <div

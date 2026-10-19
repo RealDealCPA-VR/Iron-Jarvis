@@ -277,7 +277,10 @@ describe("the folded line says what the turn did, in plain words", () => {
     expect(toolKind("read_file")).toBe("read");
     expect(toolKind("read_file_backup")).toBe("tool");
     expect(toolKind("Read_file")).toBe("tool");
-    expect(toolKind("mcp__files__scan")).toBe("tool");
+    // v1.352.0 (G22, updated on purpose): a connected app's tool is no longer
+    // a plain tool — it reads "files: scan" and counts as "used files"
+    // (pinned in work-words-v13520.test.tsx).
+    expect(toolKind("mcp__files__scan")).toBe("app");
   });
 
   it("a call names its file by its name, a search in quotes", () => {
@@ -348,8 +351,13 @@ describe("live tool calls are grey one-line rows", () => {
     expect(write.getAttribute("data-state")).toBe("failed");
     expect(within(write).getByText("failed")).toBeTruthy();
     expect(scan.getAttribute("data-state")).toBe("running");
-    expect(within(scan).getByText("Running")).toBeTruthy();
-    expect(within(scan).getByText("mcp__files__scan")).toBeTruthy();
+    // v1.352.0 (G22, updated on purpose): a connected app's call reads in
+    // words, "files: scan", its raw id only in the hover (it read "Running"
+    // · "mcp__files__scan").
+    expect(within(scan).getByText("files:")).toBeTruthy();
+    expect(within(scan).getByTestId("work-target").textContent).toBe("scan");
+    expect(within(scan).queryByText("mcp__files__scan")).toBeNull();
+    expect(within(scan).getByTestId("work-target").getAttribute("title")).toContain("mcp__files__scan");
     expect(within(scan).getByTestId("tool-progress").textContent).toBe("40% · reading");
     for (const r of [read, write, scan]) expect(boxClasses(r)).toEqual([]);
   });
@@ -359,7 +367,7 @@ describe("live tool calls are grey one-line rows", () => {
     const scan = screen.getAllByTestId("work-row")[2];
     const spinner = scan.querySelector("svg")!;
     expect(classes(spinner)).toEqual(expect.arrayContaining(["animate-spin", "motion-reduce:animate-none"]));
-    const title = within(scan).getByText("Running");
+    const title = within(scan).getByText("files:");
     // v1.348.0: the soft pulse became a shimmer (`.ij-shimmer`); the
     // stylesheet stops it under reduced motion (pinned from the CSS source in
     // live-work-v1348.test.tsx, since jsdom evaluates no media query).

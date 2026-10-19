@@ -1,5 +1,6 @@
 import type { SessionView, Review } from "./types";
 import type { Tone } from "@/components/ui";
+import { statusWords } from "@/lib/statusWords";
 
 export type LaneId = "active" | "review" | "completed" | "failed";
 
@@ -8,18 +9,35 @@ export interface LaneDef {
   title: string;
   tone: Tone;
   hint: string;
+  /** v1.352.0 (G17): what an empty lane says, in a sentence that reads with
+   *  the lane's word ("No done sessions" did not). Optional: a lane without
+   *  one (the board's own Queued lane) keeps the column's default line. */
+  empty?: string;
+}
+
+/** A lane named and toned by the ONE status table (v1.352.0, G17): the board
+ *  says "Working" / "Done" / "Failed" like the Sessions page, the mission
+ *  cards and the inbox ("Active" / "Completed" here, "Working" / "Done" there,
+ *  was the drift the audit measured). */
+function lane(id: LaneId, status: string, hint: string, empty: string): LaneDef {
+  const w = statusWords(status);
+  return { id, title: w.word, tone: w.tone, hint, empty };
 }
 
 export const LANES: LaneDef[] = [
-  { id: "active", title: "Active", tone: "cyan", hint: "Running now" },
-  { id: "review", title: "In Review", tone: "amber", hint: "Awaiting approval" },
+  lane("active", "active", "Running now", "Nothing is running"),
+  // A review to approve, or a run paused on an ask: either way the user is
+  // the next step — "Waiting for you", the paused card's own chip words.
+  lane("review", "review", "Awaiting approval", "Nothing is waiting for you"),
   // v1.315.0: "Finished", not git's "Merged & done" — most finished runs
   // never merged anything (a summary, a memo, a reply).
-  { id: "completed", title: "Completed", tone: "green", hint: "Finished" },
-  { id: "failed", title: "Failed", tone: "red", hint: "Errored or rejected" },
+  lane("completed", "completed", "Finished", "Nothing has finished yet"),
+  // A stopped run sits here too (laneFor below); its card says "Stopped".
+  lane("failed", "failed", "Errored, stopped or rejected", "Nothing failed or was stopped"),
 ];
 
-/** A review takes precedence over the raw status — that is the "In Review" lane.
+/** A review takes precedence over the raw status — that is the review lane
+ *  ("Waiting for you"; "In Review" before v1.352.0).
  *  So does a PAUSED run (v1.227.0): a session whose `waiting_on` names a
  *  pending ask is waiting for the user, and "Running now" under Active was
  *  the lie the approvals audit measured (30 of a 40-minute job spent waiting,

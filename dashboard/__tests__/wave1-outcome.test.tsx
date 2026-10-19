@@ -207,11 +207,13 @@ function result(over: Partial<RunResult> = {}): RunResult {
 
 describe("outcomeLabel / waitingLabel", () => {
   it("names the two short outcomes and stays quiet for an earned green", () => {
+    // v1.352.0 (G17, updated on purpose): the one status table's words
+    // ("Completed · needs you" / "Completed · with failures" before).
     expect(outcomeLabel({ status: "completed", outcome: "needs_you" })).toBe(
-      "Completed · needs you",
+      "Done · needs you",
     );
     expect(outcomeLabel({ status: "completed", outcome: "completed_with_failures" })).toBe(
-      "Completed · with failures",
+      "Done · part failed",
     );
     expect(outcomeLabel({ status: "completed", outcome: "completed" })).toBeNull();
     expect(outcomeLabel({ status: "completed" })).toBeNull(); // an older row
@@ -231,7 +233,8 @@ describe("outcomeLabel / waitingLabel", () => {
   it("SessionStatusBadge falls back to the plain status badge", () => {
     render(<SessionStatusBadge session={{ status: "completed", outcome: "completed" }} />);
     expect(screen.queryByTestId("session-outcome-chip")).not.toBeInTheDocument();
-    expect(screen.getByText("completed")).toBeInTheDocument();
+    // v1.352.0 (G17, updated on purpose): in words, never the raw id.
+    expect(screen.getByText("Done")).toBeInTheDocument();
   });
 });
 
@@ -285,7 +288,7 @@ describe("RunResultCard — the headline tells the truth about a short run", () 
 /* -------------------------------------------------- the list + ProjectTasks */
 
 describe("the sessions list and ProjectTasks wear the outcome chip", () => {
-  it("sessions list: amber 'Completed · with failures' instead of green", () => {
+  it("sessions list: amber 'Done · part failed' instead of green", () => {
     api.responses["/sessions"] = {
       sessions: [
         sv("s-short", "completed", { outcome: "completed_with_failures" }),
@@ -296,10 +299,10 @@ describe("the sessions list and ProjectTasks wear the outcome chip", () => {
     render(<SessionsPage />);
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("Completed · with failures");
+    expect(chips[0]).toHaveTextContent("Done · part failed");
   });
 
-  it("ProjectTasks recent runs: amber 'Completed · needs you'", () => {
+  it("ProjectTasks recent runs: amber 'Done · needs you'", () => {
     render(
       <ProjectTasks
         projectId="proj_1"
@@ -312,7 +315,7 @@ describe("the sessions list and ProjectTasks wear the outcome chip", () => {
     );
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("Completed · needs you");
+    expect(chips[0]).toHaveTextContent("Done · needs you");
   });
 });
 

@@ -37,7 +37,8 @@ describe("Badge keepCase", () => {
 
   it("the outcome chip keeps its case", () => {
     render(<SessionStatusBadge session={{ status: "completed", outcome: "needs_you" }} />);
-    expect(chipClass("Completed · needs you")).not.toMatch(/\bcapitalize\b/);
+    // v1.352.0 (G17, updated on purpose): the one status table's words.
+    expect(chipClass("Done · needs you")).not.toMatch(/\bcapitalize\b/);
   });
 
   it("the waiting chip keeps its case", () => {
@@ -52,8 +53,16 @@ describe("Badge keepCase", () => {
     expect(chipClass("Waiting for you · shell")).not.toMatch(/\bcapitalize\b/);
   });
 
-  it("a plain status through SessionStatusBadge is still capitalised", () => {
+  it("a plain status through SessionStatusBadge reads the table's own cased word", () => {
+    // v1.352.0 (G17, updated on purpose): the plain status is no longer the
+    // raw id title-cased by CSS ("completed" → "Completed"); it is the one
+    // status table's word, already cased ("Done"), so it keeps its case
+    // like the outcome chip — a two-word state ("Needs you") must not read
+    // "Needs You".
     render(<SessionStatusBadge session={{ status: "completed", outcome: "completed" }} />);
-    expect(chipClass("completed")).toMatch(/\bcapitalize\b/);
+    expect(chipClass("Done")).not.toMatch(/\bcapitalize\b/);
+    cleanup();
+    render(<SessionStatusBadge session={{ status: "cancelled" }} />);
+    expect(chipClass("Stopped")).not.toMatch(/\bcapitalize\b/);
   });
 });

@@ -22,6 +22,7 @@
 
 import { Badge, type BadgeVariant, type Tone } from "@/components/ui";
 import type { SessionOutcome, SessionWaitingOn } from "@/lib/types";
+import { outcomeWords, statusWords, type StatusWords } from "@/lib/statusWords";
 
 export interface OutcomeSource {
   status: string;
@@ -29,14 +30,26 @@ export interface OutcomeSource {
   waiting_on?: SessionWaitingOn | null;
 }
 
-/** "Completed · needs you" / "Completed · with failures", or null when the
- *  plain status badge tells the truth (a completed run that completed, or a
- *  failed/cancelled run — red already says it). */
+/** "Done · needs you" / "Done · part failed", or null when the plain status
+ *  badge tells the truth (a completed run that completed, or a failed or
+ *  stopped run — its own word already says it).
+ *
+ *  v1.352.0 (G17): the words come from the ONE status table
+ *  (lib/statusWords), the same "Done" the plain badge, the board's lane, the
+ *  mission cards and the inbox say — it read "Completed · with failures"
+ *  here and "part failed" on the mission screen. */
 export function outcomeLabel(session: OutcomeSource): string | null {
   if ((session.status ?? "").toLowerCase() !== "completed") return null;
-  if (session.outcome === "needs_you") return "Completed · needs you";
-  if (session.outcome === "completed_with_failures") return "Completed · with failures";
-  return null;
+  return outcomeWords(session.outcome)?.word ?? null;
+}
+
+/** v1.352.0 (G17): a run the user (or Emergency stop) STOPPED, in the one
+ *  table's words and tone — "Stopped", slate, never a failure's red. Null for
+ *  any other run. The Session board puts it on a stopped card, which shares
+ *  the Failed lane with real failures. */
+export function stoppedChip(session: OutcomeSource): StatusWords | null {
+  const s = (session.status ?? "").trim().toLowerCase();
+  return s === "cancelled" || s === "canceled" ? statusWords(s) : null;
 }
 
 /** "Waiting for you · <tool>" while the run is paused on an ask, else null. */
@@ -47,8 +60,10 @@ export function waitingLabel(session: OutcomeSource): string | null {
 }
 
 /** The status badge every session surface renders: amber when the run is
- *  paused for the user or finished short of the job, else the plain status
- *  badge exactly as before (`tone` passes through for that case only).
+ *  paused for the user or finished short of the job, else the plain status in
+ *  the one table's words and tone (v1.352.0, G17: "Working", "Queued",
+ *  "Done", "Failed", "Stopped" — never the raw id; `tone` passes through for
+ *  that case only, and still wins over the table's).
  *
  *  `variant` (v1.330.0, calm wave 12) picks the Badge's look for all three
  *  cases: "default" is the bordered pill the Sessions pages draw (and what a
@@ -80,7 +95,8 @@ export function SessionStatusBadge({
       </span>
     );
   }
-  return <Badge value={session.status} tone={tone} variant={variant} />;
+  const plain = statusWords(session.status);
+  return <Badge value={plain.word} tone={tone ?? plain.tone} keepCase variant={variant} />;
 }
 
 export default SessionStatusBadge;

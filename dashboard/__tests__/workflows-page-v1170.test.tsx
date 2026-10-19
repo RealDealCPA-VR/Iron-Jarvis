@@ -473,10 +473,25 @@ describe("RunHistory (via the page)", () => {
       expect(chip.getAttribute("data-badge-variant"), word).toBe("calm");
       return chip.querySelector("span")?.className ?? "";
     };
-    await screen.findByText("resuming");
-    expect(dot("resuming")).toContain("bg-accent");
-    expect(dot("waiting")).toContain("bg-tone-warn");
-    expect(dot("completed")).toContain("bg-tone-success");
+    // v1.352.0 (G17, updated on purpose): the one status table's words
+    // ("resuming" / "waiting" / "completed" were the raw ids); the tones are
+    // unchanged.
+    await screen.findByText("Resuming");
+    expect(dot("Resuming")).toContain("bg-accent");
+    expect(dot("Waiting for you")).toContain("bg-tone-warn");
+    expect(dot("Done")).toContain("bg-tone-success");
+  });
+
+  it("v1.352.0 (G17): a stopped run reads Stopped in slate, a failed one Failed in red", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [run({ id: "a", status: "cancelled" }), run({ id: "b", status: "failed" })],
+    };
+    renderHistory();
+    const chip = await screen.findByText("Stopped");
+    expect(chip.getAttribute("data-badge-variant")).toBe("calm");
+    expect(chip.querySelector("span")?.className ?? "").toContain("bg-zinc-500");
+    expect(screen.getByText("Failed").querySelector("span")?.className ?? "").toContain("bg-tone-danger");
+    expect(screen.queryByText("cancelled")).toBeNull();
   });
 
   it("polls while a run is live, using the shared terminal set", async () => {

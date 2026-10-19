@@ -231,9 +231,11 @@ const assignment = (over: Partial<Assignment>): Assignment =>
 
 describe("the inbox row and a project's Completed list draw calm chips", () => {
   it.each([
-    ["queued", "queued", "bg-zinc-500"],
-    ["done", "completed", "bg-tone-success"],
-    ["failed", "failed", "bg-tone-danger"],
+    // v1.352.0 (G17, updated on purpose): the inbox speaks the ONE status
+    // table's words ("queued"/"completed"/"failed" were the raw ids).
+    ["queued", "Queued", "bg-zinc-500"],
+    ["done", "Done", "bg-tone-success"],
+    ["failed", "Failed", "bg-tone-danger"],
   ] as const)("an inbox row %s: a calm chip reading %s, dot %s", (status, word, dot) => {
     render(<AssignmentRow assignment={assignment({ status })} onChanged={() => {}} />);
     const row = screen.getByTestId(`inbox-${status}-a1`);

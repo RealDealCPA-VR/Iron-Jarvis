@@ -443,7 +443,9 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
   it("anti-vacuity: the four lanes, Clear failed, the drag hint and 'All sessions' are all still here", () => {
     seed();
     render(<KanbanPage />);
-    for (const title of ["Active", "In Review", "Completed", "Failed"]) {
+    // v1.352.0 (G17, updated on purpose): the lanes are named by the one
+    // status table (were "Active", "In Review", "Completed", "Failed").
+    for (const title of ["Working", "Waiting for you", "Done", "Failed"]) {
       expect(screen.getByRole("heading", { level: 2, name: title })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: /Clear failed \(1\)/ })).toBeInTheDocument();
@@ -464,7 +466,8 @@ describe("Project board (WorldBoard) is compact: two lanes a row, empty lanes co
     };
     w3.responses["/sessions/teams"] = { parents: {} };
   }
-  const gridOf = () => screen.getByRole("heading", { level: 2, name: "Active" }).closest(".grid") as HTMLElement;
+  // v1.352.0 (G17): the active lane reads "Working" (was "Active").
+  const gridOf = () => screen.getByRole("heading", { level: 2, name: "Working" }).closest(".grid") as HTMLElement;
 
   it("the embedded board never asks for four lanes at xl — it is two a row", () => {
     seed();
@@ -485,7 +488,7 @@ describe("Project board (WorldBoard) is compact: two lanes a row, empty lanes co
     expect(done?.getAttribute("data-collapsed")).toBe("true");
     expect(active?.getAttribute("data-collapsed")).not.toBe("true");
     // the lane itself is still there (same four lanes, same drop targets)
-    expect(screen.getByRole("heading", { level: 2, name: "Completed" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Done" })).toBeInTheDocument();
   });
 
   it("the collapse is a REST state: it reads the drag (an empty lane is a drop target while dragging)", () => {

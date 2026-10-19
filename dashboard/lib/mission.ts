@@ -10,6 +10,8 @@
 // honest empty value, never as a guess. Progress in particular keeps the
 // daemon's `pct: null` — "no count behind this bar" — instead of inventing one.
 
+import { statusWords } from "@/lib/statusWords";
+
 export type MemberStatus =
   | "queued"
   | "working"
@@ -332,21 +334,13 @@ export function guideChatPath(ask: string): string {
 
 /* ----------------------------------------------------------- the words --- */
 
+/** A teammate's (or the coordinator's) state in words. v1.352.0 (G17): read
+ *  from the ONE status table (lib/statusWords), so a queued teammate reads
+ *  "Queued" here as it does in the mission list beside it (it read "Waiting"
+ *  on the card and "Queued" in the list), and "Stopped", "Done", "Failed"
+ *  are the words the Sessions page and the board say too. */
 export function statusWord(s: MemberStatus): string {
-  switch (s) {
-    case "queued":
-      return "Waiting";
-    case "working":
-      return "Working";
-    case "waiting_you":
-      return "Needs you";
-    case "done":
-      return "Done";
-    case "failed":
-      return "Failed";
-    case "cancelled":
-      return "Stopped";
-  }
+  return statusWords(s).word;
 }
 
 /** v1.351.0 (G09): the bell's own words for a finish that fell short

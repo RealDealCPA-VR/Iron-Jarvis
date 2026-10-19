@@ -37,6 +37,7 @@ import type {
   Project,
 } from "@/lib/types";
 import { Badge, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
+import { statusWords } from "@/lib/statusWords";
 import { timeAgo } from "@/lib/format";
 import { agentLabel } from "@/lib/agentWorlds";
 import { COMPOSER_CARD_EDGE, composerChipClass } from "@/lib/composerChips";
@@ -184,6 +185,10 @@ export function AssignmentRow({
   const [error, setError] = useState<string | null>(null);
   const actions = rowActions(a.status);
   const prio = a.status === "queued" ? priorityLabel(a.priority) : null;
+  // v1.352.0 (G17): the row's state in the ONE table's words and tone —
+  // "Queued", "Working" (claimed or running), "Done", "Failed", "Needs you"
+  // (blocked), "Stopped" (slate, not a failure's red) — never the raw id.
+  const state = statusWords(a.status);
 
   async function act(kind: "cancel" | "unblock" | "retry") {
     if (busy) return;
@@ -205,7 +210,7 @@ export function AssignmentRow({
       className="px-1 py-1.5"
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Badge variant="calm" value={a.status === "done" ? "completed" : a.status} />
+        <Badge variant="calm" value={state.word} tone={state.tone} keepCase />
         <span
           className="min-w-0 flex-1 truncate text-[13px] text-zinc-200"
           title={a.task}

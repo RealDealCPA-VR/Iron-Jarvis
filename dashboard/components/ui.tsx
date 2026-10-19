@@ -165,7 +165,9 @@ const STATUS_TONE: Record<string, Tone> = {
   failed: "red",
   error: "red",
   rejected: "red",
-  cancelled: "red",
+  // v1.352.0 (G17): a run the user stopped is not a failure — slate, the
+  // "Stopped" tone of lib/statusWords, never the danger red.
+  cancelled: "slate",
   denied: "red",
   deny: "red",
   high: "red",

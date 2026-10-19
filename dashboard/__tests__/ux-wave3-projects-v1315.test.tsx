@@ -677,7 +677,10 @@ describe("Recent runs — rows that read apart", () => {
     expect(s.textContent).toBe("Done — wrote report.md");
     const row = runRows()[0];
     expect(row.getAttribute("href")).toBe("/sessions/s-md");
-    expect(row.textContent ?? "").toMatch(/completed/i);
+    // v1.352.0 (G17, updated on purpose): the status chip says "Done" (the
+    // one status table), not the raw "completed" — read off the chip itself,
+    // since this summary also starts with the word "Done".
+    expect(row.querySelector("[data-badge-variant]")?.textContent).toBe("Done");
   });
 
   it("anti-vacuity: a run with no summary prints its task once (no empty or doubled line)", () => {

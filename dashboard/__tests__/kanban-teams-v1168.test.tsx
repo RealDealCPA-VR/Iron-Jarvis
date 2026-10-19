@@ -310,8 +310,11 @@ describe("KanbanBoard team rendering", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    // The child left its own lane — Completed shows its empty state.
-    expect(screen.getByText("No completed sessions")).toBeInTheDocument();
+    // The child left its own lane — the Done lane shows its empty state.
+    // v1.352.0 (G17, updated on purpose): the lane is named by the one status
+    // table ("Done", was "Completed"); KanbanColumn words the empty line from
+    // the title.
+    expect(screen.getByText("No done sessions")).toBeInTheDocument();
 
     // The parent's badge names the real member count.
     const badge = screen.getByTestId("team-badge");

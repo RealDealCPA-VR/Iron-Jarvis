@@ -17,6 +17,7 @@ import {
   type StarterWorkflow,
 } from "@/components/workflow/starters";
 import { Badge, Empty, SkeletonRows } from "@/components/ui";
+import { statusWords } from "@/lib/statusWords";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
@@ -756,10 +757,15 @@ function RunHistory() {
                       </td>
                       <td className="px-2 py-2.5">
                         <div className="flex flex-wrap items-center gap-2">
+                          {/* v1.352.0 (G17): the run's state in the ONE
+                              table's words ("Working", "Done", "Stopped" in
+                              slate, "Waiting for you"), never the raw id;
+                              runBadgeTone still decides the live tones. */}
                           <Badge
                             variant="calm"
-                            value={r.status || "unknown"}
-                            tone={runBadgeTone(r.status)}
+                            value={statusWords(r.status || "unknown").word}
+                            tone={runBadgeTone(r.status) ?? statusWords(r.status).tone}
+                            keepCase
                           />
                           {r.status === "interrupted" && r.id != null && (
                             <button
@@ -886,7 +892,12 @@ function RunHistory() {
                                         · {stepKindHint(d)}
                                       </span>
                                     )}
-                                    <Badge variant="calm" value={st} />
+                                    <Badge
+                                      variant="calm"
+                                      value={statusWords(st).word}
+                                      tone={statusWords(st).tone}
+                                      keepCase
+                                    />
                                   </div>
                                   {o?.summary && (
                                     <p

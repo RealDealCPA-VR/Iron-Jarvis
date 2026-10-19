@@ -69,7 +69,10 @@ const WORDS: Record<string, string> = {
 // (tools/dynamic.py), so `browser_backup` would be a command of its author's
 // choosing — described as "act in a browser tab" on a consent card, that is
 // a lie (v1.314.0 review). An unknown name falls back to "run <its id>".
-const BROWSER_TOOLS: ReadonlySet<string> = new Set([
+//
+// v1.352.0 (G22): exported, so the work line (lib/workTarget's `browser`
+// kind) reads the SAME fourteen names the approval card does.
+export const BROWSER_TOOLS: ReadonlySet<string> = new Set([
   "browser_get_status",
   "browser_list_tabs",
   "browser_get_active_tab",
@@ -101,6 +104,71 @@ export function isBuiltinBrowserTool(tool: string): boolean {
  *  bell share. */
 export const PLAN_TOOL = "approve_plan";
 
+/** v1.352.0 (G22): what the browser tool did, said after "Used your
+ *  browser" — its own name without the `browser_` prefix ("click", "read
+ *  page"). Built-ins only (exact names); null for anything else. */
+export function browserActionWords(tool: string): string | null {
+  if (!isBuiltinBrowserTool(tool)) return null;
+  return tool.slice("browser_".length).replace(/_/g, " ");
+}
+
+/* ------------------------------------------------- connected apps (v1.352.0) */
+
+/** The longest pack name / tool phrase a row shows (the full id is in the
+ *  title). */
+const APP_NAME_MAX = 40;
+const APP_TOOL_MAX = 60;
+
+function cutWords(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+}
+
+/** A control character (a line break, a NUL, DEL) anywhere in the text. */
+function hasControlChar(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * A connected app's tool, read from its registry name `mcp__<pack>__<tool>`
+ * (mcp/tools.py: `f"mcp__{server_name}__{remote_name}"`): the pack's name as
+ * the Tools page shows it, and the tool's own name. Null for any other name
+ * — a built-in, a custom tool, or a malformed id (no pack, no tool, or
+ * anything that is not one line of plain characters). The split is at the
+ * FIRST `__` after the prefix, as the registry joins them.
+ */
+export function appToolParts(tool: string): { app: string; tool: string } | null {
+  if (typeof tool !== "string" || !tool.startsWith("mcp__")) return null;
+  const rest = tool.slice("mcp__".length);
+  const cut = rest.indexOf("__");
+  if (cut <= 0) return null;
+  const app = rest.slice(0, cut);
+  const name = rest.slice(cut + 2);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(app)) return null;
+  if (!name.trim() || hasControlChar(name)) return null;
+  return { app, tool: name };
+}
+
+/** A tool's own name as words: "search_messages" → "search messages",
+ *  "listOpenIssues" → "list open issues", "get-file" → "get file"; an
+ *  acronym keeps its case ("get_PR" → "get PR"). Cut to one short line. */
+export function appToolNameWords(name: string): string {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => (/^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w));
+  return cutWords(words.join(" ") || name, APP_TOOL_MAX);
+}
+
+/** The pack's name for a row, one short line. */
+export function appNameWords(app: string): string {
+  return cutWords(app, APP_NAME_MAX);
+}
+
 /** Plain words for a tool id, or null when this map does not know it. */
 export function toolWords(tool: string): string | null {
   const id = (tool || "").trim();
@@ -109,5 +177,10 @@ export function toolWords(tool: string): string | null {
   // The built-in browser tools act in a tab of the browser the user
   // connected; the card's tab answer and note say the rest.
   if (isBuiltinBrowserTool(id)) return "act in a browser tab";
+  // v1.352.0 (G22): a connected app's tool is named by its app and its own
+  // words — "use gmail (search messages)" — read straight off its id, so
+  // nothing is invented; the exact id stays on the card beside it.
+  const app = appToolParts(id);
+  if (app) return `use ${appNameWords(app.app)} (${appToolNameWords(app.tool)})`;
   return null;
 }

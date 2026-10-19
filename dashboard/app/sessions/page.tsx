@@ -35,6 +35,7 @@ import { NewSessionForm, NEW_SESSION_TASK_ID } from "@/components/NewSessionForm
 import OriginChip, { originKind, originLabel } from "@/components/sessions/OriginChip";
 import { CopyIconButton } from "@/components/Markdown";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
+import { SESSION_FILTER_STATUSES, statusWords } from "@/lib/statusWords";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
 import { timeAgo, shortId } from "@/lib/format";
@@ -141,10 +142,18 @@ function SessionsList() {
     return () => clearTimeout(t);
   }, [confirmDeleteId]);
 
-  const statusOptions = useMemo(
-    () => Array.from(new Set(sessions.map((s) => s.status))).sort(),
-    [sessions],
-  );
+  // v1.352.0 (G17): the filter offers every session state in WORDS, in the
+  // order a person reads them (Working, Queued, Done, Failed, Stopped — the
+  // one table's words, the same the badges in the table say), whether or not
+  // a row holds it yet; a status the table does not know is still offered,
+  // as itself, after them. The option VALUE stays the raw status the rows
+  // are matched on.
+  const statusOptions = useMemo(() => {
+    const extra = Array.from(new Set(sessions.map((s) => s.status)))
+      .filter((s) => typeof s === "string" && s && !SESSION_FILTER_STATUSES.includes(s))
+      .sort();
+    return [...SESSION_FILTER_STATUSES, ...extra];
+  }, [sessions]);
   const agentOptions = useMemo(
     () => Array.from(new Set(sessions.map((s) => s.agent_type))).sort(),
     [sessions],
@@ -355,7 +364,7 @@ function SessionsList() {
                     <option value="">All statuses</option>
                     {statusOptions.map((s) => (
                       <option key={s} value={s}>
-                        {s}
+                        {statusWords(s).word}
                       </option>
                     ))}
                   </select>

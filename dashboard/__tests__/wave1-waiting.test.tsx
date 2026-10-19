@@ -213,10 +213,13 @@ describe("KanbanBoard — the waiting card", () => {
         reload={() => {}}
       />,
     );
-    const review = column("In Review");
+    // v1.352.0 (G17, updated on purpose): the lanes are named by the one
+    // status table — "Waiting for you" (was "In Review"), "Working" (was
+    // "Active").
+    const review = column("Waiting for you");
     expect(review).toHaveTextContent("task s-w");
-    expect(column("Active")).not.toHaveTextContent("task s-w");
-    expect(column("Active")).toHaveTextContent("task s-r");
+    expect(column("Working")).not.toHaveTextContent("task s-w");
+    expect(column("Working")).toHaveTextContent("task s-r");
 
     const chip = screen.getByTestId("session-waiting-chip");
     expect(chip).toHaveTextContent("Waiting for you · rename_file");
@@ -241,11 +244,12 @@ describe("KanbanBoard — the waiting card", () => {
         reload={() => {}}
       />,
     );
-    const done = column("Completed");
+    // v1.352.0 (G17, updated on purpose): "Done" lane, "Done · needs you".
+    const done = column("Done");
     expect(done).toHaveTextContent("task s-short");
     const chips = screen.getAllByTestId("session-outcome-chip");
     expect(chips).toHaveLength(1); // s-ok earned plain green — no chip
-    expect(chips[0]).toHaveTextContent("Completed · needs you");
+    expect(chips[0]).toHaveTextContent("Done · needs you");
   });
 });
 
@@ -312,7 +316,7 @@ describe("sessions/[id] — the run is paused for you", () => {
     );
     await act(async () => {});
     expect(screen.getByTestId("session-outcome-chip")).toHaveTextContent(
-      "Completed · needs you",
+      "Done · needs you",
     );
     expect(screen.queryByTestId("session-approval")).not.toBeInTheDocument();
   });

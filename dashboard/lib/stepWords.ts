@@ -12,10 +12,18 @@
  * vouch for). A step saved before targets existed keeps the older shape:
  * the words, then the tool's own id as a quiet hint ("Read · read_file").
  *
+ * v1.352.0 (G22): a connected app's step and a browser step read in words.
+ * An app's tool (`mcp__<pack>__<tool>`) is "<pack>: <its tool's words>"
+ * ("gmail: search messages") and is counted by its pack ("used gmail"), not
+ * as "ran 1 tool"; a built-in browser tool is "Used your browser · click",
+ * counted "used your browser". Both are read straight off the tool's own id
+ * (lib/toolWords), never invented; the id itself stays in the hover title.
+ *
  * Icons stay in WorkLine (this file is plain data, importable anywhere).
  */
 
 import { toolKind, type WorkKind } from "@/lib/workTarget";
+import { appNameWords, appToolNameWords, appToolParts, browserActionWords } from "@/lib/toolWords";
 
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -47,11 +55,42 @@ export const STEP_WORDS: Record<WorkKind, KindWords> = {
   web: { done: "Searched the web", doing: "Searching the web", doneOn: "Searched the web for", doingOn: "Searching the web for", count: (n) => `searched the web${times(n)}` },
   page: { done: "Read a web page", doing: "Reading a web page", doneOn: "Read a page on", doingOn: "Reading a page on", count: (n) => `read ${plural(n, "web page")}` },
   command: { done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "command")}` },
+  // v1.352.0 (G22): the built-in browser tools, as one surface.
+  browser: {
+    done: "Used your browser",
+    doing: "Using your browser",
+    doneOn: "Used your browser",
+    doingOn: "Using your browser",
+    count: (n) => `used your browser${times(n)}`,
+  },
+  // v1.352.0 (G22): a connected app. The row and the count name the app
+  // itself (appStepWords / stepCounts below); these words are only the
+  // fallback for an app id that names no app, which toolKind never returns.
+  app: { done: "Used an app", doing: "Using an app", doneOn: "Used", doingOn: "Using", count: (n) => `used an app${times(n)}` },
   tool: { done: "Ran", doing: "Running", doneOn: "Ran", doingOn: "Running", count: (n) => `ran ${plural(n, "tool")}` },
 };
 
-/** The order counts are said in: looking before making, tools last. */
-export const KIND_ORDER: readonly WorkKind[] = ["read", "folder", "search", "page", "web", "change", "make", "command", "tool"];
+/** The order counts are said in: looking before making, tools last. A
+ *  connected app sits just before the plain tools. */
+export const KIND_ORDER: readonly WorkKind[] = [
+  "read",
+  "folder",
+  "search",
+  "page",
+  "web",
+  "browser",
+  "change",
+  "make",
+  "command",
+  "app",
+  "tool",
+];
+
+/** v1.352.0 (G22): "used gmail", "used gmail 3 times" — an app's piece of
+ *  the counted line, by its pack name. */
+export function appCountWords(app: string, n: number): string {
+  return `used ${app}${times(n)}`;
+}
 
 /**
  * v1.348.0: "read 2 files, ran 1 tool" pieces, in a fixed order, plus
@@ -63,9 +102,14 @@ export const KIND_ORDER: readonly WorkKind[] = ["read", "folder", "search", "pag
  * v1.351.0 (G07): a FAILED step is counted once, as failed, and never as
  * work done. One page read and seven failed reads used to say "read 8 web
  * pages, 7 failed"; it now says "read 1 web page, 7 failed".
+ *
+ * v1.352.0 (G22): an app's steps are counted per app, in the order the turn
+ * first used each ("used gmail 2 times, used github"); browser steps are
+ * "used your browser".
  */
 export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | null }>): string[] {
   const n = new Map<WorkKind, number>();
+  const apps = new Map<string, number>();
   let failed = 0;
   for (const st of steps) {
     if (st.ok === false) {
@@ -73,10 +117,21 @@ export function stepCounts(steps: ReadonlyArray<{ name: string; ok?: boolean | n
       continue;
     }
     const k = toolKind(st.name);
+    if (k === "app") {
+      const parts = appToolParts(st.name);
+      if (parts) {
+        const app = appNameWords(parts.app);
+        apps.set(app, (apps.get(app) ?? 0) + 1);
+        continue;
+      }
+    }
     n.set(k, (n.get(k) ?? 0) + 1);
   }
   const out: string[] = [];
   for (const k of KIND_ORDER) {
+    if (k === "app") {
+      for (const [app, c] of apps) out.push(appCountWords(app, c));
+    }
     const c = n.get(k);
     if (c) out.push(STEP_WORDS[k].count(c));
   }
@@ -99,21 +154,57 @@ export function failedWords(n: number): string {
 /** The subject a row names after its words, and whether it is a file. A known
  *  tool names its safe target; any other tool names its own id ("Ran
  *  excel_query"). Null = no subject: the row keeps the older shape, words ·
- *  tool id (a step saved before targets existed). */
+ *  tool id (a step saved before targets existed).
+ *
+ *  v1.352.0 (G22): an app's step names its tool in words ("search messages",
+ *  after the "gmail:" words); a browser step has no subject (its action is
+ *  the quiet word after the dot — `stepHint`). */
 export function rowSubject(
   kind: WorkKind,
   name: string,
   target: string | null,
 ): { text: string; file: boolean } | null {
   if (kind === "tool") return { text: name, file: false };
+  if (kind === "app") {
+    const parts = appToolParts(name);
+    return { text: parts ? appToolNameWords(parts.tool) : name, file: false };
+  }
   if (!target) return null;
   return { text: target, file: kind === "read" || kind === "make" || kind === "change" || kind === "folder" };
 }
 
+/**
+ * The words that LEAD a row, done or running, with or without a subject.
+ * v1.352.0 (G22): an app's row leads with its app, "gmail:", the same while
+ * it runs (the spinner says it is running); every other kind reads its words
+ * from STEP_WORDS exactly as before.
+ */
+export function kindWords(kind: WorkKind, name: string, opts: { subject: boolean; running: boolean }): string {
+  if (kind === "app") {
+    const parts = appToolParts(name);
+    if (parts) return `${appNameWords(parts.app)}:`;
+  }
+  const w = STEP_WORDS[kind];
+  if (opts.subject) return opts.running ? w.doingOn : w.doneOn;
+  return opts.running ? w.doing : w.done;
+}
+
+/**
+ * The quiet word after the dot on a row with no subject: the tool's own id
+ * for an older step ("Read · read_file"), and since v1.352.0 (G22) a browser
+ * step's action ("Used your browser · click") — the browser's id stays in
+ * the hover title.
+ */
+export function stepHint(kind: WorkKind, name: string): string {
+  if (kind === "browser") return browserActionWords(name) ?? name;
+  return name;
+}
+
 /** A FINISHED step in words: what was done ("Read"), to what
- *  ("sales-harbor-st.xlsx", or null), whether that is a file, and the tool's
- *  own id when the words alone do not name it (the quiet "· read_file" of an
- *  older step; null when the subject already is the id). */
+ *  ("sales-harbor-st.xlsx", or null), whether that is a file, and the quiet
+ *  word after the dot when the words alone do not name it (the "· read_file"
+ *  of an older step, a browser step's "· click"; null when the subject
+ *  already names it). */
 export interface StepPhrase {
   kind: WorkKind;
   words: string;
@@ -124,18 +215,18 @@ export interface StepPhrase {
 
 export function stepPhrase(name: string, target?: string | null): StepPhrase {
   const kind = toolKind(name);
-  const w = STEP_WORDS[kind];
   const subject = rowSubject(kind, name, target ?? null);
   return {
     kind,
-    words: subject ? w.doneOn : w.done,
+    words: kindWords(kind, name, { subject: !!subject, running: false }),
     subject: subject?.text ?? null,
     file: !!subject?.file,
-    hint: subject ? null : name,
+    hint: subject ? null : stepHint(kind, name),
   };
 }
 
-/** The phrase as one line of text: "Read harbor.xlsx", "Read · read_file". */
+/** The phrase as one line of text: "Read harbor.xlsx", "Read · read_file",
+ *  "gmail: search messages", "Used your browser · click". */
 export function stepPhraseText(p: StepPhrase): string {
   if (p.subject) return `${p.words} ${p.subject}`;
   return p.hint ? `${p.words} · ${p.hint}` : p.words;
