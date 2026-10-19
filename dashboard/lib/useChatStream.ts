@@ -112,6 +112,10 @@ export type SSEEvent =
        *  1 image on Pixio for 12 credits (your price)"). Sent only when the
        *  tool quoted a price; the card shows it as one quiet line. */
       cost_note?: string;
+      /** v1.352.0 (G25): can the action be undone? `true` for a tool that
+       *  keeps an inverse, `false` for one that does not (or never said);
+       *  ABSENT for a read-only tool and the plan ask (nothing to undo). */
+      reversible?: boolean;
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -594,6 +598,9 @@ export function sseEventFrom(
       // money on a call that costs some.
       if (typeof data.cost_note === "string" && data.cost_note.trim())
         ev.cost_note = data.cost_note;
+      // v1.352.0 (G25): the undo verdict, a real boolean only — anything
+      // else reads as "not said", and the card then says nothing about undo.
+      if (typeof data.reversible === "boolean") ev.reversible = data.reversible;
       return ev;
     }
     case "approval_resolved": {
@@ -1109,6 +1116,10 @@ export interface PendingApproval {
   /** v1.346.0: what the call would spend, in the daemon's words; present
    *  only when the tool quoted a price (media generation). */
   costNote?: string;
+  /** v1.352.0 (G25): can the action be undone (the daemon's verdict)?
+   *  Absent when it did not say (a read-only tool, the plan ask, an older
+   *  daemon): the card then says nothing about undo. */
+  reversible?: boolean;
 }
 
 /**
@@ -1458,6 +1469,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 argsHash: ev.args_hash,
                 ...(ev.once_only === true ? { onceOnly: true } : {}),
                 ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
+                ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
               });
               break;
             case "approval_resolved":

@@ -550,6 +550,9 @@ export default function SessionDetailPage({
               <div data-testid="session-approval" className="max-w-[640px]">
                 <ApprovalCard
                   key={session.waiting_on.approval_id}
+                  // v1.352.0 (G24): an agent run's ask — the wider answer is
+                  // "Allow for this run" (the card infers it too; said here).
+                  scope="run"
                   approval={{
                     id: session.waiting_on.approval_id,
                     callId: "",
@@ -560,6 +563,10 @@ export default function SessionDetailPage({
                     // absent on an older daemon = the three answers of today.
                     canAlways: session.waiting_on.can_always === true,
                     argsHash: session.waiting_on.args_hash,
+                    // v1.352.0 (G25): the undo line, when the daemon said.
+                    ...(typeof session.waiting_on.reversible === "boolean"
+                      ? { reversible: session.waiting_on.reversible }
+                      : {}),
                   }}
                 />
               </div>

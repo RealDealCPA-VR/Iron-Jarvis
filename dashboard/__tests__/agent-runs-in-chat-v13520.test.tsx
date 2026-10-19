@@ -532,6 +532,10 @@ describe("G19: the run's words, from the ledger, never its tool ids", () => {
         { tool: "memory_read", count: 1, failed: 1 },
         { tool: "read_file", count: 2, failed: 0 },
       ],
+      // v1.352.0 integrate, moved on purpose: WHO ran it (the receipt's
+      // agent_name, else agent_type) rides the stamp too. RESULT carries no
+      // `on_this_network`, so no `onThisNetwork` is stamped.
+      agent: "researcher",
     });
     // a failed run at its step limit is stamped so; a "completed" outcome adds nothing
     const limit = readAgentRun(

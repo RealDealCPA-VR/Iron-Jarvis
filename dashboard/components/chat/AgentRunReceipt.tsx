@@ -11,7 +11,7 @@
  *   ⚠ <the route note, when the run's model failed over or was refused>
  *   ✓ Searched your chats 83 times          (lib/runWords, the ledger's counts)
  *   ✕ One memory lookup failed
- *   ▣ Ran on Opus 5.5
+ *   ▣ Ran on Opus 5.5 · cloud              (v1.352.0 integrate: where, G21)
  *   ▣ in 2026-10-18 Quarterly · Open folder (POST /documents/open, G11)
  *
  * Every fact comes from the stamp finalize saved on the hand-off message
@@ -28,6 +28,7 @@ import { WorkRow } from "@/components/chat/WorkLine";
 import { runActionLines } from "@/lib/runWords";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { providerDisplay } from "@/lib/onboarding";
+import { replyWhere } from "@/components/chat/TurnReceipt";
 import type { AgentRunStamp } from "@/lib/agentRun";
 
 /** The model the run was served by, in the words the reply's receipt uses
@@ -60,6 +61,14 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
   const model = runModelName(run);
   const modelTitle = [providerDisplay(run.provider ?? ""), run.model].filter(Boolean).join(" · ");
   const folder = run.workspacePath ?? "";
+  // v1.352.0 integrate (G21 on the helper agent): where its model ran, in the
+  // reply receipt's words and rule ("local" / "cloud"; nothing for the demo
+  // model or a stamp that never said).
+  const where = replyWhere({
+    provider: run.provider ?? "",
+    model: run.model,
+    on_this_network: run.onThisNetwork,
+  });
 
   async function openFolder() {
     if (!folder || opening) return;
@@ -101,7 +110,12 @@ export function AgentRunReceipt({ run }: { run: AgentRunStamp }) {
       ) : null}
       {model ? (
         <div data-testid="agent-run-model" title={modelTitle || undefined}>
-          <WorkRow icon={Cpu} title={`Ran on ${model}`} />
+          <WorkRow
+            icon={Cpu}
+            title={`Ran on ${model}`}
+            detail={where?.tail ?? null}
+            detailTitle={where?.title}
+          />
         </div>
       ) : null}
       {folder ? (

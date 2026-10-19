@@ -5,6 +5,9 @@
  *  - lib/scheduleOutcome is the ONE table of words + tones: needs_you reads
  *    "finished · needs you", partial "finished · part failed", an unknown
  *    value reads as itself (it used to fall through to "not run yet");
+ *    v1.352.0 (G17, updated on purpose): those words are now the app's one
+ *    status table's (lib/statusWords) — "Done · needs you", "Done · part
+ *    failed", "Failed", "Stopped" (slate), "Not run yet";
  *  - the Schedules page row: amber words for a run that finished short, the
  *    open-session link, the detail as plain words (an older row's flattened
  *    "# Final Report ## …" too); Run now answers in AMBER for those, never
@@ -120,18 +123,22 @@ const NEEDS_YOU_DETAIL =
 /* ------------------------------------------------------------- the words */
 
 describe("lib/scheduleOutcome — one table of words", () => {
+  // v1.352.0 (G17, updated on purpose): the words are the one status
+  // table's (lib/statusWords) — they read "✓ ok", "✗ failed", "finished ·
+  // needs you", "finished · part failed", an amber "stopped", "not run yet".
   it("names every verdict the daemon writes, and an unknown one as itself", () => {
-    expect(scheduleStatusWords("ok")).toEqual({ label: "✓ ok", tone: "success" });
-    expect(scheduleStatusWords("error")).toEqual({ label: "✗ failed", tone: "danger" });
-    expect(scheduleStatusWords("needs_you")).toEqual({ label: "finished · needs you", tone: "warn" });
-    expect(scheduleStatusWords("partial")).toEqual({ label: "finished · part failed", tone: "warn" });
-    expect(scheduleStatusWords("cancelled")).toEqual({ label: "stopped", tone: "warn" });
+    expect(scheduleStatusWords("ok")).toEqual({ label: "Done", tone: "success" });
+    expect(scheduleStatusWords("error")).toEqual({ label: "Failed", tone: "danger" });
+    expect(scheduleStatusWords("needs_you")).toEqual({ label: "Done · needs you", tone: "warn" });
+    expect(scheduleStatusWords("partial")).toEqual({ label: "Done · part failed", tone: "warn" });
+    // A stop is not a failure and not a warning: slate (muted).
+    expect(scheduleStatusWords("cancelled")).toEqual({ label: "Stopped", tone: "muted" });
     expect(scheduleStatusWords("skipped").tone).toBe("warn");
     expect(scheduleStatusWords("missed").tone).toBe("warn");
-    expect(scheduleStatusWords("")).toEqual({ label: "not run yet", tone: "muted" });
-    expect(scheduleStatusWords(undefined).label).toBe("not run yet");
+    expect(scheduleStatusWords("")).toEqual({ label: "Not run yet", tone: "muted" });
+    expect(scheduleStatusWords(undefined).label).toBe("Not run yet");
     // The old lie: any value it did not know read "not run yet".
-    expect(scheduleStatusWords("brand_new").label).toBe("brand new");
+    expect(scheduleStatusWords("brand_new").label).toBe("Brand new");
   });
 
   it("counts failed and short runs, never a fine or skipped one", () => {
@@ -281,10 +288,11 @@ describe("a project's Schedules list", () => {
     };
     render(<ProjectSchedules projectId="proj_1" />);
     const word = await screen.findByTestId("project-schedule-status-nightly");
-    expect(word.textContent).toBe("finished · needs you");
+    // v1.352.0 (G17, updated on purpose): the Schedules page's words.
+    expect(word.textContent).toBe("Done · needs you");
     expect(word.className).toMatch(/text-tone-warn/);
     expect(word.getAttribute("title")).toBe(NEEDS_YOU_DETAIL);
-    expect(screen.queryByText("not run yet")).toBeNull();
+    expect(screen.queryByText(/not run yet/i)).toBeNull();
     expect(screen.getByText(/open session/).closest("a")?.getAttribute("href")).toBe("/sessions/session_abc");
   });
 
@@ -293,8 +301,33 @@ describe("a project's Schedules list", () => {
       schedules: [row({ last_status: "error", last_detail: "The run failed: the endpoint is down" })],
     };
     render(<ProjectSchedules projectId="proj_1" />);
-    expect(await screen.findByText("✗ failed: the endpoint is down")).toBeInTheDocument();
+    // v1.352.0 (G17, updated on purpose): "Failed", the one table's word
+    // (was "✗ failed").
+    const line = await screen.findByText("Failed: the endpoint is down");
+    expect(line.className).toMatch(/text-tone-danger/);
   });
+
+  // v1.352.0 (G17): the same last run reads ONE way on both schedule
+  // surfaces — it read "Done" on the Schedules page and "✓ ok" here, an amber
+  // "stopped" here and a slate "Stopped" there. Both real components, the
+  // same row, every verdict the scheduler writes plus a never-fired one.
+  const INK = /text-tone-success|text-tone-danger|text-tone-warn|text-zinc-500/;
+  it.each(["ok", "needs_you", "partial", "error", "failed", "cancelled", "skipped", "missed", ""])(
+    "last_status %j reads the same word in the same ink on the Schedules page and the project list",
+    async (status) => {
+      mountPage([row({ last_status: status })]);
+      const pageWord = await screen.findByTestId("schedule-status-nightly");
+      const word = pageWord.textContent ?? "";
+      const pageInk = pageWord.className.match(INK)?.[0];
+      expect(word).not.toBe("");
+      expect(pageInk).toBeTruthy();
+      cleanup();
+      render(<ProjectSchedules projectId="proj_1" />);
+      const list = await screen.findByTestId("project-schedules");
+      const listWord = within(list).getByText(word);
+      expect(listWord.className.match(INK)?.[0]).toBe(pageInk);
+    },
+  );
 });
 
 /* ------------------------------------------------------------ the home line */

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import threading
 import time
 from collections import deque
@@ -454,6 +455,25 @@ def emergency_stop_covers(origin: str | None) -> bool:
     background lane and the busy count keep their own reading."""
     text = str(origin or "").strip()
     return text != SELF_DEV_ORIGIN and is_unattended_origin(text)
+
+
+#: The run option a session a PERSON started through an unattended-shaped
+#: door carries (v1.352.0): a workflow the user ran by pressing Run stamps its
+#: agent steps ``workflow:<name>`` exactly as a schedule or a rule does, so
+#: the origin cannot tell them apart. ``create_session(started_by_person=
+#: True)`` — the ONE way to set it — admits the step under Emergency stop and
+#: writes this key, which ``stop_unattended`` reads to leave the run going.
+PERSON_STARTED_OPTION = "started_by_person"
+
+
+def person_started(options_json: Any) -> bool:
+    """Does a session row's ``options_json`` say a person started it?
+    Junk reads as no. Never raises."""
+    try:
+        raw = json.loads(options_json) if isinstance(options_json, str) else options_json
+    except (TypeError, ValueError):
+        return False
+    return isinstance(raw, dict) and raw.get(PERSON_STARTED_OPTION) is True
 
 
 def busy_notice_threshold(config) -> int:
@@ -940,8 +960,17 @@ class Orchestrator:
         options: dict | None = None,
         prior_tool_results: list | None = None,
         chat_thread_id: str = "",
+        started_by_person: bool = False,
     ) -> Session:
         """Create (never start) a session row.
+
+        ``started_by_person`` (v1.352.0): a PERSON started this run through a
+        door whose origin reads as unattended — today one door, a workflow the
+        user ran by pressing Run (its agent steps are stamped ``workflow:
+        <name>`` like a trigger's). Emergency stop admits it, and the row
+        carries ``options["started_by_person"] = True`` so engaging the switch
+        later (``stop_unattended``) leaves it going. The kwarg is the ONLY way
+        to set the key: one a door put in ``options`` is dropped.
 
         ``chat_thread_id`` (v1.345.0, lane T): the SAVED chat this work was
         asked in. Stored under ``options["chat_thread_id"]`` only when
@@ -999,7 +1028,13 @@ class Orchestrator:
         # phone, a queued assignment, autonomy — ends here, so this is the one
         # refusal. Judged on the origin the DOOR stamped (before the self-dev
         # default below): an untagged run is a person, never refused.
-        if emergency_stop_covers(origin) and emergency_stop_on(self.p.config):
+        # v1.352.0: a run a PERSON started (a workflow's Run press) is
+        # admitted — the setting promises "work you start keeps going".
+        if (
+            not started_by_person
+            and emergency_stop_covers(origin)
+            and emergency_stop_on(self.p.config)
+        ):
             raise EmergencyStopOn(EMERGENCY_STOP_REFUSAL)
 
         # LOCAL ONLY (v1.332.0). A session is local only when the door says so
@@ -1014,6 +1049,11 @@ class Orchestrator:
         from ..providers import egress as _egress
 
         options = dict(options) if isinstance(options, dict) else {}
+        # WHO STARTED IT (v1.352.0): only the kwarg writes the marker.
+        if started_by_person:
+            options[PERSON_STARTED_OPTION] = True
+        else:
+            options.pop(PERSON_STARTED_OPTION, None)
         if options.get("local_only") is True or _egress.current_scope().on:
             options["local_only"] = True
             _lo_provider = provider or self.p.config.default_provider
@@ -1572,7 +1612,8 @@ class Orchestrator:
         Attended work (chat, a mission, a project task, a run a person
         started) is never touched, and neither is a delegated teammate (it
         stops with the run it belongs to: cancelling the parent cancels the
-        awaited child).
+        awaited child). Since v1.352.0 that includes a workflow step a
+        person's Run press started (``options["started_by_person"]``).
 
         Reads the live rows (ACTIVE/QUEUED, bounded) rather than ``_running``
         alone, so a run parked in the governor's queue or a schedule fire on
@@ -1584,7 +1625,7 @@ class Orchestrator:
         try:
             with session_scope(self.p.engine) as db:
                 rows = db.exec(
-                    select(Session.id, Session.origin)
+                    select(Session.id, Session.origin, Session.options_json)
                     .where(
                         Session.status.in_(  # type: ignore[attr-defined]
                             [SessionStatus.ACTIVE, SessionStatus.QUEUED]
@@ -1596,9 +1637,11 @@ class Orchestrator:
             log.exception("Emergency stop could not read the live runs")
             return []
         stopped: list[str] = []
-        for sid, origin in rows:
+        for sid, origin, options_json in rows:
             if not sid or not emergency_stop_covers(origin):
                 continue
+            if person_started(options_json):
+                continue  # a person's workflow Run keeps going (v1.352.0)
             self._stop_reasons[sid] = reason
             try:
                 self.cancel_session(sid)
@@ -1928,8 +1971,15 @@ class Orchestrator:
         try:
             if not _chat_delivery.chat_thread_of(session):
                 return {"ok": False, "why": "no chat", "appended": 0, "skipped": 0}
+            # The provider manager + config let the delivered card judge
+            # where the run's model ran (v1.352.0, G21) exactly as GET
+            # /sessions/{id}/result does — without them the flag is dropped.
             out = _chat_delivery.deliver_session_line(
-                self.p.engine, session, event_bus=getattr(self.p, "event_bus", None)
+                self.p.engine,
+                session,
+                event_bus=getattr(self.p, "event_bus", None),
+                manager=getattr(self.p, "providers", None),
+                config=getattr(self.p, "config", None),
             )
             if not out.get("ok"):
                 log.warning(

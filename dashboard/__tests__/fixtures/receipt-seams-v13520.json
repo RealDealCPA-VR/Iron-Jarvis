@@ -1,0 +1,444 @@
+{
+  "_comment": "v1.352.0 integrate: what the REAL daemon sends for wave 2's seams. Written by tests/test_receipt_seams_v13520.py (IJ_REGEN_RECEIPT_SEAMS=1); read by dashboard/__tests__/receipt-seams-v13520.test.tsx.",
+  "asks": {
+    "mission_waiting": {
+      "approval_id": "apr_fixture",
+      "reversible": true,
+      "tool": "write_file"
+    },
+    "pending_row": {
+      "id": "apr_fixture",
+      "mission_id": null,
+      "origin": "schedule:nightly-brief",
+      "project_id": null,
+      "requested_at": "<requested_at>",
+      "reversible": true,
+      "session_id": "session_brief",
+      "task": "Write the nightly brief",
+      "timeout_s": 300,
+      "tool": "write_file"
+    },
+    "requested": {
+      "approval_id": "apr_fixture",
+      "args_hash": "<args_hash>",
+      "can_always": false,
+      "quarantined": false,
+      "reversible": true,
+      "timeout_s": 300,
+      "tool": "write_file"
+    },
+    "stream_frame": {
+      "args": {
+        "content": "# Brief",
+        "path": "brief.md"
+      },
+      "args_hash": "<args_hash>",
+      "call_id": "call_fixture",
+      "can_always": true,
+      "id": "apr_fixture",
+      "quarantined": false,
+      "reversible": true,
+      "timeout_s": 0,
+      "tool": "write_file"
+    },
+    "waiting_on": {
+      "approval_id": "apr_fixture",
+      "reversible": true,
+      "tool": "write_file"
+    }
+  },
+  "receipts": {
+    "cloud": {
+      "line": {
+        "agentType": "builder",
+        "at": "2026-10-18T09:00:00",
+        "content": "(no response)",
+        "panelWho": "dynamic:tax-reader",
+        "receipt": {
+          "activity": [
+            {
+              "at": "2026-10-18T07:00:01",
+              "session_id": "sess_cloud",
+              "text": "tax-reader read k1-2025.pdf",
+              "tone": "ok",
+              "who": "tax-reader"
+            },
+            {
+              "at": "2026-10-18T07:00:03",
+              "session_id": "sess_cloud",
+              "text": "tax-reader could not write summary.md",
+              "tone": "warn",
+              "who": "tax-reader"
+            },
+            {
+              "at": "2026-10-18T07:00:04",
+              "session_id": "sess_cloud",
+              "text": "tax-reader needed your OK to run a command",
+              "tone": "ask",
+              "who": "tax-reader"
+            }
+          ],
+          "agent_name": "custom:tax-reader",
+          "agent_type": "builder",
+          "documents": [],
+          "duration_s": 180.0,
+          "errors": [
+            {
+              "error": "",
+              "tool": "write_file"
+            },
+            {
+              "error": "",
+              "tool": "shell"
+            }
+          ],
+          "files_changed": [],
+          "files_changed_total": 0,
+          "files_created": [],
+          "files_created_total": 0,
+          "found": true,
+          "model": "claude-sonnet-4-6",
+          "on_this_network": false,
+          "outcome": "completed_with_failures",
+          "provider": "anthropic",
+          "revertable": 0,
+          "reverted": 0,
+          "route_note": "tax-reader's model ollama failed (unreachable); anthropic answered instead.",
+          "session_id": "sess_cloud",
+          "status": "completed",
+          "steps": 0,
+          "summary": "",
+          "task": "Read the K-1 and summarise it",
+          "tools_failed": [
+            {
+              "count": 1,
+              "tool": "shell"
+            },
+            {
+              "count": 1,
+              "tool": "write_file"
+            }
+          ],
+          "tools_failed_mutating": 2,
+          "tools_used": [
+            {
+              "count": 1,
+              "tool": "read_file"
+            },
+            {
+              "count": 1,
+              "tool": "shell"
+            },
+            {
+              "count": 1,
+              "tool": "worklist_next"
+            },
+            {
+              "count": 1,
+              "tool": "write_file"
+            }
+          ],
+          "trust": "full",
+          "trust_reason": "",
+          "unanswered_asks": 0
+        },
+        "role": "assistant",
+        "sessionId": "sess_cloud"
+      },
+      "result": {
+        "activity": [
+          {
+            "at": "2026-10-18T07:00:01",
+            "session_id": "sess_cloud",
+            "text": "tax-reader read k1-2025.pdf",
+            "tone": "ok",
+            "who": "tax-reader"
+          },
+          {
+            "at": "2026-10-18T07:00:03",
+            "session_id": "sess_cloud",
+            "text": "tax-reader could not write summary.md",
+            "tone": "warn",
+            "who": "tax-reader"
+          },
+          {
+            "at": "2026-10-18T07:00:04",
+            "session_id": "sess_cloud",
+            "text": "tax-reader needed your OK to run a command",
+            "tone": "ask",
+            "who": "tax-reader"
+          }
+        ],
+        "agent_name": "custom:tax-reader",
+        "agent_type": "builder",
+        "documents": [],
+        "duration_s": 180.0,
+        "errors": [
+          {
+            "error": "",
+            "tool": "write_file"
+          },
+          {
+            "error": "",
+            "tool": "shell"
+          }
+        ],
+        "files_changed": [],
+        "files_changed_total": 0,
+        "files_created": [],
+        "files_created_total": 0,
+        "found": true,
+        "model": "claude-sonnet-4-6",
+        "on_this_network": false,
+        "outcome": "completed_with_failures",
+        "provider": "anthropic",
+        "revertable": 0,
+        "reverted": 0,
+        "route_note": "tax-reader's model ollama failed (unreachable); anthropic answered instead.",
+        "session_id": "sess_cloud",
+        "status": "completed",
+        "steps": 0,
+        "summary": "",
+        "task": "Read the K-1 and summarise it",
+        "tools_failed": [
+          {
+            "count": 1,
+            "tool": "shell"
+          },
+          {
+            "count": 1,
+            "tool": "write_file"
+          }
+        ],
+        "tools_failed_mutating": 2,
+        "tools_used": [
+          {
+            "count": 1,
+            "tool": "read_file"
+          },
+          {
+            "count": 1,
+            "tool": "shell"
+          },
+          {
+            "count": 1,
+            "tool": "worklist_next"
+          },
+          {
+            "count": 1,
+            "tool": "write_file"
+          }
+        ],
+        "trust": "full",
+        "trust_reason": "",
+        "unanswered_asks": 0
+      },
+      "row": {
+        "created_at": "2026-10-18T07:00:00",
+        "finished_at": "2026-10-18T07:03:00",
+        "model": "claude-sonnet-4-6",
+        "outcome": null,
+        "provider": "anthropic",
+        "status": "completed",
+        "summary": "",
+        "workspace_path": ""
+      }
+    },
+    "local": {
+      "line": {
+        "agentType": "builder",
+        "at": "2026-10-18T09:00:00",
+        "content": "(no response)",
+        "panelWho": "dynamic:tax-reader",
+        "receipt": {
+          "activity": [
+            {
+              "at": "2026-10-18T07:00:01",
+              "session_id": "sess_local",
+              "text": "tax-reader read k1-2025.pdf",
+              "tone": "ok",
+              "who": "tax-reader"
+            },
+            {
+              "at": "2026-10-18T07:00:03",
+              "session_id": "sess_local",
+              "text": "tax-reader could not write summary.md",
+              "tone": "warn",
+              "who": "tax-reader"
+            },
+            {
+              "at": "2026-10-18T07:00:04",
+              "session_id": "sess_local",
+              "text": "tax-reader needed your OK to run a command",
+              "tone": "ask",
+              "who": "tax-reader"
+            }
+          ],
+          "agent_name": "custom:tax-reader",
+          "agent_type": "builder",
+          "documents": [],
+          "duration_s": 180.0,
+          "errors": [
+            {
+              "error": "",
+              "tool": "write_file"
+            },
+            {
+              "error": "",
+              "tool": "shell"
+            }
+          ],
+          "files_changed": [],
+          "files_changed_total": 0,
+          "files_created": [],
+          "files_created_total": 0,
+          "found": true,
+          "model": "llama3.2",
+          "on_this_network": true,
+          "outcome": "completed_with_failures",
+          "provider": "ollama",
+          "revertable": 0,
+          "reverted": 0,
+          "route_note": "tax-reader's model ollama failed (unreachable); anthropic answered instead.",
+          "session_id": "sess_local",
+          "status": "completed",
+          "steps": 0,
+          "summary": "",
+          "task": "Read the K-1 and summarise it",
+          "tools_failed": [
+            {
+              "count": 1,
+              "tool": "shell"
+            },
+            {
+              "count": 1,
+              "tool": "write_file"
+            }
+          ],
+          "tools_failed_mutating": 2,
+          "tools_used": [
+            {
+              "count": 1,
+              "tool": "read_file"
+            },
+            {
+              "count": 1,
+              "tool": "shell"
+            },
+            {
+              "count": 1,
+              "tool": "worklist_next"
+            },
+            {
+              "count": 1,
+              "tool": "write_file"
+            }
+          ],
+          "trust": "full",
+          "trust_reason": "",
+          "unanswered_asks": 0
+        },
+        "role": "assistant",
+        "sessionId": "sess_local"
+      },
+      "result": {
+        "activity": [
+          {
+            "at": "2026-10-18T07:00:01",
+            "session_id": "sess_local",
+            "text": "tax-reader read k1-2025.pdf",
+            "tone": "ok",
+            "who": "tax-reader"
+          },
+          {
+            "at": "2026-10-18T07:00:03",
+            "session_id": "sess_local",
+            "text": "tax-reader could not write summary.md",
+            "tone": "warn",
+            "who": "tax-reader"
+          },
+          {
+            "at": "2026-10-18T07:00:04",
+            "session_id": "sess_local",
+            "text": "tax-reader needed your OK to run a command",
+            "tone": "ask",
+            "who": "tax-reader"
+          }
+        ],
+        "agent_name": "custom:tax-reader",
+        "agent_type": "builder",
+        "documents": [],
+        "duration_s": 180.0,
+        "errors": [
+          {
+            "error": "",
+            "tool": "write_file"
+          },
+          {
+            "error": "",
+            "tool": "shell"
+          }
+        ],
+        "files_changed": [],
+        "files_changed_total": 0,
+        "files_created": [],
+        "files_created_total": 0,
+        "found": true,
+        "model": "llama3.2",
+        "on_this_network": true,
+        "outcome": "completed_with_failures",
+        "provider": "ollama",
+        "revertable": 0,
+        "reverted": 0,
+        "route_note": "tax-reader's model ollama failed (unreachable); anthropic answered instead.",
+        "session_id": "sess_local",
+        "status": "completed",
+        "steps": 0,
+        "summary": "",
+        "task": "Read the K-1 and summarise it",
+        "tools_failed": [
+          {
+            "count": 1,
+            "tool": "shell"
+          },
+          {
+            "count": 1,
+            "tool": "write_file"
+          }
+        ],
+        "tools_failed_mutating": 2,
+        "tools_used": [
+          {
+            "count": 1,
+            "tool": "read_file"
+          },
+          {
+            "count": 1,
+            "tool": "shell"
+          },
+          {
+            "count": 1,
+            "tool": "worklist_next"
+          },
+          {
+            "count": 1,
+            "tool": "write_file"
+          }
+        ],
+        "trust": "full",
+        "trust_reason": "",
+        "unanswered_asks": 0
+      },
+      "row": {
+        "created_at": "2026-10-18T07:00:00",
+        "finished_at": "2026-10-18T07:03:00",
+        "model": "llama3.2",
+        "outcome": null,
+        "provider": "ollama",
+        "status": "completed",
+        "summary": "",
+        "workspace_path": ""
+      }
+    }
+  }
+}

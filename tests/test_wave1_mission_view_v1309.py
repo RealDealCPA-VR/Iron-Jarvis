@@ -482,11 +482,12 @@ def test_a_members_denied_ask_reads_as_needing_your_ok(tmp_path):
            at=t0 + timedelta(seconds=1))
     view = mission_view(p, root)
     texts = [a["text"] for a in view["activity"]]
-    assert "Builder needed your OK to use write file" in texts, texts
+    # v1.352.0, moved on purpose: the approval card's words ("save a file").
+    assert "Builder needed your OK to save a file" in texts, texts
     assert not any("could not write" in t for t in texts), texts
     assert "Builder could not edit notes.md" in texts, texts  # control
     member = view["members"][0]
-    assert member["activity"] == "needed your OK to use write file", member["activity"]
+    assert member["activity"] == "needed your OK to save a file", member["activity"]
 
 
 # --------------------------------------------------------------------------- #

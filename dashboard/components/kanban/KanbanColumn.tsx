@@ -134,7 +134,11 @@ export function KanbanColumn({
               collapsed ? "py-1.5" : "py-8"
             }`}
           >
-            {lane.id === "review" ? "No sessions awaiting review" : `No ${lane.title.toLowerCase()} sessions`}
+            {/* v1.352.0 (G17): the lane's own sentence (lib/kanban LANES) —
+                "No done sessions" did not read once the lanes took the status
+                table's words. A lane without one keeps the old line. */}
+            {lane.empty ??
+              (lane.id === "review" ? "No sessions awaiting review" : `No ${lane.title.toLowerCase()} sessions`)}
           </div>
         )}
       </div>

@@ -578,7 +578,10 @@ def test_world_lists_what_waits_and_what_got_done(client, monkeypatch):
     ask = kinds["ask"]
     assert ask["title"] == "rename the K-1s"
     assert ask["link"] == f"/sessions/{s.asking}"
-    assert ask["waiting_on"] == {"approval_id": s.approval_id, "tool": "rename_file", "count": 3}
+    # v1.352.0 (G25), moved on purpose: plus the undo verdict (a rename can be undone).
+    assert ask["waiting_on"] == {
+        "approval_id": s.approval_id, "tool": "rename_file", "count": 3, "reversible": True
+    }
     assert "3 calls" in ask["reason"]
     # NUMBERS, never arguments — the path the tool wanted never leaves.
     assert "secret-ssn" not in json.dumps(world)

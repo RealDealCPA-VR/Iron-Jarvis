@@ -79,6 +79,22 @@ def _writer(platform: Any) -> Any:
     return w
 
 
+#: v1.352.0 (G24): the approval levels' names before they became the chat
+#: chip's three ("Ask first" / "Ask when risky" / "Don't ask"). A person (or a
+#: model reading the Handbook of an older version) may still type them; they
+#: keep meaning the same level. Per key, lower-case words -> option value.
+_RETIRED_OPTION_WORDS: dict[str, dict[str, str]] = {
+    "device.approval_mode": {
+        "ask for approval": "always_ask",
+        "always ask": "always_ask",
+        "approve for me": "approve_for_me",
+        "auto-approve": "yolo",
+        "auto approve": "yolo",
+        "auto-approve (yolo)": "yolo",
+    },
+}
+
+
 def _coerce(d: schema.SettingDef, value: Any) -> Any:
     """Models send strings; turn them into the setting's type."""
     if d.type == "bool" and isinstance(value, str):
@@ -105,6 +121,9 @@ def _coerce(d: schema.SettingDef, value: Any) -> Any:
         for v, label in d.options:
             if value.strip().lower() in (str(v).lower(), label.lower()):
                 return v
+        retired = _RETIRED_OPTION_WORDS.get(d.key, {}).get(value.strip().lower())
+        if retired is not None:
+            return retired
     return value
 
 

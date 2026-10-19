@@ -313,8 +313,10 @@ describe("a teammate card's model line follows the member's status (the receipt 
     ]);
     at("?mission=s1");
     render(<AgentsPage />);
-    expect(await modelLine("writer")).toMatch(/^Working on glm-5\.3-flash on fleet-custom/);
-    expect(await modelLine("checker")).toMatch(/^Working on glm-5\.3-flash on fleet-custom/);
+    // v1.352.0 integrate, moved on purpose: the words name the endpoint, so
+    // the verb says "with" (never "Working on … on …").
+    expect(await modelLine("writer")).toMatch(/^Working with glm-5\.3-flash on fleet-custom/);
+    expect(await modelLine("checker")).toMatch(/^Working with glm-5\.3-flash on fleet-custom/);
   });
 
   it("a DONE teammate was answered by it", async () => {
@@ -331,7 +333,7 @@ describe("a teammate card's model line follows the member's status (the receipt 
     ]);
     at("?mission=s1");
     render(<AgentsPage />);
-    expect(await modelLine("writer")).toMatch(/^Ran on glm-5\.3-flash on fleet-custom/);
+    expect(await modelLine("writer")).toMatch(/^Ran with glm-5\.3-flash on fleet-custom/);
     expect(await modelLine("researcher")).toMatch(/no real model ran/i);
   });
 });

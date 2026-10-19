@@ -92,7 +92,26 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     _count = first.get("count")
     if isinstance(_count, int) and not isinstance(_count, bool) and _count > 1:
         out["count"] = _count
+    # v1.352.0 (G25): can the action be undone — the SAME verdict the ask's
+    # own frame/event carries (``tools/reversible``), so the session page's
+    # and a project task's card say what the chat card says. Left out for a
+    # read-only tool and an unknown name. In-memory registry read.
+    out.update(_undo_verdict(d, out["tool"]))
     return out
+
+
+def _undo_verdict(d, tool: str) -> dict[str, Any]:
+    """``{"reversible": bool}`` for ``tool`` on this platform's registry, or
+    ``{}`` when the verdict is "nothing to say" (read-only, unknown, no
+    registry, any fault). Never raises."""
+    try:
+        from ...tools.reversible import reversible_flag
+
+        registry = getattr(getattr(d, "platform", None), "registry", None)
+        rev = reversible_flag(registry.get(tool)) if registry is not None and tool else None
+    except Exception:  # noqa: BLE001 — wording only, never a new failure
+        return {}
+    return {"reversible": rev} if rev is not None else {}
 
 
 def _project_team(d, project_id: str) -> list[str]:

@@ -5,6 +5,7 @@ builds the shared deps object ``d`` and calls each register in order.
 """
 
 from . import (  # noqa: F401
+    access_summary,
     agents,
     audit,
     autonomy,

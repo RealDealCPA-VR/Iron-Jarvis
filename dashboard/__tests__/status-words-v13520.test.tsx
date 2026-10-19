@@ -368,6 +368,53 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
     expect(dot.className).toMatch(/bg-zinc-500/);
     expect(dot.className).not.toMatch(/tone-danger/);
   });
+
+  it("a stopped card SAYS Stopped, in slate, in the lane it shares with real failures", () => {
+    api.responses["/sessions/teams"] = { parents: {} };
+    render(
+      <KanbanBoard
+        sessions={[
+          sv("s-stop", "cancelled"),
+          sv("s-fail", "failed"),
+          sv("s-short", "completed", { outcome: "completed_with_failures" }),
+        ]}
+        reviews={{}}
+        reload={() => {}}
+      />,
+    );
+    const failedLane = document.querySelector('[data-lane="failed"]') as HTMLElement;
+    const chips = within(failedLane).getAllByTestId("session-stopped-chip");
+    // Exactly one: the stopped card's. A real failure keeps its plain card.
+    expect(chips).toHaveLength(1);
+    const stopCard = within(failedLane).getByText("task s-stop").closest("[data-team-depth]") as HTMLElement;
+    expect(stopCard.contains(chips[0])).toBe(true);
+    expect(chips[0].textContent).toBe("Stopped");
+    // The board's calm chip: the tone lives on its dot (the Badge inside the
+    // testid wrapper).
+    const badge = chips[0].querySelector('[data-badge-variant="calm"]') as HTMLElement;
+    expect(badge.getAttribute("data-tone")).toBe("slate");
+    expect(dotOf(badge)).toMatch(/bg-zinc-500/);
+    expect(dotOf(badge)).not.toMatch(/tone-danger|tone-warn/);
+    const failCard = within(failedLane).getByText("task s-fail").closest("[data-team-depth]") as HTMLElement;
+    expect(within(failCard).queryByText("Stopped")).toBeNull();
+    // Anti-vacuity: a finished-short card still wears its amber outcome chip,
+    // never a stop chip.
+    const doneLane = document.querySelector('[data-lane="completed"]') as HTMLElement;
+    expect(within(doneLane).getByTestId("session-outcome-chip").textContent).toBe("Done · part failed");
+    expect(within(doneLane).queryByTestId("session-stopped-chip")).toBeNull();
+  });
+
+  it("an empty lane says its own sentence, never 'No done sessions'", () => {
+    api.responses["/sessions/teams"] = { parents: {} };
+    render(<KanbanBoard sessions={[]} reviews={{}} reload={() => {}} />);
+    for (const l of LANES) {
+      const col = document.querySelector(`[data-lane="${l.id}"]`) as HTMLElement;
+      expect(within(col).getByText(l.empty as string), l.id).toBeInTheDocument();
+    }
+    expect(screen.getByText("Nothing has finished yet")).toBeInTheDocument();
+    expect(screen.getByText("Nothing failed or was stopped")).toBeInTheDocument();
+    expect(screen.queryByText(/^No (working|done|failed) sessions$/)).toBeNull();
+  });
 });
 
 /* =============================================================== the inbox */

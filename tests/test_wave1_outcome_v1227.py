@@ -326,7 +326,9 @@ def test_session_rows_carry_waiting_on_from_the_approvals_registry(rt, monkeypat
     monkeypatch.setattr(rt.platform.approvals, "pending_for", pending_for, raising=False)
 
     detail = rt.client.get("/sessions/s-paused").json()["session"]
-    assert detail["waiting_on"] == {"approval_id": "apr_first", "tool": "shell"}
+    # v1.352.0 (G25), moved on purpose: the row also says whether the action
+    # can be undone (a command cannot) — the verdict every ask card shows.
+    assert detail["waiting_on"] == {"approval_id": "apr_first", "tool": "shell", "reversible": False}
     assert "args" not in detail["waiting_on"], "arguments never ride a listing row"
     assert rt.client.get("/sessions/s-idle").json()["session"]["waiting_on"] is None
     rows = {r["id"]: r for r in rt.client.get("/sessions").json()["sessions"]}
@@ -357,11 +359,13 @@ async def test_waiting_on_reads_the_real_approvals_registry(rt):
     approvals.request("shell", {"command": "ls"})  # chat lane: no session
     try:
         row = rt.client.get("/sessions/s-live").json()["session"]
-        assert row["waiting_on"] == {"approval_id": first_id, "tool": "shell"}
+        assert row["waiting_on"] == {"approval_id": first_id, "tool": "shell", "reversible": False}
         assert approvals.resolve(first_id, "once")
         approvals.pop(first_id)
         row = rt.client.get("/sessions/s-live").json()["session"]
-        assert row["waiting_on"] == {"approval_id": second_id, "tool": "rename_file"}
+        assert row["waiting_on"] == {
+            "approval_id": second_id, "tool": "rename_file", "reversible": True
+        }
     finally:
         for aid in list(approvals.pending_ids()):
             approvals.pop(aid)

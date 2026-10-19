@@ -310,7 +310,8 @@ describe("source guard: the board and the project Tasks stay calm", () => {
   it("the counts the audit named are all there (nothing was dropped to pass)", () => {
     const count = (rel: string, tag: string) => calmUses(rel).filter((u) => u.tag === tag && u.calm).length;
     expect(count("components/kanban/KanbanBoard.tsx", "ConfirmButton")).toBe(2); // Clear completed / failed
-    expect(count("components/kanban/SessionCard.tsx", "Badge")).toBe(2); // waiting / outcome
+    // v1.352.0 (G17, updated on purpose): + the stopped card's "Stopped" chip.
+    expect(count("components/kanban/SessionCard.tsx", "Badge")).toBe(3); // waiting / outcome / stopped
     expect(count("components/kanban/SessionCard.tsx", "ConfirmButton")).toBe(1); // Dismiss
     expect(count("components/project/ProjectTasks.tsx", "Badge")).toBe(1); // unknown
   });

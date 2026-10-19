@@ -54,6 +54,13 @@ class WorkflowRunRecord(SQLModel, table=True):
     #: {index, step, question} for the parked ``ask`` step. Additive column;
     #: old DBs self-heal it via the diff-migration.
     waiting_json: str = ""
+    #: v1.352.0 — WHO started the run: ``"person"`` when a person pressed Run
+    #: (``POST /workflows/run``, ``ironjarvis workflow run``), ``""`` for every
+    #: door that starts one on its own (a schedule, a rule, a goal, the chat
+    #: tool). Emergency stop admits a person's run (its agent steps carry the
+    #: same ``workflow:<name>`` origin a trigger stamps, so the origin alone
+    #: cannot tell them apart). Additive column; old rows read ``""``.
+    started_by: str = ""
     started_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

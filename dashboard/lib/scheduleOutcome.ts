@@ -19,8 +19,17 @@
 // ONE table for the words and the tone, read by the Schedules page and a
 // project's Schedules list, so the two cannot drift again. An unknown value is
 // shown as itself, never as "not run yet" (that was the lie).
+//
+// v1.352.0 (G17): that table is now the app's ONE status word table
+// (lib/statusWords.scheduleRunWords) — "Done", "Done · needs you",
+// "Done · part failed", "Failed", "Stopped" (slate: a stop is not a failure),
+// "Skipped", "Missed", "Not run yet" — the words a session, a mission and the
+// Session board use for the same states. `scheduleStatusWords` keeps its
+// {label, tone} shape for the project list; the second copy of the words that
+// lived here ("✓ ok", "finished · needs you", an amber "stopped") is gone.
 
 import { plainText } from "@/components/Markdown";
+import { scheduleStatusLabel } from "@/lib/statusWords";
 
 export type ScheduleTone = "success" | "danger" | "warn" | "muted";
 
@@ -31,24 +40,11 @@ export interface ScheduleStatusWords {
   tone: ScheduleTone;
 }
 
-const WORDS: Record<string, ScheduleStatusWords> = {
-  ok: { label: "✓ ok", tone: "success" },
-  error: { label: "✗ failed", tone: "danger" },
-  // Not written by the scheduler; a row planted by an older build or by hand
-  // reads like `error` — the daemon's FAILED_STATUSES counts it too.
-  failed: { label: "✗ failed", tone: "danger" },
-  needs_you: { label: "finished · needs you", tone: "warn" },
-  partial: { label: "finished · part failed", tone: "warn" },
-  cancelled: { label: "stopped", tone: "warn" },
-  skipped: { label: "skipped", tone: "warn" },
-  missed: { label: "missed", tone: "warn" },
-};
-
-/** The row's status words for a `last_status` value. */
+/** The row's status words for a `last_status` value, from the one status
+ *  table (a legacy `failed` reads like `error` — the daemon's
+ *  FAILED_STATUSES counts it too; an unknown value is shown as itself). */
 export function scheduleStatusWords(status: string | null | undefined): ScheduleStatusWords {
-  const s = (status ?? "").trim();
-  if (!s) return { label: "not run yet", tone: "muted" };
-  return WORDS[s] ?? { label: s.replace(/_/g, " "), tone: "muted" };
+  return scheduleStatusLabel(status);
 }
 
 /** The daemon's `run_outcome.SHORT_STATUSES` (FAILED_STATUSES +
@@ -73,7 +69,7 @@ export function scheduleDetail(detail: string | null | undefined): string {
 const FAILED_LEAD = "The run failed: ";
 
 /** A failed row's reason without the daemon's lead, for a surface that
- *  already says "✗ failed: " in front of it. */
+ *  already says "Failed: " in front of it. */
 export function failureReason(detail: string | null | undefined): string {
   const text = scheduleDetail(detail);
   return text.startsWith(FAILED_LEAD) ? text.slice(FAILED_LEAD.length) : text;

@@ -352,12 +352,13 @@ import { AgentRunLive, AgentRunSettled, HandOffLine } from "@/components/chat/Ag
 // v1.352.0 (G19): what a settled run did, inside that row's opened body.
 import { AgentRunReceipt } from "@/components/chat/AgentRunReceipt";
 import {
-  agentRunName,
+  agentPhrase,
   handOffFor,
   handOffSentence,
   readAgentRun,
   remoteName,
   settleHandOff,
+  settledRunName,
   stampMs,
   stopHandOff,
   type AgentRunStamp,
@@ -535,6 +536,9 @@ interface SessionAsk {
   /** v1.350.0: an ask answered once or declined, nothing wider (the plan
    *  approval's `once_only`), so its card offers no conversation answer. */
   onceOnly?: boolean;
+  /** v1.352.0 (G25): can the action be undone (the ask's own verdict, off
+   *  the event or the listing)? Absent when the daemon did not say. */
+  reversible?: boolean;
 }
 
 interface ChatMessage {
@@ -1096,21 +1100,11 @@ function CompactionOffer({
   );
 }
 
-/** Human phrase for a roster agent name (v1.139.0), used by the hand-off
- *  bubble: "researcher" → "the researcher"; "custom:invoice-chaser" → "your
- *  invoice-chaser agent"; "remote:hermes-mac-mini" → "the hermes-mac-mini
- *  remote agent". Plain and honest — no prefixes shown to the user. */
-function agentPhrase(name: string): string {
-  const custom = name.startsWith("custom:");
-  const remote = name.startsWith("remote:");
-  const bare = (custom || remote ? name.slice(name.indexOf(":") + 1) : name).trim();
-  // A degenerate name (empty slug etc.) can only arrive on a broken wire —
-  // degrade to a sane phrase, never "your  agent" / "the undefined".
-  if (!bare) return "a specialist agent";
-  if (custom) return `your ${bare} agent`;
-  if (remote) return `the ${bare} remote agent`;
-  return `the ${bare}`;
-}
+// Human phrase for a roster agent name (v1.139.0), used by the hand-off
+// bubble: "researcher" → "the researcher"; "custom:invoice-chaser" → "your
+// invoice-chaser agent"; "remote:hermes-mac-mini" → "the hermes-mac-mini
+// remote agent" — `agentPhrase`, lib/agentRun since v1.352.0 (the settled
+// row names the agent the receipt says ran with the same words).
 
 interface PersonaOption {
   /** Slug id used as the `persona` value on the /chat POST. */
@@ -3103,7 +3097,7 @@ const MessageRow = memo(function MessageRow({
     if (run)
       return (
         <div className="group/msg">
-          <AgentRunSettled name={agentRunName(m.escalatedTo)} run={run} why={said}>
+          <AgentRunSettled name={settledRunName(m.escalatedTo, run)} run={run} why={said}>
             <AgentRunReceipt run={run} />
           </AgentRunSettled>
         </div>
@@ -7399,6 +7393,8 @@ export default function ChatPage() {
           // this conversation", which would arm a tool name that is not a
           // tool.
           ...(p.once_only === true ? { onceOnly: true } : {}),
+          // v1.352.0 (G25): the undo line the chat's own card shows.
+          ...(typeof p.reversible === "boolean" ? { reversible: p.reversible } : {}),
         });
       }
     }
@@ -7422,6 +7418,7 @@ export default function ChatPage() {
           count?: unknown;
           timeout_s?: unknown;
           once_only?: unknown;
+          reversible?: unknown;
         }[];
       }>("/chat/approvals/pending");
       if (awaitingIdRef.current !== id) return;
@@ -7433,6 +7430,7 @@ export default function ChatPage() {
           ...(typeof a.count === "number" && a.count > 1 ? { count: a.count } : {}),
           ...(typeof a.timeout_s === "number" ? { timeoutS: a.timeout_s } : {}),
           ...(a.once_only === true ? { onceOnly: true } : {}),
+          ...(typeof a.reversible === "boolean" ? { reversible: a.reversible } : {}),
         }));
       setPolledAsks(mine);
     } catch {
@@ -7483,6 +7481,7 @@ export default function ChatPage() {
               examples: ask.examples,
               timeoutS: ask.timeoutS,
               ...(ask.onceOnly ? { onceOnly: true } : {}),
+              ...(typeof ask.reversible === "boolean" ? { reversible: ask.reversible } : {}),
             }))
           : null,
       }),
@@ -12051,7 +12050,7 @@ export default function ChatPage() {
                         className="flex items-center gap-2 px-3 py-2 text-[12px] text-zinc-400"
                       >
                         <span className="min-w-0 flex-1">
-                          Allowed for this conversation. {grantCapNote} won&apos;t ask
+                          Allowed for this chat. {grantCapNote} won&apos;t ask
                           again here when it&apos;s in use. All {MAX_TOOLS} tool slots
                           are in use, so remove one, then add it from + to keep it
                           available.

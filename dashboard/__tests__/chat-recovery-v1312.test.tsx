@@ -306,7 +306,8 @@ describe("W4-2 — 'Allow for this conversation' is remembered as a grant", () =
 
     // Plain words, not a silent no-op: granted, but not kept armed.
     const note = await screen.findByTestId("grant-cap-note");
-    expect(note.textContent).toMatch(/allowed for this conversation/i);
+    // v1.352.0 (G24), moved on purpose: the button's own words ("this chat").
+    expect(note.textContent).toMatch(/allowed for this chat/i);
     expect(note.textContent).toMatch(/add it from \+ to keep it available/i);
 
     await endTurn();

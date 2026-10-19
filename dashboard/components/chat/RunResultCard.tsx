@@ -29,6 +29,8 @@ import {
   Ban,
   ChevronDown,
   ChevronRight,
+  Check,
+  Hand,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import type { SessionOutcome } from "@/lib/types";
@@ -36,7 +38,7 @@ import { atStepLimit } from "@/lib/agentRun";
 import { runActionLines, stepFailedWords } from "@/lib/runWords";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { providerDisplay } from "@/lib/onboarding";
-import { secondsText } from "@/components/chat/TurnReceipt";
+import { replyWhere, secondsText } from "@/components/chat/TurnReceipt";
 
 export interface RunResult {
   found: boolean;
@@ -190,6 +192,18 @@ export function RunMeta({ result }: { result: RunResult }) {
       </span>,
     );
   }
+  // v1.352.0 integrate (G21 on the helper agent's card): WHERE the run's
+  // model ran, in the reply receipt's own words and rule (TurnReceipt
+  // replyWhere: "local" or "cloud", only when the receipt says, never for the
+  // demo model). The receipt carries no endpoint label, so no "on <label>".
+  const where = replyWhere({ provider, model, on_this_network: runOnNetwork(result) });
+  if (who && where?.tail) {
+    parts.push(
+      <span data-testid="run-result-where" title={where.title}>
+        {where.tail}
+      </span>,
+    );
+  }
   const dur =
     typeof result.duration_s === "number" ? secondsText(result.duration_s * 1000) : null;
   if (dur) parts.push(dur);
@@ -209,6 +223,27 @@ export function RunMeta({ result }: { result: RunResult }) {
   );
 }
 
+/** The receipt's `on_this_network`, a real boolean only (null/absent = the
+ *  receipt did not say, so the card says nothing about where). */
+function runOnNetwork(result: RunResult): boolean | undefined {
+  return typeof result.on_this_network === "boolean" ? result.on_this_network : undefined;
+}
+
+/** The receipt's action log (`activity`, the newest 20 plain lines, oldest
+ *  first), checked line by line: a line with words, its tone one of the
+ *  three, at most 20. Anything else is left out, never guessed. */
+export function runActivity(result: Pick<RunResult, "activity">): { text: string; tone: "ok" | "warn" | "ask" }[] {
+  const out: { text: string; tone: "ok" | "warn" | "ask" }[] = [];
+  for (const a of Array.isArray(result.activity) ? result.activity : []) {
+    if (out.length >= 20) break;
+    const text = typeof a?.text === "string" ? a.text.replace(/\s+/g, " ").trim() : "";
+    if (!text) continue;
+    const tone = a.tone === "warn" || a.tone === "ask" ? a.tone : "ok";
+    out.push({ text: text.length > 200 ? `${text.slice(0, 199)}…` : text, tone });
+  }
+  return out;
+}
+
 export function RunResultCard({
   result,
   onRetry,
@@ -224,6 +259,7 @@ export function RunResultCard({
   const [note, setNote] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
 
   const end = runEnd(result);
   const failed = end === "failed";
@@ -243,6 +279,9 @@ export function RunResultCard({
 
   // v1.352.0 (G19): the run's work in words, counted per tool.
   const actions = runActionLines(result.tools_used, result.tools_failed);
+  // v1.352.0 integrate (G18 -> G19): what it did, step by step, in the
+  // mission screen's words (the receipt's `activity`), folded.
+  const activity = runActivity(result);
 
   async function revert() {
     setBusy("revert");
@@ -395,6 +434,47 @@ export function RunResultCard({
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* v1.352.0 integrate (G18 -> G19): the receipt's own action log —
+            "Builder saved brief.md", "needed your OK to run a command" —
+            folded behind one quiet toggle, as plain grey rows (no box). An
+            older result with no log shows nothing new. */}
+        {activity.length > 0 && (
+          <div>
+            <button
+              type="button"
+              data-testid="run-result-steps-toggle"
+              aria-expanded={stepsOpen}
+              onClick={() => setStepsOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-[12px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
+            >
+              {stepsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              {activity.length >= 20 ? "The last 20 things it did" : "What it did"}
+            </button>
+            {stepsOpen && (
+              <ul data-testid="run-result-activity" className="mt-1.5 grid gap-1">
+                {activity.map((a, i) => (
+                  <li
+                    key={i}
+                    data-tone={a.tone}
+                    className={`flex min-w-0 items-start gap-2 text-[12px] leading-5 ${
+                      a.tone === "warn" ? "text-tone-warn" : "text-zinc-400"
+                    }`}
+                  >
+                    {a.tone === "warn" ? (
+                      <AlertTriangle size={13} aria-hidden="true" className="mt-[3px] shrink-0" />
+                    ) : a.tone === "ask" ? (
+                      <Hand size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-zinc-500" />
+                    ) : (
+                      <Check size={13} aria-hidden="true" className="mt-[3px] shrink-0 text-zinc-500" />
+                    )}
+                    <span className="min-w-0 break-words">{a.text}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 

@@ -312,9 +312,9 @@ describe("KanbanBoard team rendering", () => {
 
     // The child left its own lane — the Done lane shows its empty state.
     // v1.352.0 (G17, updated on purpose): the lane is named by the one status
-    // table ("Done", was "Completed"); KanbanColumn words the empty line from
-    // the title.
-    expect(screen.getByText("No done sessions")).toBeInTheDocument();
+    // table ("Done", was "Completed") and says its own empty sentence
+    // (lib/kanban LANES `empty`; "No done sessions" did not read).
+    expect(screen.getByText("Nothing has finished yet")).toBeInTheDocument();
 
     // The parent's badge names the real member count.
     const badge = screen.getByTestId("team-badge");
@@ -437,8 +437,8 @@ describe("nested cards keep their own lane's affordances (v1.168.0 review fix)",
       "s-child": "s-parent",
     });
     // The failed child renders inside the Active column, so the Failed column
-    // is honestly empty…
-    expect(screen.getByText("No failed sessions")).toBeInTheDocument();
+    // is honestly empty… (v1.352.0, G17: in the lane's own empty sentence)
+    expect(screen.getByText("Nothing failed or was stopped")).toBeInTheDocument();
     // …and the toolbar must not contradict it one line above.
     expect(screen.queryByText(/Clear failed/)).not.toBeInTheDocument();
   });

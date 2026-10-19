@@ -273,10 +273,11 @@ async def test_a_session_asked_from_a_chat_appends_exactly_one_line_with_its_fil
     # stamped by the server (the integrator compares this with the page's own)
     row = _session_row(p.engine, s.id)
     # v1.352.0 (G19), moved ON PURPOSE: the line's card is the RECEIPT read
-    # (what GET /sessions/{id}/result answers), minus `on_this_network`,
-    # which the orchestrator's call cannot judge without the provider manager.
-    receipt = session_result(p.engine, s.id, receipt=True)
-    receipt.pop("on_this_network", None)
+    # (what GET /sessions/{id}/result answers). The integrator's change hands
+    # the orchestrator's provider manager + config through, so the card also
+    # says where the run's model ran (`on_this_network`) — exactly the route's.
+    receipt = session_result(p.engine, s.id, receipt=True, manager=p.providers, config=p.config)
+    assert receipt["on_this_network"] is True  # the mock runs in-process
     expected = line_for_session(row, receipt, "builtin:builder")
     assert line["at"].endswith("+00:00")
     assert {k: v for k, v in line.items() if k != "at"} == expected

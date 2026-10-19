@@ -3547,6 +3547,81 @@ does not need a bump, stop and bump it.
   sends `env` to an http pack (or `headers` to a stdio one) writes then
   drops it silently rather than 422ing.
 
+- **One vocabulary, one receipt, one approval language** (v1.352.0,
+  product-readiness Wave 2, G16/G17/G19/G21-G27; lanes 2A-2D + integrate).
+  HELPER-AGENT RECEIPT (2A): `RunResultCard.runEnd` — cancelled = neutral
+  "Stopped", a failed run whose summary says max steps = "Stopped at its step
+  limit" (warn), only a real failure is red; `RunMeta` = "answered by <friendly
+  model> · local|cloud · <secondsText> · N steps · N tool calls" (the where
+  part is TurnReceipt `replyWhere`, only when `on_this_network` is a real
+  boolean, never for mock); "What it did" folds the receipt's `activity`
+  (`runActivity`, <= 20). `lib/runWords` says tools by EXACT name (raw ids only
+  in titles). The hand-off stamp (`lib/agentRun`) gains optional status,
+  outcome, stepLimit, provider, model, routeNote, workspacePath, tools (<=
+  `STAMP_TOOLS_MAX` 20), agent, onThisNetwork — written by `settleHandOff(msgs,
+  session, row, steps, plan, result)` on BOTH finalize paths (the row first,
+  the ledger result standing in for status/outcome/provider/model);
+  `stopHandOff` settles a Stop at once; `settledRunName` names the receipt's
+  agent when the hand-off line named none (`agentPhrase` lives in
+  lib/agentRun now). `components/chat/AgentRunReceipt` is the settled row's
+  body (route note, action lines, "Ran on X · local|cloud", folder + Open
+  folder). DAEMON: `agents/chat_delivery.delivery_result` makes the
+  `receipt=True` read for the appended line, and `Orchestrator.
+  _deliver_to_chat_sync` passes `manager`/`config` — without them
+  `on_this_network` is DROPPED (absent beats wrong). `STOPPED_SENTENCE` /
+  `FAILED_SENTENCE` are the page's and the daemon's same words. Every reply's
+  TurnReceipt says "on <label>" / "· local" / "· cloud" (never "this PC" on a
+  guess); the model menu badges read local / cloud · on your plan / cloud ·
+  pay per use. ONE STATUS TABLE (2C): `lib/statusWords` gives every surface
+  its word AND tone (session badge, Sessions filter, Session board lanes +
+  `stoppedChip`, mission cards, inbox, workflow run/step badges, Schedules and
+  a project's list via `scheduleStatusLabel` — `lib/scheduleOutcome` keeps no
+  table); cancelled is slate "Stopped" everywhere (ui `STATUS_TONE` too); an
+  unknown value reads as itself. A NEW status value goes in its Python home
+  (`scheduling/run_outcome`, `SessionStatus`, `outcome.OUTCOME_*`) AND this
+  table — `receipt-seams-v13520` reads the Python constants. App / browser
+  steps are `lib/workTarget` kinds (`BROWSER_TOOLS` exported from
+  lib/toolWords, exact names). ONE APPROVAL LANGUAGE (2B): `lib/approvalWords`
+  (dependency-free; ApprovalCard re-exports it) — Allow once / Allow for this
+  chat|run (`scope`: docked or `onConversation` = chat, else run; the session
+  page and ProjectSurfaces pass "run") / Deny; posted VALUES unchanged.
+  `agents/mission.ASK_WORDS` is its Python twin for the activity log ("needed
+  your OK to save a file"), pinned EQUAL to lib/toolWords. LOCK-STEP (MIRROR
+  NOTE): `tools/reversible.reversible_flag` feeds the stream lane's approval
+  frame AND the runtime's `approval.requested`; the pending listing copies
+  `reversible` key by key and every agent row carries `task` (masked first
+  line, <= 120) + `origin`; `routes/sessions._waiting_on` (session and project
+  rows) and `mission._waiting` add the same verdict from the registry; the
+  dashboard carries it through useChatStream (decode + `PendingApproval`), the
+  chat page's ask fold + listing poll + dock mapping, ProjectSurfaces, the
+  session page, MissionOutput and the bell (which holds "Approved. The run
+  continues · Open run" for `ANSWERED_LINGER_MS`). Settings and SetupCard show
+  `PERMISSION_LEVELS`' labels; `settings/tools._RETIRED_OPTION_WORDS` keeps
+  the old level names meaning the same level. The mission receipt's
+  `receiptLine` says "with" when the words already name an endpoint. TRUST
+  SURFACES (2D): the footer says "Ready"; the orb opens `RunningNow`
+  (`lib/runningNow`, re-read on `RUN_EDGE_TYPES`); `GET /settings/access`
+  (`routes/access_summary`, registered in `create_app` — pinned) feeds
+  `components/settings/AccessSummary` atop Permissions & ledger. EMERGENCY
+  STOP ADMITS A PERSON'S WORKFLOW (integrate): `POST /workflows/run` and
+  `ironjarvis workflow` create the record with `started_by="person"`
+  (`WorkflowRunRecord.started_by`, additive; a resume reads it off the
+  record); the engine passes `create_session(started_by_person=True)` to its
+  agent steps (the kwarg ONLY when true), which admits them and writes
+  `options["started_by_person"]` (only the kwarg sets it; a door's options
+  entry is dropped) for `stop_unattended` to skip. A schedule, a rule, a goal
+  and the chat's `workflow_run` tool stay refused. CONTRACT FIXTURE:
+  `dashboard/__tests__/fixtures/receipt-seams-v13520.json` (regenerate with
+  `IJ_REGEN_RECEIPT_SEAMS=1`) holds two real receipts (cloud + local), the
+  line the daemon appended, and ONE real ask as five surfaces receive it;
+  `tests/test_receipt_seams_v13520.py` writes/checks it,
+  `dashboard/__tests__/{receipt-seams,approval-session-page}-v13520.test.tsx`
+  feed it through the real components. Pins: `tests/test_{agent_runs_in_chat,
+  approval_words,access_summary,emergency_stop_workflow_run,receipt_seams}_
+  v13520.py`, `dashboard/__tests__/{agent-runs-in-chat,approval-words,
+  approval-levels-setup,status-words,work-words,running-now,access-summary,
+  receipt-seams,approval-session-page}-v13520.test.tsx` (every lane change
+  and every integrator change mutation-checked red).
 - **Every surface tells the truth about an outcome — ONE verdict vocabulary,
   and Emergency stop stops what starts on its own** (v1.351.0, product-
   readiness Wave 1, gaps G01-G15 + G18; lanes 1A-1E + integrate). SCHEDULES:
@@ -3594,12 +3669,14 @@ does not need a bump, stop and bump it.
   `tests/test_emergency_stop_rules_v13510.py`); any other route door gets the app's
   409 `{detail, code: "emergency_stop"}` handler, never a 500. A person's
   Continue is NOT refused (`continue_session` builds its row itself —
-  pinned). Known: a manual workflow Run's agent steps are refused (origin
-  `workflow:<name>` cannot tell a person from a trigger); the TOML
+  pinned). (A manual workflow Run's agent steps were refused here — origin
+  `workflow:<name>` cannot tell a person from a trigger — until v1.352.0's
+  `started_by_person`; see that bullet.) Known: the TOML
   `[[triggers]]` cron in `workflows/triggers.py` has no live caller. THE
   RECEIPT (G18, for wave 2): `agents/outcome.session_result` always carries
   `provider`, `model` (the served pair), `agent_name` (roster name or None),
-  `agent_type`; with `receipt=True` — ONLY `GET /sessions/{id}/result`, the
+  `agent_type`; with `receipt=True` — `GET /sessions/{id}/result` and (v1.352.0) the
+  daemon-appended chat line (`chat_delivery.delivery_result`); the
   finalize/coach/compaction callers skip it for cost — also `route_note`
   (the mission screen's failover/refusal sentence, "in this run", else ""),
   `on_this_network` (`egress.stays_on_this_network`, None with no
@@ -3784,8 +3861,8 @@ does not need a bump, stop and bump it.
   read before it writes `messagesRef` — the ledger read and the outer catch
   too (re-review 20ae618c: a user who opened another chat while
   GET /sessions/{id}/result was out got the agent's reply composed INTO
-  that chat). A stopped hand-off keeps its old line (no session row to
-  settle from). Pins: `step-detail-v1349`, `agent-run-row-v1349`,
+  that chat). (v1.352.0: a Stop settles the hand-off at once —
+  `lib/agentRun.stopHandOff`.) Pins: `step-detail-v1349`, `agent-run-row-v1349`,
   `step-detail-contract-v1349`, `rereview-wave-b-v1349` (dashboard);
   `test_step_detail_v1349`, `test_step_detail_contract_v1349`,
   `test_redact_linear_v1349`, `test_step_detail_bounded_v1349`.

@@ -65,7 +65,7 @@ import {
 } from "@/lib/mission";
 import { settledSplit } from "@/lib/streamSplit";
 import { useMissionLive, type MissionLive, type MissionLiveStore } from "@/lib/useMission";
-import { receiptVerbFor } from "./receipt";
+import { receiptLine, receiptVerbFor } from "./receipt";
 import { mockLine } from "./AgentCards";
 
 export type OutputTab = "report" | "markdown" | "preview";
@@ -120,7 +120,7 @@ function ApprovalCard({
   // the ask is out): approving a plan you cannot read is not a decision. A
   // 404 (no copy) leaves the words and the two answers.
   const planAsk = waiting.tool === PLAN_TOOL;
-  const undo = undoLine((waiting as WaitingOn & { reversible?: unknown }).reversible);
+  const undo = undoLine(waiting.reversible);
   const [plan, setPlan] = useState<PlanView | null>(null);
   useEffect(() => {
     if (!planAsk || !session) return;
@@ -392,9 +392,7 @@ function MissionReceipt({ view, catalog }: { view: MissionView; catalog: readonl
           </Link>
         </span>
       ) : pair ? (
-        <span title={pair}>
-          {receiptVerb(view)} {words.text || pair}
-        </span>
+        <span title={pair}>{receiptLine(receiptVerb(view), words.text || pair)}</span>
       ) : null}
       {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-tone-warn`}>{note}</div>}
     </div>

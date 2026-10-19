@@ -92,7 +92,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/workflows/run")
     async def workflow_run(body: WorkflowRunBody) -> dict[str, Any]:
-        from ...workflows.engine import WorkflowEngine, load_workflow, load_workflow_toml
+        """A PERSON pressed Run (the canvas, the chat's draft card, the
+        workflows page, a curl): the record is marked person-started
+        (v1.352.0), so Emergency stop admits its agent steps — "work you
+        start keeps going". A schedule, a rule, a goal and the chat tool
+        start runs through the engine directly and stay refused."""
+        from ...workflows.engine import (
+            STARTED_BY_PERSON,
+            WorkflowEngine,
+            load_workflow,
+            load_workflow_toml,
+        )
 
         if body.toml:
             wf = load_workflow_toml(body.toml)
@@ -140,7 +150,9 @@ def register(app: FastAPI, d) -> None:
         try:
             # v1.226.0: the INSERT waits behind any long writer (VACUUM) for
             # up to busy_timeout — on a worker thread, never on the loop.
-            rec = await asyncio.to_thread(engine.create_record, wf, **run_kwargs)
+            rec = await asyncio.to_thread(
+                engine.create_record, wf, started_by=STARTED_BY_PERSON, **run_kwargs
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _spawn_run_or_interrupt(rec.id, engine.run_record(rec, wf, **run_kwargs))

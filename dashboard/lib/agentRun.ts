@@ -84,6 +84,15 @@ export interface AgentRunStamp {
   workspacePath?: string;
   /** What it did, counted per tool (the ledger's own numbers). */
   tools?: AgentRunTool[];
+  /** v1.352.0 integrate (the wave-1 receipt, G18): WHO ran it — the
+   *  receipt's `agent_name` (a roster name: "custom:researcher"), else its
+   *  `agent_type` ("builder"). Names the settled row when the hand-off line
+   *  named nobody (the default agent). */
+  agent?: string;
+  /** v1.352.0 integrate (G21 on the helper agent): did the run's model stay
+   *  on the user's network (the receipt's `on_this_network`)? Only a real
+   *  boolean; absent = not said, and the row says nothing about where. */
+  onThisNetwork?: boolean;
 }
 
 /** The fields of a chat message this file reads; the page's ChatMessage
@@ -208,7 +217,14 @@ export interface RunEndFacts {
   routeNote?: unknown;
   toolsUsed?: unknown;
   toolsFailed?: unknown;
+  /** The receipt's who (agent_name, else agent_type) and where. */
+  agent?: unknown;
+  onThisNetwork?: unknown;
 }
+
+/** A roster name fit to keep ("builder", "custom:researcher",
+ *  "remote:hermes"): one short token of name characters. */
+const AGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,79}$/;
 
 /** The v1.352.0 fields of a stamp, each only when known (an old stamp, or a
  *  finalize with nothing to say, keeps the old shape exactly). */
@@ -230,6 +246,9 @@ function endFields(f: RunEndFacts | null | undefined): Partial<AgentRunStamp> {
   if (workspacePath) out.workspacePath = workspacePath;
   const tools = stampTools(f.toolsUsed, f.toolsFailed);
   if (tools.length) out.tools = tools;
+  const agent = typeof f.agent === "string" ? f.agent.trim() : "";
+  if (agent && AGENT_NAME.test(agent)) out.agent = agent;
+  if (typeof f.onThisNetwork === "boolean") out.onThisNetwork = f.onThisNetwork;
   return out;
 }
 
@@ -286,6 +305,8 @@ export function readAgentRun(m: unknown): AgentRunStamp | null {
     routeNote: r.routeNote,
     workspacePath: r.workspacePath,
     toolsUsed: r.tools,
+    agent: r.agent,
+    onThisNetwork: r.onThisNetwork,
   });
   if (r.stepLimit === true && end.status === "failed") end.stepLimit = true;
   return {
@@ -354,6 +375,14 @@ export interface RunResultLike {
   route_note?: unknown;
   tools_used?: unknown;
   tools_failed?: unknown;
+  /** The ledger's own reading of how the run ended (stands in for a row
+   *  that holds none — the row is read first). */
+  status?: unknown;
+  outcome?: unknown;
+  /** The wave-1 receipt's who and where (G18). */
+  agent_name?: unknown;
+  agent_type?: unknown;
+  on_this_network?: unknown;
 }
 
 /** finalize's one call (both of its paths, the composed reply and the
@@ -382,8 +411,10 @@ export function settleHandOff<M extends HandOffLike>(
       steps,
       plan,
       end: {
-        status: row?.status,
-        outcome: row?.outcome,
+        // The row's own verdict first; the ledger's (the same derivation the
+        // result card reads) when the row holds none.
+        status: row?.status || result?.status,
+        outcome: row?.outcome || result?.outcome,
         summary: row?.summary,
         // The row holds the SERVED pair once a run ends; the result carries
         // the same two (G18), which stand in for a row that lacks them.
@@ -393,6 +424,9 @@ export function settleHandOff<M extends HandOffLike>(
         routeNote: result?.route_note,
         toolsUsed: result?.tools_used,
         toolsFailed: result?.tools_failed,
+        // v1.352.0 integrate: who ran it and where (the receipt read).
+        agent: result?.agent_name || result?.agent_type,
+        onThisNetwork: result?.on_this_network,
       },
     }),
   );
@@ -462,6 +496,30 @@ export function runEndWords(run: Pick<AgentRunStamp, "status" | "outcome" | "ste
   if (run.outcome === "needs_you") return "needs you";
   if (run.outcome === "completed_with_failures") return "part failed";
   return null;
+}
+
+/** How a roster name reads in a sentence (moved here from the chat page in
+ *  v1.352.0 so the settled row can name the agent the receipt says ran):
+ *  "custom:researcher" -> "your researcher agent", "remote:hermes" -> "the
+ *  hermes remote agent", "builder" -> "the builder". */
+export function agentPhrase(name: string): string {
+  const custom = name.startsWith("custom:");
+  const remote = name.startsWith("remote:");
+  const bare = (custom || remote ? name.slice(name.indexOf(":") + 1) : name).trim();
+  // A degenerate name (empty slug etc.) can only arrive on a broken wire —
+  // degrade to a sane phrase, never "your  agent" / "the undefined".
+  if (!bare) return "a specialist agent";
+  if (custom) return `your ${bare} agent`;
+  if (remote) return `the ${bare} remote agent`;
+  return `the ${bare}`;
+}
+
+/** The settled row's subject: the hand-off line's own words when it named
+ *  the agent, else (v1.352.0 integrate) the agent the receipt says RAN —
+ *  "The builder worked for 45 s" where it used to read "The agent". */
+export function settledRunName(escalatedTo: string | null | undefined, run: AgentRunStamp): string {
+  const said = typeof escalatedTo === "string" ? escalatedTo.trim() : "";
+  return agentRunName(said || (run.agent ? agentPhrase(run.agent) : ""));
 }
 
 /** The row's subject, at the start of a sentence: "the researcher" reads

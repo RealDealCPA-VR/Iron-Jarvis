@@ -123,7 +123,8 @@ def test_the_result_names_provider_model_agent_place_recovery_and_actions(tmp_pa
     assert [a["text"] for a in body["activity"]] == [
         "tax-reader read k1-2025.pdf",
         "tax-reader could not write summary.md",
-        "tax-reader needed your OK to use shell",
+        # v1.352.0, moved on purpose: the approval card's words (mission.ASK_WORDS).
+        "tax-reader needed your OK to run a command",
     ]
     assert [a["tone"] for a in body["activity"]] == ["ok", "warn", "ask"]
     assert all(a["session_id"] == "sess_tax" for a in body["activity"])
@@ -248,4 +249,4 @@ def test_the_mission_screen_and_the_receipt_share_one_wording(tmp_path):
     again, last = mission.tool_activity(invs, denied, {"sess_tax": "Jarvis"})
     assert lines == again
     assert [ln["text"] for ln in lines][0] == "Jarvis read k1-2025.pdf"
-    assert last["sess_tax"] == "needed your OK to use shell"
+    assert last["sess_tax"] == "needed your OK to run a command"

@@ -14,7 +14,21 @@ import { useApi } from "@/lib/useApi";
 import { cronLabel } from "@/lib/schedules";
 import type { Schedule } from "@/lib/types";
 import { Card, Dot } from "@/components/ui";
-import { failureReason, scheduleDetail, scheduleStatusWords } from "@/lib/scheduleOutcome";
+import {
+  failureReason,
+  scheduleDetail,
+  scheduleStatusWords,
+  type ScheduleTone,
+} from "@/lib/scheduleOutcome";
+
+/** A last run's ink by the one table's tone (v1.352.0, G17) — the theme's
+ *  tone tokens, the same inks the Schedules page row draws. */
+const STATUS_INK: Record<ScheduleTone, string> = {
+  success: "text-tone-success",
+  danger: "text-tone-danger",
+  warn: "text-tone-warn",
+  muted: "text-zinc-500",
+};
 
 /** The project a schedule runs inside. Prefers the server-decoded
  * `project_id` (additive on GET /schedules since v1.169.0); falls back to
@@ -135,30 +149,35 @@ export function ProjectSchedules({
               {/* Outcome truth (v1.119.0): how the last fire went + the session.
                   v1.351.0 (G01): the Schedules page's words (lib/scheduleOutcome)
                   — a run that finished but needs the user, or partly failed, is
-                  amber here too, and a detail is plain words. */}
+                  amber here too, and a detail is plain words.
+                  v1.352.0 (G17): those words are the ONE status table's
+                  (lib/statusWords via scheduleStatusWords) — "Done", "Failed",
+                  "Done · needs you", "Stopped" in slate, "Not run yet" — so a
+                  last run reads the same here and on the Schedules page. */}
               {s.last_status === "ok" ? (
-                <span className="text-[11px] text-tone-success">✓ ok</span>
+                <span className={`text-[11px] ${STATUS_INK[scheduleStatusWords("ok").tone]}`}>
+                  {scheduleStatusWords("ok").label}
+                </span>
               ) : s.last_status === "error" || s.last_status === "failed" ? (
                 <span
-                  className="max-w-[200px] truncate text-[11px] text-tone-danger"
+                  className={`max-w-[200px] truncate text-[11px] ${STATUS_INK[scheduleStatusWords(s.last_status).tone]}`}
                   title={scheduleDetail(s.last_detail) || undefined}
                 >
-                  ✗ failed{s.last_detail ? `: ${failureReason(s.last_detail)}` : ""}
+                  {scheduleStatusWords(s.last_status).label}
+                  {s.last_detail ? `: ${failureReason(s.last_detail)}` : ""}
                 </span>
               ) : s.last_status ? (
                 <span
-                  className={`max-w-[200px] truncate text-[11px] ${
-                    scheduleStatusWords(s.last_status).tone === "warn"
-                      ? "text-tone-warn"
-                      : "text-zinc-500"
-                  }`}
+                  className={`max-w-[200px] truncate text-[11px] ${STATUS_INK[scheduleStatusWords(s.last_status).tone]}`}
                   title={scheduleDetail(s.last_detail) || undefined}
                   data-testid={`project-schedule-status-${s.name}`}
                 >
                   {scheduleStatusWords(s.last_status).label}
                 </span>
               ) : (
-                <span className="text-[11px] text-zinc-600">not run yet</span>
+                <span className={`text-[11px] ${STATUS_INK[scheduleStatusWords("").tone]}`}>
+                  {scheduleStatusWords("").label}
+                </span>
               )}
               {s.last_session_id ? (
                 <Link

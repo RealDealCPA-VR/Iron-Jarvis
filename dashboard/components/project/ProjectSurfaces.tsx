@@ -35,6 +35,9 @@ export interface ProjectApproval {
   sessionId: string;
   tool: string;
   args?: Record<string, unknown>;
+  /** v1.352.0 (G25): the ask's undo verdict (`approval.requested` carries
+   *  it); absent when the daemon did not say. */
+  reversible?: boolean;
 }
 
 /**
@@ -148,10 +151,20 @@ export function useProjectApprovals(projectId: string): ProjectApproval[] {
         const args = (e.payload?.args ?? undefined) as
           | Record<string, unknown>
           | undefined;
+        const rev = e.payload?.reversible;
         setPending((prev) =>
           prev.some((p) => p.id === aid)
             ? prev
-            : [...prev, { id: aid, sessionId: sid, tool, args }],
+            : [
+                ...prev,
+                {
+                  id: aid,
+                  sessionId: sid,
+                  tool,
+                  args,
+                  ...(typeof rev === "boolean" ? { reversible: rev } : {}),
+                },
+              ],
         );
       }
     })();
@@ -185,7 +198,14 @@ export function ProjectApprovals({ projectId }: { projectId: string }) {
               runtime widens the RUN's own allow-set server-side, so the
               button still means what it says for this task. */}
           <ApprovalCard
-            approval={{ id: a.id, callId: "", tool: a.tool, args: a.args }}
+            scope="run"
+            approval={{
+              id: a.id,
+              callId: "",
+              tool: a.tool,
+              args: a.args,
+              ...(typeof a.reversible === "boolean" ? { reversible: a.reversible } : {}),
+            }}
           />
         </div>
       ))}

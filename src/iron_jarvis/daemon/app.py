@@ -3223,6 +3223,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Standing grants (v1.299.0): exact-argument grants, listed + revoked here.
     _routes.grants.register(app, d)
     _routes.settings.register(app, d)
+    # What Jarvis can reach (v1.352.0, G27): Settings › Permissions & ledger.
+    _routes.access_summary.register(app, d)
     _routes.knowledge.register(app, d)
     _routes.codelab.register(app, d)
     _routes.creative.register(app, d)

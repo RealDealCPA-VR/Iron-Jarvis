@@ -193,7 +193,12 @@ def test_inputs_forwarded_to_create_and_run(tmp_path, monkeypatch):
                   "inputs": {"Client": "Acme", "Year": "2025"}},
         )
         assert r.status_code == 200
-        assert captured["create"] == {"inputs": {"Client": "Acme", "Year": "2025"}}
+        # v1.352.0, moved on purpose: a person pressed Run, so the record is
+        # created person-started (Emergency stop admits its agent steps).
+        assert captured["create"] == {
+            "inputs": {"Client": "Acme", "Year": "2025"},
+            "started_by": "person",
+        }
         assert _wait_for(lambda: "run" in captured)
         assert captured["run"] == {"inputs": {"Client": "Acme", "Year": "2025"}}
 
@@ -207,7 +212,9 @@ def test_no_inputs_means_no_inputs_kwarg_at_all(tmp_path, monkeypatch):
     with TestClient(create_app(str(tmp_path))) as client:
         r = client.post("/workflows/run", json={"name": "adhoc", "steps": STEPS})
         assert r.status_code == 200
-        assert captured["create"] == {}
+        # v1.352.0: still NO `inputs` kwarg; the only one is the Run press's
+        # person-started mark (moved on purpose).
+        assert captured["create"] == {"started_by": "person"}
         assert _wait_for(lambda: "run" in captured)
         assert captured["run"] == {}
 

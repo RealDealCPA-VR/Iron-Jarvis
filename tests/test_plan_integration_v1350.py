@@ -195,8 +195,9 @@ def test_the_mission_screen_says_the_plan_ask_in_words(tmp_path):
     texts = [line["text"] for line in mission_view(p, root.id)["activity"]]
     assert any(t.endswith("is waiting for you to approve the plan") for t in texts), texts
     assert not any("approve plan" in t for t in texts), texts
-    # Anti-vacuity: any other ask keeps its v1.307.0 words.
-    assert any(t.endswith("is waiting for your OK to use write file") for t in texts), texts
+    # Anti-vacuity: any other ask keeps its words — since v1.352.0 the
+    # approval card's own ("save a file", moved on purpose: one vocabulary).
+    assert any(t.endswith("is waiting for your OK to save a file") for t in texts), texts
 
 
 @requires_node

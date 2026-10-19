@@ -533,11 +533,12 @@ def skills(root: str = typer.Option(".", help="Project root.")) -> None:
 @app.command()
 def workflow(file: str, root: str = typer.Option(".", help="Project root.")) -> None:
     """Run a workflow defined in a TOML file (§24)."""
-    from ..workflows.engine import WorkflowEngine, load_workflow_toml
+    from ..workflows.engine import STARTED_BY_PERSON, WorkflowEngine, load_workflow_toml
 
     platform = build_platform(root)
     wf = load_workflow_toml(file)
-    rec = asyncio.run(WorkflowEngine(platform).run(wf))
+    # A person typed this (v1.352.0): Emergency stop admits its agent steps.
+    rec = asyncio.run(WorkflowEngine(platform).run(wf, started_by=STARTED_BY_PERSON))
     console.print(f"[bold]Workflow[/bold] {rec.workflow_name} -> [cyan]{rec.status}[/cyan]")
     console.print(f"sessions: {rec.session_ids_json}")
 

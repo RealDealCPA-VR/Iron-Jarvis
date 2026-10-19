@@ -989,13 +989,13 @@ describe("the receipt says what happened, not 'answered' (review: TurnReceipt ru
     H.api["/sessions/s1/mission"] = ended("cancelled", { provider: "claude-cli", model: "claude-opus" });
     at("?mission=s1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Ran on claude-opus on Claude Code/);
+    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Ran with claude-opus on Claude Code/); // v1.352.0: "with", moved on purpose
     cleanup();
 
     H.api["/sessions/s1/mission"] = { ...VIEW, session: { ...VIEW.session, provider: "claude-cli", model: "claude-opus" } };
     at("?mission=s1");
     render(<AgentsPage />);
-    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Working on claude-opus on Claude Code/);
+    expect((await screen.findByTestId("mission-receipt")).textContent).toMatch(/^Working with claude-opus on Claude Code/);
     cleanup();
 
     H.api["/sessions/s1/mission"] = ended("completed", { provider: "claude-cli", model: "claude-opus" });

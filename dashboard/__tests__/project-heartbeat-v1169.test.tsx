@@ -13,7 +13,9 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
  *    parsing the payload blob; garbage/non-string values yield "" instead of
  *    crashing the surface;
  *  - the card tells the v1.119.0 outcome truth: ✓ ok / ✗ failed + detail /
- *    "not run yet", and `last_session_id` deep-links to the REAL session;
+ *    "not run yet", and `last_session_id` deep-links to the REAL session
+ *    (v1.352.0, G17: in the one status table's words — Done / Failed +
+ *    detail / "Not run yet", the Schedules page's words);
  *  - next run renders as the row's `next_run` local time (the Schedules
  *    page's formatting approach), never the raw ISO string, with the trigger
  *    HUMANIZED in the tooltip (preset cron → its friendly label);
@@ -213,7 +215,7 @@ describe("scheduleTask / scheduleRepeatLabel", () => {
 /* ------------------------------------------------- ProjectSchedules render */
 
 describe("ProjectSchedules", () => {
-  it("renders this project's rows with name, task, ✓ ok, session link, next run", async () => {
+  it("renders this project's rows with name, task, Done, session link, next run", async () => {
     api.responses["/schedules"] = {
       schedules: [
         sched(),
@@ -225,7 +227,9 @@ describe("ProjectSchedules", () => {
     expect(await screen.findByText("Schedules · 1")).toBeInTheDocument();
     expect(screen.getByText("weekly-taxes")).toBeInTheDocument();
     expect(screen.getByText("Review open items.")).toBeInTheDocument();
-    expect(screen.getByText("✓ ok")).toBeInTheDocument();
+    // v1.352.0 (G17, updated on purpose): "Done", the one status table's
+    // word for an ok run (was "✓ ok"), in the success ink.
+    expect(screen.getByText("Done").className).toMatch(/text-tone-success/);
     // Another project's automation must NOT leak in.
     expect(screen.queryByText("other-project")).toBeNull();
     // Deep link to the REAL session the last fire spawned.
@@ -243,7 +247,7 @@ describe("ProjectSchedules", () => {
     expect(screen.getByText("manage →").getAttribute("href")).toBe("/schedules");
   });
 
-  it("a failed last fire shows ✗ failed with the detail", async () => {
+  it("a failed last fire shows Failed with the detail", async () => {
     api.responses["/schedules"] = {
       schedules: [
         sched({ last_status: "error", last_detail: "provider unreachable" }),
@@ -252,19 +256,21 @@ describe("ProjectSchedules", () => {
     render(<ProjectSchedules projectId="proj_1" />);
     expect(
       // v1.329.0 (calm chat W4 F6): "failed: <why>", no em-dash aside.
-      await screen.findByText("✗ failed: provider unreachable"),
+      // v1.352.0 (G17, updated on purpose): "Failed", the one table's word.
+      await screen.findByText("Failed: provider unreachable"),
     ).toBeInTheDocument();
-    expect(screen.queryByText("✓ ok")).toBeNull();
+    expect(screen.queryByText("Done")).toBeNull();
   });
 
-  it("a never-fired schedule says 'not run yet' and offers no session link", async () => {
+  it("a never-fired schedule says 'Not run yet' and offers no session link", async () => {
     api.responses["/schedules"] = {
       schedules: [
         sched({ last_status: "", last_detail: "", last_session_id: "" }),
       ],
     };
     render(<ProjectSchedules projectId="proj_1" />);
-    expect(await screen.findByText("not run yet")).toBeInTheDocument();
+    // v1.352.0 (G17, updated on purpose): the Schedules page's "Not run yet".
+    expect(await screen.findByText("Not run yet")).toBeInTheDocument();
     expect(screen.queryByText(/open session/)).toBeNull();
   });
 

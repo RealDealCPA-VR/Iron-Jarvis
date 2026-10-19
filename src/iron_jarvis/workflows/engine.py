@@ -74,6 +74,10 @@ _ORIGIN_MAX = 64
 _ORIGIN_BAD_RX = re.compile(r"[^A-Za-z0-9:_\-. ]")
 
 
+#: ``WorkflowRunRecord.started_by`` for a run a PERSON started (v1.352.0).
+STARTED_BY_PERSON = "person"
+
+
 def _workflow_origin(name: str) -> str:
     """The Session origin stamp for a workflow-spawned step session: charset-
     laundered (out-of-charset characters become ``_``) and length-clipped."""
@@ -354,7 +358,11 @@ class WorkflowEngine:
         )
 
     def create_record(
-        self, workflow: WorkflowDef, inputs: dict[str, str] | None = None
+        self,
+        workflow: WorkflowDef,
+        inputs: dict[str, str] | None = None,
+        *,
+        started_by: str = "",
     ) -> WorkflowRunRecord:
         """Persist a fresh ``running`` record for *workflow* and return it.
 
@@ -364,6 +372,11 @@ class WorkflowEngine:
         true start), not at the end. Inputs are seeded into ``outputs_json`` at
         creation so the record is honest from its first read. The record is
         refreshed so it stays usable once detached.
+
+        ``started_by`` (v1.352.0): ``STARTED_BY_PERSON`` when a person pressed
+        Run — the record carries it, so the run's agent steps (and a resume
+        of it) are admitted under Emergency stop. Every other door leaves it
+        ``""``.
         """
         if not self._has_runnable_steps(workflow):
             raise ValueError("workflow has no steps")
@@ -381,6 +394,7 @@ class WorkflowEngine:
             steps_json=dumps(steps_meta),
             session_ids_json="[]",
             outputs_json=dumps(seeded) if seeded else "{}",
+            started_by=STARTED_BY_PERSON if started_by == STARTED_BY_PERSON else "",
         )
         with session_scope(self.platform.engine) as db:
             db.add(record)
@@ -388,9 +402,10 @@ class WorkflowEngine:
             db.refresh(record)  # un-expire attrs so the detached record stays usable
         return record
 
-    async def run(self, workflow: WorkflowDef) -> WorkflowRunRecord:
-        """Create the record AND run it to completion (synchronous callers)."""
-        record = self.create_record(workflow)
+    async def run(self, workflow: WorkflowDef, *, started_by: str = "") -> WorkflowRunRecord:
+        """Create the record AND run it to completion (synchronous callers).
+        ``started_by`` as :meth:`create_record` (the CLI passes a person)."""
+        record = self.create_record(workflow, started_by=started_by)
         return await self.run_record(record, workflow)
 
     @staticmethod
@@ -456,6 +471,10 @@ class WorkflowEngine:
 
         orch = self.orchestrator or Orchestrator(self.platform)
         run_id = record.id
+        # v1.352.0: a run a PERSON started (the record says so, so a resume of
+        # it says so too) hands that to create_session for its agent steps —
+        # Emergency stop admits them ("work you start keeps going").
+        person_started = (getattr(record, "started_by", "") or "") == STARTED_BY_PERSON
         # Resolve the pinned project's folder ONCE for the whole run (None when
         # unpinned, or when the folder is missing on disk — see the helper).
         workspace_root, folder_note = self._project_folder(workflow.project_id)
@@ -528,6 +547,7 @@ class WorkflowEngine:
                         orch, run_id, workflow, steps[i], i, len(steps),
                         outputs, _completed_chain(), workspace_root,
                         session_ids, tool_workspace,
+                        person_started=person_started,
                     )
                     for i in pending
                 ),
@@ -882,6 +902,8 @@ class WorkflowEngine:
         workspace_root: str | None,
         session_ids: list[str],
         tool_workspace,
+        *,
+        person_started: bool = False,
     ) -> dict:
         """Execute ONE step per its kind; returns its output dict. Raises
         :class:`_AskPark` for ask steps and lets CancelledError propagate."""
@@ -921,6 +943,7 @@ class WorkflowEngine:
                 out = await self._run_agent_step(
                     orch, run_id, workflow, step, outputs, completed,
                     workspace_root, session_ids,
+                    person_started=person_started,
                 )
             # Verified steps (v1.170.0, contract 8): expectations run INSIDE
             # the attempt loop so a failed expectation routes through
@@ -967,7 +990,7 @@ class WorkflowEngine:
 
     async def _run_agent_step(
         self, orch, run_id, workflow, step, outputs, completed,
-        workspace_root, session_ids,
+        workspace_root, session_ids, *, person_started: bool = False,
     ) -> dict:
         task_text = render_template(step.task, outputs) + self._context_block(completed)
         # The def's explicit pin (None for unpinned workflows) grounds each
@@ -984,6 +1007,9 @@ class WorkflowEngine:
             # answer "which workflow started this session?" — laundered to the
             # origin rule's charset and clipped to its 64-char cap.
             origin=_workflow_origin(workflow.name),
+            # v1.352.0: passed ONLY for a person's run, so every other door's
+            # call (and a test double's create_session) is byte-identical.
+            **({"started_by_person": True} if person_started else {}),
         )
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving

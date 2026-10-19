@@ -564,7 +564,7 @@ export const NON_RAIL_ENTRIES: NavEntry[] = [
       "drag to approve",
     ],
     blurb:
-      "Every session as a card in its lane — running, waiting for your review, finished or failed. Drag from In Review to approve or reject.",
+      "Every session as a card in its lane — running, waiting for your review, finished or failed. Drag from Waiting for you to approve or reject.",
   },
 ];
 

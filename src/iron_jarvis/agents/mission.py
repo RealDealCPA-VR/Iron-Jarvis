@@ -210,6 +210,32 @@ _TOOL_WORDS: dict[str, tuple[str, str]] = {
     "notebook": ("updated its notebook", "could not update its notebook"),
 }
 
+#: What an ASK wants to do, in the approval card's own words (v1.352.0, one
+#: approval vocabulary): "needed your OK to save a file" beside a card that
+#: says "Waiting for your OK to save a file.", never "…to use write file".
+#: The Python twin of ``dashboard/lib/toolWords.ts`` for the built-ins an
+#: agent run asks about most; every phrase is pinned EQUAL to that file
+#: (``tests/test_one_vocabulary_v13520.py``). Built-ins only, by exact name;
+#: any other tool keeps "use <its name>" (never invented words).
+ASK_WORDS: dict[str, str] = {
+    "write_file": "save a file",
+    "edit_file": "change a file",
+    "rename_file": "rename or move a file",
+    "shell": "run a command",
+    "repl": "run some code",
+    "run_code": "run some code",
+    "web_fetch": "read a web page",
+    "web_search": "search the web",
+}
+
+
+def ask_words(tool: str) -> str:
+    """What an ask for ``tool`` wants to do ("save a file"), else "use <its
+    name>". Pure."""
+    name = str(tool or "").strip()
+    return ASK_WORDS.get(name) or f"use {name.replace('_', ' ') or 'a tool'}"
+
+
 #: Tools whose lines are bookkeeping, not work — kept out of the log.
 _QUIET_TOOLS = frozenset(
     {"delegate", "spawn_agent", "worklist_next", "worklist_status", "blackboard_read",
@@ -656,7 +682,7 @@ def tool_activity(
             # user said no, or the pause timed out). "Builder could not write
             # report.md" read as the agent failing at the work; it was
             # waiting on a person.
-            text, tone = f"needed your OK to use {tool.replace('_', ' ')}", "ask"
+            text, tone = f"needed your OK to {ask_words(tool)}", "ask"
         elif kind is not None:
             # …and a refusal NOBODY was asked about is never worded as one
             # (v1.309.0 review, honest copy): the breaker, the roster gate
@@ -722,7 +748,20 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
         if not rows:
             return None
         first = rows[0]
-        return {"approval_id": first.get("approval_id") or first.get("id"), "tool": first.get("tool")}
+        out = {"approval_id": first.get("approval_id") or first.get("id"), "tool": first.get("tool")}
+        # v1.352.0 (G25): can the action be undone — the verdict every ask
+        # card shows (``tools/reversible``), so the mission's card says it too.
+        # Left out for a read-only tool / an unknown name. In-memory read.
+        try:
+            from ..tools.reversible import reversible_flag
+
+            registry = getattr(platform, "registry", None)
+            rev = reversible_flag(registry.get(str(first.get("tool") or ""))) if registry is not None else None
+        except Exception:  # noqa: BLE001 — wording only
+            rev = None
+        if rev is not None:
+            out["reversible"] = rev
+        return out
 
     with session_scope(engine) as db:
         root = db.get(Session, session_id)
@@ -844,7 +883,7 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                 # v1.350.0: the plan approval is not a tool to "use".
                 text, tone = f"{who} is waiting for you to approve the plan", "ask"
             else:
-                text, tone = f"{who} is waiting for your OK to use {tool.replace('_', ' ')}", "ask"
+                text, tone = f"{who} is waiting for your OK to {ask_words(tool)}", "ask"
         elif ev.type == EventType.APPROVAL_RESOLVED:
             decision = str(data.get("decision") or "")
             if decision == "deny":

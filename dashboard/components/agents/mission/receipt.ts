@@ -35,3 +35,14 @@ export function receiptVerbFor(status: string, interrupted = false): string {
       return "Working on";
   }
 }
+
+/** The receipt line: the verb, then what it ran on. v1.352.0 (G23): the
+ *  words now name the endpoint too ("glm-4.6 on DGX Spark"), so a verb that
+ *  ends in "on" would read "Working on glm-4.6 on DGX Spark" — it says "with"
+ *  instead ("Working with glm-4.6 on DGX Spark", "Ran with …", "Will run
+ *  with …"). "Answered by" and "Tried" read right as they are, and words
+ *  that name no endpoint keep the verb exactly as before. */
+export function receiptLine(verb: string, words: string): string {
+  const v = / on$/.test(verb) && / on /.test(words) ? verb.replace(/ on$/, " with") : verb;
+  return words ? `${v} ${words}` : v;
+}

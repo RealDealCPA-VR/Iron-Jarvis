@@ -241,11 +241,17 @@ def test_the_dashboards_short_list_is_the_daemons():
     assert m, "SHORT_SCHEDULE_STATUSES is gone from lib/scheduleOutcome.ts"
     ts_short = set(re.findall(r'"([a-z_]+)"', m.group(1)))
     assert ts_short == set(ro.SHORT_STATUSES)
-    words = src[src.index("const WORDS"): src.index("};", src.index("const WORDS"))]
+    # v1.352.0 (G17), moved on purpose: lib/scheduleOutcome keeps no word
+    # table of its own any more; the words live in the app's ONE status table
+    # (lib/statusWords `SCHEDULE`), which scheduleStatusWords returns.
+    assert "return scheduleStatusLabel(status);" in src
+    table = _source("dashboard/lib/statusWords.ts")
+    start = table.index("const SCHEDULE")
+    words = table[start: table.index("};", start)]
     written = {ro.STATUS_OK, ro.STATUS_ERROR, ro.STATUS_NEEDS_YOU, ro.STATUS_PARTIAL,
                ro.STATUS_CANCELLED, ro.STATUS_SKIPPED, "missed", *ro.FAILED_STATUSES}
     for status in written:
-        assert re.search(rf"^\s+{status}: \{{ label:", words, re.M), status
+        assert re.search(rf"^\s+{status}: ", words, re.M), status
 
 
 # --------------------------------------------------------------------------- #

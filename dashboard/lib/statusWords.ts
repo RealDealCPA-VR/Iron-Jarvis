@@ -13,8 +13,9 @@
  * AND its tone here: the session badge (components/sessions/SessionStatusBadge),
  * the Sessions filter, the Session board's lanes (lib/kanban), the mission
  * cards (lib/mission.statusWord), the inbox rows (components/agents/AgentInbox),
- * the workflow run and step badges, and the Schedules row
- * (`scheduleRunWords`). The words were merged from the three tables that
+ * the workflow run and step badges, the Schedules row (`scheduleRunWords`)
+ * and a project's Schedules list (lib/scheduleOutcome.scheduleStatusWords
+ * returns `scheduleStatusLabel`). The words were merged from the three tables that
  * already existed (lib/mission.statusWord, MissionComposer's STATUS_WORD and
  * SessionStatusBadge.outcomeLabel) — the mission screen's plain words won.
  *

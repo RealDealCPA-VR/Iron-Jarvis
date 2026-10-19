@@ -109,6 +109,9 @@ export interface SessionWaitingOn {
   can_always?: boolean;
   /** v1.299.0: sha256 over tool + canonical args (never the redacted display). */
   args_hash?: string;
+  /** v1.352.0 (G25): can the action be undone (the daemon's verdict, the
+   *  same one the ask's own event carries)? Absent = nothing to say. */
+  reversible?: boolean;
 }
 
 export interface AgentRun {

@@ -35,7 +35,7 @@ export default function KanbanPage() {
             use (lib/nav NON_RAIL_ENTRIES; still not a sidebar row). */}
         <PageHeader
           title="Session board"
-          subtitle="Live session lifecycle — drag a card from In Review onto Completed to approve, or onto Failed to reject."
+          subtitle="Live session lifecycle — drag a card from Waiting for you onto Done to approve, or onto Failed to reject."
           actions={
             <span className="flex items-center gap-2">
               <span className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-400 sm:flex">

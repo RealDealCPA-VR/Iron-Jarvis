@@ -449,7 +449,9 @@ describe("Session board page: named for what it is, lanes in plain words", () =>
       expect(screen.getByRole("heading", { level: 2, name: title })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: /Clear failed \(1\)/ })).toBeInTheDocument();
-    expect(screen.getByText(/drag a card from In Review onto Completed to approve/)).toBeInTheDocument();
+    // v1.352.0 (G17, updated on purpose): the drag hint names the lanes by
+    // their new words — "In Review" / "Completed" no longer exist on the board.
+    expect(screen.getByText(/drag a card from Waiting for you onto Done to approve/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /All sessions/ }).getAttribute("href")).toBe("/sessions");
   });
 });

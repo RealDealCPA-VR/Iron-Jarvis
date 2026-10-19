@@ -61,10 +61,12 @@ export interface PermissionChipProps {
 
 /**
  * The menu's box before it has rendered: w-72 is 288px, and at that width
- * every one of the three descriptions wraps to two lines (the box measured
- * 226px in Edge at 1440, 390, 360 and 320 wide). This is only the first-frame
- * guess; once the menu is on screen its real box is measured and the placement
- * is worked out again with it.
+ * every one of the three descriptions wrapped to two lines (the box measured
+ * 226px in Edge at 1440, 390, 360 and 320 wide). Since v1.352.0 each
+ * description also carries READS_LINE and wraps to three, so the box is
+ * taller than this guess. That is fine: this is only the first-frame guess;
+ * once the menu is on screen its real box is measured (a layout effect,
+ * before paint) and the placement is worked out again with it.
  */
 export const PERMISSION_MENU_W = 288;
 export const PERMISSION_MENU_H = 232;

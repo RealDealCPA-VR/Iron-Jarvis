@@ -257,7 +257,8 @@ describe("the chat page and its notice components keep to plain sentences", () =
     ])
       expect(page, s).toContain(s);
     // JSX text spread over lines is read too.
-    expect(page).toContain("Allowed for this conversation.");
+    // v1.352.0 (G24), moved on purpose: the note uses the button's own words.
+    expect(page).toContain("Allowed for this chat.");
     expect(page).toContain("Editing a sent message. The");
     const step = copyPieces("components/chat/stepLabel.ts").map((p) => p.text).join("\n");
     expect(step).toContain("The offline mock answered, not a real model.");

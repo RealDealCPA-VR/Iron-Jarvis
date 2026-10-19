@@ -31,6 +31,9 @@ export interface MissionProgress {
 export interface WaitingOn {
   approval_id: string;
   tool: string;
+  /** v1.352.0 (G25): can the action be undone (the daemon's verdict)?
+   *  Absent when there is nothing to say (read-only, the plan ask). */
+  reversible?: boolean;
 }
 
 export interface MissionMember {

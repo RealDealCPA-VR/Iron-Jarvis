@@ -40,7 +40,7 @@ import {
   type MissionMember,
   type MissionProgress,
 } from "@/lib/mission";
-import { receiptVerbFor } from "./receipt";
+import { receiptLine, receiptVerbFor } from "./receipt";
 
 function moodFor(s: MemberStatus): FaceMood {
   if (s === "working") return "work";
@@ -263,7 +263,9 @@ function AgentCard({
                 <MockRanOn answered={m.status === "done"} ranOn={ranOn} />
               ) : (
                 // v1.352.0 (G23): "Answered by fleet on DGX Spark".
-                `${receiptVerbFor(m.status)} ${words.text || ranOn}`
+                // v1.352.0 integrate: "Working with glm-4.6 on DGX Spark"
+                // (./receipt receiptLine), never a doubled "on … on".
+                receiptLine(receiptVerbFor(m.status), words.text || ranOn)
               )}
             </div>
           )}

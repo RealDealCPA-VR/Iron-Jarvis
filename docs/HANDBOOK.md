@@ -145,7 +145,7 @@ Anything on the Settings page can be changed in chat, in your own words —
 - **What needs your OK still asks.** Safe preferences (the theme, the default
   model) change at once. Bigger ones ask on the usual approval card first.
   Protected ones — autonomy, the sandbox, tool permissions, turning a safety
-  off — ask **every time**, even in Auto-approve, and are never offered
+  off — ask **every time**, even in Don't ask, and are never offered
   "Always".
 - **Keys and tokens never go in the chat.** When something needs a key or a
   token, the reply shows a **secure card**: paste it there and it goes
@@ -310,8 +310,8 @@ Chat is where most work happens, and it is wired into everything:
   own measured model, not a limit you set.
 - **What an escalated run inherits from the chat** (v1.232.0): the armed
   tools (on every message, not just the first), a grant you answered on a
-  card, the grounded folder, and the approval posture — except *Auto-approve
-  (YOLO)*, which escalates as *Approve for me*. See *Agents & jobs* for the
+  card, the grounded folder, and the approval posture — except *Don't ask*,
+  which escalates as *Ask when risky*. See *Agents & jobs* for the
   rules, and the session's amber chips ("Waiting for you · shell",
   "Completed · needs you") now keep their own case.
 
@@ -335,7 +335,7 @@ counted shows a moving stripe and what it is doing ("Working · step 3"), never 
 invented number. Below the result, **Live activity** is the team's work as a
 plain-words log ("Researcher read k1.pdf", "Jarvis gave Writer a task: draft the
 strategy"). If Jarvis needs your OK for a tool, the question appears under your
-objective with Allow once / Allow for this task / Decline, and nothing runs until
+objective with Allow once / Allow for this run / Deny, and nothing runs until
 you answer. **Stop** ends the whole objective. Your recent objectives are listed
 under New task, and **Your projects** below them open a project's own screen.
 
@@ -390,24 +390,27 @@ into chat as `@guide …`, ready to send.
 - **Approvals in a batch** (v1.227.0): when a run asks for permission several
   times at once (a folder rename asks once per file), the chat thread shows
   one card per pending ask; answering one leaves the others in place, and
-  **Allow for this conversation** on any one of them answers every other
+  **Allow for this chat** on any one of them answers every other
   pending ask for the same tool. An ask nobody answers in 5 minutes is
   reported to the model as *paused, not run* (never as "the user declined"),
   and the run carries a **needs you** verdict at the end.
 - **Grants carry, and the bell can answer a batch** (v1.232.0): a tool you
-  allow "for this conversation / for this run" is written to the session, so
+  allow "for this chat / for this run" is written to the session, so
   the next message you send to that run (and a re-run) does not ask again;
   the chat sends the tools it has armed on every message, not only the
   first. The notification bell's agent-ask row now has **Allow for this
-  run** beside Approve once / Deny — one click clears every pending ask for
-  that tool. A hard `deny` is never lifted by any grant.
+  run** beside Allow once / Deny — one click clears every pending ask for
+  that tool. A hard `deny` is never lifted by any grant. (Since v1.352.0
+  the bell's row says what and why: "Your nightly-brief run wants to save a
+  file", the task on a quiet "for:" line, whether it can be undone, and,
+  after you answer, "Approved. The run continues · Open run" for a moment.)
 - **The approval posture rides an escalation** (v1.232.0): when a chat hands
   work to an agent session, the chat's approval dropdown goes with it.
-  *Approve for me* lets the tools you armed in chat run without a pause and
-  asks once for anything else; *Ask for approval* asks once per run for
+  *Ask when risky* lets the tools you armed in chat run without a pause and
+  asks once for anything else; *Ask first* asks once per run for
   every ask-tier tool, armed or not (Allow for this run covers the rest of
-  the run). *Auto-approve (YOLO)* is **never inherited**: a YOLO chat's
-  escalated run behaves as *Approve for me* — you consented to auto-approval
+  the run). *Don't ask* is **never inherited**: a Don't ask chat's
+  escalated run behaves as *Ask when risky* — you consented to auto-approval
   one watched turn at a time, not for a background run making a batch of
   calls while you are elsewhere.
 
@@ -418,18 +421,22 @@ Every agent run is a **session**: live token/tool streaming, the delegation
 closing paragraph), transcript export, cancel/rerun/continue. The **Session
 board** (`/kanban`; called Kanban before v1.315.0) shows the same sessions as
 lanes — including **Queued** when a concurrency limit is
-set. Cancel genuinely stops the agent, in every lane.
+set. Cancel genuinely stops the agent, in every lane. Since v1.352.0 the
+lanes use the same status words as every other surface: **Working**,
+**Waiting for you**, **Done** and **Failed**; a run you stopped sits in
+Failed and its card says **Stopped** (grey, not red).
 
 - **Waiting for you** (v1.227.0): a run paused on a permission ask sits in
-  the **In review** column with an amber "Waiting for you · tool" chip, and
+  the **Waiting for you** column (called In review before v1.352.0) with an
+  amber "Waiting for you · tool" chip, and
   the session page shows the same approval card chat shows. A run waiting
   for you shows in the bell and as an amber chip; an ask nobody answered is
   on the session's outcome (*needs you*) — the bell does not keep a record
   of asks that already expired.
 - **The verdict is separate from the status** (v1.227.0): a finished run also
-  carries an **outcome** — *completed*, *completed · with failures* (a call
-  that changes files or state failed), or *completed · needs you* (an ask was
-  never answered). The session header, the sessions list, the Session board card and
+  carries an **outcome** — *Done*, *Done · part failed* (a call that changes
+  files or state failed), or *Done · needs you* (an ask was never answered;
+  the words since v1.352.0). The session header, the sessions list, the Session board card and
   a project's recent runs show it as an amber chip instead of a green badge,
   and the result card headlines "Finished — N calls were never approved".
   The Worklist panel offers **Re-run the N failed items**, which re-opens
@@ -1099,7 +1106,8 @@ memory only — it ends when Iron Jarvis restarts. *One switch:* the header's
 **Auto-allow** switch (shown at Interactive) replaces the per-action cards: on,
 Jarvis acts on pages without asking each time, across every tab and every
 message, until you turn it off; off, each page action shows a card with
-**Allow**, **Always allow** (which turns the switch on) and **Deny**. The switch
+**Allow**, **Allow all page actions** (which turns the switch on for every
+tab) and **Deny**. The switch
 is remembered in your browser. What it does NOT cover, on purpose: a payment or
 password field, anything with "delete"/"remove"/"cancel" in its name, a page
 that tried to give Jarvis instructions, and a control Jarvis cannot read still
@@ -1839,6 +1847,75 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## One set of words for what happened, where, and what needs your OK (v1.352.0)
+
+Every place that shows work now says it the same way: how it ended, who did
+it, where it ran, and what it wants from you. The chat looks the same.
+
+- **A run you stopped reads "Stopped".** Press Stop on a helper agent and the
+  card under its reply says **Stopped** in grey, with Try again, instead of a
+  red "Task failed". A run that used up its steps reads **Stopped at its step
+  limit**. Only a real failure is red. The hand-off line settles at once:
+  "The researcher worked for 45 s · stopped".
+- **A helper agent says what it did, in words.** Its row reads "The
+  researcher worked for 2 min 5 s · 6 steps · part failed" (or "· needs you",
+  "· stopped", "· failed", "· hit its step limit"). When the hand-off did not
+  name an agent, the row names the one that ran ("Your tax-reader agent
+  worked for 3 min"). Open it for the plain lines: "Searched your chats 83
+  times", "One memory lookup failed", "Ran on Opus 5.5 · cloud", and "in
+  <folder> · Open folder". The card under the reply reads "answered by Opus
+  5.5 · cloud · 2 min 5 s · 6 steps · 86 tool calls", says when the model
+  had to be swapped, and folds **What it did** step by step ("tax-reader
+  read k1-2025.pdf", "needed your OK to run a command"). Tool names are plain
+  words; a failure's own text is one click away.
+- **Every reply says where it ran.** "answered by glm-4.6 on DGX Spark" for
+  an endpoint you named, "· local" for your PC or a machine on your network,
+  "· cloud" for a model that runs elsewhere. Older replies show nothing new.
+  The model menu's badges read **local**, **cloud · on your plan** and
+  **cloud · pay per use**, with the cost on hover. If you picked a remote
+  agent for a hand-off that has to run here, the line says so: "Running on
+  this PC. Reach hermes with @hermes."
+- **The same status words everywhere:** Working, Queued, Done, Done · needs
+  you, Done · part failed, Failed, and a grey Stopped. The Session board's
+  columns are Working, Waiting for you, Done and Failed; a stopped card says
+  Stopped, and an empty column says so in a sentence. A project's Schedules
+  list uses the Schedules page's words.
+- **App and browser steps read in words:** "gmail: search messages" under
+  "Worked for 3 s · used gmail", and "Used your browser · click".
+- **One approval language.** Every card answers **Allow once**, **Allow for
+  this chat** (in a chat or a Build pane) or **Allow for this run** (an agent
+  run's ask: the session page, a project's task, the mission screen, the
+  bell), and **Deny**. After a wide answer the note says "Allowed for this
+  chat." Settings and agent setup show the chat chip's three levels: **Ask
+  first**, **Ask when risky**, **Don't ask** (typing an old name such as
+  "approve for me" still sets the same level). The browser sidebar's wide
+  answer is **Allow all page actions**, because it covers every tab.
+- **Every ask says whether it can be undone.** "You can undo this." for a
+  file save, "This may not be undoable." for a message or a command; a read
+  says nothing. The line is on every card: the chat, a Build pane, the
+  session page, a project's task, the mission screen and the bell.
+- **The bell says what and why:** "Your nightly-brief run wants to save a
+  file. The run waits up to 5 min for you.", what the run was for, whether
+  it can be undone, and after you answer "Approved. The run continues · Open
+  run" for a few seconds.
+- **The mission screen uses the chat's words:** "Answered by fleet on DGX
+  Spark" (and "Working with glm-4.6 on DGX Spark" while it runs), "Waiting
+  for your OK to save a file.", how long each teammate took, and its activity
+  log says "needed your OK to save a file", never a tool's code name.
+- **See what is running.** The footer reads **Ready** when the app is up;
+  press the orb for **Running now**, one row per job ("Schedule ·
+  nightly-brief · 3 min") that opens its run. Status's Running number opens
+  the same list.
+- **What Jarvis can reach is written down.** Settings › Permissions & ledger
+  opens with it: it reads files anywhere on this PC except its own key
+  folders without asking, saves only in the chat's or the project's folder,
+  which apps are connected, and your approval level.
+- **A workflow you run yourself keeps going under Emergency stop.** Pressing
+  Run on a workflow, or resuming one you started, is your own work: its steps
+  run even with Emergency stop on, and turning the switch on does not stop
+  them. A workflow that starts on its own (a schedule, a rule, a goal) still
+  does not start.
+
 ## Jarvis tells you how things really went (v1.351.0)
 
 Work that runs while you are away now says how it ended, in the same plain
@@ -1851,7 +1928,11 @@ words everywhere. The chat looks the same.
   run says why in a plain sentence ("The run failed: the model endpoint is
   not answering"), never a code name. The note it sends says the same thing
   ("finished, but it needs you"), and **Run now** answers in the same words.
-  "open session" still takes you to the run.
+  "open session" still takes you to the run. Since v1.352.0 both lists use
+  the app's one set of status words: **Done**, **Done · needs you**, **Done
+  · part failed**, **Failed: <why>**, a grey **Stopped** and **Not run yet**
+  (they read "✓ ok", "finished · needs you" and "finished · part failed"
+  before).
 - **You see it without going to look.** The Schedules light on the Status
   map turns amber when a schedule failed or fell short last time, and the
   line above the chat box offers "1 scheduled job needs a look · Open".

@@ -156,8 +156,12 @@ async def test_the_delivered_card_carries_the_receipts_plain_action_lines(tmp_pa
     # who served it (the row's pair) and the ledger's per-tool counts
     assert receipt["provider"] == "mock"
     assert receipt["tools_used"] == [{"tool": "write_file", "count": 1}]
-    # judged with no endpoint settings, "on this network" is LEFT OUT
-    assert "on_this_network" not in receipt
+    # v1.352.0 integrate: the orchestrator now hands its provider manager +
+    # config to the delivery, so the card says where it ran exactly as
+    # GET /sessions/{id}/result does (the blind case is pinned below).
+    full_judged = session_result(p.engine, s.id, receipt=True, manager=p.providers, config=p.config)
+    assert receipt["on_this_network"] is True
+    assert receipt["on_this_network"] == full_judged["on_this_network"]
 
 
 def test_with_the_provider_manager_the_card_says_where_it_ran(tmp_path):

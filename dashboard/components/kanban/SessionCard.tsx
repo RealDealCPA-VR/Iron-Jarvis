@@ -23,7 +23,7 @@ import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
 import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
 import TrustChip from "@/components/TrustChip";
-import { outcomeLabel, waitingLabel } from "@/components/sessions/SessionStatusBadge";
+import { outcomeLabel, stoppedChip, waitingLabel } from "@/components/sessions/SessionStatusBadge";
 import { Badge, MockChip } from "@/components/ui";
 import { providerDisplay } from "@/lib/onboarding";
 import { timeAgo } from "@/lib/format";
@@ -127,6 +127,10 @@ export function CardInner({
   // the job wears the same amber (outcomeLabel) instead of reading as done.
   const waiting = waitingLabel(session);
   const outcome = outcomeLabel(session);
+  // v1.352.0 (G17): a run the user (or Emergency stop) stopped shares the
+  // Failed lane with real failures, so its card says "Stopped" in the one
+  // status table's slate — the slate dot alone did not say it.
+  const stopped = stoppedChip(session);
   const reviewable = lane === "review" && !waiting;
   const agentName = agentDisplayName(session.agent_type, session.origin);
   return (
@@ -210,6 +214,11 @@ export function CardInner({
         {!waiting && outcome && (
           <span data-testid="session-outcome-chip" className="contents">
             <Badge value={outcome} tone="amber" keepCase variant="calm" />
+          </span>
+        )}
+        {!waiting && !outcome && stopped && (
+          <span data-testid="session-stopped-chip" className="contents">
+            <Badge value={stopped.word} tone={stopped.tone} keepCase variant="calm" />
           </span>
         )}
         {teamBadge}
