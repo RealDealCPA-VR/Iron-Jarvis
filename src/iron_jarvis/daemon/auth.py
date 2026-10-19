@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hmac
 import inspect
+import ipaddress
 import os
 import uuid
 from urllib.parse import urlparse
@@ -288,6 +289,56 @@ _EXEMPT_EXACT = frozenset(
     {"/health", "/docs", "/openapi.json", "/redoc", MCP_PATH}
 )
 
+#: v1.358.0 (G61, lane 8E review): "Let other computers on my network reach
+#: this Iron Jarvis" makes the DESKTOP spawn the daemon listening on the
+#: network and marks the spawn with this variable (desktop/main.js
+#: ``daemonNetwork``). The token-free reads above that carry no credential of
+#: their own (``/health`` names the active project and its folder, the
+#: providers and the default model; the API docs) then answer a request from
+#: ANOTHER computer only with the install token — so the setting's promise,
+#: "every request still needs its token", holds on the network too. A request
+#: from THIS computer is unchanged (the desktop's start-up gate and the window
+#: read ``/health`` without one), and a server deployment (no marker) keeps its
+#: load-balancer probe exactly as before. The doors (``/mcp``, the OAuth
+#: callback, Slack events, the inbound and task-door leaves) keep their own
+#: credentials either way. The PEER address decides, never the Host header (a
+#: client writes that).
+LAN_ACCESS_ENV = "IRONJARVIS_LAN_ACCESS"
+_LOCAL_ONLY_EXEMPT = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
+
+
+def _lan_opened() -> bool:
+    return (os.environ.get(LAN_ACCESS_ENV) or "").strip() == "1"
+
+
+def _peer_is_this_computer(request: Request) -> bool:
+    """True when the TCP peer is a loopback address. Starlette's TestClient
+    names its peer ``testclient`` — a real socket peer is always an address,
+    so no request from another machine can be named that (the ``testserver``
+    rule above). Anything unreadable is NOT this computer (fail closed)."""
+    client = getattr(request, "client", None)
+    host = ((getattr(client, "host", "") if client else "") or "").strip().lower()
+    if host == "testclient":
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return bool((mapped or ip).is_loopback)
+
+
+def _exempt_for(request: Request) -> bool:
+    """``_is_exempt`` for THIS request: a local-only read asked from another
+    computer while the desktop opened the network is not exempt."""
+    path = request.url.path
+    if not _is_exempt(path):
+        return False
+    if path in _LOCAL_ONLY_EXEMPT and _lan_opened() and not _peer_is_this_computer(request):
+        return False
+    return True
+
+
 _TOKEN_ENV = "IRONJARVIS_TOKEN"
 
 
@@ -549,7 +600,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         if not token:  # auth disabled -> wide open (local dev)
             return await call_next(request)
 
-        if _is_exempt(request.url.path):
+        if _exempt_for(request):
             return await call_next(request)
 
         candidate = _present_token(request)

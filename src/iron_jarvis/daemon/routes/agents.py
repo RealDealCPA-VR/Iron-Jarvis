@@ -129,8 +129,13 @@ def reachability(url: str, *, who: str, instead: str, lan_access: bool = False) 
             note = (
                 f"Iron Jarvis on this computer still accepts requests from this computer "
                 f"only, so {who} cannot reach it yet. The setting {setting} is on and "
-                f"takes effect when Iron Jarvis restarts: restart it from Settings › System "
-                f"or the tray. If it still cannot be reached after that, this computer has "
+                # v1.358.0 review: the tray offers "Restart Iron Jarvis" only
+                # once something is stuck, so the sentence names the press
+                # that is always there (Settings › System › Maintenance) and
+                # the plain quit-and-reopen.
+                f"takes effect when Iron Jarvis restarts: press “Restart Iron Jarvis” in "
+                f"Settings › System › Maintenance, or quit Iron Jarvis and open it again. "
+                f"If it still cannot be reached after that, this computer has "
                 f"no address on your network that the setting can use. {tunnel}"
             )
         else:

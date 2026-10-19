@@ -234,7 +234,12 @@ def test_saved_through_the_real_settings_route_the_next_spawn_listens_on_the_lan
 
     on = _node({"home": str(home), "homeIfaces": IFACES, "root": "R"}, tmp_path, "on")
     assert on["args"] == ["serve", "--host", "0.0.0.0", "--port", "8787", "--root", "R"], on["args"]
-    assert on["net"]["env"] == {"IRONJARVIS_HOST_ALLOWLIST": "192.168.1.20,100.101.102.103"}
+    assert on["net"]["env"] == {
+        "IRONJARVIS_HOST_ALLOWLIST": "192.168.1.20,100.101.102.103",
+        # review: the marker that makes the token-free reads want the token
+        # from another computer (daemon/auth.LAN_ACCESS_ENV)
+        "IRONJARVIS_LAN_ACCESS": "1",
+    }
     assert on["key"] == "lan_access" == schema.get("lan_access").key
 
     # NOTHING OPENED IN THE RUNNING PROCESS: saving changed no environment
@@ -313,6 +318,10 @@ def test_the_task_door_sentence_points_at_the_setting_never_a_command_line(tmp_p
     assert pending["host_allowed"] is False
     assert "is on and takes effect when Iron Jarvis restarts" in pending["note"], pending["note"]
     assert "--host" not in pending["note"]
+    # review: the press it names is one that is always there — the tray's
+    # Restart item shows only once something is stuck.
+    assert "“Restart Iron Jarvis” in Settings › System › Maintenance" in pending["note"], pending["note"]
+    assert "the tray" not in pending["note"], pending["note"]
 
     # After the restart the desktop spawned it with the allowlist: reachable, no note.
     monkeypatch.setenv("IRONJARVIS_HOST_ALLOWLIST", "192.168.1.20,100.101.102.103")
@@ -350,6 +359,59 @@ def test_once_open_every_request_still_needs_the_install_token(tmp_path, monkeyp
     assert other.status_code == 403, "a name outside the allowlist is still refused"
     door = client.post(TASK_DOOR_PATH, headers=lan, json={"task": "hi"})
     assert door.status_code in (401, 403), door.text  # door off / no door token: never in
+
+
+def test_once_open_the_token_free_reads_want_the_token_from_another_computer(tmp_path, monkeypatch):
+    """Review (v1.358.0): /health is token-free so the desktop's start-up
+    gate and a load balancer can read it — and it names the active project,
+    its folder, the providers and the model. With the network opened by the
+    setting (the desktop's IRONJARVIS_LAN_ACCESS=1), ANOTHER computer gets it
+    (and the API docs) only with the install token; THIS computer reads it as
+    before; a server deploy (no marker) keeps its probe; and the doors still
+    answer with their OWN refusal, never the install-token one. The PEER
+    decides, never the Host header (a client writes that)."""
+    monkeypatch.setenv("IRONJARVIS_TOKEN", "install-token-123")
+    monkeypatch.setenv("IRONJARVIS_HOST_ALLOWLIST", "192.168.1.20")
+    monkeypatch.setenv("IRONJARVIS_LAN_ACCESS", "1")
+    app = create_app(str(tmp_path))
+    lan = {"Host": "192.168.1.20:8787"}
+    other_pc = TestClient(app, base_url="http://192.168.1.20:8787", client=("192.168.1.30", 51000))
+    for path in ("/health", "/openapi.json", "/docs"):
+        res = other_pc.get(path, headers=lan)
+        assert res.status_code == 401, (path, res.status_code)
+        assert res.json() == {"detail": "missing or invalid token"}
+    ok = other_pc.get("/health", headers={**lan, "Authorization": "Bearer install-token-123"})
+    assert ok.status_code == 200 and ok.json()["status"] == "ok"
+    # A spoofed loopback Host from another computer is still another computer.
+    spoof = other_pc.get("/health", headers={"Host": "127.0.0.1:8787"})
+    assert spoof.status_code == 401, spoof.status_code
+
+    # This computer (the desktop's own gate, the window) reads it as before.
+    for peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        here = TestClient(app, client=(peer, 51000)).get("/health", headers={"Host": "127.0.0.1:8787"})
+        assert here.status_code == 200, (peer, here.status_code)
+
+    # The task door keeps its OWN answer (door off), never the install-token one.
+    door = other_pc.post(TASK_DOOR_PATH, headers=lan, json={"task": "hi"})
+    assert door.status_code in (401, 403) and door.json() != {"detail": "missing or invalid token"}, door.text
+
+    # A server deployment (no marker) keeps its load-balancer probe exactly.
+    monkeypatch.delenv("IRONJARVIS_LAN_ACCESS")
+    probe = other_pc.get("/health", headers=lan)
+    assert probe.status_code == 200, probe.status_code
+
+
+def test_the_desktop_marker_is_the_daemons_marker():
+    """The spawn env's name is the one the daemon reads (pinned equal)."""
+    from iron_jarvis.daemon import auth
+
+    assert auth.LAN_ACCESS_ENV == "IRONJARVIS_LAN_ACCESS"
+    assert "IRONJARVIS_LAN_ACCESS: \"1\"" in _src()
+    for peer, local in (("127.0.0.1", True), ("::1", True), ("::ffff:127.0.0.1", True),
+                        ("10.0.0.2", False), ("192.168.1.30", False), ("", False), ("localhost", False)):
+        req = type("R", (), {"client": type("C", (), {"host": peer})()})()
+        assert auth._peer_is_this_computer(req) is local, peer
+    assert auth._peer_is_this_computer(type("R", (), {"client": None})()) is False
 
 
 @pytest.mark.parametrize("value", [True, False])

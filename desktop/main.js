@@ -171,13 +171,20 @@ function lanAddresses(ifaces) {
 //: Where the daemon listens and what it is told, from the setting and this
 //: PC's addresses. A host allowlist the user already set is KEPT (ours is
 //: added to it, never replaces it). Pure: the node pins drive it directly.
+//: IRONJARVIS_LAN_ACCESS=1 tells the daemon the network is open on purpose,
+//: so its token-free reads (/health, the API docs) want the install token
+//: from another computer too (daemon/auth.LAN_ACCESS_ENV).
 function daemonNetwork(on, addresses, ambientAllow) {
   const ips = (Array.isArray(addresses) ? addresses : []).filter((a) => typeof a === "string" && a);
   if (!on || ips.length === 0) return { host: "127.0.0.1", env: {}, lan: [] };
   const allow = [];
   const ambient = String(ambientAllow || "").split(",").map((s) => s.trim()).filter(Boolean);
   for (const name of ambient.concat(ips)) if (!allow.includes(name)) allow.push(name);
-  return { host: "0.0.0.0", env: { IRONJARVIS_HOST_ALLOWLIST: allow.join(",") }, lan: ips };
+  return {
+    host: "0.0.0.0",
+    env: { IRONJARVIS_HOST_ALLOWLIST: allow.join(","), IRONJARVIS_LAN_ACCESS: "1" },
+    lan: ips,
+  };
 }
 
 //: The daemon's spawn arguments — the ONE place `--host` is decided.

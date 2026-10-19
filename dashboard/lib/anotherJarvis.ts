@@ -70,8 +70,12 @@ export const LAN_SETTING_KEY = "lan_access";
 export const LAN_SETTING_HREF = `/settings?focus=${LAN_SETTING_KEY}`;
 export const LAN_SETTING_LINK = "Open the setting";
 
-/** Said quietly when another computer CAN reach the address shown. */
-export const REACHABLE_LINE = "Other computers on your network can reach this address.";
+/** Said quietly when Iron Jarvis ACCEPTS requests at the address shown (the
+ *  daemon's Host-guard verdict). It cannot see Windows Firewall, so it never
+ *  claims more than that, and says where to look if one still cannot get
+ *  through (v1.358.0 review). */
+export const REACHABLE_LINE =
+  "Iron Jarvis accepts requests at this address from your network. If another computer still cannot reach it, allow Iron Jarvis in Windows Firewall.";
 
 /** The card's title — the Agents › Your team tile. */
 export const CARD_TITLE = "Another computer running Jarvis";
