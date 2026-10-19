@@ -34,9 +34,15 @@ AdapterFactory = Callable[..., LLMAdapter]
 API_PROVIDERS = ("anthropic", "openai", "google", "xai", "openrouter")
 
 #: The Gemini model a request that names none is served by (v1.355.0, G46).
-#: A current, generally available id (providers/reasoning.py's table, read
-#: 2026-10-10); the old gemini-1.5-flash default had been retired by Google.
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+#: A Gemini 3 model a NEW key can use. Google's model + deprecation pages
+#: (ai.google.dev/gemini-api/docs/models and /deprecations, read 2026-10-19)
+#: list gemini-3.8-flash as Stable and say "we are limiting access to the 2.5
+#: models to users who have actively used them in the past" -- "for any new
+#: projects, use ... 3.5 Flash-Lite or 3.8 Flash". So gemini-2.5-flash (the
+#: first cut of this wave) would refuse the very user G46 is for, and the old
+#: gemini-1.5-flash default had been retired outright. Also in
+#: providers/reasoning.py's table (read 2026-10-10: thinking "On (medium)").
+GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 class _GeminiAdapter(GoogleAdapter):
@@ -68,6 +74,7 @@ class _GeminiAdapter(GoogleAdapter):
         key = super()._resolve_key()
         self._oauth = not is_google_api_key(key)
         return key
+
 
 #: xAI (Grok) is OpenAI-compatible, so it routes through the OpenAI adapter with
 #: a base_url override (same pattern as a local Ollama server).

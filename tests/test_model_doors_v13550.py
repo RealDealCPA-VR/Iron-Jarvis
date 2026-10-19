@@ -185,13 +185,13 @@ def test_a_pasted_key_reaches_gemini_as_x_goog_api_key_and_a_gemini_model_answer
     no per-request decision (the pre-v1.355.0 factory) -> the key rides
     ``Authorization: Bearer`` -> red."""
     assert client.post("/connections/google/key", json={"key": KEY}).status_code == 200
-    adapter = _platform(client).providers.get("google", "gemini-2.5-flash")
+    adapter = _platform(client).providers.get("google")
     http = _FakeGemini()
     adapter._http = http
 
     assert _ask(adapter) == "Hello from Gemini"
     sent = http.calls[-1]
-    assert sent["url"].endswith("/models/gemini-2.5-flash:generateContent")
+    assert sent["url"].endswith(f"/models/{GEMINI_DEFAULT_MODEL}:generateContent")
     assert sent["headers"]["x-goog-api-key"] == KEY
     assert "Authorization" not in sent["headers"]
 
@@ -232,10 +232,20 @@ def test_every_door_sends_a_new_user_to_the_same_key_page():
 
 def test_a_request_naming_no_model_gets_a_current_gemini():
     """gemini-1.5-flash was retired by Google: Auto (and a bare "google")
-    asked for it and got a 404. MUTATION: put the old default back -> red."""
+    asked for it and got a 404. And it must be a model a NEW key can use:
+    Google limits the 2.5 models to accounts that already used them and
+    names 3.8 Flash for new projects (docs read 2026-10-19), so a 2.5 default
+    would refuse the very user G46 is for. MUTATION: put the old default (or
+    gemini-2.5-flash) back -> red."""
     pm = ProviderManager(credential_resolver=lambda name: KEY if name == "google" else None)
-    assert GEMINI_DEFAULT_MODEL == "gemini-2.5-flash"
+    assert GEMINI_DEFAULT_MODEL == "gemini-3.8-flash"
+    assert not GEMINI_DEFAULT_MODEL.startswith(("gemini-1.", "gemini-2."))
     assert pm.get("google").model == GEMINI_DEFAULT_MODEL
+    # The reasoning table knows it (a model the app has never heard of would
+    # offer no levels and no default).
+    from iron_jarvis.providers.reasoning import reasoning_default
+
+    assert reasoning_default("google", GEMINI_DEFAULT_MODEL) == "medium"
 
 
 @pytest.mark.parametrize(
