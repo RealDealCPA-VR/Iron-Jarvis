@@ -194,7 +194,7 @@ const saved = () => hooks.posts.find((p) => p.path === "/fleet/nodes")?.body as 
 async function openForm() {
   seed();
   render(<ConnectionsPage />);
-  const card = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+  const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
   fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
   fireEvent.change(within(card).getByPlaceholderText("http://localhost:1234/v1"), {
     target: { value: "https://relay.test/anthropic" },
@@ -315,7 +315,7 @@ describe("a saved Anthropic endpoint", () => {
       ],
     );
     render(<ConnectionsPage />);
-    const card = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     await waitFor(() => expect(within(card).getAllByTestId("endpoint-row-protocol")).toHaveLength(1));
     const tag = within(card).getByTestId("endpoint-row-protocol");
     expect(tag.textContent).toBe("Anthropic");

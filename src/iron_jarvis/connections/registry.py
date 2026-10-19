@@ -37,6 +37,20 @@ from .specs import BUILTIN_SPECS, ConnectionSpec
 #: ``oauth_app(provider) -> {"client_id", "client_secret", "redirect_uri"}``
 OAuthAppResolver = Callable[[str], dict]
 
+#: v1.354.0 (G47): the model-server SLOTS whose card is connected by the server
+#: ANSWERING, not by a key stored here. A keyless local server (LM Studio,
+#: llama.cpp, vLLM, Ollama) is the common case and has nothing to store, so a
+#: status row that reads only the ConnectionRecord said "Not connected" beside
+#: the very endpoint that answered every chat (the readiness audit's live
+#: finding: /connections custom ``connected: false`` vs /health ``available:
+#: true``). Only a slot with NO stored key takes this path; a keyed one keeps
+#: the record's answer.
+ENDPOINT_SLOTS = ("custom", "ollama")
+
+#: The ``source`` such a row reports (the dashboard keys its words on the
+#: leading "your endpoint").
+ENDPOINT_SOURCE = "your endpoint — no key needed"
+
 
 def _account_label(token: dict) -> str:
     """Human label for the connected account, ALWAYS a string.
@@ -94,6 +108,7 @@ class ConnectionRegistry:
         oauth_app: OAuthAppResolver | None = None,
         prober: "Callable[[str, str], tuple[bool, str]] | None" = None,
         inherited_from: "Callable[[str], str | None] | None" = None,
+        available: "Callable[[str], bool] | None" = None,
     ) -> None:
         self.engine = engine
         self.secrets = secrets
@@ -104,6 +119,11 @@ class ConnectionRegistry:
         # attribute once the manager exists. None (tests, bare construction)
         # keeps status() record-only, exactly as before.
         self.inherited_from = inherited_from
+        # v1.354.0 (G47): ``available(slot) -> bool`` — does this model-server
+        # slot (ENDPOINT_SLOTS) answer right now, by the ROUTER's own reading?
+        # Assigned by the platform beside ``inherited_from`` for the same
+        # reason; None keeps status() record-only, exactly as before.
+        self.available = available
         self._http_factory = http_factory or _default_http_factory
         self._oauth_app = oauth_app or _no_oauth_app
         # Optional live reachability probe (provider, credential) -> (ok, detail).
@@ -166,6 +186,12 @@ class ConnectionRegistry:
             if alias:
                 status, connected = "connected", True
                 source = f"inherited from {alias}"
+            # v1.354.0 (G47): a keyless model server is connected when it
+            # answers — the same router reading /health gives, never a second
+            # truth kept in this store.
+            if not connected and self._endpoint_answers(spec.provider):
+                status, connected = "connected", True
+                source = ENDPOINT_SOURCE
             if record and record.scopes_json and record.scopes_json not in ("[]", ""):
                 scopes = _loads_list(record.scopes_json)
             else:
@@ -187,8 +213,9 @@ class ConnectionRegistry:
                     "account": account,
                     # Where "connected" comes from: "vault" (a stored key /
                     # token), "environment" (Pixio's env fallback),
-                    # "inherited from claude-cli" / "codex-cli", or "" when
-                    # not connected. Additive (v1.230.0).
+                    # "inherited from claude-cli" / "codex-cli",
+                    # ENDPOINT_SOURCE (a keyless model server that answers,
+                    # v1.354.0), or "" when not connected. Additive (v1.230.0).
                     "source": source,
                     "scopes": scopes,
                     # v1.316.0 (UX wave 4): could an account login START right
@@ -228,6 +255,24 @@ class ConnectionRegistry:
         except Exception:  # noqa: BLE001 — a detection fault is "not inherited"
             return None
         return str(alias) if alias else None
+
+    def _endpoint_answers(self, provider: str) -> bool:
+        """True when *provider* is a KEYLESS model-server slot that answers.
+
+        Only ENDPOINT_SLOTS take this path, only with no key stored here (a
+        keyed slot keeps its record's answer, which already reads the vault),
+        and only on the platform's ``available`` oracle — never a network call
+        (status() runs on every Connections read). Never raises: a vault or
+        oracle fault is "does not answer", so the row keeps today's words.
+        """
+        if provider not in ENDPOINT_SLOTS or self.available is None:
+            return False
+        try:
+            if self.has_credential(provider):
+                return False
+            return bool(self.available(provider))
+        except Exception:  # noqa: BLE001 — a fault reads as not answering
+            return False
 
     # --- API key ----------------------------------------------------------
 
@@ -528,6 +573,18 @@ class ConnectionRegistry:
                     "detail": (
                         f"{spec.display_name} is served through the logged-in "
                         f"{alias.removesuffix('-cli')} CLI — no API key is stored"
+                    ),
+                }
+            # A keyless model server (v1.354.0, G47): the status row calls it
+            # connected, so Test must not answer "not connected" either. No
+            # live probe here (the slot has no fixed URL to ask); the row's
+            # Verify tools asks the server itself.
+            if self._endpoint_answers(provider):
+                return {
+                    "ok": True,
+                    "detail": (
+                        f"{spec.display_name} is your own server and needs no key. "
+                        "Verify tools on its row asks it now."
                     ),
                 }
             return {

@@ -506,7 +506,7 @@ describe("Settings > Connections: secondary actions are calm, each card keeps it
       [fleetRow(node("relay", "Relay anthropic", { protocol: "anthropic", tool_use: true })), fleetRow(node("spare", "Spare box"))],
     );
     render(<ConnectionsPage />);
-    const custom = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const custom = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     await within(custom).findByText("Spare box");
     const tags = [
       ...within(custom).getAllByTestId("endpoint-row-protocol"),
@@ -531,7 +531,7 @@ describe("Settings > Connections: secondary actions are calm, each card keeps it
   it("the unconnected cards keep their one primary (Add an endpoint is the accent outline)", async () => {
     seed([card("custom", { display_name: "Custom endpoint" })], []);
     render(<ConnectionsPage />);
-    const custom = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const custom = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     const add = within(custom).getByRole("button", { name: /Add an endpoint/ });
     expect(tokens(add)).toContain("btn-soft");
   });

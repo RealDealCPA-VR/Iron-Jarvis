@@ -410,7 +410,7 @@ describe("source guard: Connections and Fleet use whole pixels and theme tokens"
 
 async function savedRows() {
   render(<ConnectionsPage />);
-  const card = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+  const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
   await within(card).findByText("Relay anthropic");
   return card;
 }
@@ -473,7 +473,7 @@ describe("Settings > Connections: one quiet chip look on every saved-endpoint ro
       ],
     };
     render(<ConnectionsPage />);
-    const custom = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const custom = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     await within(custom).findByText("Relay anthropic");
 
     const expectations: Array<[string, string, string]> = [

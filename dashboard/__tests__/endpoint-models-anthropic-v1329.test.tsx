@@ -335,13 +335,13 @@ describe("the card header", () => {
   it("wraps: the name keeps a floor and the pill moves to its own line instead of covering it", async () => {
     seed();
     render(<ConnectionsPage />);
-    const card = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     const header = within(card).getByTestId("conn-card-header");
     const cls = header.className.split(/\s+/);
     expect(cls).toContain("flex-wrap");
     expect(cls).toContain("gap-y-2");
     const name = header.firstElementChild as HTMLElement;
-    expect(name.textContent).toContain("Custom endpoint");
+    expect(name.textContent).toContain("Model servers on your network");
     const nameCls = name.className.split(/\s+/);
     // A floor on the name block is what makes the row wrap instead of
     // squeezing the name to nothing beside a nowrap pill; capped at the

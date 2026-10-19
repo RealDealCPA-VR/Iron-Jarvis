@@ -45,6 +45,12 @@ import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
 import { OLLAMA_LOCAL_URL, providerDisplay, type HealthRow } from "@/lib/onboarding";
 import { codeParts, paneHref, subscriptionCliFor, useCliSignIn } from "@/lib/cliSignIn";
+import {
+  OWN_ENDPOINT_LABEL,
+  connectionTitle,
+  isOwnEndpoint,
+  unreachableNote,
+} from "@/lib/modelServers";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 
 /** A user-added custom endpoint (a routable fleet node) as the card shows it. */
@@ -95,6 +101,7 @@ import {
   SkeletonRows,
   ErrorNote,
   SuccessNote,
+  WarnNote,
   LoaderInline,
   ConfirmButton,
   type Tone,
@@ -474,7 +481,14 @@ function StatusPill({ conn }: { conn: Connection }) {
     // Code"), never the daemon's CLI id ("claude-cli"), and still told apart
     // from a key stored here ("Connected"). The raw `source` rides the title.
     const via = inheritedVia(conn);
-    label = via ? `Connected · via ${providerDisplay(via)}` : "Connected";
+    // v1.354.0 (G47): a keyless model server of the user's own that answers
+    // is connected with nothing stored here; the card said "Not connected"
+    // while that very endpoint answered every chat.
+    label = isOwnEndpoint(conn)
+      ? OWN_ENDPOINT_LABEL
+      : via
+        ? `Connected · via ${providerDisplay(via)}`
+        : "Connected";
   } else if (conn.status === "needs_auth") {
     tone = "amber";
     label = "Needs auth";
@@ -532,6 +546,10 @@ function ConnectionCard({
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
   const isCustom = conn.provider === "custom";
+  // v1.354.0 (G47): connected THROUGH a keyless server that answers. The card
+  // keeps its endpoint list and add form then (that IS the connection; there
+  // is no key to test or disconnect), only the pill says it works.
+  const ownEndpoint = isOwnEndpoint(conn);
   // Deep-link target: /connections?focus=endpoints lands on the custom-endpoint
   // card (where saved endpoints are added, renamed and deleted). One card owns
   // the key — every other provider passes "" so its instance stays inert.
@@ -561,6 +579,9 @@ function ConnectionCard({
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
   const [test, setTest] = useState<ConnectionTestResult | null>(null);
+  // v1.354.0 (G47): an endpoint was SAVED but its live check could not reach
+  // it (a mistyped address, a server that is off). A warning, never green.
+  const [saveWarn, setSaveWarn] = useState<string | null>(null);
   // Manual-code OAuth (Anthropic): the provider shows a code to paste back —
   // completion arrives via POST /oauth/{provider}/complete, not a redirect.
   const manualCodeFlow = conn.oauth_manual_code === true;
@@ -665,6 +686,9 @@ function ConnectionCard({
   async function verifyEndpoint(ep: EndpointRow) {
     setEpBusy(ep.id);
     setEpError(null);
+    // A fresh check replaces the save's "could not reach" note: its own
+    // result (or its own error, just below) is the newer word.
+    setSaveWarn(null);
     try {
       const v = await post<VerifyResult>(
         `/fleet/nodes/${encodeURIComponent(ep.id)}/verify`,
@@ -746,8 +770,11 @@ function ConnectionCard({
     setBusy(true);
     setError(null);
     setTest(null);
+    setSaveWarn(null);
     try {
       if (isCustom) {
+        // The address as typed, kept for the save note (the form clears).
+        const address = baseUrl.trim();
         // Every save creates a NEW endpoint (its own provider) — nothing is
         // ever overwritten; delete rows in the Saved-endpoints list instead.
         const created = await post<{ node?: { id?: string; label?: string } }>(
@@ -780,26 +807,38 @@ function ConnectionCard({
         // it the router treats the endpoint as tools-incapable and quietly
         // sends every tool-using turn to another provider.
         let verifyNote = "";
+        // v1.354.0 (G47): the check's own error when it could not reach the
+        // server. It used to be dropped, so a mistyped address still got a
+        // green "Endpoint saved" and nothing said why no reply ever came.
+        let unreachable: string | null = null;
         if (nodeId) {
           try {
             const v = await post<VerifyResult>(
               `/fleet/nodes/${encodeURIComponent(nodeId)}/verify`,
               { model: model.trim() },
             );
-            verifyNote =
-              v.tool_use === true
-                ? " It runs tools, so turns that use the web or files can run here."
-                : v.tool_use === false
-                  ? " This server can't run tools, so turns that use the web or files go to another model."
-                  : " Tool support could not be checked yet. The server may be asleep; press Verify tools on its row later.";
-          } catch {
-            verifyNote = "";
+            if (v.tool_use === null && v.error) {
+              unreachable = v.error;
+            } else {
+              verifyNote =
+                v.tool_use === true
+                  ? " It runs tools, so turns that use the web or files can run here."
+                  : v.tool_use === false
+                    ? " This server can't run tools, so turns that use the web or files go to another model."
+                    : " Tool support could not be checked yet. The server may be asleep; press Verify tools on its row later.";
+            }
+          } catch (verr) {
+            unreachable = verr instanceof ApiError ? verr.message : String(verr);
           }
         }
-        setTest({
-          ok: true,
-          detail: `Endpoint saved. Pick "${shown}" in any model picker.${verifyNote}`,
-        });
+        if (unreachable !== null) {
+          setSaveWarn(unreachableNote(address, unreachable));
+        } else {
+          setTest({
+            ok: true,
+            detail: `Endpoint saved. Pick "${shown}" in any model picker.${verifyNote}`,
+          });
+        }
         setEpName("");
         setBaseUrl("");
         setModel("");
@@ -952,11 +991,14 @@ function ConnectionCard({
             {/* v1.314.0: the scripted model is never named "Mock" to a user
                 (lib/onboarding providerDisplay); the daemon's name stays in
                 the title. */}
+            {/* v1.354.0 (G47): the custom slot's card is "Model servers on
+                your network" (lib/modelServers); the daemon's name rides the
+                title like the mock's. */}
             <div
               className="text-sm font-semibold text-zinc-100"
-              title={isMock ? conn.display_name : undefined}
+              title={isMock || connectionTitle(conn) !== conn.display_name ? conn.display_name : undefined}
             >
-              {isMock ? providerDisplay("mock") : conn.display_name}
+              {isMock ? providerDisplay("mock") : connectionTitle(conn)}
             </div>
             {/* v1.314.0 (UX wave 2): an inherited login has no key, so no
                 "API key" method chip; where the login lives is its own line
@@ -1013,7 +1055,9 @@ function ConnectionCard({
           The built-in demo model: scripted replies, no AI. Always available for testing. No
           key needed.
         </p>
-      ) : conn.connected ? (
+      ) : conn.connected && !ownEndpoint ? (
+        // v1.354.0 (G47): a card connected through its own keyless server
+        // (ownEndpoint) keeps the endpoint list + add form below instead.
         // v1.329.0 (H3): the actions row WRAPS inside the card. Three across
         // beside the Settings sidebar, "Make default" + Test + Disconnect did
         // not fit one line, so Disconnect spilled past the card's right edge
@@ -1521,6 +1565,7 @@ function ConnectionCard({
       {/* Test result + errors */}
       {test &&
         (test.ok ? <SuccessNote>{test.detail}</SuccessNote> : <ErrorNote>{test.detail}</ErrorNote>)}
+      {saveWarn && <WarnNote>{saveWarn}</WarnNote>}
       {error && <ErrorNote>{error}</ErrorNote>}
     </div>
   );
@@ -1835,11 +1880,14 @@ interface RescannedModel {
  * redundant with the sidebar: /tools and /channels are Advanced-only, so in
  * Simple mode — the default — these tiles are the ONLY way to reach them. The
  * "AI accounts" tile is gone because you are already on that page.
+ *
+ * v1.354.0 (G48): the first tile says what it does ("Add a tool"), never the
+ * protocol's name; the Tools page it opens still lists them as extensions.
  */
 const CONNECT_ELSEWHERE = [
   {
     href: "/tools",
-    title: "Extensions (MCP)",
+    title: "Add a tool",
     desc: "Ready-made extensions that give Jarvis new abilities.",
     icon: <Blocks size={17} />,
   },
@@ -1917,8 +1965,12 @@ export default function ConnectionsPage() {
   })).filter((g) => g.items.length > 0);
   const connectedCount = connections.filter((c) => c.connected).length;
   // The "+ Add connection" dropdown lists these: everything not yet connected
-  // (mock is built-in — nothing to connect).
-  const notConnected = connections.filter((c) => !c.connected && c.provider !== "mock");
+  // (mock is built-in — nothing to connect). v1.354.0 (G47): the model-server
+  // card stays listed while its own server answers, because another server
+  // can always be added there.
+  const notConnected = connections.filter(
+    (c) => (!c.connected || isOwnEndpoint(c)) && c.provider !== "mock",
+  );
 
   // Subscription / local providers are DETECTED by the daemon, not configured
   // here — availability comes from the shared /health poll.
@@ -2125,7 +2177,7 @@ export default function ConnectionsPage() {
                               size={14}
                               fallback={<MenuIcon size={14} className={m.tint} />}
                             />
-                            <span className="flex-1 truncate">{c.display_name}</span>
+                            <span className="flex-1 truncate">{connectionTitle(c)}</span>
                           </button>
                         );
                       })
@@ -2148,7 +2200,8 @@ export default function ConnectionsPage() {
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                     >
                       <Wrench size={14} className="text-tone-warn" />
-                      <span className="flex-1">Extensions (MCP)</span>
+                      {/* v1.354.0 (G48): what it does, not the protocol's name. */}
+                      <span className="flex-1">Add a tool</span>
                       <ChevronRight size={13} className="text-zinc-600" />
                     </Link>
                   </div>
@@ -2308,10 +2361,6 @@ export default function ConnectionsPage() {
       <IronProxyCard />
 
       <Reveal>
-        <RestHookups />
-      </Reveal>
-
-      <Reveal>
         <Card title="Where else things connect" icon={<Compass size={15} />}>
           <div className="grid gap-3 sm:grid-cols-2">
             {CONNECT_ELSEWHERE.map((tile) => (
@@ -2319,6 +2368,26 @@ export default function ConnectionsPage() {
             ))}
           </div>
         </Card>
+      </Reveal>
+
+      {/* v1.354.0 (G48): REST hookups are connection CHECKS only: no tool can
+          call one yet, so a card promising to "connect any service" was a
+          dead end for a new user. They sit in a closed fold after every real
+          door (a quiet line, no box); anyone who made one still finds it. */}
+      <Reveal>
+        <details data-testid="more-ways-to-connect" className="group/more">
+          <summary className="flex w-fit cursor-pointer select-none items-center gap-1.5 text-[12px] font-medium text-zinc-400 transition-colors hover:text-zinc-200 [&::-webkit-details-marker]:hidden">
+            <ChevronRight
+              size={13}
+              aria-hidden
+              className="shrink-0 transition-transform duration-200 motion-reduce:transition-none group-open/more:rotate-90"
+            />
+            More ways to connect (advanced)
+          </summary>
+          <div className="mt-3">
+            <RestHookups />
+          </div>
+        </details>
       </Reveal>
 
       {!offline && (

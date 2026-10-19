@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   Plug,
   FlaskConical,
@@ -269,7 +270,7 @@ function AddIntegrationForm({
     <Card>
       <form onSubmit={submit} className="space-y-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-          <Plug size={15} className="text-accent-soft" /> New REST hookup
+          <Plug size={15} className="text-accent-soft" /> New connection check
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -357,7 +358,7 @@ function AddIntegrationForm({
               <LoaderInline label="Adding…" />
             ) : (
               <>
-                <Save size={14} /> Add hookup
+                <Save size={14} /> Add check
               </>
             )}
           </button>
@@ -384,6 +385,13 @@ function AddIntegrationForm({
  * is rendered inside Connections, and /integrations redirects there. Kept as a
  * component rather than inlined so the Connections page doesn't grow past 1,900
  * lines — the same reason chat/page.tsx is hard to work in.
+ *
+ * v1.354.0 (G48): a hookup is a CONNECTION CHECK only. No tool can call one
+ * (integrations/tools.py has integration_list and integration_test, nothing
+ * else), so the old "Connect any service that has an HTTP API" promised what
+ * nothing delivered, and Test then said healthy. The copy now says what it
+ * is and points at the real door for a new ability (Add a tool); the page
+ * keeps it inside its closed "More ways to connect (advanced)" fold.
  */
 export function RestHookups() {
   const { data, error, loading, reload } = useApi<{ integrations: Integration[] }>(
@@ -400,7 +408,7 @@ export function RestHookups() {
 
   return (
     <Card
-      title="Direct REST hookups"
+      title="Connection checks"
       icon={<Plug size={15} />}
       right={
         <button
@@ -410,13 +418,21 @@ export function RestHookups() {
           }}
           className={CALM_ACTION}
         >
-          <Plus size={13} /> Add hookup
+          <Plus size={13} /> Add a check
         </button>
       }
     >
-      <p className="mb-3 text-xs leading-relaxed text-zinc-500">
-        Connect any service that has an HTTP API. Give it a name, base URL, and an API
-        key. Use Test any time to check the connection is healthy.
+      <p
+        data-testid="rest-hookups-note"
+        className="mb-3 text-xs leading-relaxed text-zinc-500"
+      >
+        Connection checks only. Jarvis can&apos;t call these yet. Save a web
+        service&apos;s address, and its key if it needs one, then press Test to see that
+        it answers. To give Jarvis a new ability, use{" "}
+        <Link href="/tools" className="font-medium text-accent-soft hover:text-accent">
+          Add a tool
+        </Link>
+        .
       </p>
 
       {showAdd && (

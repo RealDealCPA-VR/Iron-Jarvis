@@ -810,6 +810,31 @@ def build_platform(
     # logged-in `claude` CLI shows "Inherited from claude-cli", not
     # "Not connected" beside an `available: true`.
     connections.inherited_from = providers.inherited_from
+
+    # v1.354.0 (G47): the model-server card reads "Connected" when a KEYLESS
+    # server on it answers — the router's own answer, never a second truth.
+    # The slot itself (custom_base_url / ollama_base_url) is exactly
+    # ``providers.available(slot)`` (what /health says). The custom card also
+    # lists every endpoint the user saved there (each its own "fleet-<id>"
+    # provider): a keyless one counts only once the sampler or Verify tools
+    # has SEEN it answer — an unprobed node reads available by default, and a
+    # mistyped address must not read "Connected" beside "could not reach".
+    # Cached reads only (status() runs on every Connections read).
+    def _endpoint_answers(slot: str) -> bool:
+        if providers.available(slot):
+            return True
+        if slot != "custom":
+            return False
+        from .fleet.registry import provider_name as _fleet_provider
+
+        for node in fleet_registry.routable_nodes():
+            if node.source != "user" or node.api_key_name:
+                continue
+            if fleet_registry.reachable(_fleet_provider(node.id)) is True:
+                return True
+        return False
+
+    connections.available = _endpoint_answers
     # LOCAL FLEET — the user's own inference machines. The registry derives nodes
     # from the two config endpoint slots (so it works with zero setup) plus any
     # the user added, and registers one provider per ROUTABLE node. Topology

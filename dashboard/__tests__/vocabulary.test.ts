@@ -92,8 +92,14 @@ describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle
   it("the Connections directory tile agrees", () => {
     // The directory the user explicitly asked to keep (v1.101.0) — its words
     // teach the taxonomy harder than any other card.
+    // v1.354.0 (G48, product readiness): the tile and the Add connection
+    // menu say what the door DOES, "Add a tool", never the protocol's name
+    // ("Extensions (MCP)" was an engine word on a first-run screen). The
+    // Tools page it opens still calls them extensions.
     const s = read("components/settings/pages/ConnectionsPage.tsx");
-    expect(s).toContain('title: "Extensions (MCP)"');
+    expect(s).toContain('title: "Add a tool"');
+    expect(s).not.toContain("Extensions (MCP)");
+    expect(s).toContain("Ready-made extensions that give Jarvis new abilities.");
     expect(s).not.toContain("Tool packs");
   });
   it("no user-visible surface still says plug-in", () => {

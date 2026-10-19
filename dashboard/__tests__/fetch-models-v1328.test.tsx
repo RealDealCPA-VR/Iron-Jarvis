@@ -367,7 +367,7 @@ describe("on the Connections page", () => {
   it("never probes while the address and key are typed; the picked id is saved as before", async () => {
     seed();
     render(<ConnectionsPage />);
-    const card = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+    const card = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: /Add an endpoint/ }));
 
     vi.useFakeTimers();

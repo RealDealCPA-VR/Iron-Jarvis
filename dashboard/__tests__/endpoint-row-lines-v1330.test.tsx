@@ -286,7 +286,7 @@ function seedRows() {
 async function mountRows() {
   seedRows();
   render(<ConnectionsPage />);
-  const custom = (await screen.findByText("Custom endpoint")).closest("#conn-card-custom") as HTMLElement;
+  const custom = (await screen.findByText("Model servers on your network")).closest("#conn-card-custom") as HTMLElement;
   // Wait for the thing asserted: the relay's measured chip (an async GET).
   await within(custom).findByTestId("envelope-chip-fleet-relay-fable-claude");
   await within(custom).findByText("Spare box");
