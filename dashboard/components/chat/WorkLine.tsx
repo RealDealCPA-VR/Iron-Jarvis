@@ -25,6 +25,11 @@
  * stores (steps, timing, the tools that ran, the thinking and how long it
  * took); a reply with none of that shows no line at all.
  *
+ * v1.355.0 (readiness G63): a PLAIN answer (no step, no thinking) whose turn
+ * timing was stored reads "Answered in 2.1 s" on the same quiet line, with
+ * nothing to open (no chevron, not a button). Without timing (an older chat,
+ * the POST lane) it still shows nothing.
+ *
  * Plain words only for tools this file KNOWS (built-ins, by exact name). Any
  * other tool reads as "ran a tool" with its own id beside it: the app does not
  * describe what it cannot vouch for (the lib/toolWords rule).
@@ -195,18 +200,30 @@ export function workDuration(timing: ReceiptTiming | null | undefined): string |
 }
 
 /**
- * The folded line's words, or null when the reply has no process detail:
+ * The folded line's words, or null when the reply has nothing to say:
  *   "Worked for 3.2 s · read 2 files, ran 1 tool"
  *   "Read 2 files"                         (no timing stored)
  *   "Worked for 6.0 s · thought for 4 s"   (thinking only)
+ *   "Answered in 2.1 s"                    (a plain answer, v1.355.0 G63)
  */
 export function workSummary(input: WorkInput): string | null {
   return summaryOf(workSteps(input), input);
 }
 
+/** v1.355.0 (readiness G63): true when the reply did no work worth folding
+ *  (no step, no thinking) but its turn's timing is known — the line then
+ *  says only how long the answer took, and has nothing to open. */
+function plainAnswer(steps: ReceiptStep[], input: WorkInput): boolean {
+  const thought = typeof input.thinking === "string" && input.thinking.trim().length > 0;
+  return !steps.length && !thought && workDuration(input.timing) !== null;
+}
+
 /** workSummary's words from steps already read (WorkLine reads them once). */
 function summaryOf(steps: ReceiptStep[], input: WorkInput): string | null {
   const thought = typeof input.thinking === "string" && input.thinking.trim().length > 0;
+  // v1.355.0 (G63): a plain answer says how long it took (it used to show
+  // nothing, so a reply with no tools had no duration anywhere).
+  if (plainAnswer(steps, input)) return `Answered in ${workDuration(input.timing)}`;
   if (!steps.length && !thought) return null;
   const counts = workCounts(steps);
   if (!counts.length) {
@@ -861,8 +878,9 @@ function StepRow({ step }: { step: ReceiptStep }) {
 
 /**
  * The ONE line above a settled reply: "Worked for 3.2 s · read 2 files", a
- * chevron, and the rows underneath when opened. Renders nothing for a reply
- * with no process detail.
+ * chevron, and the rows underneath when opened. A plain answer with stored
+ * timing reads "Answered in 2.1 s" (v1.355.0, nothing to open). Renders
+ * nothing for a reply with neither.
  */
 export function WorkLine(props: WorkInput) {
   const [open, setOpen] = useState(false);
@@ -874,6 +892,21 @@ export function WorkLine(props: WorkInput) {
   const steps = useMemo(() => workSteps({ steps: savedSteps, toolsUsed }), [savedSteps, toolsUsed]);
   const summary = summaryOf(steps, props);
   if (!summary) return null;
+  if (plainAnswer(steps, props)) {
+    // v1.355.0 (G63): "Answered in 2.1 s". The same quiet line and hairline
+    // as the folded one, but not a button: there is nothing under it to
+    // open, so no chevron and no expanded state for a screen reader.
+    return (
+      <div data-testid="work-line" data-kind="answered" className="mb-2">
+        <p className="flex w-full min-w-0 items-center gap-2 border-b border-white/[0.08] pb-2 text-[13px] text-zinc-500">
+          <Check size={14} aria-hidden="true" data-testid="work-line-check" className="shrink-0" />
+          <span data-testid="work-summary" className="min-w-0 truncate">
+            {summary}
+          </span>
+        </p>
+      </div>
+    );
+  }
   const thinking = typeof props.thinking === "string" ? props.thinking : "";
   // v1.351.0 (G07): a turn where any step failed folds under a warning mark,
   // never a check, and its "N failed" piece carries the same tone. The row

@@ -98,7 +98,11 @@ describe("mcp.pack_failed in the bell", () => {
     expect(item).not.toBeNull();
     expect(item!.title).toBe("Pack brave is failing: It needs BRAVE_API_KEY and none was given");
     expect(item!.href).toBe("/tools");
-    expect(item!.body).toBe("Add BRAVE_API_KEY in Settings > Tools, then Retry");
+    // v1.355.0 (G32, updated on purpose): the body also says what keeps
+    // working (the fix gets its full stop first).
+    expect(item!.body).toBe(
+      "Add BRAVE_API_KEY in Settings > Tools, then Retry. Chat and your other tools keep working.",
+    );
     expect(item!.id).toBe("evt-pack-1");
     expect(item!.title).not.toMatch(ASIDE);
     expect(item!.body).not.toMatch(ASIDE);
@@ -107,7 +111,9 @@ describe("mcp.pack_failed in the bell", () => {
   it("with no reason it names the error; with neither it still names the pack", () => {
     const noReason = toActivity(ev({ name: "brave", error: "exit code 1", reason: "", fix: "" }))!;
     expect(noReason.title).toBe("Pack brave is failing: exit code 1");
-    expect(noReason.body).toBe("");
+    // v1.355.0 (G32, updated on purpose): with no fix the body still says
+    // what keeps working (it was empty).
+    expect(noReason.body).toBe("Chat and your other tools keep working.");
     const bare = toActivity(ev({ name: "brave" }))!;
     expect(bare.title).toMatch(/^Pack brave is failing: \S/);
     const nameless = toActivity(ev({}))!;

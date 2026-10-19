@@ -15,6 +15,12 @@
  *    "Background task <name> has been failing for <m> min — <last_error>" —
  *    counted in the badge; a fresh failure (< 5 min) and an entry with no
  *    `at` are NOT items.
+ *
+ * v1.355.0 (readiness G32, UPDATED ON PURPOSE): the loop is named in the
+ * user's words (lib/loopWords: `fleet` → "Your model servers can't be
+ * checked"), the row/note opens the page its fix lives on (/fleet, not the
+ * chat home), and the engine name + last error ride the hover title only.
+ * The full new contract is pinned in background-names-v13550.test.tsx.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -113,8 +119,14 @@ describe("Overview names a failing background loop (v1.229.0; read off the syste
     mapRef.current = { areas: [], status: { failing_loops: [{ name: "fleet", error: FLEET_ERR }] } };
     render(<OverviewPage />);
     const note = await screen.findByTestId("loop-failing-note");
-    expect(note.textContent).toContain("fleet");
-    expect(note.textContent).toContain(FLEET_ERR);
+    // v1.355.0 (G32, on purpose): plain words on screen, the engine name and
+    // the error on the hover, and a door to where the fix lives.
+    expect(note.textContent).toContain("Your model servers can't be checked.");
+    expect(note.textContent).not.toContain("fleet");
+    expect(note.textContent).not.toContain(FLEET_ERR);
+    const row = screen.getByTestId("loop-failing-row");
+    expect(row.querySelector("[title]")?.getAttribute("title")).toBe(`fleet: ${FLEET_ERR}`);
+    expect(screen.getByRole("link", { name: "Open: Model servers" })).toHaveAttribute("href", "/fleet");
     expect(screen.getByText("1 background task failing")).toBeTruthy();
     expect(screen.queryByText(/All good/)).toBeNull();
   });
@@ -143,8 +155,16 @@ describe("Overview names a failing background loop (v1.229.0; read off the syste
     };
     render(<OverviewPage />);
     const note = await screen.findByTestId("loop-failing-note");
-    expect(note.textContent).toContain(`fleet — ${FLEET_ERR}`);
-    expect(note.textContent).toContain("rehydrate_goals — RuntimeError: goals exploded");
+    // v1.355.0 (G32, on purpose): one line per task, each in plain words
+    // with its own reason on the hover and its own door.
+    const rows = screen.getAllByTestId("loop-failing-row");
+    expect(rows.map((r) => r.getAttribute("data-loop"))).toEqual(["fleet", "rehydrate_goals"]);
+    expect(note.textContent).toContain("Your model servers can't be checked.");
+    expect(note.textContent).toContain("Your goals weren't loaded. Chat keeps working.");
+    expect(rows[1].querySelector("[title]")?.getAttribute("title")).toBe(
+      "rehydrate_goals: RuntimeError: goals exploded",
+    );
+    expect(screen.getByRole("link", { name: "Open: Goals" })).toHaveAttribute("href", "/autonomy");
     expect(screen.getByText("2 background tasks failing")).toBeTruthy();
   });
 });
@@ -166,13 +186,20 @@ describe("NotificationBell: a loop failing for 5+ min is an item (v1.229.0)", ()
     fireEvent.click(btn);
     const rows = await screen.findAllByTestId("bell-loop-failing");
     expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toContain("Background task fleet has been failing for 10 min");
-    expect(rows[0].textContent).toContain(FLEET_ERR);
+    // v1.355.0 (G32, on purpose): the task in the user's words, how long,
+    // and the row opens Fleet (it opened the chat home); the engine name and
+    // the last error stay on the hover title.
+    expect(rows[0].textContent).toContain("Your model servers can't be checked");
+    expect(rows[0].textContent).toContain("For 10 min");
+    const link = rows[0].querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("/fleet");
+    expect(link.getAttribute("title")).toBe(`fleet: ${FLEET_ERR}`);
+    expect(rows[0].textContent).not.toContain(FLEET_ERR);
     expect(document.body.textContent).not.toContain("slack_socket");
     expect(screen.queryByText(/all caught up/i)).toBeNull();
-    // the desktop ping names it
+    // the desktop ping names it (one task: in the row's words)
     expect(notifyMock).toHaveBeenCalled();
-    expect(String(notifyMock.mock.calls[0][1])).toContain("1 background task failing");
+    expect(String(notifyMock.mock.calls[0][1])).toContain("Your model servers can't be checked");
   });
 
   it("no stale failing loop: no item, badge absent", async () => {

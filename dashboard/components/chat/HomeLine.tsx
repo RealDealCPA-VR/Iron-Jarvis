@@ -24,12 +24,20 @@
  * Daemon offline, a mock downgrade and "no model chosen" are the shell's own
  * banners (DaemonBanner, ProviderDowngradeBanner, SimulatedBanner), so they
  * are never repeated here. Nothing to say → nothing rendered.
+ *
+ * v1.355.0 (readiness audit G32): a failing background task also offers
+ * "Ask Jarvis" beside Open. It opens Chat with HEALTH_QUESTION waiting in
+ * the box (never sent); that question arms the health readers (app_health,
+ * run_doctor, pack_status), so the answer reads the app's own health.
  */
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, CalendarClock, CircleDot, RotateCcw } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
+import { chatAskHrefFrom } from "@/lib/chatAsk";
+import { HEALTH_QUESTION } from "@/lib/loopWords";
 
 interface StatusCounts {
   interrupted?: number;
@@ -100,6 +108,14 @@ const ICON = {
 export function HomeLine() {
   const counts = usePolledApi<StatusCounts>("/ui/status-line", 20000);
   const approvals = usePolledApi<{ approvals?: unknown[] }>("/chat/approvals/pending", 20000);
+  // v1.355.0 (G32): the address this chat page is on, read after mount (the
+  // line is drawn on the chat page itself, at "/" or "/chat"); Ask Jarvis
+  // links to the OTHER one so a fresh chat mounts with the question waiting
+  // (lib/chatAsk.chatAskHrefFrom says why).
+  const [here, setHere] = useState("");
+  useEffect(() => {
+    setHere(window.location.pathname);
+  }, []);
   const c = counts.data ?? {};
   const items = homeLineItems({
     interrupted: n(c.interrupted),
@@ -125,6 +141,16 @@ export function HomeLine() {
         {top.text}
         {rest.length > 0 && <span className="text-zinc-500"> +{rest.length} more</span>}
       </span>
+      {top.kind === "failing" && (
+        // v1.355.0 (G32): ask about it in chat, where the health readers run.
+        <Link
+          href={chatAskHrefFrom(here, HEALTH_QUESTION)}
+          data-testid="home-line-ask"
+          className="shrink-0 rounded-md px-2 py-0.5 text-[12px] text-zinc-300 hover:bg-white/[0.06] hover:text-zinc-100"
+        >
+          Ask Jarvis
+        </Link>
+      )}
       {top.kind === "schedules" ? (
         // The rows say what happened and link each run (v1.351.0, G02).
         <Link

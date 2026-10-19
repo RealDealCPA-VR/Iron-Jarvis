@@ -41,6 +41,8 @@ import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { PageShell, Reveal } from "@/components/motion";
 import { Heartbeat, MapLegend, SystemMap, type SystemMapData } from "@/components/overview/SystemMap";
 import { RunningNow } from "@/components/RunningNow";
+// v1.355.0 (G32): a failing background task in the user's words + its door.
+import { STATUS_HREF, loopSentence, loopWords } from "@/lib/loopWords";
 
 /** GET /ui/system-map — the map plus the status line's own counts. */
 export type SystemMapResponse = SystemMapData & {
@@ -226,18 +228,44 @@ export default function OverviewPage({ embedded = false }: { embedded?: boolean 
           nothing when there is nothing to pick up. */}
       <InterruptedJobsNote />
 
+      {/* v1.355.0 (G32): each failing task on its own line in the user's
+          words ("Slack messages aren't arriving. Chat and your other channels
+          keep working."), with an Open to the page its fix lives on, like the
+          pack note's Retry (lib/loopWords). The engine name and the last
+          error stay on the line's hover. One note, one line per task. */}
       {failingLoops.length > 0 && (
         <Reveal>
           <div
             role="status"
             data-testid="loop-failing-note"
-            className="flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
+            className="grid gap-1 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
           >
-            <AlertTriangle size={14} className="shrink-0" />
-            <span className="min-w-0 truncate">
-              Background task{failingLoops.length === 1 ? "" : "s"} failing:{" "}
-              {failingLoops.map((l) => `${l.name} — ${l.error}`).join(" · ")}
-            </span>
+            {failingLoops.map((l) => {
+              const w = loopWords(l.name);
+              return (
+                <div
+                  key={l.name}
+                  data-testid="loop-failing-row"
+                  data-loop={l.name}
+                  className="flex min-w-0 items-center gap-2"
+                >
+                  <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate" title={`${l.name}: ${l.error}`}>
+                    {loopSentence(l.name)}
+                  </span>
+                  {/* On this page already: a Status door would go nowhere. */}
+                  {w.href !== STATUS_HREF && (
+                    <Link
+                      href={w.href}
+                      aria-label={`Open: ${w.label}`}
+                      className="ml-auto shrink-0 font-medium text-amber-100 underline-offset-2 hover:underline"
+                    >
+                      Open
+                    </Link>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Reveal>
       )}

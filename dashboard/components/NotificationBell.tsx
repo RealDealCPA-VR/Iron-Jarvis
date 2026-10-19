@@ -60,6 +60,21 @@ import {
   paneWaitingTitle,
   type BlockedPane,
 } from "@/lib/paneAsks";
+// v1.355.0 (G32): a failing background task in the user's words, with the
+// page its fix lives on (dependency-free).
+import { STATUS_HREF, loopWords } from "@/lib/loopWords";
+import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
+
+/** v1.355.0 (G32): what a failed pack does NOT take down, said on its row. */
+export const PACK_STILL_WORKS = "Chat and your other tools keep working.";
+
+/** The pack row's body: its own fix (when the daemon gave one) and then what
+ *  keeps working. A fix with no closing mark gets a full stop first. */
+export function packFailedBody(fix: unknown): string {
+  const f = typeof fix === "string" ? fix.trim() : "";
+  if (!f) return PACK_STILL_WORKS;
+  return `${/[.!?]$/.test(f) ? f : `${f}.`} ${PACK_STILL_WORKS}`;
+}
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -648,6 +663,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // Payload: {name, error, reason, fix}, published ONCE per pack per
     // episode. The TITLE is the plain reason (the error can carry a masked
     // tail); the fix is the body; the row opens the Tools page.
+    // v1.355.0 (G32): the body also says what keeps working (packFailedBody).
     const name = typeof p.name === "string" && p.name ? p.name : "a pack";
     const reason =
       typeof p.reason === "string" && p.reason.trim()
@@ -661,7 +677,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       href: "/tools",
       icon: AlertTriangle,
       title: `Pack ${name} is failing: ${reason}`,
-      body: typeof p.fix === "string" ? p.fix.trim() : "",
+      body: packFailedBody(p.fix),
     };
   }
   if (e.type === "media.completed" || e.type === "media.failed") {
@@ -1750,10 +1766,11 @@ export function NotificationBell() {
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
-      if (failingLoops.length)
-        parts.push(
-          `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`,
-        );
+      // v1.355.0 (G32): one failing task is named in the row's words; more
+      // are counted (the rows name each one).
+      if (failingLoops.length === 1) parts.push(loopWords(failingLoops[0].name).problem);
+      else if (failingLoops.length > 1)
+        parts.push(`${failingLoops.length} background tasks failing`);
       if (interrupted.jobs.length)
         parts.push(
           // v1.354.0: the words the bell's own rows and the run page say.
@@ -1987,30 +2004,39 @@ export function NotificationBell() {
                   ))}
 
                   {/* v1.229.0: background loops failing for 5+ min, one row
-                      per loop, named with the last error. Links to the
-                      Overview, which carries the same list + the note. */}
-                  {failingLoops.map((l) => (
-                    <li key={`loop-${l.name}`} data-testid="bell-loop-failing">
-                      <Link
-                        href="/"
-                        onClick={() => setOpen(false)}
-                        className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
-                      >
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
-                          <ShieldAlert size={15} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium text-zinc-100">
-                            Background task {l.name} has been failing for {l.minutes} min
+                      per loop. v1.355.0 (G32): named in the user's words
+                      ("Slack messages aren't arriving"), how long, what keeps
+                      working, and the row opens the page its fix lives on
+                      (lib/loopWords; it used to open the chat home). The
+                      engine name and the last error stay on the hover. */}
+                  {failingLoops.map((l) => {
+                    const w = loopWords(l.name);
+                    return (
+                      <li key={`loop-${l.name}`} data-testid="bell-loop-failing" data-loop={l.name}>
+                        <Link
+                          href={w.href}
+                          title={`${l.name}: ${l.error}`}
+                          onClick={() => {
+                            setOpen(false);
+                            if (w.href === STATUS_HREF)
+                              window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }));
+                          }}
+                          className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
+                        >
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+                            <ShieldAlert size={15} />
                           </span>
-                          <span className="block truncate text-[11px] text-zinc-500" title={l.error}>
-                            {l.error}
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-medium text-zinc-100">{w.problem}</span>
+                            <span className="block truncate text-[11px] text-zinc-500">
+                              For {l.minutes} min{w.still ? ` · ${w.still}` : ""}
+                            </span>
                           </span>
-                        </span>
-                        <ArrowRight size={13} className="shrink-0 text-zinc-600" />
-                      </Link>
-                    </li>
-                  ))}
+                          <ArrowRight size={13} className="shrink-0 text-zinc-600" />
+                        </Link>
+                      </li>
+                    );
+                  })}
 
                   {reviews.map((e) => {
                     const summary =

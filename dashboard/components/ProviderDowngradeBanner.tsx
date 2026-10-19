@@ -5,6 +5,8 @@ import { AlertTriangle, X } from "lucide-react";
 import Link from "next/link";
 import { useEvents } from "@/lib/useEvents";
 import type { IJEvent } from "@/lib/types";
+// v1.355.0 (G32): where a run opens (a mission on its screen, else its page).
+import { sessionHref } from "@/lib/missionLinks";
 
 /** The one /events type the banner reads (v1.311.0). */
 export const PROVIDER_DOWNGRADE_EVENT_TYPES: readonly string[] = ["provider.downgraded"];
@@ -15,7 +17,17 @@ export interface DowngradeNotice {
   kind: "mock" | "refused";
   title: string;
   detail: string;
+  /** v1.355.0 (G32): what was NOT affected, as a sentence ("" = say nothing).
+   *  A refusal means no model answered that call, so the call itself made
+   *  no change (earlier steps of the run may have; hence "in that step"). A
+   *  mock answer can write files, so it never claims this. */
+  still: string;
+  /** v1.355.0 (G32): the run it happened in ("" for none), for "See the job". */
+  sessionId: string;
 }
+
+/** v1.355.0 (G32): the refusal's "what was not affected" sentence. */
+export const REFUSED_STILL = "Nothing was changed in that step.";
 
 function sentence(text: string): string {
   const t = text.trim().replace(/[.\s]+$/, "");
@@ -47,9 +59,11 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
   const p = (e.payload ?? {}) as Record<string, unknown>;
   const used = String(p.used ?? "");
   const reason = String(p.reason ?? "");
+  const sid = String(e.session_id ?? "").trim();
+  // A chat turn's id ("chat") is not a job anyone can open.
+  const runId = sid && sid !== "chat" ? sid : "";
   if (used === "none") {
-    const sid = String(e.session_id ?? "");
-    if (!sid || sid === "chat") return null;
+    if (!runId) return null;
     // The name exactly as the user gave it (a label is never re-cased).
     const name = String(p.label || p.requested || "the chosen model");
     const why = reason.trim().replace(/[.\s]+$/, "");
@@ -57,12 +71,16 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
       kind: "refused",
       title: "Nothing answered a background job.",
       detail: why ? `${name}: ${why}.` : `${name} did not answer.`,
+      still: REFUSED_STILL,
+      sessionId: runId,
     };
   }
   return {
     kind: "mock",
     title: "Output came from the mock model.",
     detail: sentence(reason || "a session ran on the offline mock model instead of a real provider"),
+    still: "",
+    sessionId: runId,
   };
 }
 
@@ -71,6 +89,8 @@ export function downgradeNotice(e: IJEvent | null | undefined): DowngradeNotice 
  * saying (see `downgradeNotice`). Tone tokens only (the danger tone for a run
  * nothing answered, the warn tone for a mock answer), a hairline, a quiet link
  * to Connections, dismissible; the next event that needs saying shows again.
+ * v1.355.0 (G32): it also says what was not affected and, when the event
+ * names its run, offers a quiet "See the job" beside Connections.
  */
 export function ProviderDowngradeBanner() {
   // v1.311.0 (wave 3): only the one type it reads. It sits on every page,
@@ -103,6 +123,21 @@ export function ProviderDowngradeBanner() {
       <AlertTriangle size={14} aria-hidden="true" className={`mt-[3px] shrink-0 ${tone}`} />
       <p className="min-w-0 flex-1 break-words text-zinc-400">
         <span className={`font-medium ${tone}`}>{notice.title}</span> {notice.detail}{" "}
+        {notice.still ? <span data-testid="provider-downgrade-still">{notice.still} </span> : null}
+        {notice.sessionId ? (
+          <>
+            <Link
+              href={sessionHref({ id: notice.sessionId })}
+              data-testid="provider-downgrade-job"
+              className="whitespace-nowrap text-zinc-300 underline-offset-2 transition-colors hover:text-zinc-100 hover:underline"
+            >
+              See the job
+            </Link>
+            <span aria-hidden="true" className="text-zinc-600">
+              {" · "}
+            </span>
+          </>
+        ) : null}
         <Link
           href="/connections"
           className="whitespace-nowrap text-zinc-300 underline-offset-2 transition-colors hover:text-zinc-100 hover:underline"
