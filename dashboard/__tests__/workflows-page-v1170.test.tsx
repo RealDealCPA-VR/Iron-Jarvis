@@ -494,6 +494,31 @@ describe("RunHistory (via the page)", () => {
     expect(screen.queryByText("cancelled")).toBeNull();
   });
 
+  it("v1.352.0 (G17, review): an opened run's STEP badges say the same words, never the raw ids", async () => {
+    api.responses[RUNS_PATH] = {
+      runs: [
+        run({
+          status: "interrupted",
+          outputs_json: JSON.stringify({
+            Scan: { status: "completed" },
+            Triage: { status: "cancelled" },
+          }),
+        }),
+      ],
+    };
+    renderHistory();
+    fireEvent.click(await screen.findByText("intake"));
+    // Scan finished, Triage was stopped, Check has no output yet.
+    const stopped = await screen.findByText("Stopped");
+    expect(stopped.getAttribute("data-badge-variant")).toBe("calm");
+    expect(stopped.querySelector("span")?.className ?? "").toContain("bg-zinc-500");
+    expect(screen.getByText("Done").querySelector("span")?.className ?? "").toContain("bg-tone-success");
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    for (const raw of ["completed", "cancelled", "pending"]) {
+      expect(screen.queryByText(raw)).toBeNull();
+    }
+  });
+
   it("polls while a run is live, using the shared terminal set", async () => {
     // Fake timers BEFORE render — the interval must be scheduled on the fake
     // clock or advancing it proves nothing.
