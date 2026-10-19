@@ -190,14 +190,20 @@ describe("Edit on a pack row", () => {
     await waitFor(() => expect(screen.queryByTestId("edit-pack-brave")).toBeNull());
   });
 
-  it("an http pack's row says the transport and the URL in place of a command line; a stdio row keeps its argv", async () => {
+  it("an http pack's row says the URL in place of a command line; a stdio row keeps its argv", async () => {
     render(<ToolsPage />);
     const remote = await screen.findByTestId("mcp-launch-remote");
-    expect(remote.textContent).toContain("HTTP https://host/mcp");
+    // v1.356.0 (G74 fix round, updated on purpose): the opened fold reads the
+    // address, never "HTTP"/"SSE"; the protocol name rides the title.
+    expect(remote.textContent).toBe("https://host/mcp");
+    expect(remote.getAttribute("title")).toBe("Streamable HTTP https://host/mcp");
     expect(remote.textContent).not.toContain("npx");
-    // an sse pack reads SSE; a stdio pack is still its command line
-    expect(screen.getByTestId("mcp-launch-open").textContent).toBe("SSE https://open/sse");
+    // an sse pack says it is an older server; a stdio pack is still its command line
+    const open = screen.getByTestId("mcp-launch-open");
+    expect(open.textContent).toBe("https://open/sse (older servers)");
+    expect(open.getAttribute("title")).toBe("SSE https://open/sse");
     expect(screen.getByTestId("mcp-launch-brave").textContent).toBe("npx -y @brave/x");
+    expect(screen.getByTestId("mcp-launch-brave").getAttribute("title")).toBeNull();
   });
 
   it("never renders a value, even off an older daemon's row that carries one", async () => {

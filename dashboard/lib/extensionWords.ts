@@ -106,6 +106,33 @@ export const PACK_FAILING_CONSEQUENCE = "Chats and agents can't use its tools un
 /** Said beside every box that takes a key or a token. */
 export const KEYS_KEPT_HINT = "Keys and tokens are kept encrypted on this PC.";
 
+/** How an extension reached by a web address connects, in the words the
+ *  editor's "How it connects" choice uses (EditPack, the add-by-address
+ *  door). An older server (the "sse" transport) says so; anything else is a
+ *  web address. Never the protocol name: that rides `transportTitle`. */
+export function webAddressWords(transport: string | null | undefined): string {
+  return transport === "sse" ? "A web address (older servers)" : "A web address";
+}
+
+/** The protocol name a server's own docs use, for a title (tooltip) only. */
+export function transportTitle(transport: string | null | undefined): string {
+  return transport === "sse" ? "SSE" : "Streamable HTTP";
+}
+
+/** What a Tools row's opened "Show address" fold reads: the address, and
+ *  "(older servers)" after it for an older server; the protocol name rides
+ *  the title (v1.356.0 fix round: the fold read "SSE https://…"). */
+export function addressLine(
+  transport: string | null | undefined,
+  url: string | null | undefined,
+): { text: string; title: string } {
+  const address = (url ?? "").trim();
+  return {
+    text: transport === "sse" ? `${address} (older servers)` : address,
+    title: `${transportTitle(transport)} ${address}`.trim(),
+  };
+}
+
 /** Words a raw key is written with that read better another way. */
 const WORD_CASE: Readonly<Record<string, string>> = {
   api: "API",

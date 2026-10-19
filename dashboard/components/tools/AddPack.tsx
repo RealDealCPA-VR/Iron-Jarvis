@@ -65,6 +65,7 @@ import {
   transportFromUrl,
   type ImportRow,
 } from "@/lib/addPackWords";
+import { transportTitle, webAddressWords } from "@/lib/extensionWords";
 import { StatusChip } from "./chips";
 import { RUNTIME_HELP } from "./meta";
 import {
@@ -159,8 +160,14 @@ function PreviewList({
         const st = rowStatus(row);
         const isHttp = row.transport === "http" || row.transport === "sse";
         // v1.356.0 (G74): a row with no command reads "a program on this PC"
-        // (it read "stdio").
-        const launcher = isHttp ? row.transport.toUpperCase() : (row.command ?? "").trim() || "a program on this PC";
+        // (it read "stdio"). Fix round: an address row says how it connects
+        // in the editor's words (it read "HTTP"/"SSE" — and this fold opens
+        // by itself on a row that asks for a value); the protocol rides the
+        // chip's title.
+        const launcher = isHttp
+          ? webAddressWords(row.transport)
+          : (row.command ?? "").trim() || "a program on this PC";
+        const launcherTitle = isHttp ? transportTitle(row.transport) : undefined;
         const secretKeys = row.secret_keys ?? [];
         // v1.355.0: the secret keys plus every placeholder the config left.
         const asked = askedNames(row);
@@ -228,7 +235,7 @@ function PreviewList({
                 Details
               </summary>
               <div className="mt-1 flex flex-wrap items-center gap-2">
-                <Badge value={launcher} tone="slate" variant="calm" keepCase data-testid={`import-launcher-${row.name}`} />
+                <Badge value={launcher} tone="slate" variant="calm" keepCase title={launcherTitle} data-testid={`import-launcher-${row.name}`} />
                 <div className="min-w-0 flex-1 overflow-x-auto">
                   <code className="whitespace-pre font-mono text-[11px] text-zinc-500">{rowLaunch(row)}</code>
                 </div>

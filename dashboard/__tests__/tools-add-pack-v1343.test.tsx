@@ -229,9 +229,13 @@ describe("paste a config", () => {
     expect(within(py).getByTestId("status-blocked").textContent).toContain("Needs Python (uv)");
     expect(within(py).getByTestId("import-note-py").textContent).toContain("uvx is not installed");
     expect((within(py).getByTestId("import-pick-py") as HTMLInputElement).checked).toBe(true);
-    // an HTTP row: the transport as the chip, the URL as the launch line, no runtime chip
+    // an HTTP row: how it connects as the chip, the URL as the launch line, no runtime chip.
+    // v1.356.0 (G74 fix round, updated on purpose): the chip says it in the
+    // editor's words ("A web address"); the protocol name rides its title.
     const remote = screen.getByTestId("import-row-remote");
-    expect(within(remote).getByTestId("import-launcher-remote").textContent).toContain("HTTP");
+    const chip = within(remote).getByTestId("import-launcher-remote");
+    expect(chip.textContent).toBe("A web address");
+    expect(chip.getAttribute("title")).toBe("Streamable HTTP");
     expect(remote.textContent).toContain("https://host/mcp");
     expect(remote.textContent).toContain("headers X-Api-Key");
     expect(within(remote).queryByTestId("status-ready")).toBeNull();

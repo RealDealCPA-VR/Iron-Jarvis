@@ -74,6 +74,7 @@ import {
   PACK_FAILING_CONSEQUENCE,
   PACK_OFF_LINE,
   PACK_OFF_WORD,
+  addressLine,
   humanFieldLabel,
   isPackOff,
   packSwitchLabel,
@@ -2443,13 +2444,21 @@ export default function ToolsPage() {
                           </summary>
                           <div className="mt-1 overflow-x-auto">
                             {/* v1.343.0: an http/sse pack has no command line; its
-                                row says the transport and the URL instead. */}
+                                row says the URL instead. v1.356.0 (G74, fix
+                                round): opened, the fold reads the address
+                                (an older server says "(older servers)"), never
+                                "HTTP"/"SSE" — the protocol rides the title. */}
                             <code
                               className="whitespace-pre font-mono text-[11px] text-zinc-500"
                               data-testid={`mcp-launch-${s.name}`}
+                              title={
+                                s.transport === "http" || s.transport === "sse"
+                                  ? addressLine(s.transport, s.url).title
+                                  : undefined
+                              }
                             >
                               {s.transport === "http" || s.transport === "sse"
-                                ? `${s.transport.toUpperCase()} ${s.url ?? ""}`
+                                ? addressLine(s.transport, s.url).text
                                 : [s.command, ...(s.args ?? [])].join(" ")}
                             </code>
                           </div>

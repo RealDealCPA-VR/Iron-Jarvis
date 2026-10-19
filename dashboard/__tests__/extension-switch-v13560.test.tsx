@@ -44,6 +44,8 @@ const api = vi.hoisted(() => {
     connectors: [] as Record<string, unknown>[],
     /** What a switch press answers, by the `enabled` it was sent. */
     switchAnswer: null as null | ((name: string, on: boolean) => Record<string, unknown>),
+    /** What POST /mcp/import/preview answers (the paste door). */
+    preview: null as null | Record<string, unknown>,
   };
 });
 
@@ -66,6 +68,7 @@ vi.mock("@/lib/api", () => ({
   },
   post: async (path: string) => {
     api.posts.push(path);
+    if (path === "/mcp/import/preview" && api.preview) return api.preview;
     return {};
   },
   put: async () => ({}),
@@ -228,6 +231,7 @@ beforeEach(() => {
   api.catalog = [];
   api.connectors = [];
   api.switchAnswer = null;
+  api.preview = null;
 });
 afterEach(() => cleanup());
 
@@ -559,6 +563,80 @@ describe("ACCEPTANCE: add, edit and remove an extension without reading MCP, std
     ]);
     expect(select.getAttribute("aria-label")).toBe("How it connects");
     expect(engineWordsIn(visibleText(door))).toEqual([]);
+  });
+
+  it("every fold on the Tools page OPENED still says how an address row connects in words (fix round)", async () => {
+    api.servers = [
+      SLACK,
+      row("remote", { transport: "http", url: "https://host/mcp", command: "", args: [] }),
+      row("old", { transport: "sse", url: "https://h/sse", command: "", args: [] }),
+    ];
+    render(<ToolsPage />);
+    await screen.findByTestId("mcp-launch-old");
+    // A person who opens every fold: the address folds read the address, an
+    // older server says so, and the protocol name is only in the tooltip.
+    for (const d of Array.from(document.querySelectorAll("details"))) (d as HTMLDetailsElement).open = true;
+    const remote = screen.getByTestId("mcp-launch-remote");
+    expect(remote.textContent).toBe("https://host/mcp");
+    expect(remote.getAttribute("title")).toBe("Streamable HTTP https://host/mcp");
+    const old = screen.getByTestId("mcp-launch-old");
+    expect(old.textContent).toBe("https://h/sse (older servers)");
+    expect(old.getAttribute("title")).toBe("SSE https://h/sse");
+    expect(engineWordsIn(visibleText(document.body))).toEqual([]);
+  });
+
+  it("a pasted older-server row, its Details opened by the value it asks for, says how it connects in words (fix round)", async () => {
+    api.servers = [];
+    api.preview = {
+      servers: [
+        {
+          name: "old",
+          transport: "sse",
+          command: null,
+          args: [],
+          url: "https://h/sse",
+          header_names: ["X-Api-Key"],
+          env_keys: [],
+          secret_keys: [],
+          asks: ["X-Api-Key"],
+          exists: false,
+          runtime_ready: true,
+          launcher_note: null,
+          source: "paste",
+          origin: "paste",
+        },
+      ],
+      unrecognised: false,
+    };
+    render(<ToolsPage />);
+    const area = await screen.findByTestId("add-pack");
+    fireEvent.click(within(area).getByTestId("add-pack-door-paste"));
+    const box = await within(area).findByTestId("add-pack-paste");
+    fireEvent.change(box, { target: { value: "npx mcp-remote https://h/sse" } });
+    fireEvent.blur(box);
+    const r = await screen.findByTestId("import-row-old");
+    // The fold opens by itself on a row that needs a typed value.
+    expect((within(r).getByTestId("import-details-old") as HTMLDetailsElement).open).toBe(true);
+    const chip = within(r).getByTestId("import-launcher-old");
+    expect(chip.textContent).toBe("A web address (older servers)");
+    expect(chip.getAttribute("title")).toBe("SSE");
+    expect(engineWordsIn(visibleText(r))).toEqual([]);
+  });
+
+  it("webAddressWords / transportTitle / addressLine", () => {
+    expect(words.webAddressWords("http")).toBe("A web address");
+    expect(words.webAddressWords("sse")).toBe("A web address (older servers)");
+    expect(words.transportTitle("http")).toBe("Streamable HTTP");
+    expect(words.transportTitle("sse")).toBe("SSE");
+    expect(words.addressLine("http", " https://a/mcp ")).toEqual({
+      text: "https://a/mcp",
+      title: "Streamable HTTP https://a/mcp",
+    });
+    expect(words.addressLine("sse", "https://a/sse")).toEqual({
+      text: "https://a/sse (older servers)",
+      title: "SSE https://a/sse",
+    });
+    expect(words.addressLine("http", null)).toEqual({ text: "", title: "Streamable HTTP" });
   });
 
   it("the Directory (a connected app, a switched-off app)", async () => {
