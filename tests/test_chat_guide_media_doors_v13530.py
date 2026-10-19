@@ -548,6 +548,32 @@ def test_a_declined_connect_leaves_no_button(app):
     assert _done(frames)["doors"] == []
 
 
+def test_a_refusal_the_registry_made_leaves_no_button_stream_lane(app):
+    """The fix door is for a call that FAILED because something is not set
+    up, never for a refusal the registry made: here app_connect was not
+    turned on for this chat ("not armed"), so the reply gets the footnote
+    and no button. Review pin (v1.353.0 lane 3B)."""
+    model = _StreamModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
+    app.state.platform.router.stream = model
+    frames = _stream(app, _body("What can you do?"))
+    assert "app_connect" not in model.tools[0], "anti-vacuity: app_connect was not armed"
+    done = _done(frames)
+    assert "app_connect could not run (not turned on for this chat)" in done["reply"], done["reply"]
+    assert done["doors"] == []
+
+
+def test_a_refusal_the_registry_made_leaves_no_button_post_lane(app):
+    """The POST lane's twin (MIRROR NOTE, lock-step): a "not armed" refusal
+    of app_connect for Drive leaves the footnote and no button."""
+    platform = app.state.platform
+    platform.router = _PostModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
+    body = ChatBody(messages=[{"role": "user", "content": "connect my Google Drive"}], tools=["read_file"])
+    res = asyncio.run(run_chat_turn(platform, {}, body))
+    assert "app_connect" not in platform.router.tools[0], "anti-vacuity: app_connect was not armed"
+    assert "app_connect could not run (not turned on for this chat)" in res["reply"], res["reply"]
+    assert res["doors"] == []
+
+
 def test_connect_my_google_drive_leaves_the_button_in_the_post_lane(app):
     platform = app.state.platform
     platform.router = _PostModel([[ToolCall(id="c1", name="app_connect", arguments={"app": "google_drive"})], []])
