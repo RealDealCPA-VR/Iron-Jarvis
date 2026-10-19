@@ -146,7 +146,9 @@ def test_every_package_npm_retired_says_so_and_none_is_slack_or_puppeteer():
         else:
             assert c.package_note == "", c.id
     flagged = {c.id for c in CATALOG if c.package_note}
-    assert flagged == {"github", "postgres", "google_maps"}
+    # v1.355.0 (G44, moved on purpose): GitHub's card reaches GitHub's own
+    # maintained server now, so it no longer runs an "older package".
+    assert flagged == {"postgres", "google_maps"}
 
 
 def test_the_running_sequentialthinking_pack_lights_its_own_card(client, monkeypatch):
@@ -247,8 +249,11 @@ def test_a_missing_helper_program_is_said_before_connect_by_the_launchers_own_an
 
     monkeypatch.setattr(mcp_tools, "resolve_launcher", resolve)
     rows = {r["id"]: r for r in _rows(client)}
-    assert rows["github"]["runtime_ready"] is False
-    assert rows["github"]["runtime"] == "Node.js" and rows["github"]["runtime_url"] == "https://nodejs.org"
+    # v1.355.0 (G44, moved on purpose): Notion stands in for GitHub here —
+    # GitHub's card reaches a server over the network and launches nothing.
+    assert rows["notion"]["runtime_ready"] is False
+    assert rows["notion"]["runtime"] == "Node.js" and rows["notion"]["runtime_url"] == "https://nodejs.org"
+    assert "runtime_ready" not in rows["github"], "a remote server needs no helper program"
     assert rows["fetch"]["runtime_ready"] is True and rows["fetch"]["runtime"] == "uv"
     # Once per command per listing, never once per card.
     assert asked.count("npx") == 1 and asked.count("uvx") == 1

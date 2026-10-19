@@ -20,11 +20,23 @@ from typing import Any
 
 from ..core.config import persist_config_values
 from ..mcp.tools import mcp_tools, unload_pack_tools
-from .catalog import CATALOG, LINK_CARDS, connector_dict, get_connector
+from .catalog import CATALOG, LINK_CARDS, connector_dict, get_connector, is_remote
 
 
 def _mcp_servers(platform) -> list[dict]:
     return list(getattr(platform.config, "mcp_servers", None) or [])
+
+
+def _persist(platform):
+    """The config writer the pack door is handed (v1.355.0, G44): this
+    module's own ``persist_config_values``, so the Directory's doors write
+    config.toml exactly as they always did."""
+
+    def _write(keys: list[str]) -> None:
+        cfg = platform.config
+        persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in keys})
+
+    return _write
 
 
 def _server_cfg(platform, connector_id: str) -> "dict | None":
@@ -184,6 +196,51 @@ def _mcp_status(configured: bool, tools_loaded: int, name: str = "") -> dict[str
     return {"connected": True, "status": "connected", "detail": ""}
 
 
+def auto_approve_on(platform) -> bool:
+    """Do pack tools run WITHOUT asking? The rule the boot resolver applies
+    (platform.py: the global "Run app tools without asking" OR any pack's own
+    flag — ``mcp_call`` is one shared permission key) and the one the Tools
+    page's switch reads (``auto_approve_effective``)."""
+    if bool(getattr(platform.config, "mcp_auto_approve", False)):
+        return True
+    return any(bool((s or {}).get("auto_approve")) for s in _mcp_servers(platform))
+
+
+def pack_powers(platform, server: str, loaded: list[str], *, asks_first: bool) -> dict[str, Any]:
+    """What a connected pack can actually DO (v1.355.0, G70), read off the
+    live tools — never the catalog's hand-written scopes:
+
+    ``can_change``  — how many of its loaded tools can change things (the
+                      tool's own ``write_like``: an MCP ``readOnlyHint``
+                      makes a tool read-only, anything else may write —
+                      the same flag the quarantine and the Tools row use);
+    ``asks_first``  — whether its tools ask before they run (no auto-approve,
+                      :func:`auto_approve_on`);
+    ``held_back``   — tools that arrived since it was connected and ask
+                      until trusted, whatever ``asks_first`` says (v1.299.0);
+    ``keyed``       — the pack holds a key or token the user can change
+                      (the Directory's Change key).
+
+    No separate permission model: write_like, quarantine and auto-approve are
+    what the app already enforces."""
+    can_change = 0
+    held = 0
+    for full in loaded:
+        try:
+            tool = platform.registry.get(full)
+        except Exception:  # noqa: BLE001 — a count never breaks the gallery
+            tool = None
+        if bool(getattr(tool, "write_like", True)):
+            can_change += 1
+        if bool(getattr(tool, "quarantined", False)):
+            held += 1
+    cfg = _server_cfg(platform, server) or {}
+    from ..mcp.pack_door import vault_refs
+
+    keyed = bool(vault_refs(cfg)) or isinstance(cfg.get("auth"), dict)
+    return {"can_change": can_change, "asks_first": bool(asks_first), "held_back": held, "keyed": keyed}
+
+
 def _status_for(
     platform,
     connector,
@@ -191,6 +248,7 @@ def _status_for(
     *,
     runtime_cache: "dict[str, bool] | None" = None,
     memory_kinds: "set[str] | None" = None,
+    asks_first: "bool | None" = None,
 ) -> dict[str, Any]:
     if connector.connect_via == "mcp":
         server = _configured_name(platform, connector.id)
@@ -208,9 +266,20 @@ def _status_for(
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
             # v1.353.0 (G45): before Connect, the card says when this PC lacks
-            # the helper program the pack starts with ("Needs Node.js").
+            # the helper program the pack starts with ("Needs Node.js"). A
+            # remote server (v1.355.0, G44: GitHub's) launches nothing here.
             **_runtime_fields(connector.command, runtime_cache if runtime_cache is not None else {}),
         }
+        if server:
+            # v1.355.0 (G70): what the connected pack can actually do.
+            row.update(
+                pack_powers(
+                    platform,
+                    server,
+                    loaded,
+                    asks_first=(not auto_approve_on(platform)) if asks_first is None else asks_first,
+                )
+            )
         if server and server != connector.id:
             # v1.353.0 (G43): lit by an ALIAS. The row takes the pack's real
             # name as its id, because every door the card and the chat use —
@@ -323,11 +392,15 @@ def user_pack_blurb(platform, name: str, loaded: list[str]) -> str:
     return text
 
 
-def _user_mcp_connectors(platform, skip: "set[str] | None" = None) -> list[dict[str, Any]]:
+def _user_mcp_connectors(
+    platform, skip: "set[str] | None" = None, *, asks_first: "bool | None" = None
+) -> list[dict[str, Any]]:
     """MCP servers the user added OUTSIDE the catalog (pasted configs, the
     /mcp routes) — established connections, so they belong in the gallery.
     ``skip``: names a catalog card already shows (an alias it lit, v1.353.0)."""
     catalog_ids = {c.id for c in CATALOG} | set(skip or ())
+    if asks_first is None:
+        asks_first = not auto_approve_on(platform)
     out: list[dict[str, Any]] = []
     for cfg in _mcp_servers(platform):
         name = str(cfg.get("name") or "").strip()
@@ -347,6 +420,9 @@ def _user_mcp_connectors(platform, skip: "set[str] | None" = None) -> list[dict[
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
+            # v1.355.0 (G70): an imported pack has no hand-written scopes; its
+            # card says what its tools can do and whether they ask first.
+            **pack_powers(platform, name, loaded, asks_first=asks_first),
         })
     return out
 
@@ -430,11 +506,18 @@ def list_connectors(platform) -> list[dict[str, Any]]:
         conn_status = {}
     runtime_cache: dict[str, bool] = {}
     memory_kinds = _memory_kinds(platform)
+    # v1.355.0 (G70): read once per listing, the same answer on every card.
+    asks_first = not auto_approve_on(platform)
     out = [
         {
             **connector_dict(c),
             **_status_for(
-                platform, c, conn_status, runtime_cache=runtime_cache, memory_kinds=memory_kinds
+                platform,
+                c,
+                conn_status,
+                runtime_cache=runtime_cache,
+                memory_kinds=memory_kinds,
+                asks_first=asks_first,
             ),
         }
         for c in CATALOG
@@ -442,7 +525,7 @@ def list_connectors(platform) -> list[dict[str, Any]]:
     # A pack an alias lit is shown by its catalog card, never a second time.
     shown = {row["id"] for row in out}
     out += [_link_row(card) for card in LINK_CARDS]
-    out += _user_mcp_connectors(platform, skip=shown)
+    out += _user_mcp_connectors(platform, skip=shown, asks_first=asks_first)
     out += _memory_connectors(platform)
     return out
 
@@ -465,7 +548,74 @@ def connect(platform, connector_id: str, values: dict[str, Any] | None = None) -
 
 
 def _secret_name(connector_id: str, field_name: str) -> str:
-    return f"conn_{connector_id}_{field_name.lower()}"
+    """The vault row a Directory app's secret field is kept under — the SAME
+    name the one add door (mcp/pack_door.add_pack) gives it (v1.355.0, G44):
+    ``mcp.<id>.<FIELD>`` for a value the pack reads as an env var, and
+    ``mcp.<id>.auth.value`` for a remote server's token (its card's
+    ``auth_field``). The chat's secure card (``app.<id>``,
+    settings/credentials) and ``app_connect`` name it through here, and the
+    Directory's Change key (``PATCH /mcp/servers/{id}``) writes the same row,
+    so all three doors replace ONE token.
+
+    Before v1.355.0 it was ``conn_<id>_<field>``: a pack saved then still
+    names that row and keeps launching with it; settings/records points it at
+    this name when a card stores a new token (``adopt_card_secrets``)."""
+    from ..mcp.secrets import vault_name
+    from . import catalog as _catalog
+
+    conn = _catalog.get_connector(connector_id)
+    if conn is not None and is_remote(conn) and conn.auth_field and conn.auth_field == field_name:
+        return vault_name(connector_id, "auth.value")
+    return vault_name(connector_id, field_name)
+
+
+#: What a remote card's token header looks like (GitHub's own server reads
+#: ``Authorization: Bearer <personal access token>``) — the add door's
+#: defaults (``McpAuthBody``), said once.
+REMOTE_AUTH_HEADER = "Authorization"
+REMOTE_AUTH_FORMAT = "Bearer {value}"
+
+
+def pack_body(connector, values: dict[str, Any]):
+    """The ``McpServerBody`` the one add door takes for a Directory card and
+    the values the user typed (v1.355.0, G44). Secret fields ride as VALUES —
+    the door vaults them (``secret_keys`` marks the ones whose names do not
+    say so); an ``arg`` field fills its ``<name>`` placeholder (a secret
+    inside it, a connection string's password, is vaulted by the door too).
+
+    A REMOTE card (GitHub's server) is ``transport`` http + ``url``; its
+    ``auth_field`` is the bearer token. Raises ``ValueError`` when the shape
+    does not validate (the route answers it as a 400)."""
+    from ..daemon.schemas import McpAuthBody, McpServerBody
+
+    if is_remote(connector):
+        url = connector.url
+        headers: dict[str, str] = {}
+        auth = None
+        for f in connector.fields:
+            val = str(values.get(f.name, "")).strip()
+            if not val:
+                continue
+            if f.name == connector.auth_field:
+                auth = McpAuthBody(header=REMOTE_AUTH_HEADER, format=REMOTE_AUTH_FORMAT, value=val)
+            elif f.kind == "arg":
+                url = url.replace(f"<{f.name}>", val)
+            else:
+                headers[f.name] = val
+        return McpServerBody(
+            name=connector.id, transport=connector.transport, url=url, headers=headers, auth=auth
+        )
+    args = list(connector.args)
+    env: dict[str, str] = {}
+    for f in connector.fields:
+        val = str(values.get(f.name, "")).strip()
+        if not val:
+            continue
+        if f.kind == "arg":
+            args = [a.replace(f"<{f.name}>", val) for a in args]
+        else:  # env, or a secret the door vaults (injected as an env var at launch)
+            env[f.name] = val
+    return McpServerBody(name=connector.id, command=connector.command, args=args, env=env)
 
 
 def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
@@ -477,71 +627,47 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
     if missing:
         raise ValueError("missing required field(s): " + ", ".join(missing))
 
-    args = list(connector.args)
-    env: dict[str, str] = {}
-    env_secrets: dict[str, str] = {}
-    for f in connector.fields:
-        val = str(values.get(f.name, "")).strip()
-        if not val:
-            continue
-        if f.kind == "arg":
-            args = [a.replace(f"<{f.name}>", val) for a in args]
-        elif f.kind == "env":
-            env[f.name] = val
-        else:  # secret → vault, injected as an env var at launch
-            sname = _secret_name(connector.id, f.name)
-            platform.secrets.set(sname, val)
-            env_secrets[f.name] = sname
+    # v1.355.0 (G44): THE ONE ADD DOOR (mcp/pack_door.add_pack, the body of
+    # POST /mcp/servers): the vault split (env, argument, url and auth
+    # secrets — v1.351.0's G12 argument rule included), the stored row, the
+    # live load and the load record that names WHY it did not start. This
+    # door used to keep its own copy, with its own vault names.
+    # `replace=True`: connecting a card that is already saved is a RECONNECT —
+    # the row is replaced, its old client closed (v1.342.0), and its manifest
+    # KEPT so a write-like tool that arrived since is held back now
+    # (v1.299.0). Disconnect + Connect is a clean first load (remove_pack
+    # drops the manifest).
+    from ..mcp.pack_door import PackDoorError, add_pack
 
-    # v1.351.0 (G12): a value typed into an ARGUMENT (Postgres's
-    # `postgresql://me:password@host/db`) goes to the vault like every other
-    # pack's argument secret — config.toml holds the masked text, the pack
-    # launches with the real one (`_build_transport` resolves `arg_secrets`).
-    # Before, this door stored it plain until the next boot's migration.
-    from ..mcp.secrets import split_args, store_arg_secrets
-
-    args, arg_values = split_args(args)
-    arg_secrets = (
-        store_arg_secrets(platform.secrets, connector.id, arg_values) if arg_values else {}
-    )
-
-    cfg: dict[str, Any] = {"name": connector.id, "command": connector.command, "args": args}
-    if arg_secrets:
-        cfg["arg_secrets"] = arg_secrets
-    if env:
-        cfg["env"] = env
-    if env_secrets:
-        cfg["env_secrets"] = env_secrets
-
-    # Persist (replacing any prior config for this connector), then hot-load.
-    servers = [s for s in _mcp_servers(platform) if s.get("name") != connector.id]
-    servers.append(cfg)
-    platform.config.mcp_servers = servers
-    persist_config_values(platform.config.home, {"mcp_servers": servers})
-
-    # v1.342.0 (lane D): a RECONNECT replaces the pack's live tools. Registering
-    # the fresh ones over the old names used to orphan the old client — its
-    # stdio child ran on until restart (the v1.328.1 leak, by another door).
-    # Unload what is there, closing its client, before the fresh load.
-    unload_pack_tools(platform.registry, connector.id)
-    loaded = 0
+    body = pack_body(connector, values)
+    secret_keys = [f.name for f in connector.fields if f.kind == "secret"]
     try:
-        # `home=` (v1.299.0): a reconnect diffs the pack against its manifest, so
-        # a write-like tool that arrived since is registered quarantined NOW,
-        # not at the next boot. The two probes below stay record=False.
-        for tool in mcp_tools(
-            [cfg], secret_resolver=platform.secrets.get, home=platform.config.home
-        ):
-            platform.registry.register(tool, mcp=True)
-            loaded += 1
-    except Exception:  # noqa: BLE001 — persisted config still loads on restart
-        loaded = 0
-    return {
+        out = add_pack(
+            platform, body, persist=_persist(platform), secret_keys=secret_keys, replace=True
+        )
+    except PackDoorError as exc:  # the vault refused, a name the door refuses
+        raise ValueError(exc.detail)
+    loaded = int(out.get("tools_loaded") or 0)
+    result: dict[str, Any] = {
         "ok": True,
         "connector": connector.id,
         "tools_loaded": loaded,
         "note": None if loaded else DID_NOT_START_NOTE,
     }
+    if not loaded:
+        # v1.355.0 (G44): the REAL reason rides the answer too (the load
+        # record's plain words — a refused token, an unreachable server); the
+        # card's status line shows the same record beside its Retry.
+        try:
+            from ..mcp.tools import load_status
+
+            record = load_status(connector.id) or {}
+        except Exception:  # noqa: BLE001
+            record = {}
+        if record.get("reason"):
+            result["reason"] = str(record.get("reason") or "")
+            result["fix"] = str(record.get("fix") or "")
+    return result
 
 
 def _connect_api_key(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
@@ -644,31 +770,25 @@ def test(platform, connector_id: str) -> dict[str, Any]:
 
 
 def _disconnect_mcp_server(platform, server_id: str) -> dict[str, Any]:
-    """Remove one MCP server (catalog or user-added): config row, live tools,
-    and any vault secrets minted for it."""
-    servers = _mcp_servers(platform)
-    removed = _server_cfg(platform, server_id)
-    kept = [s for s in servers if s.get("name") != server_id]
-    platform.config.mcp_servers = kept
-    persist_config_values(platform.config.home, {"mcp_servers": kept})
-    # v1.342.0 (lane D): unregister AND close — like DELETE /mcp/servers/{name}
-    # since v1.328.1; a bare unregister left the stdio child running.
-    unload_pack_tools(platform.registry, server_id)
-    if removed:  # drop the vault secrets we minted for it
-        for sname in (removed.get("env_secrets") or {}).values():
-            try:
-                platform.secrets.delete(sname)
-            except Exception:  # noqa: BLE001
-                pass
-        # v1.351.0 (G12): and every `mcp.<server>.*` row — argument, url,
-        # header and auth secrets — the same sweep DELETE /mcp/servers/{name}
-        # does (names only in the log); they used to stay in the vault.
-        from ..mcp.secrets import delete_pack_secrets
+    """Remove one MCP server (catalog or user-added) through THE ONE REMOVE
+    DOOR (v1.355.0, G44: mcp/pack_door.remove_pack, the body of DELETE
+    /mcp/servers/{name}): config row, every vault row, its manifest (so a
+    connect after this is a FIRST load, never diffed against the pack the
+    user removed), its live tools AND their client, its live client and its
+    load record (a removed pack must not keep reading "ok")."""
+    from ..mcp.pack_door import PackDoorError, forget_legacy_refs, remove_pack
 
-        try:
-            delete_pack_secrets(platform.secrets, server_id, removed)
-        except Exception:  # noqa: BLE001 — the pack is gone either way
-            pass
+    removed = _server_cfg(platform, server_id)
+    try:
+        remove_pack(platform, server_id, persist=_persist(platform))
+    except PackDoorError:
+        # Nothing saved under that name: still unregister AND close anything
+        # live under it (v1.342.0, lane D), as this door always did.
+        unload_pack_tools(platform.registry, server_id)
+    # A pack connected here before v1.355.0 names its token `conn_<id>_<field>`
+    # (outside the `mcp.<id>.` rows the door sweeps): drop those too, as this
+    # door always dropped the secrets it minted.
+    forget_legacy_refs(platform, server_id, removed)
     return {"ok": True, "disconnected": server_id}
 
 

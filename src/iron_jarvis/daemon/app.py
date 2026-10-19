@@ -3025,6 +3025,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # `needs` names the prerequisite runtime for the plain-language UI hint;
     # `category` groups the cards ("reference" vs "integration"). `<...>` args are
     # placeholders the UI collects before connecting.
+    # v1.355.0 (G44): GitHub's maintained server address, ONE constant for
+    # both catalogs (connectors/catalog.py is the Directory's).
+    from ..connectors.catalog import GITHUB_MCP_URL as _GITHUB_MCP_URL
+
     _MCP_CATALOG = [
         # --- Official reference servers (maintained) ---
         {
@@ -3047,7 +3051,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         },
         {
             "id": "memory",
-            "name": "Long-term memory",
+            # v1.355.0 (G44): "Long-term memory" is the app's OWN memory (the
+            # Memory page); this pack is a separate graph, named as the
+            # Directory names it.
+            "name": "Knowledge graph",
             "description": "A persistent knowledge graph the agent can remember things in across chats. Official reference server.",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-memory"],
@@ -3083,14 +3090,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
         },
         # --- Popular integrations (company-official) ---
         {
+            # v1.355.0 (G44): GitHub's OWN maintained server, reached over the
+            # network (nothing to install) — the SAME address and token the
+            # Directory's GitHub card uses (connectors/catalog.GITHUB_MCP_URL).
+            # The reference @modelcontextprotocol/server-github it replaces is
+            # "no longer supported" on npm. `auth_field` names the value sent as
+            # "Authorization: Bearer <token>" (vaulted by the add door);
+            # `env_keys` keeps it the one field the add form asks for.
             "id": "github",
             "name": "GitHub",
-            "description": "Search repos and read/open issues and pull requests. Needs a GitHub personal access token.",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "description": "Search repos and read/open issues and pull requests, through GitHub's own server. Needs a GitHub personal access token.",
+            "command": "",
+            "args": [],
+            "transport": "http",
+            "url": _GITHUB_MCP_URL,
+            "auth_field": "GITHUB_PERSONAL_ACCESS_TOKEN",
             "env_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
             "category": "integration",
-            "needs": "Node",
+            "needs": "",
         },
         {
             "id": "playwright",
@@ -3104,7 +3121,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         {
             "id": "box",
             "name": "Box (cloud files)",
-            "description": "Search, read, and manage files in Box. Box's official server — get a Developer Token from a Box custom app (developer.box.com).",
+            # v1.355.0 (G44): the server reads a client id and secret (the
+            # env_keys below, and the Directory's Box card) — it never took a
+            # Developer Token, which this line used to ask for.
+            "description": "Search, read, and manage files in Box. Box's official server — needs the client id and client secret of a Box custom app (developer.box.com).",
             "command": "uvx",
             "args": ["mcp-server-box"],
             "env_keys": ["BOX_CLIENT_ID", "BOX_CLIENT_SECRET"],

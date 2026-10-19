@@ -446,39 +446,42 @@ def snap_app(platform: Any, connector_id: str) -> dict[str, Any] | None:
 
 
 def load_app(platform: Any, cfg: dict[str, Any]) -> int:
-    """(Re)load one MCP pack's tools live. Returns how many registered."""
-    from ..mcp.tools import mcp_tools, unload_pack_tools
+    """(Re)load one MCP pack's tools live. Returns how many registered.
 
-    name = cfg.get("name") or ""
-    # v1.342.0 (lane D): unregister AND close the old client — a bare
-    # unregister left the pack's stdio child running until restart.
-    unload_pack_tools(platform.registry, name)
-    loaded = 0
-    try:
-        for tool in mcp_tools([cfg], secret_resolver=platform.secrets.get, home=platform.config.home):
-            platform.registry.register(tool, mcp=True)
-            loaded += 1
-    except Exception:  # noqa: BLE001 — the config is saved; a restart retries
-        log.warning("app %s: tools did not load", name, exc_info=True)
-    return loaded
+    v1.355.0 (G44): through the one door's loader (mcp/pack_door.load_config):
+    unregister AND close the old client (v1.342.0, lane D — a bare unregister
+    left the pack's stdio child running until restart), then the loader boot
+    uses, its failure kept on the load record."""
+    from ..mcp.pack_door import load_config
+
+    return load_config(platform, cfg)
 
 
 def apply_app(platform: Any, connector_id: str, cfg: dict[str, Any] | None, *, load: bool = True) -> int:
-    from ..core.config import persist_config_values
+    """Put an app's pack row in place (``cfg``) or take it away (``None``) —
+    ``app_connect`` and its Undo. v1.355.0 (G44): through THE ONE DOOR
+    (mcp/pack_door): a removal is ``remove_pack`` — the row, every vault row,
+    the manifest (a later connect is a first load), the live tools AND their
+    client, the live client and the load record — exactly what the Tools
+    page's Delete and the Directory's Disconnect do. A row is put in place
+    with ``install_config`` (it already names its vault rows: the secure card
+    stores the token after this, and an Undo restores a prior row whose rows
+    must stay), then loaded by :func:`load_app` unless ``load`` is False
+    ("save only": the live tools are left as they are)."""
+    from ..mcp.pack_door import PackDoorError, forget_legacy_refs, install_config, remove_pack
 
-    servers = [
-        s for s in (getattr(platform.config, "mcp_servers", None) or []) if not (isinstance(s, dict) and s.get("name") == connector_id)
-    ]
-    if cfg is not None:
-        servers.append(cfg)
-    platform.config.mcp_servers = servers
-    persist_config_values(platform.config.home, {"mcp_servers": servers})
     if cfg is None:
-        from ..mcp.tools import unload_pack_tools
+        removed = snap_app(platform, connector_id)
+        try:
+            remove_pack(platform, connector_id)
+        except PackDoorError:
+            from ..mcp.tools import unload_pack_tools
 
-        # v1.342.0 (lane D): a removed app's client is closed with its tools.
-        unload_pack_tools(platform.registry, connector_id)
+            # Nothing saved under that name: still close anything live (v1.342.0).
+            unload_pack_tools(platform.registry, connector_id)
+        forget_legacy_refs(platform, connector_id, removed)
         return 0
+    install_config(platform, cfg, load=False)
     return load_app(platform, cfg) if load else 0
 
 
@@ -500,15 +503,72 @@ def app_waiting_for(platform: Any, connector_id: str) -> list[str]:
         conn = get_connector(connector_id)
         if conn is None:
             return []
+        saved = snap_app(platform, connector_id) or {}
         missing: list[str] = []
         for f in conn.fields:
             if f.kind != "secret" or f.optional:
                 continue
-            if not platform.secrets.get(_secret_name(conn.id, f.name)):
+            # v1.355.0 (G44): the row the card writes (`_secret_name`) OR the
+            # row a pack saved before v1.355.0 still names (`conn_<id>_<field>`).
+            names = [_secret_name(conn.id, f.name), _field_ref(saved, conn, f.name)]
+            if not any(n and platform.secrets.get(n) for n in names):
                 missing.append(f.label)
         return missing
     except Exception:  # noqa: BLE001 — unknown = try the load
         return []
+
+
+def _field_ref(cfg: dict[str, Any], conn: Any, field_name: str) -> str:
+    """The vault NAME a saved app row reads ``field_name`` from: its
+    ``env_secrets`` entry, or — for a remote card's token — ``auth.secret``.
+    ``""`` when the row does not name one."""
+    auth = cfg.get("auth") if isinstance(cfg.get("auth"), dict) else None
+    if auth is not None and getattr(conn, "auth_field", "") == field_name and auth.get("secret"):
+        return str(auth["secret"])
+    return str(dict(cfg.get("env_secrets") or {}).get(field_name) or "")
+
+
+def adopt_card_secrets(platform: Any, connector_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
+    """A pack saved before v1.355.0 names its token ``conn_<id>_<field>``; the
+    secure card (``app.<id>``) now writes the row the one door uses
+    (``connectors.service._secret_name``). When the card's row HAS a value and
+    the saved row still points elsewhere, point the row at the card's — so the
+    token the user just pasted is the token the pack launches with (it was a
+    silent no-op otherwise). Persisted, not loaded. Returns the row in force;
+    never raises."""
+    try:
+        from ..connectors.catalog import get_connector
+        from ..connectors.service import _secret_name
+
+        conn = get_connector(connector_id)
+        if conn is None:
+            return cfg
+        new = copy.deepcopy(cfg)
+        changed = False
+        for f in conn.fields:
+            if f.kind != "secret":
+                continue
+            canonical = _secret_name(conn.id, f.name)
+            current = _field_ref(new, conn, f.name)
+            if not current or current == canonical or not platform.secrets.get(canonical):
+                continue
+            auth = new.get("auth") if isinstance(new.get("auth"), dict) else None
+            if auth is not None and auth.get("secret") == current:
+                auth["secret"] = canonical
+            else:
+                env_secrets = dict(new.get("env_secrets") or {})
+                env_secrets[f.name] = canonical
+                new["env_secrets"] = env_secrets
+            changed = True
+        if not changed:
+            return cfg
+        from ..mcp.pack_door import install_config
+
+        install_config(platform, new, load=False)
+        return new
+    except Exception:  # noqa: BLE001 — the row as it was still loads
+        log.warning("app %s: could not adopt the card's token row", connector_id, exc_info=True)
+        return cfg
 
 
 def reload_app_after_secret(platform: Any, connector_id: str) -> dict[str, Any] | None:
@@ -523,6 +583,8 @@ def reload_app_after_secret(platform: Any, connector_id: str) -> dict[str, Any] 
         cfg = snap_app(platform, connector_id)
         if cfg is None:
             return None
+        # v1.355.0 (G44): an older row is pointed at the row the card wrote.
+        cfg = adopt_card_secrets(platform, connector_id, cfg)
         loaded = int(load_app(platform, cfg) or 0)
     except Exception:  # noqa: BLE001
         log.warning("app %s: reload after its credential failed", connector_id, exc_info=True)
@@ -1651,13 +1713,32 @@ class AppConnectTool(_RecordTool):
                     ok=False,
                     error=f"The vault could not keep {conn.name}'s private setting ({type(exc).__name__}); nothing was connected.",
                 )
-        cfg: dict[str, Any] = {"name": conn.id, "command": conn.command, "args": cfg_args}
-        if arg_secrets:
-            cfg["arg_secrets"] = arg_secrets
-        if env:
-            cfg["env"] = env
-        if env_secrets:
-            cfg["env_secrets"] = env_secrets
+        from ..connectors.catalog import is_remote
+
+        if is_remote(conn):
+            # v1.355.0 (G44): a server reached over the network (GitHub's own)
+            # — the row the one add door stores for it: the token the secure
+            # card saves is sent as "Authorization: Bearer <token>", its vault
+            # row named by `_secret_name` (`mcp.<id>.auth.value`).
+            from ..connectors.service import REMOTE_AUTH_FORMAT, REMOTE_AUTH_HEADER
+
+            cfg: dict[str, Any] = {"name": conn.id, "transport": conn.transport, "url": conn.url}
+            if conn.auth_field:
+                cfg["auth"] = {
+                    "header": REMOTE_AUTH_HEADER,
+                    "format": REMOTE_AUTH_FORMAT,
+                    "secret": _secret_name(conn.id, conn.auth_field),
+                }
+            if env:
+                cfg["headers"] = env
+        else:
+            cfg = {"name": conn.id, "command": conn.command, "args": cfg_args}
+            if arg_secrets:
+                cfg["arg_secrets"] = arg_secrets
+            if env:
+                cfg["env"] = env
+            if env_secrets:
+                cfg["env_secrets"] = env_secrets
         before = await asyncio.to_thread(snap_app, self.platform, conn.id)
         # A pack waiting for its token is saved now and loaded when the card
         # stores it (credentials.CredentialStore); one with no token loads now.

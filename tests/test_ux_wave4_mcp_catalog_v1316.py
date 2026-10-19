@@ -109,9 +109,18 @@ def test_node_found_only_in_a_per_user_dir_is_ready(client, bin_dir):
     assert all(r["runtime_ready"] is False for r in uvx_rows)
 
 
+def _launches(row) -> bool:
+    """v1.355.0 (G44): a row reached over the network (GitHub's own server)
+    launches nothing here, so it is always ready — the import preview's rule
+    for an http/sse pack. Every other row is judged by its launcher."""
+    return str(row.get("transport") or "stdio") not in ("http", "sse")
+
+
 def test_nothing_installed_means_nothing_ready_and_needs_is_kept(client, bin_dir):
     cat = _catalog(client)
-    assert all(r["runtime_ready"] is False for r in cat)
+    assert all(r["runtime_ready"] is False for r in cat if _launches(r))
+    remote = [r for r in cat if not _launches(r)]
+    assert [r["id"] for r in remote] == ["github"] and remote[0]["runtime_ready"] is True
     # The requirement itself stays on every row (the UI keeps "Needs X" in
     # the chip's title) and nothing else about the row changed.
     by_id = {r["id"]: r for r in cat}
@@ -126,7 +135,8 @@ def test_agrees_with_the_launcher_row_by_row(client, bin_dir):
     _drop(bin_dir, "uvx")
     cat = _catalog(client)
     for r in cat:
-        assert r["runtime_ready"] is _launcher_finds(r["command"]), r["id"]
+        if _launches(r):
+            assert r["runtime_ready"] is _launcher_finds(r["command"]), r["id"]
     # And the answer is not constant (anti-vacuity for the loop above).
     assert {r["runtime_ready"] for r in cat} == {True, False}
 
@@ -148,7 +158,7 @@ def test_a_resolution_fault_is_not_ready_never_a_500(client, monkeypatch):
 
     monkeypatch.setattr(ai_clis, "_find", boom)
     cat = _catalog(client)  # asserts 200
-    assert cat and all(r["runtime_ready"] is False for r in cat)
+    assert cat and all(r["runtime_ready"] is False for r in cat if _launches(r))
 
 
 # --------------------------------------------------------------------------- #

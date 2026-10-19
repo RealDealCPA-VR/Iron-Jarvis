@@ -252,7 +252,9 @@ def test_the_drive_offer_ends_in_its_connect_door_with_the_setup_said(tmp_path, 
 @pytest.fixture
 def local_github(monkeypatch):
     real = catalog.get_connector("github")
-    swapped = dataclasses.replace(real, command=sys.executable, args=[FIXTURE])
+    # v1.355.0 (G44): the GitHub card is remote now; the local child makes it
+    # a program this PC runs (transport stdio), only the launch target changes.
+    swapped = dataclasses.replace(real, command=sys.executable, args=[FIXTURE], transport="stdio", url="", auth_field="")
     original = catalog.get_connector
     monkeypatch.setattr(catalog, "get_connector", lambda c: swapped if c == "github" else original(c))
     return swapped

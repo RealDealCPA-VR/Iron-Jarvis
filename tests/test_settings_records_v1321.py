@@ -202,12 +202,13 @@ async def test_app_connect_waits_for_its_token_then_loads_and_undo_disconnects(t
     frames = await _drive_stream(app, _body("connect my Notion"), await _approve_all(app, seen))
     assert seen == ["app_connect"]
     cfg = records.snap_app(p, "notion")
-    assert cfg is not None and cfg["env_secrets"] == {"NOTION_TOKEN": "conn_notion_notion_token"}
+    # v1.355.0 (G44, moved on purpose): the one add door's vault name.
+    assert cfg is not None and cfg["env_secrets"] == {"NOTION_TOKEN": "mcp.notion.NOTION_TOKEN"}
     assert loads == [], "a pack waiting for its token is not launched yet"
     secret = next(c for c in _done(frames)["config_cards"] if c["kind"] == "secret")
     assert secret["name"] == "app.notion"
     status, _ = await _asgi_post(app, "/config/secret", {"name": "app.notion", "value": "ntn_secret_value_123456"})
-    assert status == 200 and p.secrets.get("conn_notion_notion_token") == "ntn_secret_value_123456"
+    assert status == 200 and p.secrets.get("mcp.notion.NOTION_TOKEN") == "ntn_secret_value_123456"
     assert loads == ["notion"], "the saved token loads the pack"
     await _undo_card(app, _card(frames, "App connected"))
     assert records.snap_app(p, "notion") is None

@@ -556,7 +556,11 @@ def test_an_already_connected_app_names_how_to_replace_its_token(tmp_path, monke
     original = catalog.get_connector
 
     def swap(**changes):
-        swapped = dataclasses.replace(real, command=sys.executable, args=[fixture], **changes)
+        # v1.355.0 (G44): the GitHub card is remote now; a local child makes it
+        # a program this PC runs again (transport stdio).
+        swapped = dataclasses.replace(
+            real, command=sys.executable, args=[fixture], transport="stdio", url="", auth_field="", **changes
+        )
         monkeypatch.setattr(catalog, "get_connector", lambda c: swapped if c == "github" else original(c))
 
     swap()

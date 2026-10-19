@@ -71,6 +71,25 @@ class Connector:
     # -- link (a card that points at the page that sets it up; LINK_CARDS) --
     href: str = ""
     action: str = ""
+    # -- a server reached over the network instead of a program run here --
+    # v1.355.0 (G44): ``transport`` "http" (or "sse") with ``url`` is a REMOTE
+    # server — GitHub's own is one — and ``command``/``args`` stay empty. Its
+    # token is the field named ``auth_field``, sent as ``Authorization:
+    # Bearer <token>`` (vaulted as ``mcp.<id>.auth.value`` by the one add door,
+    # mcp/pack_door.py). "stdio" (the default) keeps every other card exactly
+    # as it was.
+    transport: str = "stdio"
+    url: str = ""
+    auth_field: str = ""
+    # v1.355.0 (G44): packages this card USED to run. An imported copy of one
+    # (a Claude Desktop config still naming @modelcontextprotocol/server-github)
+    # is described by this card's blurb (routes/agents.catalog_blurbs).
+    replaces: list[str] = field(default_factory=list)
+
+
+def is_remote(connector: "Connector") -> bool:
+    """True for a card whose server is reached over the network (G44)."""
+    return str(connector.transport or "").lower() in ("http", "sse") and bool(connector.url)
 
 
 #: How a LINK card is wired: it is not connected here at all — its one action
@@ -89,6 +108,17 @@ OLDER_PACKAGE_NOTE = "Uses an older package its makers no longer update."
 # --------------------------------------------------------------------------- #
 _GH = "https://github.com/settings/tokens"
 
+#: v1.355.0 (G44): GitHub's own maintained server, hosted by GitHub and
+#: reached over Streamable HTTP. Read off github/github-mcp-server's README
+#: (2026-10-19): `"type": "http", "url": "https://api.githubcopilot.com/mcp/"`
+#: with `"Authorization": "Bearer <personal access token>"`. The reference
+#: @modelcontextprotocol/server-github it replaces is "no longer supported" on
+#: npm. Nothing to install on this PC. The Tools page's catalog
+#: (daemon/app.py ``_MCP_CATALOG``) names the same address.
+GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+#: The reference package the GitHub card ran before (G43's "older package").
+GITHUB_OLD_PACKAGE = "@modelcontextprotocol/server-github"
+
 CATALOG: list[Connector] = [
     # ---------------- Developer ----------------
     Connector(
@@ -98,12 +128,10 @@ CATALOG: list[Connector] = [
         glyph="🐙",
         blurb="Repos, issues, and pull requests.",
         unlocks="Search repositories, read and open issues & PRs, review diffs, and "
-        "manage your GitHub — all from chat and agents.",
+        "manage your GitHub — all from chat and agents, through GitHub's own server.",
         connect_via="mcp",
         scopes=["Repositories", "Issues & pull requests", "Code search"],
         docs_url=_GH,
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-github"],
         fields=[
             Field(
                 "GITHUB_PERSONAL_ACCESS_TOKEN",
@@ -111,9 +139,12 @@ CATALOG: list[Connector] = [
                 help=f"Create a token (repo scope) at {_GH}.",
             )
         ],
-        # GitHub's own maintained server speaks HTTP, a different door
-        # (G44); until then this card says what it runs.
-        package_note=OLDER_PACKAGE_NOTE,
+        # v1.355.0 (G44): GitHub's maintained server, reached over the network
+        # (nothing to install), so no "older package" note any more.
+        transport="http",
+        url=GITHUB_MCP_URL,
+        auth_field="GITHUB_PERSONAL_ACCESS_TOKEN",
+        replaces=[GITHUB_OLD_PACKAGE],
     ),
     Connector(
         id="postgres",

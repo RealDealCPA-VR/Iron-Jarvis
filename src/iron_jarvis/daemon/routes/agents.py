@@ -322,211 +322,18 @@ def add_mcp_pack(d, body: McpServerBody) -> dict[str, Any]:
     the import/apply door adds each chosen pack through the same function
     so the secret split, the live load and the add note cannot drift.
     Raises ``HTTPException`` exactly as the route answers.
+
+    v1.355.0 (G44): the body lives in :func:`iron_jarvis.mcp.pack_door.
+    add_pack` so the Directory's Connect and the chat's ``app_connect`` go
+    through it too (a service must not import a route module); this wrapper
+    keeps the route's name, signature and answer byte for byte.
     """
-    import re as _re
+    from ...mcp.pack_door import PackDoorError, add_pack
 
-    name = (body.name or "").strip()
-    # v1.343.0 (lane J): the npm/GitHub door (a body naming a `launcher` or
-    # a `package`) gets the contract's name rule applied HERE, not only in
-    # the browser: `safe_name` (dots and spaces become "-", lowercase, a
-    # letter first, 40 chars), falling back to the package's own tail when
-    # the typed name leaves nothing. A name that still fails the rule is a
-    # 422 that says the rule. Every other door keeps its 400 as before.
-    npm_door = bool(body.launcher or body.package)
-    if npm_door:
-        from ...mcp.import_config import NAME_RX as _NAME_RX
-        from ...mcp.import_config import bare_package as _bare_package
-        from ...mcp.import_config import safe_name as _safe_name
-
-        name = _safe_name(name)
-        if not name and body.package:
-            tail = _bare_package(body.package).rsplit("/", 1)[-1].split("@", 1)[0]
-            name = _safe_name(tail)
-        if not _NAME_RX.match(name):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "a pack name starts with a letter and uses letters, digits, "
-                    "- or _ (at most 40 characters)"
-                ),
-            )
-    if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
-        raise HTTPException(status_code=400, detail="invalid server name")
-    is_http = body.transport in ("http", "sse")
-    if not is_http and not (body.command or "").strip():
-        raise HTTPException(status_code=400, detail="command is required")
-    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
-    if any(s.get("name") == name for s in servers):
-        raise HTTPException(status_code=400, detail=f"server '{name}' already exists")
-    # v1.342.0 (lane C): an env KEY that names a secret (SECRET_KEY_RX)
-    # goes to the vault as `mcp.<name>.<KEY>`; the stored row keeps only
-    # the plain entries in `env` and the vault NAMES in `env_secrets`
-    # (resolved at spawn by `_build_transport`). The catalog, npm and
-    # suggest doors all POST here, so this is the one split. A vault that
-    # refuses the write refuses the add — a secret never lands in
-    # config.toml as a fallback.
-    # v1.343.0 (lane H): an http/sse pack splits the same way — a HEADER
-    # whose name matches SECRET_KEY_RX goes to the vault as
-    # `mcp.<name>.header.<H>` (the row keeps `header_secrets[H]`, resolved
-    # at launch beside `env_secrets`), and the auth VALUE goes to
-    # `mcp.<name>.auth.value` (the row keeps `auth.secret`, the shape
-    # `_build_transport` has resolved since the first HTTP pack). A stdio
-    # body is stored exactly as before, byte for byte.
-    from ...mcp.secrets import is_secret_key as _is_secret_key
-    from ...mcp.secrets import split_args as _split_args
-    from ...mcp.secrets import split_env as _split_env
-    from ...mcp.secrets import split_url as _split_url
-    from ...mcp.secrets import store_arg_secrets as _store_arg_secrets
-    from ...mcp.secrets import store_env_secrets as _store_env_secrets
-    from ...mcp.secrets import store_url_secret as _store_url_secret
-    from ...mcp.secrets import vault_name as _vault_name
-
-    plain_env, secret_values = _split_env(name, body.env or {})
-    # v1.351.0 (G12): a secret INSIDE an argument (an mcp-remote block's
-    # `--header "Authorization: Bearer …"`, `--api-key=…`, `--api-key …`, a
-    # connection string's password) or a url (`?api_key=…`) is kept in the
-    # vault too: the stored arg / url is the MASKED text, `arg_secrets[i]` /
-    # `url_secret` name the vault rows, and `_build_transport` puts the real
-    # text back at launch. Every pasted, imported, typed or Directory pack
-    # comes through here, so this is the one split for them all.
-    shown_args, arg_values = ([], {}) if is_http else _split_args([str(a) for a in body.args])
-    shown_url, url_value = _split_url(body.url) if is_http else ("", "")
-    plain_headers: dict[str, str] = {}
-    header_secret_values: dict[str, str] = {}
-    if is_http:
-        for header_name, value in dict(body.headers or {}).items():
-            h = str(header_name).strip()
-            v = "" if value is None else str(value)
-            if not h:
-                continue
-            if _is_secret_key(h):
-                if v:
-                    header_secret_values[h] = v
-            else:
-                plain_headers[h] = v
-    auth_value = (body.auth.value if (is_http and body.auth is not None) else "") or ""
-    # Every vault write happens BEFORE the row is built: a refusal
-    # refuses the add, naming the KEYS only.
     try:
-        env_secrets = _store_env_secrets(d.platform.secrets, name, secret_values)
-        header_secrets: dict[str, str] = {}
-        for h, v in header_secret_values.items():
-            sname = _vault_name(name, f"header.{h}")
-            d.platform.secrets.set(
-                sname, v, kind="api_key", description=f"MCP pack {name}: header {h}"
-            )
-            header_secrets[h] = sname
-        auth_secret = ""
-        if auth_value:
-            auth_secret = _vault_name(name, "auth.value")
-            d.platform.secrets.set(
-                auth_secret,
-                auth_value,
-                kind="api_key",
-                description=f"MCP pack {name}: {body.auth.header} value",
-            )
-        arg_secrets = _store_arg_secrets(d.platform.secrets, name, arg_values)
-        url_secret = _store_url_secret(d.platform.secrets, name, url_value) if url_value else ""
-    except Exception as exc:  # noqa: BLE001 — names only, never the value
-        refused = sorted(secret_values) + sorted(
-            f"header {h}" for h in header_secret_values
-        ) + (["the auth value"] if auth_value else []) + [
-            f"argument {i + 1}" for i in sorted(arg_values)
-        ] + (["the url"] if url_value else [])
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"the vault could not store {', '.join(refused)} "
-                f"({type(exc).__name__}); the pack was not added"
-            ),
-        )
-    if is_http:
-        cfg = {
-            "name": name,
-            "transport": body.transport,
-            "url": shown_url,
-            **({"url_secret": url_secret} if url_secret else {}),
-            **({"headers": plain_headers} if plain_headers else {}),
-            **({"header_secrets": header_secrets} if header_secrets else {}),
-            **(
-                {
-                    "auth": {
-                        "header": body.auth.header.strip(),
-                        "format": body.auth.format,
-                        "secret": auth_secret,
-                    }
-                }
-                if auth_secret
-                else {}
-            ),
-            **({"auto_approve": True} if body.auto_approve else {}),
-        }
-    else:
-        cfg = {
-            "name": name,
-            "command": body.command.strip(),
-            "args": shown_args,
-            **({"arg_secrets": arg_secrets} if arg_secrets else {}),
-            "env": plain_env,
-            **({"env_secrets": env_secrets} if env_secrets else {}),
-            **({"cwd": body.cwd} if body.cwd else {}),
-            **({"auto_approve": True} if body.auto_approve else {}),
-        }
-    servers.append(cfg)
-    d.platform.config.mcp_servers = servers
-    d._persist_config(["mcp_servers"])
-    # Best-effort LIVE load so its tools appear without a restart. Registered
-    # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
-    # and they survive the next restart (boot re-registers the same way).
-    loaded = 0
-    # v1.342.0: the loader says WHY a pack did not start (`errors`), so
-    # the note names the reason instead of "restart the daemon".
-    errors: dict[str, dict[str, Any]] = {}
-    try:
-        from ...mcp.tools import mcp_tools as _mcp_tools
-
-        # `home` (v1.299.0): this FIRST load writes the pack's manifest —
-        # everything it advertises now is what the user is connecting.
-        for tool in _mcp_tools(
-            [cfg],
-            secret_resolver=d.platform.secrets.get,
-            home=d.platform.config.home,
-            errors=errors,
-        ):
-            d.platform.registry.register(tool, mcp=True)
-            loaded += 1
-    except Exception:  # noqa: BLE001 — persisted config still loads on restart
-        loaded = 0
-    # auto_approve is applied when the resolver is built at boot, so a server
-    # added live with auto_approve won't be trusted by headless agents until
-    # the next restart — be honest about that.
-    note = None
-    if not loaded:
-        failure = errors.get(name)
-        if failure is not None:
-            reason = failure.get("reason") or failure.get("error") or "it did not start"
-            note = f"saved, but it did not start: {reason} — see its row for the fix"
-        else:
-            note = "saved — it connected but advertised no tools; see its row"
-    elif body.auto_approve:
-        note = "loaded — restart the daemon so autonomous agents may use it without asking"
-    return {
-        "name": name,
-        "added": True,
-        "tools_loaded": loaded,
-        "auto_approve": bool(body.auto_approve),
-        "note": note,
-        # v1.342.0: what was kept where — key NAMES only.
-        "env_keys": sorted(plain_env),
-        "secret_keys": sorted(env_secrets),
-        # v1.343.0: the http shape, names only.
-        "transport": body.transport,
-        "header_names": sorted(list(plain_headers) + list(header_secrets)),
-        "auth_set": bool(auth_secret),
-        # v1.343.0 (lane J): the npm door's effective launcher (the one named,
-        # else the guess); absent for every other door.
-        **({"launcher": body.launcher} if npm_door else {}),
-    }
+        return add_pack(d.platform, body, persist=d._persist_config)
+    except PackDoorError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 def remove_mcp_pack(d, name: str) -> dict[str, Any]:
@@ -537,64 +344,19 @@ def remove_mcp_pack(d, name: str) -> dict[str, Any]:
     here (its answer is unchanged), and the import/apply door's
     ``replace: true`` removes the old pack through the same function before
     re-adding. Raises ``HTTPException(404)`` for an unknown name.
+
+    v1.355.0 (G44): the body is :func:`iron_jarvis.mcp.pack_door.
+    remove_pack` — the Directory's Disconnect and the chat's Undo of
+    ``app_connect`` remove through it too, so every one of them drops the
+    manifest, the live client and the load record (``close_tools_clients``
+    and ``forget_load_record`` run there).
     """
-    servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
-    kept = [s for s in servers if s.get("name") != name]
-    if len(kept) == len(servers):
-        raise HTTPException(status_code=404, detail="no such server")
-    removed_cfg = next((s for s in servers if s.get("name") == name), None)
-    d.platform.config.mcp_servers = kept
-    d._persist_config(["mcp_servers"])
-    # v1.342.0 (lane C): the pack's vault rows (`mcp.<name>.*`) and its
-    # manifest (`<home>/mcp/manifests/<name>.json`) go with it, so a
-    # re-add is a FIRST load again (every tool trusted, no quarantine
-    # diff against a pack the user removed) and no orphaned secret
-    # outlives the row that named it.
-    from ...mcp.manifest import PackManifest as _PackManifest
-    from ...mcp.secrets import delete_pack_secrets as _delete_pack_secrets
+    from ...mcp.pack_door import PackDoorError, remove_pack
 
-    secrets_removed = _delete_pack_secrets(
-        getattr(d.platform, "secrets", None), name, removed_cfg
-    )
-    manifest_removed = False
     try:
-        _manifest_path = _PackManifest(d.platform.config.home).path(name)
-        if _manifest_path.is_file():
-            _manifest_path.unlink()
-            manifest_removed = True
-    except OSError as exc:
-        log.warning("MCP pack %r: manifest could not be removed: %s", name, type(exc).__name__)
-    # Unregister its live tools NOW so they disappear from every agent's
-    # loadout immediately (they won't come back on restart either — the
-    # config no longer lists the server).
-    unloaded = 0
-    removed = []
-    for tool_name in d.platform.registry.mcp_names(name):
-        live = d.platform.registry.get(tool_name)
-        if d.platform.registry.unregister(tool_name):
-            unloaded += 1
-            if live is not None:
-                removed.append(live)
-    # v1.328.1: and CLOSE their client, like a Retry closes what it
-    # replaces. Unregistering alone left the pack's stdio child running
-    # until the app restarted, with no surface left that could stop it.
-    from ...mcp.tools import close_tools_clients
-
-    close_tools_clients(removed)
-    # v1.324.0: its prompts and resources go with it ("/" and "@").
-    from ...mcp.tools import forget_live_client, forget_load_record
-
-    forget_live_client(name)
-    # v1.350.2: and its load record — a removed pack that had finished
-    # loading kept reading as "ok" (the background loader only forgot it for
-    # a pack deleted WHILE starting).
-    forget_load_record(name)
-    return {
-        "removed": name,
-        "tools_unloaded": unloaded,
-        "secrets_removed": len(secrets_removed),
-        "manifest_removed": manifest_removed,
-    }
+        return remove_pack(d.platform, name, persist=d._persist_config)
+    except PackDoorError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 def launcher_ready(command: str) -> bool:
@@ -735,6 +497,13 @@ def catalog_blurbs(d) -> dict[str, str]:
             key = _first_package(c.args) if c.connect_via == "mcp" else ""
             if key and c.blurb and not _MECHANISM_WORD_RX.search(c.blurb):
                 index.setdefault(key, c.blurb)
+            # v1.355.0 (G44): a card that now reaches a maintained server
+            # (GitHub's) still describes the package it used to run — an
+            # imported Claude Desktop config naming it is the same app.
+            for old in getattr(c, "replaces", None) or []:
+                old_key = _package_key(old)
+                if old_key and c.blurb and not _MECHANISM_WORD_RX.search(c.blurb):
+                    index.setdefault(old_key, c.blurb)
     except Exception:  # noqa: BLE001 — a blurb never breaks the preview
         pass
     for row in getattr(d, "_MCP_CATALOG", None) or []:
@@ -3636,6 +3405,12 @@ def register(app: FastAPI, d) -> None:
             cache: dict[str, bool] = {}
             out: list[dict[str, Any]] = []
             for row in d._MCP_CATALOG:
+                # v1.355.0 (G44): a server reached over the network (GitHub's
+                # own) launches nothing here, so nothing is missing — the
+                # import preview's rule for an http/sse pack.
+                if str(row.get("transport") or "stdio").lower() in ("http", "sse"):
+                    out.append({**row, "runtime_ready": True})
+                    continue
                 cmd = str(row.get("command") or "")
                 if cmd not in cache:
                     cache[cmd] = launcher_ready(cmd)

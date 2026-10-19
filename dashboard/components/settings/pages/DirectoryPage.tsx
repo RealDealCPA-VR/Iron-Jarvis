@@ -15,9 +15,10 @@ import {
   ArrowRight,
   FolderInput,
   Info,
+  KeyRound,
   X,
 } from "lucide-react";
-import { post, del, ApiError } from "@/lib/api";
+import { get, post, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Badge,
@@ -36,6 +37,9 @@ import { SourcesDoor } from "@/components/tools/AddPack";
 import { DOOR_LABELS } from "@/lib/addPackWords";
 import type { ImportSource } from "@/lib/mcpImport";
 import { discover, discoveryLine } from "@/lib/importDiscovery";
+import { EditPack, type EditSaved } from "@/components/tools/EditPack";
+import { packStartReason } from "@/lib/packStartWords";
+import { packPowersLine } from "@/lib/packPowers";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -95,6 +99,14 @@ interface Connector {
   /** v1.353.0 (G43): a LINK card's one action. */
   href?: string | null;
   action?: string | null;
+  /** v1.355.0 (G70): what a connected app's loaded tools can do — how many
+   *  can change things, whether they ask first, how many arrived since it was
+   *  connected (they ask until trusted). Absent on an older daemon. */
+  can_change?: number | null;
+  asks_first?: boolean | null;
+  held_back?: number | null;
+  /** v1.355.0 (G69): the app holds a key or token the card can change. */
+  keyed?: boolean | null;
 }
 
 interface ConnectorsResponse {
@@ -386,6 +398,47 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
     }
   }
 
+  /** v1.355.0 (G69): Change key — the Tools page's own editor (EditPack,
+   *  PATCH /mcp/servers/{name}) for THIS app, opened on its card. A token that
+   *  expired is replaced in place: nothing is disconnected, the app reloads
+   *  with the new one. The editor is seeded from the app's GET /mcp/servers
+   *  row (key NAMES only, never a value). */
+  const [editRow, setEditRow] = useState<Record<string, unknown> | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  async function openChangeKey() {
+    if (keyBusy) return;
+    if (editRow) {
+      setEditRow(null);
+      return;
+    }
+    setKeyBusy(true);
+    clearNotes();
+    setTestResult(null);
+    try {
+      const res = await get<{ servers?: Record<string, unknown>[] }>("/mcp/servers");
+      const row = (res?.servers ?? []).find((s) => s && s.name === c.id) ?? null;
+      if (row) setEditRow(row);
+      else setError(`${c.name} isn't saved yet. Press Connect.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+  function onKeyChanged(res: EditSaved) {
+    setEditRow(null);
+    const loaded = typeof res.tools_loaded === "number" ? res.tools_loaded : 0;
+    if (res.reloaded) {
+      setSuccess(`Key changed. ${loaded} tool${loaded === 1 ? "" : "s"} ready to use.`);
+    } else {
+      // The card's Retry (on its status line) loads it again; the reason is
+      // the daemon's own words, said once.
+      const reason = packStartReason(res.note);
+      setNote(`Key saved, but ${c.name} didn't start${reason ? `: ${reason}` : ""}. Press Retry.`);
+    }
+    onChanged();
+  }
+
   async function disconnect() {
     setError(null);
     setTestResult(null);
@@ -423,6 +476,11 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   const needsMemoryFolder =
     healthy && c.connect_via === "oauth" && MEMORY_DRIVES.has(c.provider) && c.memory_source === false;
   const also = ALSO[c.id];
+  // v1.355.0 (G70): a connected app's card says what its tools can do; the
+  // hand-written scopes stay for a card not connected yet.
+  const powers = c.connect_via === "mcp" && healthy ? packPowersLine(c) : null;
+  // v1.355.0 (G69): Change key, on a saved app that holds a key or token.
+  const canChangeKey = c.connect_via === "mcp" && c.connected && c.keyed === true;
 
   return (
     <div
@@ -514,8 +572,13 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
         <p className="text-[12.5px] leading-relaxed text-zinc-300">{c.unlocks}</p>
       </div>
 
-      {/* Scopes / permissions */}
-      {c.scopes.length > 0 && (
+      {/* Scopes / permissions. v1.355.0 (G70): a connected app says what its
+          tools can actually do, read off the app itself. */}
+      {powers ? (
+        <p data-testid={`connector-powers-${c.id}`} className="text-[11px] text-zinc-400">
+          {powers}
+        </p>
+      ) : c.scopes.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {c.scopes.map((s) => (
             <span
@@ -674,6 +737,25 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
               </>
             )}
           </button>
+          {canChangeKey && (
+            <button
+              type="button"
+              data-testid={`connector-change-key-${c.id}`}
+              onClick={() => void openChangeKey()}
+              disabled={keyBusy}
+              aria-expanded={editRow !== null}
+              className="btn-ghost flex-1 py-1.5 text-xs"
+              title={`Paste a new key or token for ${c.name}; it stays connected`}
+            >
+              {keyBusy ? (
+                <LoaderInline label="Opening…" />
+              ) : (
+                <>
+                  <KeyRound size={14} /> Change key
+                </>
+              )}
+            </button>
+          )}
           <ConfirmButton
             onConfirm={disconnect}
             label="Disconnect"
@@ -815,6 +897,16 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             </div>
           )}
         </div>
+      )}
+
+      {/* v1.355.0 (G69): the Tools page's own editor, for this app. */}
+      {editRow && (
+        <EditPack
+          key={c.id}
+          row={editRow}
+          onSaved={onKeyChanged}
+          onCancel={() => setEditRow(null)}
+        />
       )}
 
       {/* Feedback: connect note / success / error */}

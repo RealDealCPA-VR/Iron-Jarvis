@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from iron_jarvis.connectors.catalog import (
@@ -27,6 +28,16 @@ from iron_jarvis.connectors.catalog import (
     get_connector,
 )
 from iron_jarvis.daemon.app import create_app
+from tests.fixtures.github_http_mcp_v13550 import FakeGitHub, github_at
+
+
+@pytest.fixture(autouse=True)
+def _github_is_local():
+    """v1.355.0 (G44): the GitHub card reaches GitHub's OWN server over the
+    network now; every test here points it at an in-process stand-in that
+    accepts the token these tests type ("ghp_x") — no network."""
+    with FakeGitHub("ghp_x") as gh, github_at(gh.url):
+        yield gh
 
 
 # --------------------------------------------------------------------------- #
@@ -57,7 +68,14 @@ def test_catalog_invariants():
         assert c.name and c.glyph and c.blurb and c.unlocks, c.id
         assert c.category in CATEGORY_ORDER, c.id
         if c.connect_via == "mcp":
-            assert c.command, f"{c.id} is mcp so it needs a command"
+            # v1.355.0 (G44, moved on purpose): a card runs a program here
+            # (a command) OR reaches a server over the network (GitHub's own:
+            # an http url, its one secret the bearer token).
+            if c.transport in ("http", "sse"):
+                assert c.url and not c.command, c.id
+                assert [f.name for f in c.fields if f.kind == "secret"] == [c.auth_field], c.id
+            else:
+                assert c.command, f"{c.id} is mcp so it needs a command"
         else:  # oauth / api_key route through the connection registry
             assert c.provider, f"{c.id} is {c.connect_via} so it needs a provider"
         for f in c.fields:
@@ -76,7 +94,9 @@ def test_catalog_invariants():
 # --------------------------------------------------------------------------- #
 def test_known_connectors_present():
     gh = get_connector("github")
-    assert gh is not None and gh.connect_via == "mcp" and gh.command
+    # v1.355.0 (G44, moved on purpose): GitHub's maintained server, remote.
+    assert gh is not None and gh.connect_via == "mcp" and gh.transport == "http" and gh.url
+    assert gh.auth_field == "GITHUB_PERSONAL_ACCESS_TOKEN"
     assert any(
         f.name == "GITHUB_PERSONAL_ACCESS_TOKEN" and f.kind == "secret" for f in gh.fields
     )
@@ -126,9 +146,11 @@ def test_mcp_connect_stores_token_in_vault(tmp_path):
         assert r.status_code == 200, r.text
 
         cfg = _server(p, "github")
-        sname = cfg["env_secrets"]["GITHUB_PERSONAL_ACCESS_TOKEN"]
-        # env_secrets names a vault secret, it does NOT hold the plaintext.
-        assert sname.startswith("conn_github_")
+        # v1.355.0 (G44, moved on purpose): GitHub's own server takes the token
+        # as "Authorization: Bearer"; the row names its vault row, the add
+        # door's name (it was `env_secrets` -> `conn_github_…`).
+        sname = cfg["auth"]["secret"]
+        assert sname == "mcp.github.auth.value"
         assert sname != "ghp_x"
         # The security property: the persisted config has no plaintext token.
         assert "ghp_x" not in json.dumps(p.config.mcp_servers)
@@ -142,21 +164,35 @@ def test_mcp_connect_stores_token_in_vault(tmp_path):
 # (5) Building the transport resolves the secret AND preserves PATH (merge, not
 #     replace) so the child ``npx`` process can still launch.
 # --------------------------------------------------------------------------- #
-def test_env_build_resolves_and_preserves_path(tmp_path):
+def test_env_build_resolves_and_preserves_path(tmp_path, monkeypatch):
+    from iron_jarvis.mcp import tools as mcp_tools_mod
     from iron_jarvis.mcp.tools import _build_transport
 
+    # v1.355.0 (G44, moved on purpose): GitHub is a remote server now, so the
+    # env-var token is proven on Notion (a program this PC runs); nothing is
+    # launched — this pins the stored row and the transport it builds.
+    monkeypatch.setattr(mcp_tools_mod, "mcp_tools", lambda *_a, **_k: [])
     with TestClient(create_app(str(tmp_path))) as client:
         p = client.app.state.platform
+        client.post(
+            "/connectors/notion/connect",
+            json={"values": {"NOTION_TOKEN": "ntn_x"}},
+        )
+        cfg = _server(p, "notion")
+        assert cfg["env_secrets"] == {"NOTION_TOKEN": "mcp.notion.NOTION_TOKEN"}
+
+        transport = _build_transport(cfg, p.secrets.get)
+        assert transport.env["NOTION_TOKEN"] == "ntn_x"
+        # Merged onto os.environ, not replaced — PATH survives.
+        assert "PATH" in transport.env
+
+        # And GitHub's token reaches its server as the bearer header.
         client.post(
             "/connectors/github/connect",
             json={"values": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_x"}},
         )
-        cfg = _server(p, "github")
-
-        transport = _build_transport(cfg, p.secrets.get)
-        assert transport.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_x"
-        # Merged onto os.environ, not replaced — PATH survives.
-        assert "PATH" in transport.env
+        http = _build_transport(_server(p, "github"), p.secrets.get)
+        assert http.headers["Authorization"] == "Bearer ghp_x"
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +247,7 @@ def test_disconnect_removes_server_and_secret(tmp_path):
             "/connectors/github/connect",
             json={"values": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_x"}},
         )
-        sname = _server(p, "github")["env_secrets"]["GITHUB_PERSONAL_ACCESS_TOKEN"]
+        sname = _server(p, "github")["auth"]["secret"]
         assert p.secrets.get(sname) == "ghp_x"
 
         r = client.delete("/connectors/github")
@@ -236,14 +272,14 @@ def test_restart_survival(tmp_path):
             "/connectors/github/connect",
             json={"values": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_x"}},
         )
-        sname = _server(p, "github")["env_secrets"]["GITHUB_PERSONAL_ACCESS_TOKEN"]
+        sname = _server(p, "github")["auth"]["secret"]
 
     # Second boot on the SAME root.
     with TestClient(create_app(root)) as client2:
         p2 = client2.app.state.platform
         assert _row(client2, "github")["connected"] is True
         cfg2 = _server(p2, "github")
-        assert cfg2["env_secrets"]["GITHUB_PERSONAL_ACCESS_TOKEN"] == sname
+        assert cfg2["auth"]["secret"] == sname
         assert p2.secrets.get(sname) == "ghp_x"  # vault survived too
 
 

@@ -33,7 +33,11 @@ from iron_jarvis.mcp.tools import close_tools_clients, unload_pack_tools
 from iron_jarvis.settings import records
 from iron_jarvis.tools.registry import ToolRegistry
 
-PACK = "github"  # a catalog MCP connector (connect_via="mcp"), so connect() reaches _connect_mcp
+# A catalog MCP connector (connect_via="mcp") that runs a program here, so
+# connect() reaches _connect_mcp. v1.355.0 (G44, moved on purpose): it was
+# "github", whose card now reaches GitHub's own server over the network.
+PACK = "notion"
+TOKEN_FIELD = "NOTION_TOKEN"
 SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis"
 
 
@@ -66,7 +70,8 @@ class _Secrets:
         self.values: dict[str, str] = {}
         self.deleted: list[str] = []
 
-    def set(self, name: str, value: str) -> None:
+    def set(self, name: str, value: str, **_kw) -> None:
+        # v1.355.0: the one add door names the row's kind/description.
         self.values[name] = value
 
     def get(self, name: str):
@@ -186,9 +191,11 @@ def test_reconnect_closes_the_old_client_once_and_keeps_the_fresh_one_open(tmp_p
         calls.append(cfgs)
         return [_PackTool(f"mcp__{PACK}__search", fresh)]
 
-    monkeypatch.setattr(service, "mcp_tools", _fake_mcp_tools)
+    # v1.355.0 (G44): the Directory connects through the one add door
+    # (mcp/pack_door), which loads through mcp.tools.mcp_tools.
+    monkeypatch.setattr(mcp_tools_mod, "mcp_tools", _fake_mcp_tools)
 
-    out = service.connect(platform, PACK, {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_x"})
+    out = service.connect(platform, PACK, {TOKEN_FIELD: "ntn_x"})
 
     assert out["ok"] is True and out["tools_loaded"] == 1, out
     assert len(calls) == 1 and calls[0][0]["name"] == PACK
@@ -209,9 +216,9 @@ def test_reconnect_whose_fresh_load_fails_still_closed_the_old_client(tmp_path, 
     def _boom(*_a, **_k):
         raise RuntimeError("launcher missing")
 
-    monkeypatch.setattr(service, "mcp_tools", _boom)
+    monkeypatch.setattr(mcp_tools_mod, "mcp_tools", _boom)
 
-    out = service.connect(platform, PACK, {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_x"})
+    out = service.connect(platform, PACK, {TOKEN_FIELD: "ntn_x"})
 
     assert out["ok"] is True and out["tools_loaded"] == 0
     assert old.closed == 1
@@ -283,7 +290,12 @@ def test_the_services_and_the_routes_share_the_one_closer_in_mcp_tools():
     rec = _read(SRC / "settings" / "records.py")
     route = _read(SRC / "daemon" / "routes" / "agents.py")
 
+    door = _read(SRC / "mcp" / "pack_door.py")
     for text, label in ((svc, "connectors/service.py"), (rec, "settings/records.py")):
+        # v1.355.0 (G44, moved on purpose): the services add, reload and
+        # remove a pack through the ONE door (mcp/pack_door), which unloads
+        # through mcp.tools.unload_pack_tools / close_tools_clients below.
+        assert "pack_door" in text, f"{label} does not go through mcp.pack_door"
         assert "unload_pack_tools" in text, f"{label} does not go through mcp.tools.unload_pack_tools"
         assert "_close_mcp_tools" not in text, f"{label} reaches the closer through platform"
         assert "routes.agents" not in text and "routes import agents" not in text, f"{label} imports a route module"
@@ -292,8 +304,14 @@ def test_the_services_and_the_routes_share_the_one_closer_in_mcp_tools():
             f"{label} still unregisters a pack's tools without closing them"
         )
     assert "_close_mcp_tools" not in route, "routes/agents.py still reaches the closer through platform"
-    # DELETE (remove_mcp_pack, v1.343.0) calls the closer in the route module.
-    assert route.count("close_tools_clients(") >= 1, "the DELETE route does not call the lifted closer"
+    # DELETE (remove_mcp_pack, v1.343.0) ends in the closer. v1.355.0 (G44):
+    # its body is mcp.pack_door.remove_pack (the services call it too), so
+    # the pin follows the call there, as it does for reload_pack below.
+    assert "remove_pack(" in route and "add_pack(" in route, "the routes do not wrap the one door"
+    assert door.count("close_tools_clients(") >= 1, "remove_pack does not call the lifted closer"
+    assert "unload_pack_tools(" in door, "the door's loader does not close what it replaces"
+    # …and the door itself imports no route module (a service calls it).
+    assert "routes.agents" not in door and "from ..daemon" not in door, "mcp/pack_door.py imports the daemon"
     # v1.344.0: the Retry route's body lives in mcp.tools.reload_pack (shared
     # with the pack_restart tool) — the door still ends in the one closer,
     # one level down, so the pin follows the call there.

@@ -93,8 +93,11 @@ def test_t4_every_schema_key_has_a_chat_tool_for_its_tier(tmp_path):
         arg = "notion" if s.name.startswith("app.") else "telegram"
         name = s.name.replace("{provider}", "openai").replace("{name}", arg)
         assert resolve_secret(name)[2]
-    assert resolve_secret("app.notion")[2] == "conn_notion_notion_token"
-    assert resolve_secret("app.box__BOX_CLIENT_SECRET")[2] == "conn_box_box_client_secret"
+    # v1.355.0 (G44, moved on purpose): the row the one add door names (the
+    # Directory's Connect and Change key write the same one).
+    assert resolve_secret("app.notion")[2] == "mcp.notion.NOTION_TOKEN"
+    assert resolve_secret("app.box__BOX_CLIENT_SECRET")[2] == "mcp.box.BOX_CLIENT_SECRET"
+    assert resolve_secret("app.github")[2] == "mcp.github.auth.value"
 
 
 def test_t4_config_list_finds_settings_by_words(tmp_path):

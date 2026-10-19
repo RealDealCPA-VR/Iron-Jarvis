@@ -46,6 +46,11 @@ TOKEN = "ghp_LANE1E0123456789abcdefNEVERSHOWN"
 
 def _swap_connector(monkeypatch, cid: str, **changes):
     real = catalog.get_connector(cid)
+    if "command" in changes:
+        # v1.355.0 (G44): GitHub's card reaches GitHub's own server over the
+        # network; a swapped LAUNCH target makes it a program this PC runs
+        # again (the token then rides as an env var, as before).
+        changes = {"transport": "stdio", "url": "", "auth_field": "", **changes}
     swapped = dataclasses.replace(real, **changes)
     original = catalog.get_connector
     monkeypatch.setattr(catalog, "get_connector", lambda c: swapped if c == cid else original(c))
