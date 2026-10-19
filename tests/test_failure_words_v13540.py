@@ -207,6 +207,11 @@ def test_the_post_lane_502_has_the_same_keys(tmp_path, monkeypatch):
         "title": "OpenRouter refused your key",
         "fix": f"Update it in {ACCOUNTS_PLACE}.",
         "technical": OPENROUTER_401,
+        # v1.355.0 (G29, on purpose): the one press that fixes it — the
+        # chat's failure line puts "Update the key in Connections" beside
+        # the headline from these two typed keys.
+        "fix_kind": "key",
+        "fix_provider": "openrouter",
     }
 
 

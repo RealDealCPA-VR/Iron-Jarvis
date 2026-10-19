@@ -19,7 +19,10 @@
 //              "local only" refusal: code "local_only", v1.332.0)
 //   thinking  {"text":"…"}  reasoning deltas, display-only, any round (v1.323.0)
 //   (done also carries "truncated": bool since v1.323.0 — the answer ran out
-//    of output tokens; "folder_rules" and "thread_refs" since v1.326.0)
+//    of output tokens; "folder_rules" and "thread_refs" since v1.326.0;
+//    "refit" {dropped}|null and "approved" [{tool, decision, count?}] since
+//    v1.355.0 — lib/turnRecovery; and error carries "fix_kind"/"fix_provider"
+//    when one press fixes the failure)
 //   mcp_elicitation {id,call_id,pack,message,fields}   an app asks the user
 //   mcp_sampling    {id,call_id,pack,system,messages,max_tokens,model,model_id,more?}
 //   mcp_progress    {call_id,pack,progress,total,message}
@@ -55,6 +58,7 @@ import {
   type ResourceReceipt,
 } from "./mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./turnReads";
+import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "./turnRecovery";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 
@@ -211,6 +215,12 @@ export type SSEEvent =
       /** v1.326.0 (wired v1.327.0): the saved chats this message pointed to
        *  with "@", read or left out — lib/turnReads. */
       thread_refs?: ThreadRefReceipt[];
+      /** v1.355.0 (G55): older messages left out to retry a too-long
+       *  refusal — lib/turnRecovery. Absent when the daemon sent null. */
+      refit?: TurnRefit;
+      /** v1.355.0 (G64): the cards the user allowed this turn — absent when
+       *  there were none. */
+      approved?: ApprovedCall[];
       /** v1.344.0: on an ESCALATING turn, what the chat lane already ran
        *  this turn, so the agent does not redo those reads. Whitelisted per
        *  row (`decodePriorToolResults`); absent when the daemon sent none or
@@ -234,6 +244,11 @@ export type SSEEvent =
       title?: string;
       fix?: string;
       technical?: string;
+      /** v1.355.0 (G29): the ONE press that fixes it — "sign_in" (with the
+       *  CLI's provider id) or "key" (with the provider) — from the same
+       *  typed facts as the headline (`chat_turn.fix_action`). */
+      fix_kind?: string;
+      fix_provider?: string;
     }
   /** v1.324.0: an installed app asks the USER something (MCP elicitation)
    *  or asks to use the turn's model (MCP sampling) — the decoded ask. */
@@ -425,6 +440,12 @@ export interface ChatStreamResult {
   /** v1.327.0: the saved chats this message pointed to (the done frame's
    *  `thread_refs`); absent when there were none. */
   threadRefs?: ThreadRefReceipt[];
+  /** v1.355.0 (G55): older messages left out to fit the model (the done
+   *  frame's `refit`); absent when nothing was left out. */
+  refit?: TurnRefit;
+  /** v1.355.0 (G64): the cards the user allowed this turn (the done frame's
+   *  `approved`); absent when there were none. */
+  approved?: ApprovedCall[];
   /** v1.344.0: what the chat lane already ran in a turn that ESCALATES (the
    *  done frame's `prior_tool_results`); absent when there were none. The
    *  page passes it to the session the turn re-runs as, so the agent does
@@ -738,6 +759,15 @@ export function sseEventFrom(
         const refs = decodeThreadRefs(data.thread_refs);
         if (refs.length) ev.thread_refs = refs;
       }
+      // v1.355.0 (G55, G64): what happened around the answer — whitelisted
+      // like every field here (the denied_tools lesson). Null and [] leave
+      // the keys absent: "nothing left out" and "nothing asked" say nothing.
+      {
+        const refit = decodeRefit(data.refit);
+        if (refit) ev.refit = refit;
+        const approved = decodeApproved(data.approved);
+        if (approved.length) ev.approved = approved;
+      }
       // v1.344.0: what the chat already ran, for the session it escalates
       // into — whitelisted per row like every field here; an empty list
       // leaves the key absent.
@@ -761,6 +791,9 @@ export function sseEventFrom(
       if (str(data.title)) ev.title = str(data.title);
       if (str(data.fix)) ev.fix = str(data.fix);
       if (str(data.technical)) ev.technical = str(data.technical);
+      // v1.355.0 (G29): the press that fixes it, beside the words.
+      if (str(data.fix_kind)) ev.fix_kind = str(data.fix_kind);
+      if (str(data.fix_provider)) ev.fix_provider = str(data.fix_provider);
       return ev;
     }
     // v1.324.0: apps that talk back. Each decoder WHITELISTS (lib/mcpInteract)
@@ -940,6 +973,8 @@ export async function* streamSSE(
         title?: string;
         fix?: string;
         technical?: string;
+        fix_kind?: string;
+        fix_provider?: string;
       } = {};
       try {
         const parsed = (await res.json()) as {
@@ -950,6 +985,8 @@ export async function* streamSSE(
           title?: unknown;
           fix?: unknown;
           technical?: unknown;
+          fix_kind?: unknown;
+          fix_provider?: unknown;
         };
         // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
         if (parsed?.detail) detail = flattenDetail(parsed.detail);
@@ -964,6 +1001,9 @@ export async function* streamSSE(
             title: str(parsed.title),
             fix: str(parsed.fix),
             technical: str(parsed.technical),
+            // v1.355.0 (G29): the press that fixes it, when there is one.
+            ...(str(parsed.fix_kind) ? { fix_kind: str(parsed.fix_kind) } : {}),
+            ...(str(parsed.fix_provider) ? { fix_provider: str(parsed.fix_provider) } : {}),
           };
         }
       } catch {
@@ -1115,6 +1155,10 @@ export class StreamError extends ApiError {
   readonly title: string;
   readonly fix: string;
   readonly technical: string;
+  /** v1.355.0 (G29): the ONE press that fixes it ("sign_in" | "key" | "")
+   *  and the provider it is for ("" when none) — lib/failureActions. */
+  readonly fixKind: string;
+  readonly fixProvider: string;
   constructor(
     message: string,
     status: number,
@@ -1128,6 +1172,8 @@ export class StreamError extends ApiError {
       title?: string;
       fix?: string;
       technical?: string;
+      fix_kind?: string;
+      fix_provider?: string;
     } = {},
   ) {
     super(message, status);
@@ -1141,6 +1187,8 @@ export class StreamError extends ApiError {
     this.title = refusal.title ?? "";
     this.fix = refusal.fix ?? "";
     this.technical = refusal.technical ?? "";
+    this.fixKind = refusal.fix_kind ?? "";
+    this.fixProvider = refusal.fix_provider ?? "";
   }
 }
 
@@ -1600,6 +1648,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(ev.resources ? { resources: ev.resources } : {}),
                 ...(ev.folder_rules?.length ? { folderRules: ev.folder_rules } : {}),
                 ...(ev.thread_refs?.length ? { threadRefs: ev.thread_refs } : {}),
+                ...(ev.refit ? { refit: ev.refit } : {}),
+                ...(ev.approved?.length ? { approved: ev.approved } : {}),
                 ...(ev.prior_tool_results?.length
                   ? { priorToolResults: ev.prior_tool_results }
                   : {}),
@@ -1622,6 +1672,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   title: ev.title,
                   fix: ev.fix,
                   technical: ev.technical,
+                  fix_kind: ev.fix_kind,
+                  fix_provider: ev.fix_provider,
                 },
               );
             default:

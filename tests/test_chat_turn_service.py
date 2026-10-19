@@ -455,7 +455,14 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # present): the saved chats @-referenced this turn;
         # tests/test_chat_thread_refs_v1326.py.
         "thread_refs",
+        # v1.355.0: two more — "refit" ({dropped} | null, always present:
+        # older messages left out to retry a too-long refusal) and "approved"
+        # ([{tool, decision, count?}], always present, always [] on this
+        # lane — it never cards). Same keys in the SSE done frame;
+        # tests/test_chat_receipts_v13550.py.
+        "refit", "approved",
     }
+    assert body["refit"] is None and body["approved"] == []
     assert body["thread_refs"] == []
     assert body["folder_rules"] == []
     assert body["remembered"] == []

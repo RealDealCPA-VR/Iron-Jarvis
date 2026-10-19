@@ -1,0 +1,120 @@
+/**
+ * What a reply's receipt says about what happened AROUND the answer
+ * (v1.355.0, product-readiness G55 + G64):
+ *
+ *  - `refit` — the model refused the chat as too long, so Iron Jarvis left
+ *    older messages out and tried once more (`chat_turn._overflow_refit`).
+ *    Only the model used to be told; the reply now says "Left out 12 older
+ *    messages to fit this model", because an answer that ignored earlier
+ *    context otherwise looks complete.
+ *  - `approved` — the cards the user ALLOWED this turn ([{tool, decision,
+ *    count?}], the stream lane's `approval_resolved` answers). Once a turn
+ *    ended the saved reply recorded only refusals; the expanded receipt now
+ *    lists "You approved: save a file (once)".
+ *
+ * Since v1.355.0 the POST /chat response and the /chat/stream done frame
+ * ALWAYS carry both keys (`refit` null when nothing was left out, `approved`
+ * [] — always [] on the POST lane, which never asks). They cross a JSON
+ * boundary twice (the wire, then a saved thread read back from disk), so
+ * every reader goes through the decoders here: a WHITELIST, like every other
+ * receipt field (lib/turnReads).
+ *
+ * Pure module, no React: the stream hook, the page and the receipt import it,
+ * and the tests that mock `@/lib/useChatStream` are unaffected.
+ */
+
+import { askPhrase } from "@/lib/approvalWords";
+
+/** What a too-long refit left out (`{dropped: n}`; n may be 0 when only the
+ *  turn's own earlier tool output was trimmed). */
+export interface TurnRefit {
+  dropped: number;
+}
+
+/** One card the user allowed this turn. `decision` is the daemon's answer
+ *  VALUE (`once` | `conversation` | `tab` | `always`); `count` > 1 when ONE
+ *  card covered a batch of the same kind of call. */
+export interface ApprovedCall {
+  tool: string;
+  decision: string;
+  count?: number;
+}
+
+/** The answers that let a call run (a deny or a timeout never lands here). */
+const APPROVING = new Set(["once", "conversation", "tab", "always"]);
+
+/** Most approvals one reply keeps (the daemon's `APPROVED_MAX`). */
+export const APPROVED_MAX = 20;
+
+/** The `refit` field's normal form, or null for anything else (null, an
+ *  older daemon, a hand-edited thread). */
+export function decodeRefit(raw: unknown): TurnRefit | null {
+  if (!raw || typeof raw !== "object") return null;
+  const n = (raw as { dropped?: unknown }).dropped;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return null;
+  return { dropped: Math.floor(n) };
+}
+
+/** The `approved` field's normal form: rows with a tool name and an
+ *  approving decision, `count` only when it is a whole number above 1, at
+ *  most APPROVED_MAX. Anything that is not a list reads as none. */
+export function decodeApproved(raw: unknown): ApprovedCall[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ApprovedCall[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const r = row as { tool?: unknown; decision?: unknown; count?: unknown };
+    const tool = typeof r.tool === "string" ? r.tool.trim().slice(0, 200) : "";
+    const decision = typeof r.decision === "string" ? r.decision.trim().toLowerCase() : "";
+    if (!tool || !APPROVING.has(decision)) continue;
+    const count =
+      typeof r.count === "number" && Number.isFinite(r.count) && r.count > 1
+        ? Math.floor(r.count)
+        : 0;
+    out.push({ tool, decision, ...(count > 1 ? { count } : {}) });
+    if (out.length >= APPROVED_MAX) break;
+  }
+  return out;
+}
+
+/**
+ * The receipt's words for a refit, or null when there was none: "Left out 12
+ * older messages to fit this model" (one: "1 older message"). A retry that
+ * left no MESSAGE out only trimmed the turn's own earlier tool output, and
+ * says that instead.
+ */
+export function refitLine(refit: TurnRefit | null | undefined): string | null {
+  const r = decodeRefit(refit);
+  if (!r) return null;
+  if (r.dropped === 0) return "Shortened earlier tool results to fit this model";
+  return `Left out ${r.dropped} older message${r.dropped === 1 ? "" : "s"} to fit this model`;
+}
+
+/** Hover words for the refit part: why, and what it means for the answer. */
+export const REFIT_TITLE =
+  "The model said this chat was too long for it, so Iron Jarvis left the oldest messages out and asked again. The answer did not see them.";
+
+/** How far an approval reached, in the card's own words (lib/approvalWords:
+ *  "Allow once" / "Allow for this chat" / "Allow for this tab" / "Always
+ *  allow exactly this"). */
+export function approvalReach(decision: string): string {
+  switch (decision) {
+    case "conversation":
+      return "for this chat";
+    case "tab":
+      return "for this tab";
+    case "always":
+      return "always, exactly this";
+    default:
+      return "once";
+  }
+}
+
+/** One approval as the expanded receipt says it: "You approved: save a file
+ *  (once)"; a batch card adds the count ("(once, 3 calls)"). The words come
+ *  from the approval card's own phrase (lib/approvalWords.askPhrase). */
+export function approvedLine(a: ApprovedCall): string {
+  const reach = approvalReach(a.decision);
+  const many = a.count && a.count > 1 ? `, ${a.count} calls` : "";
+  return `You approved: ${askPhrase(a.tool)} (${reach}${many})`;
+}

@@ -92,6 +92,7 @@ import {
   Search,
   Share2,
   ListTree,
+  LogIn,
   Sparkles,
   Square,
   SquareTerminal,
@@ -131,6 +132,29 @@ import {
   type TurnAdapted,
   type TurnRoute,
 } from "@/components/chat/TurnReceipt";
+// v1.355.0 (G55, G64): what happened around the answer — older messages left
+// out to fit, the cards the user allowed (whitelisted, both lanes).
+import {
+  decodeApproved,
+  decodeRefit,
+  type ApprovedCall,
+  type TurnRefit,
+} from "@/lib/turnRecovery";
+// v1.355.0 (G62): an agent's line in the chat gets a receipt and, while a
+// remote is still working, its age.
+import { isNoReplyBack, lineAt, panelAskedAt, panelWaiting } from "@/lib/panelReceipt";
+import { PanelReplyLine, PanelWaiting } from "@/components/chat/PanelReceipt";
+// v1.355.0 (G29): the press beside a failed turn.
+import {
+  DETAILS_WORDS,
+  DRAFT_BACK_WORDS,
+  KEY_LINK_HREF,
+  KEY_LINK_WORDS,
+  failureAction,
+  failureFacts,
+  signInLabel,
+} from "@/lib/failureActions";
+import { codeParts, paneHref, useCliSignIn } from "@/lib/cliSignIn";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { LiveToolRows, WorkLine, WorkRow } from "@/components/chat/WorkLine";
 import { FitPanel } from "@/components/chat/FitPanel";
@@ -274,6 +298,8 @@ interface PanelEntry {
   content: string;
   error?: boolean;
   at?: string;
+  /** v1.285.0: a remote that TOOK the task to answer later (202). */
+  pending?: boolean;
 }
 /** What POST /chat/panel answers (v1.284.0): a ROUND (`mode: "panel"`), or a
  *  HAND-OFF (`mode: "session"`) when one local agent was asked for work a
@@ -732,6 +758,13 @@ interface ChatMessage {
   /** v1.327.0: the saved chats this message pointed to with "@", read or
    *  left out (`{id, title, chars, ok, note}`) — the receipt says them. */
   threadRefs?: ThreadRefReceipt[];
+  /** v1.355.0 (G55): the model refused the chat as too long and this many
+   *  older messages were left out to retry — the receipt says it. Absent
+   *  when nothing was left out and on older messages. */
+  refit?: TurnRefit;
+  /** v1.355.0 (G64): the cards the user allowed in this turn
+   *  ([{tool, decision, count?}]) — the expanded receipt lists them. */
+  approved?: ApprovedCall[];
 }
 
 /** v1.325.0: a message written while a reply was running — sent after it. */
@@ -2873,6 +2906,8 @@ const MessageRow = memo(function MessageRow({
   reading = false,
   regen,
   answeredName,
+  panelAsked,
+  panelWaits = false,
   h,
 }: {
   m: ChatMessage;
@@ -2897,6 +2932,12 @@ const MessageRow = memo(function MessageRow({
    *  its id) for the receipt's "answered by …" words. A string, so the memo
    *  holds while the catalog is unchanged. */
   answeredName?: string;
+  /** v1.355.0 (G62): for an agent's line, when the question it answers was
+   *  sent (ISO) — the receipt line's "from hermes · 6 min 12 s". */
+  panelAsked?: string;
+  /** v1.355.0 (G62): a remote's "still working" line nothing has followed
+   *  yet — it shows "· waiting 3 min" until the answer arrives. */
+  panelWaits?: boolean;
   h: RowHandlers;
 }) {
   // v1.323.0: the hidden "please continue" turn of a Continue press.
@@ -2987,6 +3028,10 @@ const MessageRow = memo(function MessageRow({
     );
   // v1.285.0: a remote's PROGRESS line is a quiet one-liner, not a reply —
   // unless it delivered files, which deserve the full bubble and the rail.
+  // v1.355.0 (G62): while nothing later has come from that remote, the line
+  // says how long the chat has been waiting; a remote with message-back OFF
+  // says its answer will not come back, so it wraps (never cut off) and
+  // never shows a wait.
   if (m.panelWho && m.panelKind === "progress" && !m.documents?.length)
     return (
       <div
@@ -2994,7 +3039,10 @@ const MessageRow = memo(function MessageRow({
         className="flex min-w-0 items-center gap-2 text-[12px] text-zinc-500"
       >
         <span className="shrink-0 font-medium text-zinc-400">{agentDisplayName(m.panelWho)}</span>
-        <span className="truncate">{m.content}</span>
+        <span className={isNoReplyBack(m) ? "min-w-0 break-words" : "truncate"} title={m.content}>
+          {m.content}
+        </span>
+        {panelWaits && <PanelWaiting since={lineAt(m)} />}
       </div>
     );
   // v1.150.0: a panel reply is attributed. Without a name on it, a three-way
@@ -3021,6 +3069,8 @@ const MessageRow = memo(function MessageRow({
               {m.panelKind === "pending" ? "working, will report back" : m.panelKind}
             </span>
           )}
+          {/* v1.355.0 (G62): still waiting on this remote's answer. */}
+          {panelWaits && <PanelWaiting since={lineAt(m)} />}
           {/* v1.309.0: the "open in Agents →" link is GONE. It sent a live
               conversation to `/agents?thread=`, which since v1.308.0 is a
               READ-ONLY transcript of "the old round table" — the user left
@@ -3042,6 +3092,17 @@ const MessageRow = memo(function MessageRow({
           <RunResultCard
             result={m.runResult}
             onRetry={() => h.retryTask(m.runResult?.task || "")}
+          />
+        )}
+        {/* v1.355.0 (G62): the agent reply's receipt line, in the voice of
+            Jarvis's own "answered by …": who, and how long since the
+            question. Not on a failed seat (its line already says so) nor on
+            a "still working" line (that one waits instead). */}
+        {!m.panelError && m.panelKind !== "pending" && m.panelKind !== "progress" && (
+          <PanelReplyLine
+            name={agentDisplayName(m.panelWho)}
+            replyAt={lineAt(m)}
+            askedAt={panelAsked}
           />
         )}
         {/* What the speakers were NOT shown (v1.284.0) — said, never silent. */}
@@ -3135,6 +3196,7 @@ const MessageRow = memo(function MessageRow({
       remembered: m.remembered,
       trust: m.trust,
       threadRefs: m.threadRefs,
+      refit: m.refit,
     });
   return (
     <div className="group/msg" data-testid="reply">
@@ -3313,6 +3375,8 @@ const MessageRow = memo(function MessageRow({
             onUndo={h.undoWrite}
             folderRules={m.folderRules}
             threadRefs={m.threadRefs}
+            refit={m.refit}
+            approved={m.approved}
           />
         )}
       </div>
@@ -3567,6 +3631,10 @@ export default function ChatPage() {
   // U8): the footer used to say "default model" while the title bar said
   // "brain (RTX)" — two words for one thing. Read, never polled here.
   const defaultModelName = useDaemon().health?.default_model ?? "";
+  // v1.355.0 (G29): the /health rows the failure line's Sign in press reads
+  // (the same shared poll; never a second one).
+  const daemonHealthForFix = useDaemon().health;
+  const daemonRefreshForFix = useDaemon().refresh;
   // v1.314.0: which provider the default runs on, so the footer can name the
   // default by its catalog label ("Claude Opus 4.8"), the same as a pick.
   const defaultProviderId = useDaemon().health?.default_provider ?? "";
@@ -3878,7 +3946,36 @@ export default function ChatPage() {
   // with the line it belongs to so a later error from another path never
   // wears a stale hover (read only when `text === error`). A ref, not state:
   // the line re-renders with setError anyway.
-  const errorTechRef = useRef<{ text: string; technical: string }>({ text: "", technical: "" });
+  // v1.355.0 (G29): it also keeps the line's headline, the press that fixes
+  // it (`fix_kind` / `fix_provider`, lib/failureActions) and whether the
+  // failed turn put the typed message back in the box — all keyed to the
+  // same line, read only when `text === error`.
+  const errorTechRef = useRef<{
+    text: string;
+    technical: string;
+    title?: string;
+    fixKind?: string;
+    fixProvider?: string;
+    draftBack?: boolean;
+  }>({ text: "", technical: "" });
+  // v1.355.0 (G29): the failure line's Details fold is open for THIS line
+  // (keyed to its text, so a new failure always starts folded).
+  const [errorDetailsFor, setErrorDetailsFor] = useState<string | null>(null);
+  // v1.355.0 (G29): the failure line's own facts — only for the line the ref
+  // was written for — and the ONE press that fixes it (lib/failureActions):
+  // the daemon's typed `fix_kind`, else the turn's provider row on /health
+  // (or the CLI it is served through) saying installed and signed out.
+  const errFacts =
+    error && errorTechRef.current.text === error ? errorTechRef.current : null;
+  const errorDetailsOpen = !!error && errorDetailsFor === error;
+  const turnFix =
+    errFacts && !localRefusal
+      ? failureAction(errFacts, daemonHealthForFix, trouble.provider)
+      : null;
+  // v1.355.0 (G29): the Sign in press — the same hook the Accounts row and
+  // the connect doors use; a pane that opened refreshes /health so the
+  // provider turns green by itself once the user finishes there.
+  const { signIn: cliSignIns, start: startCliSignIn } = useCliSignIn(() => daemonRefreshForFix());
   const [offline, setOffline] = useState(false);
   // v1.354.0 (G31): the chat's own offline hint clears BY ITSELF when Iron
   // Jarvis answers again. It used to stay until the user sent, retried or
@@ -8240,11 +8337,15 @@ export default function ChatPage() {
    *  it's empty (never clobber text typed while the turn was in flight). The
    *  restore is programmatic, so it must never count as voice input: Voice
    *  Chat's auto-send would otherwise re-fire the failed turn in a loop. */
-  function restoreComposerDraft(history: ChatMessage[]) {
+  function restoreComposerDraft(history: ChatMessage[]): boolean {
     const lastUser = [...history].reverse().find((m) => m.role === "user");
-    if (!lastUser) return;
+    if (!lastUser) return false;
     inputFromVoiceRef.current = false;
-    if (!composer.get().text.trim()) composer.setText(lastUser.content);
+    // v1.355.0 (G29): says whether the words went back, so the failure line
+    // can tell the user where their message is.
+    if (composer.get().text.trim()) return false;
+    composer.setText(lastUser.content);
+    return true;
   }
 
   /**
@@ -8434,6 +8535,10 @@ export default function ChatPage() {
         // lane's receiptPost below carries the same two fields, last.
         const folderRules = decodeFolderRules(streamRes.folderRules);
         const threadRefs = decodeThreadRefs(streamRes.threadRefs);
+        // v1.355.0 (G55, G64): what happened around the answer — decoded
+        // again for the same reason. MIRROR NOTE: receiptPost carries both.
+        const refit = decodeRefit(streamRes.refit);
+        const approved = decodeApproved(streamRes.approved);
         const receipt = {
           at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
           ...(route ? { route } : {}),
@@ -8471,6 +8576,10 @@ export default function ChatPage() {
           // v1.327.0 (kept last, the receipt rule): folder rules + chats read.
           ...(folderRules.length ? { folderRules } : {}),
           ...(threadRefs.length ? { threadRefs } : {}),
+          // v1.355.0 (after those two, the receipt rule): left out to fit,
+          // and the approvals given.
+          ...(refit ? { refit } : {}),
+          ...(approved.length ? { approved } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -8582,7 +8691,12 @@ export default function ChatPage() {
             // technical text on the line's hover only (lib/failureLine). A
             // failure without a title keeps its message, as before.
             const line = turnErrorText(e);
-            errorTechRef.current = { text: line, technical: turnErrorTechnical(e) };
+            // v1.355.0 (G29): the headline and the press ride with the line.
+            errorTechRef.current = {
+              text: line,
+              technical: turnErrorTechnical(e),
+              ...failureFacts(e),
+            };
             setError(line);
           }
           // v1.332.0: a "local only" refusal names the provider it did not
@@ -8593,7 +8707,10 @@ export default function ChatPage() {
           // (+ the interrupted partial) through the same autosave path a
           // completed turn uses, and put the message back in the composer.
           queueSave(withPartial);
-          restoreComposerDraft(history);
+          // v1.355.0 (G29): the line says the message is back in the box.
+          if (restoreComposerDraft(history)) {
+            errorTechRef.current = { ...errorTechRef.current, draftBack: true };
+          }
           return;
         }
         // else: /chat/stream is absent on a reachable daemon → safe to fall back.
@@ -8634,6 +8751,10 @@ export default function ChatPage() {
       // chats read. MIRROR NOTE: keep in step with the stream path above.
       const folderRulesPost = decodeFolderRules((res as { folder_rules?: unknown }).folder_rules);
       const threadRefsPost = decodeThreadRefs((res as { thread_refs?: unknown }).thread_refs);
+      // v1.355.0 (G55, G64): MIRROR NOTE — the stream lane's receipt above.
+      // This lane never asks, so `approved` is [] here today; decoded anyway.
+      const refitPost = decodeRefit((res as { refit?: unknown }).refit);
+      const approvedPost = decodeApproved((res as { approved?: unknown }).approved);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -8668,6 +8789,8 @@ export default function ChatPage() {
         // and chats read (whitelisted, kept last). MIRROR NOTE: keep in step.
         ...(folderRulesPost.length ? { folderRules: folderRulesPost } : {}),
         ...(threadRefsPost.length ? { threadRefs: threadRefsPost } : {}),
+        ...(refitPost ? { refit: refitPost } : {}),
+        ...(approvedPost.length ? { approved: approvedPost } : {}),
       };
       const full: ChatMessage[] = [
         ...history,
@@ -8735,14 +8858,21 @@ export default function ChatPage() {
       // the provider's own message, e.g. a rate limit, in `detail`). Remember
       // the exact turn (history + attachments) so Retry can re-send it — the
       // attachments are NOT consumed on failure.
+      const postLine = e instanceof ApiError ? e.message : String(e);
       if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      else setError(postLine);
       setLocalRefusal(localOnlyRefusalFrom(e)); // v1.332.0: the POST lane's 409
       setFailedTurn({ history, atts });
       // Persist the typed message so navigating away doesn't lose it, and
       // restore it to the composer for an immediate edit/resend.
       queueSave(history);
-      restoreComposerDraft(history);
+      // v1.355.0 (G29): and say so on this path's own line (no hover rides
+      // it — this lane's words carry no technical text).
+      errorTechRef.current = {
+        text: postLine,
+        technical: "",
+        ...(restoreComposerDraft(history) ? { draftBack: true } : {}),
+      };
     } finally {
       sendingRef.current = false;
       turnChoiceRef.current = null;
@@ -9828,6 +9958,12 @@ export default function ChatPage() {
         panelThreadId: res.thread_id,
         ...(e.error ? { panelError: true } : {}),
         ...(idx === 0 && note ? { panelNote: note } : {}),
+        // v1.355.0 (G62): the daemon's own line shape for a remote that took
+        // the task (routes/agents.panel_reply_lines: a quiet "progress"
+        // line), so this fallback copy also shows the wait; and the entry's
+        // time, so the reply's receipt line can say how long it took.
+        ...(e.pending ? { panelKind: "progress" } : {}),
+        ...(e.at ? { at: e.at } : {}),
       })),
     ];
   }
@@ -10829,6 +10965,14 @@ export default function ChatPage() {
   const regenOptions = useMemo(
     () => ({ models, recent: readRecentModels(), current: choice }),
     [models, choice],
+  );
+  // v1.355.0 (G62): per row, when an agent's line was asked for and whether
+  // a remote is still being waited on — worked out once per messages change
+  // (never per keystroke or token), handed to each row as a string and a
+  // boolean so the memoized rows hold.
+  const panelFacts = useMemo(
+    () => ({ asked: panelAskedAt(messages), waiting: panelWaiting(messages) }),
+    [messages],
   );
   // Calm chat W1-5 (v1.326.0): what the receipt's "answered by …" calls the
   // model. v1.329.0 (G2): the SAME name the composer's model chip uses (the
@@ -11946,6 +12090,8 @@ export default function ChatPage() {
                           reading={tts.readingKey === `reply-${i}`}
                           regen={canRegen ? regenOptions : undefined}
                           answeredName={answeredModelName(m.route)}
+                          panelAsked={m.panelWho ? panelFacts.asked[i] : undefined}
+                          panelWaits={m.panelWho ? panelFacts.waiting[i] : false}
                           h={rowHandlers}
                         />
                         </div>
@@ -12188,7 +12334,10 @@ export default function ChatPage() {
                             }
                             className="min-w-0 flex-1 break-words text-[13px] leading-5 text-tone-danger"
                           >
-                            {error}
+                            {/* v1.355.0 (G29): with a press beside it, the
+                                line is the headline alone — the press does
+                                what the fix sentence sent the user to do. */}
+                            {turnFix && errFacts?.title ? errFacts.title : error}
                           </p>
                         )}
                         {compactNote && (
@@ -12239,6 +12388,38 @@ export default function ChatPage() {
                             </button>
                           </>
                         )}
+                        {/* v1.355.0 (G29): THE PRESS THAT FIXES IT, before
+                            Retry. A signed-out Claude Code / Codex: the same
+                            Sign in the Accounts row has (lib/cliSignIn — a
+                            Build pane on this PC's own login; the click is the
+                            consent). A refused key: a link to where keys
+                            live. Retry stays beside it, unchanged. */}
+                        {failedTurn && !busy && turnFix?.kind === "sign_in" &&
+                          cliSignIns[turnFix.cli.cli]?.paneId === undefined && (
+                          <button
+                            type="button"
+                            data-testid="chat-turn-sign-in"
+                            onClick={() => void startCliSignIn(turnFix.cli)}
+                            disabled={!!cliSignIns[turnFix.cli.cli]?.busy}
+                            className={CALM_GHOST_BTN}
+                          >
+                            {cliSignIns[turnFix.cli.cli]?.busy ? (
+                              <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden />
+                            ) : (
+                              <LogIn size={13} aria-hidden />
+                            )}
+                            {signInLabel(turnFix.cli)}
+                          </button>
+                        )}
+                        {failedTurn && !busy && turnFix?.kind === "key" && (
+                          <Link
+                            href={KEY_LINK_HREF}
+                            data-testid="chat-turn-key-link"
+                            className={CALM_GHOST_BTN}
+                          >
+                            {KEY_LINK_WORDS}
+                          </Link>
+                        )}
                         {failedTurn && !busy && !localRefusal && (
                           <RetryTurnButton
                             cooldownS={trouble.cooldownS}
@@ -12273,6 +12454,70 @@ export default function ChatPage() {
                           >
                             Retry with the default model
                           </button>
+                        )}
+                        {/* v1.355.0 (G29): the server's own words, FOLDED —
+                            a quiet toggle, never a box. Same text as the
+                            line's hover (masked by the daemon). */}
+                        {errFacts?.technical && (
+                          <button
+                            type="button"
+                            data-testid="chat-turn-error-details-toggle"
+                            aria-expanded={errorDetailsOpen}
+                            aria-controls={errorDetailsOpen ? "chat-turn-error-details" : undefined}
+                            onClick={() => setErrorDetailsFor(errorDetailsOpen ? null : error)}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                          >
+                            <ChevronRight
+                              size={12}
+                              aria-hidden
+                              className={`transition-transform motion-reduce:transition-none ${errorDetailsOpen ? "rotate-90" : ""}`}
+                            />
+                            {DETAILS_WORDS}
+                          </button>
+                        )}
+                        {errFacts?.technical && errorDetailsOpen && (
+                          <pre
+                            id="chat-turn-error-details"
+                            data-testid="chat-turn-error-details"
+                            className="max-h-48 basis-full overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-4 text-zinc-500"
+                          >
+                            {errFacts.technical}
+                          </pre>
+                        )}
+                        {/* v1.355.0 (G29): after the Sign in press, what to do
+                            in the pane it opened (per CLI), and the way to it. */}
+                        {failedTurn && !busy && turnFix?.kind === "sign_in" &&
+                          cliSignIns[turnFix.cli.cli]?.paneId !== undefined && (
+                          <div data-testid="chat-turn-sign-in-hint" className="basis-full text-[12px] leading-5 text-zinc-400">
+                            A Build pane opened with {turnFix.cli.name} running.{" "}
+                            {codeParts(turnFix.cli.paneHint).map((part, k) =>
+                              part.code ? (
+                                <code key={k} className="font-mono text-zinc-300">
+                                  {part.text}
+                                </code>
+                              ) : (
+                                part.text
+                              ),
+                            )}{" "}
+                            Then press Retry.{" "}
+                            <Link
+                              href={paneHref(cliSignIns[turnFix.cli.cli]?.paneId)}
+                              className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
+                            >
+                              Open the Build pane
+                            </Link>
+                          </div>
+                        )}
+                        {failedTurn && !busy && turnFix?.kind === "sign_in" &&
+                          cliSignIns[turnFix.cli.cli]?.error && (
+                          <div role="alert" className="basis-full text-[12px] leading-5 text-tone-danger">
+                            {cliSignIns[turnFix.cli.cli]?.error}
+                          </div>
+                        )}
+                        {errFacts?.draftBack && (
+                          <div data-testid="chat-turn-draft-back" className="basis-full text-[12px] text-zinc-500">
+                            {DRAFT_BACK_WORDS}
+                          </div>
                         )}
                       </div>
                     )}

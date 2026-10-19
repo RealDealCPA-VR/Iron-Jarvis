@@ -200,7 +200,9 @@ def test_a_remote_that_will_report_back_leaves_a_progress_line(app, monkeypatch)
     line = _thread(client, saved["id"])["messages"][-1]
     assert line["panelWho"] == "remote:hermes"
     assert line["panelKind"] == "progress"
-    assert "will report back" in line["content"]
+    # v1.355.0 (G62, on purpose): message-back is OFF for this remote, so
+    # the line says plainly that its answer will not come back here.
+    assert "Its answer will not come back here" in line["content"]
     assert line["panelThreadId"] == body["thread_id"]
 
 

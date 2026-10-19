@@ -623,6 +623,22 @@ def _load_round(rec: Any) -> tuple[list[dict], list[dict]]:
     )
 
 
+#: v1.355.0 (G62): what the chat says when a remote ACCEPTED a task but may
+#: not message back — its answer will never arrive here. The dashboard's
+#: ``lib/panelReceipt.NO_REPLY_BACK_MARK`` is the middle sentence, pinned
+#: equal (``dashboard/__tests__/chat-receipts-v13550.test.tsx``); "Let it
+#: message back" is the agent card's own button (``SetupCard``).
+NO_REPLY_BACK_MARK = "Its answer will not come back here"
+
+
+def no_reply_back_line(name: str) -> str:
+    """The pending line for a remote with message-back OFF (v1.355.0, G62)."""
+    return (
+        f"{name} took the task. {NO_REPLY_BACK_MARK}; turn on Let it message "
+        "back on its card to get it in this chat."
+    )
+
+
 class AgentThreads:
     """Store + the speaking-round engine."""
 
@@ -1718,11 +1734,22 @@ class AgentThreads:
         if not out.get("ok"):
             raise RuntimeError(out.get("detail") or "remote agent failed")
         if out.get("accepted"):
-            where = "here" if self._inbound_url(record) else "on its own side"
+            if self._inbound_url(record):
+                return (
+                    f"{p['name']} has the task and will report back here when it has "
+                    "something.",
+                    {"pending": True},
+                )
+            # v1.355.0 (G62): with message-back off the answer NEVER comes
+            # back to this chat — said plainly, with the switch that fixes
+            # it, instead of a "will report back" that leaves the user
+            # waiting on a line that cannot arrive. `reply_back: False` is
+            # the typed fact beside the words; the chat page reads the
+            # words (`NO_REPLY_BACK_MARK`, lib/panelReceipt — pinned equal)
+            # and shows no "waiting" on this line.
             return (
-                f"{p['name']} has the task and will report back {where} when it has "
-                "something.",
-                {"pending": True},
+                no_reply_back_line(p["name"]),
+                {"pending": True, "reply_back": False},
             )
         return str(out.get("result") or "").strip(), {}
 

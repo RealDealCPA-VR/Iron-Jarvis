@@ -247,7 +247,12 @@ def test_an_accepted_remote_round_is_recorded_as_pending(app, monkeypatch):
     ).json()
     entry = body["entries"][-1]
     assert entry["pending"] is True
-    assert "will report back" in entry["content"]
+    # v1.355.0 (G62, on purpose): this remote has message-back OFF, so the
+    # line says its answer will not come back here (and how to fix that) —
+    # a remote that CAN message back keeps "will report back here".
+    assert "Its answer will not come back here" in entry["content"]
+    assert "Let it message back" in entry["content"]
+    assert entry["reply_back"] is False
     assert not entry.get("error")
 
 

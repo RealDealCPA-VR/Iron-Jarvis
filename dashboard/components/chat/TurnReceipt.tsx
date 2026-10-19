@@ -63,6 +63,7 @@ import {
   MapPin,
   MessagesSquare,
   Route as RouteIcon,
+  Scissors,
   ScrollText,
   ShieldAlert,
   ShieldCheck,
@@ -84,6 +85,14 @@ import {
   threadRefLines,
   type ThreadRefReceipt,
 } from "@/lib/turnReads";
+import {
+  approvedLine,
+  decodeApproved,
+  REFIT_TITLE,
+  refitLine,
+  type ApprovedCall,
+  type TurnRefit,
+} from "@/lib/turnRecovery";
 
 /** The capability envelope's adaptation disclosure (v1.202.0): the daemon
  *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
@@ -417,6 +426,14 @@ export interface TurnReceiptProps {
    *  left out — quiet lines in the expanded receipt; a left-out one that
    *  warns is amber, and a small amber count rides the collapsed line. */
   threadRefs?: ThreadRefReceipt[] | null;
+  /** v1.355.0 (G55): the model refused the chat as too long and older
+   *  messages were left out to retry — said on the collapsed line in the
+   *  quiet class ("Left out 12 older messages to fit this model"), like an
+   *  adapted turn: a recovery, not a warning, and never silent. */
+  refit?: TurnRefit | null;
+  /** v1.355.0 (G64): the cards the user allowed this turn — listed in the
+   *  expanded receipt ("You approved: save a file (once)"). */
+  approved?: ApprovedCall[] | null;
 }
 
 /**
@@ -430,11 +447,14 @@ export interface TurnReceiptProps {
 export function receiptWantsAttention(
   p: Pick<
     TurnReceiptProps,
-    "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked" | "threadRefs"
+    "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked" | "threadRefs" | "refit"
   >,
 ): boolean {
   return (
     routeWarning(p.route) !== null ||
+    // v1.355.0 (G55): older messages were left out of this answer — kept on
+    // screen like an adapted turn, never behind a hover.
+    refitLine(p.refit) !== null ||
     names(p.deniedTools ?? []).length > 0 ||
     names(p.remembered ?? []).length > 0 ||
     p.trust === "low" ||
@@ -680,6 +700,8 @@ export function TurnReceipt({
   modelName,
   folderRules,
   threadRefs,
+  refit,
+  approved,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -732,6 +754,11 @@ export function TurnReceipt({
   const rulesText = folderRulesLine(folderRules);
   const refLines = threadRefLines(threadRefs);
   const refWarnings = refLines.notes.filter((n) => n.warn).length;
+  // v1.355.0 (G55, G64): what happened around the answer — older messages
+  // left out to fit, and the cards the user allowed. Decoded here because a
+  // reopened chat hands back whatever the disk held.
+  const refitText = refitLine(refit);
+  const approvedRows = decodeApproved(approved);
   if (
     !used.cache &&
     !used.cost &&
@@ -745,7 +772,9 @@ export function TurnReceipt({
     !blockedOut.length &&
     !rulesText &&
     !refLines.read &&
-    !refLines.notes.length
+    !refLines.notes.length &&
+    !refitText &&
+    !approvedRows.length
   ) {
     return null;
   }
@@ -851,6 +880,17 @@ export function TurnReceipt({
     parts.push(
       <span key="adapted" className="text-zinc-500">
         {adaptedText}
+      </span>,
+    );
+  }
+  if (refitText) {
+    // v1.355.0 (G55): the same quiet class as an adapted turn — Iron Jarvis
+    // recovered on the user's behalf, and the answer did not see the oldest
+    // messages. Said where the user reads the reply; why is on hover and in
+    // the expanded receipt (a phone has no hover).
+    parts.push(
+      <span key="refit" data-testid="turn-refit" title={REFIT_TITLE} className="text-zinc-500">
+        {refitText}
       </span>,
     );
   }
@@ -1089,6 +1129,16 @@ export function TurnReceipt({
               </div>
             </div>
           )}
+          {/* v1.355.0 (G55): why older messages were left out, in words a
+              phone can read (the collapsed part's title needs a pointer). */}
+          {refitText && (
+            <div className="flex items-start gap-2">
+              <Scissors size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div data-testid="turn-refit-detail" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
+                {REFIT_TITLE}
+              </div>
+            </div>
+          )}
           {(stepChips.length > 0 || tools.length > 0) && (
             <div className="flex items-start gap-2">
               <Wrench size={12} className="mt-0.5 shrink-0 text-zinc-500" />
@@ -1098,6 +1148,27 @@ export function TurnReceipt({
                   : tools.map((t): ReceiptStep => ({ name: t, ok: null, ms: null }))
                 ).map((st, i) => (
                   <ReceiptStepRow key={`${st.name}-${i}`} step={st} timed={stepChips.length > 0} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* v1.355.0 (G64): the cards the user allowed this turn, in the
+              card's own words, one quiet line each; the tool's id is on
+              hover. A refusal is never listed here (it is "blocked"). */}
+          {approvedRows.length > 0 && (
+            <div className="flex items-start gap-2">
+              <ShieldCheck size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                {approvedRows.map((a, i) => (
+                  <div
+                    key={`${a.tool}-${i}`}
+                    data-testid="turn-approved"
+                    title={a.tool}
+                    className="min-w-0 break-words text-[12px] leading-5 text-zinc-400"
+                  >
+                    {approvedLine(a)}
+                  </div>
                 ))}
               </div>
             </div>

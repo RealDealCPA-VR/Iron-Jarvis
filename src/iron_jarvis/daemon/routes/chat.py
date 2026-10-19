@@ -3849,6 +3849,14 @@ async def chat_stream(
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
         denied_tools: list[str] = []        # armed tools refused this turn
+        # v1.355.0 (G64): the cards the user ALLOWED this turn —
+        # [{tool, decision, count?}] from `approved_entry`, one per answered
+        # card, ≤ APPROVED_MAX. MIRROR NOTE (lock-step): chat_turn's POST
+        # response carries the key too (always [] there — it never cards).
+        approved_calls: list[dict[str, Any]] = []
+        # v1.355.0 (G55): what a too-long refit left out this turn; lock-step
+        # with chat_turn's `_refit_note`.
+        _refit_note: dict[str, int] = {}
         # v1.344.0 (M3): every labelled refusal — (tool, label) in call order
         # — for `refusal_footnotes`; lock-step with chat_turn.
         refused_tools: list[tuple[str, str]] = []
@@ -3968,7 +3976,8 @@ async def chat_stream(
                     # first word is shrunk and tried ONCE more (lock-step:
                     # chat_turn's _complete_refitting).
                     refit=_chat_turn._overflow_refit(
-                        d, msgs, system, provider_choice, model_choice, head=_head
+                        d, msgs, system, provider_choice, model_choice, head=_head,
+                        record=_refit_note,
                     ),
                     provider=provider_choice or None,
                     model=model_choice or None,
@@ -4545,6 +4554,15 @@ async def chat_stream(
                                 "id": _ap_id, "call_id": tc.id,
                                 "tool": tc.name, "decision": _decision,
                             })
+                            # v1.355.0 (G64): the reply records what the
+                            # user allowed — the frame's own decision, once
+                            # per answered card (a batch replay below is the
+                            # same answer, not a new one).
+                            _approved = _chat_turn.approved_entry(
+                                tc.name, _decision, _count
+                            )
+                            if _approved is not None and len(approved_calls) < _chat_turn.APPROVED_MAX:
+                                approved_calls.append(_approved)
                             _round_answers[_card_key] = _decision
                         if _decision == "tab":
                             # The tab is granted (above); THIS call is "once".
@@ -5269,6 +5287,10 @@ async def chat_stream(
             # carries the identical keys — edit both or neither.
             **_trust_receipt(_trust_state),
             "denied_tools": denied_tools,
+            # APPROVALS GIVEN (v1.355.0, G64): [{tool, decision, count?}],
+            # ALWAYS present (possibly []). MIRROR NOTE (lock-step):
+            # chat_turn.py's response carries the identical key.
+            "approved": approved_calls,
             "auto_armed": auto_armed,
             "documents": made_docs,
             "escalate": escalate,
@@ -5285,6 +5307,10 @@ async def chat_stream(
             # composer's headroom meter and the compaction offer behave
             # identically on both lanes.
             "context": {**plan.as_dict(), **context_report},
+            # REFIT (v1.355.0, G55): {"dropped": n} | null, ALWAYS present —
+            # older messages left out to retry a too-long refusal. MIRROR
+            # NOTE (lock-step): chat_turn.py's response carries it too.
+            "refit": _chat_turn.refit_receipt(_refit_note),
         }
         # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop
         # actually started a workflow run — absent otherwise (including

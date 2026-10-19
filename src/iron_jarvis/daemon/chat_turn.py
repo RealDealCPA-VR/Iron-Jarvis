@@ -625,7 +625,8 @@ def _tokens_of(msgs, system: str, d, provider: str, model: str) -> int:
 
 
 def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: int, window: int):
-    """``(messages, system)`` that fit ``window``, or None when even the
+    """``(messages, system, dropped)`` that fit ``window`` — ``dropped`` is
+    how many older messages were left out — or None when even the
     question and the current tool round cannot. Drops the OLDEST history
     first (never the question, never the newest round), starting the kept
     history on a user message, then lets :func:`_fit_turn_transcript` trim
@@ -652,14 +653,24 @@ def _shrink_to_window(d, msgs, system: str, provider: str, model: str, *, head: 
     # would be the same refusal again.
     if _tokens_of(sent, sent_system, d, provider, model) > int(window * 0.98):
         return None
-    return sent, sent_system
+    return sent, sent_system, keep_from
 
 
-def _overflow_refit(d, msgs, system: str, provider: str, model: str, *, head: int):
+def _overflow_refit(
+    d, msgs, system: str, provider: str, model: str, *, head: int,
+    record: "dict[str, int] | None" = None,
+):
     """The ``refit`` both lanes hand their model call (lock-step): on a
     too-long refusal, learn the window (the one the refusal names, else 3/4
     of what was sent) and return the shrunk request, or None to give up.
-    Called at most once per completion."""
+    Called at most once per completion.
+
+    ``record`` (v1.355.0, G55): the turn's own dict. A refit that is going
+    to be retried writes ``record["dropped"]`` — how many OLDER messages of
+    the conversation it left out (the most any round of the turn left out,
+    since every round starts from the whole history) — so both lanes can
+    say it on the reply (:func:`refit_receipt`). Only the model was told
+    before (``OVERFLOW_NOTE``)."""
 
     def refit(exc: BaseException, sent, sent_system: str):
         try:
@@ -672,17 +683,69 @@ def _overflow_refit(d, msgs, system: str, provider: str, model: str, *, head: in
             fitted = _shrink_to_window(
                 d, msgs, system, provider, model, head=head, window=window
             )
-            if fitted is not None:
-                log.info(
-                    "chat: %s refused the request as too long; retrying once in %d tokens",
-                    provider or "the default model", window,
-                )
-            return fitted
+            if fitted is None:
+                return None
+            sent2, system2, dropped = fitted
+            if record is not None:
+                record["dropped"] = max(int(record.get("dropped", 0) or 0), int(dropped))
+            log.info(
+                "chat: %s refused the request as too long; retrying once in %d tokens",
+                provider or "the default model", window,
+            )
+            return sent2, system2
         except Exception:  # noqa: BLE001 — the original refusal stands
             log.warning("overflow refit failed", exc_info=True)
             return None
 
     return refit
+
+
+def refit_receipt(record: "dict[str, int] | None") -> "dict[str, int] | None":
+    """The receipt's ``refit`` (v1.355.0, G55): ``{"dropped": n}`` when a
+    too-long refusal was shrunk and retried this turn (n may be 0 — only the
+    turn's own earlier tool output was trimmed), else None. ALWAYS PRESENT on
+    both lanes (null, never absent), like ``adapted``. MIRROR NOTE
+    (lock-step): chat_turn's POST response and routes/chat.py's done frame
+    both carry it from here."""
+    if not record or "dropped" not in record:
+        return None
+    try:
+        return {"dropped": max(0, int(record["dropped"]))}
+    except (TypeError, ValueError):
+        return None
+
+
+#: How many approvals one reply records (v1.355.0, G64). A turn answers a
+#: card per call group, up to its round budget; past this the receipt is a
+#: list nobody reads.
+APPROVED_MAX = 20
+
+#: The answers that let a call run (``core.approvals.DECISIONS`` minus
+#: ``deny``); a card that timed out is not an approval either.
+_APPROVING_DECISIONS = frozenset({"once", "tab", "conversation", "always"})
+
+
+def approved_entry(tool: str, decision: str, count: int = 1) -> "dict[str, Any] | None":
+    """One approval the user gave this turn, for the reply's receipt
+    (v1.355.0, G64): ``{tool, decision}`` plus ``count`` when ONE card
+    covered a batch. The decision is the one the ``approval_resolved``
+    frame carried (a local-only or priced card's wider answer already read
+    as ``once``). None for a refusal or a card nobody answered. Names only,
+    never arguments. MIRROR NOTE (lock-step): the stream lane appends these
+    to ``approved`` on its done frame; the POST lane never cards, so its
+    ``approved`` is always []."""
+    d = str(decision or "").strip().lower()
+    name = str(tool or "").strip()
+    if not name or d not in _APPROVING_DECISIONS:
+        return None
+    out: dict[str, Any] = {"tool": name, "decision": d}
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        n = 1
+    if n > 1:
+        out["count"] = n
+    return out
 
 
 async def _complete_refitting(router, *, refit=None, **kwargs):
@@ -3015,7 +3078,36 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
     except Exception:  # noqa: BLE001 - the error must still be answered
         log.debug("friendly words for a chat error failed", exc_info=True)
         return {"detail": base}
-    return {"detail": base, **words}
+    return {"detail": base, **words, **fix_action(exc, provider=hint)}
+
+
+def fix_action(exc: BaseException | None, *, provider: str = "") -> dict[str, str]:
+    """The ONE press that fixes a failed turn (v1.355.0, G29), read off the
+    SAME typed facts ``failure_words.classify`` words the headline from —
+    never a string guess: ``{"fix_kind": "sign_in", "fix_provider":
+    "claude-cli"}`` when a subscription CLI is not signed in (or refused the
+    sign-in), ``{"fix_kind": "key", "fix_provider": <provider>}`` when a
+    provider refused the key (401/403), else ``{}``. The chat's failure line
+    puts the Sign in press / the key link beside the headline from it.
+    Provider IDS only (no secret, no server text). Never raises."""
+    try:
+        from ..providers.failure_words import SIGN_IN_CLIS, failure_facts
+
+        f = failure_facts(exc)
+        who = (f.provider or str(provider or "")).strip()
+        if f.kind == "signed_out":
+            cli = (f.cli or who).strip()
+            if cli in SIGN_IN_CLIS:
+                return {"fix_kind": "sign_in", "fix_provider": cli}
+            return {}
+        if not f.kind and f.status in (401, 403):
+            if who in SIGN_IN_CLIS:
+                return {"fix_kind": "sign_in", "fix_provider": who}
+            if who:
+                return {"fix_kind": "key", "fix_provider": who}
+    except Exception:  # noqa: BLE001 - a missing press is no reason to fail
+        log.debug("fix action for a chat error failed", exc_info=True)
+    return {}
 
 
 def named_app_ask_tools(
@@ -3080,9 +3172,10 @@ class ChatTurnFailed(HTTPException):
         self.words: dict[str, str] = dict(words or {})
 
     def body(self) -> dict[str, str]:
-        """The 502 body: ``detail`` first, then ``title``/``fix``/``technical``."""
+        """The 502 body: ``detail`` first, then ``title``/``fix``/``technical``
+        and (v1.355.0, G29) ``fix_kind``/``fix_provider`` when a press fixes it."""
         out = {"detail": str(self.detail)}
-        for key in ("title", "fix", "technical"):
+        for key in ("title", "fix", "technical", "fix_kind", "fix_provider"):
             if self.words.get(key):
                 out[key] = str(self.words[key])
         return out
@@ -6995,6 +7088,10 @@ async def run_chat_turn(
     # history; each completion sends `msgs` FITTED to the window (the rounds
     # grow it). Lock-step: the stream lane fits every completion the same way.
     _head = len(msgs)
+    # v1.355.0 (G55): what a too-long refit left out this turn, for the
+    # reply's receipt (`refit_receipt`). MIRROR NOTE (lock-step): the stream
+    # lane keeps the same dict.
+    _refit_note: dict[str, int] = {}
     try:
         for _round in range(_rounds):
             _send, _send_system = _fit_turn_transcript(
@@ -7005,7 +7102,8 @@ async def run_chat_turn(
             route = await _complete_refitting(
                 d.platform.router,
                 refit=_overflow_refit(
-                    d, msgs, system, provider_choice, model_choice, head=_head
+                    d, msgs, system, provider_choice, model_choice, head=_head,
+                    record=_refit_note,
                 ),
                 provider=provider_choice or None,
                 model=model_choice or None,
@@ -7640,6 +7738,12 @@ async def run_chat_turn(
         # What the seamless path armed on its own (honesty surface — the
         # client can show "auto-armed" distinctly from user picks).
         "auto_armed": auto_armed,
+        # APPROVALS GIVEN (v1.355.0, G64): [{tool, decision, count?}] — the
+        # cards the user allowed this turn. ALWAYS PRESENT; always [] here,
+        # because this lane never cards (every armed tool is its own grant).
+        # MIRROR NOTE (lock-step): the stream done-frame carries the
+        # identical key, filled from its `approval_resolved` answers.
+        "approved": [],
         # One surface (v1.108.0): the turn decided it needs the full agent.
         # The client re-runs the SAME message as a session — the user is
         # never asked to pick a mode.
@@ -7662,6 +7766,13 @@ async def run_chat_turn(
         # level, thresholds, and whether a compaction was applied. Every
         # v1.146.0 field keeps its meaning, so existing clients are untouched.
         "context": {**plan.as_dict(), **context_report},
+        # REFIT (v1.355.0, G55): {"dropped": n} when the model refused the
+        # request as too long and older messages were left out to retry it
+        # (`refit_receipt`), else null — ALWAYS PRESENT, beside `context`,
+        # because the context numbers above are the plan BEFORE that retry.
+        # MIRROR NOTE (lock-step): the stream done-frame carries the
+        # identical key.
+        "refit": refit_receipt(_refit_note),
     }
     # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop actually
     # started a workflow run — absent otherwise (including failed calls), so
